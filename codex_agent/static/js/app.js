@@ -1,0 +1,670 @@
+const state = {
+    sessions: [],
+    activeSessionId: null,
+    loading: false,
+    sending: false,
+    stream: null,
+    streamTimer: null,
+    streamPolling: false
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    const form = document.getElementById('codex-chat-form');
+    const input = document.getElementById('codex-chat-input');
+    const newSessionBtn = document.getElementById('codex-chat-new-session');
+    const refreshBtn = document.getElementById('codex-chat-refresh');
+
+    if (form) {
+        form.addEventListener('submit', handleSubmit);
+    }
+
+    if (input) {
+        input.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                handleSubmit();
+            }
+        });
+    }
+
+    if (newSessionBtn) {
+        newSessionBtn.addEventListener('click', async () => {
+            await createSession(true);
+        });
+    }
+
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', async () => {
+            await loadSessions({ preserveActive: true });
+        });
+    }
+
+    loadSessions({ preserveActive: true });
+});
+
+async function loadSessions({ preserveActive = true, selectSessionId = null } = {}) {
+    if (state.loading) return;
+    state.loading = true;
+    setStatus('Loading sessions...');
+    try {
+        const response = await fetch('/api/codex/sessions');
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to load sessions.');
+        }
+        state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+        renderSessions();
+
+        let activeId = selectSessionId || (preserveActive ? state.activeSessionId : null);
+        if (!activeId && state.sessions.length > 0) {
+            activeId = state.sessions[0].id;
+        }
+        state.activeSessionId = activeId || null;
+
+        if (activeId) {
+            await loadSession(activeId);
+        } else {
+            renderMessages([]);
+            updateHeader(null);
+        }
+        setStatus('Idle');
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to load sessions.'), true);
+    } finally {
+        state.loading = false;
+    }
+}
+
+function renderSessions() {
+    const list = document.getElementById('codex-session-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (!state.sessions.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'No sessions yet.';
+        list.appendChild(empty);
+        return;
+    }
+
+    state.sessions.forEach(session => {
+        const item = document.createElement('div');
+        item.className = 'session-item';
+        if (session.id === state.activeSessionId) {
+            item.classList.add('active');
+        }
+
+        const selectBtn = document.createElement('button');
+        selectBtn.type = 'button';
+        selectBtn.className = 'session-select';
+
+        const title = document.createElement('div');
+        title.className = 'session-title';
+        title.textContent = session.title || 'New session';
+
+        const meta = document.createElement('div');
+        meta.className = 'session-meta';
+        const updated = formatTimestamp(session.updated_at);
+        const count = Number.isFinite(session.message_count) ? session.message_count : 0;
+        meta.textContent = updated ? `Updated ${updated} - ${count} msgs` : `Messages ${count}`;
+
+        selectBtn.appendChild(title);
+        selectBtn.appendChild(meta);
+        selectBtn.addEventListener('click', async () => {
+            if (state.sending) {
+                setStatus('Cannot switch sessions while receiving a response.', true);
+                return;
+            }
+            await loadSession(session.id);
+        });
+
+        const actions = document.createElement('div');
+        actions.className = 'session-actions';
+
+        const renameBtn = document.createElement('button');
+        renameBtn.type = 'button';
+        renameBtn.className = 'session-action';
+        renameBtn.textContent = 'Rename';
+        renameBtn.addEventListener('click', async event => {
+            event.stopPropagation();
+            await renameSession(session);
+        });
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'session-action danger';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', async event => {
+            event.stopPropagation();
+            await deleteSession(session.id);
+        });
+
+        actions.appendChild(renameBtn);
+        actions.appendChild(deleteBtn);
+
+        item.appendChild(selectBtn);
+        item.appendChild(actions);
+        list.appendChild(item);
+    });
+}
+
+function upsertSessionSummary(session) {
+    if (!session || !session.id) return;
+    const summary = {
+        id: session.id,
+        title: session.title || 'New session',
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        message_count: Array.isArray(session.messages) ? session.messages.length : 0
+    };
+    const existingIndex = state.sessions.findIndex(item => item.id === session.id);
+    if (existingIndex >= 0) {
+        state.sessions[existingIndex] = summary;
+    } else {
+        state.sessions.push(summary);
+    }
+    state.sessions.sort((a, b) => {
+        const aKey = a.updated_at || a.created_at || '';
+        const bKey = b.updated_at || b.created_at || '';
+        return bKey.localeCompare(aKey);
+    });
+}
+
+function removeSessionSummary(sessionId) {
+    state.sessions = state.sessions.filter(session => session.id !== sessionId);
+}
+
+async function createSession(selectAfter = true) {
+    setStatus('Creating session...');
+    setBusy(true);
+    try {
+        const response = await fetch('/api/codex/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to create session.');
+        }
+        const sessionId = result?.session?.id;
+        upsertSessionSummary(result?.session);
+        if (selectAfter && sessionId) {
+            state.activeSessionId = sessionId;
+            renderSessions();
+            await loadSession(sessionId);
+        } else {
+            renderSessions();
+        }
+        setStatus('Idle');
+        return result?.session;
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to create session.'), true);
+        return null;
+    } finally {
+        setBusy(false);
+    }
+}
+
+async function loadSession(sessionId) {
+    if (!sessionId) return;
+    setStatus('Loading session...');
+    try {
+        const response = await fetch(`/api/codex/sessions/${sessionId}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to load session.');
+        }
+        const session = result?.session;
+        state.activeSessionId = session?.id || sessionId;
+        renderSessions();
+        renderMessages(session?.messages || []);
+        updateHeader(session || null);
+        setStatus('Idle');
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to load session.'), true);
+    }
+}
+
+function renderMessages(messages) {
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return;
+    container.innerHTML = '';
+
+    if (!messages || messages.length === 0) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'chat-placeholder';
+        placeholder.textContent = 'No messages yet.';
+        container.appendChild(placeholder);
+        return;
+    }
+
+    messages.forEach(message => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message';
+        const roleClass = message?.role || 'assistant';
+        wrapper.classList.add(roleClass);
+
+        const meta = document.createElement('div');
+        meta.className = 'message-meta';
+        const label = getRoleLabel(message?.role);
+        const timestamp = formatTimestamp(message?.created_at);
+        meta.textContent = timestamp ? `${label} - ${timestamp}` : label;
+
+        const bubble = document.createElement('div');
+        bubble.className = 'message-bubble';
+        setMarkdownContent(bubble, message?.content || '');
+
+        wrapper.appendChild(meta);
+        wrapper.appendChild(bubble);
+        container.appendChild(wrapper);
+    });
+
+    scrollToBottom();
+}
+
+function appendMessageToDOM(message, roleOverride = null) {
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return null;
+    const placeholder = container.querySelector('.chat-placeholder');
+    if (placeholder) placeholder.remove();
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message';
+    const role = roleOverride || message?.role || 'assistant';
+    wrapper.classList.add(role);
+
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+    const label = getRoleLabel(role);
+    const timestamp = formatTimestamp(message?.created_at);
+    meta.textContent = timestamp ? `${label} - ${timestamp}` : label;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble';
+    setMarkdownContent(bubble, message?.content || '');
+
+    wrapper.appendChild(meta);
+    wrapper.appendChild(bubble);
+    container.appendChild(wrapper);
+    scrollToBottom();
+    return { wrapper, bubble, meta };
+}
+
+function updateHeader(session) {
+    const title = document.getElementById('codex-chat-title');
+    const meta = document.getElementById('codex-chat-meta');
+    if (!title || !meta) return;
+    if (!session) {
+        title.textContent = 'Select a session';
+        meta.textContent = '';
+        return;
+    }
+    title.textContent = session.title || 'New session';
+    const updated = formatTimestamp(session.updated_at);
+    meta.textContent = updated ? `Updated ${updated}` : '';
+}
+
+async function handleSubmit(event) {
+    if (event) event.preventDefault();
+    if (state.sending && state.stream) {
+        await stopStream();
+        return;
+    }
+    if (state.sending) return;
+    const input = document.getElementById('codex-chat-input');
+    if (!input) return;
+    const prompt = input.value.trim();
+    if (!prompt) return;
+    input.value = '';
+    await sendPrompt(prompt);
+}
+
+async function sendPrompt(prompt) {
+    setBusy(true);
+    state.sending = true;
+    setStatus('Waiting for Codex...');
+
+    let sessionId = state.activeSessionId;
+    if (!sessionId) {
+        const session = await createSession(true);
+        sessionId = session?.id;
+    }
+
+    if (!sessionId) {
+        setStatus('Failed to create a session.', true);
+        setBusy(false);
+        state.sending = false;
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to send message.');
+        }
+        const userMessage = result?.user_message;
+        if (userMessage) {
+            appendMessageToDOM(userMessage, 'user');
+        } else {
+            appendMessageToDOM({
+                role: 'user',
+                content: prompt,
+                created_at: new Date().toISOString()
+            }, 'user');
+        }
+
+        const assistantEntry = appendMessageToDOM({
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString()
+        }, 'assistant');
+
+        const streamId = result?.stream_id;
+        if (!streamId || !assistantEntry) {
+            throw new Error('Failed to start stream.');
+        }
+        startStream(streamId, sessionId, assistantEntry);
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to send message.'), true);
+        setBusy(false);
+        state.sending = false;
+    }
+}
+
+function startStream(streamId, sessionId, assistantEntry) {
+    stopStreamPolling();
+    state.stream = {
+        id: streamId,
+        sessionId,
+        outputOffset: 0,
+        errorOffset: 0,
+        output: '',
+        error: '',
+        entry: assistantEntry
+    };
+    pollStream();
+    state.streamTimer = setInterval(() => {
+        pollStream();
+    }, 800);
+}
+
+function stopStreamPolling() {
+    if (state.streamTimer) {
+        clearInterval(state.streamTimer);
+        state.streamTimer = null;
+    }
+    state.stream = null;
+    state.streamPolling = false;
+}
+
+async function stopStream() {
+    const stream = state.stream;
+    if (!stream) return;
+    setStatus('Stopping...');
+    try {
+        const response = await fetch(`/api/codex/streams/${stream.id}/stop`, { method: 'POST' });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to stop stream.');
+        }
+        const wrapper = stream.entry?.wrapper;
+        const bubble = stream.entry?.bubble;
+        if (wrapper) {
+            wrapper.classList.remove('assistant');
+            wrapper.classList.add('error');
+        }
+        if (bubble) {
+            const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
+            const messageText = combined ? `${combined}\n\n[Stopped by user]` : '[Stopped by user]';
+            setMarkdownContent(bubble, messageText);
+        }
+        stopStreamPolling();
+        setBusy(false);
+        state.sending = false;
+        setStatus('Stopped');
+        await loadSessions({ preserveActive: true, selectSessionId: stream.sessionId });
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to stop stream.'), true);
+    }
+}
+
+async function pollStream() {
+    const stream = state.stream;
+    if (!stream || state.streamPolling) return;
+    state.streamPolling = true;
+
+    try {
+        const response = await fetch(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to fetch stream.');
+        }
+
+        if (!state.stream || state.stream.id !== stream.id) {
+            return;
+        }
+
+        if (result?.output) {
+            stream.output += result.output;
+            stream.outputOffset = Number.isFinite(result.output_length)
+                ? result.output_length
+                : stream.output.length;
+        }
+        if (result?.error) {
+            stream.error += result.error;
+            stream.errorOffset = Number.isFinite(result.error_length)
+                ? result.error_length
+                : stream.error.length;
+        }
+
+        if (result?.output || result?.error) {
+            updateStreamEntry(stream);
+            setStatus('Receiving response...');
+        }
+
+        if (result?.done) {
+            await finishStream(result);
+        }
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to fetch stream.'), true);
+        stopStreamPolling();
+        setBusy(false);
+        state.sending = false;
+    } finally {
+        state.streamPolling = false;
+    }
+}
+
+function updateStreamEntry(stream) {
+    const bubble = stream?.entry?.bubble;
+    if (!bubble) return;
+    const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
+    setMarkdownContent(bubble, combined);
+    scrollToBottom();
+}
+
+async function finishStream(result) {
+    const stream = state.stream;
+    if (!stream) return;
+
+    stopStreamPolling();
+    const exitCode = result?.exit_code;
+    const wrapper = stream.entry?.wrapper;
+    const bubble = stream.entry?.bubble;
+    if (exitCode !== 0) {
+        if (wrapper) {
+            wrapper.classList.remove('assistant');
+            wrapper.classList.add('error');
+        }
+        const errorText = stream.error || stream.output || 'Codex execution failed.';
+        if (bubble) setMarkdownContent(bubble, errorText);
+    }
+
+    setBusy(false);
+    state.sending = false;
+    setStatus(exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
+    await loadSessions({ preserveActive: true, selectSessionId: stream.sessionId });
+}
+
+async function renameSession(session) {
+    if (!session?.id || state.sending) return;
+    const currentTitle = session.title || 'New session';
+    const nextTitle = window.prompt('Enter a session name.', currentTitle);
+    if (nextTitle === null) return;
+    const trimmed = String(nextTitle).trim();
+    if (!trimmed) {
+        setStatus('Session name is empty.', true);
+        return;
+    }
+    setStatus('Renaming session...');
+    try {
+        const response = await fetch(`/api/codex/sessions/${session.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: trimmed })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to rename session.');
+        }
+        const updated = result?.session;
+        upsertSessionSummary(updated);
+        renderSessions();
+        if (state.activeSessionId === updated?.id) {
+            updateHeader(updated);
+        }
+        setStatus('Idle');
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to rename session.'), true);
+    }
+}
+
+async function deleteSession(sessionId) {
+    if (!sessionId || state.sending) return;
+    const confirmed = window.confirm('Delete this session? This will remove all messages.');
+    if (!confirmed) return;
+    setStatus('Deleting session...');
+    try {
+        const response = await fetch(`/api/codex/sessions/${sessionId}`, { method: 'DELETE' });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to delete session.');
+        }
+        removeSessionSummary(sessionId);
+        if (state.activeSessionId === sessionId) {
+            state.activeSessionId = null;
+        }
+        renderSessions();
+        if (!state.activeSessionId && state.sessions.length > 0) {
+            await loadSession(state.sessions[0].id);
+        } else if (!state.activeSessionId) {
+            renderMessages([]);
+            updateHeader(null);
+        }
+        setStatus('Idle');
+    } catch (error) {
+        setStatus(normalizeError(error, 'Failed to delete session.'), true);
+    }
+}
+
+function setBusy(isBusy) {
+    const input = document.getElementById('codex-chat-input');
+    const sendBtn = document.getElementById('codex-chat-send');
+    const newBtn = document.getElementById('codex-chat-new-session');
+    const refreshBtn = document.getElementById('codex-chat-refresh');
+    if (input) input.disabled = isBusy;
+    if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.textContent = isBusy ? 'Stop' : 'Send';
+    }
+    if (newBtn) newBtn.disabled = isBusy;
+    if (refreshBtn) refreshBtn.disabled = isBusy;
+}
+
+function setStatus(message, isError = false) {
+    const status = document.getElementById('codex-chat-status');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('is-error', isError);
+}
+
+function formatTimestamp(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+}
+
+function getRoleLabel(role) {
+    if (role === 'user') return 'You';
+    if (role === 'assistant') return 'Codex';
+    if (role === 'system') return 'System';
+    if (role === 'error') return 'Error';
+    return 'Message';
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+}
+
+function setMarkdownContent(element, content) {
+    if (!element) return;
+    element.innerHTML = renderMarkdown(content || '');
+}
+
+function renderMarkdown(text) {
+    const safe = escapeHtml(String(text || ''));
+    const blocks = safe.split(/```/);
+    return blocks.map((block, index) => {
+        if (index % 2 === 1) {
+            const trimmed = block.replace(/^\n+|\n+$/g, '');
+            return `<pre><code>${trimmed}</code></pre>`;
+        }
+        return renderInlineMarkdown(block);
+    }).join('');
+}
+
+function renderInlineMarkdown(text) {
+    let html = text;
+    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    html = html.replace(/\n/g, '<br>');
+    return html;
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeError(error, fallback) {
+    if (typeof error === 'string' && error.trim()) return error.trim();
+    if (error instanceof Error && error.message) return error.message;
+    if (error && typeof error === 'object') {
+        try {
+            const serialized = JSON.stringify(error);
+            if (serialized && serialized !== '{}') return serialized;
+        } catch (err) {
+            return fallback || 'An unknown error occurred.';
+        }
+    }
+    return fallback || 'An unknown error occurred.';
+}

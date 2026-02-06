@@ -17,3 +17,7 @@ python run_codex_chat_server.py
 ```
 
 The server listens on `http://localhost:3000`.
+
+## GUI
+- `http://localhost:3000/` serves the chat UI.
+- `http://localhost:3000/health` returns JSON status.

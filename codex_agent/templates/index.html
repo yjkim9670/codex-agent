@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Chat</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <div class="app">
+        <header class="app-header">
+            <div>
+                <h1>Codex Chat</h1>
+                <p>Manage Codex CLI conversations.</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn secondary" type="button" id="codex-chat-new-session">+ New session</button>
+            </div>
+        </header>
+
+        <main class="layout">
+            <aside class="sessions">
+                <div class="sessions-header">
+                    <span>Sessions</span>
+                    <button class="btn ghost" type="button" id="codex-chat-refresh">Refresh</button>
+                </div>
+                <div id="codex-session-list" class="session-list">
+                    <div class="empty-state">No sessions yet.</div>
+                </div>
+            </aside>
+
+            <section class="chat">
+                <div class="chat-header">
+                    <div>
+                        <div id="codex-chat-title" class="chat-title">Select a session</div>
+                        <div id="codex-chat-meta" class="chat-meta"></div>
+                    </div>
+                </div>
+
+                <div id="codex-chat-messages" class="chat-messages">
+                    <div class="chat-placeholder">Select a session or create a new one.</div>
+                </div>
+
+                <form id="codex-chat-form" class="chat-input" autocomplete="off">
+                    <label class="sr-only" for="codex-chat-input">Codex prompt</label>
+                    <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                    <button class="btn primary" type="submit" id="codex-chat-send">Send</button>
+                </form>
+
+                <div id="codex-chat-status" class="chat-status">Idle</div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

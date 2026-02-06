@@ -1,6 +1,6 @@
 """Codex chat Flask application."""
 
-from flask import Flask, request
+from flask import Flask, jsonify, render_template, request
 
 from .blueprints import codex_chat
 from .config import SECRET_KEY
@@ -19,6 +19,18 @@ def create_codex_app():
     app.config['SECRET_KEY'] = SECRET_KEY
 
     app.register_blueprint(codex_chat.bp)
+
+    @app.route('/')
+    def codex_root():
+        return render_template('index.html')
+
+    @app.route('/health')
+    def codex_health():
+        return jsonify({
+            'service': 'codex-agent',
+            'status': 'ok',
+            'api': '/api/codex/sessions'
+        })
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])
     def codex_preflight(_):

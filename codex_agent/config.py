@@ -11,7 +11,11 @@ except ImportError:
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
-WORKSPACE_DIR = REPO_ROOT / 'workspace'
+_workspace_override = os.environ.get('CODEX_WORKSPACE_DIR')
+if _workspace_override:
+    WORKSPACE_DIR = Path(_workspace_override).expanduser().resolve()
+else:
+    WORKSPACE_DIR = REPO_ROOT / 'workspace'
 
 CODEX_CHAT_STORE_PATH = WORKSPACE_DIR / 'codex_chat_sessions.json'
 CODEX_MAX_PROMPT_CHARS = 4000

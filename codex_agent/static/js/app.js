@@ -5,7 +5,9 @@ const state = {
     sending: false,
     stream: null,
     streamTimer: null,
-    streamPolling: false
+    streamPolling: false,
+    autoScrollEnabled: true,
+    autoScrollThreshold: 48
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -13,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('codex-chat-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const refreshBtn = document.getElementById('codex-chat-refresh');
+    const messages = document.getElementById('codex-chat-messages');
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -36,6 +39,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
             await loadSessions({ preserveActive: true });
+        });
+    }
+
+    if (messages) {
+        messages.addEventListener('scroll', () => {
+            handleMessageScroll(messages);
         });
     }
 
@@ -237,6 +246,7 @@ function renderMessages(messages) {
         placeholder.className = 'chat-placeholder';
         placeholder.textContent = 'No messages yet.';
         container.appendChild(placeholder);
+        scrollToBottom(true);
         return;
     }
 
@@ -261,7 +271,7 @@ function renderMessages(messages) {
         container.appendChild(wrapper);
     });
 
-    scrollToBottom();
+    scrollToBottom(true);
 }
 
 function appendMessageToDOM(message, roleOverride = null) {
@@ -610,10 +620,32 @@ function getRoleLabel(role) {
     return 'Message';
 }
 
-function scrollToBottom() {
+function scrollToBottom(force = false) {
     const container = document.getElementById('codex-chat-messages');
     if (!container) return;
-    container.scrollTop = container.scrollHeight;
+    if (!force && !state.autoScrollEnabled) return;
+    if (force) {
+        setAutoScrollEnabled(true);
+    }
+    const scroll = () => {
+        container.scrollTop = container.scrollHeight;
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(scroll);
+    } else {
+        scroll();
+    }
+}
+
+function handleMessageScroll(container) {
+    if (!container) return;
+    const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setAutoScrollEnabled(distanceFromBottom <= threshold);
+}
+
+function setAutoScrollEnabled(isEnabled) {
+    state.autoScrollEnabled = Boolean(isEnabled);
 }
 
 function setMarkdownContent(element, content) {

@@ -16,30 +16,14 @@ script_dir = Path(__file__).resolve().parent
 repo_root = script_dir
 original_cwd = Path.cwd()
 
-def maybe_request_parent_workspace(script_path):
-    if os.environ.get('CODEX_PARENT_ACCESS_PROMPT', '1') == '0':
-        return
-    if os.environ.get('CODEX_PARENT_ACCESS_DECISION'):
-        return
+def ensure_parent_workspace(script_path):
     if os.environ.get('CODEX_WORKSPACE_DIR'):
         os.environ['CODEX_PARENT_ACCESS_DECISION'] = 'preset'
         return
     parent_dir = script_path.parent
-    prompt = (
-        f"[PROMPT] Allow use of the parent directory as workspace? ({parent_dir}) [y/N]: "
-    )
-    try:
-        response = input(prompt)
-    except EOFError:
-        os.environ['CODEX_PARENT_ACCESS_DECISION'] = 'skipped'
-        return
-    if response.strip().lower() in ('y', 'yes'):
-        os.environ['CODEX_WORKSPACE_DIR'] = str(parent_dir)
-        os.environ['CODEX_PARENT_ACCESS_DECISION'] = 'granted'
-        print(f"[INFO] Parent workspace enabled: {parent_dir}")
-    else:
-        os.environ['CODEX_PARENT_ACCESS_DECISION'] = 'declined'
-        print("[INFO] Parent workspace not enabled.")
+    os.environ['CODEX_WORKSPACE_DIR'] = str(parent_dir)
+    os.environ['CODEX_PARENT_ACCESS_DECISION'] = 'auto'
+    print(f"[INFO] Parent workspace enabled by default: {parent_dir}")
 
 if original_cwd != script_dir:
     print(f"[INFO] Changing working directory from {original_cwd} to: {script_dir}")
@@ -50,7 +34,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 if __name__ == '__main__':
-    maybe_request_parent_workspace(script_dir)
+    ensure_parent_workspace(script_dir)
     try:
         from codex_agent.codex_app import create_codex_app
     except ImportError as exc:

@@ -1,0 +1,1 @@
+/home/dinya/Personal-Finance-Manager/history.md

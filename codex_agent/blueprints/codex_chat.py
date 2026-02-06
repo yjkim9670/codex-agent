@@ -1,0 +1,167 @@
+"""Codex chat routes."""
+
+from flask import Blueprint, jsonify, request
+
+from ..config import CODEX_MAX_PROMPT_CHARS, CODEX_MAX_TITLE_CHARS
+from ..services.codex_chat import (
+    append_message,
+    build_codex_prompt,
+    create_session,
+    create_codex_stream,
+    cleanup_codex_streams,
+    delete_session,
+    ensure_default_title,
+    execute_codex_prompt,
+    finalize_codex_stream,
+    get_session,
+    read_codex_stream,
+    list_sessions,
+    rename_session,
+    stop_codex_stream,
+)
+
+bp = Blueprint('codex_chat', __name__)
+
+
+@bp.route('/api/codex/sessions')
+def codex_sessions():
+    return jsonify({'sessions': list_sessions()})
+
+
+@bp.route('/api/codex/sessions', methods=['POST'])
+def codex_sessions_create():
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get('title') or '').strip()
+    session = create_session(title=title or None)
+    return jsonify({'session': session})
+
+
+@bp.route('/api/codex/sessions/<session_id>')
+def codex_session_detail(session_id):
+    session = get_session(session_id)
+    if not session:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    return jsonify({'session': session})
+
+
+@bp.route('/api/codex/sessions/<session_id>', methods=['PATCH'])
+def codex_session_rename(session_id):
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get('title') or '').strip()
+
+    if not title:
+        return jsonify({'error': '세션 이름이 비어 있습니다.'}), 400
+    if len(title) > CODEX_MAX_TITLE_CHARS:
+        return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
+
+    session = rename_session(session_id, title)
+    if not session:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    return jsonify({'session': session})
+
+
+@bp.route('/api/codex/sessions/<session_id>', methods=['DELETE'])
+def codex_session_delete(session_id):
+    deleted = delete_session(session_id)
+    if not deleted:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    return jsonify({'status': 'deleted'})
+
+
+@bp.route('/api/codex/sessions/<session_id>/message', methods=['POST'])
+def codex_session_message(session_id):
+    payload = request.get_json(silent=True) or {}
+    prompt = (payload.get('prompt') or '').strip()
+
+    if not prompt:
+        return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
+    if len(prompt) > CODEX_MAX_PROMPT_CHARS:
+        return jsonify({'error': '프롬프트가 너무 깁니다.'}), 400
+
+    session = get_session(session_id)
+    if not session:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+
+    ensure_default_title(session_id, prompt)
+
+    prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+    user_message = append_message(session_id, 'user', prompt)
+    if not user_message:
+        return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
+
+    output, error = execute_codex_prompt(prompt_with_context)
+    if error:
+        assistant_message = append_message(session_id, 'error', error)
+    else:
+        assistant_message = append_message(session_id, 'assistant', output or '')
+
+    session = get_session(session_id)
+    return jsonify({
+        'session': session,
+        'user_message': user_message,
+        'assistant_message': assistant_message
+    })
+
+
+@bp.route('/api/codex/sessions/<session_id>/message/stream', methods=['POST'])
+def codex_session_message_stream(session_id):
+    payload = request.get_json(silent=True) or {}
+    prompt = (payload.get('prompt') or '').strip()
+
+    if not prompt:
+        return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
+    if len(prompt) > CODEX_MAX_PROMPT_CHARS:
+        return jsonify({'error': '프롬프트가 너무 깁니다.'}), 400
+
+    session = get_session(session_id)
+    if not session:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+
+    ensure_default_title(session_id, prompt)
+    prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+    user_message = append_message(session_id, 'user', prompt)
+    if not user_message:
+        return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
+
+    stream_id = create_codex_stream(session_id, prompt_with_context)
+    return jsonify({'stream_id': stream_id, 'user_message': user_message})
+
+
+@bp.route('/api/codex/streams/<stream_id>')
+def codex_stream_output(stream_id):
+    cleanup_codex_streams()
+    try:
+        output_offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        output_offset = 0
+    try:
+        error_offset = int(request.args.get('error_offset', 0))
+    except (TypeError, ValueError):
+        error_offset = 0
+
+    output_offset = max(output_offset, 0)
+    error_offset = max(error_offset, 0)
+
+    data = read_codex_stream(stream_id, output_offset, error_offset)
+    if not data:
+        return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
+
+    saved_message = None
+    if data.get('done') and not data.get('saved'):
+        saved_message = finalize_codex_stream(stream_id)
+        data = read_codex_stream(stream_id, output_offset, error_offset)
+        if data:
+            data['saved'] = True
+
+    response = data or {}
+    if saved_message:
+        response['saved_message'] = saved_message
+    return jsonify(response)
+
+
+@bp.route('/api/codex/streams/<stream_id>/stop', methods=['POST'])
+def codex_stream_stop(stream_id):
+    result = stop_codex_stream(stream_id)
+    if not result:
+        return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
+    return jsonify(result)

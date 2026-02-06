@@ -22,7 +22,10 @@
             <aside class="sessions">
                 <div class="sessions-header">
                     <span>Sessions</span>
-                    <button class="btn ghost" type="button" id="codex-chat-refresh">Refresh</button>
+                    <div class="sessions-actions">
+                        <button class="btn ghost" type="button" id="codex-chat-refresh">Refresh</button>
+                        <button class="btn ghost sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list">Hide sessions</button>
+                    </div>
                 </div>
                 <div id="codex-session-list" class="session-list">
                     <div class="empty-state">No sessions yet.</div>

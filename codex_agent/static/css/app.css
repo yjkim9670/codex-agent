@@ -96,6 +96,16 @@ body {
     color: var(--text-secondary);
 }
 
+.sessions-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sessions-toggle {
+    display: none;
+}
+
 .session-list {
     display: flex;
     flex-direction: column;
@@ -120,6 +130,10 @@ body {
     border-color: var(--accent);
     box-shadow: 0 10px 20px rgba(15, 76, 129, 0.12);
     background: #ffffff;
+}
+
+.sessions.is-collapsed .session-list {
+    display: none;
 }
 
 .session-select {
@@ -352,23 +366,75 @@ body {
 }
 
 @media (max-width: 960px) {
+    html,
+    body {
+        height: auto;
+    }
+
+    body {
+        overflow-y: auto;
+    }
+
+    .app {
+        height: auto;
+        min-height: 100dvh;
+        padding: 16px;
+    }
+
     .layout {
-        grid-template-columns: 1fr;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
     }
 
     .sessions {
-        order: 2;
+        order: 1;
     }
 
     .chat {
-        order: 1;
+        order: 2;
+        flex: 1;
+        min-height: 0;
+    }
+
+    .sessions-toggle {
+        display: inline-flex;
     }
 
     .chat-input {
         grid-template-columns: 1fr;
+        position: sticky;
+        bottom: 0;
+        background: var(--surface);
+        padding-bottom: env(safe-area-inset-bottom);
+        z-index: 1;
     }
 
     .chat-input button {
         justify-self: flex-end;
+    }
+
+    .sessions,
+    .chat {
+        min-height: auto;
+    }
+
+    .sessions {
+        max-height: 70vh;
+    }
+
+    .sessions.is-collapsed {
+        max-height: 72px;
+        padding-bottom: 10px;
+        overflow: hidden;
+    }
+
+    .session-list {
+        max-height: 38vh;
+    }
+
+    .chat-frame {
+        flex: 1;
+        min-height: 220px;
     }
 }

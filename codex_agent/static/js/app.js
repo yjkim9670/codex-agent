@@ -10,12 +10,18 @@ const state = {
     autoScrollThreshold: 48
 };
 
+const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
+const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
+
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('codex-chat-form');
     const input = document.getElementById('codex-chat-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const refreshBtn = document.getElementById('codex-chat-refresh');
     const messages = document.getElementById('codex-chat-messages');
+    const sessionsPanel = document.querySelector('.sessions');
+    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -42,6 +48,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (sessionsToggle && sessionsPanel) {
+        sessionsToggle.addEventListener('click', () => {
+            const collapsed = sessionsPanel.classList.contains('is-collapsed');
+            setSessionsCollapsed(!collapsed);
+        });
+    }
+
+    syncSessionsLayout(mobileMedia.matches);
+    if (typeof mobileMedia.addEventListener === 'function') {
+        mobileMedia.addEventListener('change', event => {
+            syncSessionsLayout(event.matches);
+        });
+    } else if (typeof mobileMedia.addListener === 'function') {
+        mobileMedia.addListener(event => {
+            syncSessionsLayout(event.matches);
+        });
+    }
+
     if (messages) {
         messages.addEventListener('scroll', () => {
             handleMessageScroll(messages);
@@ -50,6 +74,41 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadSessions({ preserveActive: true });
 });
+
+function setSessionsCollapsed(collapsed, { persist = true } = {}) {
+    const sessionsPanel = document.querySelector('.sessions');
+    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    if (!sessionsPanel || !sessionsToggle) return;
+    sessionsPanel.classList.toggle('is-collapsed', collapsed);
+    sessionsToggle.setAttribute('aria-expanded', String(!collapsed));
+    sessionsToggle.textContent = collapsed ? 'Show sessions' : 'Hide sessions';
+    if (persist) {
+        try {
+            localStorage.setItem(SESSION_COLLAPSE_KEY, collapsed ? '1' : '0');
+        } catch (error) {
+            void error;
+        }
+    }
+}
+
+function syncSessionsLayout(isMobile) {
+    const sessionsPanel = document.querySelector('.sessions');
+    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    if (!sessionsPanel || !sessionsToggle) return;
+    if (!isMobile) {
+        sessionsPanel.classList.remove('is-collapsed');
+        sessionsToggle.setAttribute('aria-expanded', 'true');
+        sessionsToggle.textContent = 'Hide sessions';
+        return;
+    }
+    let collapsed = false;
+    try {
+        collapsed = localStorage.getItem(SESSION_COLLAPSE_KEY) === '1';
+    } catch (error) {
+        void error;
+    }
+    setSessionsCollapsed(collapsed, { persist: false });
+}
 
 async function loadSessions({ preserveActive = true, selectSessionId = null } = {}) {
     if (state.loading) return;

@@ -10,7 +10,7 @@
     --accent: #0f4c81;
     --accent-dark: #0c3e6b;
     --danger: #d92d4c;
-    --font-sans: "Avenir Next", "Avenir", "SF Pro Display", "SF Pro Text", -apple-system,
+    --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
         BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
         "Segoe UI", sans-serif;
 }
@@ -27,6 +27,7 @@ body {
 body {
     margin: 0;
     font-family: var(--font-sans);
+    letter-spacing: -0.01em;
     background: var(--bg);
     color: var(--text-primary);
     overflow: hidden;

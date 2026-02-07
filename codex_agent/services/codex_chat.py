@@ -14,6 +14,7 @@ from ..config import (
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_EXEC_TIMEOUT_SECONDS,
+    CODEX_SESSIONS_PATH,
     CODEX_STREAM_TTL_SECONDS,
     WORKSPACE_DIR,
 )
@@ -188,25 +189,75 @@ def update_settings(model=None, reasoning_effort=None):
     return get_settings()
 
 
-def get_usage_summary():
-    with _DATA_LOCK:
-        data = _load_data()
-        sessions = data.get('sessions', [])
-        session_count = len(sessions)
-        message_count = 0
-        char_count = 0
-        for session in sessions:
-            messages = session.get('messages', [])
-            if not isinstance(messages, list):
-                continue
-            for message in messages:
-                message_count += 1
-                char_count += len(str(message.get('content') or ''))
+def _extract_limits(rate_limits):
+    if not isinstance(rate_limits, dict):
+        return None
+    primary = rate_limits.get('primary')
+    secondary = rate_limits.get('secondary')
+    entries = []
+    for entry in (primary, secondary):
+        if not isinstance(entry, dict):
+            continue
+        entries.append({
+            'used_percent': entry.get('used_percent'),
+            'window_minutes': entry.get('window_minutes'),
+            'resets_at': entry.get('resets_at')
+        })
+    five_hour = None
+    weekly = None
+    for entry in entries:
+        if entry.get('window_minutes') == 300:
+            five_hour = entry
+        elif entry.get('window_minutes') == 10080:
+            weekly = entry
+    if not five_hour and entries:
+        five_hour = entries[0]
+    if not weekly and len(entries) > 1:
+        weekly = entries[1]
     return {
-        'sessions': session_count,
-        'messages': message_count,
-        'chars': char_count
+        'five_hour': five_hour,
+        'weekly': weekly
     }
+
+
+def _read_rate_limits_from_log(path):
+    last_limits = None
+    try:
+        with path.open('r', encoding='utf-8') as file_handle:
+            for line in file_handle:
+                if '"rate_limits"' not in line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rate_limits = payload.get('payload', {}).get('rate_limits')
+                if rate_limits:
+                    last_limits = rate_limits
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    return last_limits
+
+
+def get_usage_summary():
+    if not CODEX_SESSIONS_PATH.exists():
+        return {'five_hour': None, 'weekly': None}
+    try:
+        files = sorted(
+            CODEX_SESSIONS_PATH.rglob('*.jsonl'),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True
+        )
+    except Exception:
+        return {'five_hour': None, 'weekly': None}
+    for path in files[:30]:
+        rate_limits = _read_rate_limits_from_log(path)
+        limits = _extract_limits(rate_limits)
+        if limits and (limits.get('five_hour') or limits.get('weekly')):
+            return limits
+    return {'five_hour': None, 'weekly': None}
 
 
 def _sort_sessions(sessions):

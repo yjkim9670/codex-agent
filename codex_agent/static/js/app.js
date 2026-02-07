@@ -395,14 +395,13 @@ async function loadSettings({ silent = true } = {}) {
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
-    if (!usage) {
+    if (!usage || (!usage.five_hour && !usage.weekly)) {
         element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         return;
     }
-    const sessions = Number.isFinite(usage.sessions) ? usage.sessions : 0;
-    const messages = Number.isFinite(usage.messages) ? usage.messages : 0;
-    const chars = Number.isFinite(usage.chars) ? usage.chars : 0;
-    element.textContent = `${sessions} sessions · ${messages} msgs · ${formatNumber(chars)} chars`;
+    const fiveHour = formatLimitUsage(usage.five_hour, '5h');
+    const weekly = formatLimitUsage(usage.weekly, 'Weekly');
+    element.textContent = [fiveHour, weekly].filter(Boolean).join(' · ');
 }
 
 function updateModelControls(model, options) {
@@ -1362,6 +1361,14 @@ function formatDuration(durationMs) {
 function formatNumber(value) {
     if (!Number.isFinite(value)) return '0';
     return value.toLocaleString('en-US');
+}
+
+function formatLimitUsage(entry, label) {
+    if (!entry || !Number.isFinite(entry.used_percent)) {
+        return `${label}: --`;
+    }
+    const percent = Math.round(entry.used_percent);
+    return `${label}: ${percent}%`;
 }
 
 function setMessageStreaming(wrapper, isStreaming) {

@@ -10,6 +10,7 @@
     --accent: #0f4c81;
     --accent-dark: #0c3e6b;
     --danger: #d92d4c;
+    --streaming-bubble-height: 240px;
     --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
         BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
         "Segoe UI", sans-serif;
@@ -271,6 +272,45 @@ body {
 .message-meta {
     font-size: 10px;
     color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.message-meta-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.message-copy {
+    border: 1px solid var(--border);
+    background: #fff;
+    border-radius: 999px;
+    padding: 2px 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.message-copy svg {
+    width: 14px;
+    height: 14px;
+}
+
+.message-copy:hover {
+    border-color: var(--text-muted);
+    color: var(--text-secondary);
+    background: var(--surface-muted);
+}
+
+.message-copy.is-copied {
+    border-color: rgba(59, 130, 246, 0.35);
+    color: var(--accent);
+    background: rgba(59, 130, 246, 0.08);
 }
 
 .message-bubble {
@@ -283,6 +323,28 @@ body {
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.message.is-streaming .message-bubble {
+    height: var(--streaming-bubble-height);
+    min-height: var(--streaming-bubble-height);
+    max-height: var(--streaming-bubble-height);
+    overflow: auto;
+    scrollbar-gutter: stable;
+}
+
+.message-footer {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+.message.user .message-meta {
+    justify-content: flex-end;
+}
+
+.message.user .message-footer {
+    text-align: right;
 }
 
 .message.user .message-bubble {
@@ -366,6 +428,10 @@ body {
 }
 
 @media (max-width: 960px) {
+    :root {
+        --streaming-bubble-height: 180px;
+    }
+
     html,
     body {
         height: auto;

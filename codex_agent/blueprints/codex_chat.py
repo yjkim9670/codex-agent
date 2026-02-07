@@ -1,5 +1,7 @@
 """Codex chat routes."""
 
+import time
+
 from flask import Blueprint, jsonify, request
 
 from ..config import CODEX_MAX_PROMPT_CHARS, CODEX_MAX_TITLE_CHARS
@@ -89,11 +91,14 @@ def codex_session_message(session_id):
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
 
+    started_at = time.time()
     output, error = execute_codex_prompt(prompt_with_context)
+    duration_ms = max(0, int((time.time() - started_at) * 1000))
+    metadata = {'duration_ms': duration_ms}
     if error:
-        assistant_message = append_message(session_id, 'error', error)
+        assistant_message = append_message(session_id, 'error', error, metadata)
     else:
-        assistant_message = append_message(session_id, 'assistant', output or '')
+        assistant_message = append_message(session_id, 'assistant', output or '', metadata)
 
     session = get_session(session_id)
     return jsonify({

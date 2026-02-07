@@ -11,6 +11,7 @@ const state = {
 };
 
 const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
+const ACTIVE_STREAM_KEY = 'codexActiveStream';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -72,8 +73,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    loadSessions({ preserveActive: true });
+    void initializeApp();
 });
+
+async function initializeApp() {
+    const pending = getPersistedStream();
+    const targetSessionId = pending?.sessionId || null;
+    await loadSessions({ preserveActive: true, selectSessionId: targetSessionId });
+    if (pending) {
+        await resumeStreamFromStorage(pending);
+    }
+}
 
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     const sessionsPanel = document.querySelector('.sessions');
@@ -110,6 +120,42 @@ function syncSessionsLayout(isMobile) {
     setSessionsCollapsed(collapsed, { persist: false });
 }
 
+function getPersistedStream() {
+    try {
+        const raw = localStorage.getItem(ACTIVE_STREAM_KEY);
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+        if (!data?.id || !data?.sessionId) return null;
+        return data;
+    } catch (error) {
+        return null;
+    }
+}
+
+function persistActiveStream(stream) {
+    if (!stream?.id || !stream?.sessionId) return;
+    try {
+        localStorage.setItem(
+            ACTIVE_STREAM_KEY,
+            JSON.stringify({
+                id: stream.id,
+                sessionId: stream.sessionId,
+                startedAt: stream.startedAt || Date.now()
+            })
+        );
+    } catch (error) {
+        void error;
+    }
+}
+
+function clearPersistedStream() {
+    try {
+        localStorage.removeItem(ACTIVE_STREAM_KEY);
+    } catch (error) {
+        void error;
+    }
+}
+
 async function loadSessions({ preserveActive = true, selectSessionId = null } = {}) {
     if (state.loading) return;
     state.loading = true;
@@ -140,6 +186,71 @@ async function loadSessions({ preserveActive = true, selectSessionId = null } = 
         setStatus(normalizeError(error, 'Failed to load sessions.'), true);
     } finally {
         state.loading = false;
+    }
+}
+
+async function resumeStreamFromStorage(pending) {
+    if (!pending || state.stream || state.sending) return;
+    const sessionExists = state.sessions.some(session => session.id === pending.sessionId);
+    if (!sessionExists) {
+        clearPersistedStream();
+        return;
+    }
+    setStatus('Reconnecting to Codex...');
+    setBusy(true);
+    state.sending = true;
+    try {
+        const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to resume stream.');
+        }
+        if (result?.done) {
+            clearPersistedStream();
+            setBusy(false);
+            state.sending = false;
+            setStatus('Idle');
+            await loadSessions({ preserveActive: true, selectSessionId: pending.sessionId });
+            return;
+        }
+
+        const assistantEntry = appendMessageToDOM({
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString()
+        }, 'assistant');
+        if (!assistantEntry) {
+            clearPersistedStream();
+            setBusy(false);
+            state.sending = false;
+            return;
+        }
+        setMessageStreaming(assistantEntry.wrapper, true);
+
+        const output = result?.output || '';
+        const errorText = result?.error || '';
+        const stream = {
+            id: pending.id,
+            sessionId: pending.sessionId,
+            output,
+            error: errorText,
+            outputOffset: Number.isFinite(result?.output_length)
+                ? result.output_length
+                : output.length,
+            errorOffset: Number.isFinite(result?.error_length)
+                ? result.error_length
+                : errorText.length,
+            entry: assistantEntry,
+            startedAt: Number.isFinite(pending.startedAt) ? pending.startedAt : Date.now()
+        };
+        updateStreamEntry(stream);
+        beginStreamPolling(stream);
+        setStatus('Receiving response...');
+    } catch (error) {
+        clearPersistedStream();
+        setBusy(false);
+        state.sending = false;
+        setStatus(normalizeError(error, 'Failed to resume stream.'), true);
     }
 }
 
@@ -315,18 +426,24 @@ function renderMessages(messages) {
         const roleClass = message?.role || 'assistant';
         wrapper.classList.add(roleClass);
 
-        const meta = document.createElement('div');
-        meta.className = 'message-meta';
         const label = getRoleLabel(message?.role);
         const timestamp = formatTimestamp(message?.created_at);
-        meta.textContent = timestamp ? `${label} - ${timestamp}` : label;
+        const metaText = timestamp ? `${label} - ${timestamp}` : label;
+        const meta = buildMessageMeta(metaText, wrapper);
 
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         setMarkdownContent(bubble, message?.content || '');
 
+        const footer = createMessageFooter();
+        const durationMs = Number(message?.duration_ms);
+        if (Number.isFinite(durationMs)) {
+            setMessageDuration(footer, durationMs);
+        }
+
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
+        wrapper.appendChild(footer);
         container.appendChild(wrapper);
     });
 
@@ -344,21 +461,27 @@ function appendMessageToDOM(message, roleOverride = null) {
     const role = roleOverride || message?.role || 'assistant';
     wrapper.classList.add(role);
 
-    const meta = document.createElement('div');
-    meta.className = 'message-meta';
     const label = getRoleLabel(role);
     const timestamp = formatTimestamp(message?.created_at);
-    meta.textContent = timestamp ? `${label} - ${timestamp}` : label;
+    const metaText = timestamp ? `${label} - ${timestamp}` : label;
+    const meta = buildMessageMeta(metaText, wrapper);
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     setMarkdownContent(bubble, message?.content || '');
 
+    const footer = createMessageFooter();
+    const durationMs = Number(message?.duration_ms);
+    if (Number.isFinite(durationMs)) {
+        setMessageDuration(footer, durationMs);
+    }
+
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
+    wrapper.appendChild(footer);
     container.appendChild(wrapper);
     scrollToBottom();
-    return { wrapper, bubble, meta };
+    return { wrapper, bubble, meta, footer };
 }
 
 function updateHeader(session) {
@@ -408,6 +531,7 @@ async function sendPrompt(prompt) {
         return;
     }
 
+    const startedAt = Date.now();
     try {
         const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
             method: 'POST',
@@ -439,7 +563,8 @@ async function sendPrompt(prompt) {
         if (!streamId || !assistantEntry) {
             throw new Error('Failed to start stream.');
         }
-        startStream(streamId, sessionId, assistantEntry);
+        setMessageStreaming(assistantEntry.wrapper, true);
+        startStream(streamId, sessionId, assistantEntry, startedAt);
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to send message.'), true);
         setBusy(false);
@@ -447,21 +572,19 @@ async function sendPrompt(prompt) {
     }
 }
 
-function startStream(streamId, sessionId, assistantEntry) {
-    stopStreamPolling();
-    state.stream = {
+function startStream(streamId, sessionId, assistantEntry, startedAt) {
+    const stream = {
         id: streamId,
         sessionId,
         outputOffset: 0,
         errorOffset: 0,
         output: '',
         error: '',
-        entry: assistantEntry
+        entry: assistantEntry,
+        startedAt: startedAt || Date.now()
     };
-    pollStream();
-    state.streamTimer = setInterval(() => {
-        pollStream();
-    }, 800);
+    persistActiveStream(stream);
+    beginStreamPolling(stream);
 }
 
 function stopStreamPolling() {
@@ -469,8 +592,20 @@ function stopStreamPolling() {
         clearInterval(state.streamTimer);
         state.streamTimer = null;
     }
+    if (state.stream?.entry?.wrapper) {
+        setMessageStreaming(state.stream.entry.wrapper, false);
+    }
     state.stream = null;
     state.streamPolling = false;
+}
+
+function beginStreamPolling(stream) {
+    stopStreamPolling();
+    state.stream = stream;
+    pollStream();
+    state.streamTimer = setInterval(() => {
+        pollStream();
+    }, 800);
 }
 
 async function stopStream() {
@@ -494,6 +629,10 @@ async function stopStream() {
             const messageText = combined ? `${combined}\n\n[Stopped by user]` : '[Stopped by user]';
             setMarkdownContent(bubble, messageText);
         }
+        const durationMs = getStreamDuration(stream);
+        setMessageDuration(stream.entry?.footer, durationMs);
+        setMessageStreaming(stream.entry?.wrapper, false);
+        clearPersistedStream();
         stopStreamPolling();
         setBusy(false);
         state.sending = false;
@@ -543,6 +682,7 @@ async function pollStream() {
         }
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to fetch stream.'), true);
+        clearPersistedStream();
         stopStreamPolling();
         setBusy(false);
         state.sending = false;
@@ -556,6 +696,9 @@ function updateStreamEntry(stream) {
     if (!bubble) return;
     const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
     setMarkdownContent(bubble, combined);
+    if (stream?.entry?.wrapper?.classList.contains('is-streaming')) {
+        bubble.scrollTop = bubble.scrollHeight;
+    }
     scrollToBottom();
 }
 
@@ -563,6 +706,10 @@ async function finishStream(result) {
     const stream = state.stream;
     if (!stream) return;
 
+    const durationMs = getStreamDuration(stream);
+    setMessageDuration(stream.entry?.footer, durationMs);
+    setMessageStreaming(stream.entry?.wrapper, false);
+    clearPersistedStream();
     stopStreamPolling();
     const exitCode = result?.exit_code;
     const wrapper = stream.entry?.wrapper;
@@ -710,6 +857,133 @@ function setAutoScrollEnabled(isEnabled) {
 function setMarkdownContent(element, content) {
     if (!element) return;
     element.innerHTML = renderMarkdown(content || '');
+    const wrapper = element.closest('.message');
+    if (wrapper) {
+        wrapper.dataset.messageContent = String(content || '');
+    }
+}
+
+function buildMessageMeta(text, wrapper) {
+    const meta = document.createElement('div');
+    meta.className = 'message-meta';
+
+    const label = document.createElement('span');
+    label.className = 'message-meta-text';
+    label.textContent = text || '';
+
+    const actions = document.createElement('div');
+    actions.className = 'message-meta-actions';
+    actions.appendChild(createMessageCopyButton(wrapper));
+
+    meta.appendChild(label);
+    meta.appendChild(actions);
+    return meta;
+}
+
+function createMessageCopyButton(wrapper) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'message-copy';
+    button.setAttribute('aria-label', 'Copy message');
+    button.setAttribute('title', 'Copy');
+    button.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="4" y="4" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+        </svg>
+    `;
+    button.addEventListener('click', event => {
+        event.stopPropagation();
+        copyMessageContent(wrapper, button);
+    });
+    return button;
+}
+
+async function copyMessageContent(wrapper, button) {
+    if (!wrapper) return;
+    const text = wrapper.dataset.messageContent || '';
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            copyMessageFallback(text);
+        }
+        showMessageCopyFeedback(button);
+    } catch (error) {
+        copyMessageFallback(text);
+        showMessageCopyFeedback(button);
+    }
+}
+
+function copyMessageFallback(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'absolute';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
+    } catch (error) {
+        void error;
+    }
+    document.body.removeChild(textarea);
+}
+
+function showMessageCopyFeedback(button) {
+    if (!button) return;
+    button.classList.add('is-copied');
+    button.setAttribute('title', 'Copied');
+    button.setAttribute('aria-label', 'Copied');
+    window.setTimeout(() => {
+        button.classList.remove('is-copied');
+        button.setAttribute('title', 'Copy');
+        button.setAttribute('aria-label', 'Copy message');
+    }, 1500);
+}
+
+function createMessageFooter() {
+    const footer = document.createElement('div');
+    footer.className = 'message-footer';
+    return footer;
+}
+
+function setMessageDuration(footer, durationMs) {
+    if (!footer) return;
+    const formatted = formatDuration(durationMs);
+    if (!formatted) {
+        footer.textContent = '';
+        footer.classList.remove('is-visible');
+        return;
+    }
+    footer.textContent = `총 걸린시간 ${formatted}`;
+    footer.classList.add('is-visible');
+}
+
+function formatDuration(durationMs) {
+    if (!Number.isFinite(durationMs)) return '';
+    const totalSeconds = Math.max(0, durationMs / 1000);
+    if (totalSeconds < 10) {
+        return `${totalSeconds.toFixed(1)}초`;
+    }
+    const rounded = Math.round(totalSeconds);
+    if (rounded < 60) {
+        return `${rounded}초`;
+    }
+    const minutes = Math.floor(rounded / 60);
+    const seconds = String(rounded % 60).padStart(2, '0');
+    return `${minutes}분 ${seconds}초`;
+}
+
+function setMessageStreaming(wrapper, isStreaming) {
+    if (!wrapper) return;
+    wrapper.classList.toggle('is-streaming', Boolean(isStreaming));
+}
+
+function getStreamDuration(stream) {
+    if (!stream?.startedAt) return null;
+    return Math.max(0, Date.now() - stream.startedAt);
 }
 
 function renderMarkdown(text) {

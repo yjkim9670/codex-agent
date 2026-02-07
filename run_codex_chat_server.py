@@ -28,7 +28,6 @@ def ensure_parent_workspace(script_path):
 if original_cwd != script_dir:
     print(f"[INFO] Changing working directory from {original_cwd} to: {script_dir}")
     os.chdir(script_dir)
-    os.environ['WERKZEUG_RUN_MAIN'] = 'true'
 
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))

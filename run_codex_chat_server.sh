@@ -12,4 +12,7 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
+cd "${PARENT_DIR}"
+
 exec python "${SCRIPT_DIR}/run_codex_chat_server.py"

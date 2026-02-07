@@ -13,7 +13,6 @@ from ..config import (
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_EXEC_TIMEOUT_SECONDS,
     CODEX_STREAM_TTL_SECONDS,
-    REPO_ROOT,
     WORKSPACE_DIR,
 )
 from ..utils.time import normalize_timestamp
@@ -133,7 +132,7 @@ def update_session_title(session_id, title):
         return deepcopy(session)
 
 
-def append_message(session_id, role, content):
+def append_message(session_id, role, content, metadata=None):
     if content is None:
         content = ''
     message = {
@@ -142,6 +141,11 @@ def append_message(session_id, role, content):
         'content': str(content),
         'created_at': normalize_timestamp(None)
     }
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            if key in message:
+                continue
+            message[key] = value
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -229,7 +233,7 @@ def execute_codex_prompt(prompt):
     try:
         result = subprocess.run(
             cmd,
-            cwd=str(REPO_ROOT),
+            cwd=str(WORKSPACE_DIR),
             capture_output=True,
             text=True,
             timeout=CODEX_EXEC_TIMEOUT_SECONDS,
@@ -300,7 +304,7 @@ def _run_codex_stream(stream_id, prompt):
     try:
         process = subprocess.Popen(
             cmd,
-            cwd=str(REPO_ROOT),
+            cwd=str(WORKSPACE_DIR),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -354,6 +358,7 @@ def _run_codex_stream(stream_id, prompt):
             stream['exit_code'] = exit_code
             stream['updated_at'] = time.time()
             stream['process'] = None
+    finalize_codex_stream(stream_id)
 
 
 def create_codex_stream(session_id, prompt):
@@ -419,11 +424,18 @@ def finalize_codex_stream(stream_id):
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
         exit_code = stream.get('exit_code')
+        created_at = stream.get('created_at')
+        updated_at = stream.get('updated_at') or time.time()
+
+    duration_ms = None
+    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
+        duration_ms = max(0, int((updated_at - created_at) * 1000))
+    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
 
     if exit_code == 0:
-        return append_message(session_id, 'assistant', output)
+        return append_message(session_id, 'assistant', output, metadata)
     message_text = error or output or 'Codex 실행에 실패했습니다.'
-    return append_message(session_id, 'error', message_text)
+    return append_message(session_id, 'error', message_text, metadata)
 
 
 def stop_codex_stream(stream_id):
@@ -439,6 +451,8 @@ def stop_codex_stream(stream_id):
         session_id = stream.get('session_id')
         output = (stream.get('output') or '').strip()
         error = (stream.get('error') or '').strip()
+        created_at = stream.get('created_at')
+        updated_at = stream.get('updated_at') or time.time()
 
     if process and process.poll() is None:
         try:
@@ -455,7 +469,11 @@ def stop_codex_stream(stream_id):
     else:
         message_text = '사용자에 의해 중지되었습니다.'
 
-    saved_message = append_message(session_id, 'error', message_text)
+    duration_ms = None
+    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
+        duration_ms = max(0, int((updated_at - created_at) * 1000))
+    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
+    saved_message = append_message(session_id, 'error', message_text, metadata)
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)

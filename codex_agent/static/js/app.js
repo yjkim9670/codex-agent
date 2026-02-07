@@ -7,12 +7,22 @@ const state = {
     streamTimer: null,
     streamPolling: false,
     autoScrollEnabled: true,
-    autoScrollThreshold: 48
+    autoScrollThreshold: 48,
+    settings: {
+        model: null,
+        modelOptions: [],
+        usage: null
+    }
 };
 
 const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
 const ACTIVE_STREAM_KEY = 'codexActiveStream';
+const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
+const THEME_KEY = 'codexTheme';
+const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
+
+let hasManualTheme = false;
 
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('codex-chat-form');
@@ -23,6 +33,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const themeToggle = document.getElementById('codex-theme-toggle');
+    const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
+    const modelSelect = document.getElementById('codex-model-select');
+    const modelInput = document.getElementById('codex-model-input');
+    const modelApply = document.getElementById('codex-model-apply');
+    const controlsToggle = document.getElementById('codex-controls-toggle');
+    const controls = document.getElementById('codex-controls');
+    const controlsRefresh = document.getElementById('codex-controls-refresh');
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -56,7 +74,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (controlsToggle && controls) {
+        controlsToggle.addEventListener('click', () => {
+            const collapsed = controls.classList.contains('is-collapsed');
+            setControlsCollapsed(!collapsed);
+            if (controls.classList.contains('is-collapsed') === false) {
+                void loadSettings({ silent: true });
+            }
+        });
+    }
+
+    if (controlsRefresh) {
+        controlsRefresh.addEventListener('click', () => {
+            void loadSettings({ silent: false });
+        });
+    }
+
     syncSessionsLayout(mobileMedia.matches);
+    syncControlsLayout();
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', event => {
             syncSessionsLayout(event.matches);
@@ -73,6 +108,30 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (modelSelect) {
+        modelSelect.addEventListener('change', () => {
+            if (modelSelect.value && modelInput) {
+                modelInput.value = modelSelect.value;
+            }
+        });
+    }
+
+    if (modelInput) {
+        modelInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void updateModel();
+            }
+        });
+    }
+
+    if (modelApply) {
+        modelApply.addEventListener('click', () => {
+            void updateModel();
+        });
+    }
+
+    initializeTheme(themeToggle, themeMedia);
     void initializeApp();
 });
 
@@ -83,6 +142,7 @@ async function initializeApp() {
     if (pending) {
         await resumeStreamFromStorage(pending);
     }
+    void loadSettings({ silent: true });
 }
 
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
@@ -118,6 +178,90 @@ function syncSessionsLayout(isMobile) {
         void error;
     }
     setSessionsCollapsed(collapsed, { persist: false });
+}
+
+function setControlsCollapsed(collapsed, { persist = true } = {}) {
+    const controls = document.getElementById('codex-controls');
+    const toggle = document.getElementById('codex-controls-toggle');
+    if (!controls || !toggle) return;
+    controls.classList.toggle('is-collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    if (persist) {
+        try {
+            localStorage.setItem(CONTROLS_COLLAPSE_KEY, collapsed ? '1' : '0');
+        } catch (error) {
+            void error;
+        }
+    }
+}
+
+function syncControlsLayout() {
+    let collapsed = true;
+    try {
+        const stored = localStorage.getItem(CONTROLS_COLLAPSE_KEY);
+        if (stored !== null) {
+            collapsed = stored === '1';
+        }
+    } catch (error) {
+        void error;
+    }
+    setControlsCollapsed(collapsed, { persist: false });
+}
+
+function initializeTheme(themeToggle, themeMedia) {
+    const storedTheme = getStoredTheme();
+    if (storedTheme) {
+        hasManualTheme = true;
+        applyTheme(storedTheme, { persist: false });
+    } else {
+        applyTheme(themeMedia?.matches ? 'dark' : 'light', { persist: false });
+    }
+
+    if (themeToggle) {
+        themeToggle.addEventListener('change', () => {
+            const nextTheme = themeToggle.checked ? 'dark' : 'light';
+            hasManualTheme = true;
+            applyTheme(nextTheme);
+        });
+    }
+
+    if (themeMedia) {
+        const handler = event => {
+            if (hasManualTheme) return;
+            applyTheme(event.matches ? 'dark' : 'light', { persist: false });
+        };
+        if (typeof themeMedia.addEventListener === 'function') {
+            themeMedia.addEventListener('change', handler);
+        } else if (typeof themeMedia.addListener === 'function') {
+            themeMedia.addListener(handler);
+        }
+    }
+}
+
+function applyTheme(theme, { persist = true } = {}) {
+    const root = document.documentElement;
+    if (!root) return;
+    const normalized = theme === 'dark' ? 'dark' : 'light';
+    root.dataset.theme = normalized;
+    const toggle = document.getElementById('codex-theme-toggle');
+    if (toggle) toggle.checked = normalized === 'dark';
+    if (persist) {
+        try {
+            localStorage.setItem(THEME_KEY, normalized);
+        } catch (error) {
+            void error;
+        }
+    }
+}
+
+function getStoredTheme() {
+    try {
+        const stored = localStorage.getItem(THEME_KEY);
+        if (stored === 'dark' || stored === 'light') return stored;
+        return null;
+    } catch (error) {
+        return null;
+    }
 }
 
 function getPersistedStream() {
@@ -181,11 +325,132 @@ async function loadSessions({ preserveActive = true, selectSessionId = null } = 
             renderMessages([]);
             updateHeader(null);
         }
+        void loadSettings({ silent: true });
         setStatus('Idle');
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to load sessions.'), true);
     } finally {
         state.loading = false;
+    }
+}
+
+async function loadSettings({ silent = true } = {}) {
+    const refreshBtn = document.getElementById('codex-controls-refresh');
+    if (refreshBtn) refreshBtn.classList.add('is-loading');
+    try {
+        const response = await fetch('/api/codex/settings');
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to load settings.');
+        }
+        state.settings = {
+            model: result?.settings?.model || null,
+            modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
+            usage: result?.usage || null
+        };
+        updateUsageSummary(state.settings.usage);
+        updateModelControls(state.settings.model, state.settings.modelOptions);
+    } catch (error) {
+        updateUsageSummary(null);
+        updateModelControls(state.settings.model, state.settings.modelOptions);
+        setModelStatus(null, normalizeError(error, 'Failed to load settings.'));
+        if (!silent) {
+            setStatus(normalizeError(error, 'Failed to load settings.'), true);
+        }
+    } finally {
+        if (refreshBtn) refreshBtn.classList.remove('is-loading');
+    }
+}
+
+function updateUsageSummary(usage) {
+    const element = document.getElementById('codex-usage-summary');
+    if (!element) return;
+    if (!usage) {
+        element.textContent = 'Usage unavailable';
+        return;
+    }
+    const sessions = Number.isFinite(usage.sessions) ? usage.sessions : 0;
+    const messages = Number.isFinite(usage.messages) ? usage.messages : 0;
+    const chars = Number.isFinite(usage.chars) ? usage.chars : 0;
+    element.textContent = `${sessions} sessions · ${messages} msgs · ${formatNumber(chars)} chars`;
+}
+
+function updateModelControls(model, options) {
+    const select = document.getElementById('codex-model-select');
+    const input = document.getElementById('codex-model-input');
+    if (select) {
+        select.innerHTML = '';
+        if (options && options.length > 0) {
+            select.classList.remove('is-hidden');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select model';
+            select.appendChild(placeholder);
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                select.appendChild(option);
+            });
+            if (model) {
+                select.value = options.includes(model) ? model : '';
+            } else {
+                select.value = '';
+            }
+        } else {
+            select.classList.add('is-hidden');
+        }
+    }
+    if (input) {
+        input.value = model || '';
+        input.placeholder = model ? model : 'Default model';
+    }
+    setModelStatus(model);
+}
+
+function setModelStatus(model, overrideText = null) {
+    const status = document.getElementById('codex-model-status');
+    if (!status) return;
+    if (overrideText) {
+        status.textContent = overrideText;
+        return;
+    }
+    if (model) {
+        status.textContent = `Current: ${model}`;
+    } else {
+        status.textContent = 'Using default model';
+    }
+}
+
+async function updateModel() {
+    const input = document.getElementById('codex-model-input');
+    const status = document.getElementById('codex-model-status');
+    const refreshBtn = document.getElementById('codex-controls-refresh');
+    const model = input ? input.value.trim() : '';
+    if (status) status.textContent = 'Saving...';
+    if (refreshBtn) refreshBtn.classList.add('is-loading');
+    try {
+        const response = await fetch('/api/codex/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result?.error || 'Failed to update model.');
+        }
+        state.settings.model = result?.settings?.model || null;
+        state.settings.modelOptions = Array.isArray(result?.model_options)
+            ? result.model_options
+            : state.settings.modelOptions;
+        state.settings.usage = result?.usage || state.settings.usage;
+        updateUsageSummary(state.settings.usage);
+        updateModelControls(state.settings.model, state.settings.modelOptions);
+        if (status) status.textContent = 'Saved';
+    } catch (error) {
+        if (status) status.textContent = normalizeError(error, 'Failed to update model.');
+    } finally {
+        if (refreshBtn) refreshBtn.classList.remove('is-loading');
     }
 }
 
@@ -286,7 +551,16 @@ function renderSessions() {
         meta.className = 'session-meta';
         const updated = formatTimestamp(session.updated_at);
         const count = Number.isFinite(session.message_count) ? session.message_count : 0;
-        meta.textContent = updated ? `Updated ${updated} - ${count} msgs` : `Messages ${count}`;
+        const metaText = document.createElement('span');
+        metaText.textContent = updated ? `Updated ${updated} - ${count} msgs` : `Messages ${count}`;
+        meta.appendChild(metaText);
+        if (isSessionStreaming(session.id)) {
+            const spinner = document.createElement('span');
+            spinner.className = 'session-spinner';
+            spinner.setAttribute('aria-label', 'Streaming');
+            spinner.setAttribute('title', 'Streaming');
+            meta.appendChild(spinner);
+        }
 
         selectBtn.appendChild(title);
         selectBtn.appendChild(meta);
@@ -326,6 +600,11 @@ function renderSessions() {
         item.appendChild(actions);
         list.appendChild(item);
     });
+}
+
+function isSessionStreaming(sessionId) {
+    if (!sessionId) return false;
+    return Boolean(state.stream && state.stream.sessionId === sessionId);
 }
 
 function upsertSessionSummary(session) {
@@ -597,11 +876,13 @@ function stopStreamPolling() {
     }
     state.stream = null;
     state.streamPolling = false;
+    renderSessions();
 }
 
 function beginStreamPolling(stream) {
     stopStreamPolling();
     state.stream = stream;
+    renderSessions();
     pollStream();
     state.streamTimer = setInterval(() => {
         pollStream();
@@ -799,6 +1080,7 @@ function setBusy(isBusy) {
     if (sendBtn) {
         sendBtn.disabled = false;
         sendBtn.textContent = isBusy ? 'Stop' : 'Send';
+        sendBtn.dataset.mode = isBusy ? 'stop' : 'send';
     }
     if (newBtn) newBtn.disabled = isBusy;
     if (refreshBtn) refreshBtn.disabled = isBusy;
@@ -974,6 +1256,11 @@ function formatDuration(durationMs) {
     const minutes = Math.floor(rounded / 60);
     const seconds = String(rounded % 60).padStart(2, '0');
     return `${minutes}분 ${seconds}초`;
+}
+
+function formatNumber(value) {
+    if (!Number.isFinite(value)) return '0';
+    return value.toLocaleString('en-US');
 }
 
 function setMessageStreaming(wrapper, isStreaming) {

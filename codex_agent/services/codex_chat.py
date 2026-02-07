@@ -12,12 +12,15 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_EXEC_TIMEOUT_SECONDS,
+    CODEX_SETTINGS_PATH,
     CODEX_STREAM_TTL_SECONDS,
+    CODEX_DEFAULT_MODEL,
     WORKSPACE_DIR,
 )
 from ..utils.time import normalize_timestamp
 
 _DATA_LOCK = threading.Lock()
+_SETTINGS_LOCK = threading.Lock()
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -48,6 +51,68 @@ def _save_data(data):
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding='utf-8'
     )
+
+
+def _load_settings():
+    if not CODEX_SETTINGS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(CODEX_SETTINGS_PATH.read_text(encoding='utf-8'))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _save_settings(data):
+    CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_SETTINGS_PATH.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding='utf-8'
+    )
+
+
+def get_settings():
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+    model = (settings.get('model') or '').strip()
+    if not model:
+        model = CODEX_DEFAULT_MODEL
+    return {'model': model or None}
+
+
+def set_model(model):
+    normalized = (model or '').strip()
+    with _SETTINGS_LOCK:
+        settings = _load_settings()
+        if normalized:
+            settings['model'] = normalized
+        else:
+            settings.pop('model', None)
+        _save_settings(settings)
+    return get_settings()
+
+
+def get_usage_summary():
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session_count = len(sessions)
+        message_count = 0
+        char_count = 0
+        for session in sessions:
+            messages = session.get('messages', [])
+            if not isinstance(messages, list):
+                continue
+            for message in messages:
+                message_count += 1
+                char_count += len(str(message.get('content') or ''))
+    return {
+        'sessions': session_count,
+        'messages': message_count,
+        'chars': char_count
+    }
 
 
 def _sort_sessions(sessions):
@@ -217,19 +282,27 @@ def build_codex_prompt(messages, prompt):
     return transcript[-CODEX_CONTEXT_MAX_CHARS:]
 
 
-def execute_codex_prompt(prompt):
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
+def _build_codex_command(prompt, output_path=None):
     cmd = [
         'codex',
         'exec',
         '--full-auto',
         '--color',
-        'never',
-        '--output-last-message',
-        str(output_path),
-        prompt
+        'never'
     ]
+    model = get_settings().get('model')
+    if model:
+        cmd.extend(['--model', model])
+    if output_path:
+        cmd.extend(['--output-last-message', str(output_path)])
+    cmd.append(prompt)
+    return cmd
+
+
+def execute_codex_prompt(prompt):
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
+    cmd = _build_codex_command(prompt, output_path=output_path)
     try:
         result = subprocess.run(
             cmd,
@@ -293,14 +366,7 @@ def _stream_reader(stream_id, pipe, key):
 
 
 def _run_codex_stream(stream_id, prompt):
-    cmd = [
-        'codex',
-        'exec',
-        '--full-auto',
-        '--color',
-        'never',
-        prompt
-    ]
+    cmd = _build_codex_command(prompt)
     try:
         process = subprocess.Popen(
             cmd,

@@ -14,6 +14,13 @@
                 <p>Manage Codex CLI conversations.</p>
             </div>
             <div class="header-actions">
+                <div class="theme-toggle">
+                    <span class="theme-label">Dark mode</span>
+                    <label class="theme-switch">
+                        <input type="checkbox" id="codex-theme-toggle" aria-label="Toggle dark mode">
+                        <span class="theme-slider" aria-hidden="true"></span>
+                    </label>
+                </div>
                 <button class="btn secondary" type="button" id="codex-chat-new-session">+ New session</button>
             </div>
         </header>
@@ -46,10 +53,35 @@
                     </div>
                 </div>
 
+                <div class="chat-controls" id="codex-controls">
+                    <div class="chat-controls-header">
+                        <button class="chat-controls-toggle" type="button" id="codex-controls-toggle" aria-expanded="false" aria-controls="codex-controls-body">
+                            <span>Usage &amp; Model</span>
+                            <span class="controls-chevron" aria-hidden="true"></span>
+                        </button>
+                        <button class="controls-refresh" type="button" id="codex-controls-refresh" aria-label="Refresh usage and model"></button>
+                    </div>
+                    <div class="chat-controls-body" id="codex-controls-body">
+                        <div class="usage-card">
+                            <div class="usage-label">Usage</div>
+                            <div class="usage-value" id="codex-usage-summary">Loading...</div>
+                        </div>
+                        <div class="model-card">
+                            <label class="model-label" for="codex-model-input">Model</label>
+                            <div class="model-row">
+                                <select id="codex-model-select" class="model-select" aria-label="Select model"></select>
+                                <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
+                                <button class="btn ghost model-apply" type="button" id="codex-model-apply">Apply</button>
+                            </div>
+                            <div class="model-status" id="codex-model-status"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <form id="codex-chat-form" class="chat-input" autocomplete="off">
                     <label class="sr-only" for="codex-chat-input">Codex prompt</label>
                     <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
-                    <button class="btn primary" type="submit" id="codex-chat-send">Send</button>
+                    <button class="btn primary" type="submit" id="codex-chat-send" aria-label="Send">Send</button>
                 </form>
 
                 <div id="codex-chat-status" class="chat-status">Idle</div>

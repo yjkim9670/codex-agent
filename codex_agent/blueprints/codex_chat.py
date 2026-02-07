@@ -4,7 +4,12 @@ import time
 
 from flask import Blueprint, jsonify, request
 
-from ..config import CODEX_MAX_PROMPT_CHARS, CODEX_MAX_TITLE_CHARS
+from ..config import (
+    CODEX_MAX_MODEL_CHARS,
+    CODEX_MAX_PROMPT_CHARS,
+    CODEX_MAX_TITLE_CHARS,
+    CODEX_MODEL_OPTIONS,
+)
 from ..services.codex_chat import (
     append_message,
     build_codex_prompt,
@@ -16,13 +21,41 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_session,
+    get_settings,
+    get_usage_summary,
     read_codex_stream,
     list_sessions,
     rename_session,
+    set_model,
     stop_codex_stream,
 )
 
 bp = Blueprint('codex_chat', __name__)
+
+
+@bp.route('/api/codex/settings')
+def codex_settings():
+    return jsonify({
+        'settings': get_settings(),
+        'model_options': CODEX_MODEL_OPTIONS,
+        'usage': get_usage_summary()
+    })
+
+
+@bp.route('/api/codex/settings', methods=['PATCH'])
+def codex_settings_update():
+    payload = request.get_json(silent=True) or {}
+    model = payload.get('model')
+    if model is not None:
+        model = str(model).strip()
+        if len(model) > CODEX_MAX_MODEL_CHARS:
+            return jsonify({'error': '모델 이름이 너무 깁니다.'}), 400
+    settings = set_model(model)
+    return jsonify({
+        'settings': settings,
+        'model_options': CODEX_MODEL_OPTIONS,
+        'usage': get_usage_summary()
+    })
 
 
 @bp.route('/api/codex/sessions')

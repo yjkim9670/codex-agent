@@ -64,16 +64,21 @@
                     <div class="chat-controls-body" id="codex-controls-body">
                         <div class="usage-card">
                             <div class="usage-label">Usage</div>
-                            <div class="usage-value" id="codex-usage-summary">Loading...</div>
+                            <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
                             <label class="model-label" for="codex-model-input">Model</label>
                             <div class="model-row">
-                                <select id="codex-model-select" class="model-select" aria-label="Select model"></select>
+                                <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model"></select>
                                 <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
                                 <button class="btn ghost model-apply" type="button" id="codex-model-apply">Apply</button>
                             </div>
-                            <div class="model-status" id="codex-model-status"></div>
+                            <div class="model-sub-label">Reasoning effort</div>
+                            <div class="model-row is-compact">
+                                <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort"></select>
+                                <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
+                            </div>
+                            <div class="model-status" id="codex-model-status">Refresh to load</div>
                         </div>
                     </div>
                 </div>

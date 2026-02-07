@@ -7,8 +7,10 @@ from flask import Blueprint, jsonify, request
 from ..config import (
     CODEX_MAX_MODEL_CHARS,
     CODEX_MAX_PROMPT_CHARS,
+    CODEX_MAX_REASONING_CHARS,
     CODEX_MAX_TITLE_CHARS,
     CODEX_MODEL_OPTIONS,
+    CODEX_REASONING_OPTIONS,
 )
 from ..services.codex_chat import (
     append_message,
@@ -26,7 +28,7 @@ from ..services.codex_chat import (
     read_codex_stream,
     list_sessions,
     rename_session,
-    set_model,
+    update_settings,
     stop_codex_stream,
 )
 
@@ -38,6 +40,7 @@ def codex_settings():
     return jsonify({
         'settings': get_settings(),
         'model_options': CODEX_MODEL_OPTIONS,
+        'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': get_usage_summary()
     })
 
@@ -46,14 +49,20 @@ def codex_settings():
 def codex_settings_update():
     payload = request.get_json(silent=True) or {}
     model = payload.get('model')
+    reasoning = payload.get('reasoning_effort')
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
             return jsonify({'error': '모델 이름이 너무 깁니다.'}), 400
-    settings = set_model(model)
+    if reasoning is not None:
+        reasoning = str(reasoning).strip()
+        if len(reasoning) > CODEX_MAX_REASONING_CHARS:
+            return jsonify({'error': 'reasoning_effort가 너무 깁니다.'}), 400
+    settings = update_settings(model=model, reasoning_effort=reasoning)
     return jsonify({
         'settings': settings,
         'model_options': CODEX_MODEL_OPTIONS,
+        'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': get_usage_summary()
     })
 

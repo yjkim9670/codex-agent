@@ -6,12 +6,17 @@ const state = {
     stream: null,
     streamTimer: null,
     streamPolling: false,
+    streamFailureCount: 0,
+    streamPollDelay: 800,
     autoScrollEnabled: true,
     autoScrollThreshold: 48,
     settings: {
         model: null,
         modelOptions: [],
-        usage: null
+        reasoningEffort: null,
+        reasoningOptions: [],
+        usage: null,
+        loaded: false
     }
 };
 
@@ -21,6 +26,10 @@ const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
 const THEME_KEY = 'codexTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
+const STREAM_POLL_BASE_MS = 800;
+const STREAM_POLL_MAX_MS = 5000;
+const MESSAGE_COLLAPSE_LINES = 12;
+const MESSAGE_COLLAPSE_CHARS = 1200;
 
 let hasManualTheme = false;
 
@@ -38,6 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const modelSelect = document.getElementById('codex-model-select');
     const modelInput = document.getElementById('codex-model-input');
     const modelApply = document.getElementById('codex-model-apply');
+    const reasoningSelect = document.getElementById('codex-reasoning-select');
+    const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
     const controlsRefresh = document.getElementById('codex-controls-refresh');
@@ -78,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
         controlsToggle.addEventListener('click', () => {
             const collapsed = controls.classList.contains('is-collapsed');
             setControlsCollapsed(!collapsed);
-            if (controls.classList.contains('is-collapsed') === false) {
+            if (collapsed && !state.settings.loaded) {
                 void loadSettings({ silent: true });
             }
         });
@@ -120,14 +131,31 @@ document.addEventListener('DOMContentLoaded', () => {
         modelInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') {
                 event.preventDefault();
-                void updateModel();
+                void updateSettings();
             }
         });
     }
 
     if (modelApply) {
         modelApply.addEventListener('click', () => {
-            void updateModel();
+            void updateSettings();
+        });
+    }
+
+    if (reasoningSelect) {
+        reasoningSelect.addEventListener('change', () => {
+            if (reasoningSelect.value && reasoningInput) {
+                reasoningInput.value = reasoningSelect.value;
+            }
+        });
+    }
+
+    if (reasoningInput) {
+        reasoningInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void updateSettings();
+            }
         });
     }
 
@@ -142,7 +170,6 @@ async function initializeApp() {
     if (pending) {
         await resumeStreamFromStorage(pending);
     }
-    void loadSettings({ silent: true });
 }
 
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
@@ -325,7 +352,6 @@ async function loadSessions({ preserveActive = true, selectSessionId = null } = 
             renderMessages([]);
             updateHeader(null);
         }
-        void loadSettings({ silent: true });
         setStatus('Idle');
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to load sessions.'), true);
@@ -338,22 +364,26 @@ async function loadSettings({ silent = true } = {}) {
     const refreshBtn = document.getElementById('codex-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const response = await fetch('/api/codex/settings');
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to load settings.');
-        }
+        const result = await fetchJson('/api/codex/settings');
         state.settings = {
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
-            usage: result?.usage || null
+            reasoningEffort: result?.settings?.reasoning_effort || null,
+            reasoningOptions: Array.isArray(result?.reasoning_options)
+                ? result.reasoning_options
+                : [],
+            usage: result?.usage || null,
+            loaded: true
         };
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
         updateModelControls(state.settings.model, state.settings.modelOptions);
-        setModelStatus(null, normalizeError(error, 'Failed to load settings.'));
+        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
         }
@@ -366,7 +396,7 @@ function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
     if (!usage) {
-        element.textContent = 'Usage unavailable';
+        element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         return;
     }
     const sessions = Number.isFinite(usage.sessions) ? usage.sessions : 0;
@@ -405,53 +435,109 @@ function updateModelControls(model, options) {
         input.value = model || '';
         input.placeholder = model ? model : 'Default model';
     }
-    setModelStatus(model);
+    setSettingsStatus(model, state.settings.reasoningEffort);
 }
 
-function setModelStatus(model, overrideText = null) {
+function updateReasoningControls(reasoning, options) {
+    const select = document.getElementById('codex-reasoning-select');
+    const input = document.getElementById('codex-reasoning-input');
+    if (select) {
+        select.innerHTML = '';
+        if (options && options.length > 0) {
+            select.classList.remove('is-hidden');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select effort';
+            select.appendChild(placeholder);
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                select.appendChild(option);
+            });
+            if (reasoning) {
+                select.value = options.includes(reasoning) ? reasoning : '';
+            } else {
+                select.value = '';
+            }
+        } else {
+            select.classList.add('is-hidden');
+        }
+    }
+    if (input) {
+        input.value = reasoning || '';
+        input.placeholder = reasoning ? reasoning : 'Default effort';
+    }
+}
+
+function setSettingsStatus(model, reasoning, overrideText = null) {
     const status = document.getElementById('codex-model-status');
     if (!status) return;
     if (overrideText) {
         status.textContent = overrideText;
         return;
     }
-    if (model) {
-        status.textContent = `Current: ${model}`;
-    } else {
-        status.textContent = 'Using default model';
+    if (!state.settings.loaded && !model && !reasoning) {
+        status.textContent = 'Refresh to load';
+        return;
     }
+    const modelText = model ? model : 'default';
+    const reasoningText = reasoning ? reasoning : 'default';
+    status.textContent = `Model: ${modelText} · Reasoning: ${reasoningText}`;
 }
 
-async function updateModel() {
+async function updateSettings() {
     const input = document.getElementById('codex-model-input');
     const status = document.getElementById('codex-model-status');
     const refreshBtn = document.getElementById('codex-controls-refresh');
+    const reasoningInput = document.getElementById('codex-reasoning-input');
     const model = input ? input.value.trim() : '';
+    const reasoning_effort = reasoningInput ? reasoningInput.value.trim() : '';
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const response = await fetch('/api/codex/settings', {
+        const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model })
+            body: JSON.stringify({ model, reasoning_effort })
         });
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to update model.');
-        }
         state.settings.model = result?.settings?.model || null;
+        state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.modelOptions = Array.isArray(result?.model_options)
             ? result.model_options
             : state.settings.modelOptions;
+        state.settings.reasoningOptions = Array.isArray(result?.reasoning_options)
+            ? result.reasoning_options
+            : state.settings.reasoningOptions;
         state.settings.usage = result?.usage || state.settings.usage;
+        state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
-        if (status) status.textContent = normalizeError(error, 'Failed to update model.');
+        if (status) status.textContent = normalizeError(error, 'Failed to update settings.');
     } finally {
         if (refreshBtn) refreshBtn.classList.remove('is-loading');
     }
+}
+
+async function fetchJson(url, options) {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data?.error || `Request failed (${response.status})`);
+        }
+        return data;
+    }
+    const text = await response.text();
+    if (!response.ok) {
+        throw new Error(`Request failed (${response.status})`);
+    }
+    throw new Error(text || 'Unexpected response format.');
 }
 
 async function resumeStreamFromStorage(pending) {
@@ -868,7 +954,7 @@ function startStream(streamId, sessionId, assistantEntry, startedAt) {
 
 function stopStreamPolling() {
     if (state.streamTimer) {
-        clearInterval(state.streamTimer);
+        clearTimeout(state.streamTimer);
         state.streamTimer = null;
     }
     if (state.stream?.entry?.wrapper) {
@@ -876,17 +962,27 @@ function stopStreamPolling() {
     }
     state.stream = null;
     state.streamPolling = false;
+    state.streamFailureCount = 0;
+    state.streamPollDelay = STREAM_POLL_BASE_MS;
     renderSessions();
 }
 
 function beginStreamPolling(stream) {
     stopStreamPolling();
     state.stream = stream;
+    state.streamFailureCount = 0;
+    state.streamPollDelay = STREAM_POLL_BASE_MS;
     renderSessions();
-    pollStream();
-    state.streamTimer = setInterval(() => {
+    scheduleStreamPoll(0);
+}
+
+function scheduleStreamPoll(delay) {
+    if (state.streamTimer) {
+        clearTimeout(state.streamTimer);
+    }
+    state.streamTimer = setTimeout(() => {
         pollStream();
-    }, 800);
+    }, delay);
 }
 
 async function stopStream() {
@@ -930,15 +1026,14 @@ async function pollStream() {
     state.streamPolling = true;
 
     try {
-        const response = await fetch(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to fetch stream.');
-        }
+        const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
 
         if (!state.stream || state.stream.id !== stream.id) {
             return;
         }
+
+        state.streamFailureCount = 0;
+        state.streamPollDelay = STREAM_POLL_BASE_MS;
 
         if (result?.output) {
             stream.output += result.output;
@@ -960,13 +1055,18 @@ async function pollStream() {
 
         if (result?.done) {
             await finishStream(result);
+            return;
         }
+        scheduleStreamPoll(STREAM_POLL_BASE_MS);
     } catch (error) {
-        setStatus(normalizeError(error, 'Failed to fetch stream.'), true);
-        clearPersistedStream();
-        stopStreamPolling();
-        setBusy(false);
-        state.sending = false;
+        state.streamFailureCount += 1;
+        const backoff = Math.min(
+            STREAM_POLL_MAX_MS,
+            STREAM_POLL_BASE_MS * Math.pow(2, Math.min(state.streamFailureCount, 3))
+        );
+        state.streamPollDelay = backoff;
+        setStatus('Connection lost. Retrying...', true);
+        scheduleStreamPoll(backoff);
     } finally {
         state.streamPolling = false;
     }
@@ -1138,7 +1238,8 @@ function setAutoScrollEnabled(isEnabled) {
 
 function setMarkdownContent(element, content) {
     if (!element) return;
-    element.innerHTML = renderMarkdown(content || '');
+    const wasExpanded = Boolean(element.querySelector('details.message-details')?.open);
+    element.innerHTML = renderMessageContent(content || '', wasExpanded);
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = String(content || '');
@@ -1271,6 +1372,44 @@ function setMessageStreaming(wrapper, isStreaming) {
 function getStreamDuration(stream) {
     if (!stream?.startedAt) return null;
     return Math.max(0, Date.now() - stream.startedAt);
+}
+
+function renderMessageContent(content, expanded = false) {
+    const text = String(content || '');
+    if (!shouldCollapseMessage(text)) {
+        return renderMarkdown(text);
+    }
+    const previewText = buildMessagePreview(text);
+    const openAttr = expanded ? ' open' : '';
+    const summaryText = expanded ? 'Hide full message' : 'Show full message';
+    return [
+        `<div class="message-preview">${renderMarkdown(previewText)}</div>`,
+        `<details class="message-details"${openAttr}>`,
+        `<summary>${summaryText}</summary>`,
+        `<div class="message-full">${renderMarkdown(text)}</div>`,
+        `</details>`
+    ].join('');
+}
+
+function shouldCollapseMessage(text) {
+    if (!text) return false;
+    const lines = text.split(/\r?\n/);
+    if (lines.length > MESSAGE_COLLAPSE_LINES) return true;
+    return text.length > MESSAGE_COLLAPSE_CHARS;
+}
+
+function buildMessagePreview(text) {
+    if (!text) return '';
+    const lines = text.split(/\r?\n/);
+    if (lines.length > MESSAGE_COLLAPSE_LINES) {
+        const previewLines = lines.slice(-MESSAGE_COLLAPSE_LINES);
+        return `...\n${previewLines.join('\n')}`;
+    }
+    if (text.length > MESSAGE_COLLAPSE_CHARS) {
+        const tail = text.slice(-MESSAGE_COLLAPSE_CHARS);
+        return `...${tail}`;
+    }
+    return text;
 }
 
 function renderMarkdown(text) {

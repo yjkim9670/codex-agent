@@ -1,6 +1,7 @@
 """Codex chat session storage and execution helpers."""
 
 import json
+import re
 import subprocess
 import threading
 import time
@@ -10,17 +11,16 @@ from copy import deepcopy
 from .. import state
 from ..config import (
     CODEX_CHAT_STORE_PATH,
+    CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_EXEC_TIMEOUT_SECONDS,
-    CODEX_SETTINGS_PATH,
     CODEX_STREAM_TTL_SECONDS,
-    CODEX_DEFAULT_MODEL,
     WORKSPACE_DIR,
 )
 from ..utils.time import normalize_timestamp
 
 _DATA_LOCK = threading.Lock()
-_SETTINGS_LOCK = threading.Lock()
+_CONFIG_LOCK = threading.Lock()
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -53,44 +53,138 @@ def _save_data(data):
     )
 
 
-def _load_settings():
-    if not CODEX_SETTINGS_PATH.exists():
-        return {}
+_TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
+
+
+def _read_codex_config_text():
     try:
-        data = json.loads(CODEX_SETTINGS_PATH.read_text(encoding='utf-8'))
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return data
+        return CODEX_CONFIG_PATH.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return ''
+    except Exception:
+        return ''
 
 
-def _save_settings(data):
-    CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CODEX_SETTINGS_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding='utf-8'
-    )
+def _strip_inline_comment(value):
+    in_quote = None
+    escaped = False
+    for idx, char in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char in ('"', "'"):
+            if in_quote == char:
+                in_quote = None
+            elif in_quote is None:
+                in_quote = char
+            continue
+        if char == '#' and in_quote is None:
+            return value[:idx].strip()
+    return value.strip()
+
+
+def _parse_toml_value(raw_value):
+    cleaned = _strip_inline_comment(raw_value)
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
+        return cleaned[1:-1]
+    return cleaned
+
+
+def _parse_top_level_config(text):
+    model = None
+    reasoning = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if stripped.startswith('['):
+            break
+        match = _TOML_KEY_RE.match(line)
+        if not match:
+            continue
+        key = match.group(1)
+        value = _parse_toml_value(match.group(2))
+        if key == 'model':
+            model = value
+        elif key == 'model_reasoning_effort':
+            reasoning = value
+    return {
+        'model': model or None,
+        'reasoning_effort': reasoning or None
+    }
+
+
+def _escape_toml_string(value):
+    return str(value).replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _update_top_level_config(text, updates):
+    lines = text.splitlines()
+    found = {key: False for key in updates}
+    output = []
+    in_header = True
+
+    def maybe_insert_missing():
+        for key, value in updates.items():
+            if found.get(key):
+                continue
+            if value is None:
+                continue
+            output.append(f'{key} = "{_escape_toml_string(value)}"')
+            found[key] = True
+
+    for line in lines:
+        stripped = line.strip()
+        if in_header and stripped.startswith('['):
+            maybe_insert_missing()
+            in_header = False
+        if in_header:
+            match = _TOML_KEY_RE.match(line)
+            if match:
+                key = match.group(1)
+                if key in updates:
+                    value = updates[key]
+                    found[key] = True
+                    if value is None:
+                        continue
+                    output.append(f'{key} = "{_escape_toml_string(value)}"')
+                    continue
+        output.append(line)
+
+    if in_header:
+        maybe_insert_missing()
+
+    return '\n'.join(output).rstrip() + '\n' if output else ''
 
 
 def get_settings():
-    with _SETTINGS_LOCK:
-        settings = _load_settings()
-    model = (settings.get('model') or '').strip()
-    if not model:
-        model = CODEX_DEFAULT_MODEL
-    return {'model': model or None}
+    with _CONFIG_LOCK:
+        text = _read_codex_config_text()
+    return _parse_top_level_config(text)
 
 
-def set_model(model):
-    normalized = (model or '').strip()
-    with _SETTINGS_LOCK:
-        settings = _load_settings()
-        if normalized:
-            settings['model'] = normalized
-        else:
-            settings.pop('model', None)
-        _save_settings(settings)
+def update_settings(model=None, reasoning_effort=None):
+    updates = {}
+    if model is not None:
+        model = str(model).strip()
+        updates['model'] = model or None
+    if reasoning_effort is not None:
+        reasoning_effort = str(reasoning_effort).strip()
+        updates['model_reasoning_effort'] = reasoning_effort or None
+
+    if not updates:
+        return get_settings()
+
+    with _CONFIG_LOCK:
+        text = _read_codex_config_text()
+        if not text:
+            text = ''
+        new_text = _update_top_level_config(text, updates)
+        CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CODEX_CONFIG_PATH.write_text(new_text, encoding='utf-8')
     return get_settings()
 
 

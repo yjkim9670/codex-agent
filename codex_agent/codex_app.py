@@ -36,6 +36,24 @@ def create_codex_app():
     def codex_preflight(_):
         return ('', 204)
 
+    @app.errorhandler(404)
+    def codex_not_found(error):
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'API endpoint not found.'}), 404
+        return error
+
+    @app.errorhandler(405)
+    def codex_method_not_allowed(error):
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Method not allowed.'}), 405
+        return error
+
+    @app.errorhandler(500)
+    def codex_server_error(error):
+        if request.path.startswith('/api/'):
+            return jsonify({'error': 'Internal server error.'}), 500
+        return error
+
     @app.after_request
     def add_cors_headers(response):
         origin = request.headers.get('Origin')

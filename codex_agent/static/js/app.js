@@ -24,6 +24,10 @@ const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
 const ACTIVE_STREAM_KEY = 'codexActiveStream';
 const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
+const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
+const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
+const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
+const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
 const THEME_KEY = 'codexTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
@@ -113,6 +117,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    setupMobileViewportBehavior(mobileMedia, input);
+    setupMobileSettingsInputBehavior(mobileMedia, [modelInput, reasoningInput, modelSelect, reasoningSelect]);
+
     if (messages) {
         messages.addEventListener('scroll', () => {
             handleMessageScroll(messages);
@@ -159,6 +166,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    setBusy(false);
     initializeTheme(themeToggle, themeMedia);
     void initializeApp();
 });
@@ -198,13 +206,214 @@ function syncSessionsLayout(isMobile) {
         sessionsToggle.textContent = 'Hide sessions';
         return;
     }
-    let collapsed = false;
+    let collapsed = true;
     try {
-        collapsed = localStorage.getItem(SESSION_COLLAPSE_KEY) === '1';
+        const stored = localStorage.getItem(SESSION_COLLAPSE_KEY);
+        if (stored !== null) {
+            collapsed = stored === '1';
+        }
     } catch (error) {
         void error;
     }
     setSessionsCollapsed(collapsed, { persist: false });
+}
+
+function isMobileLayout() {
+    return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function isEditableElement(element) {
+    if (!element || typeof element.tagName !== 'string') return false;
+    const tag = element.tagName.toLowerCase();
+    if (tag === 'textarea' || tag === 'select') return true;
+    if (tag !== 'input') return false;
+    const type = (element.getAttribute('type') || 'text').toLowerCase();
+    return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type);
+}
+
+function isMobileKeyboardOpen(isMobile = isMobileLayout()) {
+    if (!isMobile) return false;
+    const activeElement = document.activeElement;
+    const hasEditableFocus = isEditableElement(activeElement);
+    if (!hasEditableFocus) return false;
+    const visualHeight = Number(window.visualViewport?.height);
+    const layoutHeight = Number(window.innerHeight);
+    if (Number.isFinite(visualHeight) && Number.isFinite(layoutHeight) && visualHeight > 0 && layoutHeight > 0) {
+        const viewportDelta = layoutHeight - visualHeight;
+        if (viewportDelta > MOBILE_KEYBOARD_VIEWPORT_DELTA) {
+            return true;
+        }
+    }
+    return hasEditableFocus;
+}
+
+function setMobileKeyboardOpen(open) {
+    const app = document.querySelector('.app');
+    if (!app) return;
+    app.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, Boolean(open));
+}
+
+function syncMobileKeyboardState(isMobile = isMobileLayout()) {
+    setMobileKeyboardOpen(isMobileKeyboardOpen(isMobile));
+}
+
+function applyMobileViewportHeight(isMobile = isMobileLayout()) {
+    const root = document.documentElement;
+    if (!root) return;
+    if (!isMobile) {
+        root.style.removeProperty(MOBILE_VIEWPORT_HEIGHT_VAR);
+        return;
+    }
+    const visualHeight = Number(window.visualViewport?.height);
+    const fallbackHeight = Number(window.innerHeight);
+    const nextHeight = Number.isFinite(visualHeight) && visualHeight > 0
+        ? visualHeight
+        : fallbackHeight;
+    if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+    const clamped = Math.max(320, Math.round(nextHeight));
+    root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
+}
+
+function setupMobileViewportBehavior(mobileMedia, input) {
+    applyMobileViewportHeight(mobileMedia.matches);
+    syncMobileKeyboardState(mobileMedia.matches);
+
+    const handleViewportChange = () => {
+        applyMobileViewportHeight(mobileMedia.matches);
+        syncMobileKeyboardState(mobileMedia.matches);
+    };
+
+    if (typeof mobileMedia.addEventListener === 'function') {
+        mobileMedia.addEventListener('change', handleViewportChange);
+    } else if (typeof mobileMedia.addListener === 'function') {
+        mobileMedia.addListener(handleViewportChange);
+    }
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleViewportChange);
+        window.visualViewport.addEventListener('scroll', handleViewportChange);
+    }
+    window.addEventListener('resize', handleViewportChange);
+
+    if (!input) return;
+    input.addEventListener('focus', () => {
+        if (!mobileMedia.matches) return;
+        syncMobileKeyboardState(true);
+        window.setTimeout(handleViewportChange, 80);
+    });
+    input.addEventListener('blur', () => {
+        if (!mobileMedia.matches) return;
+        window.setTimeout(handleViewportChange, 120);
+    });
+}
+
+function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
+    const fields = Array.isArray(inputs) ? inputs.filter(Boolean) : [];
+    if (!fields.length) return;
+    const getFocusedField = () => fields.find(field => field === document.activeElement) || null;
+    const hasFocusedField = () => Boolean(getFocusedField());
+
+    const keepFieldVisible = (field, behavior = 'auto') => {
+        if (!field) return;
+        const controlsBody = document.getElementById('codex-controls-body');
+        if (controlsBody && controlsBody.contains(field)) {
+            const bodyRect = controlsBody.getBoundingClientRect();
+            const fieldRect = field.getBoundingClientRect();
+            const topMargin = 12;
+            const bottomMargin = 28;
+            if (fieldRect.top < bodyRect.top + topMargin) {
+                controlsBody.scrollBy({
+                    top: fieldRect.top - (bodyRect.top + topMargin),
+                    behavior
+                });
+            } else if (fieldRect.bottom > bodyRect.bottom - bottomMargin) {
+                controlsBody.scrollBy({
+                    top: fieldRect.bottom - (bodyRect.bottom - bottomMargin),
+                    behavior
+                });
+            }
+            return;
+        }
+        field.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior });
+    };
+
+    const keepFocusedFieldVisible = (behavior = 'auto') => {
+        if (!mobileMedia.matches) return;
+        const focusedField = getFocusedField();
+        if (!focusedField) return;
+        applyMobileViewportHeight(true);
+        keepFieldVisible(focusedField, behavior);
+    };
+
+    const scheduleFocusedFieldVisibility = () => {
+        if (!mobileMedia.matches) return;
+        window.requestAnimationFrame(() => {
+            keepFocusedFieldVisible('auto');
+        });
+        window.setTimeout(() => {
+            keepFocusedFieldVisible('auto');
+        }, 120);
+        window.setTimeout(() => {
+            keepFocusedFieldVisible('auto');
+        }, 280);
+    };
+
+    const applyMobileFocusState = focused => {
+        const chat = document.querySelector('.chat');
+        if (!chat) return;
+        chat.classList.toggle(MOBILE_SETTINGS_FOCUS_CLASS, Boolean(focused));
+    };
+
+    const clearFocusStateIfNeeded = () => {
+        if (!mobileMedia.matches || hasFocusedField()) return;
+        applyMobileFocusState(false);
+        syncMobileKeyboardState(true);
+    };
+
+    const handleLayoutModeChange = event => {
+        if (event.matches) return;
+        applyMobileFocusState(false);
+        setMobileKeyboardOpen(false);
+    };
+
+    const handleMobileViewportChange = () => {
+        if (!mobileMedia.matches) {
+            setMobileKeyboardOpen(false);
+            return;
+        }
+        syncMobileKeyboardState(true);
+        scheduleFocusedFieldVisibility();
+    };
+
+    if (typeof mobileMedia.addEventListener === 'function') {
+        mobileMedia.addEventListener('change', handleLayoutModeChange);
+    } else if (typeof mobileMedia.addListener === 'function') {
+        mobileMedia.addListener(handleLayoutModeChange);
+    }
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleMobileViewportChange);
+        window.visualViewport.addEventListener('scroll', handleMobileViewportChange);
+    }
+    window.addEventListener('resize', handleMobileViewportChange);
+
+    fields.forEach(field => {
+        field.addEventListener('focus', () => {
+            if (!mobileMedia.matches) return;
+            applyMobileFocusState(true);
+            syncMobileKeyboardState(true);
+            keepFieldVisible(field, 'auto');
+            scheduleFocusedFieldVisibility();
+        });
+
+        field.addEventListener('blur', () => {
+            if (!mobileMedia.matches) return;
+            window.setTimeout(() => {
+                applyMobileViewportHeight(true);
+                clearFocusStateIfNeeded();
+                keepFocusedFieldVisible('auto');
+            }, 160);
+        });
+    });
 }
 
 function setControlsCollapsed(collapsed, { persist = true } = {}) {
@@ -1178,8 +1387,13 @@ function setBusy(isBusy) {
     if (input) input.disabled = isBusy;
     if (sendBtn) {
         sendBtn.disabled = false;
-        sendBtn.textContent = isBusy ? 'Stop' : 'Send';
         sendBtn.dataset.mode = isBusy ? 'stop' : 'send';
+        sendBtn.setAttribute('aria-label', isBusy ? 'Stop' : 'Send');
+        sendBtn.setAttribute('title', isBusy ? 'Stop' : 'Send');
+        const srLabel = sendBtn.querySelector('.sr-only');
+        if (srLabel) {
+            srLabel.textContent = isBusy ? 'Stop' : 'Send';
+        }
     }
     if (newBtn) newBtn.disabled = isBusy;
     if (refreshBtn) refreshBtn.disabled = isBusy;

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=2">
+    <link rel="stylesheet" href="/static/css/app.css?v=7">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -87,7 +87,9 @@
                 <form id="codex-chat-form" class="chat-input" autocomplete="off">
                     <label class="sr-only" for="codex-chat-input">Codex prompt</label>
                     <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
-                    <button class="btn primary" type="submit" id="codex-chat-send" aria-label="Send">Send</button>
+                    <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
+                        <span class="sr-only">Send</span>
+                    </button>
                 </form>
 
                 <div id="codex-chat-status" class="chat-status">Idle</div>
@@ -95,6 +97,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=7"></script>
 </body>
 </html>

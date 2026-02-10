@@ -3,7 +3,7 @@
 from flask import Flask, jsonify, render_template, request
 
 from .blueprints import codex_chat
-from .config import SECRET_KEY
+from .config import CODEX_MODEL_OPTIONS, CODEX_REASONING_OPTIONS, SECRET_KEY
 
 
 def _get_allowed_origins():
@@ -22,7 +22,11 @@ def create_codex_app():
 
     @app.route('/')
     def codex_root():
-        return render_template('index.html')
+        return render_template(
+            'index.html',
+            model_options=CODEX_MODEL_OPTIONS,
+            reasoning_options=CODEX_REASONING_OPTIONS
+        )
 
     @app.route('/health')
     def codex_health():

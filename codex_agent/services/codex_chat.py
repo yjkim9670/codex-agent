@@ -15,6 +15,7 @@ from ..config import (
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_EXEC_TIMEOUT_SECONDS,
     CODEX_SESSIONS_PATH,
+    CODEX_SETTINGS_PATH,
     CODEX_STREAM_TTL_SECONDS,
     WORKSPACE_DIR,
 )
@@ -64,6 +65,39 @@ def _read_codex_config_text():
         return ''
     except Exception:
         return ''
+
+
+def _read_workspace_settings():
+    try:
+        raw = CODEX_SETTINGS_PATH.read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    model = data.get('model')
+    reasoning = data.get('reasoning_effort')
+    return {
+        'model': model or None,
+        'reasoning_effort': reasoning or None
+    }
+
+
+def _write_workspace_settings(settings):
+    payload = {
+        'model': settings.get('model') or None,
+        'reasoning_effort': settings.get('reasoning_effort') or None
+    }
+    CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_SETTINGS_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding='utf-8'
+    )
 
 
 def _strip_inline_comment(value):
@@ -163,30 +197,38 @@ def _update_top_level_config(text, updates):
 
 def get_settings():
     with _CONFIG_LOCK:
+        if CODEX_SETTINGS_PATH.exists():
+            return _read_workspace_settings()
+        workspace_settings = _read_workspace_settings()
+        if workspace_settings.get('model') or workspace_settings.get('reasoning_effort'):
+            _write_workspace_settings(workspace_settings)
+            return workspace_settings
         text = _read_codex_config_text()
-    return _parse_top_level_config(text)
+        fallback = _parse_top_level_config(text)
+        if fallback.get('model') or fallback.get('reasoning_effort'):
+            _write_workspace_settings(fallback)
+            return fallback
+    return {'model': None, 'reasoning_effort': None}
 
 
 def update_settings(model=None, reasoning_effort=None):
-    updates = {}
-    if model is not None:
-        model = str(model).strip()
-        updates['model'] = model or None
-    if reasoning_effort is not None:
-        reasoning_effort = str(reasoning_effort).strip()
-        updates['model_reasoning_effort'] = reasoning_effort or None
-
-    if not updates:
-        return get_settings()
-
     with _CONFIG_LOCK:
-        text = _read_codex_config_text()
-        if not text:
-            text = ''
-        new_text = _update_top_level_config(text, updates)
-        CODEX_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CODEX_CONFIG_PATH.write_text(new_text, encoding='utf-8')
-    return get_settings()
+        current = _read_workspace_settings()
+        if not current and not CODEX_SETTINGS_PATH.exists():
+            text = _read_codex_config_text()
+            current = _parse_top_level_config(text)
+        next_settings = {
+            'model': current.get('model'),
+            'reasoning_effort': current.get('reasoning_effort')
+        }
+        if model is not None:
+            model = str(model).strip()
+            next_settings['model'] = model or None
+        if reasoning_effort is not None:
+            reasoning_effort = str(reasoning_effort).strip()
+            next_settings['reasoning_effort'] = reasoning_effort or None
+        _write_workspace_settings(next_settings)
+        return next_settings
 
 
 def _extract_limits(rate_limits):

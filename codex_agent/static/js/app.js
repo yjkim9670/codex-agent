@@ -8,6 +8,8 @@ const state = {
     streamPolling: false,
     streamFailureCount: 0,
     streamPollDelay: 800,
+    liveClockTimer: null,
+    weatherRefreshTimer: null,
     autoScrollEnabled: true,
     autoScrollThreshold: 48,
     settings: {
@@ -34,8 +36,40 @@ const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
+const KST_TIME_ZONE = 'Asia/Seoul';
+const WEATHER_REFRESH_MS = 10 * 60 * 1000;
+const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 
 let hasManualTheme = false;
+
+function readOptionsFromData(element) {
+    if (!element) return [];
+    const raw = element.getAttribute('data-options');
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+        // Ignore invalid JSON so we can fall back to API-loaded options.
+        void error;
+        return [];
+    }
+}
+
+function primeSettingsOptionsFromDom(modelSelect, reasoningSelect) {
+    const modelOptions = readOptionsFromData(modelSelect);
+    const reasoningOptions = readOptionsFromData(reasoningSelect);
+    if (modelOptions.length > 0) {
+        state.settings.modelOptions = modelOptions;
+    }
+    if (reasoningOptions.length > 0) {
+        state.settings.reasoningOptions = reasoningOptions;
+    }
+    if (modelOptions.length > 0 || reasoningOptions.length > 0) {
+        updateModelControls(state.settings.model, state.settings.modelOptions);
+        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+    }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('codex-chat-form');
@@ -105,6 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    primeSettingsOptionsFromDom(modelSelect, reasoningSelect);
+
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
     if (typeof mobileMedia.addEventListener === 'function') {
@@ -168,16 +204,321 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setBusy(false);
     initializeTheme(themeToggle, themeMedia);
+    initializeLiveWeatherPanel();
     void initializeApp();
 });
 
 async function initializeApp() {
+    if (!state.settings.loaded) {
+        void loadSettings({ silent: true });
+    }
     const pending = getPersistedStream();
     const targetSessionId = pending?.sessionId || null;
     await loadSessions({ preserveActive: true, selectSessionId: targetSessionId });
     if (pending) {
         await resumeStreamFromStorage(pending);
     }
+}
+
+function initializeLiveWeatherPanel() {
+    const toggle = document.getElementById('codex-live-weather-toggle');
+    if (!toggle) return;
+    setLiveWeatherExpanded(false);
+    updateLiveDatetime();
+    if (state.liveClockTimer) {
+        window.clearInterval(state.liveClockTimer);
+    }
+    state.liveClockTimer = window.setInterval(updateLiveDatetime, 1000);
+    toggle.addEventListener('click', () => {
+        const expanded = toggle.getAttribute('aria-expanded') === 'true';
+        setLiveWeatherExpanded(!expanded);
+    });
+    void loadLiveWeatherData();
+    if (state.weatherRefreshTimer) {
+        window.clearInterval(state.weatherRefreshTimer);
+    }
+    state.weatherRefreshTimer = window.setInterval(() => {
+        void loadLiveWeatherData({ silent: true });
+    }, WEATHER_REFRESH_MS);
+}
+
+function setLiveWeatherExpanded(expanded) {
+    const toggle = document.getElementById('codex-live-weather-toggle');
+    const forecast = document.getElementById('codex-live-weather-forecast');
+    if (!toggle || !forecast) return;
+    const isExpanded = Boolean(expanded);
+    toggle.setAttribute('aria-expanded', String(isExpanded));
+    forecast.hidden = !isExpanded;
+}
+
+function updateLiveDatetime() {
+    const datetime = document.getElementById('codex-live-datetime');
+    if (!datetime) return;
+    datetime.textContent = formatKstNow();
+}
+
+function formatKstNow() {
+    return new Intl.DateTimeFormat('ko-KR', {
+        timeZone: KST_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).format(new Date());
+}
+
+async function loadLiveWeatherData({ silent = false } = {}) {
+    const locationElement = document.getElementById('codex-weather-location');
+    const currentElement = document.getElementById('codex-weather-current');
+    const todayElement = document.getElementById('codex-weather-today');
+    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
+
+    if (!silent) {
+        locationElement.textContent = 'Locating...';
+        currentElement.textContent = 'Loading weather...';
+        todayElement.textContent = 'Loading...';
+        tomorrowElement.textContent = 'Loading...';
+    }
+
+    try {
+        const position = await resolveWeatherPosition();
+        if (!position) {
+            renderWeatherError('Location unavailable', 'Allow browser location permission.');
+            return;
+        }
+
+        const [locationName, weather] = await Promise.all([
+            fetchLocationName(position.latitude, position.longitude),
+            fetchWeatherForecast(position.latitude, position.longitude)
+        ]);
+
+        renderWeatherSummary({
+            locationName: locationName || 'Unknown location',
+            weather
+        });
+    } catch (error) {
+        renderWeatherError('Weather unavailable', normalizeError(error, 'Failed to load weather.'));
+    }
+}
+
+async function resolveWeatherPosition() {
+    try {
+        const current = await getCurrentGeoPosition();
+        writeStoredWeatherPosition(current);
+        return current;
+    } catch (error) {
+        const stored = readStoredWeatherPosition();
+        if (stored) return stored;
+        return null;
+    }
+}
+
+function getCurrentGeoPosition() {
+    return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+            reject(new Error('Geolocation is not supported.'));
+            return;
+        }
+        navigator.geolocation.getCurrentPosition(
+            position => {
+                resolve({
+                    latitude: Number(position.coords?.latitude),
+                    longitude: Number(position.coords?.longitude)
+                });
+            },
+            error => {
+                reject(error || new Error('Unable to get position.'));
+            },
+            {
+                enableHighAccuracy: false,
+                timeout: 12000,
+                maximumAge: 10 * 60 * 1000
+            }
+        );
+    });
+}
+
+function readStoredWeatherPosition() {
+    try {
+        const raw = localStorage.getItem(WEATHER_POSITION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const latitude = Number(parsed?.latitude);
+        const longitude = Number(parsed?.longitude);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+        return { latitude, longitude };
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeStoredWeatherPosition(position) {
+    const latitude = Number(position?.latitude);
+    const longitude = Number(position?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    try {
+        localStorage.setItem(
+            WEATHER_POSITION_KEY,
+            JSON.stringify({
+                latitude,
+                longitude,
+                updatedAt: Date.now()
+            })
+        );
+    } catch (error) {
+        void error;
+    }
+}
+
+async function fetchLocationName(latitude, longitude) {
+    const url = new URL('https://geocoding-api.open-meteo.com/v1/reverse');
+    url.searchParams.set('latitude', String(latitude));
+    url.searchParams.set('longitude', String(longitude));
+    url.searchParams.set('count', '1');
+    url.searchParams.set('language', 'en');
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+        throw new Error(`Failed to resolve location (${response.status}).`);
+    }
+    const payload = await response.json();
+    const first = Array.isArray(payload?.results) ? payload.results[0] : null;
+    if (!first) return '';
+
+    const city = first.city || first.town || first.village || first.name || '';
+    const region = first.admin1 || first.country_code || '';
+    return [city, region].filter(Boolean).join(', ');
+}
+
+async function fetchWeatherForecast(latitude, longitude) {
+    const url = new URL('https://api.open-meteo.com/v1/forecast');
+    url.searchParams.set('latitude', String(latitude));
+    url.searchParams.set('longitude', String(longitude));
+    url.searchParams.set('timezone', KST_TIME_ZONE);
+    url.searchParams.set('forecast_days', '2');
+    url.searchParams.set(
+        'current',
+        [
+            'temperature_2m',
+            'apparent_temperature',
+            'relative_humidity_2m',
+            'wind_speed_10m',
+            'weather_code',
+            'is_day'
+        ].join(',')
+    );
+    url.searchParams.set(
+        'daily',
+        [
+            'weather_code',
+            'temperature_2m_max',
+            'temperature_2m_min',
+            'precipitation_probability_max',
+            'sunrise',
+            'sunset'
+        ].join(',')
+    );
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+        throw new Error(`Failed to load weather (${response.status}).`);
+    }
+    return response.json();
+}
+
+function renderWeatherSummary({ locationName, weather }) {
+    const locationElement = document.getElementById('codex-weather-location');
+    const currentElement = document.getElementById('codex-weather-current');
+    const todayElement = document.getElementById('codex-weather-today');
+    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
+
+    const current = weather?.current || {};
+    const currentTemp = formatTemperatureValue(current.temperature_2m);
+    const feelsLike = formatTemperatureValue(current.apparent_temperature);
+    const humidity = formatPercentValue(current.relative_humidity_2m);
+    const wind = Number.isFinite(Number(current.wind_speed_10m))
+        ? `${Math.round(Number(current.wind_speed_10m))}km/h`
+        : '--';
+    const weatherText = formatWeatherCode(current.weather_code, current.is_day === 1);
+
+    locationElement.textContent = locationName || 'Unknown location';
+    currentElement.textContent = `Now ${currentTemp} · ${weatherText} · Feels ${feelsLike} · Humidity ${humidity} · Wind ${wind}`;
+    todayElement.textContent = renderDailyForecast(weather?.daily, 0);
+    tomorrowElement.textContent = renderDailyForecast(weather?.daily, 1);
+}
+
+function renderWeatherError(locationText, detailText) {
+    const locationElement = document.getElementById('codex-weather-location');
+    const currentElement = document.getElementById('codex-weather-current');
+    const todayElement = document.getElementById('codex-weather-today');
+    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
+    locationElement.textContent = locationText;
+    currentElement.textContent = detailText;
+    todayElement.textContent = '--';
+    tomorrowElement.textContent = '--';
+}
+
+function renderDailyForecast(daily, index) {
+    if (!daily || !Number.isFinite(index)) return '--';
+    const weatherCode = Array.isArray(daily.weather_code) ? daily.weather_code[index] : null;
+    const maxTemp = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max[index] : null;
+    const minTemp = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min[index] : null;
+    const rainChance = Array.isArray(daily.precipitation_probability_max)
+        ? daily.precipitation_probability_max[index]
+        : null;
+    const sunrise = Array.isArray(daily.sunrise) ? daily.sunrise[index] : null;
+    const sunset = Array.isArray(daily.sunset) ? daily.sunset[index] : null;
+
+    const weatherText = formatWeatherCode(weatherCode, true);
+    const highLow = `High ${formatTemperatureValue(maxTemp)} / Low ${formatTemperatureValue(minTemp)}`;
+    const rainText = `Rain ${formatPercentValue(rainChance)}`;
+    const sunriseText = `Sunrise ${formatKstHourMinute(sunrise)}`;
+    const sunsetText = `Sunset ${formatKstHourMinute(sunset)}`;
+    return `${weatherText} · ${highLow} · ${rainText} · ${sunriseText} · ${sunsetText}`;
+}
+
+function formatWeatherCode(code, isDay) {
+    const normalized = Number(code);
+    if (!Number.isFinite(normalized)) return 'Unknown';
+    if (normalized === 0) return isDay ? 'Clear' : 'Clear night';
+    if ([1, 2, 3].includes(normalized)) return 'Cloudy';
+    if ([45, 48].includes(normalized)) return 'Fog';
+    if ([51, 53, 55, 56, 57].includes(normalized)) return 'Drizzle';
+    if ([61, 63, 65, 66, 67, 80, 81, 82].includes(normalized)) return 'Rain';
+    if ([71, 73, 75, 77, 85, 86].includes(normalized)) return 'Snow';
+    if ([95, 96, 99].includes(normalized)) return 'Thunderstorm';
+    return 'Mixed';
+}
+
+function formatTemperatureValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '--';
+    return `${Math.round(numeric)}°C`;
+}
+
+function formatPercentValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '--';
+    return `${Math.max(0, Math.min(100, Math.round(numeric)))}%`;
+}
+
+function formatKstHourMinute(value) {
+    if (!value) return '--';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '--';
+    return new Intl.DateTimeFormat('ko-KR', {
+        timeZone: KST_TIME_ZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    }).format(date);
 }
 
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
@@ -608,17 +949,28 @@ function updateUsageSummary(usage) {
         element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         return;
     }
-    const fiveHour = formatLimitUsage(usage.five_hour, '5h');
-    const weekly = formatLimitUsage(usage.weekly, 'Weekly');
-    element.textContent = [fiveHour, weekly].filter(Boolean).join(' · ');
+    element.innerHTML = '';
+    const entries = [
+        buildUsageEntry(usage.five_hour, '5h'),
+        buildUsageEntry(usage.weekly, 'Weekly')
+    ].filter(Boolean);
+    if (entries.length === 0) {
+        element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
+        return;
+    }
+    entries.forEach(entry => {
+        element.appendChild(entry);
+    });
 }
 
 function updateModelControls(model, options) {
     const select = document.getElementById('codex-model-select');
     const input = document.getElementById('codex-model-input');
+    const row = select ? select.closest('.model-row') : null;
+    const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
         select.innerHTML = '';
-        if (options && options.length > 0) {
+        if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
@@ -642,6 +994,11 @@ function updateModelControls(model, options) {
     if (input) {
         input.value = model || '';
         input.placeholder = model ? model : 'Default model';
+        input.disabled = hasOptions;
+        input.classList.toggle('is-hidden', hasOptions);
+    }
+    if (row) {
+        row.classList.toggle('is-select-only', hasOptions);
     }
     setSettingsStatus(model, state.settings.reasoningEffort);
 }
@@ -649,9 +1006,11 @@ function updateModelControls(model, options) {
 function updateReasoningControls(reasoning, options) {
     const select = document.getElementById('codex-reasoning-select');
     const input = document.getElementById('codex-reasoning-input');
+    const row = select ? select.closest('.model-row') : null;
+    const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
         select.innerHTML = '';
-        if (options && options.length > 0) {
+        if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
@@ -675,32 +1034,48 @@ function updateReasoningControls(reasoning, options) {
     if (input) {
         input.value = reasoning || '';
         input.placeholder = reasoning ? reasoning : 'Default effort';
+        input.disabled = hasOptions;
+        input.classList.toggle('is-hidden', hasOptions);
+    }
+    if (row) {
+        row.classList.toggle('is-select-only', hasOptions);
     }
 }
 
 function setSettingsStatus(model, reasoning, overrideText = null) {
     const status = document.getElementById('codex-model-status');
+    const summary = document.getElementById('codex-controls-summary');
     if (!status) return;
     if (overrideText) {
         status.textContent = overrideText;
+        if (summary) summary.textContent = overrideText;
         return;
     }
     if (!state.settings.loaded && !model && !reasoning) {
         status.textContent = 'Refresh to load';
+        if (summary) summary.textContent = 'Refresh to load';
         return;
     }
     const modelText = model ? model : 'default';
     const reasoningText = reasoning ? reasoning : 'default';
-    status.textContent = `Model: ${modelText} · Reasoning: ${reasoningText}`;
+    const text = `Model: ${modelText} · Reasoning: ${reasoningText}`;
+    status.textContent = text;
+    if (summary) summary.textContent = text;
 }
 
 async function updateSettings() {
     const input = document.getElementById('codex-model-input');
     const status = document.getElementById('codex-model-status');
     const refreshBtn = document.getElementById('codex-controls-refresh');
+    const modelSelect = document.getElementById('codex-model-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
-    const model = input ? input.value.trim() : '';
-    const reasoning_effort = reasoningInput ? reasoningInput.value.trim() : '';
+    const reasoningSelect = document.getElementById('codex-reasoning-select');
+    const model = modelSelect && !modelSelect.classList.contains('is-hidden')
+        ? modelSelect.value.trim()
+        : (input ? input.value.trim() : '');
+    const reasoning_effort = reasoningSelect && !reasoningSelect.classList.contains('is-hidden')
+        ? reasoningSelect.value.trim()
+        : (reasoningInput ? reasoningInput.value.trim() : '');
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
@@ -1410,7 +1785,7 @@ function formatTimestamp(value) {
     if (!value) return '';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
-    return date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
+    return date.toLocaleString('ko-KR', { timeZone: KST_TIME_ZONE });
 }
 
 function getRoleLabel(role) {
@@ -1484,8 +1859,8 @@ function createMessageCopyButton(wrapper) {
     button.setAttribute('title', 'Copy');
     button.innerHTML = `
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
-            <rect x="4" y="4" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="9" y="9" width="11" height="11" rx="0" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="4" y="4" width="11" height="11" rx="0" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
         </svg>
     `;
     button.addEventListener('click', event => {
@@ -1577,12 +1952,65 @@ function formatNumber(value) {
     return value.toLocaleString('en-US');
 }
 
-function formatLimitUsage(entry, label) {
-    if (!entry || !Number.isFinite(entry.used_percent)) {
-        return `${label}: --`;
+function formatRemainingPercent(usedPercent) {
+    if (!Number.isFinite(usedPercent)) return '--';
+    const remaining = 100 - usedPercent;
+    return Math.max(0, Math.min(100, Math.round(remaining)));
+}
+
+function formatResetTimestamp(value) {
+    if (!value) return '';
+    let date = null;
+    if (typeof value === 'number') {
+        const ms = value < 1000000000000 ? value * 1000 : value;
+        date = new Date(ms);
+    } else {
+        date = new Date(value);
     }
-    const percent = Math.round(entry.used_percent);
-    return `${label}: ${percent}%`;
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('ko-KR', { timeZone: KST_TIME_ZONE });
+}
+
+function formatLimitUsage(entry, label) {
+    const resetText = formatResetTimestamp(entry?.resets_at);
+    if (!entry || !Number.isFinite(entry.used_percent)) {
+        return {
+            label,
+            remainingText: '--',
+            resetText
+        };
+    }
+    const remaining = formatRemainingPercent(entry.used_percent);
+    return {
+        label,
+        remainingText: `${remaining}% left`,
+        resetText
+    };
+}
+
+function buildUsageEntry(entry, label) {
+    const details = formatLimitUsage(entry, label);
+    if (!details) return null;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-entry';
+    const row = document.createElement('div');
+    row.className = 'usage-row';
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'usage-pill';
+    pill.disabled = true;
+    pill.textContent = details.label;
+    const value = document.createElement('span');
+    value.className = 'usage-remaining';
+    value.textContent = details.remainingText;
+    row.appendChild(pill);
+    row.appendChild(value);
+    wrapper.appendChild(row);
+    const reset = document.createElement('div');
+    reset.className = 'usage-reset';
+    reset.textContent = details.resetText ? `Reset ${details.resetText}` : 'Reset --';
+    wrapper.appendChild(reset);
+    return wrapper;
 }
 
 function setMessageStreaming(wrapper, isStreaming) {

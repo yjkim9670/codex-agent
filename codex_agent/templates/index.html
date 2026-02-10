@@ -4,11 +4,42 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=7">
+    <link rel="stylesheet" href="/static/css/app.css?v=8">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
     <div class="app">
+        <section class="live-weather-panel">
+            <button
+                class="live-weather-toggle"
+                type="button"
+                id="codex-live-weather-toggle"
+                aria-expanded="false"
+                aria-controls="codex-live-weather-forecast"
+            >
+                <div class="live-weather-time">
+                    <div class="live-weather-label">KST</div>
+                    <div class="live-weather-value" id="codex-live-datetime">--</div>
+                </div>
+                <div class="live-weather-divider" aria-hidden="true"></div>
+                <div class="live-weather-current">
+                    <div class="live-weather-label" id="codex-weather-location">Locating...</div>
+                    <div class="live-weather-value" id="codex-weather-current">Loading weather...</div>
+                    <div class="live-weather-hint">Click for today/tomorrow forecast</div>
+                </div>
+            </button>
+            <div class="live-weather-forecast" id="codex-live-weather-forecast" hidden>
+                <div class="forecast-card">
+                    <div class="forecast-title">Today (KST)</div>
+                    <div class="forecast-value" id="codex-weather-today">Loading...</div>
+                </div>
+                <div class="forecast-card">
+                    <div class="forecast-title">Tomorrow (KST)</div>
+                    <div class="forecast-value" id="codex-weather-tomorrow">Loading...</div>
+                </div>
+            </div>
+        </section>
+
         <header class="app-header">
             <div>
                 <h1>Codex Agent</h1>
@@ -57,7 +88,10 @@
                 <div class="chat-controls" id="codex-controls">
                     <div class="chat-controls-header">
                         <button class="chat-controls-toggle" type="button" id="codex-controls-toggle" aria-expanded="false" aria-controls="codex-controls-body">
-                            <span>Usage &amp; Model</span>
+                            <span class="controls-label">
+                                <span class="controls-title">Usage &amp; Model</span>
+                                <span class="controls-summary" id="codex-controls-summary">Refresh to load</span>
+                            </span>
                             <span class="controls-chevron" aria-hidden="true"></span>
                         </button>
                         <button class="controls-refresh" type="button" id="codex-controls-refresh" aria-label="Refresh usage and model"></button>
@@ -70,13 +104,13 @@
                         <div class="model-card">
                             <label class="model-label" for="codex-model-input">Model</label>
                             <div class="model-row">
-                                <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model"></select>
+                                <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                 <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
                                 <button class="btn ghost model-apply" type="button" id="codex-model-apply">Apply</button>
                             </div>
                             <div class="model-sub-label">Reasoning effort</div>
                             <div class="model-row is-compact">
-                                <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort"></select>
+                                <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
                                 <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
                             </div>
                             <div class="model-status" id="codex-model-status">Refresh to load</div>
@@ -97,6 +131,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=7"></script>
+    <script src="/static/js/app.js?v=9"></script>
 </body>
 </html>

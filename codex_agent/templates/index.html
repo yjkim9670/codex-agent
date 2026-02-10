@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=15">
+    <link rel="stylesheet" href="/static/css/app.css?v=16">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -100,10 +100,17 @@
 
             <section class="chat">
                 <div class="chat-header">
-                    <div>
+                    <div class="chat-header-main">
                         <div id="codex-chat-title" class="chat-title">Select a session</div>
                         <div id="codex-chat-meta" class="chat-meta"></div>
                     </div>
+                    <button
+                        class="chat-header-refresh"
+                        type="button"
+                        id="codex-chat-header-refresh"
+                        aria-label="Refresh active session"
+                        title="Refresh active session"
+                    ></button>
                 </div>
 
                 <div class="chat-frame">
@@ -158,6 +165,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=17"></script>
+    <script src="/static/js/app.js?v=18"></script>
 </body>
 </html>

@@ -248,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('codex-chat-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const refreshBtn = document.getElementById('codex-chat-refresh');
+    const chatHeaderRefreshBtn = document.getElementById('codex-chat-header-refresh');
     const messages = document.getElementById('codex-chat-messages');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
@@ -285,6 +286,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
             await loadSessions({ preserveActive: true });
+        });
+    }
+
+    if (chatHeaderRefreshBtn) {
+        chatHeaderRefreshBtn.addEventListener('click', async () => {
+            if (chatHeaderRefreshBtn.classList.contains('is-loading')) return;
+            chatHeaderRefreshBtn.classList.add('is-loading');
+            try {
+                if (state.activeSessionId) {
+                    await loadSession(state.activeSessionId);
+                } else {
+                    await loadSessions({ preserveActive: true });
+                }
+            } finally {
+                chatHeaderRefreshBtn.classList.remove('is-loading');
+            }
         });
     }
 
@@ -2200,6 +2217,18 @@ async function finishStream(streamId, result) {
     const exitCode = result?.exit_code;
     const wrapper = stream.entry?.wrapper;
     const bubble = stream.entry?.bubble;
+    const savedMessage = result?.saved_message || null;
+    if (savedMessage && typeof savedMessage.content === 'string' && bubble) {
+        setMarkdownContent(bubble, savedMessage.content);
+    }
+    if (savedMessage && wrapper) {
+        wrapper.classList.remove('assistant', 'error');
+        wrapper.classList.add(savedMessage.role === 'error' ? 'error' : 'assistant');
+    }
+    const savedDurationMs = Number(savedMessage?.duration_ms);
+    if (Number.isFinite(savedDurationMs)) {
+        setMessageDuration(stream.entry?.footer, savedDurationMs);
+    }
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
@@ -2216,10 +2245,11 @@ async function finishStream(streamId, result) {
     }
     unpinAutoScrollForSession(sessionId);
     setSessionStatus(sessionId, exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
-    if (sessionId === state.activeSessionId) {
+    const shouldReloadActive = sessionId === state.activeSessionId;
+    if (shouldReloadActive) {
         syncActiveSessionControls();
     }
-    await loadSessions({ preserveActive: true, reloadActive: false });
+    await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
 }
 
 async function renameSession(session) {

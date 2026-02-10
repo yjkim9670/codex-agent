@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Entry point for the Codex Chat server."""
 
+import argparse
 import sys
 import os
 from pathlib import Path
@@ -32,8 +33,28 @@ if original_cwd != script_dir:
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Run Codex Chat server.')
+    parser.add_argument(
+        '-p',
+        '--port',
+        type=int,
+        default=3000,
+        help='Port to bind the server (default: 3000)',
+    )
+    parser.add_argument(
+        '--host',
+        default='0.0.0.0',
+        help='Host interface to bind (default: 0.0.0.0)',
+    )
+    args = parser.parse_args()
+    if args.port < 1 or args.port > 65535:
+        parser.error('--port must be between 1 and 65535')
+    return args
+
 if __name__ == '__main__':
     ensure_parent_workspace(script_dir)
+    args = parse_args()
     try:
         from codex_agent.codex_app import create_codex_app
     except ImportError as exc:
@@ -46,5 +67,11 @@ if __name__ == '__main__':
     app = create_codex_app()
     use_reloader = (original_cwd == script_dir)
     print("[INFO] Starting Codex Chat Server...")
-    print("[INFO] Access the Codex chat API at: http://localhost:3000")
-    app.run(debug=True, host='0.0.0.0', port=3000, use_reloader=use_reloader, threaded=True)
+    print(f"[INFO] Access the Codex chat API at: http://localhost:{args.port}")
+    app.run(
+        debug=True,
+        host=args.host,
+        port=args.port,
+        use_reloader=use_reloader,
+        threaded=True,
+    )

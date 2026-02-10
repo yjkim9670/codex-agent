@@ -8,6 +8,7 @@ const state = {
     weatherRefreshTimer: null,
     weatherLocationFailureNotified: false,
     autoScrollEnabled: true,
+    autoScrollPinnedSessionId: null,
     autoScrollThreshold: 48,
     settings: {
         model: null,
@@ -1939,6 +1940,7 @@ function cancelPendingSend(sessionId) {
     pending.controller.abort();
     sessionState.pendingSend = null;
     sessionState.sending = false;
+    unpinAutoScrollForSession(sessionId);
     setSessionStatus(sessionId, 'Canceled');
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
@@ -1963,6 +1965,8 @@ async function sendPrompt(prompt) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
         return;
     }
+    pinAutoScrollForSession(sessionId);
+    scrollToBottom(true);
     if (sessionState) {
         sessionState.sending = true;
     }
@@ -2016,6 +2020,7 @@ async function sendPrompt(prompt) {
             if (sessionState) {
                 sessionState.sending = false;
             }
+            unpinAutoScrollForSession(sessionId);
             setSessionStatus(sessionId, 'Canceled');
             if (sessionId === state.activeSessionId) {
                 syncActiveSessionControls();
@@ -2025,6 +2030,7 @@ async function sendPrompt(prompt) {
         if (sessionState) {
             sessionState.sending = false;
         }
+        unpinAutoScrollForSession(sessionId);
         setSessionStatus(sessionId, normalizeError(error, 'Failed to send message.'), true);
         if (sessionId === state.activeSessionId) {
             syncActiveSessionControls();
@@ -2102,6 +2108,7 @@ async function stopStream(sessionId) {
         if (sessionState) {
             sessionState.sending = false;
         }
+        unpinAutoScrollForSession(sessionId);
         setSessionStatus(sessionId, 'Stopped');
         if (sessionId === state.activeSessionId) {
             syncActiveSessionControls();
@@ -2207,6 +2214,7 @@ async function finishStream(streamId, result) {
     if (sessionState) {
         sessionState.sending = false;
     }
+    unpinAutoScrollForSession(sessionId);
     setSessionStatus(sessionId, exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
@@ -2308,8 +2316,9 @@ function getRoleLabel(role) {
 function scrollToBottom(force = false) {
     const container = document.getElementById('codex-chat-messages');
     if (!container) return;
-    if (!force && !state.autoScrollEnabled) return;
-    if (force) {
+    const forceByPinnedSession = shouldForceAutoScroll();
+    if (!force && !state.autoScrollEnabled && !forceByPinnedSession) return;
+    if (force || forceByPinnedSession) {
         setAutoScrollEnabled(true);
     }
     const scroll = () => {
@@ -2324,6 +2333,10 @@ function scrollToBottom(force = false) {
 
 function handleMessageScroll(container) {
     if (!container) return;
+    if (shouldForceAutoScroll()) {
+        setAutoScrollEnabled(true);
+        return;
+    }
     const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     setAutoScrollEnabled(distanceFromBottom <= threshold);
@@ -2331,6 +2344,25 @@ function handleMessageScroll(container) {
 
 function setAutoScrollEnabled(isEnabled) {
     state.autoScrollEnabled = Boolean(isEnabled);
+}
+
+function pinAutoScrollForSession(sessionId) {
+    if (!sessionId) return;
+    state.autoScrollPinnedSessionId = sessionId;
+    setAutoScrollEnabled(true);
+}
+
+function unpinAutoScrollForSession(sessionId = null) {
+    if (!state.autoScrollPinnedSessionId) return;
+    if (sessionId && state.autoScrollPinnedSessionId !== sessionId) return;
+    state.autoScrollPinnedSessionId = null;
+}
+
+function shouldForceAutoScroll() {
+    const pinnedSessionId = state.autoScrollPinnedSessionId;
+    if (!pinnedSessionId) return false;
+    if (pinnedSessionId !== state.activeSessionId) return false;
+    return isSessionBusy(pinnedSessionId);
 }
 
 function setMarkdownContent(element, content) {

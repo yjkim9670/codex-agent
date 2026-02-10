@@ -147,7 +147,7 @@ body {
 .live-weather-top {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
+    align-items: start;
     gap: 8px;
 }
 
@@ -156,6 +156,9 @@ body {
     align-items: center;
     gap: 8px;
     padding-right: 12px;
+    justify-self: end;
+    align-self: start;
+    white-space: nowrap;
 }
 
 .live-weather-toggle {
@@ -164,10 +167,10 @@ body {
     background: transparent;
     color: var(--text-primary);
     padding: 10px 12px;
-    display: grid;
-    grid-template-columns: minmax(220px, 1fr) 1px minmax(280px, 1fr);
-    gap: 12px;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
     text-align: left;
     cursor: pointer;
 }
@@ -203,7 +206,6 @@ body {
 }
 
 .live-weather-panel.is-compact .live-weather-toggle {
-    grid-template-columns: minmax(0, 1fr);
     padding: 8px 12px;
 }
 
@@ -220,6 +222,7 @@ body {
 .live-weather-time,
 .live-weather-current {
     min-width: 0;
+    width: 100%;
 }
 
 .live-weather-label {
@@ -238,9 +241,7 @@ body {
 }
 
 .live-weather-divider {
-    width: 1px;
-    align-self: stretch;
-    background: var(--border);
+    display: none;
 }
 
 .live-weather-hint {
@@ -364,6 +365,13 @@ body {
     margin: 6px 0 0;
     color: var(--text-secondary);
     font-size: 13px;
+}
+
+.app-workspace {
+    margin: 6px 0 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-tertiary);
 }
 
 .layout {
@@ -1076,14 +1084,14 @@ body {
     }
 
     .live-weather-top {
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr) auto;
         gap: 6px;
     }
 
     .live-weather-actions {
         justify-content: flex-end;
-        flex-wrap: wrap;
-        padding: 0 12px 8px;
+        flex-wrap: nowrap;
+        padding: 8px 10px 0 0;
     }
 
     .live-weather-permission {
@@ -1091,7 +1099,6 @@ body {
     }
 
     .live-weather-toggle {
-        grid-template-columns: 1fr;
         gap: 8px;
         min-width: 0;
     }

@@ -5,7 +5,7 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 
 from .blueprints import codex_chat
-from .config import CODEX_MODEL_OPTIONS, CODEX_REASONING_OPTIONS, SECRET_KEY
+from .config import CODEX_MODEL_OPTIONS, CODEX_REASONING_OPTIONS, SECRET_KEY, WORKSPACE_DIR
 
 
 def _get_allowed_origins():
@@ -26,12 +26,16 @@ def create_codex_app():
     def codex_root():
         server_directory = Path.cwd().resolve()
         server_directory_name = server_directory.name or str(server_directory)
+        workspace_directory = WORKSPACE_DIR.resolve()
+        workspace_directory_name = workspace_directory.name or str(workspace_directory)
         return render_template(
             'index.html',
             model_options=CODEX_MODEL_OPTIONS,
             reasoning_options=CODEX_REASONING_OPTIONS,
             server_directory_name=server_directory_name,
-            server_directory_path=str(server_directory)
+            server_directory_path=str(server_directory),
+            workspace_directory_name=workspace_directory_name,
+            workspace_directory_path=str(workspace_directory)
         )
 
     @app.route('/health')

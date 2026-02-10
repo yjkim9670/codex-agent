@@ -2335,11 +2335,13 @@ function setAutoScrollEnabled(isEnabled) {
 
 function setMarkdownContent(element, content) {
     if (!element) return;
+    const messageContent = String(content || '');
     const wasExpanded = Boolean(element.querySelector('details.message-details')?.open);
-    element.innerHTML = renderMessageContent(content || '', wasExpanded);
+    element.innerHTML = renderMessageContent(messageContent, wasExpanded);
+    element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
-        wrapper.dataset.messageContent = String(content || '');
+        wrapper.dataset.messageContent = messageContent;
     }
 }
 
@@ -2373,6 +2375,7 @@ function createMessageCopyButton(wrapper) {
         </svg>
     `;
     button.addEventListener('click', event => {
+        event.preventDefault();
         event.stopPropagation();
         copyMessageContent(wrapper, button);
     });
@@ -2381,7 +2384,11 @@ function createMessageCopyButton(wrapper) {
 
 async function copyMessageContent(wrapper, button) {
     if (!wrapper) return;
-    const text = wrapper.dataset.messageContent || '';
+    const bubble = wrapper.querySelector('.message-bubble');
+    const text = wrapper.dataset.messageContent
+        || bubble?.dataset.messageContent
+        || bubble?.textContent
+        || '';
     try {
         if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(text);

@@ -29,5 +29,5 @@ Or with the helper script:
 ```
 
 ## GUI
-- `http://localhost:3000/` serves the chat UI.
-- `http://localhost:3000/health` returns JSON status.
+- `http://localhost:<port>/` serves the chat UI.
+- `http://localhost:<port>/health` returns JSON status.

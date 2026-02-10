@@ -2,14 +2,11 @@ const state = {
     sessions: [],
     activeSessionId: null,
     loading: false,
-    sending: false,
-    stream: null,
-    streamTimer: null,
-    streamPolling: false,
-    streamFailureCount: 0,
-    streamPollDelay: 800,
+    sessionStates: {},
+    streams: {},
     liveClockTimer: null,
     weatherRefreshTimer: null,
+    weatherLocationFailureNotified: false,
     autoScrollEnabled: true,
     autoScrollThreshold: 48,
     settings: {
@@ -39,8 +36,182 @@ const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
 const WEATHER_REFRESH_MS = 10 * 60 * 1000;
 const WEATHER_POSITION_KEY = 'codexWeatherPosition';
+const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
+const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
+const TOAST_LAYER_ID = 'codex-toast-layer';
+const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 동탄(신동)';
+const DEFAULT_WEATHER_POSITION = Object.freeze({
+    latitude: 37.2053,
+    longitude: 127.1067,
+    label: DEFAULT_WEATHER_LOCATION_LABEL,
+    isDefault: true
+});
+const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
 
 let hasManualTheme = false;
+
+function ensureSessionState(sessionId) {
+    if (!sessionId) return null;
+    if (!state.sessionStates[sessionId]) {
+        state.sessionStates[sessionId] = {
+            sending: false,
+            pendingSend: null,
+            streamId: null,
+            status: 'Idle',
+            statusIsError: false
+        };
+    }
+    return state.sessionStates[sessionId];
+}
+
+function getSessionState(sessionId) {
+    if (!sessionId) return null;
+    return state.sessionStates[sessionId] || null;
+}
+
+function getSessionStream(sessionId) {
+    const sessionState = getSessionState(sessionId);
+    if (!sessionState?.streamId) return null;
+    return state.streams[sessionState.streamId] || null;
+}
+
+function isSessionStreaming(sessionId) {
+    if (!sessionId) return false;
+    return Boolean(getSessionStream(sessionId));
+}
+
+function isSessionBusy(sessionId) {
+    const sessionState = getSessionState(sessionId);
+    if (!sessionState) return false;
+    const stream = getSessionStream(sessionId);
+    return Boolean(sessionState.sending || sessionState.pendingSend || stream);
+}
+
+function setSessionStatus(sessionId, message, isError = false) {
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return;
+    sessionState.status = message;
+    sessionState.statusIsError = isError;
+    if (sessionId === state.activeSessionId) {
+        setStatus(message, isError);
+    }
+}
+
+function syncActiveSessionStatus() {
+    const sessionId = state.activeSessionId;
+    const sessionState = getSessionState(sessionId);
+    if (!sessionState) {
+        setStatus('Idle');
+        return;
+    }
+    setStatus(sessionState.status || 'Idle', Boolean(sessionState.statusIsError));
+}
+
+function syncActiveSessionControls() {
+    const input = document.getElementById('codex-chat-input');
+    const sendBtn = document.getElementById('codex-chat-send');
+    const sessionId = state.activeSessionId;
+    const isBusy = sessionId ? isSessionBusy(sessionId) : false;
+    const showStop = sessionId ? isBusy : false;
+    if (input) {
+        input.disabled = isBusy;
+        input.readOnly = isBusy;
+        input.setAttribute('aria-disabled', String(isBusy));
+        input.placeholder = isBusy
+            ? 'Response in progress for this session...'
+            : CHAT_INPUT_DEFAULT_PLACEHOLDER;
+    }
+    if (sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.dataset.mode = showStop ? 'stop' : 'send';
+        sendBtn.setAttribute('aria-label', showStop ? 'Stop' : 'Send');
+        sendBtn.setAttribute('title', showStop ? 'Stop' : 'Send');
+        const srLabel = sendBtn.querySelector('.sr-only');
+        if (srLabel) {
+            srLabel.textContent = showStop ? 'Stop' : 'Send';
+        }
+    }
+}
+
+function appendMessageToDOMIfActive(sessionId, message, roleOverride = null) {
+    if (sessionId !== state.activeSessionId) return null;
+    return appendMessageToDOM(message, roleOverride);
+}
+
+function detachSessionStreamEntry(sessionId) {
+    const stream = getSessionStream(sessionId);
+    if (!stream) return;
+    if (stream.entry?.wrapper) {
+        setMessageStreaming(stream.entry.wrapper, false);
+    }
+    stream.entry = null;
+}
+
+function attachSessionStreamEntry(sessionId) {
+    const stream = getSessionStream(sessionId);
+    if (!stream) return;
+    if (stream.entry?.wrapper?.isConnected) return;
+    const assistantEntry = appendMessageToDOM({
+        role: 'assistant',
+        content: '',
+        created_at: new Date().toISOString()
+    }, 'assistant');
+    if (!assistantEntry) return;
+    stream.entry = assistantEntry;
+    setMessageStreaming(assistantEntry.wrapper, true);
+    updateStreamEntry(stream);
+}
+
+function createStreamState({
+    id,
+    sessionId,
+    entry = null,
+    output = '',
+    error = '',
+    outputOffset = 0,
+    errorOffset = 0,
+    startedAt = null
+}) {
+    if (!id || !sessionId) return null;
+    const stream = {
+        id,
+        sessionId,
+        outputOffset,
+        errorOffset,
+        output,
+        error,
+        entry,
+        startedAt: startedAt || Date.now(),
+        timer: null,
+        polling: false,
+        failureCount: 0,
+        pollDelay: STREAM_POLL_BASE_MS
+    };
+    state.streams[id] = stream;
+    const sessionState = ensureSessionState(sessionId);
+    if (sessionState) {
+        sessionState.streamId = id;
+        sessionState.sending = true;
+    }
+    return stream;
+}
+
+function clearStreamState(streamId) {
+    const stream = state.streams[streamId];
+    if (!stream) return;
+    if (stream.timer) {
+        clearTimeout(stream.timer);
+        stream.timer = null;
+    }
+    if (stream.entry?.wrapper) {
+        setMessageStreaming(stream.entry.wrapper, false);
+    }
+    const sessionState = getSessionState(stream.sessionId);
+    if (sessionState?.streamId === streamId) {
+        sessionState.streamId = null;
+    }
+    delete state.streams[streamId];
+}
 
 function readOptionsFromData(element) {
     if (!element) return [];
@@ -202,9 +373,10 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    setBusy(false);
+    syncActiveSessionControls();
+    syncActiveSessionStatus();
     initializeTheme(themeToggle, themeMedia);
-    initializeLiveWeatherPanel();
+    initializeLiveWeatherPanel(mobileMedia);
     void initializeApp();
 });
 
@@ -212,17 +384,24 @@ async function initializeApp() {
     if (!state.settings.loaded) {
         void loadSettings({ silent: true });
     }
-    const pending = getPersistedStream();
-    const targetSessionId = pending?.sessionId || null;
+    const pendingStreams = getPersistedStreams();
+    const targetSessionId = pendingStreams.length > 0 ? pendingStreams[0].sessionId : null;
     await loadSessions({ preserveActive: true, selectSessionId: targetSessionId });
-    if (pending) {
-        await resumeStreamFromStorage(pending);
+    if (pendingStreams.length > 0) {
+        await resumeStreamsFromStorage(pendingStreams);
     }
 }
 
-function initializeLiveWeatherPanel() {
+function initializeLiveWeatherPanel(mobileMedia) {
+    const panel = document.getElementById('codex-live-weather-panel');
     const toggle = document.getElementById('codex-live-weather-toggle');
-    if (!toggle) return;
+    const compactToggle = document.getElementById('codex-live-weather-compact');
+    const permissionToggle = document.getElementById('codex-weather-permission');
+    if (!panel || !toggle || !compactToggle || !permissionToggle) return;
+
+    const defaultCompact = Boolean(mobileMedia?.matches);
+    const initialCompact = readLiveWeatherCompactPreference(defaultCompact);
+    setLiveWeatherCompact(initialCompact, { persist: false });
     setLiveWeatherExpanded(false);
     updateLiveDatetime();
     if (state.liveClockTimer) {
@@ -230,8 +409,21 @@ function initializeLiveWeatherPanel() {
     }
     state.liveClockTimer = window.setInterval(updateLiveDatetime, 1000);
     toggle.addEventListener('click', () => {
+        if (panel.classList.contains('is-compact')) {
+            setLiveWeatherCompact(false);
+            void maybeRequestWeatherPermissionOnTap();
+            return;
+        }
         const expanded = toggle.getAttribute('aria-expanded') === 'true';
         setLiveWeatherExpanded(!expanded);
+    });
+    permissionToggle.addEventListener('click', event => {
+        event.stopPropagation();
+        void requestWeatherPermission();
+    });
+    compactToggle.addEventListener('click', () => {
+        const isCompact = panel.classList.contains('is-compact');
+        setLiveWeatherCompact(!isCompact);
     });
     void loadLiveWeatherData();
     if (state.weatherRefreshTimer) {
@@ -240,6 +432,54 @@ function initializeLiveWeatherPanel() {
     state.weatherRefreshTimer = window.setInterval(() => {
         void loadLiveWeatherData({ silent: true });
     }, WEATHER_REFRESH_MS);
+}
+
+async function maybeRequestWeatherPermissionOnTap() {
+    const storedPosition = readStoredWeatherPosition();
+    if (storedPosition) return;
+    const permissionState = await readGeolocationPermissionState();
+    if (permissionState === 'granted') {
+        void loadLiveWeatherData({ silent: true });
+        return;
+    }
+    await requestWeatherPermission({ silentFailure: true, skipPermissionCheck: true });
+}
+
+function readLiveWeatherCompactPreference(defaultCompact) {
+    let compact = Boolean(defaultCompact);
+    try {
+        const stored = localStorage.getItem(WEATHER_COMPACT_KEY);
+        if (stored !== null) {
+            compact = stored === '1';
+        }
+    } catch (error) {
+        void error;
+    }
+    return compact;
+}
+
+function setLiveWeatherCompact(compact, { persist = true } = {}) {
+    const panel = document.getElementById('codex-live-weather-panel');
+    const compactToggle = document.getElementById('codex-live-weather-compact');
+    if (!panel || !compactToggle) return;
+    const isCompact = Boolean(compact);
+    panel.classList.toggle('is-compact', isCompact);
+    compactToggle.setAttribute('aria-pressed', String(isCompact));
+    compactToggle.textContent = isCompact ? 'Expand' : 'Minimize';
+    compactToggle.setAttribute(
+        'aria-label',
+        isCompact ? 'Expand weather panel' : 'Minimize weather panel'
+    );
+    if (isCompact) {
+        setLiveWeatherExpanded(false);
+    }
+    if (persist) {
+        try {
+            localStorage.setItem(WEATHER_COMPACT_KEY, isCompact ? '1' : '0');
+        } catch (error) {
+            void error;
+        }
+    }
 }
 
 function setLiveWeatherExpanded(expanded) {
@@ -271,7 +511,7 @@ function formatKstNow() {
     }).format(new Date());
 }
 
-async function loadLiveWeatherData({ silent = false } = {}) {
+async function loadLiveWeatherData({ silent = false, positionOverride = null } = {}) {
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
     const todayElement = document.getElementById('codex-weather-today');
@@ -286,19 +526,23 @@ async function loadLiveWeatherData({ silent = false } = {}) {
     }
 
     try {
-        const position = await resolveWeatherPosition();
+        const position = positionOverride || await resolveWeatherPosition();
         if (!position) {
             renderWeatherError('Location unavailable', 'Allow browser location permission.');
             return;
         }
 
+        const defaultLabel = position?.label || '';
+        const useDefaultLabel = Boolean(position?.isDefault && defaultLabel);
         const [locationName, weather] = await Promise.all([
-            fetchLocationName(position.latitude, position.longitude),
+            useDefaultLabel
+                ? Promise.resolve(defaultLabel)
+                : fetchLocationName(position.latitude, position.longitude).catch(() => ''),
             fetchWeatherForecast(position.latitude, position.longitude)
         ]);
 
         renderWeatherSummary({
-            locationName: locationName || 'Unknown location',
+            locationName: locationName || defaultLabel || 'Unknown location',
             weather
         });
     } catch (error) {
@@ -306,20 +550,89 @@ async function loadLiveWeatherData({ silent = false } = {}) {
     }
 }
 
+async function requestWeatherPermission({ silentFailure = false, skipPermissionCheck = false } = {}) {
+    const locationElement = document.getElementById('codex-weather-location');
+    const currentElement = document.getElementById('codex-weather-current');
+    if (locationElement) {
+        locationElement.textContent = 'Requesting location...';
+    }
+    if (currentElement) {
+        currentElement.textContent = 'Waiting for browser permission...';
+    }
+    try {
+        if (!skipPermissionCheck) {
+            const permissionState = await readGeolocationPermissionState();
+            if (permissionState === 'denied') {
+                notifyWeatherLocationFailure(
+                    new Error('Location permission denied.'),
+                    DEFAULT_WEATHER_LOCATION_LABEL
+                );
+                await loadLiveWeatherData({
+                    silent: true,
+                    positionOverride: getDefaultWeatherPosition()
+                });
+                return;
+            }
+        }
+        const position = await getCurrentGeoPosition();
+        writeStoredWeatherPosition(position);
+        state.weatherLocationFailureNotified = false;
+        await loadLiveWeatherData({ silent: true, positionOverride: position });
+    } catch (error) {
+        notifyWeatherLocationFailure(error, DEFAULT_WEATHER_LOCATION_LABEL);
+        await loadLiveWeatherData({
+            silent: true,
+            positionOverride: getDefaultWeatherPosition()
+        });
+        if (silentFailure) return;
+        void error;
+    }
+}
+
+async function readGeolocationPermissionState() {
+    try {
+        if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+            return '';
+        }
+        const status = await navigator.permissions.query({ name: 'geolocation' });
+        return status?.state || '';
+    } catch (error) {
+        return '';
+    }
+}
+
 async function resolveWeatherPosition() {
     try {
         const current = await getCurrentGeoPosition();
         writeStoredWeatherPosition(current);
+        state.weatherLocationFailureNotified = false;
         return current;
     } catch (error) {
         const stored = readStoredWeatherPosition();
-        if (stored) return stored;
-        return null;
+        if (stored) {
+            notifyWeatherLocationFailure(error, '저장된 위치');
+            return stored;
+        }
+        notifyWeatherLocationFailure(error, DEFAULT_WEATHER_LOCATION_LABEL);
+        return getDefaultWeatherPosition();
     }
+}
+
+function getDefaultWeatherPosition() {
+    return {
+        latitude: DEFAULT_WEATHER_POSITION.latitude,
+        longitude: DEFAULT_WEATHER_POSITION.longitude,
+        label: DEFAULT_WEATHER_POSITION.label,
+        isDefault: true
+    };
 }
 
 function getCurrentGeoPosition() {
     return new Promise((resolve, reject) => {
+        if (!isGeolocationAllowedContext()) {
+            reject(new Error('Location access requires HTTPS or localhost.'));
+            return;
+        }
         if (!navigator.geolocation) {
             reject(new Error('Geolocation is not supported.'));
             return;
@@ -341,6 +654,12 @@ function getCurrentGeoPosition() {
             }
         );
     });
+}
+
+function isGeolocationAllowedContext() {
+    if (window.isSecureContext) return true;
+    const hostname = window.location?.hostname || '';
+    return ['localhost', '127.0.0.1', '::1'].includes(hostname);
 }
 
 function readStoredWeatherPosition() {
@@ -373,6 +692,57 @@ function writeStoredWeatherPosition(position) {
     } catch (error) {
         void error;
     }
+}
+
+function notifyWeatherLocationFailure(error, fallbackLabel = DEFAULT_WEATHER_LOCATION_LABEL) {
+    if (state.weatherLocationFailureNotified) return;
+    const fallback = String(fallbackLabel || '').trim() || DEFAULT_WEATHER_LOCATION_LABEL;
+    const message = `현재 위치를 불러오지 못했습니다. ${fallback} 날씨를 표시합니다.`;
+    void error;
+    showToast(message, { tone: 'error', durationMs: WEATHER_LOCATION_FAILURE_TOAST_MS });
+    state.weatherLocationFailureNotified = true;
+}
+
+function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    const layer = ensureToastLayer();
+    if (!layer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${tone}`;
+    toast.textContent = text;
+    layer.appendChild(toast);
+
+    window.requestAnimationFrame(() => {
+        toast.classList.add('is-visible');
+    });
+
+    const visibleMs = Number.isFinite(Number(durationMs))
+        ? Math.max(1200, Number(durationMs))
+        : WEATHER_LOCATION_FAILURE_TOAST_MS;
+    window.setTimeout(() => {
+        toast.classList.remove('is-visible');
+        window.setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 180);
+    }, visibleMs);
+}
+
+function ensureToastLayer() {
+    const existing = document.getElementById(TOAST_LAYER_ID);
+    if (existing) return existing;
+    if (!document.body) return null;
+
+    const layer = document.createElement('div');
+    layer.id = TOAST_LAYER_ID;
+    layer.className = 'toast-layer';
+    layer.setAttribute('aria-live', 'polite');
+    layer.setAttribute('aria-atomic', 'true');
+    document.body.appendChild(layer);
+    return layer;
 }
 
 async function fetchLocationName(latitude, longitude) {
@@ -590,8 +960,18 @@ function isMobileKeyboardOpen(isMobile = isMobileLayout()) {
 
 function setMobileKeyboardOpen(open) {
     const app = document.querySelector('.app');
-    if (!app) return;
-    app.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, Boolean(open));
+    const root = document.documentElement;
+    const body = document.body;
+    const isOpen = Boolean(open);
+    if (app) {
+        app.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
+    }
+    if (root) {
+        root.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
+    }
+    if (body) {
+        body.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
+    }
 }
 
 function syncMobileKeyboardState(isMobile = isMobileLayout()) {
@@ -615,13 +995,28 @@ function applyMobileViewportHeight(isMobile = isMobileLayout()) {
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
+function normalizeMobileDocumentScroll(isMobile = isMobileLayout()) {
+    if (!isMobile) return;
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+        window.scrollTo(0, 0);
+    }
+    if (document.documentElement.scrollTop !== 0) {
+        document.documentElement.scrollTop = 0;
+    }
+    if (document.body.scrollTop !== 0) {
+        document.body.scrollTop = 0;
+    }
+}
+
 function setupMobileViewportBehavior(mobileMedia, input) {
     applyMobileViewportHeight(mobileMedia.matches);
     syncMobileKeyboardState(mobileMedia.matches);
+    normalizeMobileDocumentScroll(mobileMedia.matches);
 
     const handleViewportChange = () => {
         applyMobileViewportHeight(mobileMedia.matches);
         syncMobileKeyboardState(mobileMedia.matches);
+        normalizeMobileDocumentScroll(mobileMedia.matches);
     };
 
     if (typeof mobileMedia.addEventListener === 'function') {
@@ -640,10 +1035,12 @@ function setupMobileViewportBehavior(mobileMedia, input) {
     input.addEventListener('focus', () => {
         if (!mobileMedia.matches) return;
         syncMobileKeyboardState(true);
+        normalizeMobileDocumentScroll(true);
         window.setTimeout(handleViewportChange, 80);
     });
     input.addEventListener('blur', () => {
         if (!mobileMedia.matches) return;
+        normalizeMobileDocumentScroll(true);
         window.setTimeout(handleViewportChange, 120);
     });
 }
@@ -773,16 +1170,7 @@ function setControlsCollapsed(collapsed, { persist = true } = {}) {
 }
 
 function syncControlsLayout() {
-    let collapsed = true;
-    try {
-        const stored = localStorage.getItem(CONTROLS_COLLAPSE_KEY);
-        if (stored !== null) {
-            collapsed = stored === '1';
-        }
-    } catch (error) {
-        void error;
-    }
-    setControlsCollapsed(collapsed, { persist: false });
+    setControlsCollapsed(true, { persist: false });
 }
 
 function initializeTheme(themeToggle, themeMedia) {
@@ -841,43 +1229,56 @@ function getStoredTheme() {
     }
 }
 
-function getPersistedStream() {
+function getPersistedStreams() {
     try {
         const raw = localStorage.getItem(ACTIVE_STREAM_KEY);
-        if (!raw) return null;
+        if (!raw) return [];
         const data = JSON.parse(raw);
-        if (!data?.id || !data?.sessionId) return null;
-        return data;
+        if (Array.isArray(data)) {
+            return data.filter(item => item?.id && item?.sessionId);
+        }
+        if (data?.id && data?.sessionId) {
+            return [data];
+        }
+        return [];
     } catch (error) {
-        return null;
+        return [];
     }
 }
 
 function persistActiveStream(stream) {
     if (!stream?.id || !stream?.sessionId) return;
     try {
-        localStorage.setItem(
-            ACTIVE_STREAM_KEY,
-            JSON.stringify({
-                id: stream.id,
-                sessionId: stream.sessionId,
-                startedAt: stream.startedAt || Date.now()
-            })
-        );
+        const existing = getPersistedStreams().filter(item => item.id !== stream.id);
+        existing.push({
+            id: stream.id,
+            sessionId: stream.sessionId,
+            startedAt: stream.startedAt || Date.now()
+        });
+        localStorage.setItem(ACTIVE_STREAM_KEY, JSON.stringify(existing));
     } catch (error) {
         void error;
     }
 }
 
-function clearPersistedStream() {
+function clearPersistedStream(streamId = null) {
     try {
-        localStorage.removeItem(ACTIVE_STREAM_KEY);
+        if (!streamId) {
+            localStorage.removeItem(ACTIVE_STREAM_KEY);
+            return;
+        }
+        const existing = getPersistedStreams().filter(item => item.id !== streamId);
+        if (existing.length === 0) {
+            localStorage.removeItem(ACTIVE_STREAM_KEY);
+        } else {
+            localStorage.setItem(ACTIVE_STREAM_KEY, JSON.stringify(existing));
+        }
     } catch (error) {
         void error;
     }
 }
 
-async function loadSessions({ preserveActive = true, selectSessionId = null } = {}) {
+async function loadSessions({ preserveActive = true, selectSessionId = null, reloadActive = true } = {}) {
     if (state.loading) return;
     state.loading = true;
     setStatus('Loading sessions...');
@@ -895,14 +1296,23 @@ async function loadSessions({ preserveActive = true, selectSessionId = null } = 
             activeId = state.sessions[0].id;
         }
         state.activeSessionId = activeId || null;
+        if (state.activeSessionId) {
+            ensureSessionState(state.activeSessionId);
+        }
 
         if (activeId) {
-            await loadSession(activeId);
+            if (reloadActive) {
+                await loadSession(activeId);
+            } else {
+                const summary = state.sessions.find(session => session.id === activeId) || null;
+                updateHeader(summary);
+            }
         } else {
             renderMessages([]);
             updateHeader(null);
         }
-        setStatus('Idle');
+        syncActiveSessionControls();
+        syncActiveSessionStatus();
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to load sessions.'), true);
     } finally {
@@ -1123,68 +1533,98 @@ async function fetchJson(url, options) {
     throw new Error(text || 'Unexpected response format.');
 }
 
-async function resumeStreamFromStorage(pending) {
-    if (!pending || state.stream || state.sending) return;
-    const sessionExists = state.sessions.some(session => session.id === pending.sessionId);
-    if (!sessionExists) {
-        clearPersistedStream();
-        return;
-    }
-    setStatus('Reconnecting to Codex...');
-    setBusy(true);
-    state.sending = true;
-    try {
-        const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to resume stream.');
-        }
-        if (result?.done) {
-            clearPersistedStream();
-            setBusy(false);
-            state.sending = false;
-            setStatus('Idle');
-            await loadSessions({ preserveActive: true, selectSessionId: pending.sessionId });
-            return;
-        }
+async function resumeStreamsFromStorage(pendingStreams) {
+    if (!Array.isArray(pendingStreams) || pendingStreams.length === 0) return;
+    const sessionIds = new Set(state.sessions.map(session => session.id));
 
-        const assistantEntry = appendMessageToDOM({
-            role: 'assistant',
-            content: '',
-            created_at: new Date().toISOString()
-        }, 'assistant');
-        if (!assistantEntry) {
-            clearPersistedStream();
-            setBusy(false);
-            state.sending = false;
-            return;
+    for (const pending of pendingStreams) {
+        if (!pending?.id || !pending?.sessionId) continue;
+        if (!sessionIds.has(pending.sessionId)) {
+            clearPersistedStream(pending.id);
+            continue;
         }
-        setMessageStreaming(assistantEntry.wrapper, true);
+        const sessionState = ensureSessionState(pending.sessionId);
+        if (sessionState?.streamId) {
+            continue;
+        }
+        if (sessionState) {
+            sessionState.sending = true;
+        }
+        setSessionStatus(pending.sessionId, 'Reconnecting to Codex...');
+        if (pending.sessionId === state.activeSessionId) {
+            syncActiveSessionControls();
+        }
+        try {
+            const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result?.error || 'Failed to resume stream.');
+            }
+            if (result?.done) {
+                clearPersistedStream(pending.id);
+                if (sessionState) {
+                    sessionState.sending = false;
+                }
+                setSessionStatus(pending.sessionId, 'Idle');
+                if (pending.sessionId === state.activeSessionId) {
+                    syncActiveSessionControls();
+                }
+                continue;
+            }
 
-        const output = result?.output || '';
-        const errorText = result?.error || '';
-        const stream = {
-            id: pending.id,
-            sessionId: pending.sessionId,
-            output,
-            error: errorText,
-            outputOffset: Number.isFinite(result?.output_length)
+            const output = result?.output || '';
+            const errorText = result?.error || '';
+            const outputOffset = Number.isFinite(result?.output_length)
                 ? result.output_length
-                : output.length,
-            errorOffset: Number.isFinite(result?.error_length)
+                : output.length;
+            const errorOffset = Number.isFinite(result?.error_length)
                 ? result.error_length
-                : errorText.length,
-            entry: assistantEntry,
-            startedAt: Number.isFinite(pending.startedAt) ? pending.startedAt : Date.now()
-        };
-        updateStreamEntry(stream);
-        beginStreamPolling(stream);
-        setStatus('Receiving response...');
-    } catch (error) {
-        clearPersistedStream();
-        setBusy(false);
-        state.sending = false;
-        setStatus(normalizeError(error, 'Failed to resume stream.'), true);
+                : errorText.length;
+
+            let assistantEntry = null;
+            if (pending.sessionId === state.activeSessionId) {
+                assistantEntry = appendMessageToDOM({
+                    role: 'assistant',
+                    content: '',
+                    created_at: new Date().toISOString()
+                }, 'assistant');
+                if (assistantEntry) {
+                    setMessageStreaming(assistantEntry.wrapper, true);
+                }
+            }
+
+            const stream = createStreamState({
+                id: pending.id,
+                sessionId: pending.sessionId,
+                output,
+                error: errorText,
+                outputOffset,
+                errorOffset,
+                entry: assistantEntry,
+                startedAt: Number.isFinite(pending.startedAt) ? pending.startedAt : Date.now()
+            });
+            if (!stream) {
+                clearPersistedStream(pending.id);
+                if (sessionState) {
+                    sessionState.sending = false;
+                }
+                continue;
+            }
+            if (assistantEntry) {
+                updateStreamEntry(stream);
+            }
+            beginStreamPolling(stream.id);
+            setSessionStatus(pending.sessionId, 'Receiving response...');
+        } catch (error) {
+            clearPersistedStream(pending.id);
+            if (sessionState) {
+                sessionState.sending = false;
+            }
+            setSessionStatus(pending.sessionId, normalizeError(error, 'Failed to resume stream.'), true);
+            if (pending.sessionId === state.activeSessionId) {
+                syncActiveSessionControls();
+            }
+        }
     }
 }
 
@@ -1234,10 +1674,6 @@ function renderSessions() {
         selectBtn.appendChild(title);
         selectBtn.appendChild(meta);
         selectBtn.addEventListener('click', async () => {
-            if (state.sending) {
-                setStatus('Cannot switch sessions while receiving a response.', true);
-                return;
-            }
             await loadSession(session.id);
         });
 
@@ -1271,11 +1707,6 @@ function renderSessions() {
     });
 }
 
-function isSessionStreaming(sessionId) {
-    if (!sessionId) return false;
-    return Boolean(state.stream && state.stream.sessionId === sessionId);
-}
-
 function upsertSessionSummary(session) {
     if (!session || !session.id) return;
     const summary = {
@@ -1300,11 +1731,16 @@ function upsertSessionSummary(session) {
 
 function removeSessionSummary(sessionId) {
     state.sessions = state.sessions.filter(session => session.id !== sessionId);
+    const sessionState = state.sessionStates[sessionId];
+    if (sessionState?.streamId) {
+        clearStreamState(sessionState.streamId);
+        clearPersistedStream(sessionState.streamId);
+    }
+    delete state.sessionStates[sessionId];
 }
 
 async function createSession(selectAfter = true) {
     setStatus('Creating session...');
-    setBusy(true);
     try {
         const response = await fetch('/api/codex/sessions', {
             method: 'POST',
@@ -1319,18 +1755,17 @@ async function createSession(selectAfter = true) {
         upsertSessionSummary(result?.session);
         if (selectAfter && sessionId) {
             state.activeSessionId = sessionId;
+            ensureSessionState(sessionId);
             renderSessions();
             await loadSession(sessionId);
         } else {
             renderSessions();
         }
-        setStatus('Idle');
+        syncActiveSessionStatus();
         return result?.session;
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to create session.'), true);
         return null;
-    } finally {
-        setBusy(false);
     }
 }
 
@@ -1344,11 +1779,18 @@ async function loadSession(sessionId) {
             throw new Error(result?.error || 'Failed to load session.');
         }
         const session = result?.session;
+        const previousSessionId = state.activeSessionId;
         state.activeSessionId = session?.id || sessionId;
+        ensureSessionState(state.activeSessionId);
+        if (previousSessionId && previousSessionId !== state.activeSessionId) {
+            detachSessionStreamEntry(previousSessionId);
+        }
         renderSessions();
         renderMessages(session?.messages || []);
+        attachSessionStreamEntry(state.activeSessionId);
         updateHeader(session || null);
-        setStatus('Idle');
+        syncActiveSessionControls();
+        syncActiveSessionStatus();
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to load session.'), true);
     }
@@ -1448,11 +1890,21 @@ function updateHeader(session) {
 
 async function handleSubmit(event) {
     if (event) event.preventDefault();
-    if (state.sending && state.stream) {
-        await stopStream();
-        return;
+    const activeSessionId = state.activeSessionId;
+    if (activeSessionId && isSessionBusy(activeSessionId)) {
+        if (getSessionStream(activeSessionId)) {
+            await stopStream(activeSessionId);
+            return;
+        }
+        if (cancelPendingSend(activeSessionId)) {
+            return;
+        }
+        const sessionState = getSessionState(activeSessionId);
+        if (sessionState) {
+            sessionState.sending = false;
+        }
+        syncActiveSessionControls();
     }
-    if (state.sending) return;
     const input = document.getElementById('codex-chat-input');
     if (!input) return;
     const prompt = input.value.trim();
@@ -1461,11 +1913,40 @@ async function handleSubmit(event) {
     await sendPrompt(prompt);
 }
 
-async function sendPrompt(prompt) {
-    setBusy(true);
-    state.sending = true;
-    setStatus('Waiting for Codex...');
+function beginPendingSend(sessionId) {
+    const sessionState = ensureSessionState(sessionId);
+    const controller = new AbortController();
+    if (sessionState) {
+        sessionState.pendingSend = {
+            controller,
+            startedAt: Date.now()
+        };
+    }
+    return controller;
+}
 
+function clearPendingSend(sessionId, controller = null) {
+    const sessionState = getSessionState(sessionId);
+    if (!sessionState?.pendingSend) return;
+    if (controller && sessionState.pendingSend.controller !== controller) return;
+    sessionState.pendingSend = null;
+}
+
+function cancelPendingSend(sessionId) {
+    const sessionState = getSessionState(sessionId);
+    const pending = sessionState?.pendingSend;
+    if (!pending?.controller) return false;
+    pending.controller.abort();
+    sessionState.pendingSend = null;
+    sessionState.sending = false;
+    setSessionStatus(sessionId, 'Canceled');
+    if (sessionId === state.activeSessionId) {
+        syncActiveSessionControls();
+    }
+    return true;
+}
+
+async function sendPrompt(prompt) {
     let sessionId = state.activeSessionId;
     if (!sessionId) {
         const session = await createSession(true);
@@ -1474,104 +1955,127 @@ async function sendPrompt(prompt) {
 
     if (!sessionId) {
         setStatus('Failed to create a session.', true);
-        setBusy(false);
-        state.sending = false;
         return;
+    }
+
+    const sessionState = ensureSessionState(sessionId);
+    if (sessionState?.sending) {
+        setSessionStatus(sessionId, 'Session is already sending.', true);
+        return;
+    }
+    if (sessionState) {
+        sessionState.sending = true;
+    }
+    setSessionStatus(sessionId, 'Waiting for Codex...');
+    if (sessionId === state.activeSessionId) {
+        syncActiveSessionControls();
     }
 
     const startedAt = Date.now();
     try {
+        const controller = beginPendingSend(sessionId);
         const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt })
+            body: JSON.stringify({ prompt }),
+            signal: controller.signal
         });
+        clearPendingSend(sessionId, controller);
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to send message.');
         }
         const userMessage = result?.user_message;
         if (userMessage) {
-            appendMessageToDOM(userMessage, 'user');
+            appendMessageToDOMIfActive(sessionId, userMessage, 'user');
         } else {
-            appendMessageToDOM({
+            appendMessageToDOMIfActive(sessionId, {
                 role: 'user',
                 content: prompt,
                 created_at: new Date().toISOString()
             }, 'user');
         }
 
-        const assistantEntry = appendMessageToDOM({
+        const assistantEntry = appendMessageToDOMIfActive(sessionId, {
             role: 'assistant',
             content: '',
             created_at: new Date().toISOString()
         }, 'assistant');
 
         const streamId = result?.stream_id;
-        if (!streamId || !assistantEntry) {
+        if (!streamId) {
             throw new Error('Failed to start stream.');
         }
-        setMessageStreaming(assistantEntry.wrapper, true);
+        if (assistantEntry) {
+            setMessageStreaming(assistantEntry.wrapper, true);
+        }
         startStream(streamId, sessionId, assistantEntry, startedAt);
     } catch (error) {
-        setStatus(normalizeError(error, 'Failed to send message.'), true);
-        setBusy(false);
-        state.sending = false;
+        clearPendingSend(sessionId);
+        if (error?.name === 'AbortError') {
+            if (sessionState) {
+                sessionState.sending = false;
+            }
+            setSessionStatus(sessionId, 'Canceled');
+            if (sessionId === state.activeSessionId) {
+                syncActiveSessionControls();
+            }
+            return;
+        }
+        if (sessionState) {
+            sessionState.sending = false;
+        }
+        setSessionStatus(sessionId, normalizeError(error, 'Failed to send message.'), true);
+        if (sessionId === state.activeSessionId) {
+            syncActiveSessionControls();
+        }
     }
 }
 
 function startStream(streamId, sessionId, assistantEntry, startedAt) {
-    const stream = {
+    const stream = createStreamState({
         id: streamId,
         sessionId,
+        entry: assistantEntry,
         outputOffset: 0,
         errorOffset: 0,
         output: '',
         error: '',
-        entry: assistantEntry,
         startedAt: startedAt || Date.now()
-    };
+    });
+    if (!stream) return;
     persistActiveStream(stream);
-    beginStreamPolling(stream);
+    beginStreamPolling(stream.id);
+    setSessionStatus(sessionId, 'Receiving response...');
+    if (sessionId === state.activeSessionId) {
+        syncActiveSessionControls();
+    }
 }
 
-function stopStreamPolling() {
-    if (state.streamTimer) {
-        clearTimeout(state.streamTimer);
-        state.streamTimer = null;
-    }
-    if (state.stream?.entry?.wrapper) {
-        setMessageStreaming(state.stream.entry.wrapper, false);
-    }
-    state.stream = null;
-    state.streamPolling = false;
-    state.streamFailureCount = 0;
-    state.streamPollDelay = STREAM_POLL_BASE_MS;
+function beginStreamPolling(streamId) {
+    const stream = state.streams[streamId];
+    if (!stream) return;
+    stream.failureCount = 0;
+    stream.pollDelay = STREAM_POLL_BASE_MS;
     renderSessions();
+    scheduleStreamPoll(streamId, 0);
 }
 
-function beginStreamPolling(stream) {
-    stopStreamPolling();
-    state.stream = stream;
-    state.streamFailureCount = 0;
-    state.streamPollDelay = STREAM_POLL_BASE_MS;
-    renderSessions();
-    scheduleStreamPoll(0);
-}
-
-function scheduleStreamPoll(delay) {
-    if (state.streamTimer) {
-        clearTimeout(state.streamTimer);
+function scheduleStreamPoll(streamId, delay) {
+    const stream = state.streams[streamId];
+    if (!stream) return;
+    if (stream.timer) {
+        clearTimeout(stream.timer);
     }
-    state.streamTimer = setTimeout(() => {
-        pollStream();
+    stream.timer = setTimeout(() => {
+        pollStream(streamId);
     }, delay);
 }
 
-async function stopStream() {
-    const stream = state.stream;
+async function stopStream(sessionId) {
+    const stream = getSessionStream(sessionId);
     if (!stream) return;
-    setStatus('Stopping...');
+    setSessionStatus(sessionId, 'Stopping...');
     try {
         const response = await fetch(`/api/codex/streams/${stream.id}/stop`, { method: 'POST' });
         const result = await response.json();
@@ -1592,66 +2096,78 @@ async function stopStream() {
         const durationMs = getStreamDuration(stream);
         setMessageDuration(stream.entry?.footer, durationMs);
         setMessageStreaming(stream.entry?.wrapper, false);
-        clearPersistedStream();
-        stopStreamPolling();
-        setBusy(false);
-        state.sending = false;
-        setStatus('Stopped');
-        await loadSessions({ preserveActive: true, selectSessionId: stream.sessionId });
+        clearPersistedStream(stream.id);
+        clearStreamState(stream.id);
+        const sessionState = getSessionState(sessionId);
+        if (sessionState) {
+            sessionState.sending = false;
+        }
+        setSessionStatus(sessionId, 'Stopped');
+        if (sessionId === state.activeSessionId) {
+            syncActiveSessionControls();
+        }
+        await loadSessions({ preserveActive: true, reloadActive: false });
     } catch (error) {
-        setStatus(normalizeError(error, 'Failed to stop stream.'), true);
+        setSessionStatus(sessionId, normalizeError(error, 'Failed to stop stream.'), true);
     }
 }
 
-async function pollStream() {
-    const stream = state.stream;
-    if (!stream || state.streamPolling) return;
-    state.streamPolling = true;
+async function pollStream(streamId) {
+    const stream = state.streams[streamId];
+    if (!stream || stream.polling) return;
+    stream.polling = true;
 
     try {
         const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
-
-        if (!state.stream || state.stream.id !== stream.id) {
+        const current = state.streams[streamId];
+        if (!current) {
             return;
         }
 
-        state.streamFailureCount = 0;
-        state.streamPollDelay = STREAM_POLL_BASE_MS;
+        current.failureCount = 0;
+        current.pollDelay = STREAM_POLL_BASE_MS;
 
         if (result?.output) {
-            stream.output += result.output;
-            stream.outputOffset = Number.isFinite(result.output_length)
+            current.output += result.output;
+            current.outputOffset = Number.isFinite(result.output_length)
                 ? result.output_length
-                : stream.output.length;
+                : current.output.length;
         }
         if (result?.error) {
-            stream.error += result.error;
-            stream.errorOffset = Number.isFinite(result.error_length)
+            current.error += result.error;
+            current.errorOffset = Number.isFinite(result.error_length)
                 ? result.error_length
-                : stream.error.length;
+                : current.error.length;
         }
 
         if (result?.output || result?.error) {
-            updateStreamEntry(stream);
-            setStatus('Receiving response...');
+            updateStreamEntry(current);
+            setSessionStatus(current.sessionId, 'Receiving response...');
         }
 
         if (result?.done) {
-            await finishStream(result);
+            await finishStream(streamId, result);
             return;
         }
-        scheduleStreamPoll(STREAM_POLL_BASE_MS);
+        scheduleStreamPoll(streamId, STREAM_POLL_BASE_MS);
     } catch (error) {
-        state.streamFailureCount += 1;
+        const current = state.streams[streamId];
+        if (!current) {
+            return;
+        }
+        current.failureCount += 1;
         const backoff = Math.min(
             STREAM_POLL_MAX_MS,
-            STREAM_POLL_BASE_MS * Math.pow(2, Math.min(state.streamFailureCount, 3))
+            STREAM_POLL_BASE_MS * Math.pow(2, Math.min(current.failureCount, 3))
         );
-        state.streamPollDelay = backoff;
-        setStatus('Connection lost. Retrying...', true);
-        scheduleStreamPoll(backoff);
+        current.pollDelay = backoff;
+        setSessionStatus(current.sessionId, 'Connection lost. Retrying...', true);
+        scheduleStreamPoll(streamId, backoff);
     } finally {
-        state.streamPolling = false;
+        const current = state.streams[streamId];
+        if (current) {
+            current.polling = false;
+        }
     }
 }
 
@@ -1666,15 +2182,14 @@ function updateStreamEntry(stream) {
     scrollToBottom();
 }
 
-async function finishStream(result) {
-    const stream = state.stream;
+async function finishStream(streamId, result) {
+    const stream = state.streams[streamId];
     if (!stream) return;
 
     const durationMs = getStreamDuration(stream);
     setMessageDuration(stream.entry?.footer, durationMs);
     setMessageStreaming(stream.entry?.wrapper, false);
-    clearPersistedStream();
-    stopStreamPolling();
+    clearPersistedStream(stream.id);
     const exitCode = result?.exit_code;
     const wrapper = stream.entry?.wrapper;
     const bubble = stream.entry?.bubble;
@@ -1686,15 +2201,25 @@ async function finishStream(result) {
         const errorText = stream.error || stream.output || 'Codex execution failed.';
         if (bubble) setMarkdownContent(bubble, errorText);
     }
-
-    setBusy(false);
-    state.sending = false;
-    setStatus(exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
-    await loadSessions({ preserveActive: true, selectSessionId: stream.sessionId });
+    clearStreamState(stream.id);
+    const sessionId = stream.sessionId;
+    const sessionState = getSessionState(sessionId);
+    if (sessionState) {
+        sessionState.sending = false;
+    }
+    setSessionStatus(sessionId, exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
+    if (sessionId === state.activeSessionId) {
+        syncActiveSessionControls();
+    }
+    await loadSessions({ preserveActive: true, reloadActive: false });
 }
 
 async function renameSession(session) {
-    if (!session?.id || state.sending) return;
+    if (!session?.id) return;
+    if (isSessionBusy(session.id)) {
+        setStatus('Cannot rename a session while it is running.', true);
+        return;
+    }
     const currentTitle = session.title || 'New session';
     const nextTitle = window.prompt('Enter a session name.', currentTitle);
     if (nextTitle === null) return;
@@ -1720,14 +2245,18 @@ async function renameSession(session) {
         if (state.activeSessionId === updated?.id) {
             updateHeader(updated);
         }
-        setStatus('Idle');
+        syncActiveSessionStatus();
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to rename session.'), true);
     }
 }
 
 async function deleteSession(sessionId) {
-    if (!sessionId || state.sending) return;
+    if (!sessionId) return;
+    if (isSessionBusy(sessionId)) {
+        setStatus('Cannot delete a session while it is running.', true);
+        return;
+    }
     const confirmed = window.confirm('Delete this session? This will remove all messages.');
     if (!confirmed) return;
     setStatus('Deleting session...');
@@ -1748,30 +2277,10 @@ async function deleteSession(sessionId) {
             renderMessages([]);
             updateHeader(null);
         }
-        setStatus('Idle');
+        syncActiveSessionStatus();
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to delete session.'), true);
     }
-}
-
-function setBusy(isBusy) {
-    const input = document.getElementById('codex-chat-input');
-    const sendBtn = document.getElementById('codex-chat-send');
-    const newBtn = document.getElementById('codex-chat-new-session');
-    const refreshBtn = document.getElementById('codex-chat-refresh');
-    if (input) input.disabled = isBusy;
-    if (sendBtn) {
-        sendBtn.disabled = false;
-        sendBtn.dataset.mode = isBusy ? 'stop' : 'send';
-        sendBtn.setAttribute('aria-label', isBusy ? 'Stop' : 'Send');
-        sendBtn.setAttribute('title', isBusy ? 'Stop' : 'Send');
-        const srLabel = sendBtn.querySelector('.sr-only');
-        if (srLabel) {
-            srLabel.textContent = isBusy ? 'Stop' : 'Send';
-        }
-    }
-    if (newBtn) newBtn.disabled = isBusy;
-    if (refreshBtn) refreshBtn.disabled = isBusy;
 }
 
 function setStatus(message, isError = false) {

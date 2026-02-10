@@ -1,5 +1,7 @@
 """Codex chat Flask application."""
 
+from pathlib import Path
+
 from flask import Flask, jsonify, render_template, request
 
 from .blueprints import codex_chat
@@ -22,10 +24,14 @@ def create_codex_app():
 
     @app.route('/')
     def codex_root():
+        server_directory = Path.cwd().resolve()
+        server_directory_name = server_directory.name or str(server_directory)
         return render_template(
             'index.html',
             model_options=CODEX_MODEL_OPTIONS,
-            reasoning_options=CODEX_REASONING_OPTIONS
+            reasoning_options=CODEX_REASONING_OPTIONS,
+            server_directory_name=server_directory_name,
+            server_directory_path=str(server_directory)
         )
 
     @app.route('/health')

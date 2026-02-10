@@ -103,10 +103,59 @@ body {
     min-height: 0;
 }
 
+.toast-layer {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: 12px;
+    width: min(420px, calc(100vw - 24px));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 2400;
+    pointer-events: none;
+}
+
+.toast {
+    border: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    box-shadow: var(--shadow-accent);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.toast.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast.toast-error {
+    border-color: var(--danger);
+    background: var(--message-error-bg);
+}
+
 .live-weather-panel {
     border: 1px solid var(--border);
     background: var(--surface);
     margin-bottom: 14px;
+}
+
+.live-weather-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+
+.live-weather-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 12px;
 }
 
 .live-weather-toggle {
@@ -121,6 +170,51 @@ body {
     align-items: center;
     text-align: left;
     cursor: pointer;
+}
+
+.live-weather-permission {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.live-weather-permission:hover {
+    background: var(--surface-muted);
+}
+
+.live-weather-compact {
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.live-weather-compact:hover {
+    background: var(--surface);
+}
+
+.live-weather-panel.is-compact .live-weather-toggle {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 8px 12px;
+}
+
+.live-weather-panel.is-compact .live-weather-divider,
+.live-weather-panel.is-compact .live-weather-current,
+.live-weather-panel.is-compact .live-weather-hint {
+    display: none;
+}
+
+.live-weather-panel.is-compact .live-weather-forecast {
+    display: none;
 }
 
 .live-weather-time,
@@ -159,7 +253,7 @@ body {
     border-top: 1px solid var(--border);
     padding: 10px 12px;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 10px;
 }
 
@@ -179,6 +273,14 @@ body {
     font-size: 12px;
     color: var(--text-secondary);
     line-height: 1.4;
+}
+
+.forecast-subvalue {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.35;
+    word-break: break-all;
 }
 
 .app-header {
@@ -621,21 +723,30 @@ body {
 
 .model-row {
     display: grid;
-    grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) auto;
+    grid-template-columns: minmax(0, 170px) minmax(0, 170px);
     gap: 8px;
     align-items: center;
+    justify-content: flex-start;
 }
 
 .model-row.is-select-only {
-    grid-template-columns: minmax(160px, 1fr) auto;
+    grid-template-columns: minmax(0, 210px);
 }
 
 .model-row.is-compact {
-    grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr);
+    grid-template-columns: minmax(0, 150px) minmax(0, 150px);
 }
 
 .model-row.is-compact.is-select-only {
-    grid-template-columns: minmax(160px, 1fr);
+    grid-template-columns: minmax(0, 200px);
+}
+
+.model-row.has-apply {
+    grid-template-columns: minmax(0, 150px) minmax(0, 150px) auto;
+}
+
+.model-row.has-apply.is-select-only {
+    grid-template-columns: minmax(0, 200px) auto;
 }
 
 .model-select,
@@ -943,23 +1054,69 @@ body {
         overflow: hidden;
     }
 
+    html.is-mobile-keyboard-open,
+    body.is-mobile-keyboard-open {
+        height: var(--mobile-viewport-height);
+        overflow: hidden;
+        overscroll-behavior-y: none;
+    }
+
     .app {
         height: var(--mobile-viewport-height);
         min-height: var(--mobile-viewport-height);
         padding: 16px;
     }
 
+    .app.is-mobile-keyboard-open {
+        overflow: hidden;
+    }
+
+    .live-weather-compact {
+        padding: 4px 8px;
+    }
+
+    .live-weather-top {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 6px;
+    }
+
+    .live-weather-actions {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        padding: 0 12px 8px;
+    }
+
+    .live-weather-permission {
+        padding: 4px 8px;
+    }
+
     .live-weather-toggle {
         grid-template-columns: 1fr;
         gap: 8px;
+        min-width: 0;
     }
 
     .live-weather-divider {
         display: none;
     }
 
+    #codex-weather-current {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+        word-break: keep-all;
+    }
+
     .live-weather-forecast {
         grid-template-columns: 1fr;
+    }
+
+    .toast-layer {
+        left: 12px;
+        right: 12px;
+        width: auto;
     }
 
     .layout {
@@ -1021,7 +1178,7 @@ body {
     }
 
     .model-row {
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: 1fr;
         align-items: stretch;
     }
 
@@ -1030,7 +1187,7 @@ body {
     }
 
     .model-input {
-        grid-column: 1 / 2;
+        grid-column: 1 / -1;
     }
 
     .model-apply {
@@ -1038,7 +1195,19 @@ body {
         min-width: 72px;
     }
 
-    .model-row.is-compact {
+    .model-row.has-apply {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .model-row.has-apply .model-select {
+        grid-column: 1 / 2;
+    }
+
+    .model-row.has-apply .model-input {
+        grid-column: 1 / 2;
+    }
+
+    .model-row.is-compact:not(.has-apply) {
         grid-template-columns: 1fr;
     }
 
@@ -1068,15 +1237,19 @@ body {
     }
 
     .app.is-mobile-keyboard-open .layout {
-        overflow: auto;
+        overflow: hidden;
+        overscroll-behavior-y: none;
     }
 
     .app.is-mobile-keyboard-open .sessions {
-        max-height: min(36vh, 260px);
+        max-height: min(34vh, 220px);
+        overflow: hidden;
+        padding-bottom: 0;
+        overscroll-behavior-y: none;
     }
 
     .app.is-mobile-keyboard-open .chat {
-        overflow: auto;
+        overflow: hidden;
     }
 
     .app.is-mobile-keyboard-open .chat-controls-body {
@@ -1085,7 +1258,10 @@ body {
     }
 
     .app.is-mobile-keyboard-open .session-list {
-        scroll-padding-bottom: 132px;
+        max-height: min(24vh, 180px);
+        padding-bottom: 0;
+        scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 16px);
+        overscroll-behavior-y: contain;
     }
 
     .chat.is-settings-input-focused {

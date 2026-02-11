@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=16">
+    <link rel="stylesheet" href="/static/css/app.css?v=17">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -22,6 +22,14 @@
                         <input type="checkbox" id="codex-theme-toggle" aria-label="Toggle dark mode">
                         <span class="theme-slider" aria-hidden="true"></span>
                     </label>
+                </div>
+                <div class="git-actions" aria-label="Git actions">
+                    <button class="btn ghost" type="button" id="codex-git-submit" aria-label="Run git submit" title="Run git submit">
+                        Git Submit
+                    </button>
+                    <button class="btn ghost" type="button" id="codex-git-sync" aria-label="Run git sync" title="Run git sync">
+                        Git Sync
+                    </button>
                 </div>
                 <button class="btn secondary" type="button" id="codex-chat-new-session">+ New session</button>
             </div>
@@ -165,6 +173,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=18"></script>
+    <script src="/static/js/app.js?v=19"></script>
 </body>
 </html>

@@ -48,6 +48,10 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
+const GIT_ACTION_LABELS = Object.freeze({
+    submit: 'git submit',
+    sync: 'git sync'
+});
 
 let hasManualTheme = false;
 
@@ -263,6 +267,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
     const controlsRefresh = document.getElementById('codex-controls-refresh');
+    const gitSubmitBtn = document.getElementById('codex-git-submit');
+    const gitSyncBtn = document.getElementById('codex-git-sync');
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -280,6 +286,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (newSessionBtn) {
         newSessionBtn.addEventListener('click', async () => {
             await createSession(true);
+        });
+    }
+
+    if (gitSubmitBtn) {
+        gitSubmitBtn.addEventListener('click', () => {
+            void handleGitAction('submit', gitSubmitBtn);
+        });
+    }
+
+    if (gitSyncBtn) {
+        gitSyncBtn.addEventListener('click', () => {
+            void handleGitAction('sync', gitSyncBtn);
         });
     }
 
@@ -1549,6 +1567,54 @@ async function fetchJson(url, options) {
         throw new Error(`Request failed (${response.status})`);
     }
     throw new Error(text || 'Unexpected response format.');
+}
+
+function setGitButtonBusy(button, busy, busyLabel) {
+    if (!button) return;
+    if (!button.dataset.label) {
+        button.dataset.label = button.textContent.trim();
+    }
+    if (busy) {
+        button.classList.add('is-loading');
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        if (busyLabel) {
+            button.textContent = busyLabel;
+        }
+        return;
+    }
+    button.classList.remove('is-loading');
+    button.disabled = false;
+    button.setAttribute('aria-busy', 'false');
+    button.textContent = button.dataset.label || button.textContent;
+}
+
+function summarizeGitOutput(value) {
+    const text = String(value || '').trim();
+    if (!text) return '';
+    const firstLine = text.split(/\r?\n/)[0].trim();
+    if (!firstLine) return '';
+    if (firstLine.length > 120) {
+        return `${firstLine.slice(0, 117)}...`;
+    }
+    return firstLine;
+}
+
+async function handleGitAction(action, button) {
+    const label = GIT_ACTION_LABELS[action] || `git ${action}`;
+    const busyLabel = action === 'submit' ? 'Submitting...' : 'Syncing...';
+    setGitButtonBusy(button, true, busyLabel);
+    try {
+        const result = await fetchJson(`/api/codex/git/${action}`, { method: 'POST' });
+        const summary = summarizeGitOutput(result?.stdout || result?.stderr);
+        const suffix = summary ? `: ${summary}` : '';
+        showToast(`${label} 완료${suffix}`, { tone: 'success', durationMs: 3200 });
+    } catch (error) {
+        const message = normalizeError(error, `${label} 작업에 실패했습니다.`);
+        showToast(`${label} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+    } finally {
+        setGitButtonBusy(button, false);
+    }
 }
 
 async function resumeStreamsFromStorage(pendingStreams) {

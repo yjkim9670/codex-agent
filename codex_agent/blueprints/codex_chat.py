@@ -31,6 +31,7 @@ from ..services.codex_chat import (
     update_settings,
     stop_codex_stream,
 )
+from ..services.git_ops import run_git_action
 
 bp = Blueprint('codex_chat', __name__)
 
@@ -211,4 +212,17 @@ def codex_stream_stop(stream_id):
     result = stop_codex_stream(stream_id)
     if not result:
         return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
+    return jsonify(result)
+
+
+@bp.route('/api/codex/git/<action>', methods=['POST'])
+def codex_git_action(action):
+    result = run_git_action(action)
+    if not isinstance(result, dict):
+        return jsonify({'error': 'git 작업 결과를 확인할 수 없습니다.'}), 500
+    if result.get('error'):
+        return jsonify({'error': result['error']}), 400
+    if not result.get('ok'):
+        message = result.get('stderr') or result.get('stdout') or f'git {action} 작업에 실패했습니다.'
+        return jsonify({'error': message, 'result': result}), 400
     return jsonify(result)

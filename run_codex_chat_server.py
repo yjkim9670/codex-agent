@@ -65,7 +65,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     app = create_codex_app()
-    use_reloader = (original_cwd == script_dir)
+    use_reloader = True
     print("[INFO] Starting Codex Chat Server...")
     print(f"[INFO] Access the Codex chat API at: http://localhost:{args.port}")
     app.run(

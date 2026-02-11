@@ -1605,7 +1605,21 @@ async function handleGitAction(action, button) {
     const busyLabel = action === 'submit' ? 'Submitting...' : 'Syncing...';
     setGitButtonBusy(button, true, busyLabel);
     try {
-        const result = await fetchJson(`/api/codex/git/${action}`, { method: 'POST' });
+        let result = null;
+        try {
+            result = await fetchJson(`/api/codex/git/${action}`, { method: 'POST' });
+        } catch (error) {
+            const message = normalizeError(error, '');
+            if (message.toLowerCase().includes('method not allowed')) {
+                const ts = Date.now();
+                result = await fetchJson(`/api/codex/git/${action}?confirm=1&ts=${ts}`, {
+                    method: 'GET',
+                    cache: 'no-store'
+                });
+            } else {
+                throw error;
+            }
+        }
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
         showToast(`${label} 완료${suffix}`, { tone: 'success', durationMs: 3200 });

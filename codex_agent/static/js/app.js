@@ -1013,13 +1013,21 @@ function formatKstHourMinute(value) {
     }).format(date);
 }
 
+function updateSessionsToggleButton(toggle, collapsed) {
+    if (!toggle) return;
+    const isCollapsed = Boolean(collapsed);
+    toggle.textContent = isCollapsed ? '▸' : '▾';
+    toggle.setAttribute('aria-label', isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel');
+    toggle.setAttribute('title', isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel');
+}
+
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
     sessionsPanel.classList.toggle('is-collapsed', collapsed);
     sessionsToggle.setAttribute('aria-expanded', String(!collapsed));
-    sessionsToggle.textContent = collapsed ? 'Show sessions' : 'Hide sessions';
+    updateSessionsToggleButton(sessionsToggle, collapsed);
     if (persist) {
         try {
             localStorage.setItem(SESSION_COLLAPSE_KEY, collapsed ? '1' : '0');
@@ -1036,7 +1044,7 @@ function syncSessionsLayout(isMobile) {
     if (!isMobile) {
         sessionsPanel.classList.remove('is-collapsed');
         sessionsToggle.setAttribute('aria-expanded', 'true');
-        sessionsToggle.textContent = 'Hide sessions';
+        updateSessionsToggleButton(sessionsToggle, false);
         return;
     }
     let collapsed = true;
@@ -1657,22 +1665,41 @@ async function fetchJson(url, options) {
 
 function setGitButtonBusy(button, busy, busyLabel) {
     if (!button) return;
+    const isIconOnly = button.classList.contains('icon-only');
     if (!button.dataset.label) {
         button.dataset.label = button.textContent.trim();
+    }
+    if (!button.dataset.defaultAriaLabel) {
+        button.dataset.defaultAriaLabel = button.getAttribute('aria-label') || '';
+    }
+    if (!button.dataset.defaultTitle) {
+        button.dataset.defaultTitle = button.getAttribute('title') || '';
     }
     if (busy) {
         button.classList.add('is-loading');
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
         if (busyLabel) {
-            button.textContent = busyLabel;
+            button.setAttribute('aria-label', busyLabel);
+            button.setAttribute('title', busyLabel);
+            if (!isIconOnly) {
+                button.textContent = busyLabel;
+            }
         }
         return;
     }
     button.classList.remove('is-loading');
     button.disabled = false;
     button.setAttribute('aria-busy', 'false');
-    button.textContent = button.dataset.label || button.textContent;
+    if (button.dataset.defaultAriaLabel) {
+        button.setAttribute('aria-label', button.dataset.defaultAriaLabel);
+    }
+    if (button.dataset.defaultTitle) {
+        button.setAttribute('title', button.dataset.defaultTitle);
+    }
+    if (!isIconOnly) {
+        button.textContent = button.dataset.label || button.textContent;
+    }
 }
 
 function summarizeGitOutput(value) {

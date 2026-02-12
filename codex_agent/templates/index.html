@@ -4,31 +4,30 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=17">
+    <link rel="stylesheet" href="/static/css/app.css?v=19">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
     <div class="app">
         <header class="app-header">
-            <div>
+            <div class="app-header-main">
                 <h1>Codex Agent</h1>
                 <p class="app-workspace">{{ workspace_directory_name }}</p>
                 <p>Manage Codex Agent sessions.</p>
             </div>
             <div class="header-actions">
                 <div class="theme-toggle">
-                    <span class="theme-label">Dark mode</span>
                     <label class="theme-switch">
                         <input type="checkbox" id="codex-theme-toggle" aria-label="Toggle dark mode">
                         <span class="theme-slider" aria-hidden="true"></span>
                     </label>
                 </div>
                 <div class="git-actions" aria-label="Git actions">
-                    <button class="btn ghost" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit">
-                        Git Commit
+                    <button class="btn ghost icon-only" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit">
+                        ✓
                     </button>
-                    <button class="btn ghost" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push">
-                        Git Sync
+                    <button class="btn ghost icon-only" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push">
+                        ⇅
                     </button>
                 </div>
                 <button class="btn secondary" type="button" id="codex-chat-new-session">+ New session</button>
@@ -98,7 +97,7 @@
                     <span>Sessions</span>
                     <div class="sessions-actions">
                         <button class="btn ghost" type="button" id="codex-chat-refresh">Refresh</button>
-                        <button class="btn ghost sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list">Hide sessions</button>
+                        <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel">▾</button>
                     </div>
                 </div>
                 <div id="codex-session-list" class="session-list">
@@ -173,6 +172,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=24"></script>
+    <script src="/static/js/app.js?v=26"></script>
 </body>
 </html>

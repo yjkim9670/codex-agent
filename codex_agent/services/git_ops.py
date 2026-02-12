@@ -1,13 +1,12 @@
 """Git command helpers for Codex Agent."""
 
 import os
-import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 from ..config import WORKSPACE_DIR
-from .codex_chat import get_session, list_sessions
 
 GIT_TIMEOUT_SECONDS = 600
 _GIT_ACTIONS = {
@@ -64,71 +63,35 @@ def _run_git_command(cmd, repo_root, timeout, env):
     return result, None
 
 
-def _sanitize_commit_title(title):
-    normalized = ' '.join(str(title or '').strip().split())
-    if not normalized:
-        return 'codex: update'
-    if not normalized.lower().startswith('codex:'):
-        normalized = f'codex: {normalized}'
-    if len(normalized) > 72:
-        normalized = f"{normalized[:69]}..."
-    return normalized
+def _is_history_file(path):
+    base = os.path.basename(path or '').lower()
+    return base == 'history' or base.startswith('history.')
 
 
-def _normalize_summary_text(text):
-    if not text:
-        return ''
-    cleaned = re.sub(r'```.*?```', ' ', str(text), flags=re.DOTALL)
-    cleaned = re.sub(r'\s+', ' ', cleaned)
-    cleaned = cleaned.replace('`', '').strip()
-    return cleaned
-
-
-def _summarize_recent_conversation(messages):
-    if not isinstance(messages, list) or not messages:
-        return ''
-    last_user = None
-    last_assistant = None
-    for entry in reversed(messages):
-        role = entry.get('role')
-        content = _normalize_summary_text(entry.get('content') or '')
-        if not content:
+def _extract_changed_files(status_text):
+    files = []
+    for line in (status_text or '').splitlines():
+        if len(line) < 4:
             continue
-        if not last_user and role == 'user':
-            last_user = content
-        if not last_assistant and role == 'assistant':
-            last_assistant = content
-        if last_user and last_assistant:
-            break
-    if last_user and last_assistant:
-        summary = f"{last_user} / {last_assistant}"
-    else:
-        summary = last_user or last_assistant or ''
-    return summary
+        path = line[3:].strip()
+        if not path:
+            continue
+        if ' -> ' in path:
+            path = path.split(' -> ')[-1].strip()
+        if not path:
+            continue
+        files.append(path)
+    return files
 
 
-def _build_commit_summary():
-    sessions = list_sessions()
-    if not sessions:
-        return ''
-    session_id = sessions[0].get('id')
-    if not session_id:
-        return ''
-    session = get_session(session_id)
-    if not session:
-        return ''
-    return _summarize_recent_conversation(session.get('messages', []))
-
-
-def _build_commit_message():
-    try:
-        summary = _build_commit_summary()
-        if not summary:
-            sessions = list_sessions()
-            summary = sessions[0].get('title') if sessions else ''
-        return _sanitize_commit_title(summary)
-    except Exception:
-        return _sanitize_commit_title('')
+def _build_commit_message(status_text, max_files=3):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    files = [path for path in _extract_changed_files(status_text) if not _is_history_file(path)]
+    if not files:
+        return timestamp
+    listed = files[:max_files]
+    suffix = f" (+{len(files) - max_files})" if len(files) > max_files else ''
+    return f"{timestamp} {', '.join(listed)}{suffix}"
 
 
 def run_git_action(action):
@@ -172,7 +135,7 @@ def run_git_action(action):
                 stderr = (add_result.stderr or '').strip()
                 return {'error': stderr or stdout or 'git add에 실패했습니다.'}
 
-            message = _build_commit_message()
+            message = _build_commit_message(status_result.stdout or '')
             cmd = ['git', 'commit', '-m', message]
             result, error = _run_git_command(
                 ['git', '-C', str(repo_root), 'commit', '-m', message],

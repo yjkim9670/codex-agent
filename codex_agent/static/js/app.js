@@ -49,7 +49,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
 const GIT_ACTION_LABELS = Object.freeze({
-    submit: 'git submit',
+    submit: 'git commit',
     sync: 'git sync'
 });
 
@@ -1602,7 +1602,7 @@ function summarizeGitOutput(value) {
 
 async function handleGitAction(action, button) {
     const label = GIT_ACTION_LABELS[action] || `git ${action}`;
-    const busyLabel = action === 'submit' ? 'Submitting...' : 'Syncing...';
+    const busyLabel = action === 'submit' ? 'Committing...' : 'Syncing...';
     setGitButtonBusy(button, true, busyLabel);
     try {
         let result = null;

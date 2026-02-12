@@ -183,14 +183,45 @@ def run_git_action(action):
             if error:
                 return error
         else:
-            cmd = _GIT_ACTIONS[action]
-            result, error = _run_git_command(cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
-            if error:
-                return error
+            if action == 'sync':
+                fetch_cmd = _GIT_ACTIONS[action]
+                cmd = fetch_cmd
+                fetch_result, error = _run_git_command(fetch_cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
+                if error:
+                    return error
+                if fetch_result.returncode != 0:
+                    stdout = (fetch_result.stdout or '').strip()
+                    stderr = (fetch_result.stderr or '').strip()
+                    return {'error': stderr or stdout or 'git fetch에 실패했습니다.'}
+                push_cmd = ['git', 'push']
+                cmd = push_cmd
+                push_result, error = _run_git_command(push_cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
+                if error:
+                    return error
+                if push_result.returncode != 0:
+                    stdout = (push_result.stdout or '').strip()
+                    stderr = (push_result.stderr or '').strip()
+                    return {'error': stderr or stdout or 'git push에 실패했습니다.'}
+                result = push_result
+                cmd = ['git', 'fetch', '--prune', '&&', 'git', 'push']
+                stdout = '\n'.join([
+                    (fetch_result.stdout or '').strip(),
+                    (push_result.stdout or '').strip()
+                ]).strip()
+                stderr = '\n'.join([
+                    (fetch_result.stderr or '').strip(),
+                    (push_result.stderr or '').strip()
+                ]).strip()
+            else:
+                cmd = _GIT_ACTIONS[action]
+                result, error = _run_git_command(cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
+                if error:
+                    return error
 
         duration_ms = max(0, int((time.time() - started_at) * 1000))
-        stdout = (result.stdout or '').strip()
-        stderr = (result.stderr or '').strip()
+        if action != 'sync':
+            stdout = (result.stdout or '').strip()
+            stderr = (result.stderr or '').strip()
         return {
             'ok': result.returncode == 0,
             'exit_code': result.returncode,

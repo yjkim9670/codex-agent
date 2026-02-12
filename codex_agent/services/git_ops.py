@@ -75,73 +75,82 @@ def _sanitize_commit_title(title):
 
 
 def _build_commit_message():
-    sessions = list_sessions()
-    title = sessions[0].get('title') if sessions else ''
-    return _sanitize_commit_title(title)
+    try:
+        sessions = list_sessions()
+        title = sessions[0].get('title') if sessions else ''
+        return _sanitize_commit_title(title)
+    except Exception:
+        return _sanitize_commit_title('')
 
 
 def run_git_action(action):
-    action = (action or '').strip()
-    if action not in _GIT_ACTIONS and action != 'submit':
-        return {'error': '지원하지 않는 git 작업입니다.'}
+    try:
+        action = (action or '').strip()
+        if action not in _GIT_ACTIONS and action != 'submit':
+            return {'error': '지원하지 않는 git 작업입니다.'}
 
-    repo_root, error = _resolve_repo_root()
-    if error:
-        return {'error': error}
-
-    env = os.environ.copy()
-    env.setdefault('GIT_TERMINAL_PROMPT', '0')
-
-    started_at = time.time()
-    if action == 'submit':
-        status_result, error = _run_git_command(
-            ['git', '-C', str(repo_root), 'status', '--porcelain'],
-            repo_root,
-            15,
-            env
-        )
+        repo_root, error = _resolve_repo_root()
         if error:
-            return error
-        if not (status_result.stdout or '').strip():
-            return {'error': '커밋할 변경 사항이 없습니다.'}
+            return {'error': error}
 
-        add_result, error = _run_git_command(
-            ['git', '-C', str(repo_root), 'add', '-A'],
-            repo_root,
-            30,
-            env
-        )
-        if error:
-            return error
-        if add_result.returncode != 0:
-            stdout = (add_result.stdout or '').strip()
-            stderr = (add_result.stderr or '').strip()
-            return {'error': stderr or stdout or 'git add에 실패했습니다.'}
+        env = os.environ.copy()
+        env.setdefault('GIT_TERMINAL_PROMPT', '0')
 
-        message = _build_commit_message()
-        result, error = _run_git_command(
-            ['git', '-C', str(repo_root), 'commit', '-m', message],
-            repo_root,
-            GIT_TIMEOUT_SECONDS,
-            env
-        )
-        if error:
-            return error
-    else:
-        cmd = _GIT_ACTIONS[action]
-        result, error = _run_git_command(cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
-        if error:
-            return error
+        started_at = time.time()
+        cmd = None
+        if action == 'submit':
+            cmd = ['git', 'commit']
+            status_result, error = _run_git_command(
+                ['git', '-C', str(repo_root), 'status', '--porcelain'],
+                repo_root,
+                15,
+                env
+            )
+            if error:
+                return error
+            if not (status_result.stdout or '').strip():
+                return {'error': '커밋할 변경 사항이 없습니다.'}
 
-    duration_ms = max(0, int((time.time() - started_at) * 1000))
-    stdout = (result.stdout or '').strip()
-    stderr = (result.stderr or '').strip()
-    return {
-        'ok': result.returncode == 0,
-        'exit_code': result.returncode,
-        'stdout': stdout,
-        'stderr': stderr,
-        'command': ' '.join(cmd),
-        'repo_root': str(repo_root),
-        'duration_ms': duration_ms
-    }
+            add_result, error = _run_git_command(
+                ['git', '-C', str(repo_root), 'add', '-A'],
+                repo_root,
+                30,
+                env
+            )
+            if error:
+                return error
+            if add_result.returncode != 0:
+                stdout = (add_result.stdout or '').strip()
+                stderr = (add_result.stderr or '').strip()
+                return {'error': stderr or stdout or 'git add에 실패했습니다.'}
+
+            message = _build_commit_message()
+            cmd = ['git', 'commit', '-m', message]
+            result, error = _run_git_command(
+                ['git', '-C', str(repo_root), 'commit', '-m', message],
+                repo_root,
+                GIT_TIMEOUT_SECONDS,
+                env
+            )
+            if error:
+                return error
+        else:
+            cmd = _GIT_ACTIONS[action]
+            result, error = _run_git_command(cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
+            if error:
+                return error
+
+        duration_ms = max(0, int((time.time() - started_at) * 1000))
+        stdout = (result.stdout or '').strip()
+        stderr = (result.stderr or '').strip()
+        return {
+            'ok': result.returncode == 0,
+            'exit_code': result.returncode,
+            'stdout': stdout,
+            'stderr': stderr,
+            'command': ' '.join(cmd) if cmd else '',
+            'repo_root': str(repo_root),
+            'duration_ms': duration_ms
+        }
+    except Exception as exc:
+        return {'error': f'git 작업 처리 중 오류가 발생했습니다: {exc}'}

@@ -5,11 +5,15 @@ const state = {
     sessionStates: {},
     streams: {},
     liveClockTimer: null,
+    responseTimerId: null,
+    responseTimerSessionId: null,
     weatherRefreshTimer: null,
     weatherLocationFailureNotified: false,
     autoScrollEnabled: true,
     autoScrollPinnedSessionId: null,
     autoScrollThreshold: 48,
+    statusMessage: 'Idle',
+    statusIsError: false,
     settings: {
         model: null,
         modelOptions: [],
@@ -63,7 +67,9 @@ function ensureSessionState(sessionId) {
             pendingSend: null,
             streamId: null,
             status: 'Idle',
-            statusIsError: false
+            statusIsError: false,
+            responseStartedAt: null,
+            responseStatus: null
         };
     }
     return state.sessionStates[sessionId];
@@ -97,8 +103,83 @@ function setSessionStatus(sessionId, message, isError = false) {
     if (!sessionState) return;
     sessionState.status = message;
     sessionState.statusIsError = isError;
+    updateResponseTimerForSession(sessionId, message, isError);
     if (sessionId === state.activeSessionId) {
         setStatus(message, isError);
+    }
+}
+
+function formatElapsedTime(ms) {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function updateStatusDisplay() {
+    const status = document.getElementById('codex-chat-status');
+    if (!status) return;
+    const sessionId = state.activeSessionId;
+    const sessionState = sessionId ? getSessionState(sessionId) : null;
+    const baseMessage = state.statusMessage || 'Idle';
+    if (sessionState?.responseStartedAt && sessionState.responseStatus) {
+        const elapsed = Date.now() - sessionState.responseStartedAt;
+        const timeLabel = formatElapsedTime(elapsed);
+        status.textContent = `${sessionState.responseStatus} · ${timeLabel}`;
+    } else {
+        status.textContent = baseMessage;
+    }
+    status.classList.toggle('is-error', state.statusIsError);
+}
+
+function stopResponseTimer() {
+    if (state.responseTimerId) {
+        window.clearInterval(state.responseTimerId);
+        state.responseTimerId = null;
+    }
+    state.responseTimerSessionId = null;
+}
+
+function syncResponseTimerForActiveSession() {
+    const sessionId = state.activeSessionId;
+    const sessionState = sessionId ? getSessionState(sessionId) : null;
+    const shouldRun = Boolean(sessionState?.responseStartedAt && sessionState.responseStatus);
+    if (!shouldRun) {
+        stopResponseTimer();
+        updateStatusDisplay();
+        return;
+    }
+    if (state.responseTimerSessionId !== sessionId) {
+        stopResponseTimer();
+        state.responseTimerSessionId = sessionId;
+    }
+    if (!state.responseTimerId) {
+        state.responseTimerId = window.setInterval(updateStatusDisplay, 1000);
+    }
+    updateStatusDisplay();
+}
+
+function updateResponseTimerForSession(sessionId, message, isError = false) {
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return;
+    const responseStatus = message === 'Waiting for Codex...' || message === 'Receiving response...';
+    if (!isError && responseStatus) {
+        if (!sessionState.responseStartedAt) {
+            const pendingStartedAt = sessionState.pendingSend?.startedAt;
+            const streamStartedAt = getSessionStream(sessionId)?.startedAt;
+            sessionState.responseStartedAt = pendingStartedAt || streamStartedAt || Date.now();
+        }
+        sessionState.responseStatus = message;
+    } else {
+        sessionState.responseStartedAt = null;
+        sessionState.responseStatus = null;
+    }
+    if (sessionId === state.activeSessionId) {
+        syncResponseTimerForActiveSession();
     }
 }
 
@@ -107,9 +188,11 @@ function syncActiveSessionStatus() {
     const sessionState = getSessionState(sessionId);
     if (!sessionState) {
         setStatus('Idle');
+        syncResponseTimerForActiveSession();
         return;
     }
     setStatus(sessionState.status || 'Idle', Boolean(sessionState.statusIsError));
+    syncResponseTimerForActiveSession();
 }
 
 function syncActiveSessionControls() {
@@ -197,6 +280,9 @@ function createStreamState({
     if (sessionState) {
         sessionState.streamId = id;
         sessionState.sending = true;
+        if (!sessionState.responseStartedAt && stream.startedAt) {
+            sessionState.responseStartedAt = stream.startedAt;
+        }
     }
     return stream;
 }
@@ -2402,10 +2488,9 @@ async function deleteSession(sessionId) {
 }
 
 function setStatus(message, isError = false) {
-    const status = document.getElementById('codex-chat-status');
-    if (!status) return;
-    status.textContent = message;
-    status.classList.toggle('is-error', isError);
+    state.statusMessage = message;
+    state.statusIsError = isError;
+    updateStatusDisplay();
 }
 
 function formatTimestamp(value) {

@@ -1,12 +1,13 @@
 """Git command helpers for Codex Agent."""
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 from ..config import WORKSPACE_DIR
-from .codex_chat import list_sessions
+from .codex_chat import get_session, list_sessions
 
 GIT_TIMEOUT_SECONDS = 600
 _GIT_ACTIONS = {
@@ -74,11 +75,58 @@ def _sanitize_commit_title(title):
     return normalized
 
 
+def _normalize_summary_text(text):
+    if not text:
+        return ''
+    cleaned = re.sub(r'```.*?```', ' ', str(text), flags=re.DOTALL)
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    cleaned = cleaned.replace('`', '').strip()
+    return cleaned
+
+
+def _summarize_recent_conversation(messages):
+    if not isinstance(messages, list) or not messages:
+        return ''
+    last_user = None
+    last_assistant = None
+    for entry in reversed(messages):
+        role = entry.get('role')
+        content = _normalize_summary_text(entry.get('content') or '')
+        if not content:
+            continue
+        if not last_user and role == 'user':
+            last_user = content
+        if not last_assistant and role == 'assistant':
+            last_assistant = content
+        if last_user and last_assistant:
+            break
+    if last_user and last_assistant:
+        summary = f"{last_user} / {last_assistant}"
+    else:
+        summary = last_user or last_assistant or ''
+    return summary
+
+
+def _build_commit_summary():
+    sessions = list_sessions()
+    if not sessions:
+        return ''
+    session_id = sessions[0].get('id')
+    if not session_id:
+        return ''
+    session = get_session(session_id)
+    if not session:
+        return ''
+    return _summarize_recent_conversation(session.get('messages', []))
+
+
 def _build_commit_message():
     try:
-        sessions = list_sessions()
-        title = sessions[0].get('title') if sessions else ''
-        return _sanitize_commit_title(title)
+        summary = _build_commit_summary()
+        if not summary:
+            sessions = list_sessions()
+            summary = sessions[0].get('title') if sessions else ''
+        return _sanitize_commit_title(summary)
     except Exception:
         return _sanitize_commit_title('')
 

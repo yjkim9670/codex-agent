@@ -50,7 +50,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
 const GIT_ACTION_LABELS = Object.freeze({
     submit: 'git commit',
-    sync: 'git sync'
+    sync: 'git fetch'
 });
 
 let hasManualTheme = false;

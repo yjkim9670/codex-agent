@@ -10,7 +10,7 @@ from .codex_chat import list_sessions
 
 GIT_TIMEOUT_SECONDS = 600
 _GIT_ACTIONS = {
-    'sync': ['git', 'sync']
+    'sync': ['git', 'fetch', '--prune']
 }
 
 

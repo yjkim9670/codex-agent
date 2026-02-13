@@ -1,6 +1,7 @@
 :root {
     color-scheme: light;
     --bg: #f4f7fb;
+    --bg-ambient: radial-gradient(1200px 700px at 15% -10%, rgba(107, 145, 188, 0.28), transparent 56%);
     --surface: #ffffff;
     --surface-muted: #f0f4fa;
     --surface-raised: #ffffff;
@@ -16,14 +17,20 @@
     --code-bg: #eef2f7;
     --message-error-bg: #fff1f3;
     --shadow-accent: 0 10px 20px rgba(15, 76, 129, 0.12);
+    --shell-bg: linear-gradient(160deg, #fbfdff 0%, #edf3fb 100%);
+    --shell-border: rgba(255, 255, 255, 0.85);
+    --shell-shadow: 0 26px 48px rgba(15, 27, 45, 0.2), 0 8px 16px rgba(15, 27, 45, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.86);
+    --shell-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0) 38%);
+    --card-shadow: 0 10px 22px rgba(15, 76, 129, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.65);
     --message-max-lines: 20;
     --message-line-height: 1.5;
     --streaming-bubble-height: 240px;
     --mobile-viewport-height: 100dvh;
-    --radius-lg: 0;
-    --radius-md: 0;
-    --radius-sm: 0;
-    --radius-pill: 0;
+    --radius-lg: 18px;
+    --radius-md: 12px;
+    --radius-sm: 8px;
+    --radius-pill: 999px;
     --scrollbar-track: #e7eef7;
     --scrollbar-thumb: #a4b6cc;
     --scrollbar-thumb-hover: #7d95b2;
@@ -34,7 +41,8 @@
 
 [data-theme="dark"] {
     color-scheme: dark;
-    --bg: #1c1c1c;
+    --bg: #16191e;
+    --bg-ambient: radial-gradient(1000px 520px at 20% -6%, rgba(78, 102, 131, 0.36), transparent 58%);
     --surface: #262626;
     --surface-muted: #2c2c2c;
     --surface-raised: #313131;
@@ -50,6 +58,12 @@
     --code-bg: #222222;
     --message-error-bg: #2b2723;
     --shadow-accent: 0 10px 20px rgba(0, 0, 0, 0.45);
+    --shell-bg: linear-gradient(160deg, #2f333a 0%, #20242b 100%);
+    --shell-border: rgba(255, 255, 255, 0.1);
+    --shell-shadow: 0 28px 52px rgba(0, 0, 0, 0.56), 0 10px 18px rgba(0, 0, 0, 0.34),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --shell-gloss: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 38%);
+    --card-shadow: 0 12px 24px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.06);
     --scrollbar-track: #272727;
     --scrollbar-thumb: #5b5b5b;
     --scrollbar-thumb-hover: #7a7a7a;
@@ -88,7 +102,7 @@ body {
     margin: 0;
     font-family: var(--font-sans);
     letter-spacing: -0.01em;
-    background: var(--bg);
+    background: var(--bg-ambient), var(--bg);
     color: var(--text-primary);
     overflow: hidden;
 }
@@ -98,9 +112,30 @@ body {
     margin: 0 auto;
     padding: 24px;
     height: 100%;
+    border-radius: 24px;
+    border: 1px solid var(--shell-border);
+    background: var(--shell-bg);
+    box-shadow: var(--shell-shadow);
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
+}
+
+.app::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--shell-gloss);
+    pointer-events: none;
+    z-index: 0;
+}
+
+.app > * {
+    position: relative;
+    z-index: 1;
 }
 
 .toast-layer {
@@ -140,8 +175,11 @@ body {
 
 .live-weather-panel {
     border: 1px solid var(--border);
-    background: var(--surface);
+    background: linear-gradient(180deg, var(--surface) 0%, var(--surface-raised) 100%);
     margin-bottom: 14px;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
 }
 
 .live-weather-top {
@@ -199,6 +237,19 @@ body {
     padding: 6px 10px;
     border-radius: 999px;
     cursor: pointer;
+}
+
+.live-weather-compact.icon-only {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    line-height: 1;
+    margin-top: 6px;
 }
 
 .live-weather-compact:hover {
@@ -322,6 +373,26 @@ body {
     cursor: wait;
 }
 
+#codex-git-submit {
+    color: #188a42;
+    border-color: rgba(24, 138, 66, 0.4);
+    background: rgba(24, 138, 66, 0.08);
+}
+
+#codex-git-submit:hover {
+    background: rgba(24, 138, 66, 0.16);
+}
+
+[data-theme="dark"] #codex-git-submit {
+    color: #88dfaa;
+    border-color: rgba(136, 223, 170, 0.46);
+    background: rgba(80, 156, 109, 0.2);
+}
+
+[data-theme="dark"] #codex-git-submit:hover {
+    background: rgba(80, 156, 109, 0.32);
+}
+
 .theme-toggle {
     display: inline-flex;
     align-items: center;
@@ -334,8 +405,8 @@ body {
     position: relative;
     display: inline-flex;
     align-items: center;
-    width: 44px;
-    height: 24px;
+    width: 58px;
+    height: 32px;
 }
 
 .theme-switch input {
@@ -347,22 +418,40 @@ body {
 .theme-slider {
     position: absolute;
     inset: 0;
+    border: 1px solid rgba(255, 255, 255, 0.54);
     border-radius: var(--radius-pill);
-    background: var(--border);
-    transition: background 0.2s ease;
+    background: linear-gradient(180deg, #ecf1f8 0%, #dbe4f1 100%);
+    box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), inset 0 -1px 2px rgba(15, 27, 45, 0.14);
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.theme-slider::before {
+    content: "🌙";
+    position: absolute;
+    left: 35px;
+    top: 9px;
+    font-size: 12px;
+    line-height: 1;
+    opacity: 0.78;
+    text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .theme-slider::after {
-    content: "";
+    content: "🌞";
     position: absolute;
-    width: 18px;
-    height: 18px;
+    width: 24px;
+    height: 24px;
     left: 3px;
     top: 3px;
     border-radius: var(--radius-pill);
     background: var(--surface-raised);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-    transition: transform 0.2s ease;
+    box-shadow: 0 4px 8px rgba(15, 27, 45, 0.26);
+    transition: transform 0.2s ease, color 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    line-height: 1;
 }
 
 .theme-switch input:focus-visible + .theme-slider {
@@ -371,11 +460,17 @@ body {
 }
 
 .theme-switch input:checked + .theme-slider {
-    background: var(--accent);
+    border-color: rgba(127, 166, 200, 0.72);
+    background: linear-gradient(180deg, #394a62 0%, #2a3a50 100%);
+}
+
+.theme-switch input:checked + .theme-slider::before {
+    opacity: 0.56;
 }
 
 .theme-switch input:checked + .theme-slider::after {
-    transform: translateX(20px);
+    content: "🌙";
+    transform: translateX(26px);
 }
 
 .app-header h1 {
@@ -408,11 +503,12 @@ body {
 
 .sessions,
 .chat {
-    background: var(--surface);
+    background: linear-gradient(180deg, var(--surface) 0%, var(--surface-raised) 100%);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     padding: 16px;
     min-height: 0;
+    box-shadow: var(--card-shadow);
 }
 
 .sessions {
@@ -590,6 +686,7 @@ body {
     border-radius: var(--radius-md);
     padding: 12px;
     background: var(--surface-muted);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52);
     display: flex;
     min-height: 0;
 }
@@ -618,6 +715,7 @@ body {
     background: var(--surface);
     border-radius: var(--radius-md);
     padding: 10px;
+    box-shadow: var(--card-shadow);
 }
 
 .chat-controls-header {
@@ -746,7 +844,7 @@ body {
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text-secondary);
-    border-radius: 0;
+    border-radius: var(--radius-pill);
     padding: 2px 8px;
     font-size: 11px;
     font-weight: 600;
@@ -1137,14 +1235,20 @@ body {
         height: var(--mobile-viewport-height);
         min-height: var(--mobile-viewport-height);
         padding: 16px;
+        border-radius: 20px;
     }
 
     .app.is-mobile-keyboard-open {
         overflow: hidden;
     }
 
-    .live-weather-compact {
-        padding: 4px 8px;
+    .live-weather-compact.icon-only {
+        width: 30px;
+        min-width: 30px;
+        height: 30px;
+        padding: 0;
+        font-size: 13px;
+        margin-top: 8px;
     }
 
     .live-weather-top {

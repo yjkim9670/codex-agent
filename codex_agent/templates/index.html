@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=19">
+    <link rel="stylesheet" href="/static/css/app.css?v=21">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -64,13 +64,14 @@
                         Enable location
                     </button>
                     <button
-                        class="live-weather-compact"
+                        class="live-weather-compact icon-only"
                         type="button"
                         id="codex-live-weather-compact"
                         aria-pressed="false"
-                        aria-label="Toggle compact weather panel"
+                        aria-label="Minimize weather panel"
+                        title="Minimize weather panel"
                     >
-                        Minimize
+                        ⤡
                     </button>
                 </div>
             </div>
@@ -172,6 +173,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=26"></script>
+    <script src="/static/js/app.js?v=27"></script>
 </body>
 </html>

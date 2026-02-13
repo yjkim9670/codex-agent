@@ -63,6 +63,41 @@ def _run_git_command(cmd, repo_root, timeout, env):
     return result, None
 
 
+def _read_current_branch(repo_root, env):
+    symbolic_result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'symbolic-ref', '--short', 'HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if not error and symbolic_result and symbolic_result.returncode == 0:
+        branch_name = (symbolic_result.stdout or '').strip()
+        if branch_name:
+            return branch_name
+
+    commit_result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--short', 'HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not commit_result or commit_result.returncode != 0:
+        return ''
+    commit_short = (commit_result.stdout or '').strip()
+    if not commit_short:
+        return ''
+    return f'detached@{commit_short}'
+
+
+def get_current_branch_name():
+    repo_root, error = _resolve_repo_root()
+    if error:
+        return ''
+    env = os.environ.copy()
+    env.setdefault('GIT_TERMINAL_PROMPT', '0')
+    return _read_current_branch(repo_root, env)
+
+
 def _is_history_file(path):
     base = os.path.basename(path or '').lower()
     return base == 'history' or base.startswith('history.')
@@ -185,11 +220,13 @@ def run_git_action(action):
         if action != 'sync':
             stdout = (result.stdout or '').strip()
             stderr = (result.stderr or '').strip()
+        branch_name = _read_current_branch(repo_root, env)
         return {
             'ok': result.returncode == 0,
             'exit_code': result.returncode,
             'stdout': stdout,
             'stderr': stderr,
+            'branch': branch_name,
             'command': ' '.join(cmd) if cmd else '',
             'repo_root': str(repo_root),
             'duration_ms': duration_ms

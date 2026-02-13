@@ -585,13 +585,12 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     const compactToggle = document.getElementById('codex-live-weather-compact');
     if (!panel || !compactToggle) return;
     const isCompact = Boolean(compact);
+    const compactLabel = isCompact ? 'Expand weather panel' : 'Minimize weather panel';
     panel.classList.toggle('is-compact', isCompact);
     compactToggle.setAttribute('aria-pressed', String(isCompact));
-    compactToggle.textContent = isCompact ? 'Expand' : 'Minimize';
-    compactToggle.setAttribute(
-        'aria-label',
-        isCompact ? 'Expand weather panel' : 'Minimize weather panel'
-    );
+    compactToggle.textContent = isCompact ? '⤢' : '⤡';
+    compactToggle.setAttribute('aria-label', compactLabel);
+    compactToggle.setAttribute('title', compactLabel);
     if (isCompact) {
         setLiveWeatherExpanded(false);
     }

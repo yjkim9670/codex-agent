@@ -32,6 +32,7 @@ const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
+const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const THEME_KEY = 'codexTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
@@ -339,6 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const refreshBtn = document.getElementById('codex-chat-refresh');
     const chatHeaderRefreshBtn = document.getElementById('codex-chat-header-refresh');
+    const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
     const messages = document.getElementById('codex-chat-messages');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
@@ -407,6 +409,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 chatHeaderRefreshBtn.classList.remove('is-loading');
             }
         });
+    }
+
+    if (chatFullscreenBtn) {
+        chatFullscreenBtn.addEventListener('click', () => {
+            const app = document.querySelector('.app');
+            const isEnabled = app?.classList.contains(CHAT_FULLSCREEN_CLASS);
+            setChatFullscreen(!isEnabled);
+        });
+        const app = document.querySelector('.app');
+        updateChatFullscreenButton(chatFullscreenBtn, app?.classList.contains(CHAT_FULLSCREEN_CLASS));
     }
 
     if (sessionsToggle && sessionsPanel) {
@@ -588,7 +600,7 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     const compactLabel = isCompact ? 'Expand weather panel' : 'Minimize weather panel';
     panel.classList.toggle('is-compact', isCompact);
     compactToggle.setAttribute('aria-pressed', String(isCompact));
-    compactToggle.textContent = isCompact ? '⤢' : '⤡';
+    compactToggle.classList.toggle('is-compact', isCompact);
     compactToggle.setAttribute('aria-label', compactLabel);
     compactToggle.setAttribute('title', compactLabel);
     if (isCompact) {
@@ -1015,7 +1027,7 @@ function formatKstHourMinute(value) {
 function updateSessionsToggleButton(toggle, collapsed) {
     if (!toggle) return;
     const isCollapsed = Boolean(collapsed);
-    toggle.textContent = isCollapsed ? '▸' : '▾';
+    toggle.classList.toggle('is-collapsed', isCollapsed);
     toggle.setAttribute('aria-label', isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel');
     toggle.setAttribute('title', isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel');
 }
@@ -1034,6 +1046,25 @@ function setSessionsCollapsed(collapsed, { persist = true } = {}) {
             void error;
         }
     }
+}
+
+function updateChatFullscreenButton(button, enabled) {
+    if (!button) return;
+    const isEnabled = Boolean(enabled);
+    button.classList.toggle('is-active', isEnabled);
+    button.setAttribute('aria-pressed', String(isEnabled));
+    const label = isEnabled ? 'Exit fullscreen chat' : 'Expand chat to fullscreen';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+}
+
+function setChatFullscreen(enabled) {
+    const app = document.querySelector('.app');
+    const button = document.getElementById('codex-chat-fullscreen');
+    if (!app || !button) return;
+    const isEnabled = Boolean(enabled);
+    app.classList.toggle(CHAT_FULLSCREEN_CLASS, isEnabled);
+    updateChatFullscreenButton(button, isEnabled);
 }
 
 function syncSessionsLayout(isMobile) {

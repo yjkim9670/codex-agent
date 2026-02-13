@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=21">
+    <link rel="stylesheet" href="/static/css/app.css?v=25">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -23,14 +23,12 @@
                     </label>
                 </div>
                 <div class="git-actions" aria-label="Git actions">
-                    <button class="btn ghost icon-only" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit">
-                        ✓
-                    </button>
-                    <button class="btn ghost icon-only" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push">
-                        ⇅
-                    </button>
+                    {% if current_branch_name %}
+                        <span class="git-branch" aria-label="Current branch" title="Current branch">{{ current_branch_name }}</span>
+                    {% endif %}
+                    <button class="btn ghost icon-only git-action-submit" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit"></button>
+                    <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push"></button>
                 </div>
-                <button class="btn secondary" type="button" id="codex-chat-new-session">+ New session</button>
             </div>
         </header>
 
@@ -56,23 +54,20 @@
                 </button>
                 <div class="live-weather-actions">
                     <button
-                        class="live-weather-permission"
+                        class="live-weather-permission icon-only"
                         type="button"
                         id="codex-weather-permission"
                         aria-label="Request location access"
-                    >
-                        Enable location
-                    </button>
+                        title="Request location access"
+                    ></button>
                     <button
-                        class="live-weather-compact icon-only"
+                        class="live-weather-compact icon-only live-weather-compact-toggle"
                         type="button"
                         id="codex-live-weather-compact"
                         aria-pressed="false"
                         aria-label="Minimize weather panel"
                         title="Minimize weather panel"
-                    >
-                        ⤡
-                    </button>
+                    ></button>
                 </div>
             </div>
             <div class="live-weather-forecast" id="codex-live-weather-forecast" hidden>
@@ -97,8 +92,9 @@
                 <div class="sessions-header">
                     <span>Sessions</span>
                     <div class="sessions-actions">
-                        <button class="btn ghost" type="button" id="codex-chat-refresh">Refresh</button>
-                        <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel">▾</button>
+                        <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
+                        <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh sessions" title="Refresh sessions"></button>
+                        <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
                     </div>
                 </div>
                 <div id="codex-session-list" class="session-list">
@@ -112,13 +108,23 @@
                         <div id="codex-chat-title" class="chat-title">Select a session</div>
                         <div id="codex-chat-meta" class="chat-meta"></div>
                     </div>
-                    <button
-                        class="chat-header-refresh"
-                        type="button"
-                        id="codex-chat-header-refresh"
-                        aria-label="Refresh active session"
-                        title="Refresh active session"
-                    ></button>
+                    <div class="chat-header-actions">
+                        <button
+                            class="chat-header-fullscreen"
+                            type="button"
+                            id="codex-chat-fullscreen"
+                            aria-pressed="false"
+                            aria-label="Expand chat to fullscreen"
+                            title="Expand chat to fullscreen"
+                        ></button>
+                        <button
+                            class="chat-header-refresh"
+                            type="button"
+                            id="codex-chat-header-refresh"
+                            aria-label="Refresh active session"
+                            title="Refresh active session"
+                        ></button>
+                    </div>
                 </div>
 
                 <div class="chat-frame">
@@ -173,6 +179,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=27"></script>
+    <script src="/static/js/app.js?v=29"></script>
 </body>
 </html>

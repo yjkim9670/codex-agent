@@ -47,6 +47,11 @@ def parse_args():
         default='0.0.0.0',
         help='Host interface to bind (default: 0.0.0.0)',
     )
+    parser.add_argument(
+        '--skip-git-repo-check',
+        action='store_true',
+        help='Skip git repo check when running Codex CLI.',
+    )
     args = parser.parse_args()
     if args.port < 1 or args.port > 65535:
         parser.error('--port must be between 1 and 65535')
@@ -55,6 +60,8 @@ def parse_args():
 if __name__ == '__main__':
     ensure_parent_workspace(script_dir)
     args = parse_args()
+    if args.skip_git_repo_check:
+        os.environ['CODEX_SKIP_GIT_REPO_CHECK'] = '1'
     try:
         from codex_agent.codex_app import create_codex_app
     except ImportError as exc:

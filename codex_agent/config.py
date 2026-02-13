@@ -29,10 +29,13 @@ CODEX_STREAM_TTL_SECONDS = 900
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
-_default_model_options = [
+_default_model_options = sorted({
+    'gpt-5.1-codex-max',
+    'gpt-5.2',
     'gpt-5.2-codex',
-    'gpt-5.3-codex'
-]
+    'gpt-5.3-codex',
+    'gpt-5.3-codex-spark'
+})
 CODEX_MODEL_OPTIONS = [
     item.strip()
     for item in os.environ.get('CODEX_MODEL_OPTIONS', '').split(',')
@@ -45,6 +48,13 @@ CODEX_REASONING_OPTIONS = [
     for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high').split(',')
     if item.strip()
 ]
+
+CODEX_SKIP_GIT_REPO_CHECK = os.environ.get('CODEX_SKIP_GIT_REPO_CHECK', '').strip().lower() in {
+    '1',
+    'true',
+    'yes',
+    'on'
+}
 
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None

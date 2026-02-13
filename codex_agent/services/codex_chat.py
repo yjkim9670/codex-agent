@@ -18,6 +18,7 @@ from ..config import (
     CODEX_EXEC_TIMEOUT_SECONDS,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
+    CODEX_SKIP_GIT_REPO_CHECK,
     CODEX_STREAM_TTL_SECONDS,
     WORKSPACE_DIR,
 )
@@ -522,6 +523,8 @@ def _build_codex_command(prompt, output_path=None):
         '--color',
         'never'
     ]
+    if CODEX_SKIP_GIT_REPO_CHECK:
+        cmd.append('--skip-git-repo-check')
     model = get_settings().get('model')
     if model:
         cmd.extend(['--model', model])

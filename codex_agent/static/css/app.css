@@ -35,6 +35,12 @@
     --scrollbar-thumb: #a4b6cc;
     --scrollbar-thumb-hover: #7d95b2;
     --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px rgba(15, 76, 129, 0.45);
+    --toast-default-bg: rgba(15, 76, 129, 0.82);
+    --toast-default-text: #f5f9ff;
+    --toast-success-bg: rgba(24, 138, 66, 0.82);
+    --toast-success-text: #f1fff7;
+    --toast-error-bg: rgba(217, 45, 76, 0.8);
+    --toast-error-text: #fff4f7;
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -77,6 +83,12 @@
     --scrollbar-thumb: #5b5b5b;
     --scrollbar-thumb-hover: #7a7a7a;
     --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px rgba(127, 166, 200, 0.56);
+    --toast-default-bg: rgba(127, 166, 200, 0.74);
+    --toast-default-text: #f4f9ff;
+    --toast-success-bg: rgba(63, 166, 111, 0.74);
+    --toast-success-text: #f1fff7;
+    --toast-error-bg: rgba(199, 112, 74, 0.76);
+    --toast-error-text: #fff6f2;
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -169,13 +181,15 @@ body {
 }
 
 .toast {
-    border: 1px solid var(--border);
-    background: var(--surface-raised);
-    color: var(--text-primary);
-    padding: 10px 12px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--toast-default-bg);
+    color: var(--toast-default-text);
+    padding: 10px 13px;
     font-size: 12px;
     line-height: 1.4;
     box-shadow: var(--shadow-accent);
+    backdrop-filter: blur(3px);
     opacity: 0;
     transform: translateY(-4px);
     transition: opacity 0.16s ease, transform 0.16s ease;
@@ -186,9 +200,14 @@ body {
     transform: translateY(0);
 }
 
+.toast.toast-success {
+    background: var(--toast-success-bg);
+    color: var(--toast-success-text);
+}
+
 .toast.toast-error {
-    border-color: var(--danger);
-    background: var(--message-error-bg);
+    background: var(--toast-error-bg);
+    color: var(--toast-error-text);
 }
 
 .live-weather-panel {

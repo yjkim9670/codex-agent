@@ -132,7 +132,7 @@ def _build_commit_message(status_text, max_files=3):
 def run_git_action(action):
     try:
         action = (action or '').strip()
-        if action not in _GIT_ACTIONS and action != 'submit':
+        if action not in _GIT_ACTIONS and action not in {'submit', 'status'}:
             return {'error': '지원하지 않는 git 작업입니다.'}
 
         repo_root, error = _resolve_repo_root()
@@ -210,6 +210,11 @@ def run_git_action(action):
                     (fetch_result.stderr or '').strip(),
                     (push_result.stderr or '').strip()
                 ]).strip()
+            elif action == 'status':
+                cmd = ['git', 'status', '--porcelain']
+                result, error = _run_git_command(cmd, repo_root, 15, env)
+                if error:
+                    return error
             else:
                 cmd = _GIT_ACTIONS[action]
                 result, error = _run_git_command(cmd, repo_root, GIT_TIMEOUT_SECONDS, env)
@@ -220,6 +225,15 @@ def run_git_action(action):
         if action != 'sync':
             stdout = (result.stdout or '').strip()
             stderr = (result.stderr or '').strip()
+        status_result, status_error = _run_git_command(
+            ['git', '-C', str(repo_root), 'status', '--porcelain'],
+            repo_root,
+            15,
+            env
+        )
+        changed_files = []
+        if not status_error and status_result and status_result.returncode == 0:
+            changed_files = _extract_changed_files(status_result.stdout or '')
         branch_name = _read_current_branch(repo_root, env)
         return {
             'ok': result.returncode == 0,
@@ -227,6 +241,8 @@ def run_git_action(action):
             'stdout': stdout,
             'stderr': stderr,
             'branch': branch_name,
+            'changed_files_count': len(changed_files),
+            'changed_files': changed_files,
             'command': ' '.join(cmd) if cmd else '',
             'repo_root': str(repo_root),
             'duration_ms': duration_ms

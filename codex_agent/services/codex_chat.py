@@ -1,5 +1,6 @@
 """Codex chat session storage and execution helpers."""
 
+import base64
 import json
 import re
 import subprocess
@@ -7,6 +8,7 @@ import threading
 import time
 import uuid
 from copy import deepcopy
+from pathlib import Path
 
 from .. import state
 from ..config import (
@@ -23,6 +25,7 @@ from ..utils.time import normalize_timestamp
 
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
+_CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -283,9 +286,50 @@ def _read_rate_limits_from_log(path):
     return last_limits
 
 
+def _decode_jwt_payload(token):
+    if not isinstance(token, str):
+        return {}
+    parts = token.split('.')
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    padding = '=' * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(f'{payload}{padding}'.encode('utf-8'))
+        parsed = json.loads(decoded.decode('utf-8'))
+    except Exception:
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _read_account_name():
+    try:
+        raw = _CODEX_AUTH_PATH.read_text(encoding='utf-8')
+        auth_data = json.loads(raw)
+    except Exception:
+        return ''
+    if not isinstance(auth_data, dict):
+        return ''
+    tokens = auth_data.get('tokens')
+    if not isinstance(tokens, dict):
+        tokens = {}
+    claims = _decode_jwt_payload(tokens.get('id_token'))
+    for key in ('name', 'email', 'preferred_username', 'nickname'):
+        value = claims.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    account_id = tokens.get('account_id')
+    if isinstance(account_id, str) and account_id.strip():
+        return account_id.strip()
+    return ''
+
+
 def get_usage_summary():
+    account_name = _read_account_name()
     if not CODEX_SESSIONS_PATH.exists():
-        return {'five_hour': None, 'weekly': None}
+        return {'five_hour': None, 'weekly': None, 'account_name': account_name}
     try:
         files = sorted(
             CODEX_SESSIONS_PATH.rglob('*.jsonl'),
@@ -293,13 +337,14 @@ def get_usage_summary():
             reverse=True
         )
     except Exception:
-        return {'five_hour': None, 'weekly': None}
+        return {'five_hour': None, 'weekly': None, 'account_name': account_name}
     for path in files[:30]:
         rate_limits = _read_rate_limits_from_log(path)
         limits = _extract_limits(rate_limits)
         if limits and (limits.get('five_hour') or limits.get('weekly')):
+            limits['account_name'] = account_name
             return limits
-    return {'five_hour': None, 'weekly': None}
+    return {'five_hour': None, 'weekly': None, 'account_name': account_name}
 
 
 def _sort_sessions(sessions):

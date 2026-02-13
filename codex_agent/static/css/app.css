@@ -1013,6 +1013,18 @@ body {
     gap: 6px;
 }
 
+.usage-account {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.usage-empty {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+}
+
 .usage-entry {
     display: flex;
     flex-direction: column;

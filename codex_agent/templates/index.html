@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=25">
+    <link rel="stylesheet" href="/static/css/app.css?v=27">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -24,7 +24,15 @@
                 </div>
                 <div class="git-actions" aria-label="Git actions">
                     {% if current_branch_name %}
-                        <span class="git-branch" aria-label="Current branch" title="Current branch">{{ current_branch_name }}</span>
+                        <span
+                            class="git-branch"
+                            id="codex-git-branch"
+                            tabindex="0"
+                            role="button"
+                            aria-label="Show current branch details"
+                            title="{{ current_branch_name }}"
+                            data-branch-full="{{ current_branch_name }}"
+                        >{{ current_branch_name }}</span>
                     {% endif %}
                     <button class="btn ghost icon-only git-action-submit" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit"></button>
                     <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push"></button>
@@ -179,6 +187,6 @@
         </main>
     </div>
 
-    <script src="/static/js/app.js?v=29"></script>
+    <script src="/static/js/app.js?v=31"></script>
 </body>
 </html>

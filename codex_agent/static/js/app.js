@@ -57,8 +57,16 @@ const GIT_ACTION_LABELS = Object.freeze({
     submit: 'git commit',
     sync: 'git fetch + push'
 });
+const GIT_BRANCH_STATUS_CACHE_MS = 5000;
+const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 
 let hasManualTheme = false;
+let gitBranchStatusCache = {
+    count: null,
+    fetchedAt: 0
+};
+let gitBranchToastAt = 0;
+let gitBranchStatusInFlight = false;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -355,6 +363,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
     const controlsRefresh = document.getElementById('codex-controls-refresh');
+    const gitBranch = document.getElementById('codex-git-branch');
     const gitSubmitBtn = document.getElementById('codex-git-submit');
     const gitSyncBtn = document.getElementById('codex-git-sync');
 
@@ -386,6 +395,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (gitSyncBtn) {
         gitSyncBtn.addEventListener('click', () => {
             void handleGitAction('sync', gitSyncBtn);
+        });
+    }
+
+    if (gitBranch) {
+        const handleBranchInfo = () => {
+            void showGitBranchInfoToast(gitBranch);
+        };
+        gitBranch.addEventListener('mouseenter', handleBranchInfo);
+        gitBranch.addEventListener('focus', handleBranchInfo);
+        gitBranch.addEventListener('click', event => {
+            event.preventDefault();
+            handleBranchInfo();
         });
     }
 
@@ -1515,19 +1536,28 @@ async function loadSettings({ silent = true } = {}) {
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
-    if (!usage || (!usage.five_hour && !usage.weekly)) {
-        element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
-        return;
-    }
+    const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     element.innerHTML = '';
-    const entries = [
-        buildUsageEntry(usage.five_hour, '5h'),
-        buildUsageEntry(usage.weekly, 'Weekly')
-    ].filter(Boolean);
-    if (entries.length === 0) {
-        element.textContent = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
+    if (accountName) {
+        element.appendChild(buildUsageAccount(accountName));
+    }
+    const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
+    if (!hasUsage) {
+        const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
+        if (!accountName) {
+            element.textContent = fallbackText;
+            return;
+        }
+        const fallback = document.createElement('div');
+        fallback.className = 'usage-empty';
+        fallback.textContent = fallbackText;
+        element.appendChild(fallback);
         return;
     }
+    const entries = [
+        buildUsageEntry(usage?.five_hour, '5h'),
+        buildUsageEntry(usage?.weekly, 'Weekly')
+    ].filter(Boolean);
     entries.forEach(entry => {
         element.appendChild(entry);
     });
@@ -1682,13 +1712,19 @@ async function fetchJson(url, options) {
     if (contentType.includes('application/json')) {
         const data = await response.json();
         if (!response.ok) {
-            throw new Error(data?.error || `Request failed (${response.status})`);
+            const error = new Error(data?.error || `Request failed (${response.status})`);
+            error.status = response.status;
+            error.payload = data;
+            throw error;
         }
         return data;
     }
     const text = await response.text();
     if (!response.ok) {
-        throw new Error(`Request failed (${response.status})`);
+        const error = new Error(`Request failed (${response.status})`);
+        error.status = response.status;
+        error.payload = text;
+        throw error;
     }
     throw new Error(text || 'Unexpected response format.');
 }
@@ -1743,6 +1779,58 @@ function summarizeGitOutput(value) {
     return firstLine;
 }
 
+function getGitBranchFullName(element) {
+    if (!element) return '';
+    const dataName = element.dataset?.branchFull;
+    if (dataName && dataName.trim()) return dataName.trim();
+    return element.textContent ? element.textContent.trim() : '';
+}
+
+async function fetchGitChangedFilesCount(force = false) {
+    const now = Date.now();
+    if (!force && gitBranchStatusCache.fetchedAt) {
+        const delta = now - gitBranchStatusCache.fetchedAt;
+        if (delta >= 0 && delta < GIT_BRANCH_STATUS_CACHE_MS) {
+            return gitBranchStatusCache.count;
+        }
+    }
+    if (gitBranchStatusInFlight) {
+        return gitBranchStatusCache.count;
+    }
+    gitBranchStatusInFlight = true;
+    try {
+        const result = await fetchJson('/api/codex/git/status', { method: 'POST' });
+        const count = Number.isFinite(result?.changed_files_count)
+            ? result.changed_files_count
+            : null;
+        gitBranchStatusCache = {
+            count,
+            fetchedAt: Date.now()
+        };
+        return count;
+    } catch (error) {
+        return null;
+    } finally {
+        gitBranchStatusInFlight = false;
+    }
+}
+
+async function showGitBranchInfoToast(element) {
+    if (!element) return;
+    const now = Date.now();
+    if (gitBranchToastAt && now - gitBranchToastAt < GIT_BRANCH_TOAST_COOLDOWN_MS) {
+        return;
+    }
+    gitBranchToastAt = now;
+    const branchName = getGitBranchFullName(element);
+    if (!branchName) return;
+    const changeCount = await fetchGitChangedFilesCount();
+    const countText = Number.isFinite(changeCount)
+        ? `변경 파일 ${changeCount}개`
+        : '변경 파일 수를 불러올 수 없습니다';
+    showToast(`브랜치: ${branchName} · ${countText}`, { tone: 'success', durationMs: 2400 });
+}
+
 async function handleGitAction(action, button) {
     const label = GIT_ACTION_LABELS[action] || `git ${action}`;
     const busyLabel = action === 'submit' ? 'Committing...' : 'Syncing...';
@@ -1774,6 +1862,32 @@ async function handleGitAction(action, button) {
     }
 }
 
+function isStreamNotFoundError(error) {
+    if (error && typeof error === 'object' && error.status === 404) {
+        return true;
+    }
+    const message = normalizeError(error, '').toLowerCase();
+    return message.includes('스트림을 찾을 수 없습니다') || message.includes('stream not found');
+}
+
+async function recoverMissingStream(stream) {
+    if (!stream?.id || !stream?.sessionId) return;
+    const sessionId = stream.sessionId;
+    clearPersistedStream(stream.id);
+    clearStreamState(stream.id);
+    const sessionState = getSessionState(sessionId);
+    if (sessionState) {
+        sessionState.sending = false;
+    }
+    unpinAutoScrollForSession(sessionId);
+    setSessionStatus(sessionId, 'Stream completed. Reloading...');
+    if (sessionId === state.activeSessionId) {
+        syncActiveSessionControls();
+    }
+    await loadSessions({ preserveActive: true, reloadActive: sessionId === state.activeSessionId });
+    setSessionStatus(sessionId, 'Idle');
+}
+
 async function resumeStreamsFromStorage(pendingStreams) {
     if (!Array.isArray(pendingStreams) || pendingStreams.length === 0) return;
     const sessionIds = new Set(state.sessions.map(session => session.id));
@@ -1799,7 +1913,9 @@ async function resumeStreamsFromStorage(pendingStreams) {
             const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
             const result = await response.json();
             if (!response.ok) {
-                throw new Error(result?.error || 'Failed to resume stream.');
+                const err = new Error(result?.error || 'Failed to resume stream.');
+                err.status = response.status;
+                throw err;
             }
             if (result?.done) {
                 clearPersistedStream(pending.id);
@@ -1857,6 +1973,10 @@ async function resumeStreamsFromStorage(pendingStreams) {
             beginStreamPolling(stream.id);
             setSessionStatus(pending.sessionId, 'Receiving response...');
         } catch (error) {
+            if (isStreamNotFoundError(error)) {
+                await recoverMissingStream({ id: pending.id, sessionId: pending.sessionId });
+                continue;
+            }
             clearPersistedStream(pending.id);
             if (sessionState) {
                 sessionState.sending = false;
@@ -2402,6 +2522,10 @@ async function pollStream(streamId) {
         if (!current) {
             return;
         }
+        if (isStreamNotFoundError(error)) {
+            await recoverMissingStream(current);
+            return;
+        }
         current.failureCount += 1;
         const backoff = Math.min(
             STREAM_POLL_MAX_MS,
@@ -2810,6 +2934,14 @@ function buildUsageEntry(entry, label) {
     reset.className = 'usage-reset';
     reset.textContent = details.resetText ? `Reset ${details.resetText}` : 'Reset --';
     wrapper.appendChild(reset);
+    return wrapper;
+}
+
+function buildUsageAccount(name) {
+    if (!name) return null;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-account';
+    wrapper.textContent = `Account: ${name}`;
     return wrapper;
 }
 

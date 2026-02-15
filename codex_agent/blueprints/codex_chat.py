@@ -47,6 +47,11 @@ def codex_settings():
     })
 
 
+@bp.route('/api/codex/usage')
+def codex_usage():
+    return jsonify({'usage': get_usage_summary()})
+
+
 @bp.route('/api/codex/settings', methods=['PATCH'])
 def codex_settings_update():
     payload = request.get_json(silent=True) or {}

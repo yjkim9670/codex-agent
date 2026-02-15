@@ -368,10 +368,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('codex-chat-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const refreshBtn = document.getElementById('codex-chat-refresh');
-    const chatHeaderRefreshBtn = document.getElementById('codex-chat-header-refresh');
     const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
     const messages = document.getElementById('codex-chat-messages');
-    const streamMonitorRefreshBtn = document.getElementById('codex-stream-monitor-refresh');
     const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
     const streamMonitorToggle = document.getElementById('codex-stream-monitor-toggle');
     const streamMonitor = document.getElementById('codex-stream-monitor');
@@ -387,7 +385,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
-    const controlsRefresh = document.getElementById('codex-controls-refresh');
     const gitBranch = document.getElementById('codex-git-branch');
     const gitSubmitBtn = document.getElementById('codex-git-submit');
     const gitSyncBtn = document.getElementById('codex-git-sync');
@@ -480,22 +477,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
-            await loadSessions({ preserveActive: true });
-        });
-    }
-
-    if (chatHeaderRefreshBtn) {
-        chatHeaderRefreshBtn.addEventListener('click', async () => {
-            if (chatHeaderRefreshBtn.classList.contains('is-loading')) return;
-            chatHeaderRefreshBtn.classList.add('is-loading');
+            if (refreshBtn.classList.contains('is-loading')) return;
+            refreshBtn.classList.add('is-loading');
             try {
-                if (state.activeSessionId) {
-                    await loadSession(state.activeSessionId);
-                } else {
-                    await loadSessions({ preserveActive: true });
-                }
+                await Promise.all([
+                    loadSessions({ preserveActive: true }),
+                    refreshRemoteStreams({ force: true }),
+                    loadSettings({ silent: true }),
+                    refreshUsageSummary({ silent: true }),
+                    loadLiveWeatherData({ silent: true })
+                ]);
             } finally {
-                chatHeaderRefreshBtn.classList.remove('is-loading');
+                refreshBtn.classList.remove('is-loading');
             }
         });
     }
@@ -508,12 +501,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         const app = document.querySelector('.app');
         updateChatFullscreenButton(chatFullscreenBtn, app?.classList.contains(CHAT_FULLSCREEN_CLASS));
-    }
-
-    if (streamMonitorRefreshBtn) {
-        streamMonitorRefreshBtn.addEventListener('click', () => {
-            void refreshRemoteStreams({ force: true });
-        });
     }
 
     if (streamMonitorCloseBtn) {
@@ -543,12 +530,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (collapsed && !state.settings.loaded) {
                 void loadSettings({ silent: true });
             }
-        });
-    }
-
-    if (controlsRefresh) {
-        controlsRefresh.addEventListener('click', () => {
-            void loadSettings({ silent: false });
         });
     }
 
@@ -709,7 +690,7 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     const compactToggle = document.getElementById('codex-live-weather-compact');
     if (!panel || !compactToggle) return;
     const isCompact = Boolean(compact);
-    const compactLabel = isCompact ? 'Expand weather panel' : 'Minimize weather panel';
+    const compactLabel = isCompact ? '날씨 패널 펼치기' : '날씨 패널 최소화';
     panel.classList.toggle('is-compact', isCompact);
     compactToggle.setAttribute('aria-pressed', String(isCompact));
     compactToggle.classList.toggle('is-compact', isCompact);
@@ -872,16 +853,16 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
 
     if (!silent) {
-        locationElement.textContent = 'Locating...';
-        currentElement.textContent = 'Loading weather...';
-        todayElement.textContent = 'Loading...';
-        tomorrowElement.textContent = 'Loading...';
+        locationElement.textContent = '위치 확인 중...';
+        currentElement.textContent = '날씨 불러오는 중...';
+        todayElement.textContent = '불러오는 중...';
+        tomorrowElement.textContent = '불러오는 중...';
     }
 
     try {
         const position = positionOverride || await resolveWeatherPosition();
         if (!position) {
-            renderWeatherError('Location unavailable', 'Allow browser location permission.');
+            renderWeatherError('위치 확인 불가', '브라우저 위치 권한을 허용해 주세요.');
             return;
         }
 
@@ -895,11 +876,11 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
         ]);
 
         renderWeatherSummary({
-            locationName: locationName || defaultLabel || 'Unknown location',
+            locationName: locationName || defaultLabel || '알 수 없는 위치',
             weather
         });
     } catch (error) {
-        renderWeatherError('Weather unavailable', normalizeError(error, 'Failed to load weather.'));
+        renderWeatherError('날씨 정보를 불러올 수 없음', normalizeError(error, '날씨 정보를 불러오지 못했습니다.'));
     }
 }
 
@@ -907,17 +888,17 @@ async function requestWeatherPermission({ silentFailure = false, skipPermissionC
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
     if (locationElement) {
-        locationElement.textContent = 'Requesting location...';
+        locationElement.textContent = '위치 권한 요청 중...';
     }
     if (currentElement) {
-        currentElement.textContent = 'Waiting for browser permission...';
+        currentElement.textContent = '브라우저 권한 응답 대기 중...';
     }
     try {
         if (!skipPermissionCheck) {
             const permissionState = await readGeolocationPermissionState();
             if (permissionState === 'denied') {
                 notifyWeatherLocationFailure(
-                    new Error('Location permission denied.'),
+                    new Error('위치 권한이 거부되었습니다.'),
                     DEFAULT_WEATHER_LOCATION_LABEL
                 );
                 await loadLiveWeatherData({
@@ -983,11 +964,11 @@ function getDefaultWeatherPosition() {
 function getCurrentGeoPosition() {
     return new Promise((resolve, reject) => {
         if (!isGeolocationAllowedContext()) {
-            reject(new Error('Location access requires HTTPS or localhost.'));
+            reject(new Error('위치 접근은 HTTPS 또는 localhost에서만 가능합니다.'));
             return;
         }
         if (!navigator.geolocation) {
-            reject(new Error('Geolocation is not supported.'));
+            reject(new Error('이 브라우저는 위치 정보를 지원하지 않습니다.'));
             return;
         }
         navigator.geolocation.getCurrentPosition(
@@ -998,7 +979,7 @@ function getCurrentGeoPosition() {
                 });
             },
             error => {
-                reject(error || new Error('Unable to get position.'));
+                reject(error || new Error('현재 위치를 가져오지 못했습니다.'));
             },
             {
                 enableHighAccuracy: false,
@@ -1103,11 +1084,11 @@ async function fetchLocationName(latitude, longitude) {
     url.searchParams.set('latitude', String(latitude));
     url.searchParams.set('longitude', String(longitude));
     url.searchParams.set('count', '1');
-    url.searchParams.set('language', 'en');
+    url.searchParams.set('language', 'ko');
 
     const response = await fetch(url.toString());
     if (!response.ok) {
-        throw new Error(`Failed to resolve location (${response.status}).`);
+        throw new Error(`위치 정보를 확인하지 못했습니다. (${response.status})`);
     }
     const payload = await response.json();
     const first = Array.isArray(payload?.results) ? payload.results[0] : null;
@@ -1149,7 +1130,7 @@ async function fetchWeatherForecast(latitude, longitude) {
 
     const response = await fetch(url.toString());
     if (!response.ok) {
-        throw new Error(`Failed to load weather (${response.status}).`);
+        throw new Error(`날씨 정보를 불러오지 못했습니다. (${response.status})`);
     }
     return response.json();
 }
@@ -1170,8 +1151,8 @@ function renderWeatherSummary({ locationName, weather }) {
         : '--';
     const weatherText = formatWeatherCode(current.weather_code, current.is_day === 1);
 
-    locationElement.textContent = locationName || 'Unknown location';
-    currentElement.textContent = `Now ${currentTemp} · ${weatherText} · Feels ${feelsLike} · Humidity ${humidity} · Wind ${wind}`;
+    locationElement.textContent = locationName || '알 수 없는 위치';
+    currentElement.textContent = `현재 ${currentTemp} · ${weatherText} · 체감 ${feelsLike} · 습도 ${humidity} · 바람 ${wind}`;
     todayElement.textContent = renderDailyForecast(weather?.daily, 0);
     tomorrowElement.textContent = renderDailyForecast(weather?.daily, 1);
 }
@@ -1200,24 +1181,24 @@ function renderDailyForecast(daily, index) {
     const sunset = Array.isArray(daily.sunset) ? daily.sunset[index] : null;
 
     const weatherText = formatWeatherCode(weatherCode, true);
-    const highLow = `High ${formatTemperatureValue(maxTemp)} / Low ${formatTemperatureValue(minTemp)}`;
-    const rainText = `Rain ${formatPercentValue(rainChance)}`;
-    const sunriseText = `Sunrise ${formatKstHourMinute(sunrise)}`;
-    const sunsetText = `Sunset ${formatKstHourMinute(sunset)}`;
+    const highLow = `최고 ${formatTemperatureValue(maxTemp)} / 최저 ${formatTemperatureValue(minTemp)}`;
+    const rainText = `강수확률 ${formatPercentValue(rainChance)}`;
+    const sunriseText = `일출 ${formatKstHourMinute(sunrise)}`;
+    const sunsetText = `일몰 ${formatKstHourMinute(sunset)}`;
     return `${weatherText} · ${highLow} · ${rainText} · ${sunriseText} · ${sunsetText}`;
 }
 
 function formatWeatherCode(code, isDay) {
     const normalized = Number(code);
-    if (!Number.isFinite(normalized)) return 'Unknown';
-    if (normalized === 0) return isDay ? 'Clear' : 'Clear night';
-    if ([1, 2, 3].includes(normalized)) return 'Cloudy';
-    if ([45, 48].includes(normalized)) return 'Fog';
-    if ([51, 53, 55, 56, 57].includes(normalized)) return 'Drizzle';
-    if ([61, 63, 65, 66, 67, 80, 81, 82].includes(normalized)) return 'Rain';
-    if ([71, 73, 75, 77, 85, 86].includes(normalized)) return 'Snow';
-    if ([95, 96, 99].includes(normalized)) return 'Thunderstorm';
-    return 'Mixed';
+    if (!Number.isFinite(normalized)) return '알 수 없음';
+    if (normalized === 0) return isDay ? '맑음' : '맑은 밤';
+    if ([1, 2, 3].includes(normalized)) return '흐림';
+    if ([45, 48].includes(normalized)) return '안개';
+    if ([51, 53, 55, 56, 57].includes(normalized)) return '이슬비';
+    if ([61, 63, 65, 66, 67, 80, 81, 82].includes(normalized)) return '비';
+    if ([71, 73, 75, 77, 85, 86].includes(normalized)) return '눈';
+    if ([95, 96, 99].includes(normalized)) return '뇌우';
+    return '혼합';
 }
 
 function formatTemperatureValue(value) {
@@ -2036,6 +2017,18 @@ async function loadSettings({ silent = true } = {}) {
     }
 }
 
+async function refreshUsageSummary({ silent = true } = {}) {
+    try {
+        const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
+        const usage = result?.usage ?? null;
+        state.settings.usage = usage;
+        updateUsageSummary(usage);
+    } catch (error) {
+        const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
+        setStatus(message, true);
+    }
+}
+
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
@@ -2069,7 +2062,7 @@ function updateUsageSummary(usage) {
 function updateModelControls(model, options) {
     const select = document.getElementById('codex-model-select');
     const input = document.getElementById('codex-model-input');
-    const row = select ? select.closest('.model-row') : null;
+    const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
         select.innerHTML = '';
@@ -2100,8 +2093,8 @@ function updateModelControls(model, options) {
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
-    if (row) {
-        row.classList.toggle('is-select-only', hasOptions);
+    if (field) {
+        field.classList.toggle('is-select-only', hasOptions);
     }
     setSettingsStatus(model, state.settings.reasoningEffort);
 }
@@ -2109,7 +2102,7 @@ function updateModelControls(model, options) {
 function updateReasoningControls(reasoning, options) {
     const select = document.getElementById('codex-reasoning-select');
     const input = document.getElementById('codex-reasoning-input');
-    const row = select ? select.closest('.model-row') : null;
+    const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
         select.innerHTML = '';
@@ -2140,8 +2133,8 @@ function updateReasoningControls(reasoning, options) {
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
-    if (row) {
-        row.classList.toggle('is-select-only', hasOptions);
+    if (field) {
+        field.classList.toggle('is-select-only', hasOptions);
     }
 }
 
@@ -3155,6 +3148,7 @@ async function stopStream(sessionId) {
             syncActiveSessionControls();
         }
         await loadSessions({ preserveActive: true, reloadActive: false });
+        void refreshUsageSummary({ silent: true });
     } catch (error) {
         setSessionStatus(sessionId, normalizeError(error, 'Failed to stop stream.'), true);
     }
@@ -3278,6 +3272,7 @@ async function finishStream(streamId, result) {
         syncActiveSessionControls();
     }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
+    void refreshUsageSummary({ silent: true });
 }
 
 async function renameSession(session) {

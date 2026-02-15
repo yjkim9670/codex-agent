@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=31">
+    <link rel="stylesheet" href="/static/css/app.css?v=40">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -40,74 +40,76 @@
             </div>
         </header>
 
-        <section class="live-weather-panel" id="codex-live-weather-panel">
-            <div class="live-weather-top">
-                <button
-                    class="live-weather-toggle"
-                    type="button"
-                    id="codex-live-weather-toggle"
-                    aria-expanded="false"
-                    aria-controls="codex-live-weather-forecast"
-                >
-                    <div class="live-weather-time">
-                        <div class="live-weather-label">KST</div>
-                        <div class="live-weather-value" id="codex-live-datetime">--</div>
-                    </div>
-                    <div class="live-weather-divider" aria-hidden="true"></div>
-                    <div class="live-weather-current">
-                        <div class="live-weather-label" id="codex-weather-location">Locating...</div>
-                        <div class="live-weather-value" id="codex-weather-current">Loading weather...</div>
-                        <div class="live-weather-hint">Click for today/tomorrow forecast</div>
-                    </div>
-                </button>
-                <div class="live-weather-actions">
-                    <button
-                        class="live-weather-permission icon-only"
-                        type="button"
-                        id="codex-weather-permission"
-                        aria-label="Request location access"
-                        title="Request location access"
-                    ></button>
-                    <button
-                        class="live-weather-compact icon-only live-weather-compact-toggle"
-                        type="button"
-                        id="codex-live-weather-compact"
-                        aria-pressed="false"
-                        aria-label="Minimize weather panel"
-                        title="Minimize weather panel"
-                    ></button>
-                </div>
-            </div>
-            <div class="live-weather-forecast" id="codex-live-weather-forecast" hidden>
-                <div class="forecast-card">
-                    <div class="forecast-title">Today (KST)</div>
-                    <div class="forecast-value" id="codex-weather-today">Loading...</div>
-                </div>
-                <div class="forecast-card">
-                    <div class="forecast-title">Tomorrow (KST)</div>
-                    <div class="forecast-value" id="codex-weather-tomorrow">Loading...</div>
-                </div>
-                <div class="forecast-card">
-                    <div class="forecast-title">Codex Server Directory</div>
-                    <div class="forecast-value" id="codex-server-directory">{{ server_directory_name }}</div>
-                    <div class="forecast-subvalue">{{ server_directory_path }}</div>
-                </div>
-            </div>
-        </section>
-
         <main class="layout">
-            <aside class="sessions">
-                <div class="sessions-header">
-                    <span>Sessions</span>
-                    <div class="sessions-actions">
-                        <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
-                        <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh sessions" title="Refresh sessions"></button>
-                        <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
+            <aside class="sidebar-stack">
+                <section class="live-weather-panel" id="codex-live-weather-panel">
+                    <div class="live-weather-top">
+                        <button
+                            class="live-weather-toggle"
+                            type="button"
+                            id="codex-live-weather-toggle"
+                            aria-expanded="false"
+                            aria-controls="codex-live-weather-forecast"
+                        >
+                            <div class="live-weather-time">
+                                <div class="live-weather-label">KST</div>
+                                <div class="live-weather-value" id="codex-live-datetime">--</div>
+                            </div>
+                            <div class="live-weather-divider" aria-hidden="true"></div>
+                            <div class="live-weather-current">
+                                <div class="live-weather-label" id="codex-weather-location">위치 확인 중...</div>
+                                <div class="live-weather-value" id="codex-weather-current">날씨 불러오는 중...</div>
+                                <div class="live-weather-hint">클릭하면 오늘/내일 예보를 볼 수 있습니다</div>
+                            </div>
+                        </button>
+                        <div class="live-weather-actions">
+                            <button
+                                class="live-weather-permission icon-only"
+                                type="button"
+                                id="codex-weather-permission"
+                                aria-label="위치 권한 요청"
+                                title="위치 권한 요청"
+                            ></button>
+                            <button
+                                class="live-weather-compact icon-only live-weather-compact-toggle"
+                                type="button"
+                                id="codex-live-weather-compact"
+                                aria-pressed="false"
+                                aria-label="날씨 패널 최소화"
+                                title="날씨 패널 최소화"
+                            ></button>
+                        </div>
                     </div>
-                </div>
-                <div id="codex-session-list" class="session-list">
-                    <div class="empty-state">No sessions yet.</div>
-                </div>
+                    <div class="live-weather-forecast" id="codex-live-weather-forecast" hidden>
+                        <div class="forecast-card">
+                            <div class="forecast-title">오늘 (KST)</div>
+                            <div class="forecast-value" id="codex-weather-today">불러오는 중...</div>
+                        </div>
+                        <div class="forecast-card">
+                            <div class="forecast-title">내일 (KST)</div>
+                            <div class="forecast-value" id="codex-weather-tomorrow">불러오는 중...</div>
+                        </div>
+                        <div class="forecast-card">
+                            <div class="forecast-title">Codex 서버 디렉터리</div>
+                            <div class="forecast-value" id="codex-server-directory">{{ server_directory_name }}</div>
+                            <div class="forecast-subvalue">{{ server_directory_path }}</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sessions">
+                    <div class="sessions-header">
+                        <span>Sessions</span>
+                        <div class="sessions-actions">
+                            <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
+                            <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
+                            <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
+                        </div>
+                    </div>
+                    <div id="codex-session-list" class="session-list">
+                        <div class="empty-state">No sessions yet.</div>
+                    </div>
+                </section>
             </aside>
 
             <section class="chat">
@@ -125,13 +127,6 @@
                             aria-label="Expand chat to fullscreen"
                             title="Expand chat to fullscreen"
                         ></button>
-                        <button
-                            class="chat-header-refresh"
-                            type="button"
-                            id="codex-chat-header-refresh"
-                            aria-label="Refresh active session"
-                            title="Refresh active session"
-                        ></button>
                     </div>
                 </div>
 
@@ -146,13 +141,6 @@
                                 aria-expanded="false"
                                 aria-label="Toggle live responses"
                                 title="Toggle live responses"
-                            ></button>
-                            <button
-                                class="stream-monitor-refresh"
-                                type="button"
-                                id="codex-stream-monitor-refresh"
-                                aria-label="Refresh live streams"
-                                title="Refresh live streams"
                             ></button>
                         </div>
                     </div>
@@ -193,7 +181,6 @@
                             </span>
                             <span class="controls-chevron" aria-hidden="true"></span>
                         </button>
-                        <button class="controls-refresh" type="button" id="codex-controls-refresh" aria-label="Refresh usage and model"></button>
                     </div>
                     <div class="chat-controls-body" id="codex-controls-body">
                         <div class="usage-card">
@@ -201,16 +188,25 @@
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
-                            <label class="model-label" for="codex-model-input">Model</label>
-                            <div class="model-row">
-                                <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
-                                <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
-                            </div>
-                            <div class="model-sub-label">Reasoning effort</div>
-                            <div class="model-row is-compact has-apply">
-                                <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
-                                <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
-                                <button class="btn ghost model-apply" type="button" id="codex-model-apply">Apply</button>
+                            <label class="model-label" for="codex-model-input">Model · Reasoning effort</label>
+                            <div class="model-row model-row-combined has-apply">
+                                <div class="model-field model-field-model">
+                                    <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
+                                </div>
+                                <div class="model-field model-field-reasoning">
+                                    <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
+                                </div>
+                                <button
+                                    class="btn ghost icon-only model-apply"
+                                    type="button"
+                                    id="codex-model-apply"
+                                    aria-label="Apply model and reasoning settings"
+                                    title="Apply model and reasoning settings"
+                                >
+                                    <span class="sr-only">Apply settings</span>
+                                </button>
                             </div>
                             <div class="model-status" id="codex-model-status">Refresh to load</div>
                         </div>
@@ -263,6 +259,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=34"></script>
+    <script src="/static/js/app.js?v=37"></script>
 </body>
 </html>

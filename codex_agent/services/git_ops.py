@@ -147,11 +147,35 @@ def _is_history_file(path):
     return base == 'history' or base.startswith('history.')
 
 
-def _extract_changed_files(status_text):
-    files = []
+def _normalize_status_marker(status_code):
+    code = (status_code or '').strip()
+    if not code:
+        return ''
+    if code == '??':
+        return 'U'
+    if 'U' in code:
+        return 'U'
+    if 'D' in code:
+        return 'D'
+    if 'A' in code:
+        return 'A'
+    if 'R' in code:
+        return 'R'
+    if 'C' in code:
+        return 'C'
+    if 'M' in code:
+        return 'M'
+    if 'T' in code:
+        return 'T'
+    return code[0]
+
+
+def _extract_changed_file_details(status_text):
+    entries = []
     for line in (status_text or '').splitlines():
         if len(line) < 4:
             continue
+        status_code = line[:2]
         path = line[3:].strip()
         if not path:
             continue
@@ -159,8 +183,15 @@ def _extract_changed_files(status_text):
             path = path.split(' -> ')[-1].strip()
         if not path:
             continue
-        files.append(path)
-    return files
+        entries.append({
+            'path': path,
+            'status': _normalize_status_marker(status_code)
+        })
+    return entries
+
+
+def _extract_changed_files(status_text):
+    return [entry['path'] for entry in _extract_changed_file_details(status_text)]
 
 
 def _build_commit_message(status_text, max_files=3):
@@ -317,9 +348,11 @@ def run_git_action(action):
             15,
             env
         )
+        changed_files_detail = []
         changed_files = []
         if not status_error and status_result and status_result.returncode == 0:
-            changed_files = _extract_changed_files(status_result.stdout or '')
+            changed_files_detail = _extract_changed_file_details(status_result.stdout or '')
+            changed_files = [entry['path'] for entry in changed_files_detail]
         branch_name = _read_current_branch(repo_root, env)
         return {
             'ok': result.returncode == 0,
@@ -329,6 +362,7 @@ def run_git_action(action):
             'branch': branch_name,
             'changed_files_count': len(changed_files),
             'changed_files': changed_files,
+            'changed_files_detail': changed_files_detail,
             'command': ' '.join(cmd) if cmd else '',
             'repo_root': str(repo_root),
             'duration_ms': duration_ms

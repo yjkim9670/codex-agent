@@ -25,6 +25,7 @@ from ..services.codex_chat import (
     get_session,
     get_settings,
     get_usage_summary,
+    list_codex_streams,
     read_codex_stream,
     list_sessions,
     rename_session,
@@ -205,6 +206,13 @@ def codex_stream_output(stream_id):
     if saved_message:
         response['saved_message'] = saved_message
     return jsonify(response)
+
+
+@bp.route('/api/codex/streams')
+def codex_streams_list():
+    cleanup_codex_streams()
+    include_done = request.args.get('include_done') == '1'
+    return jsonify({'streams': list_codex_streams(include_done=include_done)})
 
 
 @bp.route('/api/codex/streams/<stream_id>/stop', methods=['POST'])

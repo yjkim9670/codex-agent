@@ -695,6 +695,27 @@ def get_codex_stream(stream_id):
         return deepcopy(stream) if stream else None
 
 
+def list_codex_streams(include_done=False):
+    streams = []
+    with state.codex_streams_lock:
+        for stream in state.codex_streams.values():
+            if not include_done:
+                if stream.get('done') or stream.get('cancelled'):
+                    continue
+            streams.append({
+                'id': stream.get('id'),
+                'session_id': stream.get('session_id'),
+                'done': stream.get('done', False),
+                'cancelled': stream.get('cancelled', False),
+                'output_length': len(stream.get('output') or ''),
+                'error_length': len(stream.get('error') or ''),
+                'created_at': int((stream.get('created_at') or 0) * 1000),
+                'updated_at': int((stream.get('updated_at') or 0) * 1000)
+            })
+    streams.sort(key=lambda item: item.get('updated_at', 0), reverse=True)
+    return streams
+
+
 def read_codex_stream(stream_id, output_offset=0, error_offset=0):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)

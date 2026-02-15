@@ -4,6 +4,8 @@ const state = {
     loading: false,
     sessionStates: {},
     streams: {},
+    remoteStreamSessions: new Set(),
+    remoteStreams: [],
     liveClockTimer: null,
     responseTimerId: null,
     responseTimerSessionId: null,
@@ -37,6 +39,7 @@ const THEME_KEY = 'codexTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
+const REMOTE_STREAM_POLL_MS = 2500;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -71,6 +74,13 @@ let gitBranchStatusCache = {
 let gitBranchToastAt = 0;
 let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
+let remoteStreamStatusCache = {
+    streams: [],
+    fetchedAt: 0
+};
+let remoteStreamPollTimer = null;
+let remoteStreamStatusInFlight = false;
+let streamMonitorState = null;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -101,14 +111,16 @@ function getSessionStream(sessionId) {
 
 function isSessionStreaming(sessionId) {
     if (!sessionId) return false;
-    return Boolean(getSessionStream(sessionId));
+    if (getSessionStream(sessionId)) return true;
+    return Boolean(state.remoteStreamSessions?.has(sessionId));
 }
 
 function isSessionBusy(sessionId) {
     const sessionState = getSessionState(sessionId);
     if (!sessionState) return false;
     const stream = getSessionStream(sessionId);
-    return Boolean(sessionState.sending || sessionState.pendingSend || stream);
+    const remoteStreaming = state.remoteStreamSessions?.has(sessionId);
+    return Boolean(sessionState.sending || sessionState.pendingSend || stream || remoteStreaming);
 }
 
 function setSessionStatus(sessionId, message, isError = false) {
@@ -212,8 +224,13 @@ function syncActiveSessionControls() {
     const input = document.getElementById('codex-chat-input');
     const sendBtn = document.getElementById('codex-chat-send');
     const sessionId = state.activeSessionId;
-    const isBusy = sessionId ? isSessionBusy(sessionId) : false;
-    const showStop = sessionId ? isBusy : false;
+    const sessionState = sessionId ? getSessionState(sessionId) : null;
+    const localBusy = sessionId
+        ? Boolean(sessionState?.sending || sessionState?.pendingSend || getSessionStream(sessionId))
+        : false;
+    const remoteBusy = sessionId ? Boolean(state.remoteStreamSessions?.has(sessionId)) : false;
+    const isBusy = sessionId ? (localBusy || remoteBusy) : false;
+    const showStop = sessionId ? localBusy : false;
     if (input) {
         input.disabled = isBusy;
         input.readOnly = isBusy;
@@ -223,7 +240,7 @@ function syncActiveSessionControls() {
             : CHAT_INPUT_DEFAULT_PLACEHOLDER;
     }
     if (sendBtn) {
-        sendBtn.disabled = false;
+        sendBtn.disabled = remoteBusy && !localBusy;
         sendBtn.dataset.mode = showStop ? 'stop' : 'send';
         sendBtn.setAttribute('aria-label', showStop ? 'Stop' : 'Send');
         sendBtn.setAttribute('title', showStop ? 'Stop' : 'Send');
@@ -354,6 +371,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatHeaderRefreshBtn = document.getElementById('codex-chat-header-refresh');
     const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
     const messages = document.getElementById('codex-chat-messages');
+    const streamMonitorRefreshBtn = document.getElementById('codex-stream-monitor-refresh');
+    const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
@@ -489,6 +508,18 @@ document.addEventListener('DOMContentLoaded', () => {
         updateChatFullscreenButton(chatFullscreenBtn, app?.classList.contains(CHAT_FULLSCREEN_CLASS));
     }
 
+    if (streamMonitorRefreshBtn) {
+        streamMonitorRefreshBtn.addEventListener('click', () => {
+            void refreshRemoteStreams({ force: true });
+        });
+    }
+
+    if (streamMonitorCloseBtn) {
+        streamMonitorCloseBtn.addEventListener('click', () => {
+            stopStreamMonitor(true);
+        });
+    }
+
     if (sessionsToggle && sessionsPanel) {
         sessionsToggle.addEventListener('click', () => {
             const collapsed = sessionsPanel.classList.contains('is-collapsed');
@@ -592,6 +623,7 @@ async function initializeApp() {
     if (pendingStreams.length > 0) {
         await resumeStreamsFromStorage(pendingStreams);
     }
+    startRemoteStreamPolling();
 }
 
 function initializeLiveWeatherPanel(mobileMedia) {
@@ -692,14 +724,74 @@ function setLiveWeatherExpanded(expanded) {
     forecast.hidden = !isExpanded;
 }
 
-function updateLiveDatetime() {
-    const datetime = document.getElementById('codex-live-datetime');
-    if (!datetime) return;
-    datetime.textContent = formatKstNow();
+const KST_FIXED_HOLIDAYS = Object.freeze([
+    [1, 1],
+    [3, 1],
+    [5, 5],
+    [6, 6],
+    [8, 15],
+    [10, 3],
+    [10, 9],
+    [12, 25]
+]);
+
+const kstHolidayCache = new Map();
+
+function toDateKey(year, month, day) {
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return '';
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function formatKstNow() {
-    return new Intl.DateTimeFormat('ko-KR', {
+function getWeekdayIndexFromDateKey(dateKey) {
+    if (!dateKey) return null;
+    const parts = dateKey.split('-').map(value => Number(value));
+    if (parts.length !== 3 || parts.some(value => !Number.isFinite(value))) return null;
+    const [year, month, day] = parts;
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (Number.isNaN(date.getTime())) return null;
+    return date.getUTCDay();
+}
+
+function addDaysToDateKey(dateKey, days) {
+    const parts = dateKey.split('-').map(value => Number(value));
+    if (parts.length !== 3 || parts.some(value => !Number.isFinite(value))) return '';
+    const [year, month, day] = parts;
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + days);
+    return toDateKey(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+}
+
+function getFixedDomesticHolidays(year) {
+    if (kstHolidayCache.has(year)) return kstHolidayCache.get(year);
+    const holidays = new Set();
+    KST_FIXED_HOLIDAYS.forEach(([month, day]) => {
+        const baseKey = toDateKey(year, month, day);
+        if (!baseKey) return;
+        holidays.add(baseKey);
+        const weekdayIndex = getWeekdayIndexFromDateKey(baseKey);
+        let observedKey = baseKey;
+        if (weekdayIndex === 6) {
+            observedKey = addDaysToDateKey(baseKey, 2);
+        } else if (weekdayIndex === 0) {
+            observedKey = addDaysToDateKey(baseKey, 1);
+        }
+        if (observedKey && observedKey.startsWith(`${year}-`)) {
+            holidays.add(observedKey);
+        }
+    });
+    kstHolidayCache.set(year, holidays);
+    return holidays;
+}
+
+function isFixedDomesticHoliday(dateKey) {
+    if (!dateKey) return false;
+    const year = Number(dateKey.split('-', 1)[0]);
+    if (!Number.isFinite(year)) return false;
+    return getFixedDomesticHolidays(year).has(dateKey);
+}
+
+function getKstNowParts(date = new Date()) {
+    const formatter = new Intl.DateTimeFormat('ko-KR', {
         timeZone: KST_TIME_ZONE,
         year: 'numeric',
         month: '2-digit',
@@ -709,7 +801,55 @@ function formatKstNow() {
         minute: '2-digit',
         second: '2-digit',
         hour12: false
-    }).format(new Date());
+    });
+    const parts = formatter.formatToParts(date);
+    const lookup = {};
+    parts.forEach(part => {
+        if (part.type !== 'literal') {
+            lookup[part.type] = part.value;
+        }
+    });
+    if (!lookup.year || !lookup.month || !lookup.day) return null;
+    return {
+        year: lookup.year,
+        month: lookup.month,
+        day: lookup.day,
+        weekday: lookup.weekday || '',
+        hour: lookup.hour || '00',
+        minute: lookup.minute || '00',
+        second: lookup.second || '00',
+        dateKey: toDateKey(Number(lookup.year), Number(lookup.month), Number(lookup.day))
+    };
+}
+
+function updateLiveDatetime() {
+    const datetime = document.getElementById('codex-live-datetime');
+    if (!datetime) return;
+    const parts = getKstNowParts();
+    if (!parts) {
+        datetime.textContent = formatKstNow();
+        return;
+    }
+    const datePart = `${parts.year}. ${parts.month}. ${parts.day}.`;
+    const timePart = `${parts.hour}:${parts.minute}:${parts.second}`;
+    const weekday = parts.weekday || '';
+    const weekdayIndex = parts.dateKey ? getWeekdayIndexFromDateKey(parts.dateKey) : null;
+    const isSunday = weekdayIndex === 0;
+    const isHoliday = parts.dateKey ? isFixedDomesticHoliday(parts.dateKey) : false;
+    if (isSunday || isHoliday) {
+        datetime.innerHTML = `${datePart} (<span class="holiday-weekday">${weekday}</span>) ${timePart}`;
+    } else {
+        datetime.textContent = `${datePart} (${weekday}) ${timePart}`;
+    }
+}
+
+function formatKstNow() {
+    const parts = getKstNowParts();
+    if (!parts) return '--';
+    const datePart = `${parts.year}. ${parts.month}. ${parts.day}.`;
+    const timePart = `${parts.hour}:${parts.minute}:${parts.second}`;
+    const weekday = parts.weekday || '';
+    return `${datePart} (${weekday}) ${timePart}`;
 }
 
 async function loadLiveWeatherData({ silent = false, positionOverride = null } = {}) {
@@ -1506,6 +1646,300 @@ function clearPersistedStream(streamId = null) {
     }
 }
 
+function setsEqual(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+        if (!b.has(value)) return false;
+    }
+    return true;
+}
+
+function getSessionTitleById(sessionId) {
+    if (!sessionId) return 'Unknown session';
+    const session = state.sessions.find(item => item.id === sessionId);
+    if (session) {
+        return session.title || 'New session';
+    }
+    return `Session ${sessionId.slice(0, 6)}`;
+}
+
+function formatStreamTimestamp(value) {
+    if (!value) return '';
+    const ms = value < 1000000000000 ? value * 1000 : value;
+    return formatTimestamp(ms);
+}
+
+function getStreamMonitorElements() {
+    const container = document.getElementById('codex-stream-monitor');
+    if (!container) return null;
+    return {
+        container,
+        list: document.getElementById('codex-stream-monitor-list'),
+        empty: document.getElementById('codex-stream-monitor-empty'),
+        output: document.getElementById('codex-stream-monitor-output'),
+        outputTitle: document.getElementById('codex-stream-monitor-title'),
+        outputStatus: document.getElementById('codex-stream-monitor-status'),
+        outputContent: document.getElementById('codex-stream-monitor-content')
+    };
+}
+
+function renderStreamMonitorOutput() {
+    const elements = getStreamMonitorElements();
+    if (!elements) return;
+    if (!streamMonitorState) {
+        if (elements.output) {
+            elements.output.classList.add('is-hidden');
+        }
+        if (elements.outputContent) {
+            elements.outputContent.textContent = '';
+        }
+        return;
+    }
+    if (elements.output) {
+        elements.output.classList.remove('is-hidden');
+    }
+    if (elements.outputTitle) {
+        const title = getSessionTitleById(streamMonitorState.sessionId);
+        elements.outputTitle.textContent = `Monitoring: ${title}`;
+    }
+    if (elements.outputStatus) {
+        elements.outputStatus.textContent = streamMonitorState.done ? 'Completed' : 'Streaming...';
+    }
+    if (elements.outputContent) {
+        const combined = streamMonitorState.output + (streamMonitorState.error ? `\n${streamMonitorState.error}` : '');
+        elements.outputContent.textContent = combined || 'Waiting for output...';
+        if (!streamMonitorState.done) {
+            elements.outputContent.scrollTop = elements.outputContent.scrollHeight;
+        }
+    }
+}
+
+function renderStreamMonitorList(streams) {
+    const elements = getStreamMonitorElements();
+    if (!elements) return;
+    const list = elements.list;
+    if (!list) return;
+    list.innerHTML = '';
+    const hasStreams = Array.isArray(streams) && streams.length > 0;
+    if (elements.empty) {
+        elements.empty.classList.toggle('is-hidden', hasStreams);
+    }
+    list.classList.toggle('is-hidden', !hasStreams);
+    if (!hasStreams) {
+        return;
+    }
+    streams.forEach(stream => {
+        const item = document.createElement('li');
+        item.className = 'stream-monitor-item';
+        const isWatching = streamMonitorState?.id === stream.id;
+        if (isWatching) {
+            item.classList.add('is-watching');
+        }
+
+        const info = document.createElement('div');
+        info.className = 'stream-monitor-info';
+
+        const title = document.createElement('div');
+        title.className = 'stream-monitor-session';
+        title.textContent = getSessionTitleById(stream.session_id || stream.sessionId);
+
+        const meta = document.createElement('div');
+        meta.className = 'stream-monitor-meta';
+        const updated = formatStreamTimestamp(stream.updated_at);
+        meta.textContent = updated ? `Updated ${updated}` : `Stream ${stream.id.slice(0, 6)}`;
+
+        info.appendChild(title);
+        info.appendChild(meta);
+
+        const watchBtn = document.createElement('button');
+        watchBtn.type = 'button';
+        watchBtn.className = 'stream-monitor-watch';
+        watchBtn.textContent = isWatching ? 'Watching' : 'Monitor';
+        watchBtn.disabled = isWatching;
+        watchBtn.addEventListener('click', () => {
+            startStreamMonitor(stream);
+        });
+
+        item.appendChild(info);
+        item.appendChild(watchBtn);
+        list.appendChild(item);
+    });
+}
+
+function updateRemoteStreamSessions(streams) {
+    const nextSet = new Set(
+        (Array.isArray(streams) ? streams : [])
+            .map(stream => stream?.session_id || stream?.sessionId)
+            .filter(Boolean)
+    );
+    const changed = !setsEqual(state.remoteStreamSessions, nextSet);
+    state.remoteStreamSessions = nextSet;
+    state.remoteStreams = Array.isArray(streams) ? streams : [];
+    if (changed) {
+        renderSessions();
+        syncActiveSessionControls();
+        syncRemoteActiveSessionStatus();
+    }
+}
+
+function syncRemoteActiveSessionStatus() {
+    const sessionId = state.activeSessionId;
+    if (!sessionId) return;
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return;
+    const hasRemote = state.remoteStreamSessions?.has(sessionId);
+    const hasLocal = Boolean(sessionState.sending || sessionState.pendingSend || getSessionStream(sessionId));
+    if (hasRemote && !hasLocal) {
+        if (sessionState.status !== 'Receiving response (remote)...') {
+            setSessionStatus(sessionId, 'Receiving response (remote)...');
+        }
+        return;
+    }
+    if (!hasRemote && sessionState.status === 'Receiving response (remote)...') {
+        setSessionStatus(sessionId, 'Idle');
+    }
+}
+
+async function fetchRemoteStreams(force = false) {
+    const now = Date.now();
+    if (!force && remoteStreamStatusCache.fetchedAt && now - remoteStreamStatusCache.fetchedAt < REMOTE_STREAM_POLL_MS - 250) {
+        return remoteStreamStatusCache;
+    }
+    if (remoteStreamStatusInFlight) {
+        return remoteStreamStatusCache;
+    }
+    remoteStreamStatusInFlight = true;
+    try {
+        const result = await fetchJson('/api/codex/streams');
+        const streams = Array.isArray(result?.streams) ? result.streams : [];
+        remoteStreamStatusCache = {
+            streams,
+            fetchedAt: Date.now()
+        };
+        return remoteStreamStatusCache;
+    } catch (error) {
+        return remoteStreamStatusCache;
+    } finally {
+        remoteStreamStatusInFlight = false;
+    }
+}
+
+async function refreshRemoteStreams({ force = false } = {}) {
+    const result = await fetchRemoteStreams(force);
+    const streams = Array.isArray(result?.streams) ? result.streams : [];
+    renderStreamMonitorList(streams);
+    updateRemoteStreamSessions(streams);
+    syncRemoteActiveSessionStatus();
+    if (!streamMonitorState && streams.length > 0) {
+        const activeMatch = state.activeSessionId
+            ? streams.find(item => (item?.session_id || item?.sessionId) === state.activeSessionId)
+            : null;
+        const candidate = activeMatch || (streams.length === 1 ? streams[0] : null);
+        if (candidate) {
+            startStreamMonitor(candidate);
+        }
+    }
+}
+
+function startRemoteStreamPolling() {
+    if (remoteStreamPollTimer) return;
+    remoteStreamPollTimer = window.setInterval(() => {
+        void refreshRemoteStreams();
+    }, REMOTE_STREAM_POLL_MS);
+    void refreshRemoteStreams({ force: true });
+}
+
+function stopStreamMonitor(clearOutput = true) {
+    if (!streamMonitorState) return;
+    if (streamMonitorState.timer) {
+        clearTimeout(streamMonitorState.timer);
+        streamMonitorState.timer = null;
+    }
+    streamMonitorState.polling = false;
+    if (clearOutput) {
+        streamMonitorState = null;
+    }
+    renderStreamMonitorOutput();
+    renderStreamMonitorList(state.remoteStreams);
+}
+
+function startStreamMonitor(stream) {
+    if (!stream?.id) return;
+    stopStreamMonitor(false);
+    streamMonitorState = {
+        id: stream.id,
+        sessionId: stream.session_id || stream.sessionId,
+        outputOffset: 0,
+        errorOffset: 0,
+        output: '',
+        error: '',
+        done: false,
+        timer: null,
+        polling: false
+    };
+    renderStreamMonitorOutput();
+    renderStreamMonitorList(state.remoteStreams);
+    scheduleStreamMonitorPoll(0);
+}
+
+function scheduleStreamMonitorPoll(delay) {
+    if (!streamMonitorState) return;
+    if (streamMonitorState.timer) {
+        clearTimeout(streamMonitorState.timer);
+    }
+    streamMonitorState.timer = setTimeout(() => {
+        void pollStreamMonitor();
+    }, delay);
+}
+
+async function pollStreamMonitor() {
+    if (!streamMonitorState || streamMonitorState.polling) return;
+    const current = streamMonitorState;
+    current.polling = true;
+    try {
+        const result = await fetchJson(
+            `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
+        );
+        if (!streamMonitorState || streamMonitorState.id !== current.id) return;
+        if (result?.output) {
+            current.output += result.output;
+            current.outputOffset = Number.isFinite(result.output_length)
+                ? result.output_length
+                : current.output.length;
+        }
+        if (result?.error) {
+            current.error += result.error;
+            current.errorOffset = Number.isFinite(result.error_length)
+                ? result.error_length
+                : current.error.length;
+        }
+        if (result?.output || result?.error) {
+            renderStreamMonitorOutput();
+        }
+        if (result?.done) {
+            current.done = true;
+            renderStreamMonitorOutput();
+            return;
+        }
+        scheduleStreamMonitorPoll(STREAM_POLL_BASE_MS);
+    } catch (error) {
+        if (isStreamNotFoundError(error)) {
+            if (streamMonitorState) {
+                streamMonitorState.done = true;
+            }
+            renderStreamMonitorOutput();
+            return;
+        }
+        scheduleStreamMonitorPoll(REMOTE_STREAM_POLL_MS);
+    } finally {
+        if (streamMonitorState) {
+            streamMonitorState.polling = false;
+        }
+    }
+}
+
 async function loadSessions({ preserveActive = true, selectSessionId = null, reloadActive = true } = {}) {
     if (state.loading) return;
     state.loading = true;
@@ -1871,6 +2305,42 @@ function setGitBranchOverlayLoading(isLoading) {
     }
 }
 
+function normalizeGitChangedFiles(files) {
+    if (!Array.isArray(files)) return [];
+    return files.map(file => {
+        if (!file) return null;
+        if (typeof file === 'string') {
+            const path = file.trim();
+            return path ? { path, status: '' } : null;
+        }
+        const path = typeof file.path === 'string' ? file.path.trim() : '';
+        if (!path) return null;
+        const status = typeof file.status === 'string' ? file.status.trim() : '';
+        return { path, status };
+    }).filter(Boolean);
+}
+
+function getGitStatusBadgeClass(status) {
+    switch ((status || '').toUpperCase()) {
+        case 'M':
+            return 'is-modified';
+        case 'A':
+            return 'is-added';
+        case 'D':
+            return 'is-deleted';
+        case 'U':
+            return 'is-untracked';
+        case 'R':
+            return 'is-renamed';
+        case 'C':
+            return 'is-copied';
+        case 'T':
+            return 'is-typechange';
+        default:
+            return '';
+    }
+}
+
 function renderGitBranchOverlay(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
@@ -1879,18 +2349,27 @@ function renderGitBranchOverlay(status) {
     if (elements.subtitle) {
         elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
     }
-    const count = Number.isFinite(status?.count) ? status.count : null;
+    const files = normalizeGitChangedFiles(status?.changedFiles);
+    const count = Number.isFinite(status?.count) ? status.count : files.length;
     if (elements.meta) {
         elements.meta.textContent = Number.isFinite(count)
             ? `변경 파일 ${count}개`
             : '변경 파일 수를 불러올 수 없습니다.';
     }
-    const files = Array.isArray(status?.changedFiles) ? status.changedFiles : [];
     if (elements.list) {
         elements.list.innerHTML = '';
         files.forEach(file => {
             const item = document.createElement('li');
-            item.textContent = file;
+            if (file.status) {
+                const badge = document.createElement('span');
+                badge.className = `branch-overlay-status ${getGitStatusBadgeClass(file.status)}`.trim();
+                badge.textContent = file.status.toUpperCase();
+                item.appendChild(badge);
+            }
+            const path = document.createElement('span');
+            path.className = 'branch-overlay-file-path';
+            path.textContent = file.path;
+            item.appendChild(path);
             elements.list.appendChild(item);
         });
         elements.list.classList.toggle('is-hidden', files.length === 0);
@@ -1947,7 +2426,10 @@ async function fetchGitStatus(force = false) {
             ? result.changed_files_count
             : null;
         const branch = typeof result?.branch === 'string' ? result.branch : '';
-        const changedFiles = Array.isArray(result?.changed_files) ? result.changed_files : [];
+        const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
+        const changedFiles = detailedFiles.length
+            ? detailedFiles
+            : (Array.isArray(result?.changed_files) ? result.changed_files : []);
         gitBranchStatusCache = {
             count,
             branch,
@@ -2955,8 +3437,8 @@ function createMessageCopyButton(wrapper) {
     button.setAttribute('title', 'Copy');
     button.innerHTML = `
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="9" y="9" width="11" height="11" rx="0" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
-            <rect x="4" y="4" width="11" height="11" rx="0" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="7" y="4" width="10" height="4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="5" y="8" width="14" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
         </svg>
     `;
     button.addEventListener('click', event => {

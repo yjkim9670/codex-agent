@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=28">
+    <link rel="stylesheet" href="/static/css/app.css?v=30">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -135,6 +135,41 @@
                     </div>
                 </div>
 
+                <div class="stream-monitor" id="codex-stream-monitor">
+                    <div class="stream-monitor-header">
+                        <div class="stream-monitor-title">Live responses</div>
+                        <div class="stream-monitor-actions">
+                            <button
+                                class="stream-monitor-refresh"
+                                type="button"
+                                id="codex-stream-monitor-refresh"
+                                aria-label="Refresh live streams"
+                                title="Refresh live streams"
+                            ></button>
+                        </div>
+                    </div>
+                    <div class="stream-monitor-body">
+                        <div class="stream-monitor-empty" id="codex-stream-monitor-empty">No active streams.</div>
+                        <ul class="stream-monitor-list is-hidden" id="codex-stream-monitor-list"></ul>
+                        <div class="stream-monitor-output is-hidden" id="codex-stream-monitor-output">
+                            <div class="stream-monitor-output-header">
+                                <div>
+                                    <div class="stream-monitor-output-title" id="codex-stream-monitor-title">Monitoring</div>
+                                    <div class="stream-monitor-status" id="codex-stream-monitor-status">Streaming...</div>
+                                </div>
+                                <button
+                                    class="stream-monitor-close"
+                                    type="button"
+                                    id="codex-stream-monitor-close"
+                                    aria-label="Stop monitoring"
+                                    title="Stop monitoring"
+                                ></button>
+                            </div>
+                            <div class="stream-monitor-output-body" id="codex-stream-monitor-content"></div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="chat-frame">
                     <div id="codex-chat-messages" class="chat-messages">
                         <div class="chat-placeholder">Select a session or create a new one.</div>
@@ -220,6 +255,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=31"></script>
+    <script src="/static/js/app.js?v=33"></script>
 </body>
 </html>

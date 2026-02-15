@@ -59,14 +59,18 @@ const GIT_ACTION_LABELS = Object.freeze({
 });
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
+const GIT_BRANCH_POLL_MS = 10000;
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
     count: null,
+    branch: '',
+    changedFiles: [],
     fetchedAt: 0
 };
 let gitBranchToastAt = 0;
 let gitBranchStatusInFlight = false;
+let gitBranchPollTimer = null;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -399,16 +403,47 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (gitBranch) {
-        const handleBranchInfo = () => {
-            void showGitBranchInfoToast(gitBranch);
-        };
-        gitBranch.addEventListener('mouseenter', handleBranchInfo);
-        gitBranch.addEventListener('focus', handleBranchInfo);
         gitBranch.addEventListener('click', event => {
             event.preventDefault();
-            handleBranchInfo();
+            openGitBranchOverlay();
+        });
+        gitBranch.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openGitBranchOverlay();
+            }
+        });
+        startGitBranchPolling();
+    }
+
+    const branchOverlay = document.getElementById('codex-branch-overlay');
+    const branchOverlayClose = document.getElementById('codex-branch-overlay-close');
+    const branchOverlayCloseFooter = document.getElementById('codex-branch-overlay-close-footer');
+    const branchOverlayRefresh = document.getElementById('codex-branch-overlay-refresh');
+    if (branchOverlay) {
+        branchOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeGitBranchOverlay();
+            }
         });
     }
+    if (branchOverlayClose) {
+        branchOverlayClose.addEventListener('click', closeGitBranchOverlay);
+    }
+    if (branchOverlayCloseFooter) {
+        branchOverlayCloseFooter.addEventListener('click', closeGitBranchOverlay);
+    }
+    if (branchOverlayRefresh) {
+        branchOverlayRefresh.addEventListener('click', () => {
+            void refreshGitBranchStatus({ force: true, updateOverlay: true });
+        });
+    }
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && isGitBranchOverlayOpen()) {
+            closeGitBranchOverlay();
+        }
+    });
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
@@ -1786,16 +1821,112 @@ function getGitBranchFullName(element) {
     return element.textContent ? element.textContent.trim() : '';
 }
 
-async function fetchGitChangedFilesCount(force = false) {
+function applyGitBranchStatusToElement(element, status) {
+    if (!element || !status) return;
+    const branchName = typeof status.branch === 'string' ? status.branch.trim() : '';
+    if (!branchName) return;
+    if (element.textContent.trim() !== branchName) {
+        element.textContent = branchName;
+    }
+    element.dataset.branchFull = branchName;
+    element.setAttribute('title', branchName);
+}
+
+function getGitBranchOverlayElements() {
+    const overlay = document.getElementById('codex-branch-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        subtitle: document.getElementById('codex-branch-overlay-subtitle'),
+        meta: document.getElementById('codex-branch-overlay-meta'),
+        loading: document.getElementById('codex-branch-overlay-loading'),
+        empty: document.getElementById('codex-branch-overlay-empty'),
+        list: document.getElementById('codex-branch-overlay-list')
+    };
+}
+
+function setGitBranchOverlayLoading(isLoading) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    if (elements.loading) {
+        elements.loading.classList.toggle('is-hidden', !isLoading);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', isLoading);
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+}
+
+function renderGitBranchOverlay(status) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    const branchElement = document.getElementById('codex-git-branch');
+    const branchName = (status?.branch || getGitBranchFullName(branchElement) || '').trim();
+    if (elements.subtitle) {
+        elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
+    }
+    const count = Number.isFinite(status?.count) ? status.count : null;
+    if (elements.meta) {
+        elements.meta.textContent = Number.isFinite(count)
+            ? `변경 파일 ${count}개`
+            : '변경 파일 수를 불러올 수 없습니다.';
+    }
+    const files = Array.isArray(status?.changedFiles) ? status.changedFiles : [];
+    if (elements.list) {
+        elements.list.innerHTML = '';
+        files.forEach(file => {
+            const item = document.createElement('li');
+            item.textContent = file;
+            elements.list.appendChild(item);
+        });
+        elements.list.classList.toggle('is-hidden', files.length === 0);
+    }
+    if (elements.empty) {
+        elements.empty.textContent = Number.isFinite(count)
+            ? '변경 파일이 없습니다.'
+            : '변경 파일 정보를 불러올 수 없습니다.';
+        elements.empty.classList.toggle('is-hidden', files.length !== 0);
+    }
+    if (elements.loading) {
+        elements.loading.classList.add('is-hidden');
+    }
+}
+
+function isGitBranchOverlayOpen() {
+    const overlay = document.getElementById('codex-branch-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openGitBranchOverlay() {
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    setGitBranchOverlayLoading(true);
+    void refreshGitBranchStatus({ force: true, updateOverlay: true });
+}
+
+function closeGitBranchOverlay() {
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('is-overlay-open');
+}
+
+async function fetchGitStatus(force = false) {
     const now = Date.now();
     if (!force && gitBranchStatusCache.fetchedAt) {
         const delta = now - gitBranchStatusCache.fetchedAt;
         if (delta >= 0 && delta < GIT_BRANCH_STATUS_CACHE_MS) {
-            return gitBranchStatusCache.count;
+            return gitBranchStatusCache;
         }
     }
     if (gitBranchStatusInFlight) {
-        return gitBranchStatusCache.count;
+        return gitBranchStatusCache;
     }
     gitBranchStatusInFlight = true;
     try {
@@ -1803,16 +1934,50 @@ async function fetchGitChangedFilesCount(force = false) {
         const count = Number.isFinite(result?.changed_files_count)
             ? result.changed_files_count
             : null;
+        const branch = typeof result?.branch === 'string' ? result.branch : '';
+        const changedFiles = Array.isArray(result?.changed_files) ? result.changed_files : [];
         gitBranchStatusCache = {
             count,
+            branch,
+            changedFiles,
             fetchedAt: Date.now()
         };
-        return count;
+        return gitBranchStatusCache;
     } catch (error) {
-        return null;
+        return gitBranchStatusCache;
     } finally {
         gitBranchStatusInFlight = false;
     }
+}
+
+async function fetchGitChangedFilesCount(force = false) {
+    const status = await fetchGitStatus(force);
+    return status?.count ?? null;
+}
+
+async function refreshGitBranchStatus({ force = false, updateOverlay = false } = {}) {
+    const status = await fetchGitStatus(force);
+    const branchElement = document.getElementById('codex-git-branch');
+    if (branchElement) {
+        applyGitBranchStatusToElement(branchElement, status);
+    }
+    if (updateOverlay && isGitBranchOverlayOpen()) {
+        renderGitBranchOverlay(status);
+    }
+    return status;
+}
+
+function startGitBranchPolling() {
+    const branchElement = document.getElementById('codex-git-branch');
+    if (!branchElement || gitBranchPollTimer) return;
+    const tick = async (force = false) => {
+        await refreshGitBranchStatus({ force, updateOverlay: true });
+    };
+    void tick(true);
+    gitBranchPollTimer = setInterval(tick, GIT_BRANCH_POLL_MS);
+    window.addEventListener('focus', () => {
+        void tick(true);
+    });
 }
 
 async function showGitBranchInfoToast(element) {

@@ -187,6 +187,33 @@
         </main>
     </div>
 
+    <div class="branch-overlay" id="codex-branch-overlay" aria-hidden="true">
+        <div class="branch-overlay-backdrop" data-action="close"></div>
+        <div class="branch-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-branch-overlay-title">
+            <div class="branch-overlay-header">
+                <div class="branch-overlay-heading">
+                    <div class="branch-overlay-title" id="codex-branch-overlay-title">브랜치 변경 사항</div>
+                    <div class="branch-overlay-subtitle" id="codex-branch-overlay-subtitle">-</div>
+                </div>
+                <button class="btn ghost icon-only branch-overlay-close" type="button" id="codex-branch-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="branch-overlay-body">
+                <div class="branch-overlay-meta" id="codex-branch-overlay-meta">불러오는 중...</div>
+                <div class="branch-overlay-loading" id="codex-branch-overlay-loading">변경 파일을 불러오는 중...</div>
+                <div class="branch-overlay-empty is-hidden" id="codex-branch-overlay-empty">변경 파일이 없습니다.</div>
+                <ul class="branch-overlay-list is-hidden" id="codex-branch-overlay-list"></ul>
+            </div>
+            <div class="branch-overlay-footer">
+                <button class="btn ghost icon-only branch-overlay-refresh" type="button" id="codex-branch-overlay-refresh" aria-label="Refresh" title="Refresh">
+                    <span class="sr-only">Refresh</span>
+                </button>
+                <button class="btn primary" type="button" id="codex-branch-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js?v=31"></script>
 </body>
 </html>

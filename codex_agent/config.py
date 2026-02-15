@@ -45,7 +45,7 @@ if not CODEX_MODEL_OPTIONS:
     CODEX_MODEL_OPTIONS = _default_model_options
 CODEX_REASONING_OPTIONS = [
     item.strip()
-    for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high').split(',')
+    for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
     if item.strip()
 ]
 

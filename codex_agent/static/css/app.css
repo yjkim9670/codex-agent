@@ -31,6 +31,8 @@
     --radius-md: 12px;
     --radius-sm: 8px;
     --radius-pill: 999px;
+    --scrollbar-size: 8px;
+    --scrollbar-radius: 999px;
     --scrollbar-track: #e7eef7;
     --scrollbar-thumb: #a4b6cc;
     --scrollbar-thumb-hover: #7d95b2;
@@ -41,6 +43,7 @@
     --toast-success-text: #f1fff7;
     --toast-error-bg: rgba(217, 45, 76, 0.8);
     --toast-error-text: #fff4f7;
+    --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -89,6 +92,7 @@
     --toast-success-text: #f1fff7;
     --toast-error-bg: rgba(199, 112, 74, 0.76);
     --toast-error-text: #fff6f2;
+    --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8f0ff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -106,17 +110,19 @@
 }
 
 *::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
 }
 
 *::-webkit-scrollbar-track {
     background: var(--scrollbar-track);
+    border-radius: var(--scrollbar-radius);
 }
 
 *::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     border: 2px solid var(--scrollbar-track);
+    border-radius: var(--scrollbar-radius);
 }
 
 *::-webkit-scrollbar-thumb:hover {
@@ -208,6 +214,139 @@ body {
 .toast.toast-error {
     background: var(--toast-error-bg);
     color: var(--toast-error-text);
+}
+
+.branch-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 2300;
+}
+
+.branch-overlay.is-visible {
+    display: flex;
+}
+
+.branch-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+    backdrop-filter: blur(4px);
+}
+
+.branch-overlay-card {
+    position: relative;
+    width: min(640px, calc(100vw - 48px));
+    max-height: min(80vh, 720px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.branch-overlay-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.branch-overlay-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.branch-overlay-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.branch-overlay-subtitle {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.branch-overlay-close {
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.branch-overlay-refresh {
+    background-image: var(--icon-refresh);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.branch-overlay-body {
+    padding: 16px 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.branch-overlay-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.branch-overlay-loading,
+.branch-overlay-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.branch-overlay-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: auto;
+    max-height: 320px;
+}
+
+.branch-overlay-list li {
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 12px;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.branch-overlay-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.is-hidden {
+    display: none !important;
 }
 
 .live-weather-panel {
@@ -1552,9 +1691,26 @@ body {
     }
 
     .toast-layer {
-        left: 12px;
-        right: 12px;
-        width: auto;
+        left: 50%;
+        right: auto;
+        width: min(360px, calc(100vw - 32px));
+        transform: translateX(-50%);
+    }
+
+    .branch-overlay {
+        padding: 16px;
+    }
+
+    .branch-overlay-card {
+        width: min(520px, calc(100vw - 32px));
+        max-height: calc(100vh - 32px);
+    }
+
+    .branch-overlay-header,
+    .branch-overlay-body,
+    .branch-overlay-footer {
+        padding-left: 16px;
+        padding-right: 16px;
     }
 
     .app-header {

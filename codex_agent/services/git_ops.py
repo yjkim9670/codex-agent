@@ -89,6 +89,50 @@ def _read_current_branch(repo_root, env):
     return f'detached@{commit_short}'
 
 
+def _read_current_branch_for_push(repo_root, env):
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--abbrev-ref', 'HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    branch = (result.stdout or '').strip()
+    if not branch or branch == 'HEAD':
+        return ''
+    return branch
+
+
+def _read_upstream_branch(repo_root, env):
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    return (result.stdout or '').strip()
+
+
+def _pick_remote(repo_root, env):
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'remote'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    remotes = [name.strip() for name in (result.stdout or '').splitlines() if name.strip()]
+    if not remotes:
+        return ''
+    if 'origin' in remotes:
+        return 'origin'
+    return remotes[0]
+
+
 def get_current_branch_name():
     repo_root, error = _resolve_repo_root()
     if error:
@@ -144,6 +188,7 @@ def run_git_action(action):
 
         started_at = time.time()
         cmd = None
+        preserve_output = False
         if action == 'submit':
             cmd = ['git', 'commit']
             status_result, error = _run_git_command(
@@ -171,7 +216,6 @@ def run_git_action(action):
                 return {'error': stderr or stdout or 'git add에 실패했습니다.'}
 
             message = _build_commit_message(status_result.stdout or '')
-            cmd = ['git', 'commit', '-m', message]
             result, error = _run_git_command(
                 ['git', '-C', str(repo_root), 'commit', '-m', message],
                 repo_root,
@@ -180,6 +224,48 @@ def run_git_action(action):
             )
             if error:
                 return error
+            if result.returncode != 0:
+                stdout = (result.stdout or '').strip()
+                stderr = (result.stderr or '').strip()
+                return {'error': stderr or stdout or 'git commit에 실패했습니다.'}
+
+            upstream = _read_upstream_branch(repo_root, env)
+            if upstream:
+                push_cmd = ['git', '-C', str(repo_root), 'push']
+            else:
+                branch_name = _read_current_branch_for_push(repo_root, env)
+                if not branch_name:
+                    return {'error': '현재 브랜치를 확인할 수 없습니다. (detached HEAD일 수 있습니다.)'}
+                remote_name = _pick_remote(repo_root, env)
+                if not remote_name:
+                    return {'error': '원격 저장소를 찾을 수 없습니다.'}
+                push_cmd = ['git', '-C', str(repo_root), 'push', '-u', remote_name, branch_name]
+
+            cmd = push_cmd
+            push_result, error = _run_git_command(
+                push_cmd,
+                repo_root,
+                GIT_TIMEOUT_SECONDS,
+                env
+            )
+            if error:
+                return error
+            if push_result.returncode != 0:
+                stdout = (push_result.stdout or '').strip()
+                stderr = (push_result.stderr or '').strip()
+                return {'error': stderr or stdout or 'git push에 실패했습니다.'}
+
+            cmd = ['git', 'commit', '&&', 'git', 'push']
+            stdout = '\n'.join([
+                (result.stdout or '').strip(),
+                (push_result.stdout or '').strip()
+            ]).strip()
+            stderr = '\n'.join([
+                (result.stderr or '').strip(),
+                (push_result.stderr or '').strip()
+            ]).strip()
+            result = push_result
+            preserve_output = True
         else:
             if action == 'sync':
                 fetch_cmd = _GIT_ACTIONS[action]
@@ -222,7 +308,7 @@ def run_git_action(action):
                     return error
 
         duration_ms = max(0, int((time.time() - started_at) * 1000))
-        if action != 'sync':
+        if action != 'sync' and not preserve_output:
             stdout = (result.stdout or '').strip()
             stderr = (result.stderr or '').strip()
         status_result, status_error = _run_git_command(

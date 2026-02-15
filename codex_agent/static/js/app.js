@@ -370,6 +370,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitBranch = document.getElementById('codex-git-branch');
     const gitSubmitBtn = document.getElementById('codex-git-submit');
     const gitSyncBtn = document.getElementById('codex-git-sync');
+    const branchOverlaySubmitBtn = document.getElementById('codex-branch-overlay-submit');
+    const branchOverlaySyncBtn = document.getElementById('codex-branch-overlay-sync');
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -399,6 +401,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (gitSyncBtn) {
         gitSyncBtn.addEventListener('click', () => {
             void handleGitAction('sync', gitSyncBtn);
+        });
+    }
+    if (branchOverlaySubmitBtn) {
+        branchOverlaySubmitBtn.addEventListener('click', () => {
+            void handleGitAction('submit', branchOverlaySubmitBtn);
+        });
+    }
+    if (branchOverlaySyncBtn) {
+        branchOverlaySyncBtn.addEventListener('click', () => {
+            void handleGitAction('sync', branchOverlaySyncBtn);
         });
     }
 

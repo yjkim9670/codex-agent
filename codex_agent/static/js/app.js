@@ -373,6 +373,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const messages = document.getElementById('codex-chat-messages');
     const streamMonitorRefreshBtn = document.getElementById('codex-stream-monitor-refresh');
     const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
+    const streamMonitorToggle = document.getElementById('codex-stream-monitor-toggle');
+    const streamMonitor = document.getElementById('codex-stream-monitor');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
@@ -520,6 +522,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (streamMonitorToggle) {
+        streamMonitorToggle.addEventListener('click', () => {
+            const isCollapsed = streamMonitor?.classList.contains('is-collapsed');
+            setStreamMonitorCollapsed(!isCollapsed);
+        });
+    }
+
     if (sessionsToggle && sessionsPanel) {
         sessionsToggle.addEventListener('click', () => {
             const collapsed = sessionsPanel.classList.contains('is-collapsed');
@@ -610,6 +619,9 @@ document.addEventListener('DOMContentLoaded', () => {
     syncActiveSessionStatus();
     initializeTheme(themeToggle, themeMedia);
     initializeLiveWeatherPanel(mobileMedia);
+    if (streamMonitor) {
+        setStreamMonitorCollapsed(streamMonitor.classList.contains('is-collapsed'));
+    }
     void initializeApp();
 });
 
@@ -1683,6 +1695,16 @@ function getStreamMonitorElements() {
         outputStatus: document.getElementById('codex-stream-monitor-status'),
         outputContent: document.getElementById('codex-stream-monitor-content')
     };
+}
+
+function setStreamMonitorCollapsed(collapsed) {
+    const monitor = document.getElementById('codex-stream-monitor');
+    if (!monitor) return;
+    monitor.classList.toggle('is-collapsed', Boolean(collapsed));
+    const toggle = document.getElementById('codex-stream-monitor-toggle');
+    if (toggle) {
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+    }
 }
 
 function renderStreamMonitorOutput() {

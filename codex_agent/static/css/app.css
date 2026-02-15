@@ -1011,6 +1011,26 @@ body {
     gap: 6px;
 }
 
+.stream-monitor-toggle {
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    border-radius: var(--radius-sm);
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    padding: 0;
+    cursor: pointer;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
+    transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
+    background-image: var(--icon-chevron-down);
+}
+
+.stream-monitor.is-collapsed .stream-monitor-toggle {
+    transform: rotate(-90deg);
+}
+
 .stream-monitor-refresh,
 .stream-monitor-close {
     border: 1px solid var(--border);
@@ -1036,6 +1056,7 @@ body {
 }
 
 .stream-monitor-refresh:hover,
+.stream-monitor-toggle:hover,
 .stream-monitor-close:hover {
     background-color: var(--surface-raised);
     border-color: var(--accent);
@@ -1044,6 +1065,14 @@ body {
 .stream-monitor-refresh:active,
 .stream-monitor-close:active {
     transform: none;
+}
+
+.stream-monitor-toggle:active {
+    transform: rotate(0deg);
+}
+
+.stream-monitor.is-collapsed .stream-monitor-toggle:active {
+    transform: rotate(-90deg);
 }
 
 .stream-monitor-empty {
@@ -1156,6 +1185,14 @@ body {
     word-break: break-word;
     max-height: 220px;
     overflow: auto;
+}
+
+.stream-monitor.is-collapsed .stream-monitor-body {
+    display: none;
+}
+
+.stream-monitor.is-collapsed {
+    padding-bottom: 6px;
 }
 
 .chat-header-refresh,

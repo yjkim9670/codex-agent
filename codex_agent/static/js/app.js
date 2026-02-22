@@ -81,6 +81,7 @@ let remoteStreamStatusCache = {
 let remoteStreamPollTimer = null;
 let remoteStreamStatusInFlight = false;
 let streamMonitorState = null;
+let hoverTooltipInteractionsBound = false;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -624,33 +625,30 @@ async function initializeApp() {
 function initializeLiveWeatherPanel(mobileMedia) {
     const panel = document.getElementById('codex-live-weather-panel');
     const toggle = document.getElementById('codex-live-weather-toggle');
-    const compactToggle = document.getElementById('codex-live-weather-compact');
     const permissionToggle = document.getElementById('codex-weather-permission');
-    if (!panel || !toggle || !compactToggle || !permissionToggle) return;
+    if (!panel || !toggle || !permissionToggle) return;
 
+    initializeHoverTooltipInteractions();
     syncLiveWeatherLayout(Boolean(mobileMedia?.matches));
-    setLiveWeatherExpanded(false);
+    const serverDirectory = document.getElementById('codex-server-directory');
+    const serverDirectoryPath = document.getElementById('codex-server-directory-path');
+    setHoverTooltip(serverDirectory, serverDirectory?.textContent || '');
+    setHoverTooltip(serverDirectoryPath, serverDirectoryPath?.textContent || '');
     updateLiveDatetime();
     if (state.liveClockTimer) {
         window.clearInterval(state.liveClockTimer);
     }
     state.liveClockTimer = window.setInterval(updateLiveDatetime, 1000);
     toggle.addEventListener('click', () => {
-        if (panel.classList.contains('is-compact')) {
-            setLiveWeatherCompact(false);
+        const isCompact = panel.classList.contains('is-compact');
+        setLiveWeatherCompact(!isCompact);
+        if (isCompact) {
             void maybeRequestWeatherPermissionOnTap();
-            return;
         }
-        const expanded = toggle.getAttribute('aria-expanded') === 'true';
-        setLiveWeatherExpanded(!expanded);
     });
     permissionToggle.addEventListener('click', event => {
         event.stopPropagation();
         void requestWeatherPermission();
-    });
-    compactToggle.addEventListener('click', () => {
-        const isCompact = panel.classList.contains('is-compact');
-        setLiveWeatherCompact(!isCompact);
     });
     void loadLiveWeatherData();
     if (state.weatherRefreshTimer) {
@@ -687,19 +685,16 @@ function readLiveWeatherCompactPreference(defaultCompact) {
 
 function setLiveWeatherCompact(compact, { persist = true } = {}) {
     const panel = document.getElementById('codex-live-weather-panel');
-    const compactToggle = document.getElementById('codex-live-weather-compact');
-    if (!panel || !compactToggle) return;
+    const toggle = document.getElementById('codex-live-weather-toggle');
+    if (!panel || !toggle) return;
     const isCompact = Boolean(compact);
-    const compactLabel = isCompact ? '날씨 패널 펼치기' : '날씨 패널 최소화';
+    const toggleLabel = isCompact ? 'Expand weather panel' : 'Collapse weather panel';
     panel.classList.toggle('is-compact', isCompact);
-    compactToggle.setAttribute('aria-pressed', String(isCompact));
-    compactToggle.classList.toggle('is-compact', isCompact);
-    compactToggle.setAttribute('aria-label', compactLabel);
-    compactToggle.setAttribute('title', compactLabel);
+    toggle.setAttribute('aria-expanded', String(!isCompact));
+    toggle.classList.toggle('is-collapsed', isCompact);
+    toggle.setAttribute('aria-label', toggleLabel);
+    toggle.setAttribute('title', toggleLabel);
     syncSidebarStackLayout();
-    if (isCompact) {
-        setLiveWeatherExpanded(false);
-    }
     if (persist) {
         try {
             localStorage.setItem(WEATHER_COMPACT_KEY, isCompact ? '1' : '0');
@@ -707,15 +702,6 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
             void error;
         }
     }
-}
-
-function setLiveWeatherExpanded(expanded) {
-    const toggle = document.getElementById('codex-live-weather-toggle');
-    const forecast = document.getElementById('codex-live-weather-forecast');
-    if (!toggle || !forecast) return;
-    const isExpanded = Boolean(expanded);
-    toggle.setAttribute('aria-expanded', String(isExpanded));
-    forecast.hidden = !isExpanded;
 }
 
 function syncLiveWeatherLayout(isMobile) {
@@ -830,7 +816,9 @@ function updateLiveDatetime() {
     if (!datetime) return;
     const parts = getKstNowParts();
     if (!parts) {
-        datetime.textContent = formatKstNow();
+        const fallback = formatKstNow();
+        datetime.textContent = fallback;
+        setHoverTooltip(datetime, fallback);
         return;
     }
     const datePart = `${parts.year}. ${parts.month}. ${parts.day}.`;
@@ -839,11 +827,13 @@ function updateLiveDatetime() {
     const weekdayIndex = parts.dateKey ? getWeekdayIndexFromDateKey(parts.dateKey) : null;
     const isSunday = weekdayIndex === 0;
     const isHoliday = parts.dateKey ? isFixedDomesticHoliday(parts.dateKey) : false;
+    const datetimeText = `${datePart} (${weekday}) ${timePart}`;
     if (isSunday || isHoliday) {
         datetime.innerHTML = `${datePart} (<span class="holiday-weekday">${weekday}</span>) ${timePart}`;
     } else {
-        datetime.textContent = `${datePart} (${weekday}) ${timePart}`;
+        datetime.textContent = datetimeText;
     }
+    setHoverTooltip(datetime, datetimeText);
 }
 
 function formatKstNow() {
@@ -862,11 +852,46 @@ function setHoverTooltip(element, text) {
         element.classList.add('hover-tooltip');
         element.setAttribute('data-tooltip', resolved);
         element.setAttribute('title', resolved);
+        if (!element.hasAttribute('tabindex')) {
+            element.setAttribute('tabindex', '0');
+            element.setAttribute('data-tooltip-tabindex', '1');
+        }
     } else {
         element.classList.remove('hover-tooltip');
+        element.classList.remove('is-open');
         element.removeAttribute('data-tooltip');
         element.removeAttribute('title');
+        if (element.getAttribute('data-tooltip-tabindex') === '1') {
+            element.removeAttribute('tabindex');
+            element.removeAttribute('data-tooltip-tabindex');
+        }
     }
+}
+
+function closeOpenHoverTooltips(exceptElement = null) {
+    document.querySelectorAll('.hover-tooltip.is-open').forEach(element => {
+        if (exceptElement && element === exceptElement) return;
+        element.classList.remove('is-open');
+    });
+}
+
+function initializeHoverTooltipInteractions() {
+    if (hoverTooltipInteractionsBound) return;
+    hoverTooltipInteractionsBound = true;
+    document.addEventListener('click', event => {
+        const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
+        if (!target || !target.getAttribute('data-tooltip')) {
+            closeOpenHoverTooltips();
+            return;
+        }
+        const willOpen = !target.classList.contains('is-open');
+        closeOpenHoverTooltips(target);
+        target.classList.toggle('is-open', willOpen);
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        closeOpenHoverTooltips();
+    });
 }
 
 function setTextWithTooltip(element, text) {
@@ -884,10 +909,10 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
 
     if (!silent) {
-        locationElement.textContent = '위치 확인 중...';
+        setTextWithTooltip(locationElement, '위치 확인 중...');
         setTextWithTooltip(currentElement, '날씨 불러오는 중...');
-        todayElement.textContent = '불러오는 중...';
-        tomorrowElement.textContent = '불러오는 중...';
+        setTextWithTooltip(todayElement, '불러오는 중...');
+        setTextWithTooltip(tomorrowElement, '불러오는 중...');
     }
 
     try {
@@ -919,7 +944,7 @@ async function requestWeatherPermission({ silentFailure = false, skipPermissionC
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
     if (locationElement) {
-        locationElement.textContent = '위치 권한 요청 중...';
+        setTextWithTooltip(locationElement, '위치 권한 요청 중...');
     }
     if (currentElement) {
         setTextWithTooltip(currentElement, '브라우저 권한 응답 대기 중...');
@@ -1182,13 +1207,13 @@ function renderWeatherSummary({ locationName, weather }) {
         : '--';
     const weatherText = formatWeatherCode(current.weather_code, current.is_day === 1);
 
-    locationElement.textContent = locationName || '알 수 없는 위치';
+    setTextWithTooltip(locationElement, locationName || '알 수 없는 위치');
     setTextWithTooltip(
         currentElement,
         `현재 ${currentTemp} · ${weatherText} · 체감 ${feelsLike} · 습도 ${humidity} · 바람 ${wind}`
     );
-    todayElement.textContent = renderDailyForecast(weather?.daily, 0);
-    tomorrowElement.textContent = renderDailyForecast(weather?.daily, 1);
+    setTextWithTooltip(todayElement, renderDailyForecast(weather?.daily, 0));
+    setTextWithTooltip(tomorrowElement, renderDailyForecast(weather?.daily, 1));
 }
 
 function renderWeatherError(locationText, detailText) {
@@ -1197,10 +1222,10 @@ function renderWeatherError(locationText, detailText) {
     const todayElement = document.getElementById('codex-weather-today');
     const tomorrowElement = document.getElementById('codex-weather-tomorrow');
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
-    locationElement.textContent = locationText;
+    setTextWithTooltip(locationElement, locationText);
     setTextWithTooltip(currentElement, detailText);
-    todayElement.textContent = '--';
-    tomorrowElement.textContent = '--';
+    setTextWithTooltip(todayElement, '--');
+    setTextWithTooltip(tomorrowElement, '--');
 }
 
 function renderDailyForecast(daily, index) {

@@ -44,14 +44,29 @@
         <main class="layout">
             <aside class="sidebar-stack">
                 <section class="live-weather-panel" id="codex-live-weather-panel">
-                    <div class="live-weather-top">
-                        <button
-                            class="live-weather-toggle"
-                            type="button"
-                            id="codex-live-weather-toggle"
-                            aria-expanded="false"
-                            aria-controls="codex-live-weather-forecast"
-                        >
+                    <div class="live-weather-header sessions-header">
+                        <span class="live-weather-title">Clock &amp; Weather</span>
+                        <div class="live-weather-actions sessions-actions">
+                            <button
+                                class="btn secondary icon-only live-weather-permission"
+                                type="button"
+                                id="codex-weather-permission"
+                                aria-label="위치 권한 요청"
+                                title="위치 권한 요청"
+                            ></button>
+                            <button
+                                class="btn ghost icon-only sessions-toggle live-weather-compact-toggle"
+                                type="button"
+                                id="codex-live-weather-toggle"
+                                aria-expanded="true"
+                                aria-controls="codex-live-weather-content"
+                                aria-label="Collapse weather panel"
+                                title="Collapse weather panel"
+                            ></button>
+                        </div>
+                    </div>
+                    <div class="live-weather-content" id="codex-live-weather-content">
+                        <div class="live-weather-overview">
                             <div class="live-weather-time">
                                 <div class="live-weather-label">KST</div>
                                 <div class="live-weather-value" id="codex-live-datetime">--</div>
@@ -60,40 +75,23 @@
                             <div class="live-weather-current">
                                 <div class="live-weather-label" id="codex-weather-location">위치 확인 중...</div>
                                 <div class="live-weather-value" id="codex-weather-current">날씨 불러오는 중...</div>
-                                <div class="live-weather-hint">클릭하면 오늘/내일 예보를 볼 수 있습니다</div>
+                                <div class="live-weather-hint">오늘/내일 예보는 아래에서 확인할 수 있습니다</div>
                             </div>
-                        </button>
-                        <div class="live-weather-actions">
-                            <button
-                                class="live-weather-permission icon-only"
-                                type="button"
-                                id="codex-weather-permission"
-                                aria-label="위치 권한 요청"
-                                title="위치 권한 요청"
-                            ></button>
-                            <button
-                                class="live-weather-compact icon-only live-weather-compact-toggle"
-                                type="button"
-                                id="codex-live-weather-compact"
-                                aria-pressed="false"
-                                aria-label="날씨 패널 최소화"
-                                title="날씨 패널 최소화"
-                            ></button>
                         </div>
-                    </div>
-                    <div class="live-weather-forecast" id="codex-live-weather-forecast" hidden>
-                        <div class="forecast-card">
-                            <div class="forecast-title">오늘 (KST)</div>
-                            <div class="forecast-value" id="codex-weather-today">불러오는 중...</div>
-                        </div>
-                        <div class="forecast-card">
-                            <div class="forecast-title">내일 (KST)</div>
-                            <div class="forecast-value" id="codex-weather-tomorrow">불러오는 중...</div>
-                        </div>
-                        <div class="forecast-card">
-                            <div class="forecast-title">Codex 서버 디렉터리</div>
-                            <div class="forecast-value" id="codex-server-directory">{{ server_directory_name }}</div>
-                            <div class="forecast-subvalue">{{ server_directory_path }}</div>
+                        <div class="live-weather-forecast" id="codex-live-weather-forecast">
+                            <div class="forecast-card">
+                                <div class="forecast-title">오늘 (KST)</div>
+                                <div class="forecast-value" id="codex-weather-today">불러오는 중...</div>
+                            </div>
+                            <div class="forecast-card">
+                                <div class="forecast-title">내일 (KST)</div>
+                                <div class="forecast-value" id="codex-weather-tomorrow">불러오는 중...</div>
+                            </div>
+                            <div class="forecast-card">
+                                <div class="forecast-title">Codex 서버 디렉터리</div>
+                                <div class="forecast-value" id="codex-server-directory">{{ server_directory_name }}</div>
+                                <div class="forecast-subvalue" id="codex-server-directory-path">{{ server_directory_path }}</div>
+                            </div>
                         </div>
                     </div>
                 </section>

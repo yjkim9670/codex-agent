@@ -428,44 +428,28 @@ body {
 }
 
 .live-weather-panel {
-    padding: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    gap: 12px;
+    padding-top: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
     overflow: hidden;
 }
 
-.live-weather-top {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 6px;
+.live-weather-header {
+    min-height: var(--icon-button-size);
+}
+
+.live-weather-title {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--icon-button-size);
 }
 
 .live-weather-actions {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: var(--icon-button-size);
-    padding: 6px 3px 0 0;
-    justify-self: end;
-    align-self: start;
     white-space: nowrap;
-}
-
-.live-weather-toggle {
-    width: 100%;
-    border: none;
-    background: transparent;
-    color: var(--text-primary);
-    padding: 10px 3px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
-    text-align: left;
-    cursor: pointer;
-    min-height: 0;
 }
 
 .live-weather-permission {
@@ -475,132 +459,44 @@ body {
     background-size: 15px 15px;
 }
 
-.live-weather-permission,
-.live-weather-compact {
-    border: 1px solid var(--border);
-    background-color: var(--surface-muted);
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
-}
-
-.live-weather-permission:hover {
-    background-color: var(--surface-raised);
-    border-color: var(--accent);
-}
-
-.live-weather-permission.icon-only,
-.live-weather-compact.icon-only {
-    width: var(--icon-button-size);
-    min-width: var(--icon-button-size);
-    height: var(--icon-button-size);
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+.live-weather-permission.btn.icon-only {
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 14px 14px;
-}
-
-.live-weather-permission.icon-only {
     background-size: 16px 16px;
 }
 
 .live-weather-compact-toggle {
     background-image: var(--icon-chevron-down);
-    transform: rotate(0deg);
-    transform-origin: center;
-    transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.2s ease;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
 }
 
-.live-weather-compact-toggle.is-compact {
-    transform: rotate(-90deg);
-}
-
-.live-weather-compact:hover {
-    background-color: var(--surface-raised);
-    border-color: var(--accent);
-}
-
-.live-weather-permission:active,
-.live-weather-compact:active {
-    transform: none;
-}
-
-.live-weather-panel.is-compact .live-weather-divider,
-.live-weather-panel.is-compact .live-weather-current,
-.live-weather-panel.is-compact .live-weather-hint {
-    display: none;
-}
-
-.live-weather-panel.is-compact .live-weather-forecast {
-    display: none;
-}
-
-.live-weather-panel.is-compact {
-    height: var(--sidebar-collapsed-height);
-    min-height: var(--sidebar-collapsed-height);
-    max-height: var(--sidebar-collapsed-height);
-    padding:
-        var(--sidebar-collapsed-pad-top)
-        var(--sidebar-collapsed-pad-right)
-        var(--sidebar-collapsed-pad-bottom)
-        var(--sidebar-collapsed-pad-left);
-    overflow: hidden;
-}
-
-.live-weather-panel.is-compact .live-weather-top {
-    min-height: 100%;
-    height: 100%;
-    align-items: center;
-    gap: 4px;
-}
-
-.live-weather-panel.is-compact .live-weather-actions {
-    align-self: start;
-    min-height: var(--icon-button-size);
-    height: auto;
-    padding: 6px 8px 0 0;
-    gap: 4px;
-}
-
-.live-weather-panel.is-compact .live-weather-toggle {
-    min-height: 100%;
-    height: 100%;
-    padding: 0;
-    gap: 1px;
-    align-items: flex-start;
-    justify-content: center;
-}
-
-.live-weather-panel.is-compact .live-weather-time {
-    min-height: 100%;
+.live-weather-content {
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    gap: 10px;
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+    scrollbar-gutter: stable;
 }
 
-.live-weather-panel.is-compact .live-weather-label {
-    font-size: 10px;
-    line-height: 1.05;
-}
-
-.live-weather-panel.is-compact .live-weather-value {
-    margin-top: 0;
-    font-size: 12px;
-    line-height: 1.15;
+.live-weather-overview {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .live-weather-time,
 .live-weather-current {
     min-width: 0;
     width: 100%;
+}
+
+.live-weather-current {
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
 }
 
 .live-weather-label {
@@ -629,41 +525,52 @@ body {
 }
 
 .live-weather-forecast {
-    border-top: 1px solid var(--border);
-    padding: 10px 3px;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-    gap: 8px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-gutter: stable;
-}
-
-.live-weather-panel:not(.is-compact) .live-weather-toggle {
-    padding:
-        var(--sidebar-collapsed-pad-top)
-        var(--sidebar-collapsed-pad-right)
-        var(--sidebar-collapsed-pad-bottom)
-        var(--sidebar-collapsed-pad-left);
-}
-
-.live-weather-panel:not(.is-compact) .live-weather-actions {
-    padding: var(--sidebar-collapsed-pad-top) var(--sidebar-collapsed-pad-right) 0 0;
-}
-
-.live-weather-panel:not(.is-compact) .live-weather-forecast {
-    padding:
-        var(--sidebar-collapsed-pad-top)
-        var(--sidebar-collapsed-pad-right)
-        var(--sidebar-collapsed-pad-bottom)
-        var(--sidebar-collapsed-pad-left);
+    gap: 10px;
 }
 
 .forecast-card {
     border: 1px solid var(--border);
+    border-radius: var(--radius-md);
     background: var(--surface-muted);
-    padding: 8px;
+    padding: 8px 10px;
     min-width: 0;
+}
+
+.live-weather-panel.is-compact .live-weather-content {
+    display: none;
+}
+
+.live-weather-panel.is-compact {
+    height: var(--sidebar-collapsed-height);
+    max-height: var(--sidebar-collapsed-height);
+    min-height: var(--sidebar-collapsed-height);
+    padding:
+        var(--sidebar-collapsed-pad-top)
+        var(--sidebar-collapsed-pad-right)
+        var(--sidebar-collapsed-pad-bottom)
+        var(--sidebar-collapsed-pad-left);
+    gap: 0;
+    overflow: hidden;
+}
+
+.live-weather-panel.is-compact .live-weather-header {
+    min-height: var(--icon-button-size);
+    height: 100%;
+    margin: 0;
+    align-items: center;
+}
+
+.live-weather-panel.is-compact .live-weather-title {
+    font-size: 12px;
+    line-height: 1.15;
+}
+
+.live-weather-panel.is-compact .live-weather-actions {
+    gap: 4px;
+    align-items: center;
+    min-height: var(--icon-button-size);
 }
 
 .forecast-title {
@@ -2020,7 +1927,7 @@ body {
 .chat-header-fullscreen:disabled,
 .chat-controls-toggle:disabled,
 .live-weather-permission:disabled,
-.live-weather-compact:disabled {
+.live-weather-compact-toggle:disabled {
     opacity: 0.55;
     cursor: not-allowed;
     transform: none;
@@ -2039,7 +1946,7 @@ body {
 .chat-header-fullscreen:focus-visible,
 .chat-controls-toggle:focus-visible,
 .live-weather-permission:focus-visible,
-.live-weather-compact:focus-visible {
+.live-weather-compact-toggle:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
 }
@@ -2058,6 +1965,7 @@ body {
 
 .hover-tooltip {
     position: relative;
+    cursor: help;
 }
 
 .hover-tooltip::after {
@@ -2085,7 +1993,8 @@ body {
 }
 
 .hover-tooltip:hover::after,
-.hover-tooltip:focus-visible::after {
+.hover-tooltip:focus-visible::after,
+.hover-tooltip.is-open::after {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
@@ -2124,25 +2033,17 @@ body {
     }
 
     .live-weather-panel {
-        padding: 0;
+        padding-top: 6px;
+        padding-left: 6px;
+        padding-right: 6px;
+        gap: 10px;
     }
 
-    .live-weather-top {
-        gap: 6px;
-    }
-
-    .live-weather-toggle {
-        padding: 8px 3px;
-        gap: 6px;
-    }
-
-    .live-weather-actions {
-        padding: 6px 3px 0 0;
-        gap: 6px;
+    .live-weather-content {
+        gap: 8px;
     }
 
     .live-weather-forecast {
-        padding: 8px 3px;
         gap: 8px;
     }
 
@@ -2150,26 +2051,6 @@ body {
         padding-left: 6px;
         padding-right: 6px;
         gap: 10px;
-    }
-
-    .live-weather-panel:not(.is-compact) .live-weather-toggle {
-        padding:
-            var(--sidebar-collapsed-pad-top)
-            var(--sidebar-collapsed-pad-right)
-            var(--sidebar-collapsed-pad-bottom)
-            var(--sidebar-collapsed-pad-left);
-    }
-
-    .live-weather-panel:not(.is-compact) .live-weather-actions {
-        padding: var(--sidebar-collapsed-pad-top) var(--sidebar-collapsed-pad-right) 0 0;
-    }
-
-    .live-weather-panel:not(.is-compact) .live-weather-forecast {
-        padding:
-            var(--sidebar-collapsed-pad-top)
-            var(--sidebar-collapsed-pad-right)
-            var(--sidebar-collapsed-pad-bottom)
-            var(--sidebar-collapsed-pad-left);
     }
 
     .sessions:not(.is-collapsed) {
@@ -2266,25 +2147,17 @@ body {
         overflow: hidden;
     }
 
-    .live-weather-top {
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 6px;
+    .live-weather-panel {
+        padding: 10px;
+        gap: 10px;
     }
 
-    .live-weather-actions {
-        justify-content: flex-end;
-        flex-wrap: nowrap;
-        padding: 6px 8px 0 0;
+    .live-weather-content {
+        gap: 8px;
     }
 
-    .live-weather-toggle {
-        padding: 8px 10px;
-        gap: 6px;
-        min-width: 0;
-    }
-
-    .live-weather-divider {
-        display: none;
+    .live-weather-current {
+        padding-top: 6px;
     }
 
     #codex-weather-current {
@@ -2298,6 +2171,7 @@ body {
 
     .live-weather-forecast {
         grid-template-columns: 1fr;
+        gap: 8px;
     }
 
     .toast-layer {
@@ -2550,56 +2424,37 @@ body {
 
     .live-weather-panel.is-compact {
         height: var(--sidebar-collapsed-height);
-        min-height: var(--sidebar-collapsed-height);
         max-height: var(--sidebar-collapsed-height);
+        min-height: var(--sidebar-collapsed-height);
         padding:
             var(--sidebar-collapsed-pad-top)
             var(--sidebar-collapsed-pad-right)
             var(--sidebar-collapsed-pad-bottom)
             var(--sidebar-collapsed-pad-left);
+        gap: 0;
         overflow: hidden;
     }
 
-    .live-weather-panel.is-compact .live-weather-top {
-        min-height: 100%;
+    .live-weather-panel.is-compact .live-weather-header {
+        min-height: var(--icon-button-size);
         height: 100%;
+        margin: 0;
         align-items: center;
-        gap: 4px;
+    }
+
+    .live-weather-panel.is-compact .live-weather-title {
+        font-size: 12px;
+        line-height: 1.15;
     }
 
     .live-weather-panel.is-compact .live-weather-actions {
-        align-self: start;
-        min-height: var(--icon-button-size);
-        height: auto;
-        padding: 6px 8px 0 0;
         gap: 4px;
+        align-items: center;
+        min-height: var(--icon-button-size);
     }
 
-    .live-weather-panel.is-compact .live-weather-toggle {
-        min-height: 100%;
-        height: 100%;
-        padding: 0;
-        gap: 1px;
-        align-items: flex-start;
-        justify-content: center;
-    }
-
-    .live-weather-panel.is-compact .live-weather-time {
-        min-height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-
-    .live-weather-panel.is-compact .live-weather-label {
-        font-size: 10px;
-        line-height: 1.05;
-    }
-
-    .live-weather-panel.is-compact .live-weather-value {
-        margin-top: 0;
-        font-size: 12px;
-        line-height: 1.15;
+    .live-weather-panel.is-compact .live-weather-content {
+        display: none;
     }
 
     .session-list {

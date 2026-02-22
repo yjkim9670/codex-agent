@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=44">
+    <link rel="stylesheet" href="/static/css/app.css?v=52">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -36,6 +36,7 @@
                     {% endif %}
                     <button class="btn ghost icon-only git-action-submit" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit"></button>
                     <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push"></button>
+                    <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
                 </div>
             </div>
         </header>
@@ -102,7 +103,6 @@
                         <span>Sessions</span>
                         <div class="sessions-actions">
                             <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
-                            <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
                             <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
                         </div>
                     </div>

@@ -540,10 +540,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', event => {
             syncSessionsLayout(event.matches);
+            syncLiveWeatherLayout(event.matches);
         });
     } else if (typeof mobileMedia.addListener === 'function') {
         mobileMedia.addListener(event => {
             syncSessionsLayout(event.matches);
+            syncLiveWeatherLayout(event.matches);
         });
     }
 
@@ -626,9 +628,7 @@ function initializeLiveWeatherPanel(mobileMedia) {
     const permissionToggle = document.getElementById('codex-weather-permission');
     if (!panel || !toggle || !compactToggle || !permissionToggle) return;
 
-    const defaultCompact = Boolean(mobileMedia?.matches);
-    const initialCompact = readLiveWeatherCompactPreference(defaultCompact);
-    setLiveWeatherCompact(initialCompact, { persist: false });
+    syncLiveWeatherLayout(Boolean(mobileMedia?.matches));
     setLiveWeatherExpanded(false);
     updateLiveDatetime();
     if (state.liveClockTimer) {
@@ -696,6 +696,7 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     compactToggle.classList.toggle('is-compact', isCompact);
     compactToggle.setAttribute('aria-label', compactLabel);
     compactToggle.setAttribute('title', compactLabel);
+    syncSidebarStackLayout();
     if (isCompact) {
         setLiveWeatherExpanded(false);
     }
@@ -715,6 +716,15 @@ function setLiveWeatherExpanded(expanded) {
     const isExpanded = Boolean(expanded);
     toggle.setAttribute('aria-expanded', String(isExpanded));
     forecast.hidden = !isExpanded;
+}
+
+function syncLiveWeatherLayout(isMobile) {
+    if (!isMobile) {
+        setLiveWeatherCompact(false, { persist: false });
+        return;
+    }
+    const compact = readLiveWeatherCompactPreference(true);
+    setLiveWeatherCompact(compact, { persist: false });
 }
 
 const KST_FIXED_HOLIDAYS = Object.freeze([
@@ -845,6 +855,27 @@ function formatKstNow() {
     return `${datePart} (${weekday}) ${timePart}`;
 }
 
+function setHoverTooltip(element, text) {
+    if (!element) return;
+    const resolved = text == null ? '' : String(text);
+    if (resolved.trim()) {
+        element.classList.add('hover-tooltip');
+        element.setAttribute('data-tooltip', resolved);
+        element.setAttribute('title', resolved);
+    } else {
+        element.classList.remove('hover-tooltip');
+        element.removeAttribute('data-tooltip');
+        element.removeAttribute('title');
+    }
+}
+
+function setTextWithTooltip(element, text) {
+    if (!element) return;
+    const resolved = text == null ? '' : String(text);
+    element.textContent = resolved;
+    setHoverTooltip(element, resolved);
+}
+
 async function loadLiveWeatherData({ silent = false, positionOverride = null } = {}) {
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
@@ -854,7 +885,7 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
 
     if (!silent) {
         locationElement.textContent = '위치 확인 중...';
-        currentElement.textContent = '날씨 불러오는 중...';
+        setTextWithTooltip(currentElement, '날씨 불러오는 중...');
         todayElement.textContent = '불러오는 중...';
         tomorrowElement.textContent = '불러오는 중...';
     }
@@ -891,7 +922,7 @@ async function requestWeatherPermission({ silentFailure = false, skipPermissionC
         locationElement.textContent = '위치 권한 요청 중...';
     }
     if (currentElement) {
-        currentElement.textContent = '브라우저 권한 응답 대기 중...';
+        setTextWithTooltip(currentElement, '브라우저 권한 응답 대기 중...');
     }
     try {
         if (!skipPermissionCheck) {
@@ -1152,7 +1183,10 @@ function renderWeatherSummary({ locationName, weather }) {
     const weatherText = formatWeatherCode(current.weather_code, current.is_day === 1);
 
     locationElement.textContent = locationName || '알 수 없는 위치';
-    currentElement.textContent = `현재 ${currentTemp} · ${weatherText} · 체감 ${feelsLike} · 습도 ${humidity} · 바람 ${wind}`;
+    setTextWithTooltip(
+        currentElement,
+        `현재 ${currentTemp} · ${weatherText} · 체감 ${feelsLike} · 습도 ${humidity} · 바람 ${wind}`
+    );
     todayElement.textContent = renderDailyForecast(weather?.daily, 0);
     tomorrowElement.textContent = renderDailyForecast(weather?.daily, 1);
 }
@@ -1164,7 +1198,7 @@ function renderWeatherError(locationText, detailText) {
     const tomorrowElement = document.getElementById('codex-weather-tomorrow');
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
     locationElement.textContent = locationText;
-    currentElement.textContent = detailText;
+    setTextWithTooltip(currentElement, detailText);
     todayElement.textContent = '--';
     tomorrowElement.textContent = '--';
 }
@@ -1233,6 +1267,17 @@ function updateSessionsToggleButton(toggle, collapsed) {
     toggle.setAttribute('title', isCollapsed ? 'Expand sessions panel' : 'Collapse sessions panel');
 }
 
+function syncSidebarStackLayout() {
+    const stack = document.querySelector('.sidebar-stack');
+    if (!stack) return;
+    const weatherPanel = document.getElementById('codex-live-weather-panel');
+    const sessionsPanel = document.querySelector('.sessions');
+    const weatherCompact = Boolean(weatherPanel?.classList.contains('is-compact'));
+    const sessionsCollapsed = Boolean(sessionsPanel?.classList.contains('is-collapsed'));
+    stack.classList.toggle('is-weather-compact', weatherCompact);
+    stack.classList.toggle('is-sessions-collapsed', sessionsCollapsed);
+}
+
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
@@ -1240,6 +1285,7 @@ function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     sessionsPanel.classList.toggle('is-collapsed', collapsed);
     sessionsToggle.setAttribute('aria-expanded', String(!collapsed));
     updateSessionsToggleButton(sessionsToggle, collapsed);
+    syncSidebarStackLayout();
     if (persist) {
         try {
             localStorage.setItem(SESSION_COLLAPSE_KEY, collapsed ? '1' : '0');
@@ -1273,9 +1319,7 @@ function syncSessionsLayout(isMobile) {
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
     if (!isMobile) {
-        sessionsPanel.classList.remove('is-collapsed');
-        sessionsToggle.setAttribute('aria-expanded', 'true');
-        updateSessionsToggleButton(sessionsToggle, false);
+        setSessionsCollapsed(false, { persist: false });
         return;
     }
     let collapsed = true;
@@ -2689,7 +2733,10 @@ function renderSessions() {
 
         const title = document.createElement('div');
         title.className = 'session-title';
-        title.textContent = session.title || 'New session';
+        const sessionTitle = session.title || 'New session';
+        title.textContent = sessionTitle;
+        setHoverTooltip(title, sessionTitle);
+        selectBtn.setAttribute('title', sessionTitle);
 
         const meta = document.createElement('div');
         meta.className = 'session-meta';

@@ -331,6 +331,54 @@ body {
     font-weight: 600;
 }
 
+.branch-overlay-stage-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.branch-overlay-stage-btn {
+    min-height: 30px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+.branch-overlay-selection {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+}
+
+.branch-overlay-commit {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.branch-overlay-commit label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.branch-overlay-commit input {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    height: 34px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+
+.branch-overlay-commit input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+}
+
 .branch-overlay-loading,
 .branch-overlay-empty {
     font-size: 12px;
@@ -363,6 +411,14 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.branch-overlay-file-check {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    flex: 0 0 auto;
 }
 
 .branch-overlay-status {
@@ -690,10 +746,10 @@ body {
     padding: 6px 12px;
 }
 
-#codex-git-submit,
-#codex-branch-overlay-submit,
-#codex-git-sync,
-#codex-branch-overlay-sync {
+#codex-git-commit,
+#codex-branch-overlay-commit,
+#codex-git-push,
+#codex-branch-overlay-push {
     background-repeat: no-repeat;
     background-position: center;
     background-size: 15px 15px;
@@ -718,33 +774,34 @@ body {
     cursor: wait;
 }
 
-.git-action-submit {
+.git-action-commit {
     background-image: var(--icon-check);
 }
 
-.btn.ghost.git-action-submit.is-ready {
+.btn.ghost.git-action-commit.is-ready {
     color: #188a42;
     border-color: rgba(24, 138, 66, 0.4);
     background-color: rgba(24, 138, 66, 0.08);
     background-image: var(--icon-check-ready);
 }
 
-.btn.ghost.git-action-submit.is-ready:hover {
+.btn.ghost.git-action-commit.is-ready:hover {
     background-color: rgba(24, 138, 66, 0.16);
 }
 
-#codex-git-sync,
-#codex-branch-overlay-sync {
+.git-action-push,
+#codex-git-push,
+#codex-branch-overlay-push {
     background-image: var(--icon-sync);
 }
 
-[data-theme="dark"] .btn.ghost.git-action-submit.is-ready {
+[data-theme="dark"] .btn.ghost.git-action-commit.is-ready {
     color: #cfe2d6;
     border-color: rgba(150, 188, 169, 0.45);
     background-color: rgba(90, 125, 108, 0.28);
 }
 
-[data-theme="dark"] .btn.ghost.git-action-submit.is-ready:hover {
+[data-theme="dark"] .btn.ghost.git-action-commit.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
 }
 

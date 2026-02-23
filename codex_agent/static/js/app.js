@@ -66,10 +66,6 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
-const GIT_ACTION_LABELS = Object.freeze({
-    submit: 'git commit',
-    sync: 'git fetch + push'
-});
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
@@ -85,6 +81,8 @@ let gitBranchStatusCache = {
 let gitBranchToastAt = 0;
 let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
+let gitOverlaySelectedFiles = new Set();
+let gitOverlaySelectionTouched = false;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -404,13 +402,16 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
     const gitBranch = document.getElementById('codex-git-branch');
-    const gitSubmitBtn = document.getElementById('codex-git-submit');
-    const gitSyncBtn = document.getElementById('codex-git-sync');
-    const branchOverlaySubmitBtn = document.getElementById('codex-branch-overlay-submit');
-    const branchOverlaySyncBtn = document.getElementById('codex-branch-overlay-sync');
+    const gitCommitBtn = document.getElementById('codex-git-commit');
+    const gitPushBtn = document.getElementById('codex-git-push');
+    const branchOverlayCommitBtn = document.getElementById('codex-branch-overlay-commit');
+    const branchOverlayPushBtn = document.getElementById('codex-branch-overlay-push');
+    const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
+    const branchOverlayStageNoneBtn = document.getElementById('codex-branch-overlay-stage-none');
+    const branchOverlayCommitMessageInput = document.getElementById('codex-branch-overlay-commit-message');
 
-    // Reset submit highlight until fresh git status arrives.
-    updateGitSubmitButtonState({ count: 0, changedFiles: [] });
+    // Reset commit highlight until fresh git status arrives.
+    updateGitCommitButtonState({ count: 0, changedFiles: [] });
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -431,25 +432,46 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (gitSubmitBtn) {
-        gitSubmitBtn.addEventListener('click', () => {
-            void handleGitAction('submit', gitSubmitBtn);
+    if (gitCommitBtn) {
+        gitCommitBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openGitBranchOverlay();
         });
     }
 
-    if (gitSyncBtn) {
-        gitSyncBtn.addEventListener('click', () => {
-            void handleGitAction('sync', gitSyncBtn);
+    if (gitPushBtn) {
+        gitPushBtn.addEventListener('click', () => {
+            void handleGitPush(gitPushBtn);
         });
     }
-    if (branchOverlaySubmitBtn) {
-        branchOverlaySubmitBtn.addEventListener('click', () => {
-            void handleGitAction('submit', branchOverlaySubmitBtn);
+    if (branchOverlayCommitBtn) {
+        branchOverlayCommitBtn.addEventListener('click', () => {
+            void handleGitCommit(branchOverlayCommitBtn);
         });
     }
-    if (branchOverlaySyncBtn) {
-        branchOverlaySyncBtn.addEventListener('click', () => {
-            void handleGitAction('sync', branchOverlaySyncBtn);
+    if (branchOverlayPushBtn) {
+        branchOverlayPushBtn.addEventListener('click', () => {
+            void handleGitPush(branchOverlayPushBtn);
+        });
+    }
+    if (branchOverlayStageAllBtn) {
+        branchOverlayStageAllBtn.addEventListener('click', () => {
+            setGitOverlaySelectionState(true);
+        });
+    }
+    if (branchOverlayStageNoneBtn) {
+        branchOverlayStageNoneBtn.addEventListener('click', () => {
+            setGitOverlaySelectionState(false);
+        });
+    }
+    if (branchOverlayCommitMessageInput) {
+        branchOverlayCommitMessageInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                if (branchOverlayCommitBtn) {
+                    void handleGitCommit(branchOverlayCommitBtn);
+                }
+            }
         });
     }
 
@@ -2528,9 +2550,9 @@ function getGitChangedFilesCountFromStatus(status) {
     return normalizeGitChangedFiles(status.changedFiles).length;
 }
 
-function updateGitSubmitButtonState(status) {
+function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
-    document.querySelectorAll('.git-action-submit').forEach(button => {
+    document.querySelectorAll('.git-action-commit').forEach(button => {
         button.classList.toggle('is-ready', hasChanges);
     });
 }
@@ -2553,6 +2575,12 @@ function getGitBranchOverlayElements() {
         overlay,
         subtitle: document.getElementById('codex-branch-overlay-subtitle'),
         meta: document.getElementById('codex-branch-overlay-meta'),
+        selection: document.getElementById('codex-branch-overlay-selection'),
+        stageAllBtn: document.getElementById('codex-branch-overlay-stage-all'),
+        stageNoneBtn: document.getElementById('codex-branch-overlay-stage-none'),
+        commitMessage: document.getElementById('codex-branch-overlay-commit-message'),
+        commitBtn: document.getElementById('codex-branch-overlay-commit'),
+        pushBtn: document.getElementById('codex-branch-overlay-push'),
         loading: document.getElementById('codex-branch-overlay-loading'),
         empty: document.getElementById('codex-branch-overlay-empty'),
         list: document.getElementById('codex-branch-overlay-list')
@@ -2570,6 +2598,18 @@ function setGitBranchOverlayLoading(isLoading) {
     }
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
+    }
+    if (elements.commitBtn) {
+        elements.commitBtn.disabled = Boolean(isLoading);
+    }
+    if (elements.stageAllBtn) {
+        elements.stageAllBtn.disabled = Boolean(isLoading);
+    }
+    if (elements.stageNoneBtn) {
+        elements.stageNoneBtn.disabled = Boolean(isLoading);
+    }
+    if (elements.selection) {
+        elements.selection.textContent = isLoading ? '선택 -' : elements.selection.textContent;
     }
 }
 
@@ -2609,6 +2649,59 @@ function getGitStatusBadgeClass(status) {
     }
 }
 
+function syncGitOverlaySelection(files) {
+    const normalizedFiles = Array.isArray(files) ? files : [];
+    const validPaths = new Set(normalizedFiles.map(file => file.path));
+    if (!gitOverlaySelectionTouched) {
+        gitOverlaySelectedFiles = new Set(normalizedFiles.map(file => file.path));
+        return;
+    }
+    const next = new Set();
+    validPaths.forEach(path => {
+        if (gitOverlaySelectedFiles.has(path)) {
+            next.add(path);
+        }
+    });
+    gitOverlaySelectedFiles = next;
+}
+
+function updateGitOverlaySelectionSummary(totalCount = 0) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    const selectedCount = gitOverlaySelectedFiles.size;
+    if (elements.selection) {
+        elements.selection.textContent = `선택 ${selectedCount}개 / 전체 ${totalCount}개`;
+    }
+    if (elements.commitBtn) {
+        elements.commitBtn.disabled = totalCount === 0 || selectedCount === 0;
+    }
+    if (elements.stageAllBtn) {
+        elements.stageAllBtn.disabled = totalCount === 0;
+    }
+    if (elements.stageNoneBtn) {
+        elements.stageNoneBtn.disabled = totalCount === 0;
+    }
+}
+
+function setGitOverlaySelectionState(selectAll) {
+    const files = normalizeGitChangedFiles(gitBranchStatusCache.changedFiles);
+    const selected = new Set();
+    if (selectAll) {
+        files.forEach(file => selected.add(file.path));
+    }
+    gitOverlaySelectedFiles = selected;
+    gitOverlaySelectionTouched = true;
+
+    const elements = getGitBranchOverlayElements();
+    if (elements?.list) {
+        elements.list.querySelectorAll('input.branch-overlay-file-check').forEach(checkbox => {
+            const path = checkbox.value || '';
+            checkbox.checked = gitOverlaySelectedFiles.has(path);
+        });
+    }
+    updateGitOverlaySelectionSummary(files.length);
+}
+
 function renderGitBranchOverlay(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
@@ -2624,10 +2717,26 @@ function renderGitBranchOverlay(status) {
             ? `변경 파일 ${count}개`
             : '변경 파일 수를 불러올 수 없습니다.';
     }
+    syncGitOverlaySelection(files);
     if (elements.list) {
         elements.list.innerHTML = '';
         files.forEach(file => {
             const item = document.createElement('li');
+            const check = document.createElement('input');
+            check.type = 'checkbox';
+            check.className = 'branch-overlay-file-check';
+            check.value = file.path;
+            check.checked = gitOverlaySelectedFiles.has(file.path);
+            check.addEventListener('change', () => {
+                gitOverlaySelectionTouched = true;
+                if (check.checked) {
+                    gitOverlaySelectedFiles.add(file.path);
+                } else {
+                    gitOverlaySelectedFiles.delete(file.path);
+                }
+                updateGitOverlaySelectionSummary(files.length);
+            });
+            item.appendChild(check);
             if (file.status) {
                 const badge = document.createElement('span');
                 badge.className = `branch-overlay-status ${getGitStatusBadgeClass(file.status)}`.trim();
@@ -2648,6 +2757,7 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 정보를 불러올 수 없습니다.';
         elements.empty.classList.toggle('is-hidden', files.length !== 0);
     }
+    updateGitOverlaySelectionSummary(files.length);
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
@@ -2661,6 +2771,11 @@ function isGitBranchOverlayOpen() {
 function openGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
+    gitOverlaySelectionTouched = false;
+    gitOverlaySelectedFiles = new Set();
+    if (elements.commitMessage) {
+        elements.commitMessage.value = '';
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
@@ -2729,7 +2844,7 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     if (branchElement) {
         applyGitBranchStatusToElement(branchElement, status);
     }
-    updateGitSubmitButtonState(status);
+    updateGitCommitButtonState(status);
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }
@@ -2765,34 +2880,88 @@ async function showGitBranchInfoToast(element) {
     showToast(`브랜치: ${branchName} · ${countText}`, { tone: 'success', durationMs: 2400 });
 }
 
-async function handleGitAction(action, button) {
-    const label = GIT_ACTION_LABELS[action] || `git ${action}`;
-    const busyLabel = action === 'submit' ? 'Committing...' : 'Syncing...';
-    setGitButtonBusy(button, true, busyLabel);
+async function handleGitCommit(button) {
+    const selectedFiles = Array.from(gitOverlaySelectedFiles);
+    if (!selectedFiles.length) {
+        showToast('커밋할 파일을 먼저 선택해주세요.', { tone: 'error', durationMs: 3400 });
+        return;
+    }
+
+    const elements = getGitBranchOverlayElements();
+    const commitMessage = elements?.commitMessage?.value?.trim() || '';
+    const commitButton = elements?.commitBtn;
+    setGitButtonBusy(button, true, 'Committing...');
+    if (commitButton && commitButton !== button) {
+        setGitButtonBusy(commitButton, true, 'Committing...');
+    }
     try {
-        let result = null;
-        try {
-            result = await fetchJson(`/api/codex/git/${action}`, { method: 'POST' });
-        } catch (error) {
-            const message = normalizeError(error, '');
-            if (message.toLowerCase().includes('method not allowed')) {
-                const ts = Date.now();
-                result = await fetchJson(`/api/codex/git/${action}?confirm=1&ts=${ts}`, {
-                    method: 'GET',
-                    cache: 'no-store'
-                });
-            } else {
-                throw error;
-            }
+        await fetchJson('/api/codex/git/stage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                files: selectedFiles,
+                replace: true
+            })
+        });
+        const result = await fetchJson('/api/codex/git/commit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: commitMessage
+            })
+        });
+        const commitHash = typeof result?.commit_hash === 'string' && result.commit_hash.trim()
+            ? ` (${result.commit_hash.trim()})`
+            : '';
+        const commitSummary = summarizeGitOutput(result?.stdout || result?.stderr);
+        const commitSuffix = commitSummary ? `: ${commitSummary}` : '';
+        showToast(`git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
+        if (elements?.commitMessage) {
+            elements.commitMessage.value = '';
         }
-        const summary = summarizeGitOutput(result?.stdout || result?.stderr);
-        const suffix = summary ? `: ${summary}` : '';
-        showToast(`${label} 완료${suffix}`, { tone: 'success', durationMs: 3200 });
+        gitOverlaySelectionTouched = false;
+        gitOverlaySelectedFiles = new Set();
     } catch (error) {
-        const message = normalizeError(error, `${label} 작업에 실패했습니다.`);
-        showToast(`${label} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        const message = normalizeError(error, 'git commit 작업에 실패했습니다.');
+        showToast(`git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         setGitButtonBusy(button, false);
+        if (commitButton && commitButton !== button) {
+            setGitButtonBusy(commitButton, false);
+        }
+        void refreshGitBranchStatus({ force: true, updateOverlay: true });
+    }
+}
+
+async function handleGitPush(button) {
+    const confirmed = window.confirm('현재 브랜치를 원격 저장소로 push 하시겠습니까?');
+    if (!confirmed) {
+        return;
+    }
+
+    const elements = getGitBranchOverlayElements();
+    const overlayPushButton = elements?.pushBtn;
+    setGitButtonBusy(button, true, 'Pushing...');
+    if (overlayPushButton && overlayPushButton !== button) {
+        setGitButtonBusy(overlayPushButton, true, 'Pushing...');
+    }
+    try {
+        const result = await fetchJson('/api/codex/git/push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: true })
+        });
+        const summary = summarizeGitOutput(result?.stdout || result?.stderr);
+        const suffix = summary ? `: ${summary}` : '';
+        showToast(`git push 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+    } catch (error) {
+        const message = normalizeError(error, 'git push 작업에 실패했습니다.');
+        showToast(`git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+    } finally {
+        setGitButtonBusy(button, false);
+        if (overlayPushButton && overlayPushButton !== button) {
+            setGitButtonBusy(overlayPushButton, false);
+        }
         void refreshGitBranchStatus({ force: true, updateOverlay: true });
     }
 }

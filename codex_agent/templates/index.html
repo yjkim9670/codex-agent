@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=60">
+    <link rel="stylesheet" href="/static/css/app.css?v=61">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -34,8 +34,8 @@
                             data-branch-full="{{ current_branch_name }}"
                         >{{ current_branch_name }}</span>
                     {% endif %}
-                    <button class="btn ghost icon-only git-action-submit" type="button" id="codex-git-submit" aria-label="Run git commit" title="Run git commit"></button>
-                    <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Run git fetch and push" title="Run git fetch and push"></button>
+                    <button class="btn ghost icon-only git-action-commit" type="button" id="codex-git-commit" aria-label="Stage files and commit" title="Stage files and commit"></button>
+                    <button class="btn ghost icon-only git-action-push" type="button" id="codex-git-push" aria-label="Push current branch" title="Push current branch"></button>
                     <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
                 </div>
             </div>
@@ -238,16 +238,31 @@
             </div>
             <div class="branch-overlay-body">
                 <div class="branch-overlay-meta" id="codex-branch-overlay-meta">불러오는 중...</div>
+                <div class="branch-overlay-stage-tools">
+                    <button class="btn secondary branch-overlay-stage-btn" type="button" id="codex-branch-overlay-stage-all">전체 선택</button>
+                    <button class="btn ghost branch-overlay-stage-btn" type="button" id="codex-branch-overlay-stage-none">선택 해제</button>
+                    <div class="branch-overlay-selection" id="codex-branch-overlay-selection">선택 0개</div>
+                </div>
+                <div class="branch-overlay-commit">
+                    <label for="codex-branch-overlay-commit-message">Commit message (선택)</label>
+                    <input
+                        id="codex-branch-overlay-commit-message"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="비워두면 자동 메시지가 생성됩니다."
+                        maxlength="240"
+                    >
+                </div>
                 <div class="branch-overlay-loading" id="codex-branch-overlay-loading">변경 파일을 불러오는 중...</div>
                 <div class="branch-overlay-empty is-hidden" id="codex-branch-overlay-empty">변경 파일이 없습니다.</div>
                 <ul class="branch-overlay-list is-hidden" id="codex-branch-overlay-list"></ul>
             </div>
             <div class="branch-overlay-footer">
-                <button class="btn ghost icon-only git-action-submit" type="button" id="codex-branch-overlay-submit" aria-label="Run git commit" title="Run git commit">
-                    <span class="sr-only">Commit</span>
+                <button class="btn ghost icon-only git-action-commit" type="button" id="codex-branch-overlay-commit" aria-label="Commit staged files" title="Commit staged files">
+                    <span class="sr-only">Commit staged files</span>
                 </button>
-                <button class="btn ghost icon-only git-action-sync" type="button" id="codex-branch-overlay-sync" aria-label="Run git fetch and push" title="Run git fetch and push">
-                    <span class="sr-only">Fetch/Push</span>
+                <button class="btn ghost icon-only git-action-push" type="button" id="codex-branch-overlay-push" aria-label="Push current branch" title="Push current branch">
+                    <span class="sr-only">Push current branch</span>
                 </button>
                 <button class="btn ghost icon-only branch-overlay-refresh" type="button" id="codex-branch-overlay-refresh" aria-label="Refresh" title="Refresh">
                     <span class="sr-only">Refresh</span>
@@ -257,6 +272,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=46"></script>
+    <script src="/static/js/app.js?v=47"></script>
 </body>
 </html>

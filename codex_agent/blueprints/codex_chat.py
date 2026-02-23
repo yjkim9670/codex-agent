@@ -230,9 +230,14 @@ def codex_stream_stop(stream_id):
 
 @bp.route('/api/codex/git/<action>', methods=['POST', 'GET'])
 def codex_git_action(action):
-    if request.method == 'GET' and request.args.get('confirm') != '1':
-        return jsonify({'error': 'GET 요청은 confirm=1이 필요합니다.'}), 400
-    result = run_git_action(action)
+    payload = request.get_json(silent=True) or {}
+    if request.method == 'GET':
+        if action != 'push' or request.args.get('confirm') != '1':
+            return jsonify({'error': 'GET 요청은 push + confirm=1 조합만 허용됩니다.'}), 400
+        payload = {'confirm': True}
+    if not isinstance(payload, dict):
+        payload = {}
+    result = run_git_action(action, payload=payload)
     if not isinstance(result, dict):
         return jsonify({'error': 'git 작업 결과를 확인할 수 없습니다.'}), 500
     if result.get('error'):

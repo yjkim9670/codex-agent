@@ -2,12 +2,14 @@
 
 import base64
 import json
+import math
 import re
 import subprocess
 import threading
 import time
 import uuid
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 from .. import state
@@ -34,6 +36,26 @@ _ROLE_LABELS = {
     'system': 'System',
     'error': 'Error'
 }
+
+_TOKEN_COUNT_KEYS = (
+    'total_tokens',
+    'token_count',
+    'tokens',
+)
+
+_TOKEN_USAGE_KEYS = (
+    'token_usage',
+    'usage',
+    'total_token_usage',
+    'last_token_usage',
+)
+
+_TOKEN_PART_KEYS = (
+    'input_tokens',
+    'cached_input_tokens',
+    'output_tokens',
+    'reasoning_output_tokens',
+)
 
 
 def _load_data():
@@ -235,6 +257,111 @@ def update_settings(model=None, reasoning_effort=None):
         return next_settings
 
 
+def _coerce_non_negative_int(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return int(numeric)
+
+
+def _coerce_int(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return int(numeric)
+
+
+def _coerce_float(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _normalize_used_percent(value):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    if numeric < 0:
+        return None
+    # Some payloads report 0~1 ratio while others report 0~100 percentage.
+    if 0 < numeric < 1:
+        numeric *= 100
+    return max(0.0, min(100.0, numeric))
+
+
+def _extract_token_count_from_usage(value):
+    if not isinstance(value, dict):
+        return None
+    total = _coerce_non_negative_int(value.get('total_tokens'))
+    if total is not None:
+        return total
+    parts = []
+    for key in _TOKEN_PART_KEYS:
+        count = _coerce_non_negative_int(value.get(key))
+        if count is not None:
+            parts.append(count)
+    if not parts:
+        return None
+    return sum(parts)
+
+
+def _estimate_tokens_from_text(text):
+    if not isinstance(text, str):
+        text = '' if text is None else str(text)
+    normalized = ' '.join(text.split())
+    if not normalized:
+        return 0
+    # Lightweight approximation for GPT-family tokenization.
+    return max(1, (len(normalized) + 3) // 4)
+
+
+def _estimate_message_tokens(message):
+    if not isinstance(message, dict):
+        return 0
+    for key in _TOKEN_COUNT_KEYS:
+        count = _coerce_non_negative_int(message.get(key))
+        if count is not None:
+            return count
+    for key in _TOKEN_USAGE_KEYS:
+        count = _extract_token_count_from_usage(message.get(key))
+        if count is not None:
+            return count
+    parts = []
+    for key in _TOKEN_PART_KEYS:
+        count = _coerce_non_negative_int(message.get(key))
+        if count is not None:
+            parts.append(count)
+    if parts:
+        return sum(parts)
+    return _estimate_tokens_from_text(message.get('content'))
+
+
+def _estimate_session_tokens(session):
+    messages = session.get('messages', []) if isinstance(session, dict) else []
+    if not isinstance(messages, list):
+        return 0
+    total = 0
+    for message in messages:
+        total += _estimate_message_tokens(message)
+    return total
+
+
 def _extract_limits(rate_limits):
     if not isinstance(rate_limits, dict):
         return None
@@ -244,9 +371,13 @@ def _extract_limits(rate_limits):
     for entry in (primary, secondary):
         if not isinstance(entry, dict):
             continue
+        used_percent = _normalize_used_percent(
+            entry.get('used_percent', entry.get('usedPercentage'))
+        )
+        window_minutes = _coerce_int(entry.get('window_minutes'))
         entries.append({
-            'used_percent': entry.get('used_percent'),
-            'window_minutes': entry.get('window_minutes'),
+            'used_percent': used_percent,
+            'window_minutes': window_minutes,
             'resets_at': entry.get('resets_at')
         })
     five_hour = None
@@ -266,8 +397,24 @@ def _extract_limits(rate_limits):
     }
 
 
+def _parse_event_timestamp(value):
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith('Z'):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(normalized).timestamp()
+    except Exception:
+        return None
+
+
 def _read_rate_limits_from_log(path):
     last_limits = None
+    last_timestamp = None
+    fallback_order = 0
     try:
         with path.open('r', encoding='utf-8') as file_handle:
             for line in file_handle:
@@ -278,13 +425,20 @@ def _read_rate_limits_from_log(path):
                 except json.JSONDecodeError:
                     continue
                 rate_limits = payload.get('payload', {}).get('rate_limits')
-                if rate_limits:
+                if not rate_limits:
+                    continue
+                event_timestamp = _parse_event_timestamp(payload.get('timestamp'))
+                if event_timestamp is None:
+                    fallback_order += 1
+                    event_timestamp = float(fallback_order)
+                if last_timestamp is None or event_timestamp >= last_timestamp:
                     last_limits = rate_limits
+                    last_timestamp = event_timestamp
     except FileNotFoundError:
-        return None
+        return None, None
     except Exception:
-        return None
-    return last_limits
+        return None, None
+    return last_limits, last_timestamp
 
 
 def _decode_jwt_payload(token):
@@ -339,12 +493,24 @@ def get_usage_summary():
         )
     except Exception:
         return {'five_hour': None, 'weekly': None, 'account_name': account_name}
-    for path in files[:30]:
-        rate_limits = _read_rate_limits_from_log(path)
+    best_limits = None
+    best_timestamp = None
+    for path in files[:80]:
+        rate_limits, event_timestamp = _read_rate_limits_from_log(path)
         limits = _extract_limits(rate_limits)
-        if limits and (limits.get('five_hour') or limits.get('weekly')):
-            limits['account_name'] = account_name
-            return limits
+        if not limits or not (limits.get('five_hour') or limits.get('weekly')):
+            continue
+        if event_timestamp is None:
+            try:
+                event_timestamp = path.stat().st_mtime
+            except Exception:
+                event_timestamp = 0.0
+        if best_timestamp is None or event_timestamp >= best_timestamp:
+            best_limits = limits
+            best_timestamp = event_timestamp
+    if best_limits and (best_limits.get('five_hour') or best_limits.get('weekly')):
+        best_limits['account_name'] = account_name
+        return best_limits
     return {'five_hour': None, 'weekly': None, 'account_name': account_name}
 
 
@@ -386,7 +552,8 @@ def list_sessions():
             'title': session.get('title') or 'New session',
             'created_at': session.get('created_at'),
             'updated_at': session.get('updated_at'),
-            'message_count': len(session.get('messages', []))
+            'message_count': len(session.get('messages', [])),
+            'token_count': _estimate_session_tokens(session)
         })
     return summary
 

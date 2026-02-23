@@ -10,7 +10,6 @@ const state = {
     responseTimerId: null,
     responseTimerSessionId: null,
     weatherRefreshTimer: null,
-    weatherLocationFailureNotified: false,
     autoScrollEnabled: true,
     autoScrollPinnedSessionId: null,
     autoScrollThreshold: 48,
@@ -48,6 +47,16 @@ const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'codex-toast-layer';
+const WEATHER_GEO_PRIMARY_OPTIONS = Object.freeze({
+    enableHighAccuracy: false,
+    timeout: 12000,
+    maximumAge: 10 * 60 * 1000
+});
+const WEATHER_GEO_RETRY_OPTIONS = Object.freeze({
+    enableHighAccuracy: true,
+    timeout: 20000,
+    maximumAge: 0
+});
 const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
 const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 동탄(신동)';
 const DEFAULT_WEATHER_POSITION = Object.freeze({
@@ -70,6 +79,7 @@ let gitBranchStatusCache = {
     count: null,
     branch: '',
     changedFiles: [],
+    isStale: false,
     fetchedAt: 0
 };
 let gitBranchToastAt = 0;
@@ -398,6 +408,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitSyncBtn = document.getElementById('codex-git-sync');
     const branchOverlaySubmitBtn = document.getElementById('codex-branch-overlay-submit');
     const branchOverlaySyncBtn = document.getElementById('codex-branch-overlay-sync');
+
+    // Reset submit highlight until fresh git status arrives.
+    updateGitSubmitButtonState({ count: 0, changedFiles: [] });
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -1002,6 +1015,12 @@ function setTextWithTooltip(element, text) {
     setHoverTooltip(element, resolved);
 }
 
+function normalizeGitChangedFilesCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Math.round(numeric));
+}
+
 async function loadLiveWeatherData({ silent = false, positionOverride = null } = {}) {
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
@@ -1024,6 +1043,7 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
         }
 
         const defaultLabel = position?.label || '';
+        const coordinateLabel = formatCoordinateLabel(position);
         const useDefaultLabel = Boolean(position?.isDefault && defaultLabel);
         const [locationName, weather] = await Promise.all([
             useDefaultLabel
@@ -1033,7 +1053,7 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
         ]);
 
         renderWeatherSummary({
-            locationName: locationName || defaultLabel || '알 수 없는 위치',
+            locationName: locationName || defaultLabel || coordinateLabel || '알 수 없는 위치',
             weather
         });
     } catch (error) {
@@ -1065,15 +1085,15 @@ async function requestWeatherPermission({ silentFailure = false, skipPermissionC
                 return;
             }
         }
-        const position = await getCurrentGeoPosition();
+        const position = await getCurrentGeoPositionWithRetry();
         writeStoredWeatherPosition(position);
-        state.weatherLocationFailureNotified = false;
         await loadLiveWeatherData({ silent: true, positionOverride: position });
     } catch (error) {
         notifyWeatherLocationFailure(error, DEFAULT_WEATHER_LOCATION_LABEL);
+        const stored = readStoredWeatherPosition();
         await loadLiveWeatherData({
             silent: true,
-            positionOverride: getDefaultWeatherPosition()
+            positionOverride: stored || getDefaultWeatherPosition()
         });
         if (silentFailure) return;
         void error;
@@ -1094,9 +1114,8 @@ async function readGeolocationPermissionState() {
 
 async function resolveWeatherPosition() {
     try {
-        const current = await getCurrentGeoPosition();
+        const current = await getCurrentGeoPositionWithRetry();
         writeStoredWeatherPosition(current);
-        state.weatherLocationFailureNotified = false;
         return current;
     } catch (error) {
         const stored = readStoredWeatherPosition();
@@ -1118,7 +1137,31 @@ function getDefaultWeatherPosition() {
     };
 }
 
-function getCurrentGeoPosition() {
+function getCurrentGeoPositionWithRetry() {
+    return getCurrentGeoPosition(WEATHER_GEO_PRIMARY_OPTIONS).catch(primaryError => {
+        return getCurrentGeoPosition(WEATHER_GEO_RETRY_OPTIONS).catch(retryError => {
+            throw retryError || primaryError;
+        });
+    });
+}
+
+function normalizeGeoPositionError(error) {
+    if (!error || typeof error !== 'object') {
+        return new Error('현재 위치를 가져오지 못했습니다.');
+    }
+    if (error.code === 1) {
+        return new Error('위치 권한이 거부되었습니다.');
+    }
+    if (error.code === 2) {
+        return new Error('위치 정보를 확인할 수 없습니다.');
+    }
+    if (error.code === 3) {
+        return new Error('위치 확인 시간이 초과되었습니다.');
+    }
+    return error;
+}
+
+function getCurrentGeoPosition(options = WEATHER_GEO_PRIMARY_OPTIONS) {
     return new Promise((resolve, reject) => {
         if (!isGeolocationAllowedContext()) {
             reject(new Error('위치 접근은 HTTPS 또는 localhost에서만 가능합니다.'));
@@ -1136,13 +1179,9 @@ function getCurrentGeoPosition() {
                 });
             },
             error => {
-                reject(error || new Error('현재 위치를 가져오지 못했습니다.'));
+                reject(normalizeGeoPositionError(error));
             },
-            {
-                enableHighAccuracy: false,
-                timeout: 12000,
-                maximumAge: 10 * 60 * 1000
-            }
+            options
         );
     });
 }
@@ -1186,12 +1225,17 @@ function writeStoredWeatherPosition(position) {
 }
 
 function notifyWeatherLocationFailure(error, fallbackLabel = DEFAULT_WEATHER_LOCATION_LABEL) {
-    if (state.weatherLocationFailureNotified) return;
     const fallback = String(fallbackLabel || '').trim() || DEFAULT_WEATHER_LOCATION_LABEL;
     const message = `현재 위치를 불러오지 못했습니다. ${fallback} 날씨를 표시합니다.`;
     void error;
     showToast(message, { tone: 'error', durationMs: WEATHER_LOCATION_FAILURE_TOAST_MS });
-    state.weatherLocationFailureNotified = true;
+}
+
+function formatCoordinateLabel(position) {
+    const latitude = Number(position?.latitude);
+    const longitude = Number(position?.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '';
+    return `위도 ${latitude.toFixed(3)} · 경도 ${longitude.toFixed(3)}`;
 }
 
 function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
@@ -1434,6 +1478,7 @@ function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     sessionsToggle.setAttribute('aria-expanded', String(!collapsed));
     updateSessionsToggleButton(sessionsToggle, collapsed);
     syncSidebarStackLayout();
+    updateSessionsHeaderSummary();
     if (persist) {
         try {
             localStorage.setItem(SESSION_COLLAPSE_KEY, collapsed ? '1' : '0');
@@ -2476,8 +2521,9 @@ function getGitBranchFullName(element) {
 
 function getGitChangedFilesCountFromStatus(status) {
     if (!status || typeof status !== 'object') return 0;
-    if (Number.isFinite(status.count)) {
-        return Math.max(0, Number(status.count));
+    const normalizedCount = normalizeGitChangedFilesCount(status.count);
+    if (Number.isFinite(normalizedCount)) {
+        return normalizedCount;
     }
     return normalizeGitChangedFiles(status.changedFiles).length;
 }
@@ -2644,9 +2690,7 @@ async function fetchGitStatus(force = false) {
     gitBranchStatusInFlight = true;
     try {
         const result = await fetchJson('/api/codex/git/status', { method: 'POST' });
-        const count = Number.isFinite(result?.changed_files_count)
-            ? result.changed_files_count
-            : null;
+        const count = normalizeGitChangedFilesCount(result?.changed_files_count);
         const branch = typeof result?.branch === 'string' ? result.branch : '';
         const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
         const changedFiles = detailedFiles.length
@@ -2656,10 +2700,18 @@ async function fetchGitStatus(force = false) {
             count,
             branch,
             changedFiles,
+            isStale: false,
             fetchedAt: Date.now()
         };
         return gitBranchStatusCache;
     } catch (error) {
+        gitBranchStatusCache = {
+            count: null,
+            branch: gitBranchStatusCache.branch || '',
+            changedFiles: [],
+            isStale: true,
+            fetchedAt: Date.now()
+        };
         return gitBranchStatusCache;
     } finally {
         gitBranchStatusInFlight = false;
@@ -2876,6 +2928,7 @@ function renderSessions() {
     const list = document.getElementById('codex-session-list');
     if (!list) return;
     list.innerHTML = '';
+    updateSessionsHeaderSummary();
 
     if (!state.sessions.length) {
         const empty = document.createElement('div');
@@ -2956,12 +3009,18 @@ function renderSessions() {
 
 function upsertSessionSummary(session) {
     if (!session || !session.id) return;
+    const fallbackMessages = Array.isArray(session.messages) ? session.messages : [];
+    const tokenCount = Number(session.token_count);
+    const resolvedTokenCount = Number.isFinite(tokenCount)
+        ? Math.max(0, Math.round(tokenCount))
+        : estimateSessionTokenCountFromMessages(fallbackMessages);
     const summary = {
         id: session.id,
         title: session.title || 'New session',
         created_at: session.created_at,
         updated_at: session.updated_at,
-        message_count: Array.isArray(session.messages) ? session.messages.length : 0
+        message_count: fallbackMessages.length,
+        token_count: resolvedTokenCount
     };
     const existingIndex = state.sessions.findIndex(item => item.id === session.id);
     if (existingIndex >= 0) {
@@ -2984,6 +3043,7 @@ function removeSessionSummary(sessionId) {
         clearPersistedStream(sessionState.streamId);
     }
     delete state.sessionStates[sessionId];
+    updateSessionsHeaderSummary();
 }
 
 async function createSession(selectAfter = true) {
@@ -3764,10 +3824,32 @@ function formatNumber(value) {
     return value.toLocaleString('en-US');
 }
 
+function normalizeUsedPercent(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    if (numeric < 0) return 0;
+    if (numeric > 0 && numeric < 1) {
+        return Math.min(100, numeric * 100);
+    }
+    return Math.min(100, numeric);
+}
+
+function formatUsagePercent(value) {
+    if (!Number.isFinite(value)) return '--';
+    const clamped = Math.max(0, Math.min(100, value));
+    if (clamped === 0 || clamped === 100) {
+        return String(Math.round(clamped));
+    }
+    const floored = Math.floor(clamped * 10) / 10;
+    if (!Number.isFinite(floored)) return '--';
+    return floored % 1 === 0 ? String(Math.trunc(floored)) : floored.toFixed(1);
+}
+
 function formatRemainingPercent(usedPercent) {
-    if (!Number.isFinite(usedPercent)) return '--';
-    const remaining = 100 - usedPercent;
-    return Math.max(0, Math.min(100, Math.round(remaining)));
+    const normalizedUsed = normalizeUsedPercent(usedPercent);
+    if (!Number.isFinite(normalizedUsed)) return '--';
+    const remaining = Math.max(0, 100 - normalizedUsed);
+    return formatUsagePercent(remaining);
 }
 
 function formatResetTimestamp(value) {
@@ -3785,19 +3867,88 @@ function formatResetTimestamp(value) {
 
 function formatLimitUsage(entry, label) {
     const resetText = formatResetTimestamp(entry?.resets_at);
-    if (!entry || !Number.isFinite(entry.used_percent)) {
+    const normalizedUsed = normalizeUsedPercent(entry?.used_percent);
+    if (!entry || !Number.isFinite(normalizedUsed)) {
         return {
             label,
             remainingText: '--',
             resetText
         };
     }
-    const remaining = formatRemainingPercent(entry.used_percent);
+    const remaining = formatRemainingPercent(normalizedUsed);
     return {
         label,
         remainingText: `${remaining}% left`,
         resetText
     };
+}
+
+function estimateTokensFromText(text) {
+    const value = typeof text === 'string' ? text : String(text || '');
+    const normalized = value.trim();
+    if (!normalized) return 0;
+    return Math.max(1, Math.ceil(normalized.length / 4));
+}
+
+function estimateSessionTokenCountFromMessages(messages) {
+    if (!Array.isArray(messages)) return 0;
+    let total = 0;
+    messages.forEach(message => {
+        if (!message || typeof message !== 'object') return;
+        const totalTokens = Number(message.total_tokens);
+        const explicitTokens = Number(message.token_count);
+        if (Number.isFinite(totalTokens) && totalTokens >= 0) {
+            total += Math.round(totalTokens);
+            return;
+        }
+        if (Number.isFinite(explicitTokens) && explicitTokens >= 0) {
+            total += Math.round(explicitTokens);
+            return;
+        }
+        total += estimateTokensFromText(message.content);
+    });
+    return total;
+}
+
+function formatCompactTokenCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '0';
+    const absolute = Math.abs(numeric);
+    if (absolute >= 1_000_000_000) {
+        return `${(numeric / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+    }
+    if (absolute >= 1_000_000) {
+        return `${(numeric / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+    }
+    if (absolute >= 1_000) {
+        return `${(numeric / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+    }
+    return String(Math.round(numeric));
+}
+
+function updateSessionsHeaderSummary() {
+    const titleElement = document.getElementById('codex-sessions-title');
+    const sessionsPanel = document.querySelector('.sessions');
+    if (!titleElement || !sessionsPanel) return;
+    const isCollapsed = sessionsPanel.classList.contains('is-collapsed');
+    if (!isCollapsed) {
+        titleElement.textContent = 'Sessions';
+        titleElement.setAttribute('title', 'Sessions');
+        return;
+    }
+    const sessionCount = Array.isArray(state.sessions) ? state.sessions.length : 0;
+    const totalTokens = Array.isArray(state.sessions)
+        ? state.sessions.reduce((sum, session) => {
+            const tokenCount = Number(session?.token_count);
+            return sum + (Number.isFinite(tokenCount) ? Math.max(0, tokenCount) : 0);
+        }, 0)
+        : 0;
+    const summaryText = `${sessionCount} sessions · ${formatCompactTokenCount(totalTokens)} tok`;
+    titleElement.textContent = summaryText;
+    titleElement.setAttribute(
+        'title',
+        `Total sessions ${formatNumber(sessionCount)} · Total tokens ${formatNumber(totalTokens)}`
+    );
 }
 
 function buildUsageEntry(entry, label) {

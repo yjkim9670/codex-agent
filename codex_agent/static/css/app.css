@@ -62,7 +62,8 @@
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
-    --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+    --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+    --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
@@ -117,7 +118,8 @@
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
-    --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+    --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
+    --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
@@ -459,6 +461,7 @@ body {
 .live-weather-actions {
     white-space: nowrap;
     flex-shrink: 0;
+    min-width: calc((var(--icon-button-size) * 2) + 8px);
 }
 
 .live-weather-permission {
@@ -569,6 +572,7 @@ body {
     height: 100%;
     margin: 0;
     align-items: center;
+    position: relative;
 }
 
 .live-weather-panel.is-compact .live-weather-title {
@@ -581,7 +585,8 @@ body {
     overflow: hidden;
     min-width: 0;
     max-width: 100%;
-    padding-right: 6px;
+    width: 100%;
+    padding: 0 calc((var(--icon-button-size) * 2) + 14px) 0 2px;
 }
 
 .live-weather-compact-line {
@@ -621,9 +626,13 @@ body {
 }
 
 .live-weather-panel.is-compact .live-weather-actions {
-    gap: 4px;
+    gap: 8px;
     align-items: center;
     min-height: var(--icon-button-size);
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 .forecast-title {
@@ -709,18 +718,18 @@ body {
     cursor: wait;
 }
 
-#codex-git-submit,
-#codex-branch-overlay-submit {
+.git-action-submit {
     background-image: var(--icon-check);
 }
 
-.git-action-submit.is-ready {
+.btn.ghost.git-action-submit.is-ready {
     color: #188a42;
     border-color: rgba(24, 138, 66, 0.4);
     background-color: rgba(24, 138, 66, 0.08);
+    background-image: var(--icon-check-ready);
 }
 
-.git-action-submit.is-ready:hover {
+.btn.ghost.git-action-submit.is-ready:hover {
     background-color: rgba(24, 138, 66, 0.16);
 }
 
@@ -729,13 +738,13 @@ body {
     background-image: var(--icon-sync);
 }
 
-[data-theme="dark"] .git-action-submit.is-ready {
+[data-theme="dark"] .btn.ghost.git-action-submit.is-ready {
     color: #cfe2d6;
     border-color: rgba(150, 188, 169, 0.45);
     background-color: rgba(90, 125, 108, 0.28);
 }
 
-[data-theme="dark"] .git-action-submit.is-ready:hover {
+[data-theme="dark"] .btn.ghost.git-action-submit.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
 }
 
@@ -919,8 +928,10 @@ body {
 .sessions-actions {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
     min-height: var(--icon-button-size);
+    min-width: calc((var(--icon-button-size) * 2) + 8px);
 }
 
 .sessions-new {
@@ -1007,21 +1018,33 @@ body {
     height: 100%;
     margin: 0;
     align-items: center;
+    justify-content: center;
+    position: relative;
 }
 
 .sessions.is-collapsed .sessions-header > span {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     min-height: var(--icon-button-size);
-    padding-top: 0;
+    width: 100%;
+    padding: 0 calc((var(--icon-button-size) * 2) + 14px) 0 2px;
     line-height: 1.15;
     font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
 }
 
 .sessions.is-collapsed .sessions-actions {
-    gap: 4px;
+    gap: 8px;
     align-items: center;
     min-height: var(--icon-button-size);
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 .session-select {
@@ -2466,21 +2489,33 @@ body {
         height: 100%;
         margin: 0;
         align-items: center;
+        justify-content: center;
+        position: relative;
     }
 
     .sessions.is-collapsed .sessions-header > span {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         min-height: var(--icon-button-size);
-        padding-top: 0;
+        width: 100%;
+        padding: 0 calc((var(--icon-button-size) * 2) + 14px) 0 2px;
         line-height: 1.15;
         font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: center;
     }
 
     .sessions.is-collapsed .sessions-actions {
-        gap: 4px;
+        gap: 8px;
         align-items: center;
         min-height: var(--icon-button-size);
+        position: absolute;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
     }
 
     .live-weather-panel.is-compact {
@@ -2501,6 +2536,7 @@ body {
         height: 100%;
         margin: 0;
         align-items: center;
+        position: relative;
     }
 
     .live-weather-panel.is-compact .live-weather-title {
@@ -2513,13 +2549,18 @@ body {
         overflow: hidden;
         min-width: 0;
         max-width: 100%;
-        padding-right: 6px;
+        width: 100%;
+        padding: 0 calc((var(--icon-button-size) * 2) + 14px) 0 2px;
     }
 
     .live-weather-panel.is-compact .live-weather-actions {
-        gap: 4px;
+        gap: 8px;
         align-items: center;
         min-height: var(--icon-button-size);
+        position: absolute;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
     }
 
     .live-weather-panel.is-compact .live-weather-content {

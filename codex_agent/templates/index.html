@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=56">
+    <link rel="stylesheet" href="/static/css/app.css?v=60">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -98,7 +98,7 @@
 
                 <section class="sessions">
                     <div class="sessions-header">
-                        <span>Sessions</span>
+                        <span id="codex-sessions-title">Sessions</span>
                         <div class="sessions-actions">
                             <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
                             <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
@@ -257,6 +257,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=43"></script>
+    <script src="/static/js/app.js?v=46"></script>
 </body>
 </html>

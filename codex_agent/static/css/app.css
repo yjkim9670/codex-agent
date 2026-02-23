@@ -13,6 +13,9 @@
     --accent: #0f4c81;
     --accent-dark: #0c3e6b;
     --danger: #d92d4c;
+    --weather-temp-current: #ca5a1f;
+    --weather-temp-high: #d64a3a;
+    --weather-temp-low: #2f6dcd;
     --button-secondary-bg: #e4edf7;
     --code-bg: #eef2f7;
     --message-error-bg: #fff1f3;
@@ -83,6 +86,9 @@
     --accent: #7b8fa3;
     --accent-dark: #6a7f92;
     --danger: #b8977f;
+    --weather-temp-current: #f2b178;
+    --weather-temp-high: #f2a093;
+    --weather-temp-low: #8cbcff;
     --button-secondary-bg: #262a30;
     --code-bg: #1f2328;
     --message-error-bg: #2a2421;
@@ -446,10 +452,13 @@ body {
     display: inline-flex;
     align-items: center;
     min-height: var(--icon-button-size);
+    min-width: 0;
+    flex: 1;
 }
 
 .live-weather-actions {
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .live-weather-permission {
@@ -563,8 +572,52 @@ body {
 }
 
 .live-weather-panel.is-compact .live-weather-title {
-    font-size: 12px;
-    line-height: 1.15;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    font-size: 11px;
+    line-height: 1.1;
+    overflow: hidden;
+    min-width: 0;
+    max-width: 100%;
+    padding-right: 6px;
+}
+
+.live-weather-compact-line {
+    display: block;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.live-weather-compact-line-secondary {
+    font-size: 11px;
+}
+
+.live-weather-compact-date {
+    color: var(--text-tertiary);
+}
+
+.live-weather-compact-current-temp {
+    color: var(--weather-temp-current);
+    font-weight: 700;
+}
+
+.live-weather-compact-weather {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.live-weather-compact-high {
+    color: var(--weather-temp-high);
+    font-weight: 700;
+}
+
+.live-weather-compact-low {
+    color: var(--weather-temp-low);
+    font-weight: 700;
 }
 
 .live-weather-panel.is-compact .live-weather-actions {
@@ -658,14 +711,16 @@ body {
 
 #codex-git-submit,
 #codex-branch-overlay-submit {
-    color: #188a42;
-    border-color: rgba(24, 138, 66, 0.4);
-    background-color: rgba(24, 138, 66, 0.08);
     background-image: var(--icon-check);
 }
 
-#codex-git-submit:hover,
-#codex-branch-overlay-submit:hover {
+.git-action-submit.is-ready {
+    color: #188a42;
+    border-color: rgba(24, 138, 66, 0.4);
+    background-color: rgba(24, 138, 66, 0.08);
+}
+
+.git-action-submit.is-ready:hover {
     background-color: rgba(24, 138, 66, 0.16);
 }
 
@@ -674,15 +729,13 @@ body {
     background-image: var(--icon-sync);
 }
 
-[data-theme="dark"] #codex-git-submit,
-[data-theme="dark"] #codex-branch-overlay-submit {
+[data-theme="dark"] .git-action-submit.is-ready {
     color: #cfe2d6;
     border-color: rgba(150, 188, 169, 0.45);
     background-color: rgba(90, 125, 108, 0.28);
 }
 
-[data-theme="dark"] #codex-git-submit:hover,
-[data-theme="dark"] #codex-branch-overlay-submit:hover {
+[data-theme="dark"] .git-action-submit.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
 }
 
@@ -719,14 +772,17 @@ body {
 }
 
 .theme-slider::before {
-    content: "☀";
+    content: "☾";
     position: absolute;
-    left: 9px;
+    left: auto;
+    right: 9px;
     top: 9px;
     font-size: 12px;
     line-height: 1;
     opacity: 0.78;
+    color: var(--text-tertiary);
     text-shadow: none;
+    transition: opacity 0.2s ease, left 0.2s ease, right 0.2s ease;
 }
 
 .theme-slider::after {
@@ -745,6 +801,7 @@ body {
     justify-content: center;
     font-size: 12px;
     line-height: 1;
+    color: var(--text-secondary);
 }
 
 .theme-switch input:focus-visible + .theme-slider {
@@ -758,6 +815,9 @@ body {
 }
 
 .theme-switch input:checked + .theme-slider::before {
+    content: "☀";
+    left: 9px;
+    right: auto;
     opacity: 0.72;
 }
 
@@ -800,7 +860,7 @@ body {
 
 .sidebar-stack {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
     gap: 18px;
     min-height: 0;
     height: 100%;
@@ -814,7 +874,7 @@ body {
 }
 
 .sidebar-stack.is-sessions-collapsed {
-    grid-template-rows: auto var(--sidebar-collapsed-height);
+    grid-template-rows: minmax(0, 1fr) var(--sidebar-collapsed-height);
 }
 
 .sidebar-stack.is-weather-compact.is-sessions-collapsed {
@@ -2254,6 +2314,7 @@ body {
         flex-direction: column;
         flex: 1;
         min-height: 0;
+        gap: 6px;
     }
 
     .sidebar-stack {
@@ -2443,8 +2504,16 @@ body {
     }
 
     .live-weather-panel.is-compact .live-weather-title {
-        font-size: 12px;
-        line-height: 1.15;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1px;
+        font-size: 11px;
+        line-height: 1.1;
+        overflow: hidden;
+        min-width: 0;
+        max-width: 100%;
+        padding-right: 6px;
     }
 
     .live-weather-panel.is-compact .live-weather-actions {

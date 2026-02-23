@@ -48,6 +48,7 @@ const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'codex-toast-layer';
+const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
 const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 동탄(신동)';
 const DEFAULT_WEATHER_POSITION = Object.freeze({
     latitude: 37.2053,
@@ -82,6 +83,12 @@ let remoteStreamPollTimer = null;
 let remoteStreamStatusInFlight = false;
 let streamMonitorState = null;
 let hoverTooltipInteractionsBound = false;
+let liveWeatherCompactDatetime = '--';
+let liveWeatherCompactCurrentTemp = '--';
+let liveWeatherCompactWeatherText = '날씨 불러오는 중...';
+let liveWeatherCompactHighTemp = '--';
+let liveWeatherCompactLowTemp = '--';
+let liveWeatherCompactHasWeather = false;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -694,6 +701,7 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     toggle.classList.toggle('is-collapsed', isCompact);
     toggle.setAttribute('aria-label', toggleLabel);
     toggle.setAttribute('title', toggleLabel);
+    updateLiveWeatherPanelTitle();
     syncSidebarStackLayout();
     if (persist) {
         try {
@@ -702,6 +710,96 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
             void error;
         }
     }
+}
+
+function updateLiveWeatherCompactSummary({
+    datetime,
+    currentTemp,
+    weatherText,
+    highTemp,
+    lowTemp,
+    hasWeather
+} = {}) {
+    if (typeof datetime === 'string' && datetime.trim()) {
+        liveWeatherCompactDatetime = datetime.trim();
+    }
+    if (typeof currentTemp === 'string' && currentTemp.trim()) {
+        liveWeatherCompactCurrentTemp = currentTemp.trim();
+    }
+    if (typeof weatherText === 'string' && weatherText.trim()) {
+        liveWeatherCompactWeatherText = weatherText.trim();
+    }
+    if (typeof highTemp === 'string' && highTemp.trim()) {
+        liveWeatherCompactHighTemp = highTemp.trim();
+    }
+    if (typeof lowTemp === 'string' && lowTemp.trim()) {
+        liveWeatherCompactLowTemp = lowTemp.trim();
+    }
+    if (typeof hasWeather === 'boolean') {
+        liveWeatherCompactHasWeather = hasWeather;
+    }
+    updateLiveWeatherPanelTitle();
+}
+
+function updateLiveWeatherPanelTitle() {
+    const panel = document.getElementById('codex-live-weather-panel');
+    const title = document.getElementById('codex-live-weather-title');
+    if (!panel || !title) return;
+    const isCompact = panel.classList.contains('is-compact');
+    if (!isCompact) {
+        title.textContent = LIVE_WEATHER_PANEL_TITLE;
+        title.setAttribute('title', LIVE_WEATHER_PANEL_TITLE);
+        return;
+    }
+    const datetimeText = liveWeatherCompactDatetime || '--';
+    const line1 = document.createElement('span');
+    line1.className = 'live-weather-compact-line live-weather-compact-line-primary';
+    const dateSpan = document.createElement('span');
+    dateSpan.className = 'live-weather-compact-date';
+    dateSpan.textContent = datetimeText;
+    line1.appendChild(dateSpan);
+
+    const line2 = document.createElement('span');
+    line2.className = 'live-weather-compact-line live-weather-compact-line-secondary';
+
+    if (!liveWeatherCompactHasWeather) {
+        const pendingText = liveWeatherCompactWeatherText || '날씨 불러오는 중...';
+        const compactTitle = `${datetimeText} · ${pendingText}`;
+        line2.textContent = pendingText;
+        title.replaceChildren(line1, line2);
+        title.setAttribute('title', compactTitle);
+        return;
+    }
+
+    const currentTemp = liveWeatherCompactCurrentTemp || '--';
+    const weatherText = liveWeatherCompactWeatherText || '알 수 없음';
+    const highTemp = liveWeatherCompactHighTemp || '--';
+    const lowTemp = liveWeatherCompactLowTemp || '--';
+
+    const currentSpan = document.createElement('span');
+    currentSpan.className = 'live-weather-compact-current-temp';
+    currentSpan.textContent = currentTemp;
+    line2.appendChild(currentSpan);
+    line2.appendChild(document.createTextNode(' '));
+    const weatherSpan = document.createElement('span');
+    weatherSpan.className = 'live-weather-compact-weather';
+    weatherSpan.textContent = weatherText;
+    line2.appendChild(weatherSpan);
+    line2.appendChild(document.createTextNode(' · '));
+    const highSpan = document.createElement('span');
+    highSpan.className = 'live-weather-compact-high';
+    highSpan.textContent = `↑${highTemp}`;
+    line2.appendChild(highSpan);
+    line2.appendChild(document.createTextNode(' '));
+    const lowSpan = document.createElement('span');
+    lowSpan.className = 'live-weather-compact-low';
+    lowSpan.textContent = `↓${lowTemp}`;
+    line2.appendChild(lowSpan);
+
+    title.replaceChildren(line1, line2);
+
+    const compactTitle = `${datetimeText} · ${currentTemp} ${weatherText} · 최고 ${highTemp} / 최저 ${lowTemp}`;
+    title.setAttribute('title', compactTitle);
 }
 
 function syncLiveWeatherLayout(isMobile) {
@@ -819,6 +917,7 @@ function updateLiveDatetime() {
         const fallback = formatKstNow();
         datetime.textContent = fallback;
         setHoverTooltip(datetime, fallback);
+        updateLiveWeatherCompactSummary({ datetime: fallback });
         return;
     }
     const datePart = `${parts.year}. ${parts.month}. ${parts.day}.`;
@@ -834,6 +933,8 @@ function updateLiveDatetime() {
         datetime.textContent = datetimeText;
     }
     setHoverTooltip(datetime, datetimeText);
+    const compactDatetime = `${parts.month}.${parts.day}${weekday ? `(${weekday})` : ''} ${parts.hour}:${parts.minute}`;
+    updateLiveWeatherCompactSummary({ datetime: compactDatetime });
 }
 
 function formatKstNow() {
@@ -1206,6 +1307,14 @@ function renderWeatherSummary({ locationName, weather }) {
         ? `${Math.round(Number(current.wind_speed_10m))}km/h`
         : '--';
     const weatherText = formatWeatherCode(current.weather_code, current.is_day === 1);
+    const todayHighRaw = Array.isArray(weather?.daily?.temperature_2m_max)
+        ? weather.daily.temperature_2m_max[0]
+        : null;
+    const todayLowRaw = Array.isArray(weather?.daily?.temperature_2m_min)
+        ? weather.daily.temperature_2m_min[0]
+        : null;
+    const todayHigh = formatTemperatureValue(todayHighRaw);
+    const todayLow = formatTemperatureValue(todayLowRaw);
 
     setTextWithTooltip(locationElement, locationName || '알 수 없는 위치');
     setTextWithTooltip(
@@ -1214,6 +1323,13 @@ function renderWeatherSummary({ locationName, weather }) {
     );
     setTextWithTooltip(todayElement, renderDailyForecast(weather?.daily, 0));
     setTextWithTooltip(tomorrowElement, renderDailyForecast(weather?.daily, 1));
+    updateLiveWeatherCompactSummary({
+        currentTemp,
+        weatherText,
+        highTemp: todayHigh,
+        lowTemp: todayLow,
+        hasWeather: true
+    });
 }
 
 function renderWeatherError(locationText, detailText) {
@@ -1226,6 +1342,13 @@ function renderWeatherError(locationText, detailText) {
     setTextWithTooltip(currentElement, detailText);
     setTextWithTooltip(todayElement, '--');
     setTextWithTooltip(tomorrowElement, '--');
+    updateLiveWeatherCompactSummary({
+        currentTemp: '--',
+        weatherText: '날씨 확인 불가',
+        highTemp: '--',
+        lowTemp: '--',
+        hasWeather: false
+    });
 }
 
 function renderDailyForecast(daily, index) {
@@ -2351,6 +2474,21 @@ function getGitBranchFullName(element) {
     return element.textContent ? element.textContent.trim() : '';
 }
 
+function getGitChangedFilesCountFromStatus(status) {
+    if (!status || typeof status !== 'object') return 0;
+    if (Number.isFinite(status.count)) {
+        return Math.max(0, Number(status.count));
+    }
+    return normalizeGitChangedFiles(status.changedFiles).length;
+}
+
+function updateGitSubmitButtonState(status) {
+    const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
+    document.querySelectorAll('.git-action-submit').forEach(button => {
+        button.classList.toggle('is-ready', hasChanges);
+    });
+}
+
 function applyGitBranchStatusToElement(element, status) {
     if (!element || !status) return;
     const branchName = typeof status.branch === 'string' ? status.branch.trim() : '';
@@ -2539,6 +2677,7 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     if (branchElement) {
         applyGitBranchStatusToElement(branchElement, status);
     }
+    updateGitSubmitButtonState(status);
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }
@@ -2602,6 +2741,7 @@ async function handleGitAction(action, button) {
         showToast(`${label} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         setGitButtonBusy(button, false);
+        void refreshGitBranchStatus({ force: true, updateOverlay: true });
     }
 }
 

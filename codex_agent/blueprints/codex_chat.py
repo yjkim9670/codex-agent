@@ -232,11 +232,19 @@ def codex_stream_stop(stream_id):
 def codex_git_action(action):
     payload = request.get_json(silent=True) or {}
     if request.method == 'GET':
-        if action != 'push' or request.args.get('confirm') != '1':
-            return jsonify({'error': 'GET 요청은 push + confirm=1 조합만 허용됩니다.'}), 400
-        payload = {'confirm': True}
+        if action == 'push':
+            if request.args.get('confirm') != '1':
+                return jsonify({'error': 'push GET 요청은 confirm=1이 필요합니다.'}), 400
+            payload = {'confirm': True}
+        elif action == 'sync':
+            payload = {'repo_target': request.args.get('repo_target') or 'codex_agent'}
+        else:
+            return jsonify({'error': 'GET 요청은 push(confirm=1) 또는 sync에서만 허용됩니다.'}), 400
     if not isinstance(payload, dict):
         payload = {}
+    if action == 'sync' and not str(payload.get('repo_target') or '').strip():
+        # Keep top-right sync pinned to codex_agent even if legacy clients omit payload.
+        payload['repo_target'] = 'codex_agent'
     result = run_git_action(action, payload=payload)
     if not isinstance(result, dict):
         return jsonify({'error': 'git 작업 결과를 확인할 수 없습니다.'}), 500

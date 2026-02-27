@@ -3199,7 +3199,7 @@ async function handleGitSync(button) {
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Syncing...');
     try {
-        const result = await fetchJson('/api/codex/git/sync', {
+        const result = await fetchJson('/api/codex/git/sync?repo_target=codex_agent', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS,

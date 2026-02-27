@@ -419,6 +419,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Reset commit highlight until fresh git status arrives.
     updateGitCommitButtonState({ count: 0, changedFiles: [] });
+    initializeHoverTooltipInteractions();
+    initializeHeaderActionTooltips({
+        themeToggle,
+        gitBranch,
+        gitCommitBtn,
+        gitPushBtn,
+        gitSyncBtn,
+        refreshBtn
+    });
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -688,6 +697,7 @@ function initializeLiveWeatherPanel(mobileMedia) {
     const serverDirectoryPath = document.getElementById('codex-server-directory-path');
     setHoverTooltip(serverDirectory, serverDirectory?.textContent || '');
     setHoverTooltip(serverDirectoryPath, serverDirectoryPath?.textContent || '');
+    syncHoverTooltipFromLabel(permissionToggle);
     updateLiveDatetime();
     if (state.liveClockTimer) {
         window.clearInterval(state.liveClockTimer);
@@ -747,7 +757,7 @@ function setLiveWeatherCompact(compact, { persist = true } = {}) {
     toggle.setAttribute('aria-expanded', String(!isCompact));
     toggle.classList.toggle('is-collapsed', isCompact);
     toggle.setAttribute('aria-label', toggleLabel);
-    toggle.setAttribute('title', toggleLabel);
+    syncHoverTooltipFromLabel(toggle, toggleLabel);
     updateLiveWeatherPanelTitle();
     syncSidebarStackLayout();
     if (persist) {
@@ -795,7 +805,7 @@ function updateLiveWeatherPanelTitle() {
     const isCompact = panel.classList.contains('is-compact');
     if (!isCompact) {
         title.textContent = LIVE_WEATHER_PANEL_TITLE;
-        title.setAttribute('title', LIVE_WEATHER_PANEL_TITLE);
+        setHoverTooltip(title, LIVE_WEATHER_PANEL_TITLE);
         return;
     }
     const datetimeText = liveWeatherCompactDatetime || '--';
@@ -814,7 +824,7 @@ function updateLiveWeatherPanelTitle() {
         const compactTitle = `${datetimeText} · ${pendingText}`;
         line2.textContent = pendingText;
         title.replaceChildren(line1, line2);
-        title.setAttribute('title', compactTitle);
+        setHoverTooltip(title, compactTitle);
         return;
     }
 
@@ -846,7 +856,7 @@ function updateLiveWeatherPanelTitle() {
     title.replaceChildren(line1, line2);
 
     const compactTitle = `${datetimeText} · ${currentTemp} ${weatherText} · 최고 ${highTemp} / 최저 ${lowTemp}`;
-    title.setAttribute('title', compactTitle);
+    setHoverTooltip(title, compactTitle);
 }
 
 function syncLiveWeatherLayout(isMobile) {
@@ -993,16 +1003,33 @@ function formatKstNow() {
     return `${datePart} (${weekday}) ${timePart}`;
 }
 
-function setHoverTooltip(element, text) {
+function isNaturallyFocusableElement(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.hasAttribute('disabled')) return false;
+    const tag = element.tagName.toLowerCase();
+    if (['button', 'input', 'select', 'textarea'].includes(tag)) return true;
+    if (tag === 'a' && element.hasAttribute('href')) return true;
+    const editable = element.getAttribute('contenteditable');
+    return editable === '' || editable === 'true';
+}
+
+function setHoverTooltip(element, text, { focusable = true } = {}) {
     if (!element) return;
     const resolved = text == null ? '' : String(text);
     if (resolved.trim()) {
         element.classList.add('hover-tooltip');
         element.setAttribute('data-tooltip', resolved);
         element.setAttribute('title', resolved);
-        if (!element.hasAttribute('tabindex')) {
+        if (
+            focusable
+            && !element.hasAttribute('tabindex')
+            && !isNaturallyFocusableElement(element)
+        ) {
             element.setAttribute('tabindex', '0');
             element.setAttribute('data-tooltip-tabindex', '1');
+        } else if (!focusable && element.getAttribute('data-tooltip-tabindex') === '1') {
+            element.removeAttribute('tabindex');
+            element.removeAttribute('data-tooltip-tabindex');
         }
     } else {
         element.classList.remove('hover-tooltip');
@@ -1014,6 +1041,22 @@ function setHoverTooltip(element, text) {
             element.removeAttribute('data-tooltip-tabindex');
         }
     }
+}
+
+function resolveTooltipText(element, fallbackText = '') {
+    const fallback = fallbackText == null ? '' : String(fallbackText).trim();
+    if (fallback) return fallback;
+    if (!element) return '';
+    const title = element.getAttribute('title');
+    if (title && title.trim()) return title.trim();
+    const ariaLabel = element.getAttribute('aria-label');
+    if (ariaLabel && ariaLabel.trim()) return ariaLabel.trim();
+    return '';
+}
+
+function syncHoverTooltipFromLabel(element, fallbackText = '', options = {}) {
+    if (!element) return;
+    setHoverTooltip(element, resolveTooltipText(element, fallbackText), options);
 }
 
 function closeOpenHoverTooltips(exceptElement = null) {
@@ -1049,6 +1092,46 @@ function setTextWithTooltip(element, text) {
     setHoverTooltip(element, resolved);
 }
 
+function syncWeatherCurrentRowTooltip(currentElement = null) {
+    const valueElement = currentElement || document.getElementById('codex-weather-current');
+    if (!valueElement) return;
+    const row = valueElement.closest('.live-weather-current');
+    if (!row) return;
+    const rowTooltip = valueElement.getAttribute('data-tooltip') || valueElement.textContent || '';
+    setHoverTooltip(row, rowTooltip);
+}
+
+function getThemeToggleTooltipText(isDarkThemeEnabled) {
+    return isDarkThemeEnabled ? 'Switch to light mode' : 'Switch to dark mode';
+}
+
+function updateThemeSwitchTooltip(themeToggle = null) {
+    const toggle = themeToggle || document.getElementById('codex-theme-toggle');
+    if (!toggle) return;
+    const tooltip = getThemeToggleTooltipText(Boolean(toggle.checked));
+    toggle.setAttribute('aria-label', tooltip);
+    toggle.setAttribute('title', tooltip);
+    const switchControl = document.querySelector('.theme-switch');
+    if (switchControl) {
+        setHoverTooltip(switchControl, tooltip, { focusable: false });
+    }
+}
+
+function initializeHeaderActionTooltips({
+    themeToggle,
+    gitBranch,
+    gitCommitBtn,
+    gitPushBtn,
+    gitSyncBtn,
+    refreshBtn
+} = {}) {
+    syncHoverTooltipFromLabel(gitBranch);
+    [gitCommitBtn, gitPushBtn, gitSyncBtn, refreshBtn].forEach(button => {
+        syncHoverTooltipFromLabel(button);
+    });
+    updateThemeSwitchTooltip(themeToggle);
+}
+
 function normalizeGitChangedFilesCount(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
@@ -1067,6 +1150,7 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
         setTextWithTooltip(currentElement, '날씨 불러오는 중...');
         setTextWithTooltip(todayElement, '불러오는 중...');
         setTextWithTooltip(tomorrowElement, '불러오는 중...');
+        syncWeatherCurrentRowTooltip(currentElement);
     }
 
     try {
@@ -1103,6 +1187,7 @@ async function requestWeatherPermission({ silentFailure = false, skipPermissionC
     }
     if (currentElement) {
         setTextWithTooltip(currentElement, '브라우저 권한 응답 대기 중...');
+        syncWeatherCurrentRowTooltip(currentElement);
     }
     try {
         if (!skipPermissionCheck) {
@@ -1399,6 +1484,7 @@ function renderWeatherSummary({ locationName, weather }) {
         currentElement,
         `현재 ${currentTemp} · ${weatherText} · 체감 ${feelsLike} · 습도 ${humidity} · 바람 ${wind}`
     );
+    syncWeatherCurrentRowTooltip(currentElement);
     setTextWithTooltip(todayElement, renderDailyForecast(weather?.daily, 0));
     setTextWithTooltip(tomorrowElement, renderDailyForecast(weather?.daily, 1));
     updateLiveWeatherCompactSummary({
@@ -1418,6 +1504,7 @@ function renderWeatherError(locationText, detailText) {
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
     setTextWithTooltip(locationElement, locationText);
     setTextWithTooltip(currentElement, detailText);
+    syncWeatherCurrentRowTooltip(currentElement);
     setTextWithTooltip(todayElement, '--');
     setTextWithTooltip(tomorrowElement, '--');
     updateLiveWeatherCompactSummary({
@@ -1841,7 +1928,10 @@ function applyTheme(theme, { persist = true } = {}) {
     const normalized = theme === 'dark' ? 'dark' : 'light';
     root.dataset.theme = normalized;
     const toggle = document.getElementById('codex-theme-toggle');
-    if (toggle) toggle.checked = normalized === 'dark';
+    if (toggle) {
+        toggle.checked = normalized === 'dark';
+        updateThemeSwitchTooltip(toggle);
+    }
     if (persist) {
         try {
             localStorage.setItem(THEME_KEY, normalized);
@@ -2576,6 +2666,7 @@ function setGitButtonBusy(button, busy, busyLabel) {
                 button.textContent = busyLabel;
             }
         }
+        syncHoverTooltipFromLabel(button, busyLabel || '');
         return;
     }
     button.classList.remove('is-loading');
@@ -2590,6 +2681,7 @@ function setGitButtonBusy(button, busy, busyLabel) {
     if (!isIconOnly) {
         button.textContent = button.dataset.label || button.textContent;
     }
+    syncHoverTooltipFromLabel(button);
 }
 
 function summarizeGitOutput(value) {
@@ -2634,7 +2726,7 @@ function applyGitBranchStatusToElement(element, status) {
         element.textContent = branchName;
     }
     element.dataset.branchFull = branchName;
-    element.setAttribute('title', branchName);
+    syncHoverTooltipFromLabel(element, branchName);
 }
 
 function getGitBranchOverlayElements() {

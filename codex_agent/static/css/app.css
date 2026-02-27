@@ -2121,6 +2121,14 @@ body {
     cursor: help;
 }
 
+button.hover-tooltip,
+a.hover-tooltip,
+input.hover-tooltip,
+label.hover-tooltip,
+[role="button"].hover-tooltip {
+    cursor: pointer;
+}
+
 .hover-tooltip::after {
     content: attr(data-tooltip);
     position: absolute;

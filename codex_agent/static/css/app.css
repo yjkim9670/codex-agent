@@ -749,7 +749,8 @@ body {
 #codex-git-commit,
 #codex-branch-overlay-commit,
 #codex-git-push,
-#codex-branch-overlay-push {
+#codex-branch-overlay-push,
+#codex-git-sync {
     background-repeat: no-repeat;
     background-position: center;
     background-size: 15px 15px;
@@ -793,6 +794,16 @@ body {
 #codex-git-push,
 #codex-branch-overlay-push {
     background-image: var(--icon-sync);
+}
+
+.git-action-sync,
+#codex-git-sync {
+    background-image: var(--icon-refresh);
+}
+
+.git-action-sync.is-loading,
+#codex-git-sync.is-loading {
+    animation: session-spin 0.8s linear infinite;
 }
 
 [data-theme="dark"] .btn.ghost.git-action-commit.is-ready {

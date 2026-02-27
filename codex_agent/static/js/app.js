@@ -73,6 +73,7 @@ const GIT_STATUS_REQUEST_TIMEOUT_MS = 15000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 30000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 120000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 120000;
+const GIT_SYNC_REQUEST_TIMEOUT_MS = 120000;
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
@@ -409,6 +410,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitBranch = document.getElementById('codex-git-branch');
     const gitCommitBtn = document.getElementById('codex-git-commit');
     const gitPushBtn = document.getElementById('codex-git-push');
+    const gitSyncBtn = document.getElementById('codex-git-sync');
     const branchOverlayCommitBtn = document.getElementById('codex-branch-overlay-commit');
     const branchOverlayPushBtn = document.getElementById('codex-branch-overlay-push');
     const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
@@ -447,6 +449,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (gitPushBtn) {
         gitPushBtn.addEventListener('click', () => {
             void handleGitPush(gitPushBtn);
+        });
+    }
+    if (gitSyncBtn) {
+        gitSyncBtn.addEventListener('click', () => {
+            void handleGitSync(gitSyncBtn);
         });
     }
     if (branchOverlayCommitBtn) {
@@ -3048,6 +3055,35 @@ async function handleGitPush(button) {
         if (overlayPushButton && overlayPushButton !== button) {
             setGitButtonBusy(overlayPushButton, false);
         }
+        void refreshGitBranchStatus({ force: true, updateOverlay: true });
+    }
+}
+
+async function handleGitSync(button) {
+    if (gitMutationInFlight) {
+        showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
+            tone: 'error',
+            durationMs: 3800
+        });
+        return;
+    }
+
+    gitMutationInFlight = true;
+    setGitButtonBusy(button, true, 'Syncing...');
+    try {
+        const result = await fetchJson('/api/codex/git/sync', {
+            method: 'POST',
+            timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS
+        });
+        const summary = summarizeGitOutput(result?.stdout || result?.stderr);
+        const suffix = summary ? `: ${summary}` : '';
+        showToast(`git fetch --prune 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+    } catch (error) {
+        const message = normalizeError(error, 'git sync 작업에 실패했습니다.');
+        showToast(`git sync 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+    } finally {
+        gitMutationInFlight = false;
+        setGitButtonBusy(button, false);
         void refreshGitBranchStatus({ force: true, updateOverlay: true });
     }
 }

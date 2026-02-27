@@ -2150,6 +2150,10 @@ body {
     cursor: help;
 }
 
+body.has-tooltip-layer .hover-tooltip::after {
+    display: none !important;
+}
+
 button.hover-tooltip,
 a.hover-tooltip,
 input.hover-tooltip,
@@ -2191,6 +2195,36 @@ label.hover-tooltip,
 .hover-tooltip:hover::after,
 .hover-tooltip:focus-visible::after,
 .hover-tooltip.is-open::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.hover-tooltip-layer {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: max-content;
+    max-width: min(56ch, min(92vw, 520px));
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--tooltip-border);
+    background: var(--tooltip-bg);
+    color: var(--tooltip-text);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    box-shadow: var(--shadow-accent);
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-2px);
+    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+    z-index: 2395;
+}
+
+.hover-tooltip-layer.is-visible {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);

@@ -47,6 +47,9 @@ const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'codex-toast-layer';
+const HOVER_TOOLTIP_LAYER_ID = 'codex-hover-tooltip-layer';
+const HOVER_TOOLTIP_OFFSET_PX = 8;
+const HOVER_TOOLTIP_VIEWPORT_MARGIN_PX = 10;
 const WEATHER_GEO_PRIMARY_OPTIONS = Object.freeze({
     enableHighAccuracy: false,
     timeout: 12000,
@@ -97,6 +100,9 @@ let remoteStreamPollTimer = null;
 let remoteStreamStatusInFlight = false;
 let streamMonitorState = null;
 let hoverTooltipInteractionsBound = false;
+let hoverTooltipLayer = null;
+let hoverTooltipAnchor = null;
+let hoverTooltipRefreshRaf = null;
 let liveWeatherCompactDatetime = '--';
 let liveWeatherCompactCurrentTemp = '--';
 let liveWeatherCompactWeatherText = '날씨 불러오는 중...';
@@ -1013,6 +1019,108 @@ function isNaturallyFocusableElement(element) {
     return editable === '' || editable === 'true';
 }
 
+function clampToRange(value, min, max) {
+    if (!Number.isFinite(value)) return min;
+    return Math.min(Math.max(value, min), max);
+}
+
+function getHoverTooltipText(element) {
+    if (!element) return '';
+    const value = element.getAttribute('data-tooltip');
+    return value ? value.trim() : '';
+}
+
+function ensureHoverTooltipLayer() {
+    if (hoverTooltipLayer && document.body.contains(hoverTooltipLayer)) {
+        return hoverTooltipLayer;
+    }
+    hoverTooltipLayer = document.getElementById(HOVER_TOOLTIP_LAYER_ID);
+    if (!hoverTooltipLayer) {
+        const layer = document.createElement('div');
+        layer.id = HOVER_TOOLTIP_LAYER_ID;
+        layer.className = 'hover-tooltip-layer';
+        layer.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(layer);
+        hoverTooltipLayer = layer;
+    }
+    document.body.classList.add('has-tooltip-layer');
+    return hoverTooltipLayer;
+}
+
+function hideHoverTooltipLayer({ clearAnchor = true } = {}) {
+    if (hoverTooltipRefreshRaf) {
+        window.cancelAnimationFrame(hoverTooltipRefreshRaf);
+        hoverTooltipRefreshRaf = null;
+    }
+    const layer = ensureHoverTooltipLayer();
+    if (layer) {
+        layer.classList.remove('is-visible');
+        layer.setAttribute('aria-hidden', 'true');
+    }
+    if (clearAnchor) {
+        hoverTooltipAnchor = null;
+    }
+}
+
+function renderHoverTooltipLayer(anchor) {
+    if (!anchor || !(anchor instanceof Element) || !document.body.contains(anchor)) {
+        hideHoverTooltipLayer();
+        return;
+    }
+    const text = getHoverTooltipText(anchor);
+    if (!text) {
+        hideHoverTooltipLayer();
+        return;
+    }
+
+    const layer = ensureHoverTooltipLayer();
+    if (!layer) return;
+    layer.textContent = text;
+    layer.setAttribute('aria-hidden', 'false');
+
+    const anchorRect = anchor.getBoundingClientRect();
+    const viewportWidth = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0);
+    const viewportHeight = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0);
+    const margin = HOVER_TOOLTIP_VIEWPORT_MARGIN_PX;
+    const offset = HOVER_TOOLTIP_OFFSET_PX;
+
+    layer.style.left = `${margin}px`;
+    layer.style.top = `${margin}px`;
+    const layerRect = layer.getBoundingClientRect();
+    const width = layerRect.width;
+    const height = layerRect.height;
+
+    const maxLeft = Math.max(margin, viewportWidth - width - margin);
+    const maxTop = Math.max(margin, viewportHeight - height - margin);
+    let left = anchorRect.left + ((anchorRect.width - width) / 2);
+    left = clampToRange(left, margin, maxLeft);
+
+    let top = anchorRect.bottom + offset;
+    if (top + height > (viewportHeight - margin)) {
+        top = anchorRect.top - height - offset;
+    }
+    top = clampToRange(top, margin, maxTop);
+
+    layer.style.left = `${Math.round(left)}px`;
+    layer.style.top = `${Math.round(top)}px`;
+    layer.classList.add('is-visible');
+}
+
+function scheduleHoverTooltipRender(anchor = null) {
+    if (anchor) {
+        hoverTooltipAnchor = anchor;
+    }
+    if (!hoverTooltipAnchor) {
+        hideHoverTooltipLayer();
+        return;
+    }
+    if (hoverTooltipRefreshRaf) return;
+    hoverTooltipRefreshRaf = window.requestAnimationFrame(() => {
+        hoverTooltipRefreshRaf = null;
+        renderHoverTooltipLayer(hoverTooltipAnchor);
+    });
+}
+
 function setHoverTooltip(element, text, { focusable = true } = {}) {
     if (!element) return;
     const resolved = text == null ? '' : String(text);
@@ -1020,6 +1128,9 @@ function setHoverTooltip(element, text, { focusable = true } = {}) {
         element.classList.add('hover-tooltip');
         element.setAttribute('data-tooltip', resolved);
         element.setAttribute('title', resolved);
+        if (hoverTooltipAnchor === element) {
+            scheduleHoverTooltipRender(element);
+        }
         if (
             focusable
             && !element.hasAttribute('tabindex')
@@ -1036,6 +1147,9 @@ function setHoverTooltip(element, text, { focusable = true } = {}) {
         element.classList.remove('is-open');
         element.removeAttribute('data-tooltip');
         element.removeAttribute('title');
+        if (hoverTooltipAnchor === element) {
+            hideHoverTooltipLayer();
+        }
         if (element.getAttribute('data-tooltip-tabindex') === '1') {
             element.removeAttribute('tabindex');
             element.removeAttribute('data-tooltip-tabindex');
@@ -1060,15 +1174,65 @@ function syncHoverTooltipFromLabel(element, fallbackText = '', options = {}) {
 }
 
 function closeOpenHoverTooltips(exceptElement = null) {
+    let hasPinnedTooltip = false;
     document.querySelectorAll('.hover-tooltip.is-open').forEach(element => {
-        if (exceptElement && element === exceptElement) return;
+        if (exceptElement && element === exceptElement) {
+            hasPinnedTooltip = true;
+            return;
+        }
         element.classList.remove('is-open');
     });
+    if (hasPinnedTooltip && exceptElement) {
+        scheduleHoverTooltipRender(exceptElement);
+        return;
+    }
+    hideHoverTooltipLayer();
 }
 
 function initializeHoverTooltipInteractions() {
     if (hoverTooltipInteractionsBound) return;
     hoverTooltipInteractionsBound = true;
+    ensureHoverTooltipLayer();
+
+    document.addEventListener('pointerover', event => {
+        if (event.pointerType === 'touch') return;
+        const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
+        if (!target || !getHoverTooltipText(target)) return;
+        if (
+            hoverTooltipAnchor
+            && hoverTooltipAnchor !== target
+            && hoverTooltipAnchor.classList.contains('is-open')
+        ) {
+            return;
+        }
+        scheduleHoverTooltipRender(target);
+    });
+
+    document.addEventListener('pointerout', event => {
+        if (event.pointerType === 'touch') return;
+        const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
+        if (!target || hoverTooltipAnchor !== target) return;
+        if (target.classList.contains('is-open') || document.activeElement === target) return;
+        const related = event.relatedTarget;
+        if (related instanceof Node && target.contains(related)) return;
+        hideHoverTooltipLayer();
+    });
+
+    document.addEventListener('focusin', event => {
+        const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
+        if (!target || !getHoverTooltipText(target)) return;
+        scheduleHoverTooltipRender(target);
+    });
+
+    document.addEventListener('focusout', event => {
+        const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
+        if (!target || hoverTooltipAnchor !== target || target.classList.contains('is-open')) return;
+        window.requestAnimationFrame(() => {
+            if (document.activeElement === target) return;
+            hideHoverTooltipLayer();
+        });
+    });
+
     document.addEventListener('click', event => {
         const target = event.target instanceof Element ? event.target.closest('.hover-tooltip') : null;
         if (!target || !target.getAttribute('data-tooltip')) {
@@ -1078,11 +1242,27 @@ function initializeHoverTooltipInteractions() {
         const willOpen = !target.classList.contains('is-open');
         closeOpenHoverTooltips(target);
         target.classList.toggle('is-open', willOpen);
+        if (willOpen) {
+            scheduleHoverTooltipRender(target);
+        } else if (hoverTooltipAnchor === target) {
+            hideHoverTooltipLayer();
+        }
     });
+
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
         closeOpenHoverTooltips();
     });
+
+    window.addEventListener('resize', () => {
+        if (!hoverTooltipAnchor) return;
+        scheduleHoverTooltipRender();
+    });
+
+    window.addEventListener('scroll', () => {
+        if (!hoverTooltipAnchor) return;
+        scheduleHoverTooltipRender();
+    }, true);
 }
 
 function setTextWithTooltip(element, text) {

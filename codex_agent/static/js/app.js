@@ -3116,7 +3116,7 @@ async function handleGitPush(button) {
         });
         return;
     }
-    const confirmed = window.confirm('현재 브랜치를 원격 저장소로 push 하시겠습니까?');
+    const confirmed = window.confirm('현재 브랜치를 원격 저장소로 push하고, 이어서 fetch까지 실행할까요?');
     if (!confirmed) {
         return;
     }
@@ -3137,7 +3137,18 @@ async function handleGitPush(button) {
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
-        showToast(`git push 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        if (result?.post_fetch_ok === false) {
+            const postFetchSummary = summarizeGitOutput(
+                result?.post_fetch_error || result?.post_fetch_stderr || result?.post_fetch_stdout
+            );
+            const postFetchSuffix = postFetchSummary ? ` (${postFetchSummary})` : '';
+            showToast(`git push 완료, post-fetch 실패${postFetchSuffix}`, {
+                tone: 'error',
+                durationMs: 5200
+            });
+        } else {
+            showToast(`git push + fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        }
     } catch (error) {
         const message = normalizeError(error, 'git push 작업에 실패했습니다.');
         showToast(`git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
@@ -3165,14 +3176,16 @@ async function handleGitSync(button) {
     try {
         const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
-            timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({ repo_target: 'codex_agent' })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
-        showToast(`git fetch --prune 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        showToast(`codex_agent git fetch --prune 완료${suffix}`, { tone: 'success', durationMs: 3600 });
     } catch (error) {
         const message = normalizeError(error, 'git sync 작업에 실패했습니다.');
-        showToast(`git sync 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        showToast(`codex_agent git sync 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         setGitButtonBusy(button, false);

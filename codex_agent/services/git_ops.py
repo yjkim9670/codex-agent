@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from ..config import WORKSPACE_DIR
+from ..config import REPO_ROOT, WORKSPACE_DIR
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
@@ -16,14 +16,38 @@ _GIT_ACTIONS = {
 }
 _GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
 _GIT_MUTATION_LOCK = threading.Lock()
+_GIT_REPO_TARGET_WORKSPACE = 'workspace'
+_GIT_REPO_TARGET_CODEX_AGENT = 'codex_agent'
+_GIT_REPO_TARGET_ALIASES = {
+    _GIT_REPO_TARGET_WORKSPACE: _GIT_REPO_TARGET_WORKSPACE,
+    'default': _GIT_REPO_TARGET_WORKSPACE,
+    _GIT_REPO_TARGET_CODEX_AGENT: _GIT_REPO_TARGET_CODEX_AGENT,
+    'codex-agent': _GIT_REPO_TARGET_CODEX_AGENT,
+    'codex': _GIT_REPO_TARGET_CODEX_AGENT,
+    'agent': _GIT_REPO_TARGET_CODEX_AGENT
+}
 
 
-def _resolve_repo_root():
-    if not WORKSPACE_DIR.exists():
-        return None, f'워크스페이스 경로를 찾을 수 없습니다: {WORKSPACE_DIR}'
+def _normalize_repo_target(value):
+    target = str(value or '').strip().lower()
+    if not target:
+        return _GIT_REPO_TARGET_WORKSPACE
+    return _GIT_REPO_TARGET_ALIASES.get(target, _GIT_REPO_TARGET_WORKSPACE)
+
+
+def _resolve_repo_root(repo_target=_GIT_REPO_TARGET_WORKSPACE):
+    normalized_target = _normalize_repo_target(repo_target)
+    if normalized_target == _GIT_REPO_TARGET_CODEX_AGENT:
+        repo_base = REPO_ROOT
+        repo_label = 'Codex Agent 저장소'
+    else:
+        repo_base = WORKSPACE_DIR
+        repo_label = '워크스페이스 저장소'
+    if not repo_base.exists():
+        return None, f'{repo_label} 경로를 찾을 수 없습니다: {repo_base}'
     try:
         result = subprocess.run(
-            ['git', '-C', str(WORKSPACE_DIR), 'rev-parse', '--show-toplevel'],
+            ['git', '-C', str(repo_base), 'rev-parse', '--show-toplevel'],
             capture_output=True,
             text=True,
             timeout=10,
@@ -39,7 +63,7 @@ def _resolve_repo_root():
     if result.returncode != 0:
         stderr = (result.stderr or '').strip()
         stdout = (result.stdout or '').strip()
-        return None, stderr or stdout or 'git 저장소를 찾을 수 없습니다.'
+        return None, stderr or stdout or f'{repo_label}를 찾을 수 없습니다.'
 
     repo_root = Path((result.stdout or '').strip())
     if not repo_root.exists():
@@ -139,7 +163,7 @@ def _pick_remote(repo_root, env):
 
 
 def get_current_branch_name():
-    repo_root, error = _resolve_repo_root()
+    repo_root, error = _resolve_repo_root(_GIT_REPO_TARGET_WORKSPACE)
     if error:
         return ''
     env = os.environ.copy()
@@ -352,7 +376,8 @@ def run_git_action(action, payload=None):
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
 
-        repo_root, error = _resolve_repo_root()
+        repo_target = _normalize_repo_target(payload.get('repo_target'))
+        repo_root, error = _resolve_repo_root(repo_target)
         if error:
             return {'error': error}
 
@@ -384,7 +409,8 @@ def run_git_action(action, payload=None):
                     command='git status --porcelain',
                     exit_code=result.returncode,
                     stdout=result.stdout,
-                    stderr=result.stderr
+                    stderr=result.stderr,
+                    extra={'repo_target': repo_target}
                 )
 
             if action == 'sync':
@@ -405,7 +431,8 @@ def run_git_action(action, payload=None):
                     command=' '.join(fetch_cmd),
                     exit_code=result.returncode,
                     stdout=result.stdout,
-                    stderr=result.stderr
+                    stderr=result.stderr,
+                    extra={'repo_target': repo_target}
                 )
 
             if action == 'stage':
@@ -458,7 +485,11 @@ def run_git_action(action, payload=None):
                     exit_code=add_result.returncode,
                     stdout=combined_stdout,
                     stderr=combined_stderr,
-                    extra={'selected_files_count': len(selected_files), 'selected_files': selected_files}
+                    extra={
+                        'selected_files_count': len(selected_files),
+                        'selected_files': selected_files,
+                        'repo_target': repo_target
+                    }
                 )
 
             if action == 'commit':
@@ -502,7 +533,11 @@ def run_git_action(action, payload=None):
                     exit_code=commit_result.returncode,
                     stdout=commit_result.stdout,
                     stderr=commit_result.stderr,
-                    extra={'commit_message': commit_message, 'commit_hash': commit_hash}
+                    extra={
+                        'commit_message': commit_message,
+                        'commit_hash': commit_hash,
+                        'repo_target': repo_target
+                    }
                 )
 
             if action == 'push':
@@ -520,14 +555,58 @@ def run_git_action(action, payload=None):
                 )
                 if error:
                     return error
+
+                fetch_cmd = _GIT_ACTIONS['sync']
+                fetch_result, fetch_exec_error = _run_git_command(
+                    fetch_cmd,
+                    repo_root,
+                    GIT_NETWORK_TIMEOUT_SECONDS,
+                    env
+                )
+                post_fetch_ok = False
+                post_fetch_stdout = ''
+                post_fetch_stderr = ''
+                post_fetch_error = ''
+                post_fetch_exit_code = -1
+                if fetch_exec_error:
+                    post_fetch_error = fetch_exec_error.get('error') or 'post-fetch 실행에 실패했습니다.'
+                elif not fetch_result:
+                    post_fetch_error = 'post-fetch 결과를 확인할 수 없습니다.'
+                else:
+                    post_fetch_stdout = (fetch_result.stdout or '').strip()
+                    post_fetch_stderr = (fetch_result.stderr or '').strip()
+                    post_fetch_exit_code = int(fetch_result.returncode)
+                    if fetch_result.returncode == 0:
+                        post_fetch_ok = True
+                    else:
+                        post_fetch_error = post_fetch_stderr or post_fetch_stdout or 'post-fetch에 실패했습니다.'
+
+                push_stdout = (push_result.stdout or '').strip()
+                push_stderr = (push_result.stderr or '').strip()
+                combined_stdout = '\n'.join(item for item in [push_stdout, post_fetch_stdout] if item)
+                combined_stderr = '\n'.join(
+                    item for item in [
+                        push_stderr,
+                        post_fetch_stderr,
+                        f'post-fetch error: {post_fetch_error}' if post_fetch_error else ''
+                    ] if item
+                )
                 return _build_result(
                     repo_root,
                     env,
                     started_at,
-                    command=' '.join(push_cmd),
+                    command=f"{' '.join(push_cmd)} && {' '.join(fetch_cmd)}",
                     exit_code=push_result.returncode,
-                    stdout=push_result.stdout,
-                    stderr=push_result.stderr
+                    stdout=combined_stdout,
+                    stderr=combined_stderr,
+                    extra={
+                        'repo_target': repo_target,
+                        'post_fetch_ok': post_fetch_ok,
+                        'post_fetch_exit_code': post_fetch_exit_code,
+                        'post_fetch_stdout': post_fetch_stdout,
+                        'post_fetch_stderr': post_fetch_stderr,
+                        'post_fetch_error': post_fetch_error
+                    }
                 )
 
             return {'error': '지원하지 않는 git 작업입니다.'}

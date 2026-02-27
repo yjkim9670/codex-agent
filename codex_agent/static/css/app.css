@@ -801,11 +801,26 @@ body {
 .git-action-sync,
 #codex-git-sync {
     background-image: var(--icon-fetch);
+    position: relative;
 }
 
 .git-action-sync.is-loading,
 #codex-git-sync.is-loading {
+    animation: none;
+    background-image: none;
+}
+
+.git-action-sync.is-loading::before,
+#codex-git-sync.is-loading::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--icon-fetch);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px 15px;
     animation: session-spin 0.8s linear infinite;
+    pointer-events: none;
 }
 
 [data-theme="dark"] .btn.ghost.git-action-commit.is-ready {
@@ -1017,10 +1032,24 @@ body {
     background-position: center;
     background-size: 16px 16px;
     background-color: var(--surface-muted);
+    position: relative;
 }
 
 .sessions-refresh.is-loading {
+    animation: none;
+    background-image: none;
+}
+
+.sessions-refresh.is-loading::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: var(--icon-refresh);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
     animation: session-spin 0.8s linear infinite;
+    pointer-events: none;
 }
 
 .sessions-toggle {

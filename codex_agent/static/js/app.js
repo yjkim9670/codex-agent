@@ -3012,6 +3012,7 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }
+    recoverGitPushButtonsIfIdle();
     return status;
 }
 
@@ -3042,6 +3043,32 @@ async function showGitBranchInfoToast(element) {
         ? `변경 파일 ${changeCount}개`
         : '변경 파일 수를 불러올 수 없습니다';
     showToast(`브랜치: ${branchName} · ${countText}`, { tone: 'success', durationMs: 2400 });
+}
+
+function getGitPushButtons(preferredButton = null) {
+    const candidates = [
+        preferredButton,
+        document.getElementById('codex-git-push'),
+        document.getElementById('codex-branch-overlay-push')
+    ];
+    const seen = new Set();
+    return candidates.filter(button => {
+        if (!button || seen.has(button)) return false;
+        seen.add(button);
+        return true;
+    });
+}
+
+function recoverGitPushButtonsIfIdle() {
+    if (gitMutationInFlight) return;
+    getGitPushButtons().forEach(button => {
+        const appearsBusy = button.disabled
+            || button.classList.contains('is-loading')
+            || button.getAttribute('aria-busy') === 'true';
+        if (appearsBusy) {
+            setGitButtonBusy(button, false);
+        }
+    });
 }
 
 async function handleGitCommit(button) {
@@ -3109,6 +3136,7 @@ async function handleGitCommit(button) {
 }
 
 async function handleGitPush(button) {
+    recoverGitPushButtonsIfIdle();
     if (gitMutationInFlight) {
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
@@ -3121,14 +3149,12 @@ async function handleGitPush(button) {
         return;
     }
 
-    const elements = getGitBranchOverlayElements();
-    const overlayPushButton = elements?.pushBtn;
+    const pushButtons = getGitPushButtons(button);
     gitMutationInFlight = true;
-    setGitButtonBusy(button, true, 'Pushing...');
-    if (overlayPushButton && overlayPushButton !== button) {
-        setGitButtonBusy(overlayPushButton, true, 'Pushing...');
-    }
     try {
+        pushButtons.forEach(pushButton => {
+            setGitButtonBusy(pushButton, true, 'Pushing...');
+        });
         const result = await fetchJson('/api/codex/git/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3154,10 +3180,9 @@ async function handleGitPush(button) {
         showToast(`git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
-        setGitButtonBusy(button, false);
-        if (overlayPushButton && overlayPushButton !== button) {
-            setGitButtonBusy(overlayPushButton, false);
-        }
+        pushButtons.forEach(pushButton => {
+            setGitButtonBusy(pushButton, false);
+        });
         void refreshGitBranchStatus({ force: true, updateOverlay: true });
     }
 }

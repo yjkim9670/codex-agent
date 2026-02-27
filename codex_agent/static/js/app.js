@@ -69,6 +69,10 @@ const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter fo
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
+const GIT_STATUS_REQUEST_TIMEOUT_MS = 15000;
+const GIT_STAGE_REQUEST_TIMEOUT_MS = 30000;
+const GIT_COMMIT_REQUEST_TIMEOUT_MS = 120000;
+const GIT_PUSH_REQUEST_TIMEOUT_MS = 120000;
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
@@ -83,6 +87,7 @@ let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
+let gitMutationInFlight = false;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -2461,8 +2466,65 @@ async function updateSettings() {
     }
 }
 
-async function fetchJson(url, options) {
-    const response = await fetch(url, options);
+function createFetchTimeoutController(timeoutMs, baseSignal = null) {
+    const normalized = Number(timeoutMs);
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+        return {
+            signal: baseSignal || undefined,
+            didTimeout: () => false,
+            clear: () => {}
+        };
+    }
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, normalized);
+    const onBaseAbort = () => {
+        controller.abort();
+    };
+    if (baseSignal) {
+        if (baseSignal.aborted) {
+            controller.abort();
+        } else {
+            baseSignal.addEventListener('abort', onBaseAbort, { once: true });
+        }
+    }
+    return {
+        signal: controller.signal,
+        didTimeout: () => timedOut,
+        clear: () => {
+            clearTimeout(timer);
+            if (baseSignal) {
+                baseSignal.removeEventListener('abort', onBaseAbort);
+            }
+        }
+    };
+}
+
+async function fetchJson(url, options = {}) {
+    const requestOptions = options && typeof options === 'object'
+        ? { ...options }
+        : {};
+    const timeoutMs = requestOptions.timeoutMs;
+    delete requestOptions.timeoutMs;
+    const timeoutController = createFetchTimeoutController(timeoutMs, requestOptions.signal);
+    if (timeoutController.signal) {
+        requestOptions.signal = timeoutController.signal;
+    }
+    let response;
+    try {
+        response = await fetch(url, requestOptions);
+    } catch (error) {
+        if (timeoutController.didTimeout()) {
+            const seconds = Math.max(1, Math.round(Number(timeoutMs) / 1000));
+            throw new Error(`요청 시간이 초과되었습니다. (${seconds}초)`);
+        }
+        throw error;
+    } finally {
+        timeoutController.clear();
+    }
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
         const data = await response.json();
@@ -2804,7 +2866,10 @@ async function fetchGitStatus(force = false) {
     }
     gitBranchStatusInFlight = true;
     try {
-        const result = await fetchJson('/api/codex/git/status', { method: 'POST' });
+        const result = await fetchJson('/api/codex/git/status', {
+            method: 'POST',
+            timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
+        });
         const count = normalizeGitChangedFilesCount(result?.changed_files_count);
         const branch = typeof result?.branch === 'string' ? result.branch : '';
         const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
@@ -2881,6 +2946,13 @@ async function showGitBranchInfoToast(element) {
 }
 
 async function handleGitCommit(button) {
+    if (gitMutationInFlight) {
+        showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
+            tone: 'error',
+            durationMs: 3800
+        });
+        return;
+    }
     const selectedFiles = Array.from(gitOverlaySelectedFiles);
     if (!selectedFiles.length) {
         showToast('커밋할 파일을 먼저 선택해주세요.', { tone: 'error', durationMs: 3400 });
@@ -2890,6 +2962,7 @@ async function handleGitCommit(button) {
     const elements = getGitBranchOverlayElements();
     const commitMessage = elements?.commitMessage?.value?.trim() || '';
     const commitButton = elements?.commitBtn;
+    gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Committing...');
     if (commitButton && commitButton !== button) {
         setGitButtonBusy(commitButton, true, 'Committing...');
@@ -2898,6 +2971,7 @@ async function handleGitCommit(button) {
         await fetchJson('/api/codex/git/stage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
                 files: selectedFiles,
                 replace: true
@@ -2906,6 +2980,7 @@ async function handleGitCommit(button) {
         const result = await fetchJson('/api/codex/git/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
                 message: commitMessage
             })
@@ -2925,6 +3000,7 @@ async function handleGitCommit(button) {
         const message = normalizeError(error, 'git commit 작업에 실패했습니다.');
         showToast(`git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
+        gitMutationInFlight = false;
         setGitButtonBusy(button, false);
         if (commitButton && commitButton !== button) {
             setGitButtonBusy(commitButton, false);
@@ -2934,6 +3010,13 @@ async function handleGitCommit(button) {
 }
 
 async function handleGitPush(button) {
+    if (gitMutationInFlight) {
+        showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
+            tone: 'error',
+            durationMs: 3800
+        });
+        return;
+    }
     const confirmed = window.confirm('현재 브랜치를 원격 저장소로 push 하시겠습니까?');
     if (!confirmed) {
         return;
@@ -2941,6 +3024,7 @@ async function handleGitPush(button) {
 
     const elements = getGitBranchOverlayElements();
     const overlayPushButton = elements?.pushBtn;
+    gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Pushing...');
     if (overlayPushButton && overlayPushButton !== button) {
         setGitButtonBusy(overlayPushButton, true, 'Pushing...');
@@ -2949,6 +3033,7 @@ async function handleGitPush(button) {
         const result = await fetchJson('/api/codex/git/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_PUSH_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({ confirm: true })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
@@ -2958,6 +3043,7 @@ async function handleGitPush(button) {
         const message = normalizeError(error, 'git push 작업에 실패했습니다.');
         showToast(`git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
+        gitMutationInFlight = false;
         setGitButtonBusy(button, false);
         if (overlayPushButton && overlayPushButton !== button) {
             setGitButtonBusy(overlayPushButton, false);

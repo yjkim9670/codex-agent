@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,9 +10,12 @@ from pathlib import Path
 from ..config import WORKSPACE_DIR
 
 GIT_TIMEOUT_SECONDS = 600
+GIT_NETWORK_TIMEOUT_SECONDS = 180
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
+_GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
+_GIT_MUTATION_LOCK = threading.Lock()
 
 
 def _resolve_repo_root():
@@ -48,6 +52,7 @@ def _run_git_command(cmd, repo_root, timeout, env):
         result = subprocess.run(
             cmd,
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -353,171 +358,181 @@ def run_git_action(action, payload=None):
 
         env = os.environ.copy()
         env.setdefault('GIT_TERMINAL_PROMPT', '0')
+        env.setdefault('GCM_INTERACTIVE', 'never')
         started_at = time.time()
+        lock_acquired = False
+        if action in _GIT_MUTATION_ACTIONS:
+            lock_acquired = _GIT_MUTATION_LOCK.acquire(blocking=False)
+            if not lock_acquired:
+                return {'error': '다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.'}
 
-        if action == 'status':
-            result, error = _run_checked(
-                ['git', '-C', str(repo_root), 'status', '--porcelain'],
-                repo_root,
-                env,
-                15,
-                'git status를 확인하지 못했습니다.'
-            )
-            if error:
-                return error
-            return _build_result(
-                repo_root,
-                env,
-                started_at,
-                command='git status --porcelain',
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr
-            )
-
-        if action == 'sync':
-            fetch_cmd = _GIT_ACTIONS['sync']
-            result, error = _run_checked(
-                fetch_cmd,
-                repo_root,
-                env,
-                GIT_TIMEOUT_SECONDS,
-                'git fetch에 실패했습니다.'
-            )
-            if error:
-                return error
-            return _build_result(
-                repo_root,
-                env,
-                started_at,
-                command=' '.join(fetch_cmd),
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr
-            )
-
-        if action == 'stage':
-            selected_files = _normalize_selected_files(payload.get('files'))
-            if not selected_files:
-                return {'error': '스테이징할 파일을 선택해주세요.'}
-
-            replace_index = payload.get('replace')
-            if replace_index is None:
-                replace_index = True
-            replace_index = bool(replace_index)
-
-            if replace_index:
-                reset_result, error = _run_checked(
-                    ['git', '-C', str(repo_root), 'reset'],
+        try:
+            if action == 'status':
+                result, error = _run_checked(
+                    ['git', '-C', str(repo_root), 'status', '--porcelain'],
                     repo_root,
                     env,
-                    30,
-                    'git 인덱스 초기화에 실패했습니다.'
+                    15,
+                    'git status를 확인하지 못했습니다.'
                 )
                 if error:
                     return error
-                reset_stdout = (reset_result.stdout or '').strip()
-                reset_stderr = (reset_result.stderr or '').strip()
-            else:
-                reset_stdout = ''
-                reset_stderr = ''
-
-            add_cmd = ['git', '-C', str(repo_root), 'add', '--', *selected_files]
-            add_result, error = _run_checked(
-                add_cmd,
-                repo_root,
-                env,
-                60,
-                'git add에 실패했습니다.'
-            )
-            if error:
-                return error
-            combined_stdout = '\n'.join(
-                item for item in [reset_stdout, (add_result.stdout or '').strip()] if item
-            )
-            combined_stderr = '\n'.join(
-                item for item in [reset_stderr, (add_result.stderr or '').strip()] if item
-            )
-            return _build_result(
-                repo_root,
-                env,
-                started_at,
-                command='git reset && git add -- <selected files>' if replace_index else 'git add -- <selected files>',
-                exit_code=add_result.returncode,
-                stdout=combined_stdout,
-                stderr=combined_stderr,
-                extra={'selected_files_count': len(selected_files), 'selected_files': selected_files}
-            )
-
-        if action == 'commit':
-            staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
-            if not staged_files_detail:
-                return {'error': '스테이징된 변경 사항이 없습니다. 먼저 stage를 실행해주세요.'}
-
-            commit_message = str(payload.get('message') or '').strip()
-            if not commit_message:
-                synthetic_status = '\n'.join(
-                    f"M  {entry['path']}" for entry in staged_files_detail if entry.get('path')
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command='git status --porcelain',
+                    exit_code=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr
                 )
-                commit_message = _build_commit_message(synthetic_status)
 
-            commit_cmd = ['git', '-C', str(repo_root), 'commit', '-m', commit_message]
-            commit_result, error = _run_checked(
-                commit_cmd,
-                repo_root,
-                env,
-                GIT_TIMEOUT_SECONDS,
-                'git commit에 실패했습니다.'
-            )
-            if error:
-                return error
+            if action == 'sync':
+                fetch_cmd = _GIT_ACTIONS['sync']
+                result, error = _run_checked(
+                    fetch_cmd,
+                    repo_root,
+                    env,
+                    GIT_NETWORK_TIMEOUT_SECONDS,
+                    'git fetch에 실패했습니다.'
+                )
+                if error:
+                    return error
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=' '.join(fetch_cmd),
+                    exit_code=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr
+                )
 
-            head_result, head_error = _run_git_command(
-                ['git', '-C', str(repo_root), 'rev-parse', '--short', 'HEAD'],
-                repo_root,
-                10,
-                env
-            )
-            commit_hash = ''
-            if not head_error and head_result and head_result.returncode == 0:
-                commit_hash = (head_result.stdout or '').strip()
+            if action == 'stage':
+                selected_files = _normalize_selected_files(payload.get('files'))
+                if not selected_files:
+                    return {'error': '스테이징할 파일을 선택해주세요.'}
 
-            return _build_result(
-                repo_root,
-                env,
-                started_at,
-                command='git commit -m <message>',
-                exit_code=commit_result.returncode,
-                stdout=commit_result.stdout,
-                stderr=commit_result.stderr,
-                extra={'commit_message': commit_message, 'commit_hash': commit_hash}
-            )
+                replace_index = payload.get('replace')
+                if replace_index is None:
+                    replace_index = True
+                replace_index = bool(replace_index)
 
-        if action == 'push':
-            if payload.get('confirm') is not True:
-                return {'error': 'push 실행 전 confirm=true가 필요합니다.'}
-            push_cmd, push_error = _resolve_push_command(repo_root, env)
-            if push_error:
-                return push_error
-            push_result, error = _run_checked(
-                push_cmd,
-                repo_root,
-                env,
-                GIT_TIMEOUT_SECONDS,
-                'git push에 실패했습니다.'
-            )
-            if error:
-                return error
-            return _build_result(
-                repo_root,
-                env,
-                started_at,
-                command=' '.join(push_cmd),
-                exit_code=push_result.returncode,
-                stdout=push_result.stdout,
-                stderr=push_result.stderr
-            )
+                if replace_index:
+                    reset_result, error = _run_checked(
+                        ['git', '-C', str(repo_root), 'reset'],
+                        repo_root,
+                        env,
+                        30,
+                        'git 인덱스 초기화에 실패했습니다.'
+                    )
+                    if error:
+                        return error
+                    reset_stdout = (reset_result.stdout or '').strip()
+                    reset_stderr = (reset_result.stderr or '').strip()
+                else:
+                    reset_stdout = ''
+                    reset_stderr = ''
 
-        return {'error': '지원하지 않는 git 작업입니다.'}
+                add_cmd = ['git', '-C', str(repo_root), 'add', '--', *selected_files]
+                add_result, error = _run_checked(
+                    add_cmd,
+                    repo_root,
+                    env,
+                    60,
+                    'git add에 실패했습니다.'
+                )
+                if error:
+                    return error
+                combined_stdout = '\n'.join(
+                    item for item in [reset_stdout, (add_result.stdout or '').strip()] if item
+                )
+                combined_stderr = '\n'.join(
+                    item for item in [reset_stderr, (add_result.stderr or '').strip()] if item
+                )
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command='git reset && git add -- <selected files>' if replace_index else 'git add -- <selected files>',
+                    exit_code=add_result.returncode,
+                    stdout=combined_stdout,
+                    stderr=combined_stderr,
+                    extra={'selected_files_count': len(selected_files), 'selected_files': selected_files}
+                )
+
+            if action == 'commit':
+                staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
+                if not staged_files_detail:
+                    return {'error': '스테이징된 변경 사항이 없습니다. 먼저 stage를 실행해주세요.'}
+
+                commit_message = str(payload.get('message') or '').strip()
+                if not commit_message:
+                    synthetic_status = '\n'.join(
+                        f"M  {entry['path']}" for entry in staged_files_detail if entry.get('path')
+                    )
+                    commit_message = _build_commit_message(synthetic_status)
+
+                commit_cmd = ['git', '-C', str(repo_root), 'commit', '-m', commit_message]
+                commit_result, error = _run_checked(
+                    commit_cmd,
+                    repo_root,
+                    env,
+                    GIT_TIMEOUT_SECONDS,
+                    'git commit에 실패했습니다.'
+                )
+                if error:
+                    return error
+
+                head_result, head_error = _run_git_command(
+                    ['git', '-C', str(repo_root), 'rev-parse', '--short', 'HEAD'],
+                    repo_root,
+                    10,
+                    env
+                )
+                commit_hash = ''
+                if not head_error and head_result and head_result.returncode == 0:
+                    commit_hash = (head_result.stdout or '').strip()
+
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command='git commit -m <message>',
+                    exit_code=commit_result.returncode,
+                    stdout=commit_result.stdout,
+                    stderr=commit_result.stderr,
+                    extra={'commit_message': commit_message, 'commit_hash': commit_hash}
+                )
+
+            if action == 'push':
+                if payload.get('confirm') is not True:
+                    return {'error': 'push 실행 전 confirm=true가 필요합니다.'}
+                push_cmd, push_error = _resolve_push_command(repo_root, env)
+                if push_error:
+                    return push_error
+                push_result, error = _run_checked(
+                    push_cmd,
+                    repo_root,
+                    env,
+                    GIT_NETWORK_TIMEOUT_SECONDS,
+                    'git push에 실패했습니다.'
+                )
+                if error:
+                    return error
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=' '.join(push_cmd),
+                    exit_code=push_result.returncode,
+                    stdout=push_result.stdout,
+                    stderr=push_result.stderr
+                )
+
+            return {'error': '지원하지 않는 git 작업입니다.'}
+        finally:
+            if lock_acquired:
+                _GIT_MUTATION_LOCK.release()
     except Exception as exc:
         return {'error': f'git 작업 처리 중 오류가 발생했습니다: {exc}'}

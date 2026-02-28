@@ -73,12 +73,14 @@ const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter fo
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
-const GIT_STATUS_REQUEST_TIMEOUT_MS = 15000;
-const GIT_HISTORY_REQUEST_TIMEOUT_MS = 20000;
-const GIT_STAGE_REQUEST_TIMEOUT_MS = 30000;
-const GIT_COMMIT_REQUEST_TIMEOUT_MS = 120000;
-const GIT_PUSH_REQUEST_TIMEOUT_MS = 120000;
-const GIT_SYNC_REQUEST_TIMEOUT_MS = 120000;
+const GIT_STATUS_REQUEST_TIMEOUT_MS = 25000;
+const GIT_HISTORY_REQUEST_TIMEOUT_MS = 90000;
+const GIT_STAGE_REQUEST_TIMEOUT_MS = 100000;
+const GIT_COMMIT_REQUEST_TIMEOUT_MS = 620000;
+const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
+const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
+const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
+const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
 const GIT_SYNC_TARGET_ORDER = Object.freeze([
@@ -2979,7 +2981,11 @@ async function fetchJson(url, options = {}) {
     } catch (error) {
         if (timeoutController.didTimeout()) {
             const seconds = Math.max(1, Math.round(Number(timeoutMs) / 1000));
-            throw new Error(`요청 시간이 초과되었습니다. (${seconds}초)`);
+            const timeoutError = new Error(`요청 시간이 초과되었습니다. (${seconds}초)`);
+            timeoutError.isTimeout = true;
+            timeoutError.timeoutMs = Number(timeoutMs);
+            timeoutError.cause = error;
+            throw timeoutError;
         }
         throw error;
     } finally {
@@ -3004,6 +3010,95 @@ async function fetchJson(url, options = {}) {
         throw error;
     }
     throw new Error(text || 'Unexpected response format.');
+}
+
+function getGitErrorPayload(error) {
+    if (!error || typeof error !== 'object') return null;
+    const payload = error.payload;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    return payload;
+}
+
+function isRequestTimeoutError(error) {
+    if (error && typeof error === 'object' && error.isTimeout === true) {
+        return true;
+    }
+    const message = normalizeError(error, '').toLowerCase();
+    return message.includes('요청 시간이 초과');
+}
+
+function normalizeGitActionError(error, fallback) {
+    const payload = getGitErrorPayload(error);
+    const base = normalizeError(error, fallback);
+    if (!payload || payload.error_code !== 'git_mutation_in_flight') {
+        return base;
+    }
+    if (base.includes('초 경과')) {
+        return base;
+    }
+    const activeAction = typeof payload.active_action === 'string' ? payload.active_action.trim() : '';
+    const elapsed = Number.isFinite(payload.active_elapsed_seconds)
+        ? Math.max(0, payload.active_elapsed_seconds)
+        : null;
+    if (activeAction && elapsed != null) {
+        return `${base} (서버: ${activeAction} ${elapsed}초 경과)`;
+    }
+    if (activeAction) {
+        return `${base} (서버: ${activeAction} 실행 중)`;
+    }
+    if (elapsed != null) {
+        return `${base} (서버: git 작업 ${elapsed}초 경과)`;
+    }
+    return base;
+}
+
+async function requestGitCancel(repoTarget) {
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    try {
+        const result = await fetchJson('/api/codex/git/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_CANCEL_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({
+                repo_target: target
+            })
+        });
+        return { ok: true, result };
+    } catch (error) {
+        return { ok: false, error };
+    }
+}
+
+function buildGitCancelNotice(outcome) {
+    if (!outcome) return '';
+    if (outcome.ok) {
+        const data = outcome.result;
+        if (!data || typeof data !== 'object') {
+            return '서버 취소 요청을 전송했습니다.';
+        }
+        if (data.cancel_requested) {
+            const actionName = typeof data.cancelled_action === 'string' && data.cancelled_action.trim()
+                ? data.cancelled_action.trim()
+                : 'git';
+            const elapsed = Number.isFinite(data.active_elapsed_seconds)
+                ? Math.max(0, data.active_elapsed_seconds)
+                : null;
+            return elapsed != null
+                ? `서버 취소 요청 완료 (${actionName}, ${elapsed}초 경과)`
+                : `서버 취소 요청 완료 (${actionName})`;
+        }
+        return '서버에서 취소할 실행 중 작업이 없습니다.';
+    }
+    const cancelError = normalizeError(outcome.error, '서버 취소 요청에 실패했습니다.');
+    return `서버 취소 요청 실패: ${cancelError}`;
+}
+
+async function requestGitCancelAfterTimeout(error, repoTarget) {
+    if (!isRequestTimeoutError(error)) {
+        return '';
+    }
+    const outcome = await requestGitCancel(repoTarget);
+    return buildGitCancelNotice(outcome);
 }
 
 function setGitButtonBusy(button, busy, busyLabel) {
@@ -3336,6 +3431,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         repoTarget: target,
         repoLabel: getGitSyncRepoLabel(target),
         repoRoot: '',
+        repoMissing: false,
         currentBranch: '',
         requestedMainBranch: 'main',
         mainBranch: 'main',
@@ -3493,6 +3589,7 @@ function renderGitSyncOverlay(history) {
     setGitSyncOverlayRepoTarget(repoTarget);
     const repoLabel = getGitSyncRepoLabel(repoTarget);
     const repoRoot = typeof history?.repoRoot === 'string' ? history.repoRoot.trim() : '';
+    const repoMissing = Boolean(history?.repoMissing) || !repoRoot;
     const currentBranch = typeof history?.currentBranch === 'string' ? history.currentBranch.trim() : '';
     const remoteMainRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
         ? history.remoteMainRef.trim()
@@ -3504,13 +3601,13 @@ function renderGitSyncOverlay(history) {
         ? history.mainBranch.trim()
         : requestedMainBranch;
     const mainBranchFallback = Boolean(history?.mainBranchFallback);
-    const remoteHistory = normalizeGitHistoryEntries(history?.remoteMainHistory);
+    const remoteHistory = normalizeGitHistoryEntries(history?.remoteMainHistory).slice(0, 10);
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
     const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
     const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
-    const compareText = aheadCount != null && behindCount != null
+    const compareText = !repoMissing && aheadCount != null && behindCount != null
         ? `HEAD 대비 ahead ${aheadCount} / behind ${behindCount}`
         : 'HEAD 비교 정보 없음';
     if (elements.subtitle) {
@@ -3521,8 +3618,8 @@ function renderGitSyncOverlay(history) {
         syncHoverTooltipFromLabel(elements.fetchBtn, `${remoteMainRef} fetch`);
     }
     if (elements.meta) {
-        const repoText = repoRoot ? `${repoLabel} (${repoRoot})` : repoLabel;
-        const branchText = currentBranch ? `현재 브랜치: ${currentBranch}` : '현재 브랜치: -';
+        const repoText = `${repoLabel} (${repoRoot || 'None'})`;
+        const branchText = currentBranch ? `현재 브랜치: ${currentBranch}` : '현재 브랜치: None';
         const fallbackText = mainBranchFallback && requestedMainBranch && mainBranch && requestedMainBranch !== mainBranch
             ? ` · 요청 ${requestedMainBranch} -> 사용 ${mainBranch}`
             : '';
@@ -3628,11 +3725,12 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
                 repo_target: target,
                 remote: 'origin',
                 branch: 'main',
-                limit: 30
+                limit: 10
             })
         });
         return setGitSyncHistoryCache(target, {
             repoRoot: typeof result?.repo_root === 'string' ? result.repo_root : '',
+            repoMissing: Boolean(result?.repo_missing),
             currentBranch: typeof result?.current_branch === 'string' ? result.current_branch : '',
             requestedMainBranch: typeof result?.requested_main_branch === 'string'
                 ? result.requested_main_branch
@@ -3651,13 +3749,21 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             isStale: false
         });
     } catch (error) {
-        const message = normalizeError(error, 'sync 이력 조회에 실패했습니다.');
-        setGitSyncHistoryCache(target, {
+        const payload = getGitErrorPayload(error);
+        const isRepoMissing = payload?.error_code === 'repo_not_found';
+        const message = normalizeGitActionError(error, 'sync 이력 조회에 실패했습니다.');
+        const cached = setGitSyncHistoryCache(target, {
+            repoRoot: '',
+            repoMissing: isRepoMissing,
+            currentBranch: '',
             remoteMainHistory: [],
-            remoteMainHistoryError: message,
-            isStale: true,
+            remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
+            isStale: !isRepoMissing,
             fetchedAt: Date.now()
         });
+        if (isRepoMissing) {
+            return cached;
+        }
         throw error;
     } finally {
         gitSyncHistoryInFlightByTarget[target] = false;
@@ -3676,7 +3782,7 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
     } catch (error) {
         renderGitSyncOverlay(getGitSyncHistoryCache(target));
         if (!silent) {
-            const message = normalizeError(error, 'sync 이력 조회에 실패했습니다.');
+            const message = normalizeGitActionError(error, 'sync 이력 조회에 실패했습니다.');
             showToast(`sync 이력 조회 실패: ${message}`, { tone: 'error', durationMs: 5200 });
         }
         return null;
@@ -3885,7 +3991,11 @@ async function handleGitCommit(button) {
         gitOverlaySelectionTouched = false;
         gitOverlaySelectedFiles = new Set();
     } catch (error) {
-        const message = normalizeError(error, 'git commit 작업에 실패했습니다.');
+        let message = normalizeGitActionError(error, 'git commit 작업에 실패했습니다.');
+        const cancelNotice = await requestGitCancelAfterTimeout(error, GIT_SYNC_TARGET_WORKSPACE);
+        if (cancelNotice) {
+            message = `${message} · ${cancelNotice}`;
+        }
         showToast(`git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
@@ -3956,7 +4066,11 @@ async function handleGitQuickCommit(button, options = {}) {
             await refreshGitSyncOverlayHistory({ force: true, silent: true });
         }
     } catch (error) {
-        const message = normalizeError(error, 'git commit 작업에 실패했습니다.');
+        let message = normalizeGitActionError(error, 'git commit 작업에 실패했습니다.');
+        const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
+        if (cancelNotice) {
+            message = `${message} · ${cancelNotice}`;
+        }
         showToast(`${repoLabel} · git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
@@ -4018,7 +4132,11 @@ async function handleGitPush(button, options = {}) {
             }
         }
     } catch (error) {
-        const message = normalizeError(error, 'git push 작업에 실패했습니다.');
+        let message = normalizeGitActionError(error, 'git push 작업에 실패했습니다.');
+        const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
+        if (cancelNotice) {
+            message = `${message} · ${cancelNotice}`;
+        }
         showToast(`${repoLabel} · git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
@@ -4041,6 +4159,9 @@ async function handleGitSync(button, options = {}) {
     const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || gitSyncOverlayRepoTarget);
     const repoLabel = getGitSyncRepoLabel(repoTarget);
     const applyAfterFetch = Boolean(options && typeof options === 'object' && options.applyAfterFetch);
+    const requestTimeoutMs = applyAfterFetch
+        ? GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS
+        : GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS;
 
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, applyAfterFetch ? 'Syncing...' : 'Fetching...');
@@ -4048,7 +4169,7 @@ async function handleGitSync(button, options = {}) {
         const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS,
+            timeoutMs: requestTimeoutMs,
             body: JSON.stringify({
                 repo_target: repoTarget,
                 remote: 'origin',
@@ -4077,7 +4198,11 @@ async function handleGitSync(button, options = {}) {
         const fallbackMessage = applyAfterFetch
             ? 'git fetch + sync 작업에 실패했습니다.'
             : 'git sync 작업에 실패했습니다.';
-        const message = normalizeError(error, fallbackMessage);
+        let message = normalizeGitActionError(error, fallbackMessage);
+        const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
+        if (cancelNotice) {
+            message = `${message} · ${cancelNotice}`;
+        }
         const actionLabel = applyAfterFetch ? 'fetch + sync' : 'fetch';
         showToast(`${repoLabel} · ${actionLabel} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {

@@ -15,7 +15,6 @@ _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
 _GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
-_GIT_MUTATION_LOCK = threading.Lock()
 _GIT_REPO_TARGET_WORKSPACE = 'workspace'
 _GIT_REPO_TARGET_CODEX_AGENT = 'codex_agent'
 _GIT_REPO_TARGET_ALIASES = {
@@ -26,6 +25,12 @@ _GIT_REPO_TARGET_ALIASES = {
     'codex': _GIT_REPO_TARGET_CODEX_AGENT,
     'agent': _GIT_REPO_TARGET_CODEX_AGENT
 }
+_GIT_MUTATION_LOCKS = {
+    _GIT_REPO_TARGET_WORKSPACE: threading.Lock(),
+    _GIT_REPO_TARGET_CODEX_AGENT: threading.Lock()
+}
+_GIT_MUTATION_STATE_LOCK = threading.Lock()
+_GIT_ACTIVE_MUTATIONS = {}
 
 
 def _normalize_repo_target(value):
@@ -33,6 +38,115 @@ def _normalize_repo_target(value):
     if not target:
         return _GIT_REPO_TARGET_WORKSPACE
     return _GIT_REPO_TARGET_ALIASES.get(target, _GIT_REPO_TARGET_WORKSPACE)
+
+
+def _get_mutation_lock(repo_target):
+    target = _normalize_repo_target(repo_target)
+    with _GIT_MUTATION_STATE_LOCK:
+        lock = _GIT_MUTATION_LOCKS.get(target)
+        if not lock:
+            lock = threading.Lock()
+            _GIT_MUTATION_LOCKS[target] = lock
+    return lock
+
+
+def _register_active_mutation(repo_target, action):
+    target = _normalize_repo_target(repo_target)
+    state = {
+        'repo_target': target,
+        'action': str(action or '').strip() or 'unknown',
+        'started_at': time.time(),
+        'cancel_event': threading.Event(),
+        'process': None
+    }
+    with _GIT_MUTATION_STATE_LOCK:
+        _GIT_ACTIVE_MUTATIONS[target] = state
+    return state
+
+
+def _set_active_mutation_process(state, process):
+    if not state:
+        return
+    target = _normalize_repo_target(state.get('repo_target'))
+    with _GIT_MUTATION_STATE_LOCK:
+        current = _GIT_ACTIVE_MUTATIONS.get(target)
+        if current is state:
+            state['process'] = process
+
+
+def _clear_active_mutation(repo_target, state=None):
+    target = _normalize_repo_target(repo_target)
+    with _GIT_MUTATION_STATE_LOCK:
+        current = _GIT_ACTIVE_MUTATIONS.get(target)
+        if not current:
+            return
+        if state is None or current is state:
+            _GIT_ACTIVE_MUTATIONS.pop(target, None)
+
+
+def _get_active_mutation_summary(repo_target):
+    target = _normalize_repo_target(repo_target)
+    with _GIT_MUTATION_STATE_LOCK:
+        state = _GIT_ACTIVE_MUTATIONS.get(target)
+        if not state:
+            return None
+        action = str(state.get('action') or '').strip() or 'unknown'
+        started_at = float(state.get('started_at') or time.time())
+    elapsed_seconds = max(0, int(time.time() - started_at))
+    return {
+        'repo_target': target,
+        'action': action,
+        'elapsed_seconds': elapsed_seconds
+    }
+
+
+def _terminate_process(process):
+    if not process:
+        return
+    try:
+        if process.poll() is not None:
+            return
+    except Exception:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=1)
+    except Exception:
+        try:
+            process.kill()
+            process.wait(timeout=1)
+        except Exception:
+            pass
+
+
+def _request_cancel_active_mutation(repo_target):
+    target = _normalize_repo_target(repo_target)
+    process = None
+    action = ''
+    started_at = time.time()
+    with _GIT_MUTATION_STATE_LOCK:
+        state = _GIT_ACTIVE_MUTATIONS.get(target)
+        if not state:
+            return {
+                'repo_target': target,
+                'cancel_requested': False,
+                'cancelled_action': '',
+                'active_elapsed_seconds': 0
+            }
+        cancel_event = state.get('cancel_event')
+        if cancel_event:
+            cancel_event.set()
+        process = state.get('process')
+        action = str(state.get('action') or '').strip()
+        started_at = float(state.get('started_at') or time.time())
+    elapsed_seconds = max(0, int(time.time() - started_at))
+    _terminate_process(process)
+    return {
+        'repo_target': target,
+        'cancel_requested': True,
+        'cancelled_action': action,
+        'active_elapsed_seconds': elapsed_seconds
+    }
 
 
 def _resolve_repo_root(repo_target=_GIT_REPO_TARGET_WORKSPACE):
@@ -71,25 +185,53 @@ def _resolve_repo_root(repo_target=_GIT_REPO_TARGET_WORKSPACE):
     return repo_root, None
 
 
-def _run_git_command(cmd, repo_root, timeout, env):
+def _run_git_command(cmd, repo_root, timeout, env, cancel_event=None, mutation_state=None):
+    process = None
+    started_at = time.time()
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             cmd,
             cwd=str(repo_root),
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
-            check=False,
             env=env
         )
+        _set_active_mutation_process(mutation_state, process)
+        while True:
+            if cancel_event and cancel_event.is_set():
+                _terminate_process(process)
+                stdout, stderr = process.communicate()
+                return None, {
+                    'error': '요청이 취소되어 git 작업을 중단했습니다.',
+                    'error_code': 'git_cancelled',
+                    'cancelled': True,
+                    'stdout': (stdout or '').strip(),
+                    'stderr': (stderr or '').strip()
+                }
+            if timeout and time.time() - started_at > timeout:
+                _terminate_process(process)
+                stdout, stderr = process.communicate()
+                return None, {
+                    'error': 'git 작업 시간이 초과되었습니다.',
+                    'error_code': 'git_timeout',
+                    'timeout': True,
+                    'stdout': (stdout or '').strip(),
+                    'stderr': (stderr or '').strip()
+                }
+            returncode = process.poll()
+            if returncode is not None:
+                stdout, stderr = process.communicate()
+                result = subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+                return result, None
+            time.sleep(0.1)
     except FileNotFoundError:
-        return None, {'error': 'git 명령을 찾을 수 없습니다.'}
-    except subprocess.TimeoutExpired:
-        return None, {'error': 'git 작업 시간이 초과되었습니다.'}
+        return None, {'error': 'git 명령을 찾을 수 없습니다.', 'error_code': 'git_not_found'}
     except Exception as exc:
-        return None, {'error': f'git 실행 중 오류가 발생했습니다: {exc}'}
-    return result, None
+        return None, {'error': f'git 실행 중 오류가 발생했습니다: {exc}', 'error_code': 'git_exec_error'}
+    finally:
+        _set_active_mutation_process(mutation_state, None)
 
 
 def _read_current_branch(repo_root, env):
@@ -478,6 +620,62 @@ def _to_bool(value):
     return text in {'1', 'true', 't', 'yes', 'y', 'on'}
 
 
+def _parse_history_request(payload):
+    requested_remote = str(payload.get('remote') or '').strip() or 'origin'
+    requested_branch = str(payload.get('branch') or '').strip() or 'main'
+    try:
+        limit = int(payload.get('limit') or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(100, limit))
+    return requested_remote, requested_branch, limit
+
+
+def _build_history_unavailable_result(
+    repo_target,
+    started_at,
+    requested_remote='origin',
+    requested_branch='main',
+    limit=20,
+    error_message=''
+):
+    remote_name = str(requested_remote or '').strip() or 'origin'
+    branch_name = str(requested_branch or '').strip() or 'main'
+    remote_ref = f'{remote_name}/{branch_name}'
+    reason = str(error_message or '').strip() or 'git 저장소를 찾을 수 없습니다.'
+    return {
+        'ok': True,
+        'exit_code': 0,
+        'stdout': '',
+        'stderr': '',
+        'branch': '',
+        'changed_files_count': 0,
+        'changed_files': [],
+        'changed_files_detail': [],
+        'staged_files_count': 0,
+        'staged_files': [],
+        'staged_files_detail': [],
+        'command': f'git log --max-count={limit} HEAD / {remote_ref}',
+        'repo_root': '',
+        'duration_ms': max(0, int((time.time() - started_at) * 1000)),
+        'repo_target': _normalize_repo_target(repo_target),
+        'history_limit': limit,
+        'current_branch': '',
+        'remote_name': remote_name,
+        'main_branch': branch_name,
+        'requested_remote_name': remote_name,
+        'requested_main_branch': branch_name,
+        'main_branch_fallback': False,
+        'remote_main_ref': remote_ref,
+        'current_branch_history': [],
+        'remote_main_history': [],
+        'remote_main_history_error': reason,
+        'ahead_count': None,
+        'behind_count': None,
+        'repo_missing': True
+    }
+
+
 def _read_changed_snapshot(repo_root, env):
     status_result, status_error = _run_git_command(
         ['git', '-C', str(repo_root), 'status', '--porcelain'],
@@ -540,8 +738,15 @@ def _build_result(
     return payload
 
 
-def _run_checked(cmd, repo_root, env, timeout, fallback_error):
-    result, error = _run_git_command(cmd, repo_root, timeout, env)
+def _run_checked(cmd, repo_root, env, timeout, fallback_error, cancel_event=None, mutation_state=None):
+    result, error = _run_git_command(
+        cmd,
+        repo_root,
+        timeout,
+        env,
+        cancel_event=cancel_event,
+        mutation_state=mutation_state
+    )
     if error:
         return None, error
     if not result:
@@ -570,25 +775,78 @@ def run_git_action(action, payload=None):
     try:
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
-        if action not in {'status', 'history', 'stage', 'commit', 'push', 'sync', 'submit'}:
+        if action not in {'status', 'history', 'stage', 'commit', 'push', 'sync', 'cancel', 'submit'}:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
 
         repo_target = _normalize_repo_target(payload.get('repo_target'))
+        if action == 'cancel':
+            cancel_result = _request_cancel_active_mutation(repo_target)
+            if cancel_result.get('cancel_requested'):
+                action_name = cancel_result.get('cancelled_action') or 'git'
+                elapsed = int(cancel_result.get('active_elapsed_seconds') or 0)
+                message = f'{action_name} 작업 취소를 요청했습니다. ({elapsed}초 경과)'
+            else:
+                message = '취소할 실행 중 git 작업이 없습니다.'
+            return {
+                'ok': True,
+                'exit_code': 0,
+                'stdout': '',
+                'stderr': '',
+                'command': 'git cancel',
+                'repo_target': repo_target,
+                'cancel_requested': bool(cancel_result.get('cancel_requested')),
+                'cancelled_action': cancel_result.get('cancelled_action') or '',
+                'active_elapsed_seconds': int(cancel_result.get('active_elapsed_seconds') or 0),
+                'message': message
+            }
+
+        started_at = time.time()
         repo_root, error = _resolve_repo_root(repo_target)
         if error:
-            return {'error': error}
+            if action == 'history':
+                requested_remote, requested_branch, limit = _parse_history_request(payload)
+                return _build_history_unavailable_result(
+                    repo_target,
+                    started_at,
+                    requested_remote=requested_remote,
+                    requested_branch=requested_branch,
+                    limit=limit,
+                    error_message='현재 repository: None'
+                )
+            return {'error': error, 'error_code': 'repo_not_found', 'repo_target': repo_target}
 
         env = os.environ.copy()
         env.setdefault('GIT_TERMINAL_PROMPT', '0')
         env.setdefault('GCM_INTERACTIVE', 'never')
-        started_at = time.time()
         lock_acquired = False
+        mutation_lock = None
+        mutation_state = None
         if action in _GIT_MUTATION_ACTIONS:
-            lock_acquired = _GIT_MUTATION_LOCK.acquire(blocking=False)
+            mutation_lock = _get_mutation_lock(repo_target)
+            lock_acquired = mutation_lock.acquire(blocking=False)
             if not lock_acquired:
-                return {'error': '다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.'}
+                active = _get_active_mutation_summary(repo_target)
+                if active:
+                    action_name = active.get('action') or 'git'
+                    elapsed = int(active.get('elapsed_seconds') or 0)
+                    return {
+                        'error': (
+                            f'다른 git 작업이 진행 중입니다. '
+                            f'현재 {action_name} 실행 중 ({elapsed}초 경과). 잠시 후 다시 시도해주세요.'
+                        ),
+                        'error_code': 'git_mutation_in_flight',
+                        'active_repo_target': active.get('repo_target'),
+                        'active_action': action_name,
+                        'active_elapsed_seconds': elapsed
+                    }
+                return {
+                    'error': '다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.',
+                    'error_code': 'git_mutation_in_flight'
+                }
+            mutation_state = _register_active_mutation(repo_target, action)
+        cancel_event = mutation_state.get('cancel_event') if mutation_state else None
 
         try:
             if action == 'status':
@@ -597,7 +855,9 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     15,
-                    'git status를 확인하지 못했습니다.'
+                    'git status를 확인하지 못했습니다.',
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 if error:
                     return error
@@ -629,7 +889,9 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     GIT_NETWORK_TIMEOUT_SECONDS,
-                    'git fetch에 실패했습니다.'
+                    'git fetch에 실패했습니다.',
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 if error:
                     return error
@@ -662,7 +924,9 @@ def run_git_action(action, payload=None):
                         repo_root,
                         env,
                         GIT_TIMEOUT_SECONDS,
-                        'git sync 적용에 실패했습니다.'
+                        'git sync 적용에 실패했습니다.',
+                        cancel_event=cancel_event,
+                        mutation_state=mutation_state
                     )
                     if merge_error:
                         return merge_error
@@ -708,13 +972,7 @@ def run_git_action(action, payload=None):
                 )
 
             if action == 'history':
-                requested_remote = str(payload.get('remote') or '').strip() or 'origin'
-                requested_branch = str(payload.get('branch') or '').strip() or 'main'
-                try:
-                    limit = int(payload.get('limit') or 20)
-                except (TypeError, ValueError):
-                    limit = 20
-                limit = max(1, min(100, limit))
+                requested_remote, requested_branch, limit = _parse_history_request(payload)
 
                 current_branch = _read_current_branch(repo_root, env) or 'HEAD'
                 resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
@@ -797,7 +1055,9 @@ def run_git_action(action, payload=None):
                         repo_root,
                         env,
                         30,
-                        'git 인덱스 초기화에 실패했습니다.'
+                        'git 인덱스 초기화에 실패했습니다.',
+                        cancel_event=cancel_event,
+                        mutation_state=mutation_state
                     )
                     if error:
                         return error
@@ -813,7 +1073,9 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     60,
-                    'git add에 실패했습니다.'
+                    'git add에 실패했습니다.',
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 if error:
                     return error
@@ -856,7 +1118,9 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     GIT_TIMEOUT_SECONDS,
-                    'git commit에 실패했습니다.'
+                    'git commit에 실패했습니다.',
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 if error:
                     return error
@@ -865,7 +1129,9 @@ def run_git_action(action, payload=None):
                     ['git', '-C', str(repo_root), 'rev-parse', '--short', 'HEAD'],
                     repo_root,
                     10,
-                    env
+                    env,
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 commit_hash = ''
                 if not head_error and head_result and head_result.returncode == 0:
@@ -897,7 +1163,9 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     GIT_NETWORK_TIMEOUT_SECONDS,
-                    'git push에 실패했습니다.'
+                    'git push에 실패했습니다.',
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 if error:
                     return error
@@ -907,7 +1175,9 @@ def run_git_action(action, payload=None):
                     fetch_cmd,
                     repo_root,
                     GIT_NETWORK_TIMEOUT_SECONDS,
-                    env
+                    env,
+                    cancel_event=cancel_event,
+                    mutation_state=mutation_state
                 )
                 post_fetch_ok = False
                 post_fetch_stdout = ''
@@ -957,7 +1227,9 @@ def run_git_action(action, payload=None):
 
             return {'error': '지원하지 않는 git 작업입니다.'}
         finally:
+            if mutation_state:
+                _clear_active_mutation(repo_target, mutation_state)
             if lock_acquired:
-                _GIT_MUTATION_LOCK.release()
+                mutation_lock.release()
     except Exception as exc:
         return {'error': f'git 작업 처리 중 오류가 발생했습니다: {exc}'}

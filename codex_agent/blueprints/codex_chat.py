@@ -280,8 +280,23 @@ def codex_git_action(action):
     if not isinstance(result, dict):
         return jsonify({'error': 'git 작업 결과를 확인할 수 없습니다.'}), 500
     if result.get('error'):
-        return jsonify({'error': result['error']}), 400
+        response_payload = {'error': result['error']}
+        for key in (
+            'error_code',
+            'repo_target',
+            'active_repo_target',
+            'active_action',
+            'active_elapsed_seconds',
+            'cancel_requested',
+            'cancelled_action'
+        ):
+            if key in result:
+                response_payload[key] = result[key]
+        return jsonify(response_payload), 400
     if not result.get('ok'):
         message = result.get('stderr') or result.get('stdout') or f'git {action} 작업에 실패했습니다.'
-        return jsonify({'error': message, 'result': result}), 400
+        response_payload = {'error': message, 'result': result}
+        if result.get('error_code'):
+            response_payload['error_code'] = result.get('error_code')
+        return jsonify(response_payload), 400
     return jsonify(result)

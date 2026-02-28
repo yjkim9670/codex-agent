@@ -883,7 +883,7 @@ def _build_codex_command(prompt, output_path=None):
         '--color',
         'never'
     ]
-    if CODEX_SKIP_GIT_REPO_CHECK:
+    if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(WORKSPACE_DIR):
         cmd.append('--skip-git-repo-check')
     settings = get_settings()
     model = settings.get('model')
@@ -897,6 +897,20 @@ def _build_codex_command(prompt, output_path=None):
         cmd.extend(['--output-last-message', str(output_path)])
     cmd.append(prompt)
     return cmd
+
+
+def _is_git_repository(path):
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(path), 'rev-parse', '--is-inside-work-tree'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and (result.stdout or '').strip().lower() == 'true'
 
 
 def execute_codex_prompt(prompt):

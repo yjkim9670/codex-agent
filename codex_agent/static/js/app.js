@@ -443,6 +443,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const branchOverlayStageNoneBtn = document.getElementById('codex-branch-overlay-stage-none');
     const branchOverlayCommitMessageInput = document.getElementById('codex-branch-overlay-commit-message');
     const syncOverlayFetchBtn = document.getElementById('codex-sync-overlay-fetch');
+    const syncOverlaySyncBtn = document.getElementById('codex-sync-overlay-sync');
+    const syncOverlayCommitBtn = document.getElementById('codex-sync-overlay-commit');
+    const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
     const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
@@ -590,6 +593,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (syncOverlayFetchBtn) {
         syncOverlayFetchBtn.addEventListener('click', () => {
             void handleGitSync(syncOverlayFetchBtn);
+        });
+    }
+    if (syncOverlaySyncBtn) {
+        syncOverlaySyncBtn.addEventListener('click', () => {
+            void handleGitSync(syncOverlaySyncBtn, { applyAfterFetch: true });
+        });
+    }
+    if (syncOverlayCommitBtn) {
+        syncOverlayCommitBtn.addEventListener('click', () => {
+            void handleGitQuickCommit(syncOverlayCommitBtn, {
+                repoTarget: normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)
+            });
+        });
+    }
+    if (syncOverlayPushBtn) {
+        syncOverlayPushBtn.addEventListener('click', () => {
+            void handleGitPush(syncOverlayPushBtn, {
+                repoTarget: normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)
+            });
         });
     }
     syncOverlayTargetButtons.forEach(button => {
@@ -3270,6 +3292,9 @@ function getGitSyncOverlayElements() {
         meta: document.getElementById('codex-sync-overlay-meta'),
         targetButtons: Array.from(overlay.querySelectorAll('.sync-overlay-target[data-repo-target]')),
         fetchBtn: document.getElementById('codex-sync-overlay-fetch'),
+        syncBtn: document.getElementById('codex-sync-overlay-sync'),
+        commitBtn: document.getElementById('codex-sync-overlay-commit'),
+        pushBtn: document.getElementById('codex-sync-overlay-push'),
         refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
         loading: document.getElementById('codex-sync-overlay-loading'),
         empty: document.getElementById('codex-sync-overlay-empty'),
@@ -3288,6 +3313,17 @@ function setGitSyncOverlayLoading(isLoading) {
             || elements.fetchBtn.getAttribute('aria-busy') === 'true';
         elements.fetchBtn.disabled = Boolean(isLoading) || fetchBusy;
     }
+    if (elements.syncBtn) {
+        const syncBusy = elements.syncBtn.classList.contains('is-loading')
+            || elements.syncBtn.getAttribute('aria-busy') === 'true';
+        elements.syncBtn.disabled = Boolean(isLoading) || syncBusy;
+    }
+    [elements.commitBtn, elements.pushBtn].forEach(button => {
+        if (!button) return;
+        const actionBusy = button.classList.contains('is-loading')
+            || button.getAttribute('aria-busy') === 'true';
+        button.disabled = Boolean(isLoading) || actionBusy;
+    });
     if (elements.refreshBtn) {
         elements.refreshBtn.disabled = Boolean(isLoading);
     }
@@ -3654,7 +3690,8 @@ function getGitPushButtons(preferredButton = null) {
     const candidates = [
         preferredButton,
         document.getElementById('codex-git-push'),
-        document.getElementById('codex-branch-overlay-push')
+        document.getElementById('codex-branch-overlay-push'),
+        document.getElementById('codex-sync-overlay-push')
     ];
     const seen = new Set();
     return candidates.filter(button => {
@@ -3674,6 +3711,34 @@ function recoverGitPushButtonsIfIdle() {
             setGitButtonBusy(button, false);
         }
     });
+}
+
+async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    if (target === GIT_SYNC_TARGET_WORKSPACE) {
+        return fetchGitStatus(force);
+    }
+    const result = await fetchJson('/api/codex/git/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+            repo_target: target
+        })
+    });
+    const count = normalizeGitChangedFilesCount(result?.changed_files_count);
+    const branch = typeof result?.branch === 'string' ? result.branch : '';
+    const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
+    const changedFiles = detailedFiles.length
+        ? detailedFiles
+        : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+    return {
+        count,
+        branch,
+        changedFiles,
+        isStale: false,
+        fetchedAt: Date.now()
+    };
 }
 
 async function handleGitCommit(button) {
@@ -3740,7 +3805,7 @@ async function handleGitCommit(button) {
     }
 }
 
-async function handleGitQuickCommit(button) {
+async function handleGitQuickCommit(button, options = {}) {
     if (gitMutationInFlight) {
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
@@ -3748,14 +3813,17 @@ async function handleGitQuickCommit(button) {
         });
         return;
     }
+    const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
+    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const repoLabel = getGitSyncRepoLabel(repoTarget);
 
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Committing...');
     try {
-        const status = await fetchGitStatus(true);
+        const status = await fetchGitStatusForRepoTarget(repoTarget, true);
         const allFiles = normalizeGitChangedFiles(status?.changedFiles).map(file => file.path);
         if (!allFiles.length) {
-            showToast('커밋할 변경 파일이 없습니다.', { tone: 'error', durationMs: 3200 });
+            showToast(`${repoLabel} · 커밋할 변경 파일이 없습니다.`, { tone: 'error', durationMs: 3200 });
             return;
         }
         await fetchJson('/api/codex/git/stage', {
@@ -3763,6 +3831,7 @@ async function handleGitQuickCommit(button) {
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
+                repo_target: repoTarget,
                 files: allFiles,
                 replace: true
             })
@@ -3772,6 +3841,7 @@ async function handleGitQuickCommit(button) {
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
+                repo_target: repoTarget,
                 message: ''
             })
         });
@@ -3780,8 +3850,8 @@ async function handleGitQuickCommit(button) {
             : '';
         const commitSummary = summarizeGitOutput(result?.stdout || result?.stderr);
         const commitSuffix = commitSummary ? `: ${commitSummary}` : '';
-        showToast(`git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
-        if (isGitBranchOverlayOpen()) {
+        showToast(`${repoLabel} · git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
+        if (repoTarget === GIT_SYNC_TARGET_WORKSPACE && isGitBranchOverlayOpen()) {
             gitOverlaySelectionTouched = false;
             gitOverlaySelectedFiles = new Set();
             const overlayElements = getGitBranchOverlayElements();
@@ -3789,9 +3859,13 @@ async function handleGitQuickCommit(button) {
                 overlayElements.commitMessage.value = '';
             }
         }
+        setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
+        if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
+            await refreshGitSyncOverlayHistory({ force: true, silent: true });
+        }
     } catch (error) {
         const message = normalizeError(error, 'git commit 작업에 실패했습니다.');
-        showToast(`git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        showToast(`${repoLabel} · git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         setGitButtonBusy(button, false);
@@ -3799,7 +3873,7 @@ async function handleGitQuickCommit(button) {
     }
 }
 
-async function handleGitPush(button) {
+async function handleGitPush(button, options = {}) {
     recoverGitPushButtonsIfIdle();
     if (gitMutationInFlight) {
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
@@ -3808,7 +3882,12 @@ async function handleGitPush(button) {
         });
         return;
     }
-    const confirmed = window.confirm('현재 브랜치를 원격 저장소로 push하고, 이어서 fetch까지 실행할까요?');
+    const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
+    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const repoLabel = getGitSyncRepoLabel(repoTarget);
+    const confirmed = window.confirm(
+        `${repoLabel} 기준으로 현재 브랜치를 원격 저장소로 push하고, 이어서 fetch까지 실행할까요?`
+    );
     if (!confirmed) {
         return;
     }
@@ -3823,7 +3902,10 @@ async function handleGitPush(button) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_PUSH_REQUEST_TIMEOUT_MS,
-            body: JSON.stringify({ confirm: true })
+            body: JSON.stringify({
+                confirm: true,
+                repo_target: repoTarget
+            })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
@@ -3832,16 +3914,20 @@ async function handleGitPush(button) {
                 result?.post_fetch_error || result?.post_fetch_stderr || result?.post_fetch_stdout
             );
             const postFetchSuffix = postFetchSummary ? ` (${postFetchSummary})` : '';
-            showToast(`git push 완료, post-fetch 실패${postFetchSuffix}`, {
+            showToast(`${repoLabel} · git push 완료, post-fetch 실패${postFetchSuffix}`, {
                 tone: 'error',
                 durationMs: 5200
             });
         } else {
-            showToast(`git push + fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+            showToast(`${repoLabel} · git push + fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+            setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
+            if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
+                await refreshGitSyncOverlayHistory({ force: true, silent: true });
+            }
         }
     } catch (error) {
         const message = normalizeError(error, 'git push 작업에 실패했습니다.');
-        showToast(`git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        showToast(`${repoLabel} · git push 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         pushButtons.forEach(pushButton => {
@@ -3859,13 +3945,14 @@ async function handleGitSync(button, options = {}) {
         });
         return;
     }
+    const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
+    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || gitSyncOverlayRepoTarget);
+    const repoLabel = getGitSyncRepoLabel(repoTarget);
+    const applyAfterFetch = Boolean(options && typeof options === 'object' && options.applyAfterFetch);
 
     gitMutationInFlight = true;
-    setGitButtonBusy(button, true, 'Fetching...');
+    setGitButtonBusy(button, true, applyAfterFetch ? 'Syncing...' : 'Fetching...');
     try {
-        const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
-        const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || gitSyncOverlayRepoTarget);
-        const repoLabel = getGitSyncRepoLabel(repoTarget);
         const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3873,7 +3960,8 @@ async function handleGitSync(button, options = {}) {
             body: JSON.stringify({
                 repo_target: repoTarget,
                 remote: 'origin',
-                branch: 'main'
+                branch: 'main',
+                apply_after_fetch: applyAfterFetch
             })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
@@ -3881,16 +3969,25 @@ async function handleGitSync(button, options = {}) {
         const syncTarget = typeof result?.sync_target === 'string' && result.sync_target.trim()
             ? result.sync_target.trim()
             : 'origin/main';
-        showToast(`${repoLabel} · ${syncTarget} fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        if (applyAfterFetch) {
+            showToast(`${repoLabel} · ${syncTarget} fetch + sync 완료${suffix}`, {
+                tone: 'success',
+                durationMs: 3600
+            });
+        } else {
+            showToast(`${repoLabel} · ${syncTarget} fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        }
         setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
         if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
             await refreshGitSyncOverlayHistory({ force: true, silent: true });
         }
     } catch (error) {
-        const message = normalizeError(error, 'git sync 작업에 실패했습니다.');
-        const repoTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
-        const repoLabel = getGitSyncRepoLabel(repoTarget);
-        showToast(`${repoLabel} fetch 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        const fallbackMessage = applyAfterFetch
+            ? 'git fetch + sync 작업에 실패했습니다.'
+            : 'git sync 작업에 실패했습니다.';
+        const message = normalizeError(error, fallbackMessage);
+        const actionLabel = applyAfterFetch ? 'fetch + sync' : 'fetch';
+        showToast(`${repoLabel} · ${actionLabel} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         setGitButtonBusy(button, false);

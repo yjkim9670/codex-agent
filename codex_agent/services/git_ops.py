@@ -467,6 +467,17 @@ def _normalize_selected_files(value):
     return normalized
 
 
+def _to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or '').strip().lower()
+    if not text:
+        return False
+    return text in {'1', 'true', 't', 'yes', 'y', 'on'}
+
+
 def _read_changed_snapshot(repo_root, env):
     status_result, status_error = _run_git_command(
         ['git', '-C', str(repo_root), 'status', '--porcelain'],
@@ -604,23 +615,16 @@ def run_git_action(action, payload=None):
             if action == 'sync':
                 requested_remote = str(payload.get('remote') or '').strip()
                 requested_branch = str(payload.get('branch') or '').strip()
+                sync_apply_requested = _to_bool(
+                    payload.get('apply_after_fetch')
+                    if 'apply_after_fetch' in payload
+                    else payload.get('apply')
+                )
                 remote_name = _normalize_remote_name(repo_root, env, requested_remote)
                 if not remote_name:
                     return {'error': '원격 저장소를 찾을 수 없습니다.'}
-                resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
-                    repo_root,
-                    env,
-                    remote_name,
-                    requested_branch
-                )
-                remote_name = resolved_remote or remote_name
-                branch_name = resolved_branch
-                fetch_cmd = ['git', '-C', str(repo_root), 'fetch', '--prune']
-                if remote_name:
-                    fetch_cmd.append(remote_name)
-                    if branch_name:
-                        fetch_cmd.append(branch_name)
-                result, error = _run_checked(
+                fetch_cmd = ['git', '-C', str(repo_root), 'fetch', '--prune', remote_name]
+                fetch_result, error = _run_checked(
                     fetch_cmd,
                     repo_root,
                     env,
@@ -629,14 +633,63 @@ def run_git_action(action, payload=None):
                 )
                 if error:
                     return error
+
+                resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
+                    repo_root,
+                    env,
+                    remote_name,
+                    requested_branch
+                )
+                remote_name = resolved_remote or remote_name
+                branch_name = resolved_branch or requested_branch
+                sync_target = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+
+                sync_apply_ok = False
+                sync_apply_exit_code = -1
+                sync_apply_stdout = ''
+                sync_apply_stderr = ''
+                sync_apply_error = ''
+                merge_cmd = []
+                merge_result = None
+                if sync_apply_requested:
+                    if not sync_target:
+                        return {'error': '동기화 대상 원격 브랜치를 확인할 수 없습니다.'}
+                    if not _ref_exists(repo_root, env, sync_target):
+                        return {'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. fetch 후 브랜치를 다시 확인해주세요.'}
+                    merge_cmd = ['git', '-C', str(repo_root), 'merge', '--ff-only', sync_target]
+                    merge_result, merge_error = _run_checked(
+                        merge_cmd,
+                        repo_root,
+                        env,
+                        GIT_TIMEOUT_SECONDS,
+                        'git sync 적용에 실패했습니다.'
+                    )
+                    if merge_error:
+                        return merge_error
+                    sync_apply_ok = True
+                    sync_apply_exit_code = int(merge_result.returncode)
+                    sync_apply_stdout = (merge_result.stdout or '').strip()
+                    sync_apply_stderr = (merge_result.stderr or '').strip()
+
+                fetch_stdout = (fetch_result.stdout or '').strip()
+                fetch_stderr = (fetch_result.stderr or '').strip()
+                combined_stdout = '\n'.join(
+                    item for item in [fetch_stdout, sync_apply_stdout] if item
+                )
+                combined_stderr = '\n'.join(
+                    item for item in [fetch_stderr, sync_apply_stderr] if item
+                )
+                command = ' '.join(fetch_cmd)
+                if merge_cmd:
+                    command = f"{command} && {' '.join(merge_cmd)}"
                 return _build_result(
                     repo_root,
                     env,
                     started_at,
-                    command=' '.join(fetch_cmd),
-                    exit_code=result.returncode,
-                    stdout=result.stdout,
-                    stderr=result.stderr,
+                    command=command,
+                    exit_code=fetch_result.returncode,
+                    stdout=combined_stdout,
+                    stderr=combined_stderr,
                     extra={
                         'repo_target': repo_target,
                         'sync_remote': remote_name,
@@ -644,7 +697,13 @@ def run_git_action(action, payload=None):
                         'requested_sync_remote': requested_remote,
                         'requested_sync_branch': requested_branch,
                         'sync_branch_fallback': fallback_used,
-                        'sync_target': f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+                        'sync_target': sync_target,
+                        'sync_apply_requested': sync_apply_requested,
+                        'sync_apply_ok': sync_apply_ok,
+                        'sync_apply_exit_code': sync_apply_exit_code,
+                        'sync_apply_stdout': sync_apply_stdout,
+                        'sync_apply_stderr': sync_apply_stderr,
+                        'sync_apply_error': sync_apply_error
                     }
                 )
 

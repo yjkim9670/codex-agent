@@ -604,10 +604,15 @@ body {
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+    flex-wrap: wrap;
 }
 
 .sync-overlay-fetch {
     min-width: 152px;
+}
+
+.sync-overlay-sync {
+    min-width: 132px;
 }
 
 .sync-overlay-loading,
@@ -939,8 +944,10 @@ body {
 
 #codex-git-commit,
 #codex-branch-overlay-commit,
+#codex-sync-overlay-commit,
 #codex-git-push,
 #codex-branch-overlay-push,
+#codex-sync-overlay-push,
 #codex-git-sync {
     background-repeat: no-repeat;
     background-position: center;
@@ -983,7 +990,8 @@ body {
 
 .git-action-push,
 #codex-git-push,
-#codex-branch-overlay-push {
+#codex-branch-overlay-push,
+#codex-sync-overlay-push {
     background-image: var(--icon-sync);
 }
 
@@ -2994,6 +3002,6 @@ label.hover-tooltip,
     }
 
     .message {
-        max-width: 92%;
+        max-width: 70%;
     }
 }

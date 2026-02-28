@@ -497,7 +497,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (gitSyncBtn) {
         gitSyncBtn.addEventListener('click', event => {
             event.preventDefault();
-            void handleGitSync(gitSyncBtn, { repoTarget: GIT_SYNC_TARGET_WORKSPACE });
+            openGitSyncOverlay();
         });
     }
     if (branchOverlayCommitBtn) {

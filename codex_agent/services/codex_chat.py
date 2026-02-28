@@ -28,6 +28,8 @@ from ..utils.time import normalize_timestamp
 
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
+_SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
+_SESSION_SUBMIT_LOCKS = {}
 _CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 
 _ROLE_LABELS = {
@@ -952,6 +954,48 @@ def _append_stream_chunk(stream_id, key, chunk):
         stream['updated_at'] = time.time()
 
 
+def _snapshot_stream_runtime_locked(stream):
+    now = time.time()
+    process = stream.get('process')
+    process_running = False
+    process_pid = None
+
+    if process is not None:
+        process_pid = getattr(process, 'pid', None)
+        try:
+            return_code = process.poll()
+        except Exception:
+            return_code = None
+        if return_code is None:
+            process_running = True
+        else:
+            # Guard against missed updates when the worker exits between polls.
+            stream['done'] = True
+            if stream.get('exit_code') is None:
+                stream['exit_code'] = return_code
+            stream['process'] = None
+            stream['updated_at'] = now
+            process_running = False
+            process_pid = None
+
+    created_at = stream.get('created_at')
+    updated_at = stream.get('updated_at')
+    runtime_ms = None
+    idle_ms = None
+
+    if isinstance(created_at, (int, float)):
+        runtime_ms = max(0, int((now - created_at) * 1000))
+    if isinstance(updated_at, (int, float)):
+        idle_ms = max(0, int((now - updated_at) * 1000))
+
+    return {
+        'process_running': process_running,
+        'process_pid': process_pid,
+        'runtime_ms': runtime_ms,
+        'idle_ms': idle_ms
+    }
+
+
 def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
@@ -1052,6 +1096,63 @@ def create_codex_stream(session_id, prompt):
     return stream_id
 
 
+def _get_session_submit_lock(session_id):
+    session_key = str(session_id or '').strip()
+    if not session_key:
+        session_key = '__unknown__'
+    with _SESSION_SUBMIT_LOCKS_GUARD:
+        submit_lock = _SESSION_SUBMIT_LOCKS.get(session_key)
+        if submit_lock is None:
+            submit_lock = threading.Lock()
+            _SESSION_SUBMIT_LOCKS[session_key] = submit_lock
+    return submit_lock
+
+
+def _find_active_stream_id_locked(session_id):
+    for stream_id, stream in state.codex_streams.items():
+        if stream.get('session_id') != session_id:
+            continue
+        if stream.get('cancelled'):
+            continue
+        _snapshot_stream_runtime_locked(stream)
+        if stream.get('done'):
+            continue
+        return stream_id
+    return None
+
+
+def get_active_stream_id_for_session(session_id):
+    with state.codex_streams_lock:
+        return _find_active_stream_id_locked(session_id)
+
+
+def start_codex_stream_for_session(session_id, prompt, prompt_with_context):
+    submit_lock = _get_session_submit_lock(session_id)
+    with submit_lock:
+        with state.codex_streams_lock:
+            active_stream_id = _find_active_stream_id_locked(session_id)
+        if active_stream_id:
+            return {
+                'ok': False,
+                'already_running': True,
+                'active_stream_id': active_stream_id
+            }
+
+        user_message = append_message(session_id, 'user', prompt)
+        if not user_message:
+            return {
+                'ok': False,
+                'error': '메시지를 저장하지 못했습니다.'
+            }
+
+        stream_id = create_codex_stream(session_id, prompt_with_context)
+        return {
+            'ok': True,
+            'stream_id': stream_id,
+            'user_message': user_message
+        }
+
+
 def get_codex_stream(stream_id):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -1062,6 +1163,7 @@ def list_codex_streams(include_done=False):
     streams = []
     with state.codex_streams_lock:
         for stream in state.codex_streams.values():
+            runtime = _snapshot_stream_runtime_locked(stream)
             if not include_done:
                 if stream.get('done') or stream.get('cancelled'):
                     continue
@@ -1073,7 +1175,11 @@ def list_codex_streams(include_done=False):
                 'output_length': len(stream.get('output') or ''),
                 'error_length': len(stream.get('error') or ''),
                 'created_at': int((stream.get('created_at') or 0) * 1000),
-                'updated_at': int((stream.get('updated_at') or 0) * 1000)
+                'updated_at': int((stream.get('updated_at') or 0) * 1000),
+                'process_running': runtime.get('process_running', False),
+                'process_pid': runtime.get('process_pid'),
+                'runtime_ms': runtime.get('runtime_ms'),
+                'idle_ms': runtime.get('idle_ms')
             })
     streams.sort(key=lambda item: item.get('updated_at', 0), reverse=True)
     return streams
@@ -1084,6 +1190,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
         stream = state.codex_streams.get(stream_id)
         if not stream:
             return None
+        runtime = _snapshot_stream_runtime_locked(stream)
         output = stream['output']
         error = stream['error']
         data = {
@@ -1094,7 +1201,13 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
-            'session_id': stream['session_id']
+            'session_id': stream['session_id'],
+            'created_at': int((stream.get('created_at') or 0) * 1000),
+            'updated_at': int((stream.get('updated_at') or 0) * 1000),
+            'process_running': runtime.get('process_running', False),
+            'process_pid': runtime.get('process_pid'),
+            'runtime_ms': runtime.get('runtime_ms'),
+            'idle_ms': runtime.get('idle_ms')
         }
         return data
 

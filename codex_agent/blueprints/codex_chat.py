@@ -16,12 +16,12 @@ from ..services.codex_chat import (
     append_message,
     build_codex_prompt,
     create_session,
-    create_codex_stream,
     cleanup_codex_streams,
     delete_session,
     ensure_default_title,
     execute_codex_prompt,
     finalize_codex_stream,
+    get_active_stream_id_for_session,
     get_session,
     get_settings,
     get_usage_summary,
@@ -29,6 +29,7 @@ from ..services.codex_chat import (
     read_codex_stream,
     list_sessions,
     rename_session,
+    start_codex_stream_for_session,
     update_settings,
     stop_codex_stream,
 )
@@ -105,6 +106,14 @@ def codex_session_rename(session_id):
     if len(title) > CODEX_MAX_TITLE_CHARS:
         return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
 
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify({
+            'error': '세션 응답이 실행 중일 때는 이름을 변경할 수 없습니다.',
+            'active_stream_id': active_stream_id,
+            'already_running': True
+        }), 409
+
     session = rename_session(session_id, title)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
@@ -113,6 +122,13 @@ def codex_session_rename(session_id):
 
 @bp.route('/api/codex/sessions/<session_id>', methods=['DELETE'])
 def codex_session_delete(session_id):
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify({
+            'error': '세션 응답이 실행 중일 때는 삭제할 수 없습니다.',
+            'active_stream_id': active_stream_id,
+            'already_running': True
+        }), 409
     deleted = delete_session(session_id)
     if not deleted:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
@@ -132,6 +148,13 @@ def codex_session_message(session_id):
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify({
+            'error': '이미 실행 중인 응답이 있습니다. 완료 후 다시 시도해 주세요.',
+            'active_stream_id': active_stream_id,
+            'already_running': True
+        }), 409
 
     ensure_default_title(session_id, prompt)
 
@@ -173,12 +196,20 @@ def codex_session_message_stream(session_id):
 
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
-    user_message = append_message(session_id, 'user', prompt)
-    if not user_message:
-        return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
+    start_result = start_codex_stream_for_session(session_id, prompt, prompt_with_context)
+    if not start_result.get('ok'):
+        if start_result.get('already_running'):
+            return jsonify({
+                'error': '이미 실행 중인 응답이 있습니다. 기존 응답을 모니터링합니다.',
+                'active_stream_id': start_result.get('active_stream_id'),
+                'already_running': True
+            }), 409
+        return jsonify({'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}), 500
 
-    stream_id = create_codex_stream(session_id, prompt_with_context)
-    return jsonify({'stream_id': stream_id, 'user_message': user_message})
+    return jsonify({
+        'stream_id': start_result.get('stream_id'),
+        'user_message': start_result.get('user_message')
+    })
 
 
 @bp.route('/api/codex/streams/<stream_id>')

@@ -39,6 +39,7 @@ const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
 const REMOTE_STREAM_POLL_MS = 2500;
+const STREAM_IDLE_WARNING_MS = 15000;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -193,6 +194,69 @@ function formatElapsedTime(ms) {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function isResponseStatusMessage(message) {
+    if (typeof message !== 'string') return false;
+    return message.startsWith('Waiting for Codex') || message.startsWith('Receiving response');
+}
+
+function buildActiveStreamStatus(processRunning) {
+    if (processRunning === true) {
+        return 'Receiving response... (CLI running)';
+    }
+    if (processRunning === false) {
+        return 'Receiving response... (CLI finalizing)';
+    }
+    return 'Receiving response...';
+}
+
+function buildStreamMonitorStatus(stream) {
+    if (!stream) return 'Streaming...';
+    if (stream.done) return 'Completed';
+
+    const runtimeLabel = Number.isFinite(stream.runtimeMs) ? formatElapsedTime(stream.runtimeMs) : null;
+    const idleLabel = Number.isFinite(stream.idleMs) ? formatElapsedTime(stream.idleMs) : null;
+
+    if (stream.processRunning === true) {
+        if (runtimeLabel && idleLabel) {
+            return `Streaming · CLI running · ${runtimeLabel} elapsed · ${idleLabel} idle`;
+        }
+        if (runtimeLabel) {
+            return `Streaming · CLI running · ${runtimeLabel} elapsed`;
+        }
+        return 'Streaming · CLI running';
+    }
+
+    if (stream.processRunning === false) {
+        if (idleLabel) {
+            return `Finalizing · CLI process exited · ${idleLabel} idle`;
+        }
+        return 'Finalizing · CLI process exited';
+    }
+
+    return 'Streaming...';
+}
+
+function buildStreamListMeta(stream) {
+    const updated = formatStreamTimestamp(stream?.updated_at);
+    const runtimeLabel = Number.isFinite(stream?.runtime_ms) ? formatElapsedTime(stream.runtime_ms) : null;
+    const idleLabel = Number.isFinite(stream?.idle_ms) ? formatElapsedTime(stream.idle_ms) : null;
+    let processLabel = 'Streaming';
+    if (stream?.process_running === true) {
+        processLabel = 'CLI running';
+    } else if (stream?.process_running === false) {
+        processLabel = 'CLI exited';
+    }
+    const parts = [processLabel];
+    if (runtimeLabel) parts.push(`${runtimeLabel} elapsed`);
+    if (idleLabel) parts.push(`${idleLabel} idle`);
+    if (updated) {
+        parts.push(`Updated ${updated}`);
+    } else if (stream?.id) {
+        parts.push(`Stream ${stream.id.slice(0, 6)}`);
+    }
+    return parts.join(' · ');
+}
+
 function updateStatusDisplay() {
     const status = document.getElementById('codex-chat-status');
     if (!status) return;
@@ -239,7 +303,7 @@ function syncResponseTimerForActiveSession() {
 function updateResponseTimerForSession(sessionId, message, isError = false) {
     const sessionState = ensureSessionState(sessionId);
     if (!sessionState) return;
-    const responseStatus = message === 'Waiting for Codex...' || message === 'Receiving response...';
+    const responseStatus = isResponseStatusMessage(message);
     if (!isError && responseStatus) {
         if (!sessionState.responseStartedAt) {
             const pendingStartedAt = sessionState.pendingSend?.startedAt;
@@ -348,6 +412,10 @@ function createStreamState({
         error,
         entry,
         startedAt: startedAt || Date.now(),
+        processRunning: null,
+        processPid: null,
+        runtimeMs: null,
+        idleMs: null,
         timer: null,
         polling: false,
         failureCount: 0,
@@ -2340,7 +2408,7 @@ function renderStreamMonitorOutput() {
         elements.outputTitle.textContent = `Monitoring: ${title}`;
     }
     if (elements.outputStatus) {
-        elements.outputStatus.textContent = streamMonitorState.done ? 'Completed' : 'Streaming...';
+        elements.outputStatus.textContent = buildStreamMonitorStatus(streamMonitorState);
     }
     if (elements.outputContent) {
         const combined = streamMonitorState.output + (streamMonitorState.error ? `\n${streamMonitorState.error}` : '');
@@ -2382,8 +2450,7 @@ function renderStreamMonitorList(streams) {
 
         const meta = document.createElement('div');
         meta.className = 'stream-monitor-meta';
-        const updated = formatStreamTimestamp(stream.updated_at);
-        meta.textContent = updated ? `Updated ${updated}` : `Stream ${stream.id.slice(0, 6)}`;
+        meta.textContent = buildStreamListMeta(stream);
 
         info.appendChild(title);
         info.appendChild(meta);
@@ -2427,12 +2494,24 @@ function syncRemoteActiveSessionStatus() {
     const hasRemote = state.remoteStreamSessions?.has(sessionId);
     const hasLocal = Boolean(sessionState.sending || sessionState.pendingSend || getSessionStream(sessionId));
     if (hasRemote && !hasLocal) {
-        if (sessionState.status !== 'Receiving response (remote)...') {
-            setSessionStatus(sessionId, 'Receiving response (remote)...');
+        const remoteState = state.remoteStreams.find(
+            stream => (stream?.session_id || stream?.sessionId) === sessionId
+        );
+        const remoteRunning = typeof remoteState?.process_running === 'boolean'
+            ? remoteState.process_running
+            : null;
+        let nextStatus = 'Receiving response (remote)...';
+        if (remoteRunning === true) {
+            nextStatus = 'Receiving response (remote, CLI running)...';
+        } else if (remoteRunning === false) {
+            nextStatus = 'Receiving response (remote, CLI finalizing)...';
+        }
+        if (sessionState.status !== nextStatus) {
+            setSessionStatus(sessionId, nextStatus);
         }
         return;
     }
-    if (!hasRemote && sessionState.status === 'Receiving response (remote)...') {
+    if (!hasRemote && typeof sessionState.status === 'string' && sessionState.status.startsWith('Receiving response (remote')) {
         setSessionStatus(sessionId, 'Idle');
     }
 }
@@ -2511,6 +2590,10 @@ function startStreamMonitor(stream) {
         output: '',
         error: '',
         done: false,
+        processRunning: typeof stream?.process_running === 'boolean' ? stream.process_running : null,
+        processPid: Number.isFinite(stream?.process_pid) ? stream.process_pid : null,
+        runtimeMs: Number.isFinite(stream?.runtime_ms) ? stream.runtime_ms : null,
+        idleMs: Number.isFinite(stream?.idle_ms) ? stream.idle_ms : null,
         timer: null,
         polling: false
     };
@@ -2538,6 +2621,16 @@ async function pollStreamMonitor() {
             `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
         );
         if (!streamMonitorState || streamMonitorState.id !== current.id) return;
+        if (typeof result?.process_running === 'boolean') {
+            current.processRunning = result.process_running;
+        }
+        current.processPid = Number.isFinite(result?.process_pid) ? result.process_pid : null;
+        if (Number.isFinite(result?.runtime_ms)) {
+            current.runtimeMs = result.runtime_ms;
+        }
+        if (Number.isFinite(result?.idle_ms)) {
+            current.idleMs = result.idle_ms;
+        }
         if (result?.output) {
             current.output += result.output;
             current.outputOffset = Number.isFinite(result.output_length)
@@ -2550,9 +2643,7 @@ async function pollStreamMonitor() {
                 ? result.error_length
                 : current.error.length;
         }
-        if (result?.output || result?.error) {
-            renderStreamMonitorOutput();
-        }
+        renderStreamMonitorOutput();
         if (result?.done) {
             current.done = true;
             renderStreamMonitorOutput();
@@ -2563,6 +2654,7 @@ async function pollStreamMonitor() {
         if (isStreamNotFoundError(error)) {
             if (streamMonitorState) {
                 streamMonitorState.done = true;
+                streamMonitorState.processRunning = false;
             }
             renderStreamMonitorOutput();
             return;
@@ -4100,11 +4192,17 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 }
                 continue;
             }
+            if (typeof result?.process_running === 'boolean') {
+                stream.processRunning = result.process_running;
+            }
+            stream.processPid = Number.isFinite(result?.process_pid) ? result.process_pid : null;
+            stream.runtimeMs = Number.isFinite(result?.runtime_ms) ? result.runtime_ms : stream.runtimeMs;
+            stream.idleMs = Number.isFinite(result?.idle_ms) ? result.idle_ms : stream.idleMs;
             if (assistantEntry) {
                 updateStreamEntry(stream);
             }
             beginStreamPolling(stream.id);
-            setSessionStatus(pending.sessionId, 'Receiving response...');
+            setSessionStatus(pending.sessionId, buildActiveStreamStatus(stream.processRunning));
         } catch (error) {
             if (isStreamNotFoundError(error)) {
                 await recoverMissingStream({ id: pending.id, sessionId: pending.sessionId });
@@ -4120,6 +4218,39 @@ async function resumeStreamsFromStorage(pendingStreams) {
             }
         }
     }
+}
+
+async function connectToExistingStream(sessionId, streamId) {
+    if (!sessionId || !streamId) return false;
+    const sessionState = ensureSessionState(sessionId);
+    if (sessionState?.streamId === streamId) {
+        return true;
+    }
+    if (sessionState?.streamId && sessionState.streamId !== streamId) {
+        return false;
+    }
+    persistActiveStream({
+        id: streamId,
+        sessionId,
+        startedAt: Date.now()
+    });
+    await resumeStreamsFromStorage([{
+        id: streamId,
+        sessionId,
+        startedAt: Date.now()
+    }]);
+    await refreshRemoteStreams({ force: true });
+    const attachedState = getSessionState(sessionId);
+    if (attachedState?.streamId === streamId) {
+        return true;
+    }
+    if (state.remoteStreamSessions?.has(sessionId)) {
+        if (attachedState) {
+            attachedState.sending = false;
+        }
+        return true;
+    }
+    return false;
 }
 
 function renderSessions() {
@@ -4491,7 +4622,10 @@ async function sendPrompt(prompt) {
         clearPendingSend(sessionId, controller);
         const result = await response.json();
         if (!response.ok) {
-            throw new Error(result?.error || 'Failed to send message.');
+            const err = new Error(result?.error || 'Failed to send message.');
+            err.status = response.status;
+            err.payload = result;
+            throw err;
         }
         const userMessage = result?.user_message;
         if (userMessage) {
@@ -4531,6 +4665,32 @@ async function sendPrompt(prompt) {
             }
             return;
         }
+        if (error?.status === 409 && error?.payload?.already_running) {
+            const activeStreamId = error?.payload?.active_stream_id;
+            if (activeStreamId) {
+                setSessionStatus(sessionId, 'Another client is already responding. Connecting...');
+                const attached = await connectToExistingStream(sessionId, activeStreamId);
+                if (attached) {
+                    showToast('다른 브라우저에서 실행 중인 응답에 연결했습니다.', {
+                        tone: 'success',
+                        durationMs: 3000
+                    });
+                    if (sessionId === state.activeSessionId) {
+                        syncActiveSessionControls();
+                    }
+                    return;
+                }
+            }
+            if (sessionState) {
+                sessionState.sending = false;
+            }
+            unpinAutoScrollForSession(sessionId);
+            setSessionStatus(sessionId, normalizeError(error, 'Another response is already running.'), true);
+            if (sessionId === state.activeSessionId) {
+                syncActiveSessionControls();
+            }
+            return;
+        }
         if (sessionState) {
             sessionState.sending = false;
         }
@@ -4554,9 +4714,10 @@ function startStream(streamId, sessionId, assistantEntry, startedAt) {
         startedAt: startedAt || Date.now()
     });
     if (!stream) return;
+    stream.processRunning = true;
     persistActiveStream(stream);
     beginStreamPolling(stream.id);
-    setSessionStatus(sessionId, 'Receiving response...');
+    setSessionStatus(sessionId, buildActiveStreamStatus(true));
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
     }
@@ -4638,6 +4799,16 @@ async function pollStream(streamId) {
 
         current.failureCount = 0;
         current.pollDelay = STREAM_POLL_BASE_MS;
+        if (typeof result?.process_running === 'boolean') {
+            current.processRunning = result.process_running;
+        }
+        current.processPid = Number.isFinite(result?.process_pid) ? result.process_pid : null;
+        if (Number.isFinite(result?.runtime_ms)) {
+            current.runtimeMs = result.runtime_ms;
+        }
+        if (Number.isFinite(result?.idle_ms)) {
+            current.idleMs = result.idle_ms;
+        }
 
         if (result?.output) {
             current.output += result.output;
@@ -4654,12 +4825,15 @@ async function pollStream(streamId) {
 
         if (result?.output || result?.error) {
             updateStreamEntry(current);
-            setSessionStatus(current.sessionId, 'Receiving response...');
         }
+        setSessionStatus(current.sessionId, buildActiveStreamStatus(current.processRunning));
 
         if (result?.done) {
             await finishStream(streamId, result);
             return;
+        }
+        if (current.processRunning === false && Number.isFinite(current.idleMs) && current.idleMs >= STREAM_IDLE_WARNING_MS) {
+            setSessionStatus(current.sessionId, 'Receiving response... (CLI finalizing, no recent output)');
         }
         scheduleStreamPoll(streamId, STREAM_POLL_BASE_MS);
     } catch (error) {

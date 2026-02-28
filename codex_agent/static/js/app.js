@@ -73,6 +73,7 @@ const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
 const GIT_STATUS_REQUEST_TIMEOUT_MS = 15000;
+const GIT_HISTORY_REQUEST_TIMEOUT_MS = 20000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 30000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 120000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 120000;
@@ -92,6 +93,17 @@ let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
 let gitMutationInFlight = false;
+let gitSyncHistoryCache = {
+    currentBranch: '',
+    remoteMainRef: 'origin/main',
+    remoteMainHistory: [],
+    remoteMainHistoryError: '',
+    aheadCount: null,
+    behindCount: null,
+    fetchedAt: 0,
+    isStale: false
+};
+let gitSyncHistoryInFlight = false;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -422,6 +434,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
     const branchOverlayStageNoneBtn = document.getElementById('codex-branch-overlay-stage-none');
     const branchOverlayCommitMessageInput = document.getElementById('codex-branch-overlay-commit-message');
+    const syncOverlayFetchBtn = document.getElementById('codex-sync-overlay-fetch');
+    const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
 
     // Reset commit highlight until fresh git status arrives.
     updateGitCommitButtonState({ count: 0, changedFiles: [] });
@@ -467,8 +481,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     if (gitSyncBtn) {
-        gitSyncBtn.addEventListener('click', () => {
-            void handleGitSync(gitSyncBtn);
+        gitSyncBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openGitSyncOverlay();
         });
     }
     if (branchOverlayCommitBtn) {
@@ -539,8 +554,40 @@ document.addEventListener('DOMContentLoaded', () => {
             void refreshGitBranchStatus({ force: true, updateOverlay: true });
         });
     }
+    const syncOverlay = document.getElementById('codex-sync-overlay');
+    const syncOverlayClose = document.getElementById('codex-sync-overlay-close');
+    const syncOverlayCloseFooter = document.getElementById('codex-sync-overlay-close-footer');
+    if (syncOverlay) {
+        syncOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeGitSyncOverlay();
+            }
+        });
+    }
+    if (syncOverlayClose) {
+        syncOverlayClose.addEventListener('click', closeGitSyncOverlay);
+    }
+    if (syncOverlayCloseFooter) {
+        syncOverlayCloseFooter.addEventListener('click', closeGitSyncOverlay);
+    }
+    if (syncOverlayRefreshBtn) {
+        syncOverlayRefreshBtn.addEventListener('click', () => {
+            void refreshGitSyncOverlayHistory({ force: true });
+        });
+    }
+    if (syncOverlayFetchBtn) {
+        syncOverlayFetchBtn.addEventListener('click', () => {
+            void handleGitSync(syncOverlayFetchBtn);
+        });
+    }
     document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && isGitBranchOverlayOpen()) {
+        if (event.key !== 'Escape') return;
+        if (isGitSyncOverlayOpen()) {
+            closeGitSyncOverlay();
+            return;
+        }
+        if (isGitBranchOverlayOpen()) {
             closeGitBranchOverlay();
         }
     });
@@ -3112,6 +3159,9 @@ function isGitBranchOverlayOpen() {
 function openGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
     if (elements.commitMessage) {
@@ -3129,7 +3179,248 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('is-overlay-open');
+    if (!isGitSyncOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function getGitSyncOverlayElements() {
+    const overlay = document.getElementById('codex-sync-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        subtitle: document.getElementById('codex-sync-overlay-subtitle'),
+        meta: document.getElementById('codex-sync-overlay-meta'),
+        fetchBtn: document.getElementById('codex-sync-overlay-fetch'),
+        refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
+        loading: document.getElementById('codex-sync-overlay-loading'),
+        empty: document.getElementById('codex-sync-overlay-empty'),
+        list: document.getElementById('codex-sync-overlay-list')
+    };
+}
+
+function setGitSyncOverlayLoading(isLoading) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    if (elements.loading) {
+        elements.loading.classList.toggle('is-hidden', !isLoading);
+    }
+    if (elements.fetchBtn) {
+        const fetchBusy = elements.fetchBtn.classList.contains('is-loading')
+            || elements.fetchBtn.getAttribute('aria-busy') === 'true';
+        elements.fetchBtn.disabled = Boolean(isLoading) || fetchBusy;
+    }
+    if (elements.refreshBtn) {
+        elements.refreshBtn.disabled = Boolean(isLoading);
+    }
+}
+
+function normalizeGitHistoryEntries(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map(entry => {
+        if (!entry || typeof entry !== 'object') return null;
+        const commitHash = typeof entry.commit_hash === 'string'
+            ? entry.commit_hash.trim()
+            : (typeof entry.commitHash === 'string' ? entry.commitHash.trim() : '');
+        const shortHashRaw = typeof entry.short_hash === 'string'
+            ? entry.short_hash.trim()
+            : (typeof entry.shortHash === 'string' ? entry.shortHash.trim() : '');
+        const shortHash = shortHashRaw || (commitHash ? commitHash.slice(0, 8) : '');
+        const committedAt = typeof entry.committed_at === 'string'
+            ? entry.committed_at.trim()
+            : (typeof entry.committedAt === 'string' ? entry.committedAt.trim() : '');
+        const author = typeof entry.author === 'string' ? entry.author.trim() : '';
+        const subject = typeof entry.subject === 'string' ? entry.subject.trim() : '';
+        if (!shortHash && !subject) return null;
+        return { commitHash, shortHash, committedAt, author, subject };
+    }).filter(Boolean);
+}
+
+function formatGitHistoryTimestamp(value) {
+    const text = String(value || '').trim();
+    if (!text) return '-';
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return text;
+    return parsed.toLocaleString('ko-KR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+    });
+}
+
+function renderGitSyncOverlay(history) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    const currentBranch = typeof history?.currentBranch === 'string' ? history.currentBranch.trim() : '';
+    const remoteMainRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
+        ? history.remoteMainRef.trim()
+        : 'origin/main';
+    const remoteHistory = normalizeGitHistoryEntries(history?.remoteMainHistory);
+    const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
+        ? history.remoteMainHistoryError.trim()
+        : '';
+    const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
+    const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
+    const compareText = aheadCount != null && behindCount != null
+        ? `HEAD 대비 ahead ${aheadCount} / behind ${behindCount}`
+        : 'HEAD 비교 정보 없음';
+    if (elements.subtitle) {
+        elements.subtitle.textContent = `${remoteMainRef} 최근 이력`;
+    }
+    if (elements.fetchBtn) {
+        elements.fetchBtn.textContent = `${remoteMainRef} fetch`;
+        syncHoverTooltipFromLabel(elements.fetchBtn, `${remoteMainRef} fetch`);
+    }
+    if (elements.meta) {
+        const branchText = currentBranch ? `현재 브랜치: ${currentBranch}` : '현재 브랜치: -';
+        elements.meta.textContent = `${branchText} · ${compareText}`;
+    }
+    if (elements.list) {
+        elements.list.innerHTML = '';
+        remoteHistory.forEach(entry => {
+            const item = document.createElement('li');
+            const main = document.createElement('div');
+            main.className = 'sync-overlay-item-main';
+
+            const hash = document.createElement('span');
+            hash.className = 'sync-overlay-item-hash';
+            hash.textContent = entry.shortHash || '-';
+            if (entry.commitHash) {
+                hash.title = entry.commitHash;
+            }
+            main.appendChild(hash);
+
+            const subject = document.createElement('span');
+            subject.className = 'sync-overlay-item-subject';
+            subject.textContent = entry.subject || '(no subject)';
+            main.appendChild(subject);
+
+            const meta = document.createElement('div');
+            meta.className = 'sync-overlay-item-meta';
+            const authorText = entry.author || 'unknown';
+            meta.textContent = `${formatGitHistoryTimestamp(entry.committedAt)} · ${authorText}`;
+
+            item.appendChild(main);
+            item.appendChild(meta);
+            elements.list.appendChild(item);
+        });
+        elements.list.classList.toggle('is-hidden', remoteHistory.length === 0);
+    }
+    if (elements.empty) {
+        const fallbackMessage = remoteHistoryError || '표시할 이력이 없습니다.';
+        elements.empty.textContent = fallbackMessage;
+        elements.empty.classList.toggle('is-hidden', remoteHistory.length !== 0);
+    }
+}
+
+function isGitSyncOverlayOpen() {
+    const overlay = document.getElementById('codex-sync-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openGitSyncOverlay() {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    if (elements.meta) {
+        elements.meta.textContent = '히스토리를 불러오는 중...';
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+    if (elements.list) {
+        elements.list.classList.add('is-hidden');
+        elements.list.innerHTML = '';
+    }
+    setGitSyncOverlayLoading(true);
+    void refreshGitSyncOverlayHistory({ force: true });
+}
+
+function closeGitSyncOverlay() {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (!isGitBranchOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+async function fetchGitSyncHistory(force = false) {
+    const now = Date.now();
+    if (!force && gitSyncHistoryCache.fetchedAt) {
+        const delta = now - gitSyncHistoryCache.fetchedAt;
+        if (delta >= 0 && delta < GIT_BRANCH_STATUS_CACHE_MS) {
+            return gitSyncHistoryCache;
+        }
+    }
+    if (gitSyncHistoryInFlight) {
+        return gitSyncHistoryCache;
+    }
+    gitSyncHistoryInFlight = true;
+    try {
+        const result = await fetchJson('/api/codex/git/history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_HISTORY_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({
+                repo_target: 'codex_agent',
+                remote: 'origin',
+                branch: 'main',
+                limit: 30
+            })
+        });
+        gitSyncHistoryCache = {
+            currentBranch: typeof result?.current_branch === 'string' ? result.current_branch : '',
+            remoteMainRef: typeof result?.remote_main_ref === 'string' ? result.remote_main_ref : 'origin/main',
+            remoteMainHistory: Array.isArray(result?.remote_main_history) ? result.remote_main_history : [],
+            remoteMainHistoryError: typeof result?.remote_main_history_error === 'string'
+                ? result.remote_main_history_error
+                : '',
+            aheadCount: Number.isFinite(result?.ahead_count) ? result.ahead_count : null,
+            behindCount: Number.isFinite(result?.behind_count) ? result.behind_count : null,
+            fetchedAt: Date.now(),
+            isStale: false
+        };
+        return gitSyncHistoryCache;
+    } catch (error) {
+        gitSyncHistoryCache = {
+            ...gitSyncHistoryCache,
+            isStale: true,
+            fetchedAt: Date.now()
+        };
+        throw error;
+    } finally {
+        gitSyncHistoryInFlight = false;
+    }
+}
+
+async function refreshGitSyncOverlayHistory({ force = false, silent = false } = {}) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return null;
+    setGitSyncOverlayLoading(true);
+    try {
+        const history = await fetchGitSyncHistory(force);
+        renderGitSyncOverlay(history);
+        return history;
+    } catch (error) {
+        renderGitSyncOverlay(gitSyncHistoryCache);
+        if (!silent) {
+            const message = normalizeError(error, 'sync 이력 조회에 실패했습니다.');
+            showToast(`sync 이력 조회 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        }
+        return null;
+    } finally {
+        setGitSyncOverlayLoading(false);
+    }
 }
 
 async function fetchGitStatus(force = false) {
@@ -3377,20 +3668,31 @@ async function handleGitSync(button) {
     }
 
     gitMutationInFlight = true;
-    setGitButtonBusy(button, true, 'Syncing...');
+    setGitButtonBusy(button, true, 'Fetching...');
     try {
-        const result = await fetchJson('/api/codex/git/sync?repo_target=codex_agent', {
+        const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_SYNC_REQUEST_TIMEOUT_MS,
-            body: JSON.stringify({ repo_target: 'codex_agent' })
+            body: JSON.stringify({
+                repo_target: 'codex_agent',
+                remote: 'origin',
+                branch: 'main'
+            })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
-        showToast(`codex_agent git fetch --prune 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        const syncTarget = typeof result?.sync_target === 'string' && result.sync_target.trim()
+            ? result.sync_target.trim()
+            : 'origin/main';
+        showToast(`${syncTarget} fetch 완료${suffix}`, { tone: 'success', durationMs: 3600 });
+        gitSyncHistoryCache.fetchedAt = 0;
+        if (isGitSyncOverlayOpen()) {
+            await refreshGitSyncOverlayHistory({ force: true, silent: true });
+        }
     } catch (error) {
         const message = normalizeError(error, 'git sync 작업에 실패했습니다.');
-        showToast(`codex_agent git sync 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        showToast(`codex_agent fetch 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         setGitButtonBusy(button, false);

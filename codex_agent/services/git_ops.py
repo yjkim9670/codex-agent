@@ -145,7 +145,7 @@ def _read_upstream_branch(repo_root, env):
     return (result.stdout or '').strip()
 
 
-def _pick_remote(repo_root, env):
+def _list_remotes(repo_root, env):
     result, error = _run_git_command(
         ['git', '-C', str(repo_root), 'remote'],
         repo_root,
@@ -153,13 +153,201 @@ def _pick_remote(repo_root, env):
         env
     )
     if error or not result or result.returncode != 0:
-        return ''
-    remotes = [name.strip() for name in (result.stdout or '').splitlines() if name.strip()]
+        return []
+    return [name.strip() for name in (result.stdout or '').splitlines() if name.strip()]
+
+
+def _pick_remote(repo_root, env):
+    remotes = _list_remotes(repo_root, env)
     if not remotes:
         return ''
     if 'origin' in remotes:
         return 'origin'
     return remotes[0]
+
+
+def _normalize_remote_name(repo_root, env, remote_name=''):
+    requested = str(remote_name or '').strip()
+    remotes = _list_remotes(repo_root, env)
+    if not remotes:
+        return ''
+    if requested and requested in remotes:
+        return requested
+    if requested and requested not in remotes:
+        return _pick_remote(repo_root, env)
+    return _pick_remote(repo_root, env)
+
+
+def _ref_exists(repo_root, env, ref_name):
+    ref = str(ref_name or '').strip()
+    if not ref:
+        return False
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--verify', '--quiet', ref],
+        repo_root,
+        10,
+        env
+    )
+    return not error and bool(result) and result.returncode == 0
+
+
+def _read_local_remote_head_branch(repo_root, env, remote_name):
+    remote = str(remote_name or '').strip()
+    if not remote:
+        return ''
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'symbolic-ref', '--quiet', '--short', f'refs/remotes/{remote}/HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    value = (result.stdout or '').strip()
+    prefix = f'{remote}/'
+    if value.startswith(prefix):
+        return value[len(prefix):].strip()
+    return ''
+
+
+def _read_network_remote_head_branch(repo_root, env, remote_name):
+    remote = str(remote_name or '').strip()
+    if not remote:
+        return ''
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'ls-remote', '--symref', remote, 'HEAD'],
+        repo_root,
+        20,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    for line in (result.stdout or '').splitlines():
+        stripped = line.strip()
+        if not stripped.startswith('ref:'):
+            continue
+        # Example: ref: refs/heads/main  HEAD
+        parts = stripped.split()
+        if len(parts) < 2:
+            continue
+        ref_name = parts[1].strip()
+        prefix = 'refs/heads/'
+        if ref_name.startswith(prefix):
+            branch = ref_name[len(prefix):].strip()
+            if branch:
+                return branch
+    return ''
+
+
+def _remote_branch_exists(repo_root, env, remote_name, branch_name):
+    remote = str(remote_name or '').strip()
+    branch = str(branch_name or '').strip()
+    if not remote or not branch:
+        return None
+    if _ref_exists(repo_root, env, f'{remote}/{branch}'):
+        return True
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'ls-remote', '--heads', remote, branch],
+        repo_root,
+        20,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return None
+    return bool((result.stdout or '').strip())
+
+
+def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch=''):
+    remote = _normalize_remote_name(repo_root, env, remote_name)
+    if not remote:
+        return '', '', False
+
+    preferred = str(preferred_branch or '').strip()
+    if preferred:
+        preferred_exists = _remote_branch_exists(repo_root, env, remote, preferred)
+        if preferred_exists is True:
+            return remote, preferred, False
+
+    local_head_branch = _read_local_remote_head_branch(repo_root, env, remote)
+    if local_head_branch:
+        fallback_used = bool(preferred and local_head_branch != preferred)
+        return remote, local_head_branch, fallback_used
+
+    network_head_branch = _read_network_remote_head_branch(repo_root, env, remote)
+    if network_head_branch:
+        fallback_used = bool(preferred and network_head_branch != preferred)
+        return remote, network_head_branch, fallback_used
+
+    # Common fallback when remote default is still "master".
+    for candidate in ('main', 'master'):
+        exists = _remote_branch_exists(repo_root, env, remote, candidate)
+        if exists is True:
+            fallback_used = bool(preferred and candidate != preferred)
+            return remote, candidate, fallback_used
+
+    # If existence cannot be determined, keep caller preference.
+    if preferred:
+        return remote, preferred, False
+    return remote, '', False
+
+
+def _read_commit_history(repo_root, env, ref_name='HEAD', max_count=20):
+    ref = str(ref_name or '').strip()
+    if not ref:
+        return [], {'error': '히스토리 조회 기준 브랜치가 비어 있습니다.'}
+    try:
+        count = int(max_count)
+    except (TypeError, ValueError):
+        count = 20
+    count = max(1, min(100, count))
+    pretty = '--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s'
+    cmd = [
+        'git', '-C', str(repo_root), 'log',
+        f'--max-count={count}',
+        '--date=iso-strict',
+        pretty,
+        ref,
+        '--'
+    ]
+    result, error = _run_git_command(cmd, repo_root, 20, env)
+    if error:
+        return [], error
+    if not result or result.returncode != 0:
+        message = (result.stderr or result.stdout or '').strip() if result else ''
+        return [], {'error': message or f'{ref} 이력을 불러오지 못했습니다.'}
+    history = []
+    for line in (result.stdout or '').splitlines():
+        parts = line.split('\x1f')
+        if len(parts) < 5:
+            continue
+        history.append({
+            'commit_hash': parts[0].strip(),
+            'short_hash': parts[1].strip(),
+            'committed_at': parts[2].strip(),
+            'author': parts[3].strip(),
+            'subject': parts[4].strip()
+        })
+    return history, None
+
+
+def _read_divergence_counts(repo_root, env, left_ref, right_ref):
+    left = str(left_ref or '').strip()
+    right = str(right_ref or '').strip()
+    if not left or not right:
+        return None, None
+    cmd = ['git', '-C', str(repo_root), 'rev-list', '--left-right', '--count', f'{left}...{right}']
+    result, error = _run_git_command(cmd, repo_root, 10, env)
+    if error or not result or result.returncode != 0:
+        return None, None
+    parts = (result.stdout or '').strip().split()
+    if len(parts) != 2:
+        return None, None
+    try:
+        ahead = max(0, int(parts[0]))
+        behind = max(0, int(parts[1]))
+    except ValueError:
+        return None, None
+    return ahead, behind
 
 
 def get_current_branch_name():
@@ -371,7 +559,7 @@ def run_git_action(action, payload=None):
     try:
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
-        if action not in {'status', 'stage', 'commit', 'push', 'sync', 'submit'}:
+        if action not in {'status', 'history', 'stage', 'commit', 'push', 'sync', 'submit'}:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
@@ -414,7 +602,24 @@ def run_git_action(action, payload=None):
                 )
 
             if action == 'sync':
-                fetch_cmd = _GIT_ACTIONS['sync']
+                requested_remote = str(payload.get('remote') or '').strip()
+                requested_branch = str(payload.get('branch') or '').strip()
+                remote_name = _normalize_remote_name(repo_root, env, requested_remote)
+                if not remote_name:
+                    return {'error': '원격 저장소를 찾을 수 없습니다.'}
+                resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
+                    repo_root,
+                    env,
+                    remote_name,
+                    requested_branch
+                )
+                remote_name = resolved_remote or remote_name
+                branch_name = resolved_branch
+                fetch_cmd = ['git', '-C', str(repo_root), 'fetch', '--prune']
+                if remote_name:
+                    fetch_cmd.append(remote_name)
+                    if branch_name:
+                        fetch_cmd.append(branch_name)
                 result, error = _run_checked(
                     fetch_cmd,
                     repo_root,
@@ -432,7 +637,89 @@ def run_git_action(action, payload=None):
                     exit_code=result.returncode,
                     stdout=result.stdout,
                     stderr=result.stderr,
-                    extra={'repo_target': repo_target}
+                    extra={
+                        'repo_target': repo_target,
+                        'sync_remote': remote_name,
+                        'sync_branch': branch_name,
+                        'requested_sync_remote': requested_remote,
+                        'requested_sync_branch': requested_branch,
+                        'sync_branch_fallback': fallback_used,
+                        'sync_target': f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+                    }
+                )
+
+            if action == 'history':
+                requested_remote = str(payload.get('remote') or '').strip() or 'origin'
+                requested_branch = str(payload.get('branch') or '').strip() or 'main'
+                try:
+                    limit = int(payload.get('limit') or 20)
+                except (TypeError, ValueError):
+                    limit = 20
+                limit = max(1, min(100, limit))
+
+                current_branch = _read_current_branch(repo_root, env) or 'HEAD'
+                resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
+                    repo_root,
+                    env,
+                    requested_remote,
+                    requested_branch
+                )
+                remote_name = resolved_remote or requested_remote
+                branch_name = resolved_branch or requested_branch
+                remote_ref = f'{remote_name}/{branch_name}'
+
+                current_branch_history, current_error = _read_commit_history(
+                    repo_root,
+                    env,
+                    'HEAD',
+                    max_count=limit
+                )
+                if current_error:
+                    return {'error': current_error.get('error') or '현재 브랜치 이력을 불러오지 못했습니다.'}
+
+                remote_history = []
+                remote_history_error = ''
+                if _ref_exists(repo_root, env, remote_ref):
+                    remote_history, remote_error = _read_commit_history(
+                        repo_root,
+                        env,
+                        remote_ref,
+                        max_count=limit
+                    )
+                    if remote_error:
+                        remote_history_error = remote_error.get('error') or f'{remote_ref} 이력을 불러오지 못했습니다.'
+                        remote_history = []
+                else:
+                    remote_history_error = (
+                        f'{remote_ref} 레퍼런스를 아직 찾을 수 없습니다. 먼저 fetch를 실행해 최신 원격 정보를 가져오세요.'
+                    )
+
+                ahead_count, behind_count = _read_divergence_counts(repo_root, env, 'HEAD', remote_ref)
+
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=f'git log --max-count={limit} HEAD / {remote_ref}',
+                    exit_code=0,
+                    stdout='',
+                    stderr='',
+                    extra={
+                        'repo_target': repo_target,
+                        'history_limit': limit,
+                        'current_branch': current_branch,
+                        'remote_name': remote_name,
+                        'main_branch': branch_name,
+                        'requested_remote_name': requested_remote,
+                        'requested_main_branch': requested_branch,
+                        'main_branch_fallback': fallback_used,
+                        'remote_main_ref': remote_ref,
+                        'current_branch_history': current_branch_history,
+                        'remote_main_history': remote_history,
+                        'remote_main_history_error': remote_history_error,
+                        'ahead_count': ahead_count,
+                        'behind_count': behind_count
+                    }
                 )
 
             if action == 'stage':

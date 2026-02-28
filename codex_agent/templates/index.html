@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=67">
+    <link rel="stylesheet" href="/static/css/app.css?v=69">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -36,7 +36,7 @@
                     {% endif %}
                     <button class="btn ghost icon-only git-action-commit" type="button" id="codex-git-commit" aria-label="Stage files and commit" title="Stage files and commit"></button>
                     <button class="btn ghost icon-only git-action-push" type="button" id="codex-git-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch"></button>
-                    <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Fetch updates for codex_agent repository" title="Fetch updates for codex_agent repository"></button>
+                    <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Open codex_agent sync overlay" title="Open codex_agent sync overlay"></button>
                     <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
                 </div>
             </div>
@@ -273,6 +273,36 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=54"></script>
+    <div class="sync-overlay" id="codex-sync-overlay" aria-hidden="true">
+        <div class="sync-overlay-backdrop" data-action="close"></div>
+        <div class="sync-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-sync-overlay-title">
+            <div class="sync-overlay-header">
+                <div class="sync-overlay-heading">
+                    <div class="sync-overlay-title" id="codex-sync-overlay-title">Codex Agent Sync</div>
+                    <div class="sync-overlay-subtitle" id="codex-sync-overlay-subtitle">원격 main 이력 확인 후 fetch</div>
+                </div>
+                <button class="btn ghost icon-only sync-overlay-close" type="button" id="codex-sync-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="sync-overlay-body">
+                <div class="sync-overlay-meta" id="codex-sync-overlay-meta">히스토리를 불러오는 중...</div>
+                <div class="sync-overlay-tools">
+                    <button class="btn primary sync-overlay-fetch" type="button" id="codex-sync-overlay-fetch">origin/main fetch</button>
+                    <button class="btn ghost icon-only sync-overlay-refresh" type="button" id="codex-sync-overlay-refresh" aria-label="히스토리 새로고침" title="히스토리 새로고침">
+                        <span class="sr-only">히스토리 새로고침</span>
+                    </button>
+                </div>
+                <div class="sync-overlay-loading" id="codex-sync-overlay-loading">원격 이력을 불러오는 중...</div>
+                <div class="sync-overlay-empty is-hidden" id="codex-sync-overlay-empty">표시할 이력이 없습니다.</div>
+                <ul class="sync-overlay-list is-hidden" id="codex-sync-overlay-list"></ul>
+            </div>
+            <div class="sync-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-sync-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=55"></script>
 </body>
 </html>

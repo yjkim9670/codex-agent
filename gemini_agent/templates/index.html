@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gemini Agent · {{ workspace_directory_name }}</title>
+    <link rel="stylesheet" href="/static/css/app.css?v=74">
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+    <div class="app">
+        <header class="app-header">
+            <div class="app-header-main">
+                <h1>Gemini Agent</h1>
+                <p class="app-workspace">{{ workspace_directory_name }}</p>
+                <p>Manage Gemini Agent sessions.</p>
+            </div>
+            <div class="header-actions">
+                <div class="theme-toggle">
+                    <label class="theme-switch">
+                        <input type="checkbox" id="gemini-theme-toggle" aria-label="Toggle dark mode">
+                        <span class="theme-slider" aria-hidden="true"></span>
+                    </label>
+                </div>
+                <div class="git-actions" aria-label="Git actions">
+                    {% if current_branch_name %}
+                        <span
+                            class="git-branch"
+                            id="gemini-git-branch"
+                            tabindex="0"
+                            role="button"
+                            aria-label="Show current branch details"
+                            title="{{ current_branch_name }}"
+                            data-branch-full="{{ current_branch_name }}"
+                        >{{ current_branch_name }}</span>
+                    {% endif %}
+                    <button class="btn ghost icon-only git-action-commit" type="button" id="gemini-git-commit" aria-label="Stage files and commit" title="Stage files and commit"></button>
+                    <button class="btn ghost icon-only git-action-push" type="button" id="gemini-git-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch"></button>
+                    <button class="btn ghost icon-only git-action-sync" type="button" id="gemini-git-sync" aria-label="Open repository sync panel" title="Open repository sync panel"></button>
+                    <button class="btn ghost icon-only sessions-refresh" type="button" id="gemini-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
+                </div>
+            </div>
+        </header>
+
+        <main class="layout">
+            <aside class="sidebar-stack">
+                <section class="live-weather-panel" id="gemini-live-weather-panel">
+                    <div class="live-weather-header sessions-header">
+                        <span class="live-weather-title" id="gemini-live-weather-title">Clock &amp; Weather</span>
+                        <div class="live-weather-actions sessions-actions">
+                            <button
+                                class="btn secondary icon-only live-weather-permission"
+                                type="button"
+                                id="gemini-weather-permission"
+                                aria-label="위치 권한 요청"
+                                title="위치 권한 요청"
+                            ></button>
+                            <button
+                                class="btn ghost icon-only sessions-toggle live-weather-compact-toggle"
+                                type="button"
+                                id="gemini-live-weather-toggle"
+                                aria-expanded="true"
+                                aria-controls="gemini-live-weather-content"
+                                aria-label="Collapse weather panel"
+                                title="Collapse weather panel"
+                            ></button>
+                        </div>
+                    </div>
+                    <div class="live-weather-content" id="gemini-live-weather-content">
+                        <div class="live-weather-overview">
+                            <div class="live-weather-time">
+                                <div class="live-weather-label">KST</div>
+                                <div class="live-weather-value" id="gemini-live-datetime">--</div>
+                            </div>
+                            <div class="live-weather-divider" aria-hidden="true"></div>
+                            <div class="live-weather-current">
+                                <div class="live-weather-label" id="gemini-weather-location">위치 확인 중...</div>
+                                <div class="live-weather-value" id="gemini-weather-current">날씨 불러오는 중...</div>
+                                <div class="live-weather-hint">오늘/내일 예보는 아래에서 확인할 수 있습니다</div>
+                            </div>
+                        </div>
+                        <div class="live-weather-forecast" id="gemini-live-weather-forecast">
+                            <div class="forecast-card">
+                                <div class="forecast-title">오늘 (KST)</div>
+                                <div class="forecast-value" id="gemini-weather-today">불러오는 중...</div>
+                            </div>
+                            <div class="forecast-card">
+                                <div class="forecast-title">내일 (KST)</div>
+                                <div class="forecast-value" id="gemini-weather-tomorrow">불러오는 중...</div>
+                            </div>
+                            <div class="forecast-card">
+                                <div class="forecast-title">Gemini 서버 디렉터리</div>
+                                <div class="forecast-value" id="gemini-server-directory">{{ server_directory_name }}</div>
+                                <div class="forecast-subvalue" id="gemini-server-directory-path">{{ server_directory_path }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sessions">
+                    <div class="sessions-header">
+                        <span id="gemini-sessions-title">Sessions</span>
+                        <div class="sessions-actions">
+                            <button class="btn secondary icon-only sessions-new" type="button" id="gemini-chat-new-session" aria-label="Create new session" title="Create new session"></button>
+                            <button class="btn ghost icon-only sessions-toggle" type="button" id="gemini-sessions-toggle" aria-expanded="true" aria-controls="gemini-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
+                        </div>
+                    </div>
+                    <div id="gemini-session-list" class="session-list">
+                        <div class="empty-state">No sessions yet.</div>
+                    </div>
+                </section>
+            </aside>
+
+            <section class="chat">
+                <div class="chat-header">
+                    <div class="chat-header-main">
+                        <div id="gemini-chat-title" class="chat-title">Select a session</div>
+                        <div id="gemini-chat-meta" class="chat-meta"></div>
+                    </div>
+                    <div class="chat-header-actions">
+                        <button
+                            class="chat-header-fullscreen"
+                            type="button"
+                            id="gemini-chat-fullscreen"
+                            aria-pressed="false"
+                            aria-label="Expand chat to fullscreen"
+                            title="Expand chat to fullscreen"
+                        ></button>
+                    </div>
+                </div>
+
+                <div class="stream-monitor is-collapsed" id="gemini-stream-monitor">
+                    <div class="stream-monitor-header">
+                        <div class="stream-monitor-title">Live responses</div>
+                        <div class="stream-monitor-actions">
+                            <button
+                                class="stream-monitor-toggle"
+                                type="button"
+                                id="gemini-stream-monitor-toggle"
+                                aria-expanded="false"
+                                aria-label="Toggle live responses"
+                                title="Toggle live responses"
+                            ></button>
+                        </div>
+                    </div>
+                    <div class="stream-monitor-body">
+                        <div class="stream-monitor-empty" id="gemini-stream-monitor-empty">No active streams.</div>
+                        <ul class="stream-monitor-list is-hidden" id="gemini-stream-monitor-list"></ul>
+                        <div class="stream-monitor-output is-hidden" id="gemini-stream-monitor-output">
+                            <div class="stream-monitor-output-header">
+                                <div>
+                                    <div class="stream-monitor-output-title" id="gemini-stream-monitor-title">Monitoring</div>
+                                    <div class="stream-monitor-status" id="gemini-stream-monitor-status">Streaming...</div>
+                                </div>
+                                <button
+                                    class="stream-monitor-close"
+                                    type="button"
+                                    id="gemini-stream-monitor-close"
+                                    aria-label="Stop monitoring"
+                                    title="Stop monitoring"
+                                ></button>
+                            </div>
+                            <div class="stream-monitor-output-body" id="gemini-stream-monitor-content"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-frame">
+                    <div id="gemini-chat-messages" class="chat-messages">
+                        <div class="chat-placeholder">Select a session or create a new one.</div>
+                    </div>
+                </div>
+
+                <div class="chat-controls is-collapsed" id="gemini-controls">
+                    <div class="chat-controls-header">
+                        <button class="chat-controls-toggle" type="button" id="gemini-controls-toggle" aria-expanded="false" aria-controls="gemini-controls-body">
+                            <span class="controls-label">
+                                <span class="controls-title">Usage &amp; Model</span>
+                                <span class="controls-summary" id="gemini-controls-summary">Refresh to load</span>
+                            </span>
+                            <span class="controls-chevron" aria-hidden="true"></span>
+                        </button>
+                    </div>
+                    <div class="chat-controls-body" id="gemini-controls-body">
+                        <div class="usage-card">
+                            <div class="usage-label">Limits</div>
+                            <div class="usage-value" id="gemini-usage-summary">Refresh to load</div>
+                        </div>
+                        <div class="model-card">
+                            <label class="model-label" for="gemini-model-input">Model · Approval mode</label>
+                            <div class="model-row model-row-combined has-apply">
+                                <div class="model-field model-field-model">
+                                    <select id="gemini-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <input id="gemini-model-input" class="model-input" type="text" placeholder="Default model">
+                                </div>
+                                <div class="model-field model-field-reasoning">
+                                    <select id="gemini-reasoning-select" class="model-select is-hidden" aria-label="Select approval mode" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="gemini-reasoning-input" class="model-input" type="text" placeholder="Default mode">
+                                </div>
+                                <button
+                                    class="btn ghost icon-only model-apply"
+                                    type="button"
+                                    id="gemini-model-apply"
+                                    aria-label="Apply model and approval mode settings"
+                                    title="Apply model and approval mode settings"
+                                >
+                                    <span class="sr-only">Apply settings</span>
+                                </button>
+                            </div>
+                            <div class="model-status" id="gemini-model-status">Refresh to load</div>
+                        </div>
+                    </div>
+                </div>
+
+                <form id="gemini-chat-form" class="chat-input" autocomplete="off">
+                    <label class="sr-only" for="gemini-chat-input">Gemini prompt</label>
+                    <textarea id="gemini-chat-input" rows="3" placeholder="Type a prompt for Gemini. (Shift+Enter for newline)"></textarea>
+                    <button class="btn primary" type="submit" id="gemini-chat-send" data-mode="send" aria-label="Send" title="Send">
+                        <span class="sr-only">Send</span>
+                    </button>
+                </form>
+
+                <div id="gemini-chat-status" class="chat-status">Idle</div>
+            </section>
+        </main>
+    </div>
+
+    <div class="branch-overlay" id="gemini-branch-overlay" aria-hidden="true">
+        <div class="branch-overlay-backdrop" data-action="close"></div>
+        <div class="branch-overlay-card" role="dialog" aria-modal="true" aria-labelledby="gemini-branch-overlay-title">
+            <div class="branch-overlay-header">
+                <div class="branch-overlay-heading">
+                    <div class="branch-overlay-title" id="gemini-branch-overlay-title">브랜치 변경 사항</div>
+                    <div class="branch-overlay-subtitle" id="gemini-branch-overlay-subtitle">-</div>
+                </div>
+                <button class="btn ghost icon-only branch-overlay-close" type="button" id="gemini-branch-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="branch-overlay-body">
+                <div class="branch-overlay-meta" id="gemini-branch-overlay-meta">불러오는 중...</div>
+                <div class="branch-overlay-stage-tools">
+                    <button class="btn secondary branch-overlay-stage-btn" type="button" id="gemini-branch-overlay-stage-all">전체 선택</button>
+                    <button class="btn ghost branch-overlay-stage-btn" type="button" id="gemini-branch-overlay-stage-none">선택 해제</button>
+                    <div class="branch-overlay-selection" id="gemini-branch-overlay-selection">선택 0개</div>
+                </div>
+                <div class="branch-overlay-commit">
+                    <label for="gemini-branch-overlay-commit-message">Commit message (선택)</label>
+                    <input
+                        id="gemini-branch-overlay-commit-message"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="비워두면 자동 메시지가 생성됩니다."
+                        maxlength="240"
+                    >
+                </div>
+                <div class="branch-overlay-loading" id="gemini-branch-overlay-loading">변경 파일을 불러오는 중...</div>
+                <div class="branch-overlay-empty is-hidden" id="gemini-branch-overlay-empty">변경 파일이 없습니다.</div>
+                <ul class="branch-overlay-list is-hidden" id="gemini-branch-overlay-list"></ul>
+            </div>
+            <div class="branch-overlay-footer">
+                <button class="btn ghost icon-only git-action-commit" type="button" id="gemini-branch-overlay-commit" aria-label="Commit staged files" title="Commit staged files">
+                    <span class="sr-only">Commit staged files</span>
+                </button>
+                <button class="btn ghost icon-only git-action-push" type="button" id="gemini-branch-overlay-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch">
+                    <span class="sr-only">Push current branch and run fetch</span>
+                </button>
+                <button class="btn ghost icon-only branch-overlay-refresh" type="button" id="gemini-branch-overlay-refresh" aria-label="Refresh" title="Refresh">
+                    <span class="sr-only">Refresh</span>
+                </button>
+                <button class="btn primary" type="button" id="gemini-branch-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="sync-overlay" id="gemini-sync-overlay" aria-hidden="true">
+        <div class="sync-overlay-backdrop" data-action="close"></div>
+        <div class="sync-overlay-card" role="dialog" aria-modal="true" aria-labelledby="gemini-sync-overlay-title">
+            <div class="sync-overlay-header">
+                <div class="sync-overlay-heading">
+                    <div class="sync-overlay-title" id="gemini-sync-overlay-title">Repository Sync</div>
+                    <div class="sync-overlay-subtitle" id="gemini-sync-overlay-subtitle">저장소 선택 후 원격 이력 확인/Fetch</div>
+                </div>
+                <button class="btn ghost icon-only sync-overlay-close" type="button" id="gemini-sync-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="sync-overlay-body">
+                <div class="sync-overlay-meta" id="gemini-sync-overlay-meta">히스토리를 불러오는 중...</div>
+                <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
+                    <button class="btn secondary sync-overlay-target is-active" type="button" id="gemini-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
+                    <button class="btn ghost sync-overlay-target" type="button" id="gemini-sync-target-gemini-agent" data-repo-target="gemini_agent">gemini_agent Repo</button>
+                </div>
+                <div class="sync-overlay-tools">
+                    <button class="btn primary sync-overlay-fetch" type="button" id="gemini-sync-overlay-fetch">origin/main fetch</button>
+                    <button class="btn secondary sync-overlay-sync" type="button" id="gemini-sync-overlay-sync">fetch + sync</button>
+                    <button class="btn ghost icon-only git-action-commit" type="button" id="gemini-sync-overlay-commit" aria-label="Commit all changed files" title="Commit all changed files">
+                        <span class="sr-only">Commit all changed files</span>
+                    </button>
+                    <button class="btn ghost icon-only git-action-push" type="button" id="gemini-sync-overlay-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch">
+                        <span class="sr-only">Push current branch and run fetch</span>
+                    </button>
+                    <button class="btn ghost icon-only sync-overlay-refresh" type="button" id="gemini-sync-overlay-refresh" aria-label="히스토리 새로고침" title="히스토리 새로고침">
+                        <span class="sr-only">히스토리 새로고침</span>
+                    </button>
+                </div>
+                <div class="sync-overlay-loading" id="gemini-sync-overlay-loading">원격 이력을 불러오는 중...</div>
+                <div class="sync-overlay-empty is-hidden" id="gemini-sync-overlay-empty">표시할 이력이 없습니다.</div>
+                <ul class="sync-overlay-list is-hidden" id="gemini-sync-overlay-list"></ul>
+            </div>
+            <div class="sync-overlay-footer">
+                <button class="btn ghost" type="button" id="gemini-sync-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=61"></script>
+</body>
+</html>

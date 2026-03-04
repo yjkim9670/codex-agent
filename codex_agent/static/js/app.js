@@ -83,6 +83,11 @@ const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
 const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
+const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
+const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
+const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
+const SESSION_PENDING_STALE_MS = 120000;
+const REFRESH_BUTTON_STALE_MS = 30000;
 const GIT_SYNC_TARGET_ORDER = Object.freeze([
     GIT_SYNC_TARGET_WORKSPACE,
     GIT_SYNC_TARGET_CODEX_AGENT
@@ -121,6 +126,7 @@ let remoteStreamStatusCache = {
 };
 let remoteStreamPollTimer = null;
 let remoteStreamStatusInFlight = false;
+let sessionLoadLockStartedAt = 0;
 let streamMonitorState = null;
 let hoverTooltipInteractionsBound = false;
 let hoverTooltipLayer = null;
@@ -708,8 +714,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', async () => {
-            if (refreshBtn.classList.contains('is-loading')) return;
+            if (refreshBtn.classList.contains('is-loading')) {
+                const startedAt = Number(refreshBtn.dataset.loadingStartedAt);
+                const isStale = Number.isFinite(startedAt) && Date.now() - startedAt >= REFRESH_BUTTON_STALE_MS;
+                if (!isStale) return;
+                refreshBtn.classList.remove('is-loading');
+                delete refreshBtn.dataset.loadingStartedAt;
+                const staleRecovered = recoverClientUiState({
+                    clearSessionLoadingLock: true,
+                    source: 'stale-refresh-button'
+                });
+                if (staleRecovered.length > 0) {
+                    showToast('잠긴 UI 상태를 복구하고 다시 동기화를 시작합니다.', {
+                        tone: 'success',
+                        durationMs: 2600
+                    });
+                }
+            }
             refreshBtn.classList.add('is-loading');
+            refreshBtn.dataset.loadingStartedAt = String(Date.now());
+            const recovered = recoverClientUiState({
+                clearSessionLoadingLock: true,
+                source: 'manual-refresh'
+            });
+            if (recovered.length > 0) {
+                showToast('로컬 잠금 상태를 정리한 뒤 새로고침합니다.', {
+                    tone: 'success',
+                    durationMs: 2200
+                });
+            }
             try {
                 await Promise.all([
                     loadSessions({ preserveActive: true }),
@@ -720,6 +753,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ]);
             } finally {
                 refreshBtn.classList.remove('is-loading');
+                delete refreshBtn.dataset.loadingStartedAt;
             }
         });
     }
@@ -2670,15 +2704,23 @@ async function pollStreamMonitor() {
 }
 
 async function loadSessions({ preserveActive = true, selectSessionId = null, reloadActive = true } = {}) {
-    if (state.loading) return;
+    if (state.loading) {
+        const isStaleLock = sessionLoadLockStartedAt > 0
+            && Date.now() - sessionLoadLockStartedAt >= REFRESH_BUTTON_STALE_MS;
+        if (!isStaleLock) {
+            return;
+        }
+        state.loading = false;
+        sessionLoadLockStartedAt = 0;
+        console.warn('[codex-ui] recovered stale session loading lock before reloading sessions');
+    }
     state.loading = true;
+    sessionLoadLockStartedAt = Date.now();
     setStatus('Loading sessions...');
     try {
-        const response = await fetch('/api/codex/sessions');
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to load sessions.');
-        }
+        const result = await fetchJson('/api/codex/sessions', {
+            timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
+        });
         state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
         renderSessions();
 
@@ -2708,6 +2750,7 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
         setStatus(normalizeError(error, 'Failed to load sessions.'), true);
     } finally {
         state.loading = false;
+        sessionLoadLockStartedAt = 0;
     }
 }
 
@@ -3140,6 +3183,141 @@ function setGitButtonBusy(button, busy, busyLabel) {
         button.textContent = button.dataset.label || button.textContent;
     }
     syncHoverTooltipFromLabel(button);
+}
+
+function isRecoverableActionButtonBusy(button) {
+    if (!button) return false;
+    return button.disabled
+        || button.classList.contains('is-loading')
+        || button.getAttribute('aria-busy') === 'true';
+}
+
+function getRecoverableGitActionButtons() {
+    const selectors = [
+        '#codex-git-commit',
+        '#codex-git-push',
+        '#codex-git-sync',
+        '#codex-branch-overlay-commit',
+        '#codex-branch-overlay-push',
+        '#codex-sync-overlay-fetch',
+        '#codex-sync-overlay-sync',
+        '#codex-sync-overlay-commit',
+        '#codex-sync-overlay-push',
+        '#codex-sync-overlay-refresh'
+    ];
+    const seen = new Set();
+    const buttons = [];
+    selectors.forEach(selector => {
+        const button = document.querySelector(selector);
+        if (!button || seen.has(button)) return;
+        seen.add(button);
+        buttons.push(button);
+    });
+    return buttons;
+}
+
+function recoverGitActionButtons() {
+    let recoveredCount = 0;
+    getRecoverableGitActionButtons().forEach(button => {
+        if (!isRecoverableActionButtonBusy(button)) return;
+        setGitButtonBusy(button, false);
+        recoveredCount += 1;
+    });
+    recoverGitPushButtonsIfIdle();
+    return recoveredCount;
+}
+
+function isTransientBusySessionStatus(message) {
+    if (typeof message !== 'string') return false;
+    return message.startsWith('Waiting for Codex')
+        || message.startsWith('Receiving response')
+        || message.startsWith('Reconnecting to Codex')
+        || message.startsWith('Connection lost. Retrying')
+        || message.startsWith('Stream completed. Reloading')
+        || message.startsWith('Stopping');
+}
+
+function recoverStaleSessionBusyStates(now = Date.now()) {
+    let recoveredCount = 0;
+    Object.entries(state.sessionStates).forEach(([sessionId, sessionState]) => {
+        if (!sessionState || typeof sessionState !== 'object') return;
+        let changed = false;
+
+        if (sessionState.streamId && !state.streams[sessionState.streamId]) {
+            sessionState.streamId = null;
+            changed = true;
+        }
+
+        const pendingSend = sessionState.pendingSend;
+        const pendingStartedAt = Number(pendingSend?.startedAt);
+        const pendingAgeMs = Number.isFinite(pendingStartedAt) ? now - pendingStartedAt : null;
+        if (pendingSend && pendingAgeMs != null && pendingAgeMs >= SESSION_PENDING_STALE_MS) {
+            try {
+                pendingSend.controller?.abort();
+            } catch (error) {
+                void error;
+            }
+            sessionState.pendingSend = null;
+            changed = true;
+        }
+
+        const hasLocalStream = Boolean(getSessionStream(sessionId));
+        const hasRemoteStream = Boolean(state.remoteStreamSessions?.has(sessionId));
+        const hasPendingSend = Boolean(sessionState.pendingSend);
+        if (sessionState.sending && !hasLocalStream && !hasRemoteStream && !hasPendingSend) {
+            sessionState.sending = false;
+            changed = true;
+        }
+
+        if (!hasLocalStream && !hasRemoteStream && !hasPendingSend && isTransientBusySessionStatus(sessionState.status)) {
+            sessionState.status = 'Idle';
+            sessionState.statusIsError = false;
+            sessionState.responseStartedAt = null;
+            sessionState.responseStatus = null;
+            changed = true;
+        }
+
+        if (changed) {
+            recoveredCount += 1;
+        }
+    });
+    return recoveredCount;
+}
+
+function recoverClientUiState({ clearSessionLoadingLock = false, source = 'manual' } = {}) {
+    const recovered = [];
+    if (clearSessionLoadingLock && state.loading) {
+        const isStaleLoadLock = sessionLoadLockStartedAt > 0
+            && Date.now() - sessionLoadLockStartedAt >= REFRESH_BUTTON_STALE_MS;
+        if (isStaleLoadLock) {
+            state.loading = false;
+            sessionLoadLockStartedAt = 0;
+            recovered.push('session loading lock');
+        }
+    }
+    if (gitMutationInFlight) {
+        gitMutationInFlight = false;
+        recovered.push('git mutation lock');
+    }
+
+    const recoveredButtons = recoverGitActionButtons();
+    if (recoveredButtons > 0) {
+        recovered.push(`git action buttons (${recoveredButtons})`);
+    }
+
+    const recoveredSessions = recoverStaleSessionBusyStates();
+    if (recoveredSessions > 0) {
+        recovered.push(`session busy states (${recoveredSessions})`);
+        renderSessions();
+    }
+
+    syncActiveSessionControls();
+    syncActiveSessionStatus();
+
+    if (recovered.length > 0) {
+        console.info(`[codex-ui] recovered stale state (${source}): ${recovered.join(', ')}`);
+    }
+    return recovered;
 }
 
 function summarizeGitOutput(value) {
@@ -3941,6 +4119,7 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
 
 async function handleGitCommit(button) {
     if (gitMutationInFlight) {
+        console.warn('[codex-ui] git commit blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -4009,6 +4188,7 @@ async function handleGitCommit(button) {
 
 async function handleGitQuickCommit(button, options = {}) {
     if (gitMutationInFlight) {
+        console.warn('[codex-ui] git quick commit blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -4082,6 +4262,7 @@ async function handleGitQuickCommit(button, options = {}) {
 async function handleGitPush(button, options = {}) {
     recoverGitPushButtonsIfIdle();
     if (gitMutationInFlight) {
+        console.warn('[codex-ui] git push blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -4149,6 +4330,7 @@ async function handleGitPush(button, options = {}) {
 
 async function handleGitSync(button, options = {}) {
     if (gitMutationInFlight) {
+        console.warn('[codex-ui] git sync blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -4503,15 +4685,12 @@ function removeSessionSummary(sessionId) {
 async function createSession(selectAfter = true) {
     setStatus('Creating session...');
     try {
-        const response = await fetch('/api/codex/sessions', {
+        const result = await fetchJson('/api/codex/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({})
         });
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to create session.');
-        }
         const sessionId = result?.session?.id;
         upsertSessionSummary(result?.session);
         if (selectAfter && sessionId) {
@@ -4534,11 +4713,9 @@ async function loadSession(sessionId) {
     if (!sessionId) return;
     setStatus('Loading session...');
     try {
-        const response = await fetch(`/api/codex/sessions/${sessionId}`);
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to load session.');
-        }
+        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+            timeoutMs: SESSION_DETAIL_REQUEST_TIMEOUT_MS
+        });
         const session = result?.session;
         const previousSessionId = state.activeSessionId;
         state.activeSessionId = session?.id || sessionId;
@@ -5047,7 +5224,10 @@ async function finishStream(streamId, result) {
 async function renameSession(session) {
     if (!session?.id) return;
     if (isSessionBusy(session.id)) {
-        setStatus('Cannot rename a session while it is running.', true);
+        console.warn(`[codex-ui] rename blocked: session ${session.id} is busy`);
+        const message = 'Cannot rename a session while it is running.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3200 });
         return;
     }
     const currentTitle = session.title || 'New session';
@@ -5060,15 +5240,12 @@ async function renameSession(session) {
     }
     setStatus('Renaming session...');
     try {
-        const response = await fetch(`/api/codex/sessions/${session.id}`, {
+        const result = await fetchJson(`/api/codex/sessions/${session.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
+            timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({ title: trimmed })
         });
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to rename session.');
-        }
         const updated = result?.session;
         upsertSessionSummary(updated);
         renderSessions();
@@ -5084,18 +5261,20 @@ async function renameSession(session) {
 async function deleteSession(sessionId) {
     if (!sessionId) return;
     if (isSessionBusy(sessionId)) {
-        setStatus('Cannot delete a session while it is running.', true);
+        console.warn(`[codex-ui] delete blocked: session ${sessionId} is busy`);
+        const message = 'Cannot delete a session while it is running.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3200 });
         return;
     }
     const confirmed = window.confirm('Delete this session? This will remove all messages.');
     if (!confirmed) return;
     setStatus('Deleting session...');
     try {
-        const response = await fetch(`/api/codex/sessions/${sessionId}`, { method: 'DELETE' });
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to delete session.');
-        }
+        await fetchJson(`/api/codex/sessions/${sessionId}`, {
+            method: 'DELETE',
+            timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS
+        });
         removeSessionSummary(sessionId);
         if (state.activeSessionId === sessionId) {
             state.activeSessionId = null;

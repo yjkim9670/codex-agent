@@ -54,7 +54,7 @@ MODEL_MAX_MODEL_CHARS = _read_positive_int_env('MODEL_MAX_MODEL_CHARS', 80)
 MODEL_MAX_REASONING_CHARS = _read_positive_int_env('MODEL_MAX_REASONING_CHARS', 40)
 
 MODEL_DEFAULT_PROVIDER = os.environ.get('MODEL_DEFAULT_PROVIDER', 'gemini').strip().lower() or 'gemini'
-_default_provider_options = ['gemini', 'openai']
+_default_provider_options = ['gemini', 'openai', 'kimi', 'glm']
 MODEL_PROVIDER_OPTIONS = _read_csv_env('MODEL_PROVIDER_OPTIONS')
 if not MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS = list(_default_provider_options)
@@ -71,15 +71,29 @@ MODEL_OPENAI_API_BASE_URL = (
     os.environ.get('MODEL_OPENAI_API_BASE_URL', 'https://api.openai.com/v1').strip().rstrip('/')
     or 'https://api.openai.com/v1'
 )
+MODEL_KIMI_API_KEY = os.environ.get('MODEL_KIMI_API_KEY', '').strip()
+MODEL_KIMI_API_BASE_URL = (
+    os.environ.get('MODEL_KIMI_API_BASE_URL', 'https://api.moonshot.cn/v1').strip().rstrip('/')
+    or 'https://api.moonshot.cn/v1'
+)
+MODEL_GLM_API_KEY = os.environ.get('MODEL_GLM_API_KEY', '').strip()
+MODEL_GLM_API_BASE_URL = (
+    os.environ.get('MODEL_GLM_API_BASE_URL', 'https://open.bigmodel.cn/api/paas/v4').strip().rstrip('/')
+    or 'https://open.bigmodel.cn/api/paas/v4'
+)
 
 MODEL_GEMINI_DEFAULT_MODEL = (
-    os.environ.get('MODEL_GEMINI_DEFAULT_MODEL', os.environ.get('MODEL_DEFAULT_MODEL', 'gemini-2.5-flash')).strip()
-    or 'gemini-2.5-flash'
+    os.environ.get('MODEL_GEMINI_DEFAULT_MODEL', os.environ.get('MODEL_DEFAULT_MODEL', 'gemini-flash-latest')).strip()
+    or 'gemini-flash-latest'
 )
 MODEL_OPENAI_DEFAULT_MODEL = os.environ.get('MODEL_OPENAI_DEFAULT_MODEL', 'gpt-4.1-mini').strip() or 'gpt-4.1-mini'
+MODEL_KIMI_DEFAULT_MODEL = os.environ.get('MODEL_KIMI_DEFAULT_MODEL', 'kimi-k2-0905-preview').strip() or 'kimi-k2-0905-preview'
+MODEL_GLM_DEFAULT_MODEL = os.environ.get('MODEL_GLM_DEFAULT_MODEL', 'glm-4.7').strip() or 'glm-4.7'
 MODEL_PROVIDER_DEFAULT_MODELS = {
     'gemini': MODEL_GEMINI_DEFAULT_MODEL,
-    'openai': MODEL_OPENAI_DEFAULT_MODEL
+    'openai': MODEL_OPENAI_DEFAULT_MODEL,
+    'kimi': MODEL_KIMI_DEFAULT_MODEL,
+    'glm': MODEL_GLM_DEFAULT_MODEL,
 }
 MODEL_DEFAULT_MODEL = MODEL_PROVIDER_DEFAULT_MODELS.get(MODEL_DEFAULT_PROVIDER, MODEL_GEMINI_DEFAULT_MODEL)
 
@@ -91,6 +105,12 @@ _default_gemini_model_options = sorted({
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
     'gemini-2.5-pro',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-pro-preview',
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
+    'gemini-pro-latest',
     'pro'
 })
 MODEL_GEMINI_MODEL_OPTIONS = _read_csv_env('MODEL_GEMINI_MODEL_OPTIONS')
@@ -109,9 +129,40 @@ MODEL_OPENAI_MODEL_OPTIONS = _read_csv_env('MODEL_OPENAI_MODEL_OPTIONS')
 if not MODEL_OPENAI_MODEL_OPTIONS:
     MODEL_OPENAI_MODEL_OPTIONS = _default_openai_model_options
 
+_default_kimi_model_options = sorted({
+    MODEL_KIMI_DEFAULT_MODEL,
+    'auto',
+    'k2',
+    'k2.5',
+    'k2-turbo',
+    'kimi-k2-0905-preview',
+    'kimi-k2-turbo-preview',
+    'kimi-latest',
+    'kimi-thinking-preview',
+})
+MODEL_KIMI_MODEL_OPTIONS = _read_csv_env('MODEL_KIMI_MODEL_OPTIONS')
+if not MODEL_KIMI_MODEL_OPTIONS:
+    MODEL_KIMI_MODEL_OPTIONS = _default_kimi_model_options
+
+_default_glm_model_options = sorted({
+    MODEL_GLM_DEFAULT_MODEL,
+    'auto',
+    'glm4.7',
+    'glm4.7-flash',
+    'glm4.7-flashx',
+    'glm-4.7',
+    'glm-4.7-flash',
+    'glm-4.7-flashx',
+})
+MODEL_GLM_MODEL_OPTIONS = _read_csv_env('MODEL_GLM_MODEL_OPTIONS')
+if not MODEL_GLM_MODEL_OPTIONS:
+    MODEL_GLM_MODEL_OPTIONS = _default_glm_model_options
+
 MODEL_PROVIDER_MODEL_OPTIONS = {
     'gemini': MODEL_GEMINI_MODEL_OPTIONS,
-    'openai': MODEL_OPENAI_MODEL_OPTIONS
+    'openai': MODEL_OPENAI_MODEL_OPTIONS,
+    'kimi': MODEL_KIMI_MODEL_OPTIONS,
+    'glm': MODEL_GLM_MODEL_OPTIONS,
 }
 
 MODEL_REASONING_OPTIONS = _read_csv_env('MODEL_REASONING_OPTIONS')

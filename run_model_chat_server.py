@@ -5,6 +5,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -66,6 +67,35 @@ def _coerce_list(value):
     return []
 
 
+_ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
+
+
+def _resolve_env_reference(value):
+    if not isinstance(value, str):
+        return value
+    token = value.strip()
+    if not token:
+        return value
+
+    match = _ENV_REFERENCE_PATTERN.match(token)
+    if match:
+        return os.environ.get(match.group(1), '')
+
+    if token.lower().startswith('env:'):
+        env_name = token[4:].strip()
+        if env_name:
+            return os.environ.get(env_name, '')
+    return value
+
+
+def _resolve_config_env_references(value):
+    if isinstance(value, dict):
+        return {key: _resolve_config_env_references(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_config_env_references(item) for item in value]
+    return _resolve_env_reference(value)
+
+
 def _resolve_config_path(script_path):
     configured = os.environ.get('MODEL_AGENT_CONFIG_PATH', '').strip()
     if configured:
@@ -93,6 +123,7 @@ def load_runtime_config(script_path):
         print(f"[ERROR] Config JSON must be an object: {config_path}")
         sys.exit(1)
 
+    config = _resolve_config_env_references(config)
     print(f"[INFO] Loaded config: {config_path}")
     return config, config_path
 
@@ -145,38 +176,60 @@ def apply_runtime_environment(config, config_path):
     if not isinstance(providers_config, dict):
         providers_config = {}
 
-    gemini_provider = providers_config.get('gemini')
-    if not isinstance(gemini_provider, dict):
-        gemini_provider = {}
-    openai_provider = providers_config.get('openai')
-    if not isinstance(openai_provider, dict):
-        openai_provider = {}
+    provider_env_mappings = {
+        'gemini': {
+            'api_key': 'MODEL_GEMINI_API_KEY',
+            'api_base_url': 'MODEL_GEMINI_API_BASE_URL',
+            'default_model': 'MODEL_GEMINI_DEFAULT_MODEL',
+            'model_options': 'MODEL_GEMINI_MODEL_OPTIONS',
+        },
+        'openai': {
+            'api_key': 'MODEL_OPENAI_API_KEY',
+            'api_base_url': 'MODEL_OPENAI_API_BASE_URL',
+            'default_model': 'MODEL_OPENAI_DEFAULT_MODEL',
+            'model_options': 'MODEL_OPENAI_MODEL_OPTIONS',
+        },
+        'kimi': {
+            'api_key': 'MODEL_KIMI_API_KEY',
+            'api_base_url': 'MODEL_KIMI_API_BASE_URL',
+            'default_model': 'MODEL_KIMI_DEFAULT_MODEL',
+            'model_options': 'MODEL_KIMI_MODEL_OPTIONS',
+        },
+        'glm': {
+            'api_key': 'MODEL_GLM_API_KEY',
+            'api_base_url': 'MODEL_GLM_API_BASE_URL',
+            'default_model': 'MODEL_GLM_DEFAULT_MODEL',
+            'model_options': 'MODEL_GLM_MODEL_OPTIONS',
+        },
+    }
+
+    normalized_providers = {}
+    for provider_name in provider_env_mappings:
+        provider_config = providers_config.get(provider_name)
+        if not isinstance(provider_config, dict):
+            provider_config = {}
+        normalized_providers[provider_name] = provider_config
 
     # Backward compatibility for the older single-provider schema.
     if runtime_config.get('api_key') is not None:
-        gemini_provider.setdefault('api_key', runtime_config.get('api_key'))
+        normalized_providers['gemini'].setdefault('api_key', runtime_config.get('api_key'))
     if runtime_config.get('api_base_url') is not None:
-        gemini_provider.setdefault('api_base_url', runtime_config.get('api_base_url'))
+        normalized_providers['gemini'].setdefault('api_base_url', runtime_config.get('api_base_url'))
     if runtime_config.get('default_model') is not None:
-        gemini_provider.setdefault('default_model', runtime_config.get('default_model'))
+        normalized_providers['gemini'].setdefault('default_model', runtime_config.get('default_model'))
     legacy_model_options = _coerce_list(runtime_config.get('model_options'))
-    if legacy_model_options and 'model_options' not in gemini_provider:
-        gemini_provider['model_options'] = legacy_model_options
+    if legacy_model_options and 'model_options' not in normalized_providers['gemini']:
+        normalized_providers['gemini']['model_options'] = legacy_model_options
 
-    gemini_model_options = _coerce_list(gemini_provider.get('model_options'))
-    openai_model_options = _coerce_list(openai_provider.get('model_options'))
+    for provider_name, env_mapping in provider_env_mappings.items():
+        provider_config = normalized_providers.get(provider_name, {})
+        _set_env_default(env_mapping['api_key'], provider_config.get('api_key'))
+        _set_env_default(env_mapping['api_base_url'], provider_config.get('api_base_url'))
+        _set_env_default(env_mapping['default_model'], provider_config.get('default_model'))
 
-    _set_env_default('MODEL_GEMINI_API_KEY', gemini_provider.get('api_key'))
-    _set_env_default('MODEL_GEMINI_API_BASE_URL', gemini_provider.get('api_base_url'))
-    _set_env_default('MODEL_GEMINI_DEFAULT_MODEL', gemini_provider.get('default_model'))
-    if gemini_model_options:
-        _set_env_default('MODEL_GEMINI_MODEL_OPTIONS', ','.join(gemini_model_options))
-
-    _set_env_default('MODEL_OPENAI_API_KEY', openai_provider.get('api_key'))
-    _set_env_default('MODEL_OPENAI_API_BASE_URL', openai_provider.get('api_base_url'))
-    _set_env_default('MODEL_OPENAI_DEFAULT_MODEL', openai_provider.get('default_model'))
-    if openai_model_options:
-        _set_env_default('MODEL_OPENAI_MODEL_OPTIONS', ','.join(openai_model_options))
+        provider_model_options = _coerce_list(provider_config.get('model_options'))
+        if provider_model_options:
+            _set_env_default(env_mapping['model_options'], ','.join(provider_model_options))
 
     numeric_mappings = {
         'max_prompt_chars': 'MODEL_MAX_PROMPT_CHARS',

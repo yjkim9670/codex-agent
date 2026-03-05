@@ -24,6 +24,14 @@ from ..config import (
     MODEL_GEMINI_API_KEY,
     MODEL_GEMINI_DEFAULT_MODEL,
     MODEL_GEMINI_MODEL_OPTIONS,
+    MODEL_GLM_API_BASE_URL,
+    MODEL_GLM_API_KEY,
+    MODEL_GLM_DEFAULT_MODEL,
+    MODEL_GLM_MODEL_OPTIONS,
+    MODEL_KIMI_API_BASE_URL,
+    MODEL_KIMI_API_KEY,
+    MODEL_KIMI_DEFAULT_MODEL,
+    MODEL_KIMI_MODEL_OPTIONS,
     MODEL_OPENAI_API_BASE_URL,
     MODEL_OPENAI_API_KEY,
     MODEL_OPENAI_DEFAULT_MODEL,
@@ -44,7 +52,8 @@ _CONFIG_LOCK = threading.Lock()
 _USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
-_SUPPORTED_PROVIDERS = ('gemini', 'openai')
+_SUPPORTED_PROVIDERS = ('gemini', 'openai', 'kimi', 'glm')
+_OPENAI_COMPATIBLE_PROVIDERS = ('openai', 'kimi', 'glm')
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -93,6 +102,12 @@ def _canonical_provider_name(value):
         'google': 'gemini',
         'openai': 'openai',
         'gpt': 'openai',
+        'kimi': 'kimi',
+        'moonshot': 'kimi',
+        'moonshotai': 'kimi',
+        'glm': 'glm',
+        'bigmodel': 'glm',
+        'zhipu': 'glm',
     }
     return aliases.get(raw, '')
 
@@ -129,6 +144,10 @@ def _default_model_for_provider(provider):
     configured = MODEL_PROVIDER_DEFAULT_MODELS.get(normalized)
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
+    if normalized == 'glm':
+        return MODEL_GLM_DEFAULT_MODEL
+    if normalized == 'kimi':
+        return MODEL_KIMI_DEFAULT_MODEL
     if normalized == 'openai':
         return MODEL_OPENAI_DEFAULT_MODEL
     return MODEL_GEMINI_DEFAULT_MODEL
@@ -285,6 +304,10 @@ def update_settings(provider=None, model=None, reasoning_effort=None):
 
 def _provider_account_name(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'glm':
+        return 'GLM API'
+    if normalized == 'kimi':
+        return 'Kimi API'
     if normalized == 'openai':
         return 'OpenAI API'
     return 'Gemini API'
@@ -811,13 +834,32 @@ def _normalize_model_name(provider, value):
         alias_key = raw.lower()
         alias_map = {
             'auto': MODEL_GEMINI_DEFAULT_MODEL,
-            'flash': 'gemini-2.5-flash',
-            'flash-lite': 'gemini-2.5-flash-lite',
-            'pro': 'gemini-2.5-pro',
+            'flash': 'gemini-flash-latest',
+            'flash-lite': 'gemini-flash-lite-latest',
+            'pro': 'gemini-pro-latest',
         }
         return alias_map.get(alias_key, raw)
 
     alias_key = raw.lower()
+    if normalized_provider == 'kimi':
+        alias_map = {
+            'auto': MODEL_KIMI_DEFAULT_MODEL,
+            'k2': 'kimi-k2-0905-preview',
+            'k2.5': 'kimi-k2-0905-preview',
+            'k2-turbo': 'kimi-k2-turbo-preview',
+            'thinking': 'kimi-thinking-preview',
+        }
+        return alias_map.get(alias_key, raw)
+
+    if normalized_provider == 'glm':
+        alias_map = {
+            'auto': MODEL_GLM_DEFAULT_MODEL,
+            'glm4.7': 'glm-4.7',
+            'glm4.7-flash': 'glm-4.7-flash',
+            'glm4.7-flashx': 'glm-4.7-flashx',
+        }
+        return alias_map.get(alias_key, raw)
+
     alias_map = {
         'auto': MODEL_OPENAI_DEFAULT_MODEL,
         'mini': MODEL_OPENAI_DEFAULT_MODEL,
@@ -839,6 +881,10 @@ def _build_generation_config(reasoning_mode):
 
 def _provider_label(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'glm':
+        return 'GLM API'
+    if normalized == 'kimi':
+        return 'Kimi API'
     if normalized == 'openai':
         return 'OpenAI API'
     return 'Gemini API'
@@ -846,14 +892,33 @@ def _provider_label(provider):
 
 def _provider_api_key(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'glm':
+        return MODEL_GLM_API_KEY
+    if normalized == 'kimi':
+        return MODEL_KIMI_API_KEY
     if normalized == 'openai':
         return MODEL_OPENAI_API_KEY
     return MODEL_GEMINI_API_KEY
 
 
+def _provider_api_base_url(provider):
+    normalized = _normalize_provider_name(provider)
+    if normalized == 'glm':
+        return MODEL_GLM_API_BASE_URL
+    if normalized == 'kimi':
+        return MODEL_KIMI_API_BASE_URL
+    if normalized == 'openai':
+        return MODEL_OPENAI_API_BASE_URL
+    return MODEL_GEMINI_API_BASE_URL
+
+
 def _has_valid_api_key(provider):
     key = str(_provider_api_key(provider) or '').strip()
     if not key:
+        return False
+    if key.startswith('${') and key.endswith('}'):
+        return False
+    if key.lower().startswith('env:'):
         return False
     if key.upper().startswith('YOUR_'):
         return False
@@ -921,8 +986,9 @@ def _build_gemini_payload(prompt, reasoning_mode):
     }
 
 
-def _build_openai_api_url():
-    return f'{MODEL_OPENAI_API_BASE_URL}/chat/completions'
+def _build_openai_compatible_api_url(provider):
+    base_url = _provider_api_base_url(provider)
+    return f'{base_url}/chat/completions'
 
 
 def _build_openai_payload(prompt, model, reasoning_mode, stream=False):
@@ -1064,17 +1130,21 @@ def _execute_gemini_prompt(prompt, model, reasoning_mode):
     return None, 'Gemini API 실행에 실패했습니다.'
 
 
-def _execute_openai_prompt(prompt, model, reasoning_mode):
-    if not _has_valid_api_key('openai'):
-        return None, 'OpenAI API 키가 설정되지 않았습니다.'
+def _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode):
+    normalized_provider = _normalize_provider_name(provider)
+    label = _provider_label(normalized_provider)
+    api_key = _provider_api_key(normalized_provider)
+
+    if not _has_valid_api_key(normalized_provider):
+        return None, f'{label} 키가 설정되지 않았습니다.'
 
     payload = _build_openai_payload(prompt, model, reasoning_mode, stream=False)
     request = _build_json_request(
-        _build_openai_api_url(),
+        _build_openai_compatible_api_url(normalized_provider),
         payload,
         headers={
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {MODEL_OPENAI_API_KEY}',
+            'Authorization': f'Bearer {api_key}',
         },
     )
     timeout_seconds = max(1, int(min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS)))
@@ -1083,23 +1153,23 @@ def _execute_openai_prompt(prompt, model, reasoning_mode):
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        return None, _read_http_error_message(exc, 'openai')
+        return None, _read_http_error_message(exc, normalized_provider)
     except urllib.error.URLError as exc:
-        return None, f'OpenAI API 연결에 실패했습니다: {exc.reason}'
+        return None, f'{label} 연결에 실패했습니다: {exc.reason}'
     except TimeoutError:
-        return None, 'OpenAI API 응답 시간이 초과되었습니다.'
+        return None, f'{label} 응답 시간이 초과되었습니다.'
     except Exception as exc:
-        return None, f'OpenAI API 실행 중 오류가 발생했습니다: {exc}'
+        return None, f'{label} 실행 중 오류가 발생했습니다: {exc}'
 
     try:
         payload = json.loads(raw.decode('utf-8', errors='replace'))
     except Exception:
-        return None, 'OpenAI API 응답을 파싱하지 못했습니다.'
+        return None, f'{label} 응답을 파싱하지 못했습니다.'
 
     text = _extract_openai_response_text(payload).strip()
     usage_payload = _extract_openai_usage(payload)
     if usage_payload:
-        _update_usage_summary_from_openai_usage('openai', usage_payload)
+        _update_usage_summary_from_openai_usage(normalized_provider, usage_payload)
 
     if text:
         return text, None
@@ -1107,7 +1177,7 @@ def _execute_openai_prompt(prompt, model, reasoning_mode):
     error_text = _extract_api_error_message(payload)
     if error_text:
         return None, error_text
-    return None, 'OpenAI API 실행에 실패했습니다.'
+    return None, f'{label} 실행에 실패했습니다.'
 
 
 def execute_model_prompt(prompt):
@@ -1117,8 +1187,8 @@ def execute_model_prompt(prompt):
     model = _normalize_model_name(provider, settings.get('model'))
     reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'))
 
-    if provider == 'openai':
-        return _execute_openai_prompt(prompt, model, reasoning_mode)
+    if provider in _OPENAI_COMPATIBLE_PROVIDERS:
+        return _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode)
     return _execute_gemini_prompt(prompt, model, reasoning_mode)
 
 
@@ -1190,7 +1260,7 @@ def _consume_sse_payload(stream_id, provider, state_holder, payload_text):
     except Exception:
         return False
 
-    if _normalize_provider_name(provider) == 'openai':
+    if _normalize_provider_name(provider) in _OPENAI_COMPATIBLE_PROVIDERS:
         delta = _extract_openai_stream_delta(event_payload)
         if delta:
             _append_stream_chunk(stream_id, 'output', delta)
@@ -1224,14 +1294,14 @@ def _run_model_stream(stream_id, prompt, provider, model, reasoning_mode):
                 stream['request_running'] = False
         return
 
-    if normalized_provider == 'openai':
+    if normalized_provider in _OPENAI_COMPATIBLE_PROVIDERS:
         request = _build_json_request(
-            _build_openai_api_url(),
+            _build_openai_compatible_api_url(normalized_provider),
             _build_openai_payload(prompt, model, reasoning_mode, stream=True),
             headers={
                 'Content-Type': 'application/json',
                 'Accept': 'text/event-stream',
-                'Authorization': f'Bearer {MODEL_OPENAI_API_KEY}',
+                'Authorization': f'Bearer {_provider_api_key(normalized_provider)}',
             },
         )
     else:

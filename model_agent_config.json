@@ -12,25 +12,33 @@
     "default_provider": "gemini",
     "provider_options": [
       "gemini",
-      "openai"
+      "openai",
+      "kimi",
+      "glm"
     ],
     "providers": {
       "gemini": {
-        "api_key": "YOUR_GEMINI_API_KEY",
+        "api_key": "${MODEL_GEMINI_API_KEY}",
         "api_base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "default_model": "gemini-2.5-flash",
+        "default_model": "gemini-flash-latest",
         "model_options": [
           "auto",
           "flash",
           "flash-lite",
+          "gemini-flash-latest",
+          "gemini-flash-lite-latest",
+          "gemini-pro-latest",
+          "gemini-3.1-pro-preview",
+          "gemini-3.1-flash-lite-preview",
+          "gemini-3-flash-preview",
+          "gemini-2.5-pro",
           "gemini-2.5-flash",
           "gemini-2.5-flash-lite",
-          "gemini-2.5-pro",
           "pro"
         ]
       },
       "openai": {
-        "api_key": "YOUR_OPENAI_API_KEY",
+        "api_key": "${MODEL_OPENAI_API_KEY}",
         "api_base_url": "https://api.openai.com/v1",
         "default_model": "gpt-4.1-mini",
         "model_options": [
@@ -39,6 +47,35 @@
           "gpt-4.1",
           "gpt-4o-mini",
           "o4-mini"
+        ]
+      },
+      "kimi": {
+        "api_key": "${MODEL_KIMI_API_KEY}",
+        "api_base_url": "https://api.moonshot.cn/v1",
+        "default_model": "kimi-k2-0905-preview",
+        "model_options": [
+          "auto",
+          "k2",
+          "k2.5",
+          "k2-turbo",
+          "kimi-k2-0905-preview",
+          "kimi-k2-turbo-preview",
+          "kimi-thinking-preview",
+          "kimi-latest"
+        ]
+      },
+      "glm": {
+        "api_key": "${MODEL_GLM_API_KEY}",
+        "api_base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "default_model": "glm-4.7",
+        "model_options": [
+          "auto",
+          "glm4.7",
+          "glm4.7-flash",
+          "glm4.7-flashx",
+          "glm-4.7",
+          "glm-4.7-flash",
+          "glm-4.7-flashx"
         ]
       }
     },

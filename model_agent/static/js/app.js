@@ -16,6 +16,8 @@ const state = {
     statusMessage: 'Idle',
     statusIsError: false,
     settings: {
+        provider: null,
+        providerOptions: [],
         model: null,
         modelOptions: [],
         reasoningEffort: null,
@@ -69,7 +71,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     label: DEFAULT_WEATHER_LOCATION_LABEL,
     isDefault: true
 });
-const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Gemini. (Shift+Enter for newline)';
+const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for the selected model. (Shift+Enter for newline)';
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
@@ -82,14 +84,14 @@ const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
 const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
 const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
-const GIT_SYNC_TARGET_GEMINI_AGENT = 'gemini_agent';
+const GIT_SYNC_TARGET_MODEL_AGENT = 'model_agent';
 const GIT_SYNC_TARGET_ORDER = Object.freeze([
     GIT_SYNC_TARGET_WORKSPACE,
-    GIT_SYNC_TARGET_GEMINI_AGENT
+    GIT_SYNC_TARGET_MODEL_AGENT
 ]);
 const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
-    [GIT_SYNC_TARGET_GEMINI_AGENT]: 'gemini_agent Repo'
+    [GIT_SYNC_TARGET_MODEL_AGENT]: 'model_agent Repo'
 });
 
 let hasManualTheme = false;
@@ -109,11 +111,11 @@ let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: null,
-    [GIT_SYNC_TARGET_GEMINI_AGENT]: null
+    [GIT_SYNC_TARGET_MODEL_AGENT]: null
 };
 let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
-    [GIT_SYNC_TARGET_GEMINI_AGENT]: false
+    [GIT_SYNC_TARGET_MODEL_AGENT]: false
 };
 let remoteStreamStatusCache = {
     streams: [],
@@ -198,15 +200,15 @@ function formatElapsedTime(ms) {
 
 function isResponseStatusMessage(message) {
     if (typeof message !== 'string') return false;
-    return message.startsWith('Waiting for Gemini') || message.startsWith('Receiving response');
+    return message.startsWith('Waiting for model') || message.startsWith('Receiving response');
 }
 
 function buildActiveStreamStatus(processRunning) {
     if (processRunning === true) {
-        return 'Receiving response... (CLI running)';
+        return 'Receiving response... (API request running)';
     }
     if (processRunning === false) {
-        return 'Receiving response... (CLI finalizing)';
+        return 'Receiving response... (API finalizing)';
     }
     return 'Receiving response...';
 }
@@ -220,19 +222,19 @@ function buildStreamMonitorStatus(stream) {
 
     if (stream.processRunning === true) {
         if (runtimeLabel && idleLabel) {
-            return `Streaming · CLI running · ${runtimeLabel} elapsed · ${idleLabel} idle`;
+            return `Streaming · API request running · ${runtimeLabel} elapsed · ${idleLabel} idle`;
         }
         if (runtimeLabel) {
-            return `Streaming · CLI running · ${runtimeLabel} elapsed`;
+            return `Streaming · API request running · ${runtimeLabel} elapsed`;
         }
-        return 'Streaming · CLI running';
+        return 'Streaming · API request running';
     }
 
     if (stream.processRunning === false) {
         if (idleLabel) {
-            return `Finalizing · CLI process exited · ${idleLabel} idle`;
+            return `Finalizing · API response completed · ${idleLabel} idle`;
         }
-        return 'Finalizing · CLI process exited';
+        return 'Finalizing · API response completed';
     }
 
     return 'Streaming...';
@@ -244,9 +246,9 @@ function buildStreamListMeta(stream) {
     const idleLabel = Number.isFinite(stream?.idle_ms) ? formatElapsedTime(stream.idle_ms) : null;
     let processLabel = 'Streaming';
     if (stream?.process_running === true) {
-        processLabel = 'CLI running';
+        processLabel = 'API request running';
     } else if (stream?.process_running === false) {
-        processLabel = 'CLI exited';
+        processLabel = 'API request completed';
     }
     const parts = [processLabel];
     if (runtimeLabel) parts.push(`${runtimeLabel} elapsed`);
@@ -466,16 +468,21 @@ function readOptionsFromData(element) {
     }
 }
 
-function primeSettingsOptionsFromDom(modelSelect, reasoningSelect) {
+function primeSettingsOptionsFromDom(providerSelect, modelSelect, reasoningSelect) {
+    const providerOptions = readOptionsFromData(providerSelect);
     const modelOptions = readOptionsFromData(modelSelect);
     const reasoningOptions = readOptionsFromData(reasoningSelect);
+    if (providerOptions.length > 0) {
+        state.settings.providerOptions = providerOptions;
+    }
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
     }
     if (reasoningOptions.length > 0) {
         state.settings.reasoningOptions = reasoningOptions;
     }
-    if (modelOptions.length > 0 || reasoningOptions.length > 0) {
+    if (providerOptions.length > 0 || modelOptions.length > 0 || reasoningOptions.length > 0) {
+        updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
     }
@@ -496,6 +503,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
     const themeToggle = document.getElementById('gemini-theme-toggle');
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
+    const providerSelect = document.getElementById('gemini-provider-select');
+    const providerInput = document.getElementById('gemini-provider-input');
     const modelSelect = document.getElementById('gemini-model-select');
     const modelInput = document.getElementById('gemini-model-input');
     const modelApply = document.getElementById('gemini-model-apply');
@@ -764,7 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    primeSettingsOptionsFromDom(modelSelect, reasoningSelect);
+    primeSettingsOptionsFromDom(providerSelect, modelSelect, reasoningSelect);
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
@@ -781,7 +790,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     setupMobileViewportBehavior(mobileMedia, input);
-    setupMobileSettingsInputBehavior(mobileMedia, [modelInput, reasoningInput, modelSelect, reasoningSelect]);
+    setupMobileSettingsInputBehavior(
+        mobileMedia,
+        [providerInput, modelInput, reasoningInput, providerSelect, modelSelect, reasoningSelect]
+    );
+
+    if (providerSelect) {
+        providerSelect.addEventListener('change', () => {
+            if (providerInput) {
+                providerInput.value = providerSelect.value || '';
+            }
+        });
+    }
+
+    if (providerInput) {
+        providerInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void updateSettings();
+            }
+        });
+    }
 
     if (messages) {
         messages.addEventListener('scroll', () => {
@@ -2504,9 +2533,9 @@ function syncRemoteActiveSessionStatus() {
             : null;
         let nextStatus = 'Receiving response (remote)...';
         if (remoteRunning === true) {
-            nextStatus = 'Receiving response (remote, CLI running)...';
+            nextStatus = 'Receiving response (remote, API request running)...';
         } else if (remoteRunning === false) {
-            nextStatus = 'Receiving response (remote, CLI finalizing)...';
+            nextStatus = 'Receiving response (remote, API finalizing)...';
         }
         if (sessionState.status !== nextStatus) {
             setSessionStatus(sessionId, nextStatus);
@@ -2528,7 +2557,7 @@ async function fetchRemoteStreams(force = false) {
     }
     remoteStreamStatusInFlight = true;
     try {
-        const result = await fetchJson('/api/gemini/streams');
+        const result = await fetchJson('/api/model/streams');
         const streams = Array.isArray(result?.streams) ? result.streams : [];
         remoteStreamStatusCache = {
             streams,
@@ -2620,7 +2649,7 @@ async function pollStreamMonitor() {
     current.polling = true;
     try {
         const result = await fetchJson(
-            `/api/gemini/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
+            `/api/model/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
         );
         if (!streamMonitorState || streamMonitorState.id !== current.id) return;
         if (typeof result?.process_running === 'boolean') {
@@ -2674,7 +2703,7 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
     state.loading = true;
     setStatus('Loading sessions...');
     try {
-        const response = await fetch('/api/gemini/sessions');
+        const response = await fetch('/api/model/sessions');
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to load sessions.');
@@ -2715,8 +2744,12 @@ async function loadSettings({ silent = true } = {}) {
     const refreshBtn = document.getElementById('gemini-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/gemini/settings');
+        const result = await fetchJson('/api/model/settings');
         state.settings = {
+            provider: result?.settings?.provider || null,
+            providerOptions: Array.isArray(result?.provider_options)
+                ? result.provider_options
+                : [],
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
             reasoningEffort: result?.settings?.reasoning_effort || null,
@@ -2727,14 +2760,16 @@ async function loadSettings({ silent = true } = {}) {
             loaded: true
         };
         updateUsageSummary(state.settings.usage);
+        updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        setSettingsStatus(state.settings.provider, state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
+        updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
+        setSettingsStatus(null, null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
         }
@@ -2745,7 +2780,7 @@ async function loadSettings({ silent = true } = {}) {
 
 async function refreshUsageSummary({ silent = true } = {}) {
     try {
-        const result = await fetchJson('/api/gemini/usage', { cache: 'no-store' });
+        const result = await fetchJson('/api/model/usage', { cache: 'no-store' });
         const usage = result?.usage ?? null;
         state.settings.usage = usage;
         updateUsageSummary(usage);
@@ -2759,12 +2794,34 @@ function updateUsageSummary(usage) {
     const element = document.getElementById('gemini-usage-summary');
     if (!element) return;
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
+    const tokenUsage = usage && typeof usage === 'object' && usage.tokens && typeof usage.tokens === 'object'
+        ? usage.tokens
+        : null;
     element.innerHTML = '';
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
-    const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
-    if (!hasUsage) {
+    const hasLimitUsage = Boolean(usage && (usage.five_hour || usage.weekly));
+    let hasRenderedUsage = false;
+    if (tokenUsage) {
+        const tokenEntry = buildUsageTokenEntry(tokenUsage);
+        if (tokenEntry) {
+            element.appendChild(tokenEntry);
+            hasRenderedUsage = true;
+        }
+    }
+    if (hasLimitUsage) {
+        const entries = [
+            buildUsageEntry(usage?.five_hour, '5h'),
+            buildUsageEntry(usage?.weekly, 'Weekly')
+        ].filter(Boolean);
+        entries.forEach(entry => {
+            element.appendChild(entry);
+            hasRenderedUsage = true;
+        });
+    }
+
+    if (!hasRenderedUsage) {
         const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         if (!accountName) {
             element.textContent = fallbackText;
@@ -2774,15 +2831,46 @@ function updateUsageSummary(usage) {
         fallback.className = 'usage-empty';
         fallback.textContent = fallbackText;
         element.appendChild(fallback);
-        return;
     }
-    const entries = [
-        buildUsageEntry(usage?.five_hour, '5h'),
-        buildUsageEntry(usage?.weekly, 'Weekly')
-    ].filter(Boolean);
-    entries.forEach(entry => {
-        element.appendChild(entry);
-    });
+}
+
+function updateProviderControls(provider, options) {
+    const select = document.getElementById('gemini-provider-select');
+    const input = document.getElementById('gemini-provider-input');
+    const field = select ? select.closest('.model-field') : null;
+    const hasOptions = Array.isArray(options) && options.length > 0;
+    if (select) {
+        select.innerHTML = '';
+        if (hasOptions) {
+            select.classList.remove('is-hidden');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select provider';
+            select.appendChild(placeholder);
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                select.appendChild(option);
+            });
+            if (provider) {
+                select.value = options.includes(provider) ? provider : '';
+            } else {
+                select.value = '';
+            }
+        } else {
+            select.classList.add('is-hidden');
+        }
+    }
+    if (input) {
+        input.value = provider || '';
+        input.placeholder = provider ? provider : 'Provider';
+        input.disabled = hasOptions;
+        input.classList.toggle('is-hidden', hasOptions);
+    }
+    if (field) {
+        field.classList.toggle('is-select-only', hasOptions);
+    }
 }
 
 function updateModelControls(model, options) {
@@ -2822,7 +2910,7 @@ function updateModelControls(model, options) {
     if (field) {
         field.classList.toggle('is-select-only', hasOptions);
     }
-    setSettingsStatus(model, state.settings.reasoningEffort);
+    setSettingsStatus(state.settings.provider, model, state.settings.reasoningEffort);
 }
 
 function updateReasoningControls(reasoning, options) {
@@ -2864,7 +2952,7 @@ function updateReasoningControls(reasoning, options) {
     }
 }
 
-function setSettingsStatus(model, reasoning, overrideText = null) {
+function setSettingsStatus(provider, model, reasoning, overrideText = null) {
     const status = document.getElementById('gemini-model-status');
     const summary = document.getElementById('gemini-controls-summary');
     if (!status) return;
@@ -2873,25 +2961,31 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         if (summary) summary.textContent = overrideText;
         return;
     }
-    if (!state.settings.loaded && !model && !reasoning) {
+    if (!state.settings.loaded && !provider && !model && !reasoning) {
         status.textContent = 'Refresh to load';
         if (summary) summary.textContent = 'Refresh to load';
         return;
     }
+    const providerText = provider ? provider : 'default';
     const modelText = model ? model : 'default';
     const reasoningText = reasoning ? reasoning : 'default';
-    const text = `Model: ${modelText} · Mode: ${reasoningText}`;
+    const text = `Provider: ${providerText} · Model: ${modelText} · Reasoning: ${reasoningText}`;
     status.textContent = text;
     if (summary) summary.textContent = text;
 }
 
 async function updateSettings() {
     const input = document.getElementById('gemini-model-input');
+    const providerInput = document.getElementById('gemini-provider-input');
+    const providerSelect = document.getElementById('gemini-provider-select');
     const status = document.getElementById('gemini-model-status');
     const refreshBtn = document.getElementById('gemini-controls-refresh');
     const modelSelect = document.getElementById('gemini-model-select');
     const reasoningInput = document.getElementById('gemini-reasoning-input');
     const reasoningSelect = document.getElementById('gemini-reasoning-select');
+    const provider = providerSelect && !providerSelect.classList.contains('is-hidden')
+        ? providerSelect.value.trim()
+        : (providerInput ? providerInput.value.trim() : '');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
         ? modelSelect.value.trim()
         : (input ? input.value.trim() : '');
@@ -2901,11 +2995,15 @@ async function updateSettings() {
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/gemini/settings', {
+        const result = await fetchJson('/api/model/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, reasoning_effort })
+            body: JSON.stringify({ provider, model, reasoning_effort })
         });
+        state.settings.provider = result?.settings?.provider || null;
+        state.settings.providerOptions = Array.isArray(result?.provider_options)
+            ? result.provider_options
+            : state.settings.providerOptions;
         state.settings.model = result?.settings?.model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.modelOptions = Array.isArray(result?.model_options)
@@ -2917,9 +3015,10 @@ async function updateSettings() {
         state.settings.usage = result?.usage || state.settings.usage;
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
+        updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        setSettingsStatus(state.settings.provider, state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
         if (status) status.textContent = normalizeError(error, 'Failed to update settings.');
@@ -3055,7 +3154,7 @@ function normalizeGitActionError(error, fallback) {
 async function requestGitCancel(repoTarget) {
     const target = normalizeGitSyncRepoTarget(repoTarget);
     try {
-        const result = await fetchJson('/api/gemini/git/cancel', {
+        const result = await fetchJson('/api/model/git/cancel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_CANCEL_REQUEST_TIMEOUT_MS,
@@ -3717,7 +3816,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     }
     gitSyncHistoryInFlightByTarget[target] = true;
     try {
-        const result = await fetchJson('/api/gemini/git/history', {
+        const result = await fetchJson('/api/model/git/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_HISTORY_REQUEST_TIMEOUT_MS,
@@ -3804,7 +3903,7 @@ async function fetchGitStatus(force = false) {
     }
     gitBranchStatusInFlight = true;
     try {
-        const result = await fetchJson('/api/gemini/git/status', {
+        const result = await fetchJson('/api/model/git/status', {
             method: 'POST',
             timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
         });
@@ -3916,7 +4015,7 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     if (target === GIT_SYNC_TARGET_WORKSPACE) {
         return fetchGitStatus(force);
     }
-    const result = await fetchJson('/api/gemini/git/status', {
+    const result = await fetchJson('/api/model/git/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS,
@@ -3962,7 +4061,7 @@ async function handleGitCommit(button) {
         setGitButtonBusy(commitButton, true, 'Committing...');
     }
     try {
-        await fetchJson('/api/gemini/git/stage', {
+        await fetchJson('/api/model/git/stage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
@@ -3971,7 +4070,7 @@ async function handleGitCommit(button) {
                 replace: true
             })
         });
-        const result = await fetchJson('/api/gemini/git/commit', {
+        const result = await fetchJson('/api/model/git/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
@@ -4028,7 +4127,7 @@ async function handleGitQuickCommit(button, options = {}) {
             showToast(`${repoLabel} · 커밋할 변경 파일이 없습니다.`, { tone: 'error', durationMs: 3200 });
             return;
         }
-        await fetchJson('/api/gemini/git/stage', {
+        await fetchJson('/api/model/git/stage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
@@ -4038,7 +4137,7 @@ async function handleGitQuickCommit(button, options = {}) {
                 replace: true
             })
         });
-        const result = await fetchJson('/api/gemini/git/commit', {
+        const result = await fetchJson('/api/model/git/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
@@ -4104,7 +4203,7 @@ async function handleGitPush(button, options = {}) {
         pushButtons.forEach(pushButton => {
             setGitButtonBusy(pushButton, true, 'Pushing...');
         });
-        const result = await fetchJson('/api/gemini/git/push', {
+        const result = await fetchJson('/api/model/git/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_PUSH_REQUEST_TIMEOUT_MS,
@@ -4166,7 +4265,7 @@ async function handleGitSync(button, options = {}) {
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, applyAfterFetch ? 'Syncing...' : 'Fetching...');
     try {
-        const result = await fetchJson('/api/gemini/git/sync', {
+        const result = await fetchJson('/api/model/git/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: requestTimeoutMs,
@@ -4255,12 +4354,12 @@ async function resumeStreamsFromStorage(pendingStreams) {
         if (sessionState) {
             sessionState.sending = true;
         }
-        setSessionStatus(pending.sessionId, 'Reconnecting to Gemini...');
+        setSessionStatus(pending.sessionId, 'Reconnecting to model stream...');
         if (pending.sessionId === state.activeSessionId) {
             syncActiveSessionControls();
         }
         try {
-            const response = await fetch(`/api/gemini/streams/${pending.id}?offset=0&error_offset=0`);
+            const response = await fetch(`/api/model/streams/${pending.id}?offset=0&error_offset=0`);
             const result = await response.json();
             if (!response.ok) {
                 const err = new Error(result?.error || 'Failed to resume stream.');
@@ -4503,7 +4602,7 @@ function removeSessionSummary(sessionId) {
 async function createSession(selectAfter = true) {
     setStatus('Creating session...');
     try {
-        const response = await fetch('/api/gemini/sessions', {
+        const response = await fetch('/api/model/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({})
@@ -4534,7 +4633,7 @@ async function loadSession(sessionId) {
     if (!sessionId) return;
     setStatus('Loading session...');
     try {
-        const response = await fetch(`/api/gemini/sessions/${sessionId}`);
+        const response = await fetch(`/api/model/sessions/${sessionId}`);
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to load session.');
@@ -4730,7 +4829,7 @@ async function sendPrompt(prompt) {
     if (sessionState) {
         sessionState.sending = true;
     }
-    setSessionStatus(sessionId, 'Waiting for Gemini...');
+    setSessionStatus(sessionId, 'Waiting for model response...');
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
     }
@@ -4738,7 +4837,7 @@ async function sendPrompt(prompt) {
     const startedAt = Date.now();
     try {
         const controller = beginPendingSend(sessionId);
-        const response = await fetch(`/api/gemini/sessions/${sessionId}/message/stream`, {
+        const response = await fetch(`/api/model/sessions/${sessionId}/message/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ prompt }),
@@ -4873,7 +4972,7 @@ async function stopStream(sessionId) {
     if (!stream) return;
     setSessionStatus(sessionId, 'Stopping...');
     try {
-        const response = await fetch(`/api/gemini/streams/${stream.id}/stop`, { method: 'POST' });
+        const response = await fetch(`/api/model/streams/${stream.id}/stop`, { method: 'POST' });
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to stop stream.');
@@ -4916,7 +5015,7 @@ async function pollStream(streamId) {
     stream.polling = true;
 
     try {
-        const result = await fetchJson(`/api/gemini/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
+        const result = await fetchJson(`/api/model/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
         const current = state.streams[streamId];
         if (!current) {
             return;
@@ -4958,7 +5057,7 @@ async function pollStream(streamId) {
             return;
         }
         if (current.processRunning === false && Number.isFinite(current.idleMs) && current.idleMs >= STREAM_IDLE_WARNING_MS) {
-            setSessionStatus(current.sessionId, 'Receiving response... (CLI finalizing, no recent output)');
+            setSessionStatus(current.sessionId, 'Receiving response... (API finalizing, no recent output)');
         }
         scheduleStreamPoll(streamId, STREAM_POLL_BASE_MS);
     } catch (error) {
@@ -5025,7 +5124,7 @@ async function finishStream(streamId, result) {
             wrapper.classList.remove('assistant');
             wrapper.classList.add('error');
         }
-        const errorText = stream.error || stream.output || 'Gemini execution failed.';
+        const errorText = stream.error || stream.output || 'Model execution failed.';
         if (bubble) setMarkdownContent(bubble, errorText);
     }
     clearStreamState(stream.id);
@@ -5060,7 +5159,7 @@ async function renameSession(session) {
     }
     setStatus('Renaming session...');
     try {
-        const response = await fetch(`/api/gemini/sessions/${session.id}`, {
+        const response = await fetch(`/api/model/sessions/${session.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: trimmed })
@@ -5091,7 +5190,7 @@ async function deleteSession(sessionId) {
     if (!confirmed) return;
     setStatus('Deleting session...');
     try {
-        const response = await fetch(`/api/gemini/sessions/${sessionId}`, { method: 'DELETE' });
+        const response = await fetch(`/api/model/sessions/${sessionId}`, { method: 'DELETE' });
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to delete session.');
@@ -5128,7 +5227,7 @@ function formatTimestamp(value) {
 
 function getRoleLabel(role) {
     if (role === 'user') return 'You';
-    if (role === 'assistant') return 'Gemini';
+    if (role === 'assistant') return 'Model';
     if (role === 'system') return 'System';
     if (role === 'error') return 'Error';
     return 'Message';
@@ -5469,6 +5568,52 @@ function buildUsageEntry(entry, label) {
     const reset = document.createElement('div');
     reset.className = 'usage-reset';
     reset.textContent = details.resetText ? `Reset ${details.resetText}` : 'Reset --';
+    wrapper.appendChild(reset);
+    return wrapper;
+}
+
+function buildUsageTokenEntry(tokens) {
+    if (!tokens || typeof tokens !== 'object') return null;
+    const total = Number(tokens.total_tokens);
+    const input = Number(tokens.input_tokens);
+    const output = Number(tokens.output_tokens);
+    const requestCount = Number(tokens.request_count);
+    const cumulativeTotal = Number(tokens.cumulative_total_tokens);
+    if (
+        !Number.isFinite(total)
+        && !Number.isFinite(input)
+        && !Number.isFinite(output)
+        && !Number.isFinite(cumulativeTotal)
+    ) {
+        return null;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-entry';
+    const row = document.createElement('div');
+    row.className = 'usage-row';
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'usage-pill';
+    pill.disabled = true;
+    pill.textContent = 'Tokens';
+    const value = document.createElement('span');
+    value.className = 'usage-remaining';
+    const parts = [];
+    if (Number.isFinite(input)) parts.push(`In ${formatNumber(Math.max(0, input))}`);
+    if (Number.isFinite(output)) parts.push(`Out ${formatNumber(Math.max(0, output))}`);
+    if (Number.isFinite(total)) parts.push(`Total ${formatNumber(Math.max(0, total))}`);
+    value.textContent = parts.length > 0 ? parts.join(' · ') : 'Token usage';
+    row.appendChild(pill);
+    row.appendChild(value);
+    wrapper.appendChild(row);
+
+    const reset = document.createElement('div');
+    reset.className = 'usage-reset';
+    const detailParts = [];
+    if (Number.isFinite(requestCount)) detailParts.push(`Req ${formatNumber(Math.max(0, requestCount))}`);
+    if (Number.isFinite(cumulativeTotal)) detailParts.push(`Cumulative ${formatNumber(Math.max(0, cumulativeTotal))}`);
+    reset.textContent = detailParts.length > 0 ? detailParts.join(' · ') : 'From latest API response';
     wrapper.appendChild(reset);
     return wrapper;
 }

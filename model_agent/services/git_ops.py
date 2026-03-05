@@ -1,4 +1,4 @@
-"""Git command helpers for Gemini Agent."""
+"""Git command helpers for Model Agent."""
 
 import os
 import subprocess
@@ -16,18 +16,20 @@ _GIT_ACTIONS = {
 }
 _GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
 _GIT_REPO_TARGET_WORKSPACE = 'workspace'
-_GIT_REPO_TARGET_GEMINI_AGENT = 'gemini_agent'
+_GIT_REPO_TARGET_MODEL_AGENT = 'model_agent'
 _GIT_REPO_TARGET_ALIASES = {
     _GIT_REPO_TARGET_WORKSPACE: _GIT_REPO_TARGET_WORKSPACE,
     'default': _GIT_REPO_TARGET_WORKSPACE,
-    _GIT_REPO_TARGET_GEMINI_AGENT: _GIT_REPO_TARGET_GEMINI_AGENT,
-    'gemini-agent': _GIT_REPO_TARGET_GEMINI_AGENT,
-    'gemini': _GIT_REPO_TARGET_GEMINI_AGENT,
-    'agent': _GIT_REPO_TARGET_GEMINI_AGENT
+    _GIT_REPO_TARGET_MODEL_AGENT: _GIT_REPO_TARGET_MODEL_AGENT,
+    'model-agent': _GIT_REPO_TARGET_MODEL_AGENT,
+    'model': _GIT_REPO_TARGET_MODEL_AGENT,
+    'gemini-agent': _GIT_REPO_TARGET_MODEL_AGENT,
+    'gemini': _GIT_REPO_TARGET_MODEL_AGENT,
+    'agent': _GIT_REPO_TARGET_MODEL_AGENT
 }
 _GIT_MUTATION_LOCKS = {
     _GIT_REPO_TARGET_WORKSPACE: threading.Lock(),
-    _GIT_REPO_TARGET_GEMINI_AGENT: threading.Lock()
+    _GIT_REPO_TARGET_MODEL_AGENT: threading.Lock()
 }
 _GIT_MUTATION_STATE_LOCK = threading.Lock()
 _GIT_ACTIVE_MUTATIONS = {}
@@ -151,9 +153,9 @@ def _request_cancel_active_mutation(repo_target):
 
 def _resolve_repo_root(repo_target=_GIT_REPO_TARGET_WORKSPACE):
     normalized_target = _normalize_repo_target(repo_target)
-    if normalized_target == _GIT_REPO_TARGET_GEMINI_AGENT:
+    if normalized_target == _GIT_REPO_TARGET_MODEL_AGENT:
         repo_base = REPO_ROOT
-        repo_label = 'Gemini Agent 저장소'
+        repo_label = 'Model Agent 저장소'
     else:
         repo_base = WORKSPACE_DIR
         repo_label = '워크스페이스 저장소'

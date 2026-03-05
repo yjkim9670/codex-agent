@@ -63,7 +63,7 @@ while (($#)); do
 done
 
 if ((show_help == 1)); then
-    exec python "${SCRIPT_DIR}/run_gemini_chat_server.py" "${original_args[@]}"
+    exec python "${SCRIPT_DIR}/run_model_chat_server.py" "${original_args[@]}"
 fi
 
 if [[ ! "${requested_port}" =~ ^[0-9]+$ ]]; then
@@ -102,4 +102,4 @@ while port_in_use "${final_port}"; do
     final_port="${next_port}"
 done
 
-exec python "${SCRIPT_DIR}/run_gemini_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"
+exec python "${SCRIPT_DIR}/run_model_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"

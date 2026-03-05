@@ -1,0 +1,60 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3100,
+    "debug": true,
+    "use_reloader": true,
+    "threaded": true
+  },
+  "agent": {
+    "workspace_dir": "../",
+    "secret_key": "model-chat-secret-key-change-in-production",
+    "default_provider": "gemini",
+    "provider_options": [
+      "gemini",
+      "openai"
+    ],
+    "providers": {
+      "gemini": {
+        "api_key": "YOUR_GEMINI_API_KEY",
+        "api_base_url": "https://generativelanguage.googleapis.com/v1beta",
+        "default_model": "gemini-2.5-flash",
+        "model_options": [
+          "auto",
+          "flash",
+          "flash-lite",
+          "gemini-2.5-flash",
+          "gemini-2.5-flash-lite",
+          "gemini-2.5-pro",
+          "pro"
+        ]
+      },
+      "openai": {
+        "api_key": "YOUR_OPENAI_API_KEY",
+        "api_base_url": "https://api.openai.com/v1",
+        "default_model": "gpt-4.1-mini",
+        "model_options": [
+          "auto",
+          "gpt-4.1-mini",
+          "gpt-4.1",
+          "gpt-4o-mini",
+          "o4-mini"
+        ]
+      }
+    },
+    "reasoning_options": [
+      "default",
+      "auto_edit",
+      "yolo"
+    ],
+    "max_prompt_chars": 4000,
+    "context_max_chars": 12000,
+    "exec_timeout_seconds": 600,
+    "api_timeout_seconds": 600,
+    "stream_ttl_seconds": 900,
+    "max_title_chars": 80,
+    "max_provider_chars": 32,
+    "max_model_chars": 80,
+    "max_reasoning_chars": 40
+  }
+}

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Gemini Agent · {{ workspace_directory_name }}</title>
+    <title>Model Agent · {{ workspace_directory_name }}</title>
     <link rel="stylesheet" href="/static/css/app.css?v=74">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
@@ -11,9 +11,9 @@
     <div class="app">
         <header class="app-header">
             <div class="app-header-main">
-                <h1>Gemini Agent</h1>
+                <h1>Model Agent</h1>
                 <p class="app-workspace">{{ workspace_directory_name }}</p>
-                <p>Manage Gemini Agent sessions.</p>
+                <p>Manage Model Agent sessions.</p>
             </div>
             <div class="header-actions">
                 <div class="theme-toggle">
@@ -89,7 +89,7 @@
                                 <div class="forecast-value" id="gemini-weather-tomorrow">불러오는 중...</div>
                             </div>
                             <div class="forecast-card">
-                                <div class="forecast-title">Gemini 서버 디렉터리</div>
+                                <div class="forecast-title">Model 서버 디렉터리</div>
                                 <div class="forecast-value" id="gemini-server-directory">{{ server_directory_name }}</div>
                                 <div class="forecast-subvalue" id="gemini-server-directory-path">{{ server_directory_path }}</div>
                             </div>
@@ -183,26 +183,30 @@
                     </div>
                     <div class="chat-controls-body" id="gemini-controls-body">
                         <div class="usage-card">
-                            <div class="usage-label">Limits</div>
+                            <div class="usage-label">Usage</div>
                             <div class="usage-value" id="gemini-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
-                            <label class="model-label" for="gemini-model-input">Model · Approval mode</label>
+                            <label class="model-label" for="gemini-model-input">Provider · Model · Reasoning mode</label>
                             <div class="model-row model-row-combined has-apply">
+                                <div class="model-field model-field-provider">
+                                    <select id="gemini-provider-select" class="model-select is-hidden" aria-label="Select provider" data-options='{{ provider_options|default([], true)|tojson }}'></select>
+                                    <input id="gemini-provider-input" class="model-input" type="text" placeholder="Provider">
+                                </div>
                                 <div class="model-field model-field-model">
                                     <select id="gemini-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="gemini-model-input" class="model-input" type="text" placeholder="Default model">
                                 </div>
                                 <div class="model-field model-field-reasoning">
-                                    <select id="gemini-reasoning-select" class="model-select is-hidden" aria-label="Select approval mode" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <select id="gemini-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning mode" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
                                     <input id="gemini-reasoning-input" class="model-input" type="text" placeholder="Default mode">
                                 </div>
                                 <button
                                     class="btn ghost icon-only model-apply"
                                     type="button"
                                     id="gemini-model-apply"
-                                    aria-label="Apply model and approval mode settings"
-                                    title="Apply model and approval mode settings"
+                                    aria-label="Apply provider, model, and reasoning mode settings"
+                                    title="Apply provider, model, and reasoning mode settings"
                                 >
                                     <span class="sr-only">Apply settings</span>
                                 </button>
@@ -213,8 +217,8 @@
                 </div>
 
                 <form id="gemini-chat-form" class="chat-input" autocomplete="off">
-                    <label class="sr-only" for="gemini-chat-input">Gemini prompt</label>
-                    <textarea id="gemini-chat-input" rows="3" placeholder="Type a prompt for Gemini. (Shift+Enter for newline)"></textarea>
+                    <label class="sr-only" for="gemini-chat-input">Model prompt</label>
+                    <textarea id="gemini-chat-input" rows="3" placeholder="Type a prompt for the selected model. (Shift+Enter for newline)"></textarea>
                     <button class="btn primary" type="submit" id="gemini-chat-send" data-mode="send" aria-label="Send" title="Send">
                         <span class="sr-only">Send</span>
                     </button>
@@ -289,7 +293,7 @@
                 <div class="sync-overlay-meta" id="gemini-sync-overlay-meta">히스토리를 불러오는 중...</div>
                 <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
                     <button class="btn secondary sync-overlay-target is-active" type="button" id="gemini-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
-                    <button class="btn ghost sync-overlay-target" type="button" id="gemini-sync-target-gemini-agent" data-repo-target="gemini_agent">gemini_agent Repo</button>
+                    <button class="btn ghost sync-overlay-target" type="button" id="gemini-sync-target-model-agent" data-repo-target="model_agent">model_agent Repo</button>
                 </div>
                 <div class="sync-overlay-tools">
                     <button class="btn primary sync-overlay-fetch" type="button" id="gemini-sync-overlay-fetch">origin/main fetch</button>

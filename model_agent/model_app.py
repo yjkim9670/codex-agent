@@ -1,72 +1,69 @@
-"""Gemini chat Flask application."""
+"""Model chat Flask application."""
 
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
 
-from .blueprints import gemini_chat
-from .config import GEMINI_MODEL_OPTIONS, GEMINI_REASONING_OPTIONS, SECRET_KEY, WORKSPACE_DIR
+from .blueprints import model_chat
+from .config import SECRET_KEY, WORKSPACE_DIR
 from .services.git_ops import get_current_branch_name
+from .services.model_chat import get_model_options, get_provider_options, get_reasoning_options, get_settings
 
 
 def _get_allowed_origins():
-    return {
-        'http://localhost:4000',
-        'http://127.0.0.1:4000'
-    }
+    return {'http://localhost:4000', 'http://127.0.0.1:4000'}
 
 
-def create_gemini_app():
+def create_model_app():
     app = Flask(__name__)
     app.config['JSON_AS_ASCII'] = False
     app.config['SECRET_KEY'] = SECRET_KEY
 
-    app.register_blueprint(gemini_chat.bp)
+    app.register_blueprint(model_chat.bp)
 
     @app.route('/')
-    def gemini_root():
+    def model_root():
         server_directory = Path.cwd().resolve()
         server_directory_name = server_directory.name or str(server_directory)
         workspace_directory = WORKSPACE_DIR.resolve()
         workspace_directory_name = workspace_directory.name or str(workspace_directory)
         current_branch_name = get_current_branch_name()
+        current_settings = get_settings()
+        current_provider = current_settings.get('provider')
         return render_template(
             'index.html',
-            model_options=GEMINI_MODEL_OPTIONS,
-            reasoning_options=GEMINI_REASONING_OPTIONS,
+            provider_options=get_provider_options(),
+            model_options=get_model_options(current_provider),
+            reasoning_options=get_reasoning_options(),
             server_directory_name=server_directory_name,
             server_directory_path=str(server_directory),
             workspace_directory_name=workspace_directory_name,
             workspace_directory_path=str(workspace_directory),
-            current_branch_name=current_branch_name
+            current_branch_name=current_branch_name,
         )
 
     @app.route('/health')
-    def gemini_health():
-        return jsonify({
-            'service': 'gemini-agent',
-            'status': 'ok',
-            'api': '/api/gemini/sessions'
-        })
+    def model_health():
+        return jsonify({'service': 'model-agent', 'status': 'ok', 'api': '/api/model/sessions'})
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])
-    def gemini_preflight(_):
+    def model_preflight(_):
         return ('', 204)
 
     @app.errorhandler(404)
-    def gemini_not_found(error):
+    def model_not_found(error):
         if request.path.startswith('/api/'):
             return jsonify({'error': 'API endpoint not found.'}), 404
         return error
 
     @app.errorhandler(405)
-    def gemini_method_not_allowed(error):
+    def model_method_not_allowed(error):
         if request.path.startswith('/api/'):
             return jsonify({'error': 'Method not allowed.'}), 405
         return error
 
     @app.errorhandler(500)
-    def gemini_server_error(error):
+    def model_server_error(error):
         if request.path.startswith('/api/'):
             return jsonify({'error': 'Internal server error.'}), 500
         return error

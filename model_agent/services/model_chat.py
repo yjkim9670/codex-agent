@@ -854,6 +854,7 @@ def _normalize_model_name(provider, value):
     if normalized_provider == 'glm':
         alias_map = {
             'auto': MODEL_GLM_DEFAULT_MODEL,
+            'glm5': 'glm-5',
             'glm4.7': 'glm-4.7',
             'glm4.7-flash': 'glm-4.7-flash',
             'glm4.7-flashx': 'glm-4.7-flashx',
@@ -862,9 +863,10 @@ def _normalize_model_name(provider, value):
 
     alias_map = {
         'auto': MODEL_OPENAI_DEFAULT_MODEL,
-        'mini': MODEL_OPENAI_DEFAULT_MODEL,
-        'smart': 'gpt-4.1',
-        'reasoning': 'o4-mini',
+        'codex': MODEL_OPENAI_DEFAULT_MODEL,
+        'mini': 'gpt-5.1-codex-mini',
+        'smart': 'gpt-5.1-codex',
+        'reasoning': 'gpt-5-codex',
     }
     return alias_map.get(alias_key, raw)
 

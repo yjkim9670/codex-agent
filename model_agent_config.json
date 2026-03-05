@@ -22,31 +22,21 @@
         "api_base_url": "https://generativelanguage.googleapis.com/v1beta",
         "default_model": "gemini-flash-latest",
         "model_options": [
-          "auto",
-          "flash",
-          "flash-lite",
           "gemini-flash-latest",
           "gemini-flash-lite-latest",
           "gemini-pro-latest",
-          "gemini-3.1-pro-preview",
-          "gemini-3.1-flash-lite-preview",
-          "gemini-3-flash-preview",
-          "gemini-2.5-pro",
-          "gemini-2.5-flash",
-          "gemini-2.5-flash-lite",
-          "pro"
+          "gemini-3.1-pro-preview"
         ]
       },
       "openai": {
         "api_key": "${MODEL_OPENAI_API_KEY}",
         "api_base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-4.1-mini",
+        "default_model": "gpt-5.2-codex",
         "model_options": [
-          "auto",
-          "gpt-4.1-mini",
-          "gpt-4.1",
-          "gpt-4o-mini",
-          "o4-mini"
+          "gpt-5.2-codex",
+          "gpt-5.1-codex",
+          "gpt-5.1-codex-mini",
+          "gpt-5-codex"
         ]
       },
       "kimi": {
@@ -54,10 +44,6 @@
         "api_base_url": "https://api.moonshot.cn/v1",
         "default_model": "kimi-k2-0905-preview",
         "model_options": [
-          "auto",
-          "k2",
-          "k2.5",
-          "k2-turbo",
           "kimi-k2-0905-preview",
           "kimi-k2-turbo-preview",
           "kimi-thinking-preview",
@@ -67,12 +53,9 @@
       "glm": {
         "api_key": "${MODEL_GLM_API_KEY}",
         "api_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "default_model": "glm-4.7",
+        "default_model": "glm-5",
         "model_options": [
-          "auto",
-          "glm4.7",
-          "glm4.7-flash",
-          "glm4.7-flashx",
+          "glm-5",
           "glm-4.7",
           "glm-4.7-flash",
           "glm-4.7-flashx"

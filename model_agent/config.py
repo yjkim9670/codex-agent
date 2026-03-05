@@ -86,9 +86,9 @@ MODEL_GEMINI_DEFAULT_MODEL = (
     os.environ.get('MODEL_GEMINI_DEFAULT_MODEL', os.environ.get('MODEL_DEFAULT_MODEL', 'gemini-flash-latest')).strip()
     or 'gemini-flash-latest'
 )
-MODEL_OPENAI_DEFAULT_MODEL = os.environ.get('MODEL_OPENAI_DEFAULT_MODEL', 'gpt-4.1-mini').strip() or 'gpt-4.1-mini'
+MODEL_OPENAI_DEFAULT_MODEL = os.environ.get('MODEL_OPENAI_DEFAULT_MODEL', 'gpt-5.2-codex').strip() or 'gpt-5.2-codex'
 MODEL_KIMI_DEFAULT_MODEL = os.environ.get('MODEL_KIMI_DEFAULT_MODEL', 'kimi-k2-0905-preview').strip() or 'kimi-k2-0905-preview'
-MODEL_GLM_DEFAULT_MODEL = os.environ.get('MODEL_GLM_DEFAULT_MODEL', 'glm-4.7').strip() or 'glm-4.7'
+MODEL_GLM_DEFAULT_MODEL = os.environ.get('MODEL_GLM_DEFAULT_MODEL', 'glm-5').strip() or 'glm-5'
 MODEL_PROVIDER_DEFAULT_MODELS = {
     'gemini': MODEL_GEMINI_DEFAULT_MODEL,
     'openai': MODEL_OPENAI_DEFAULT_MODEL,
@@ -99,19 +99,9 @@ MODEL_DEFAULT_MODEL = MODEL_PROVIDER_DEFAULT_MODELS.get(MODEL_DEFAULT_PROVIDER, 
 
 _default_gemini_model_options = sorted({
     MODEL_GEMINI_DEFAULT_MODEL,
-    'auto',
-    'flash',
-    'flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-pro',
-    'gemini-3-flash-preview',
-    'gemini-3.1-flash-lite-preview',
-    'gemini-3.1-pro-preview',
-    'gemini-flash-latest',
     'gemini-flash-lite-latest',
     'gemini-pro-latest',
-    'pro'
+    'gemini-3.1-pro-preview',
 })
 MODEL_GEMINI_MODEL_OPTIONS = _read_csv_env('MODEL_GEMINI_MODEL_OPTIONS')
 if not MODEL_GEMINI_MODEL_OPTIONS:
@@ -119,11 +109,9 @@ if not MODEL_GEMINI_MODEL_OPTIONS:
 
 _default_openai_model_options = sorted({
     MODEL_OPENAI_DEFAULT_MODEL,
-    'auto',
-    'gpt-4.1-mini',
-    'gpt-4.1',
-    'gpt-4o-mini',
-    'o4-mini'
+    'gpt-5.1-codex',
+    'gpt-5.1-codex-mini',
+    'gpt-5-codex',
 })
 MODEL_OPENAI_MODEL_OPTIONS = _read_csv_env('MODEL_OPENAI_MODEL_OPTIONS')
 if not MODEL_OPENAI_MODEL_OPTIONS:
@@ -131,11 +119,6 @@ if not MODEL_OPENAI_MODEL_OPTIONS:
 
 _default_kimi_model_options = sorted({
     MODEL_KIMI_DEFAULT_MODEL,
-    'auto',
-    'k2',
-    'k2.5',
-    'k2-turbo',
-    'kimi-k2-0905-preview',
     'kimi-k2-turbo-preview',
     'kimi-latest',
     'kimi-thinking-preview',
@@ -146,10 +129,6 @@ if not MODEL_KIMI_MODEL_OPTIONS:
 
 _default_glm_model_options = sorted({
     MODEL_GLM_DEFAULT_MODEL,
-    'auto',
-    'glm4.7',
-    'glm4.7-flash',
-    'glm4.7-flashx',
     'glm-4.7',
     'glm-4.7-flash',
     'glm-4.7-flashx',

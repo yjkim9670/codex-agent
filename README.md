@@ -87,6 +87,21 @@ MODEL_GLM_API_KEY=your_real_glm_key
 
 If you need another config path, set `MODEL_AGENT_CONFIG_PATH`.
 
+## Git Sync Script
+`z00_sync_git.py` is included for branch sync/mirror workflows.
+
+Run:
+```bash
+python z00_sync_git.py
+```
+
+Default repository choices include:
+- `https://github.com/yjkim9670/CommonTG-Verification-Platform`
+- `https://github.com/yjkim9670/GL-FW-DV-Constraint-Review`
+- `https://github.com/yjkim9670/codex-agent`
+
+Protection rules are read from `sync_protect.list`.
+
 ## GUI
 - `http://localhost:<port>/` serves the chat UI.
 - `http://localhost:<port>/health` returns JSON status.

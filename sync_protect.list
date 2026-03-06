@@ -1,6 +1,6 @@
-__pycache__/
-*.pyc
+workspace
+sync_protect.list
+.venv/
 .env
 model_agent_env.local.sh
-workspace/
 .sync_runtime/

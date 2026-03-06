@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
 .env
+model_agent_env.local.sh
 workspace/

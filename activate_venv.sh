@@ -19,6 +19,13 @@ fi
 source "${VENV_DIR}/bin/activate"
 echo "Activated venv: ${VENV_DIR}"
 
+LOCAL_ENV_SCRIPT="${SCRIPT_DIR}/model_agent_env.local.sh"
+if [[ -f "${LOCAL_ENV_SCRIPT}" ]]; then
+    # shellcheck disable=SC1091
+    source "${LOCAL_ENV_SCRIPT}"
+    echo "Loaded local model env: ${LOCAL_ENV_SCRIPT}"
+fi
+
 if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
     python -m pip install --upgrade pip
     pip install -r "${SCRIPT_DIR}/requirements.txt"

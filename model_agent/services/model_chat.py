@@ -170,7 +170,7 @@ def get_model_options(provider=None):
     return options
 
 
-def get_reasoning_options():
+def _base_reasoning_options():
     options = []
     for item in MODEL_REASONING_OPTIONS:
         text = str(item or '').strip()
@@ -180,6 +180,62 @@ def get_reasoning_options():
     if not options:
         options = ['default', 'auto_edit', 'yolo']
     return options
+
+
+def _model_reasoning_preferences(provider, model):
+    normalized_provider = _normalize_provider_name(provider)
+    model_key = str(model or '').strip().lower()
+
+    if normalized_provider == 'gemini':
+        if 'flash-lite' in model_key:
+            return ['default']
+        if 'pro' in model_key:
+            return ['default', 'auto_edit']
+        return ['default', 'auto_edit', 'yolo']
+
+    if normalized_provider == 'openai':
+        if 'codex' in model_key or model_key.startswith('gpt'):
+            return ['low', 'medium', 'high', 'xhigh']
+        return ['default', 'auto_edit', 'yolo']
+
+    if normalized_provider == 'kimi':
+        if 'thinking' in model_key:
+            return ['auto_edit', 'default']
+        if 'turbo' in model_key:
+            return ['default', 'auto_edit', 'yolo']
+        return ['default', 'auto_edit']
+
+    if normalized_provider == 'glm':
+        if 'flashx' in model_key:
+            return ['default', 'auto_edit', 'yolo']
+        if model_key.startswith('glm-5'):
+            return ['default', 'auto_edit']
+        return ['default', 'auto_edit']
+
+    return ['default', 'auto_edit', 'yolo']
+
+
+def get_reasoning_options(provider=None, model=None):
+    normalized_provider = _normalize_provider_name(provider)
+    normalized_model = _normalize_model_name(normalized_provider, model)
+    available = _base_reasoning_options()
+    preferred = _model_reasoning_preferences(normalized_provider, normalized_model)
+
+    options = []
+    for item in preferred:
+        if item not in available or item in options:
+            continue
+        options.append(item)
+    if not options:
+        options = list(available)
+    return options
+
+
+def _sanitize_reasoning_setting(value, provider, model):
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    return _normalize_reasoning_mode(raw, provider, model)
 
 
 def _resolve_existing_path(primary_path, legacy_path):
@@ -240,7 +296,7 @@ def _read_workspace_settings():
 
     provider = _normalize_provider_name(data.get('provider'))
     model = str(data.get('model') or '').strip() or _default_model_for_provider(provider)
-    reasoning = str(data.get('reasoning_effort') or '').strip() or None
+    reasoning = _sanitize_reasoning_setting(data.get('reasoning_effort'), provider, model)
     return {
         'provider': provider,
         'model': model,
@@ -251,10 +307,11 @@ def _read_workspace_settings():
 def _write_workspace_settings(settings):
     provider = _normalize_provider_name(settings.get('provider'))
     model = str(settings.get('model') or '').strip() or _default_model_for_provider(provider)
+    reasoning = _sanitize_reasoning_setting(settings.get('reasoning_effort'), provider, model)
     payload = {
         'provider': provider,
         'model': model,
-        'reasoning_effort': str(settings.get('reasoning_effort') or '').strip() or None,
+        'reasoning_effort': reasoning,
     }
     MODEL_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_SETTINGS_PATH.write_text(
@@ -291,7 +348,9 @@ def update_settings(provider=None, model=None, reasoning_effort=None):
             next_model = _default_model_for_provider(next_provider)
 
         if reasoning_effort is not None:
-            next_reasoning = str(reasoning_effort).strip() or None
+            next_reasoning = _sanitize_reasoning_setting(reasoning_effort, next_provider, next_model)
+        else:
+            next_reasoning = _sanitize_reasoning_setting(next_reasoning, next_provider, next_model)
 
         payload = {
             'provider': next_provider,
@@ -807,10 +866,26 @@ def build_model_prompt(messages, prompt):
     return structured_prompt[-max_chars:]
 
 
-def _normalize_reasoning_mode(value):
+def _normalize_reasoning_mode(value, provider=None, model=None):
+    allowed_options = get_reasoning_options(provider, model)
+    if not allowed_options:
+        allowed_options = ['default']
+
     mode = str(value or '').strip().lower().replace('-', '_')
-    if mode in ('default', 'auto_edit', 'yolo'):
+    if mode in allowed_options:
         return mode
+
+    # OpenAI codex/gpt UI uses low/medium/high/xhigh; map legacy internal values.
+    reverse_legacy_map = {
+        'default': 'medium',
+        'auto_edit': 'high',
+        'yolo': 'xhigh',
+    }
+    if mode in reverse_legacy_map:
+        mapped = reverse_legacy_map[mode]
+        if mapped in allowed_options:
+            return mapped
+
     legacy_map = {
         'low': 'default',
         'medium': 'default',
@@ -818,8 +893,12 @@ def _normalize_reasoning_mode(value):
         'xhigh': 'yolo',
     }
     if mode in legacy_map:
-        return legacy_map[mode]
-    return 'default'
+        mapped = legacy_map[mode]
+        if mapped in allowed_options:
+            return mapped
+    if 'default' in allowed_options:
+        return 'default'
+    return allowed_options[0]
 
 
 def _normalize_model_name(provider, value):
@@ -863,10 +942,10 @@ def _normalize_model_name(provider, value):
 
     alias_map = {
         'auto': MODEL_OPENAI_DEFAULT_MODEL,
-        'codex': MODEL_OPENAI_DEFAULT_MODEL,
-        'mini': 'gpt-5.1-codex-mini',
-        'smart': 'gpt-5.1-codex',
-        'reasoning': 'gpt-5-codex',
+        'codex': 'gpt-5.3-codex',
+        'mini': 'gpt-5.2',
+        'smart': MODEL_OPENAI_DEFAULT_MODEL,
+        'reasoning': MODEL_OPENAI_DEFAULT_MODEL,
     }
     return alias_map.get(alias_key, raw)
 
@@ -876,6 +955,10 @@ def _build_generation_config(reasoning_mode):
         'default': 0.2,
         'auto_edit': 0.45,
         'yolo': 0.8,
+        'low': 0.1,
+        'medium': 0.2,
+        'high': 0.45,
+        'xhigh': 0.8,
     }
     temperature = temperature_map.get(reasoning_mode, 0.2)
     return {'temperature': temperature}
@@ -1187,7 +1270,7 @@ def execute_model_prompt(prompt):
     settings = get_settings()
     provider = _normalize_provider_name(settings.get('provider'))
     model = _normalize_model_name(provider, settings.get('model'))
-    reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'))
+    reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'), provider, model)
 
     if provider in _OPENAI_COMPATIBLE_PROVIDERS:
         return _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode)
@@ -1465,7 +1548,7 @@ def start_model_stream_for_session(session_id, prompt, prompt_with_context):
         settings = get_settings()
         provider = _normalize_provider_name(settings.get('provider'))
         model = _normalize_model_name(provider, settings.get('model'))
-        reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'))
+        reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'), provider, model)
 
         stream_id = create_model_stream(
             session_id,

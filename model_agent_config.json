@@ -31,12 +31,12 @@
       "openai": {
         "api_key": "${MODEL_OPENAI_API_KEY}",
         "api_base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-5.2-codex",
+        "default_model": "gpt-5.4",
         "model_options": [
+          "gpt-5.4",
+          "gpt-5.3-codex",
           "gpt-5.2-codex",
-          "gpt-5.1-codex",
-          "gpt-5.1-codex-mini",
-          "gpt-5-codex"
+          "gpt-5.2"
         ]
       },
       "kimi": {
@@ -65,7 +65,11 @@
     "reasoning_options": [
       "default",
       "auto_edit",
-      "yolo"
+      "yolo",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
     ],
     "max_prompt_chars": 4000,
     "context_max_chars": 12000,

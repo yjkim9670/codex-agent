@@ -43,11 +43,12 @@ bp = Blueprint('model_chat', __name__)
 def _build_settings_response():
     settings = get_settings()
     provider = settings.get('provider')
+    model = settings.get('model')
     return {
         'settings': settings,
         'provider_options': get_provider_options(),
         'model_options': get_model_options(provider),
-        'reasoning_options': get_reasoning_options(),
+        'reasoning_options': get_reasoning_options(provider, model),
         'usage': get_usage_summary(),
     }
 

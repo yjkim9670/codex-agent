@@ -86,7 +86,7 @@ MODEL_GEMINI_DEFAULT_MODEL = (
     os.environ.get('MODEL_GEMINI_DEFAULT_MODEL', os.environ.get('MODEL_DEFAULT_MODEL', 'gemini-flash-latest')).strip()
     or 'gemini-flash-latest'
 )
-MODEL_OPENAI_DEFAULT_MODEL = os.environ.get('MODEL_OPENAI_DEFAULT_MODEL', 'gpt-5.2-codex').strip() or 'gpt-5.2-codex'
+MODEL_OPENAI_DEFAULT_MODEL = os.environ.get('MODEL_OPENAI_DEFAULT_MODEL', 'gpt-5.4').strip() or 'gpt-5.4'
 MODEL_KIMI_DEFAULT_MODEL = os.environ.get('MODEL_KIMI_DEFAULT_MODEL', 'kimi-k2-0905-preview').strip() or 'kimi-k2-0905-preview'
 MODEL_GLM_DEFAULT_MODEL = os.environ.get('MODEL_GLM_DEFAULT_MODEL', 'glm-5').strip() or 'glm-5'
 MODEL_PROVIDER_DEFAULT_MODELS = {
@@ -109,9 +109,9 @@ if not MODEL_GEMINI_MODEL_OPTIONS:
 
 _default_openai_model_options = sorted({
     MODEL_OPENAI_DEFAULT_MODEL,
-    'gpt-5.1-codex',
-    'gpt-5.1-codex-mini',
-    'gpt-5-codex',
+    'gpt-5.3-codex',
+    'gpt-5.2-codex',
+    'gpt-5.2',
 })
 MODEL_OPENAI_MODEL_OPTIONS = _read_csv_env('MODEL_OPENAI_MODEL_OPTIONS')
 if not MODEL_OPENAI_MODEL_OPTIONS:
@@ -146,7 +146,7 @@ MODEL_PROVIDER_MODEL_OPTIONS = {
 
 MODEL_REASONING_OPTIONS = _read_csv_env('MODEL_REASONING_OPTIONS')
 if not MODEL_REASONING_OPTIONS:
-    MODEL_REASONING_OPTIONS = ['default', 'auto_edit', 'yolo']
+    MODEL_REASONING_OPTIONS = ['default', 'auto_edit', 'yolo', 'low', 'medium', 'high', 'xhigh']
 
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None

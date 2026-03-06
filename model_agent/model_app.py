@@ -30,11 +30,12 @@ def create_model_app():
         current_branch_name = get_current_branch_name()
         current_settings = get_settings()
         current_provider = current_settings.get('provider')
+        current_model = current_settings.get('model')
         return render_template(
             'index.html',
             provider_options=get_provider_options(),
             model_options=get_model_options(current_provider),
-            reasoning_options=get_reasoning_options(),
+            reasoning_options=get_reasoning_options(current_provider, current_model),
             server_directory_name=server_directory_name,
             server_directory_path=str(server_directory),
             workspace_directory_name=workspace_directory_name,

@@ -2072,13 +2072,9 @@ function syncMobileKeyboardState(isMobile = isMobileLayout()) {
     setMobileKeyboardOpen(isMobileKeyboardOpen(isMobile));
 }
 
-function applyMobileViewportHeight(isMobile = isMobileLayout()) {
+function applyMobileViewportHeight() {
     const root = document.documentElement;
     if (!root) return;
-    if (!isMobile) {
-        root.style.removeProperty(MOBILE_VIEWPORT_HEIGHT_VAR);
-        return;
-    }
     const visualHeight = Number(window.visualViewport?.height);
     const fallbackHeight = Number(window.innerHeight);
     const nextHeight = Number.isFinite(visualHeight) && visualHeight > 0
@@ -2103,12 +2099,12 @@ function normalizeMobileDocumentScroll(isMobile = isMobileLayout()) {
 }
 
 function setupMobileViewportBehavior(mobileMedia, input) {
-    applyMobileViewportHeight(mobileMedia.matches);
+    applyMobileViewportHeight();
     syncMobileKeyboardState(mobileMedia.matches);
     normalizeMobileDocumentScroll(mobileMedia.matches);
 
     const handleViewportChange = () => {
-        applyMobileViewportHeight(mobileMedia.matches);
+        applyMobileViewportHeight();
         syncMobileKeyboardState(mobileMedia.matches);
         normalizeMobileDocumentScroll(mobileMedia.matches);
     };
@@ -2173,7 +2169,7 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         if (!mobileMedia.matches) return;
         const focusedField = getFocusedField();
         if (!focusedField) return;
-        applyMobileViewportHeight(true);
+        applyMobileViewportHeight();
         keepFieldVisible(focusedField, behavior);
     };
 
@@ -2240,7 +2236,7 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         field.addEventListener('blur', () => {
             if (!mobileMedia.matches) return;
             window.setTimeout(() => {
-                applyMobileViewportHeight(true);
+                applyMobileViewportHeight();
                 clearFocusStateIfNeeded();
                 keepFocusedFieldVisible('auto');
             }, 160);

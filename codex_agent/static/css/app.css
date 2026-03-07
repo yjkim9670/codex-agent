@@ -2190,6 +2190,12 @@ body {
     scrollbar-gutter: stable;
 }
 
+.message.is-streaming .message-bubble:empty::before {
+    content: "Receiving response...";
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
 .message-footer {
     font-size: 10px;
     color: var(--text-tertiary);

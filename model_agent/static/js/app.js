@@ -5,6 +5,7 @@ const state = {
     sessionStates: {},
     streams: {},
     remoteStreamSessions: new Set(),
+    remoteAttachInFlightSessions: new Set(),
     remoteStreams: [],
     liveClockTimer: null,
     responseTimerId: null,
@@ -2547,6 +2548,30 @@ function syncRemoteActiveSessionStatus() {
     }
 }
 
+async function maybeAttachRemoteStreamToActiveSession(streams = state.remoteStreams) {
+    const sessionId = state.activeSessionId;
+    if (!sessionId) return false;
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState || getSessionStream(sessionId) || sessionState.pendingSend) {
+        return false;
+    }
+    const remoteStream = (Array.isArray(streams) ? streams : []).find(
+        item => (item?.session_id || item?.sessionId) === sessionId && item?.id
+    );
+    const remoteStreamId = remoteStream?.id;
+    if (!remoteStreamId) return false;
+    if (state.remoteAttachInFlightSessions.has(sessionId)) {
+        return false;
+    }
+
+    state.remoteAttachInFlightSessions.add(sessionId);
+    try {
+        return await connectToExistingStream(sessionId, remoteStreamId);
+    } finally {
+        state.remoteAttachInFlightSessions.delete(sessionId);
+    }
+}
+
 async function fetchRemoteStreams(force = false) {
     const now = Date.now();
     if (!force && remoteStreamStatusCache.fetchedAt && now - remoteStreamStatusCache.fetchedAt < REMOTE_STREAM_POLL_MS - 250) {
@@ -2577,6 +2602,7 @@ async function refreshRemoteStreams({ force = false } = {}) {
     renderStreamMonitorList(streams);
     updateRemoteStreamSessions(streams);
     syncRemoteActiveSessionStatus();
+    void maybeAttachRemoteStreamToActiveSession(streams);
     if (!streamMonitorState && streams.length > 0) {
         const activeMatch = state.activeSessionId
             ? streams.find(item => (item?.session_id || item?.sessionId) === state.activeSessionId)
@@ -4651,6 +4677,7 @@ async function loadSession(sessionId) {
         updateHeader(session || null);
         syncActiveSessionControls();
         syncActiveSessionStatus();
+        void maybeAttachRemoteStreamToActiveSession(state.remoteStreams);
     } catch (error) {
         setStatus(normalizeError(error, 'Failed to load session.'), true);
     }

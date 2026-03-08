@@ -34,7 +34,8 @@ _default_model_options = sorted({
     'gpt-5.2',
     'gpt-5.2-codex',
     'gpt-5.3-codex',
-    'gpt-5.3-codex-spark'
+    'gpt-5.3-codex-spark',
+    'gpt-5.4'
 })
 CODEX_MODEL_OPTIONS = [
     item.strip()

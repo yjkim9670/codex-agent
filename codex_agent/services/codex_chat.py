@@ -1085,6 +1085,7 @@ def _run_codex_stream(stream_id, prompt):
 
 def create_codex_stream(session_id, prompt):
     stream_id = uuid.uuid4().hex
+    created_at = time.time()
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -1095,8 +1096,8 @@ def create_codex_stream(session_id, prompt):
         'exit_code': None,
         'cancelled': False,
         'process': None,
-        'created_at': time.time(),
-        'updated_at': time.time()
+        'created_at': created_at,
+        'updated_at': created_at
     }
     with state.codex_streams_lock:
         state.codex_streams[stream_id] = stream
@@ -1107,7 +1108,10 @@ def create_codex_stream(session_id, prompt):
         daemon=True
     )
     thread.start()
-    return stream_id
+    return {
+        'id': stream_id,
+        'created_at': int(created_at * 1000)
+    }
 
 
 def _get_session_submit_lock(session_id):
@@ -1159,10 +1163,11 @@ def start_codex_stream_for_session(session_id, prompt, prompt_with_context):
                 'error': '메시지를 저장하지 못했습니다.'
             }
 
-        stream_id = create_codex_stream(session_id, prompt_with_context)
+        stream_info = create_codex_stream(session_id, prompt_with_context)
         return {
             'ok': True,
-            'stream_id': stream_id,
+            'stream_id': stream_info.get('id'),
+            'started_at': stream_info.get('created_at'),
             'user_message': user_message
         }
 

@@ -203,6 +203,40 @@ function formatElapsedTime(ms) {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function normalizeStartedAt(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    if (numeric < 1000000000000) {
+        return Math.round(numeric * 1000);
+    }
+    return Math.round(numeric);
+}
+
+function getRemoteStreamState(sessionId) {
+    if (!sessionId) return null;
+    return state.remoteStreams.find(
+        stream => (stream?.session_id || stream?.sessionId) === sessionId
+    ) || null;
+}
+
+function getRemoteStreamStartedAt(sessionId) {
+    const remoteStream = getRemoteStreamState(sessionId);
+    return normalizeStartedAt(
+        remoteStream?.started_at
+        ?? remoteStream?.startedAt
+        ?? remoteStream?.created_at
+        ?? remoteStream?.createdAt
+    );
+}
+
+function getKnownResponseStartedAt(sessionId) {
+    if (!sessionId) return null;
+    const sessionState = getSessionState(sessionId);
+    return normalizeStartedAt(sessionState?.pendingSend?.startedAt)
+        || normalizeStartedAt(getSessionStream(sessionId)?.startedAt)
+        || getRemoteStreamStartedAt(sessionId);
+}
+
 function isResponseStatusMessage(message) {
     if (typeof message !== 'string') return false;
     return message.startsWith('Waiting for Codex') || message.startsWith('Receiving response');
@@ -314,11 +348,9 @@ function updateResponseTimerForSession(sessionId, message, isError = false) {
     if (!sessionState) return;
     const responseStatus = isResponseStatusMessage(message);
     if (!isError && responseStatus) {
-        if (!sessionState.responseStartedAt) {
-            const pendingStartedAt = sessionState.pendingSend?.startedAt;
-            const streamStartedAt = getSessionStream(sessionId)?.startedAt;
-            sessionState.responseStartedAt = pendingStartedAt || streamStartedAt || Date.now();
-        }
+        sessionState.responseStartedAt = getKnownResponseStartedAt(sessionId)
+            || sessionState.responseStartedAt
+            || Date.now();
         sessionState.responseStatus = message;
     } else {
         sessionState.responseStartedAt = null;
@@ -412,6 +444,7 @@ function createStreamState({
     startedAt = null
 }) {
     if (!id || !sessionId) return null;
+    const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
     const stream = {
         id,
         sessionId,
@@ -420,7 +453,7 @@ function createStreamState({
         output,
         error,
         entry,
-        startedAt: startedAt || Date.now(),
+        startedAt: normalizedStartedAt,
         processRunning: null,
         processPid: null,
         runtimeMs: null,
@@ -435,9 +468,7 @@ function createStreamState({
     if (sessionState) {
         sessionState.streamId = id;
         sessionState.sending = true;
-        if (!sessionState.responseStartedAt && stream.startedAt) {
-            sessionState.responseStartedAt = stream.startedAt;
-        }
+        sessionState.responseStartedAt = normalizedStartedAt;
     }
     return stream;
 }
@@ -2342,12 +2373,13 @@ function getPersistedStreams() {
 
 function persistActiveStream(stream) {
     if (!stream?.id || !stream?.sessionId) return;
+    const startedAt = normalizeStartedAt(stream.startedAt) || Date.now();
     try {
         const existing = getPersistedStreams().filter(item => item.id !== stream.id);
         existing.push({
             id: stream.id,
             sessionId: stream.sessionId,
-            startedAt: stream.startedAt || Date.now()
+            startedAt
         });
         localStorage.setItem(ACTIVE_STREAM_KEY, JSON.stringify(existing));
     } catch (error) {
@@ -2527,19 +2559,18 @@ function syncRemoteActiveSessionStatus() {
     const hasRemote = state.remoteStreamSessions?.has(sessionId);
     const hasLocal = Boolean(sessionState.sending || sessionState.pendingSend || getSessionStream(sessionId));
     if (hasRemote && !hasLocal) {
-        const remoteState = state.remoteStreams.find(
-            stream => (stream?.session_id || stream?.sessionId) === sessionId
-        );
+        const remoteState = getRemoteStreamState(sessionId);
         const remoteRunning = typeof remoteState?.process_running === 'boolean'
             ? remoteState.process_running
             : null;
+        const remoteStartedAt = getRemoteStreamStartedAt(sessionId);
         let nextStatus = 'Receiving response (remote)...';
         if (remoteRunning === true) {
             nextStatus = 'Receiving response (remote, CLI running)...';
         } else if (remoteRunning === false) {
             nextStatus = 'Receiving response (remote, CLI finalizing)...';
         }
-        if (sessionState.status !== nextStatus) {
+        if (sessionState.status !== nextStatus || sessionState.responseStartedAt !== remoteStartedAt) {
             setSessionStatus(sessionId, nextStatus);
         }
         return;
@@ -2567,7 +2598,7 @@ async function maybeAttachRemoteStreamToActiveSession(streams = state.remoteStre
 
     state.remoteAttachInFlightSessions.add(sessionId);
     try {
-        return await connectToExistingStream(sessionId, remoteStreamId);
+        return await connectToExistingStream(sessionId, remoteStreamId, remoteStream?.created_at);
     } finally {
         state.remoteAttachInFlightSessions.delete(sessionId);
     }
@@ -4512,7 +4543,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 outputOffset,
                 errorOffset,
                 entry: assistantEntry,
-                startedAt: Number.isFinite(pending.startedAt) ? pending.startedAt : Date.now()
+                startedAt: normalizeStartedAt(result?.created_at) || normalizeStartedAt(pending.startedAt) || Date.now()
             });
             if (!stream) {
                 clearPersistedStream(pending.id);
@@ -4521,6 +4552,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 }
                 continue;
             }
+            persistActiveStream(stream);
             if (typeof result?.process_running === 'boolean') {
                 stream.processRunning = result.process_running;
             }
@@ -4549,7 +4581,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
     }
 }
 
-async function connectToExistingStream(sessionId, streamId) {
+async function connectToExistingStream(sessionId, streamId, startedAt = null) {
     if (!sessionId || !streamId) return false;
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.streamId === streamId) {
@@ -4558,15 +4590,16 @@ async function connectToExistingStream(sessionId, streamId) {
     if (sessionState?.streamId && sessionState.streamId !== streamId) {
         return false;
     }
+    const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
     persistActiveStream({
         id: streamId,
         sessionId,
-        startedAt: Date.now()
+        startedAt: normalizedStartedAt
     });
     await resumeStreamsFromStorage([{
         id: streamId,
         sessionId,
-        startedAt: Date.now()
+        startedAt: normalizedStartedAt
     }]);
     await refreshRemoteStreams({ force: true });
     const attachedState = getSessionState(sessionId);
@@ -4976,7 +5009,7 @@ async function sendPrompt(prompt) {
         if (assistantEntry) {
             setMessageStreaming(assistantEntry.wrapper, true);
         }
-        startStream(streamId, sessionId, assistantEntry, startedAt);
+        startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAt);
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -4994,7 +5027,11 @@ async function sendPrompt(prompt) {
             const activeStreamId = error?.payload?.active_stream_id;
             if (activeStreamId) {
                 setSessionStatus(sessionId, 'Another client is already responding. Connecting...');
-                const attached = await connectToExistingStream(sessionId, activeStreamId);
+                const attached = await connectToExistingStream(
+                    sessionId,
+                    activeStreamId,
+                    error?.payload?.started_at
+                );
                 if (attached) {
                     showToast('다른 브라우저에서 실행 중인 응답에 연결했습니다.', {
                         tone: 'success',

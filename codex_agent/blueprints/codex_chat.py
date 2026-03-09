@@ -208,6 +208,7 @@ def codex_session_message_stream(session_id):
 
     return jsonify({
         'stream_id': start_result.get('stream_id'),
+        'started_at': start_result.get('started_at'),
         'user_message': start_result.get('user_message')
     })
 

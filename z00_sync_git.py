@@ -7,7 +7,6 @@ Refactored Sync Helper with Responsive Layout, Directory Info, and Async GUI.
 import argparse
 import logging
 import os
-import random
 import re
 import shutil
 import socket
@@ -83,6 +82,8 @@ GIT_CLONE_TIMEOUT = 240   # Clone/sync operation (avg 35s, generous buffer for n
 
 # Timezone Configuration
 KST = timezone(timedelta(hours=9))  # Korea Standard Time (GMT+9)
+SUBPROCESS_TEXT_ENCODING = "utf-8"
+SUBPROCESS_TEXT_ERRORS = "replace"
 
 
 def _as_text(value: object) -> str:
@@ -127,13 +128,6 @@ GIT_SYNC_IO_SLOTS = _read_int_env("GIT_SYNC_IO_SLOTS", 1, minimum=1)
 GIT_SYNC_IO_STALE_SECONDS = _read_int_env("GIT_SYNC_IO_STALE_SECONDS", 7200, minimum=300)
 GIT_SYNC_IO_POLL_SECONDS = _read_float_env("GIT_SYNC_IO_POLL_SECONDS", 0.5, minimum=0.2)
 AUTO_SYNC_MIRROR_DEFAULT = _read_bool_env("GIT_SYNC_AUTO_MIRROR", False)
-AUTO_SYNC_JITTER_MIN_SECONDS = _read_int_env("GIT_SYNC_AUTO_JITTER_MIN_SECONDS", 20, minimum=0)
-AUTO_SYNC_JITTER_MAX_SECONDS = _read_int_env("GIT_SYNC_AUTO_JITTER_MAX_SECONDS", 90, minimum=0)
-if AUTO_SYNC_JITTER_MAX_SECONDS < AUTO_SYNC_JITTER_MIN_SECONDS:
-    AUTO_SYNC_JITTER_MIN_SECONDS, AUTO_SYNC_JITTER_MAX_SECONDS = (
-        AUTO_SYNC_JITTER_MAX_SECONDS,
-        AUTO_SYNC_JITTER_MIN_SECONDS,
-    )
 
 LOG_PATH_ENV = "GIT_SYNC_LOG_PATH"
 DEFAULT_RUNTIME_LOG_DIR = ".sync_runtime"
@@ -449,6 +443,8 @@ class GitManager:
             raw = subprocess.check_output(
                 cmd,
                 text=True,
+                encoding=SUBPROCESS_TEXT_ENCODING,
+                errors=SUBPROCESS_TEXT_ERRORS,
                 stderr=subprocess.STDOUT,
                 timeout=GIT_BRANCH_TIMEOUT,
                 env=env,
@@ -503,6 +499,8 @@ class GitManager:
             output = subprocess.check_output(
                 ["git", "for-each-ref", "refs/remotes/origin", "--format", "%(refname:short)\t%(committerdate:iso8601)"],
                 text=True,
+                encoding=SUBPROCESS_TEXT_ENCODING,
+                errors=SUBPROCESS_TEXT_ERRORS,
                 cwd=tmp_dir,
                 env=env,
                 timeout=GIT_BRANCH_TIMEOUT,
@@ -579,6 +577,8 @@ class GitManager:
                 check=True,
                 capture_output=True,
                 text=True,
+                encoding=SUBPROCESS_TEXT_ENCODING,
+                errors=SUBPROCESS_TEXT_ERRORS,
                 timeout=timeout,
                 env=env,
             )
@@ -745,6 +745,8 @@ class GitManager:
             subprocess.check_output(
                 ["git", "clone", "--depth", "1", "-b", branch, repo, str(tmp_dir)],
                 text=True,
+                encoding=SUBPROCESS_TEXT_ENCODING,
+                errors=SUBPROCESS_TEXT_ERRORS,
                 stderr=subprocess.STDOUT,
                 timeout=GIT_CLONE_TIMEOUT,
                 env=env,
@@ -1246,15 +1248,13 @@ class GuiApp:
         self.auto_refresh_enabled = False
         self.auto_refresh_interval = 150  # 2.5 minutes in seconds
 
-        # Auto-sync timer
-        self.auto_sync_job = None
+        # Auto-sync state (triggered by auto-refresh update detection only)
         self.auto_sync_enabled = False
-        self.auto_sync_interval = 150  # 2.5 minutes in seconds
         self.last_synced_branch = None  # Track last synced branch for auto-sync
         self.auto_sync_mirror_default = AUTO_SYNC_MIRROR_DEFAULT
-        self.auto_sync_jitter_min_seconds = AUTO_SYNC_JITTER_MIN_SECONDS
-        self.auto_sync_jitter_max_seconds = AUTO_SYNC_JITTER_MAX_SECONDS
-        self.auto_sync_first_schedule_pending = False
+        self.auto_sync_tracking_branch = None
+        self.auto_sync_last_synced_commit = ""
+        self.auto_sync_pending_commit = None
 
         # Archive backup settings
         default_archive_dir = str(self.manager.cwd.parent / "archive_backups")
@@ -1485,21 +1485,12 @@ class GuiApp:
             command=self._toggle_auto_sync
         )
         self.auto_sync_check.grid(row=0, column=1, sticky="w", padx=(10, 5))
-
-        ttk.Label(auto_sync_frame, text="Interval:", style="LabelMuted.TLabel").grid(row=0, column=2, sticky="w", padx=(20, 5))
-
-        self.auto_sync_interval_var = tk.StringVar(value="150")  # 2.5 minutes
-        sync_interval_spinbox = ttk.Spinbox(
+        self.auto_sync_check.config(state="disabled")
+        ttk.Label(
             auto_sync_frame,
-            from_=60,
-            to=3600,
-            increment=60,
-            textvariable=self.auto_sync_interval_var,
-            width=8
-        )
-        sync_interval_spinbox.grid(row=0, column=3, sticky="w", padx=5)
-        ttk.Label(auto_sync_frame, text="seconds", style="LabelMuted.TLabel").grid(row=0, column=4, sticky="w")
-        ttk.Label(auto_sync_frame, text="(Repeats last synced branch)", style="LabelMuted.TLabel").grid(row=0, column=5, sticky="w", padx=(20, 0))
+            text="(Auto-Refresh ON + selected branch update detected only)",
+            style="LabelMuted.TLabel",
+        ).grid(row=0, column=2, columnspan=4, sticky="w", padx=(20, 0))
 
         self.auto_sync_mirror_var = tk.BooleanVar(value=self.auto_sync_mirror_default)
         ttk.Checkbutton(
@@ -1507,11 +1498,6 @@ class GuiApp:
             text="Auto-Sync Mirror (Clean Extras)",
             variable=self.auto_sync_mirror_var,
         ).grid(row=1, column=1, sticky="w", padx=(10, 5), pady=(4, 0))
-        ttk.Label(
-            auto_sync_frame,
-            text=f"Startup jitter: {self.auto_sync_jitter_min_seconds}~{self.auto_sync_jitter_max_seconds}s",
-            style="LabelMuted.TLabel",
-        ).grid(row=1, column=2, columnspan=4, sticky="w", padx=(20, 0), pady=(4, 0))
 
         # Log Area
         log_frame = ttk.LabelFrame(self.root, text="Activity Log", padding=5)
@@ -1795,6 +1781,9 @@ class GuiApp:
         sync_enabled = not self.is_syncing and len(self.branch_map) > 0
         self.btn_sync.config(state="normal" if sync_enabled else "disabled")
 
+        # Auto-sync toggle is available only when auto-refresh is enabled
+        self.auto_sync_check.config(state="normal" if self.auto_refresh_enabled else "disabled")
+
         # Branch tree: always enabled (can select even during operations)
         # Treeview doesn't have a state property like Listbox, so no action needed
 
@@ -1980,6 +1969,7 @@ class GuiApp:
         if auto_refresh:
             self.status_var.set("Auto-refresh completed.")
             logging.info("[Auto-Refresh] Completed successfully")
+            self._detect_and_trigger_auto_sync()
         else:
             self.status_var.set("Ready.")
 
@@ -2024,6 +2014,76 @@ class GuiApp:
         self.avg_branch_var.set(f"Avg Branch: {branch_str}")
         self.avg_metadata_var.set(f"Avg Metadata: {metadata_str}")
         self.avg_sync_var.set(f"Avg Sync: {sync_str}")
+
+    def _get_selected_branch(self) -> Optional[str]:
+        """Return currently selected branch from treeview."""
+        selected = self.branch_tree.selection()
+        if not selected:
+            return None
+
+        values = self.branch_tree.item(selected[0]).get("values", [])
+        if not values:
+            return None
+
+        return str(values[0])
+
+    def _disable_auto_sync(self, reason: Optional[str] = None):
+        """Disable auto-sync and reset tracking state."""
+        self.auto_sync_enabled = False
+        self.auto_sync_var.set(False)
+        self.auto_sync_tracking_branch = None
+        self.auto_sync_last_synced_commit = ""
+        self.auto_sync_pending_commit = None
+        if reason:
+            logging.info(reason)
+        self._update_controls()
+
+    def _detect_and_trigger_auto_sync(self):
+        """Trigger auto-sync only when selected branch commit changes."""
+        if not self.auto_sync_enabled or not self.auto_refresh_enabled:
+            return
+
+        selected_branch = self._get_selected_branch()
+        if not selected_branch:
+            return
+
+        latest_commit = self.branch_dates.get(selected_branch, "")
+        if not latest_commit:
+            return
+
+        if selected_branch != self.auto_sync_tracking_branch:
+            self.auto_sync_tracking_branch = selected_branch
+            self.auto_sync_last_synced_commit = latest_commit
+            self.auto_sync_pending_commit = None
+            logging.info(
+                f"[Auto-Sync] Tracking selected branch '{selected_branch}' "
+                f"(baseline commit: {latest_commit})"
+            )
+            return
+
+        if not self.auto_sync_last_synced_commit:
+            self.auto_sync_last_synced_commit = latest_commit
+            return
+
+        if latest_commit == self.auto_sync_last_synced_commit:
+            return
+
+        if self.auto_sync_pending_commit == latest_commit:
+            return
+
+        if self.is_syncing:
+            logging.warning(
+                f"[Auto-Sync] Update detected on '{selected_branch}' "
+                f"({self.auto_sync_last_synced_commit} -> {latest_commit}), "
+                "but sync is already in progress. Will retry on next auto-refresh."
+            )
+            return
+
+        logging.info(
+            f"[Auto-Sync] Update detected on '{selected_branch}' "
+            f"({self.auto_sync_last_synced_commit} -> {latest_commit}). Starting sync."
+        )
+        self._execute_auto_sync(selected_branch, latest_commit)
 
     def start_sync(self):
         # Check if branches are loaded
@@ -2361,57 +2421,50 @@ class GuiApp:
                 self.root.after_cancel(self.auto_refresh_job)
                 self.auto_refresh_job = None
             logging.info("[Auto-Refresh] Disabled")
+            if self.auto_sync_enabled:
+                self._disable_auto_sync("[Auto-Sync] Disabled because Auto-Refresh was turned off")
+                self.status_var.set("Auto-Sync disabled (requires Auto-Refresh).")
+
+        self._update_controls()
 
     # --- Auto-Sync ---
-
-    def _pick_auto_sync_jitter_seconds(self) -> int:
-        """Pick startup jitter for auto-sync to avoid synchronized bursts across instances."""
-        low = max(0, self.auto_sync_jitter_min_seconds)
-        high = max(0, self.auto_sync_jitter_max_seconds)
-        if high < low:
-            low, high = high, low
-        if high == 0:
-            return 0
-        return random.randint(low, high)
 
     def _toggle_auto_sync(self):
         """Toggle auto-sync on/off."""
         self.auto_sync_enabled = self.auto_sync_var.get()
 
         if self.auto_sync_enabled:
-            # Check if there's a last synced branch
-            if not self.last_synced_branch:
+            if not self.auto_refresh_enabled:
                 messagebox.showwarning(
-                    "No Branch Synced",
-                    "Auto-Sync requires at least one successful sync.\n\n"
-                    "Please sync a branch first, then enable Auto-Sync."
+                    "Auto-Refresh Required",
+                    "Auto-Sync works only when Auto-Refresh is enabled.\n\n"
+                    "Please enable Auto-Refresh first."
                 )
-                self.auto_sync_var.set(False)
-                self.auto_sync_enabled = False
+                self._disable_auto_sync()
                 return
 
-            # Start auto-sync
-            try:
-                interval = int(self.auto_sync_interval_var.get())
-                self.auto_sync_interval = interval
-                self.auto_sync_first_schedule_pending = True
-                logging.info(
-                    f"[Auto-Sync] Enabled with interval: {interval} seconds, "
-                    f"branch: {self.last_synced_branch}, mirror: {self.auto_sync_mirror_var.get()}, "
-                    f"startup_jitter: {self.auto_sync_jitter_min_seconds}~{self.auto_sync_jitter_max_seconds}s"
+            selected_branch = self._get_selected_branch()
+            if not selected_branch:
+                messagebox.showwarning(
+                    "No Branch Selected",
+                    "Select a branch first. Auto-Sync monitors updates on the selected branch."
                 )
-                self._schedule_auto_sync()
-            except ValueError:
-                messagebox.showerror("Invalid Interval", "Please enter a valid number for interval.")
-                self.auto_sync_var.set(False)
-                self.auto_sync_enabled = False
+                self._disable_auto_sync()
+                return
+
+            baseline_commit = self.branch_dates.get(selected_branch, "")
+            self.auto_sync_tracking_branch = selected_branch
+            self.auto_sync_last_synced_commit = baseline_commit
+            self.auto_sync_pending_commit = None
+            logging.info(
+                f"[Auto-Sync] Enabled. Tracking branch: {selected_branch}, "
+                f"baseline commit: {baseline_commit or '(unknown)'}, "
+                f"mirror: {self.auto_sync_mirror_var.get()}"
+            )
+            self.status_var.set(f"Auto-Sync enabled for '{selected_branch}' (waiting for updates).")
         else:
-            # Stop auto-sync
-            self.auto_sync_first_schedule_pending = False
-            if self.auto_sync_job:
-                self.root.after_cancel(self.auto_sync_job)
-                self.auto_sync_job = None
-            logging.info("[Auto-Sync] Disabled")
+            self._disable_auto_sync("[Auto-Sync] Disabled")
+            self.status_var.set("Auto-Sync disabled.")
 
     def _schedule_auto_refresh(self):
         """Schedule the next auto-refresh."""
@@ -2439,85 +2492,64 @@ class GuiApp:
         # Reschedule next refresh
         self._schedule_auto_refresh()
 
-    def _schedule_auto_sync(self):
-        """Schedule the next auto-sync."""
-        if not self.auto_sync_enabled:
+    def _execute_auto_sync(self, branch: str, target_commit: str):
+        """Execute auto-sync immediately for a detected commit update."""
+        if not self.auto_sync_enabled or not self.auto_refresh_enabled:
             return
 
-        # Cancel previous job if exists
-        if self.auto_sync_job:
-            self.root.after_cancel(self.auto_sync_job)
+        if self.is_syncing:
+            logging.warning("[Auto-Sync] Sync already in progress, skipping update trigger")
+            return
 
-        delay_seconds = self.auto_sync_interval
-        if self.auto_sync_first_schedule_pending:
-            jitter_seconds = self._pick_auto_sync_jitter_seconds()
-            delay_seconds += jitter_seconds
-            self.auto_sync_first_schedule_pending = False
+        self.auto_sync_pending_commit = target_commit
+        self.last_sync_try_time = datetime.now(KST)
+
+        repo = self.repo_var.get()
+        mirror = self.auto_sync_mirror_var.get()
+        method = self.download_method_var.get()
+
+        auto_sync_start_time = time.time()
+
+        # Update state
+        self.is_syncing = True
+        self._update_controls()
+
+        method_text = "ZIP 다운로드" if method == "zip" else "Git Incremental"
+        self.status_var.set(f"Auto-syncing {branch}... ({method_text})")
+
+        if mirror != self.mirror_var.get():
             logging.info(
-                f"[Auto-Sync] Startup jitter applied: +{jitter_seconds}s "
-                f"(first trigger in {delay_seconds}s)"
+                f"[Auto-Sync] Mirror policy split active "
+                f"(manual_mirror={self.mirror_var.get()}, auto_sync_mirror={mirror})"
             )
+        logging.info(
+            f"[Auto-Sync] Starting sync - Repo: {repo}, Branch: {branch}, Method: {method}, "
+            f"Mirror: {mirror}, target_commit: {target_commit}"
+        )
 
-        interval_ms = max(1, int(delay_seconds * 1000))
-        self.auto_sync_job = self.root.after(interval_ms, self._execute_auto_sync)
-
-    def _execute_auto_sync(self):
-        """Execute auto-sync and reschedule."""
-        if not self.auto_sync_enabled:
-            return
-
-        # Only sync if there's a last synced branch
-        if self.last_synced_branch:
-            logging.info(f"[Auto-Sync] Executing automatic sync (interval: {self.auto_sync_interval}s, branch: {self.last_synced_branch})")
-
-            # Check if already syncing
-            if self.is_syncing:
-                logging.warning("[Auto-Sync] Sync already in progress, skipping this cycle")
-                self._schedule_auto_sync()
-                return
-
-            self.last_sync_try_time = datetime.now(KST)
-
-            # Perform sync
-            repo = self.repo_var.get()
-            mirror = self.auto_sync_mirror_var.get()
-            method = self.download_method_var.get()
-            branch = self.last_synced_branch
-
-            # Record sync start time for duration measurement
-            auto_sync_start_time = time.time()
-
-            # Update state
-            self.is_syncing = True
-            self._update_controls()
-
-            method_text = "ZIP 다운로드" if method == "zip" else "Git Incremental"
-            self.status_var.set(f"Auto-syncing {branch}... ({method_text})")
-
-            if mirror != self.mirror_var.get():
-                logging.info(
-                    f"[Auto-Sync] Mirror policy split active "
-                    f"(manual_mirror={self.mirror_var.get()}, auto_sync_mirror={mirror})"
+        def task():
+            error_message = None
+            try:
+                self.manager.sync(repo, branch, mirror, logging.info, method=method)
+            except Exception as e:
+                error_message = str(e)
+            finally:
+                sync_duration = time.time() - auto_sync_start_time
+                self.root.after(
+                    0,
+                    lambda msg=error_message, dur=sync_duration, b=branch, c=target_commit:
+                        self._on_auto_sync_complete(msg, dur, b, c),
                 )
-            logging.info(f"[Auto-Sync] Starting sync - Repo: {repo}, Branch: {branch}, Method: {method}, Mirror: {mirror}")
 
-            def task():
-                error_message = None
-                try:
-                    self.manager.sync(repo, branch, mirror, logging.info, method=method)
-                except Exception as e:
-                    error_message = str(e)
-                finally:
-                    # Calculate duration
-                    sync_duration = time.time() - auto_sync_start_time
-                    self.root.after(0, lambda msg=error_message, dur=sync_duration: self._on_auto_sync_complete(msg, dur))
+        threading.Thread(target=task, daemon=True).start()
 
-            threading.Thread(target=task, daemon=True).start()
-        else:
-            # No branch to sync, reschedule
-            self._schedule_auto_sync()
-
-    def _on_auto_sync_complete(self, error_message: Optional[str], duration: float = None):
+    def _on_auto_sync_complete(
+        self,
+        error_message: Optional[str],
+        duration: float = None,
+        branch: Optional[str] = None,
+        target_commit: Optional[str] = None,
+    ):
         """Handle auto-sync completion."""
         # Update state
         self.is_syncing = False
@@ -2527,6 +2559,7 @@ class GuiApp:
             # Log error but don't show popup for auto-sync
             logging.error(f"[Auto-Sync] Failed: {error_message}")
             self.status_var.set("Auto-sync failed (see log)")
+            self.auto_sync_pending_commit = None
         else:
             # Record sync time on success
             if duration is not None:
@@ -2536,6 +2569,15 @@ class GuiApp:
                 self._update_avg_times()
 
             self.last_sync_time = datetime.now(KST)
+            if branch:
+                self.last_synced_branch = branch
+            if (
+                branch
+                and target_commit
+                and branch == self.auto_sync_tracking_branch
+            ):
+                self.auto_sync_last_synced_commit = target_commit
+            self.auto_sync_pending_commit = None
 
             self.status_var.set("Auto-sync completed successfully.")
             logging.info("[Auto-Sync] Completed successfully")
@@ -2548,9 +2590,6 @@ class GuiApp:
                 # Auto-refresh metadata after successful auto-sync (only if no backup)
                 logging.info("[Auto-Sync] Refreshing metadata after successful sync...")
                 self.refresh_branches(auto_refresh=True)
-
-        # Reschedule next sync
-        self._schedule_auto_sync()
 
     def run(self):
         self.root.mainloop()

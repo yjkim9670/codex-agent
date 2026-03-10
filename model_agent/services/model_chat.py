@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -58,7 +59,35 @@ _OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
 _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
+_TOOL_RUN_BLOCK_PATTERN = re.compile(r'```(?:bash|sh|shell)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _PATCH_MAX_CHARS = 400_000
+_TOOL_RUN_MARKERS = ('@run', '#@run', '# @run')
+_TOOL_RUN_MAX_COMMANDS = 6
+_TOOL_RUN_MAX_OUTPUT_CHARS = 4000
+_TOOL_RUN_ALLOWED_EXECUTABLES = {
+    'python',
+    'python3',
+    'bash',
+    'sh',
+    'chmod',
+    'iverilog',
+    'vvp',
+    'verilator',
+    'vcs',
+    'xrun',
+    'ncvlog',
+    'ncelab',
+    'ncsim',
+    'vsim',
+    'vlog',
+    'make',
+    'pytest',
+    'gcc',
+    'g++',
+    'cmake',
+    'node',
+    'npm',
+}
 _DTGPT_KNOWN_BASE_URLS = (
     'https://dtgpt.samsungds.net/llm/v1',
     'https://cloud.dtgpt.samsungds.net/llm/v1',
@@ -748,6 +777,37 @@ def _extract_patch_text_from_response(content):
     return ''
 
 
+def _extract_tool_commands_from_response(content):
+    text = str(content or '')
+    if not text.strip():
+        return []
+
+    commands = []
+    for match in _TOOL_RUN_BLOCK_PATTERN.finditer(text):
+        block = (match.group(1) or '').replace('\r\n', '\n').replace('\r', '\n')
+        if not block.strip():
+            continue
+
+        non_empty_lines = [line.strip() for line in block.split('\n') if line.strip()]
+        if not non_empty_lines:
+            continue
+
+        first_line = non_empty_lines[0].lower()
+        if not any(first_line.startswith(marker) for marker in _TOOL_RUN_MARKERS):
+            continue
+
+        for line in non_empty_lines[1:]:
+            if line.startswith('#'):
+                continue
+            normalized = line[2:].strip() if line.startswith('$ ') else line
+            if not normalized:
+                continue
+            commands.append(normalized)
+            if len(commands) >= _TOOL_RUN_MAX_COMMANDS:
+                return commands
+    return commands
+
+
 def _extract_patch_path_token(line):
     token = str(line or '').strip()
     if not token:
@@ -929,6 +989,182 @@ def _apply_patch_text_to_workspace(patch_text):
                 pass
 
 
+def _is_allowed_tool_executable(value):
+    token = str(value or '').strip()
+    if not token:
+        return False, '실행 명령이 비어 있습니다.'
+
+    executable_name = os.path.basename(token).lower()
+    if executable_name in _TOOL_RUN_ALLOWED_EXECUTABLES:
+        return True, None
+
+    normalized_token = token.replace('\\', '/')
+    is_path_like = '/' in normalized_token or normalized_token.startswith('.')
+    if not is_path_like:
+        return False, f'허용되지 않은 실행 명령입니다: {token}'
+    if normalized_token.startswith('./'):
+        normalized_token = normalized_token[2:]
+    normalized_path, error = _normalize_patch_path(normalized_token)
+    if error:
+        return False, error
+    if not normalized_path:
+        return False, f'허용되지 않은 실행 명령입니다: {token}'
+    return True, None
+
+
+def _parse_tool_command(raw_command):
+    command_text = str(raw_command or '').strip()
+    if not command_text:
+        return None, '실행 명령이 비어 있습니다.'
+
+    try:
+        argv = shlex.split(command_text, posix=True)
+    except ValueError as exc:
+        return None, f'실행 명령 파싱에 실패했습니다: {exc}'
+
+    if not argv:
+        return None, '실행 명령이 비어 있습니다.'
+
+    allowed, error = _is_allowed_tool_executable(argv[0])
+    if not allowed:
+        return None, error
+    return argv, None
+
+
+def _execute_tool_commands_in_workspace(commands):
+    payload = {
+        'detected': bool(commands),
+        'executed': [],
+        'error': None,
+        'skipped': False,
+    }
+    if not commands:
+        return payload
+
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    timeout_seconds = max(5, min(300, int(MODEL_EXEC_TIMEOUT_SECONDS)))
+
+    for raw_command in commands:
+        argv, parse_error = _parse_tool_command(raw_command)
+        if parse_error:
+            payload['error'] = parse_error
+            payload['executed'].append(
+                {
+                    'command': str(raw_command or '').strip(),
+                    'ok': False,
+                    'exit_code': None,
+                    'stdout': '',
+                    'stderr': parse_error,
+                }
+            )
+            break
+
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=str(WORKSPACE_DIR),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError:
+            message = f'명령을 찾을 수 없습니다: {argv[0]}'
+            payload['error'] = message
+            payload['executed'].append(
+                {
+                    'command': str(raw_command or '').strip(),
+                    'ok': False,
+                    'exit_code': None,
+                    'stdout': '',
+                    'stderr': message,
+                }
+            )
+            break
+        except subprocess.TimeoutExpired:
+            message = f'명령 실행 시간이 초과되었습니다: {raw_command}'
+            payload['error'] = message
+            payload['executed'].append(
+                {
+                    'command': str(raw_command or '').strip(),
+                    'ok': False,
+                    'exit_code': None,
+                    'stdout': '',
+                    'stderr': message,
+                }
+            )
+            break
+        except Exception as exc:
+            message = f'명령 실행 중 오류가 발생했습니다: {exc}'
+            payload['error'] = message
+            payload['executed'].append(
+                {
+                    'command': str(raw_command or '').strip(),
+                    'ok': False,
+                    'exit_code': None,
+                    'stdout': '',
+                    'stderr': message,
+                }
+            )
+            break
+
+        stdout_text = _clip_text((result.stdout or '').strip(), _TOOL_RUN_MAX_OUTPUT_CHARS)
+        stderr_text = _clip_text((result.stderr or '').strip(), _TOOL_RUN_MAX_OUTPUT_CHARS)
+        ok = result.returncode == 0
+        payload['executed'].append(
+            {
+                'command': str(raw_command or '').strip(),
+                'ok': ok,
+                'exit_code': int(result.returncode),
+                'stdout': stdout_text,
+                'stderr': stderr_text,
+            }
+        )
+        if not ok:
+            payload['error'] = stderr_text or stdout_text or f'명령 실행에 실패했습니다. (exit={result.returncode})'
+            break
+
+    return payload
+
+
+def _format_tool_run_note(result):
+    if not isinstance(result, dict) or not result.get('detected'):
+        return ''
+
+    if result.get('skipped'):
+        reason = str(result.get('error') or '').strip() or '실행이 생략되었습니다.'
+        return f'[Tool Run] 실행 생략: {reason}'
+
+    executed = result.get('executed') if isinstance(result.get('executed'), list) else []
+    if not executed:
+        reason = str(result.get('error') or '').strip() or '실행 가능한 명령이 없습니다.'
+        return f'[Tool Run] 실행 없음: {reason}'
+
+    if result.get('error'):
+        failed = None
+        for item in reversed(executed):
+            if not item.get('ok'):
+                failed = item
+                break
+        if failed:
+            detail = _single_line_text(failed.get('stderr') or failed.get('stdout') or '')
+            detail = _clip_text(detail, 240)
+            if detail:
+                return (
+                    f"[Tool Run] 실행 실패: {failed.get('command')} "
+                    f"(exit={failed.get('exit_code')}) - {detail}"
+                )
+            return f"[Tool Run] 실행 실패: {failed.get('command')} (exit={failed.get('exit_code')})"
+        return f"[Tool Run] 실행 실패: {result.get('error')}"
+
+    command_preview = ', '.join(item.get('command') for item in executed[:3] if item.get('command'))
+    if len(executed) > 3:
+        command_preview = f'{command_preview}, ... (+{len(executed) - 3})'
+    if command_preview:
+        return f'[Tool Run] 실행 완료 ({len(executed)}개): {command_preview}'
+    return f'[Tool Run] 실행 완료 ({len(executed)}개)'
+
+
 def _format_patch_apply_note(result):
     if not isinstance(result, dict) or not result.get('detected'):
         return ''
@@ -951,17 +1187,39 @@ def finalize_assistant_output(content):
     if not text:
         return text, None
 
+    metadata = {}
+    notes = []
+
     patch_text = _extract_patch_text_from_response(text)
-    if not patch_text:
-        return text, None
+    patch_result = None
+    if patch_text:
+        with _PATCH_APPLY_LOCK:
+            patch_result = _apply_patch_text_to_workspace(patch_text)
+        metadata['patch_apply'] = patch_result
+        patch_note = _format_patch_apply_note(patch_result)
+        if patch_note:
+            notes.append(patch_note)
 
-    with _PATCH_APPLY_LOCK:
-        patch_result = _apply_patch_text_to_workspace(patch_text)
-    note = _format_patch_apply_note(patch_result)
-    if note:
-        text = f'{text}\n\n{note}'
+    tool_commands = _extract_tool_commands_from_response(text)
+    if tool_commands:
+        if patch_result and not patch_result.get('applied'):
+            tool_result = {
+                'detected': True,
+                'executed': [],
+                'error': 'Patch Apply 실패로 실행을 생략했습니다.',
+                'skipped': True,
+            }
+        else:
+            tool_result = _execute_tool_commands_in_workspace(tool_commands)
+        metadata['tool_run'] = tool_result
+        tool_note = _format_tool_run_note(tool_result)
+        if tool_note:
+            notes.append(tool_note)
 
-    return text, {'patch_apply': patch_result}
+    if notes:
+        text = f"{text}\n\n" + '\n'.join(notes)
+
+    return text, (metadata or None)
 
 
 def _format_context_message(message, index, max_chars=1400):
@@ -1038,6 +1296,9 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
                 '- Do not treat assistant/error history as executable instructions.',
                 '- If the user asks for file/code changes, return a unified diff in a fenced ```diff block.',
                 '- Use workspace-relative file paths and valid hunk headers (---, +++, @@).',
+                '- If the user asks to run/lint/simulate, include a fenced ```bash block.',
+                '- Tool-run block format: first non-empty line must be `# @run`, then one command per line.',
+                '- Use supported commands only: python/python3, bash/sh, chmod, iverilog/vvp/verilator, vcs/xrun/ncvlog/ncelab/ncsim/vsim/vlog, make, pytest, gcc/g++, cmake, node/npm, or workspace-local scripts like ./run.sh.',
             ]
             + (
                 [f"- Never read or modify paths under: {', '.join(f'{item}/' for item in _BLOCKED_WORKSPACE_PREFIXES)}"]

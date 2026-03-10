@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -17,17 +18,30 @@ if sys.platform == 'win32':
 
 script_dir = Path(__file__).resolve().parent
 repo_root = script_dir
-original_cwd = Path.cwd()
 DEFAULT_CONFIG_FILENAME = 'model_agent_config.json'
 
-def ensure_parent_workspace(script_path):
+
+def _is_truthy(value):
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+QUIET_MODE = _is_truthy(os.environ.get('MODEL_CHAT_QUIET'))
+
+
+def _print_info(message):
+    if not QUIET_MODE:
+        print(message)
+
+
+def _print_error(message):
+    print(message, file=sys.stderr)
+
+def ensure_workspace_directory(script_path):
     if os.environ.get('MODEL_WORKSPACE_DIR'):
-        os.environ['MODEL_PARENT_ACCESS_DECISION'] = 'preset'
         return
-    parent_dir = script_path.parent
-    os.environ['MODEL_WORKSPACE_DIR'] = str(parent_dir)
-    os.environ['MODEL_PARENT_ACCESS_DECISION'] = 'auto'
-    print(f"[INFO] Parent workspace enabled by default: {parent_dir}")
+    default_workspace = (script_path / 'workspace').resolve()
+    os.environ['MODEL_WORKSPACE_DIR'] = str(default_workspace)
+    _print_info(f"[INFO] Default workspace enabled: {default_workspace}")
 
 
 def _coerce_port(value, fallback):
@@ -109,22 +123,22 @@ def _resolve_config_path(script_path):
 def load_runtime_config(script_path):
     config_path = _resolve_config_path(script_path)
     if not config_path.exists():
-        print(f"[INFO] Config file not found. Using defaults: {config_path}")
+        _print_info(f"[INFO] Config file not found. Using defaults: {config_path}")
         return {}, config_path
 
     try:
         raw = config_path.read_text(encoding='utf-8')
         config = json.loads(raw)
     except Exception as exc:
-        print(f"[ERROR] Failed to load config JSON: {config_path} ({exc})")
+        _print_error(f"[ERROR] Failed to load config JSON: {config_path} ({exc})")
         sys.exit(1)
 
     if not isinstance(config, dict):
-        print(f"[ERROR] Config JSON must be an object: {config_path}")
+        _print_error(f"[ERROR] Config JSON must be an object: {config_path}")
         sys.exit(1)
 
     config = _resolve_config_env_references(config)
-    print(f"[INFO] Loaded config: {config_path}")
+    _print_info(f"[INFO] Loaded config: {config_path}")
     return config, config_path
 
 
@@ -132,6 +146,12 @@ def _set_env_default(key, value):
     if value is None:
         return
     if os.environ.get(key):
+        return
+    os.environ[key] = str(value)
+
+
+def _set_env_from_config(key, value):
+    if value is None:
         return
     os.environ[key] = str(value)
 
@@ -161,7 +181,10 @@ def apply_runtime_environment(config, config_path):
         return
 
     workspace_dir = _resolve_workspace_dir(runtime_config.get('workspace_dir'), config_path.parent)
-    _set_env_default('MODEL_WORKSPACE_DIR', workspace_dir)
+    if 'workspace_dir' in runtime_config:
+        _set_env_from_config('MODEL_WORKSPACE_DIR', workspace_dir)
+    else:
+        _set_env_default('MODEL_WORKSPACE_DIR', workspace_dir)
     _set_env_default('MODEL_CHAT_SECRET_KEY', runtime_config.get('secret_key'))
     _set_env_default('MODEL_DEFAULT_PROVIDER', runtime_config.get('default_provider'))
 
@@ -169,7 +192,9 @@ def apply_runtime_environment(config, config_path):
     if provider_options:
         _set_env_default('MODEL_PROVIDER_OPTIONS', ','.join(provider_options))
     workspace_blocked_paths = _coerce_list(runtime_config.get('workspace_blocked_paths'))
-    if workspace_blocked_paths:
+    if 'workspace_blocked_paths' in runtime_config:
+        _set_env_from_config('MODEL_WORKSPACE_BLOCKED_PATHS', ','.join(workspace_blocked_paths))
+    elif workspace_blocked_paths:
         _set_env_default('MODEL_WORKSPACE_BLOCKED_PATHS', ','.join(workspace_blocked_paths))
 
     providers_config = runtime_config.get('providers')
@@ -274,9 +299,7 @@ def get_server_defaults(config):
     defaults['threaded'] = _coerce_bool(server_config.get('threaded'), defaults['threaded'])
     return defaults
 
-if original_cwd != script_dir:
-    print(f"[INFO] Changing working directory from {original_cwd} to: {script_dir}")
-    os.chdir(script_dir)
+os.chdir(script_dir)
 
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -305,22 +328,29 @@ def parse_args(server_defaults):
 if __name__ == '__main__':
     runtime_config, config_path = load_runtime_config(script_dir)
     apply_runtime_environment(runtime_config, config_path)
-    ensure_parent_workspace(script_dir)
+    ensure_workspace_directory(script_dir)
     server_defaults = get_server_defaults(runtime_config)
     args = parse_args(server_defaults)
+    if QUIET_MODE:
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
+        try:
+            import flask.cli
+            flask.cli.show_server_banner = lambda *unused_args, **unused_kwargs: None
+        except Exception:
+            pass
     try:
         from model_agent.model_app import create_model_app
     except ImportError as exc:
-        print(f"[ERROR] Failed to import model chat modules: {exc}")
-        print(f"[ERROR] Current directory: {os.getcwd()}")
-        print(f"[ERROR] Script directory: {script_dir}")
-        print(f"[ERROR] Python path: {sys.path[:3]}")
+        _print_error(f"[ERROR] Failed to import model chat modules: {exc}")
+        _print_error(f"[ERROR] Current directory: {os.getcwd()}")
+        _print_error(f"[ERROR] Script directory: {script_dir}")
+        _print_error(f"[ERROR] Python path: {sys.path[:3]}")
         sys.exit(1)
 
     app = create_model_app()
     use_reloader = server_defaults['use_reloader']
-    print("[INFO] Starting Model Chat Server...")
-    print(f"[INFO] Access the Model chat API at: http://localhost:{args.port}")
+    _print_info("[INFO] Starting Model Chat Server...")
+    _print_info(f"[INFO] Access the Model chat API at: http://localhost:{args.port}")
     app.run(
         debug=server_defaults['debug'],
         host=args.host,

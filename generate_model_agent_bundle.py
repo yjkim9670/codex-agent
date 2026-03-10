@@ -16,6 +16,7 @@ SOURCE_PATHS = (
     "model_agent",
     "run_model_chat_server.py",
     "run_model_chat_server.sh",
+    "run_model_chat_server_tg.sh",
     "model_agent_config.json",
 )
 

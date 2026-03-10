@@ -38,14 +38,31 @@ Model Agent listens on `http://localhost:3100` by default.
 
 If a model response includes a unified diff block (for example, fenced with `diff` or `patch`), Model Agent will attempt to apply it to `agent.workspace_dir` automatically via `git apply`.
 Paths configured in `agent.workspace_blocked_paths` are excluded from Patch Apply and git stage/commit actions.
+If a model response includes a fenced `bash`/`sh` block whose first non-empty line is `# @run`, Model Agent executes each command line in `agent.workspace_dir` (Linux tool run/simulation support).
 
 Run with the helper script:
 ```bash
 ./run_model_chat_server.sh
 ```
 
+Run with TG_PYTHON (in-house Linux environment):
+```bash
+export TG_PYTHON=/path/to/tg_python
+./run_model_chat_server_tg.sh
+```
+
+Both shell launchers default to quiet mode (`MODEL_CHAT_QUIET=1`) to suppress verbose Python/werkzeug info logs.
+To keep logs visible, set:
+```bash
+MODEL_CHAT_QUIET=0 ./run_model_chat_server.sh
+```
+
+Default config is Linux-friendly for file edits:
+- `agent.workspace_dir` = `./workspace`
+- `agent.workspace_blocked_paths` = `[]`
+
 ## Generate Model Agent Bundle Script
-If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
+If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, `run_model_chat_server_tg.sh`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
 
 ```bash
 python generate_model_agent_bundle.py --output /tmp/model_agent_bundle.sh

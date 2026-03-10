@@ -78,14 +78,6 @@ for item in _read_csv_env('MODEL_WORKSPACE_BLOCKED_PATHS'):
     normalized = _normalize_relative_prefix(item)
     if normalized and normalized not in _workspace_blocked_paths:
         _workspace_blocked_paths.append(normalized)
-if not _workspace_blocked_paths:
-    try:
-        relative_repo_path = REPO_ROOT.resolve().relative_to(WORKSPACE_DIR.resolve()).as_posix()
-    except ValueError:
-        relative_repo_path = ''
-    normalized_repo_path = _normalize_relative_prefix(relative_repo_path)
-    if normalized_repo_path:
-        _workspace_blocked_paths.append(normalized_repo_path)
 MODEL_WORKSPACE_BLOCKED_PATHS = _workspace_blocked_paths
 
 MODEL_GEMINI_API_KEY = os.environ.get('MODEL_GEMINI_API_KEY', os.environ.get('MODEL_API_KEY', '')).strip()

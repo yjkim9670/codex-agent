@@ -48,6 +48,7 @@ const WEATHER_REFRESH_MS = 10 * 60 * 1000;
 const WEATHER_POSITION_KEY = 'geminiWeatherPosition';
 const WEATHER_COMPACT_KEY = 'geminiWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
+const ENABLE_WEATHER_GEOLOCATION = false;
 const TOAST_LAYER_ID = 'gemini-toast-layer';
 const HOVER_TOOLTIP_LAYER_ID = 'gemini-hover-tooltip-layer';
 const HOVER_TOOLTIP_OFFSET_PX = 8;
@@ -896,6 +897,11 @@ function initializeLiveWeatherPanel(mobileMedia) {
     setHoverTooltip(serverDirectory, serverDirectory?.textContent || '');
     setHoverTooltip(serverDirectoryPath, serverDirectoryPath?.textContent || '');
     syncHoverTooltipFromLabel(permissionToggle);
+    if (!ENABLE_WEATHER_GEOLOCATION) {
+        permissionToggle.disabled = true;
+        permissionToggle.setAttribute('aria-disabled', 'true');
+        syncHoverTooltipFromLabel(permissionToggle, '위치 확인 비활성화');
+    }
     updateLiveDatetime();
     if (state.liveClockTimer) {
         window.clearInterval(state.liveClockTimer);
@@ -908,10 +914,12 @@ function initializeLiveWeatherPanel(mobileMedia) {
             void maybeRequestWeatherPermissionOnTap();
         }
     });
-    permissionToggle.addEventListener('click', event => {
-        event.stopPropagation();
-        void requestWeatherPermission();
-    });
+    if (ENABLE_WEATHER_GEOLOCATION) {
+        permissionToggle.addEventListener('click', event => {
+            event.stopPropagation();
+            void requestWeatherPermission();
+        });
+    }
     void loadLiveWeatherData();
     if (state.weatherRefreshTimer) {
         window.clearInterval(state.weatherRefreshTimer);
@@ -922,6 +930,7 @@ function initializeLiveWeatherPanel(mobileMedia) {
 }
 
 async function maybeRequestWeatherPermissionOnTap() {
+    if (!ENABLE_WEATHER_GEOLOCATION) return;
     const storedPosition = readStoredWeatherPosition();
     if (storedPosition) return;
     const permissionState = await readGeolocationPermissionState();
@@ -1526,7 +1535,12 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
     }
 
     try {
-        const position = positionOverride || await resolveWeatherPosition();
+        const fallbackPosition = readStoredWeatherPosition() || getDefaultWeatherPosition();
+        const position = positionOverride || (
+            ENABLE_WEATHER_GEOLOCATION
+                ? await resolveWeatherPosition()
+                : fallbackPosition
+        );
         if (!position) {
             renderWeatherError('위치 확인 불가', '브라우저 위치 권한을 허용해 주세요.');
             return;
@@ -1552,6 +1566,13 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
 }
 
 async function requestWeatherPermission({ silentFailure = false, skipPermissionCheck = false } = {}) {
+    if (!ENABLE_WEATHER_GEOLOCATION) {
+        await loadLiveWeatherData({
+            silent: true,
+            positionOverride: readStoredWeatherPosition() || getDefaultWeatherPosition()
+        });
+        return;
+    }
     const locationElement = document.getElementById('gemini-weather-location');
     const currentElement = document.getElementById('gemini-weather-current');
     if (locationElement) {

@@ -7,10 +7,8 @@
     "threaded": true
   },
   "agent": {
-    "workspace_dir": "../",
-    "workspace_blocked_paths": [
-      "codex_agent"
-    ],
+    "workspace_dir": "./workspace",
+    "workspace_blocked_paths": [],
     "secret_key": "model-chat-secret-key-change-in-production",
     "default_provider": "dtgpt",
     "provider_options": [

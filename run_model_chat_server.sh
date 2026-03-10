@@ -63,6 +63,9 @@ while (($#)); do
 done
 
 if ((show_help == 1)); then
+    if [[ -z "${MODEL_CHAT_QUIET+x}" ]]; then
+        export MODEL_CHAT_QUIET=1
+    fi
     exec python "${SCRIPT_DIR}/run_model_chat_server.py" "${original_args[@]}"
 fi
 
@@ -101,5 +104,9 @@ while port_in_use "${final_port}"; do
     echo "[INFO] Port ${final_port} is unavailable. Trying ${next_port}..."
     final_port="${next_port}"
 done
+
+if [[ -z "${MODEL_CHAT_QUIET+x}" ]]; then
+    export MODEL_CHAT_QUIET=1
+fi
 
 exec python "${SCRIPT_DIR}/run_model_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"

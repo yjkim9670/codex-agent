@@ -1010,6 +1010,55 @@ def _summarize_patch_error(result):
     return message
 
 
+def _resolve_git_apply_scope(workspace_dir, timeout_seconds):
+    workspace_root = Path(workspace_dir).resolve()
+    default_scope = {
+        'git_cwd': str(workspace_root),
+        'directory': None,
+    }
+    probe_timeout = max(2, min(10, int(timeout_seconds)))
+    try:
+        top_level_result = subprocess.run(
+            ['git', '-C', str(workspace_root), 'rev-parse', '--show-toplevel'],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=probe_timeout,
+            check=False,
+        )
+    except Exception:
+        return default_scope
+
+    if top_level_result.returncode != 0:
+        return default_scope
+
+    top_level_raw = str(top_level_result.stdout or '').strip()
+    if not top_level_raw:
+        return default_scope
+
+    try:
+        top_level_path = Path(top_level_raw).resolve()
+    except Exception:
+        return default_scope
+
+    if top_level_path == workspace_root:
+        return default_scope
+
+    try:
+        workspace_relative = workspace_root.relative_to(top_level_path).as_posix()
+    except ValueError:
+        return default_scope
+
+    workspace_relative = workspace_relative.strip().strip('/')
+    if not workspace_relative:
+        return default_scope
+
+    return {
+        'git_cwd': str(top_level_path),
+        'directory': workspace_relative,
+    }
+
+
 def _apply_patch_text_to_workspace(patch_text):
     payload = {
         'detected': True,
@@ -1045,6 +1094,14 @@ def _apply_patch_text_to_workspace(patch_text):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     patch_path = None
     timeout_seconds = max(10, min(300, int(MODEL_EXEC_TIMEOUT_SECONDS)))
+    apply_scope = _resolve_git_apply_scope(WORKSPACE_DIR, timeout_seconds)
+    git_cwd = apply_scope.get('git_cwd') or str(WORKSPACE_DIR)
+    apply_directory = str(apply_scope.get('directory') or '').strip()
+
+    base_git_apply_cmd = ['git', '-C', git_cwd, 'apply']
+    if apply_directory:
+        # If workspace_dir is nested under another Git repo, pin patch paths into workspace_dir.
+        base_git_apply_cmd.extend(['--directory', apply_directory])
     try:
         with tempfile.NamedTemporaryFile(
             mode='w',
@@ -1056,9 +1113,11 @@ def _apply_patch_text_to_workspace(patch_text):
             handle.write(normalized_patch)
             patch_path = handle.name
 
+        check_cmd = list(base_git_apply_cmd)
+        check_cmd.extend(['--check', '--recount', '--whitespace=nowarn', patch_path])
         check_result = subprocess.run(
-            ['git', '-C', str(WORKSPACE_DIR), 'apply', '--check', '--recount', '--whitespace=nowarn', patch_path],
-            cwd=str(WORKSPACE_DIR),
+            check_cmd,
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -1068,9 +1127,11 @@ def _apply_patch_text_to_workspace(patch_text):
             payload['error'] = _summarize_patch_error(check_result)
             return payload
 
+        apply_cmd = list(base_git_apply_cmd)
+        apply_cmd.extend(['--recount', '--whitespace=nowarn', patch_path])
         apply_result = subprocess.run(
-            ['git', '-C', str(WORKSPACE_DIR), 'apply', '--recount', '--whitespace=nowarn', patch_path],
-            cwd=str(WORKSPACE_DIR),
+            apply_cmd,
+            cwd=git_cwd,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,

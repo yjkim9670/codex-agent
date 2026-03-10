@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -103,10 +105,15 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
         ["wl-copy"],
         ["xclip", "-selection", "clipboard"],
         ["xsel", "--clipboard", "--input"],
-        ["clip.exe"],
-        ["cmd.exe", "/c", "clip"],
         ["termux-clipboard-set"],
     ]
+    if os.name == "nt" or sys.platform.startswith("win"):
+        clipboard_cmds.extend(
+            [
+                ["clip.exe"],
+                ["cmd.exe", "/c", "clip"],
+            ]
+        )
     for cmd in clipboard_cmds:
         if shutil.which(cmd[0]) is None:
             continue
@@ -164,7 +171,8 @@ def main() -> int:
         return 0
 
     print("Clipboard: failed (no supported clipboard command found).")
-    return 1
+    print("Script file is still generated successfully.")
+    return 0
 
 
 if __name__ == "__main__":

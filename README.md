@@ -44,6 +44,26 @@ Run with the helper script:
 ./run_model_chat_server.sh
 ```
 
+## Generate Model Agent Bundle Script
+If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, and `run_model_chat_server.sh` using per-file `gzip + base64` payloads:
+
+```bash
+python generate_model_agent_bundle.py --output /tmp/model_agent_bundle.sh
+```
+
+By default, the generated shell script is also copied to your clipboard (if a supported clipboard command is available).  
+To skip clipboard copy:
+
+```bash
+python generate_model_agent_bundle.py --no-clipboard
+```
+
+Run the generated installer script:
+
+```bash
+bash /tmp/model_agent_bundle.sh /path/to/target/root
+```
+
 ### Model Agent JSON Config
 `run_model_chat_server.py` reads `./model_agent_config.json` automatically.
 

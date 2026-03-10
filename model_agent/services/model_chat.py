@@ -142,9 +142,14 @@ def _known_dtgpt_base_urls():
     return _DTGPT_KNOWN_BASE_URLS_LINUX
 
 
+def _is_dtgpt_cloud_endpoint(url):
+    lowered = str(url or '').strip().lower()
+    return 'cloud.dtgpt.samsungds.net' in lowered
+
+
 def _dtgpt_endpoint_rank(url):
     lowered = str(url or '').strip().lower()
-    is_cloud = 'cloud.dtgpt.samsungds.net' in lowered
+    is_cloud = _is_dtgpt_cloud_endpoint(lowered)
     is_direct = '://dtgpt.samsungds.net' in lowered
 
     if _is_windows_platform():
@@ -1592,6 +1597,10 @@ def _provider_api_base_urls(provider):
                 candidates.append(token)
         if any('dtgpt.samsungds.net' in item.lower() for item in candidates):
             candidates.extend(_known_dtgpt_base_urls())
+        if not _is_windows_platform():
+            candidates = [item for item in candidates if not _is_dtgpt_cloud_endpoint(item)]
+            if not candidates:
+                candidates.extend(_known_dtgpt_base_urls())
         candidates = sorted(candidates, key=_dtgpt_endpoint_rank)
 
     deduped = []

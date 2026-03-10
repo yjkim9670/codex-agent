@@ -104,7 +104,7 @@ MODEL_DTGPT_API_BASE_URLS = _read_csv_env('MODEL_DTGPT_API_BASE_URLS')
 if not MODEL_DTGPT_API_BASE_URLS:
     MODEL_DTGPT_API_BASE_URLS = [
         MODEL_DTGPT_API_BASE_URL,
-        'https://dtgpt.samsungds.net/llm/v1',
+        'https://cloud.dtgpt.samsungds.net/llm/v1',
     ]
 
 MODEL_GEMINI_DEFAULT_MODEL = (

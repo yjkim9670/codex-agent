@@ -60,8 +60,8 @@ _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
 _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _PATCH_MAX_CHARS = 400_000
 _DTGPT_KNOWN_BASE_URLS = (
+    'https://cloud.dtgpt.samsungds.net/llm/v1',
     'http://cloud.dtgpt.samsungds.net/llm/v1',
-    'https://dtgpt.samsungds.net/llm/v1',
 )
 _BLOCKED_WORKSPACE_PREFIXES = tuple(
     str(item or '').strip().replace('\\', '/').strip().strip('/')

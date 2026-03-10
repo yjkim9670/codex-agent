@@ -45,7 +45,7 @@ Run with the helper script:
 ```
 
 ## Generate Model Agent Bundle Script
-If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, and `run_model_chat_server.sh` using per-file `gzip + base64` payloads:
+If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
 
 ```bash
 python generate_model_agent_bundle.py --output /tmp/model_agent_bundle.sh

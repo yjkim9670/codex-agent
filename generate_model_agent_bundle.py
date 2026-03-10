@@ -16,6 +16,7 @@ SOURCE_PATHS = (
     "model_agent",
     "run_model_chat_server.py",
     "run_model_chat_server.sh",
+    "model_agent_config.json",
 )
 
 SKIP_PARTS = {"__pycache__", ".DS_Store"}
@@ -127,13 +128,13 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate a shell installer that restores model_agent and run_model_chat_server scripts via gzip+base64 payloads."
+        description="Generate a shell installer that restores model_agent, run_model_chat_server scripts, and model_agent_config.json via gzip+base64 payloads."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parent,
-        help="Repository root containing model_agent and run_model_chat_server.*",
+        help="Repository root containing model_agent, run_model_chat_server.*, and model_agent_config.json",
     )
     parser.add_argument(
         "--output",

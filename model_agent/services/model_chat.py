@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from .. import state
 from ..config import (
@@ -283,10 +283,31 @@ def _load_data():
 
 def _save_data(data):
     MODEL_CHAT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MODEL_CHAT_STORE_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding='utf-8',
-    )
+    serialized = json.dumps(data, ensure_ascii=False, indent=2)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=str(MODEL_CHAT_STORE_PATH.parent),
+            prefix=f'.{MODEL_CHAT_STORE_PATH.name}.',
+            suffix='.tmp',
+            delete=False,
+        ) as handle:
+            handle.write(serialized)
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+            temp_path = Path(handle.name)
+        os.replace(temp_path, MODEL_CHAT_STORE_PATH)
+    finally:
+        if temp_path and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
 
 
 def _default_settings():
@@ -617,8 +638,9 @@ def generate_session_title(prompt):
 
 
 def list_sessions():
-    data = _load_data()
-    sessions = _sort_sessions(data.get('sessions', []))
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = _sort_sessions(data.get('sessions', []))
     summary = []
     for session in sessions:
         summary.append(
@@ -635,8 +657,9 @@ def list_sessions():
 
 
 def get_session(session_id):
-    data = _load_data()
-    session = _find_session(data.get('sessions', []), session_id)
+    with _DATA_LOCK:
+        data = _load_data()
+        session = _find_session(data.get('sessions', []), session_id)
     return deepcopy(session) if session else None
 
 
@@ -964,8 +987,16 @@ def _sanitize_create_delete_hunks(patch_text):
         if in_hunk and section_mode == 'new' and line.startswith('-') and not line.startswith('--- '):
             changed = True
             continue
+        if in_hunk and section_mode == 'new' and line.startswith(' '):
+            changed = True
+            output.append(f'+{line[1:]}')
+            continue
         if in_hunk and section_mode == 'delete' and line.startswith('+') and not line.startswith('+++ '):
             changed = True
+            continue
+        if in_hunk and section_mode == 'delete' and line.startswith(' '):
+            changed = True
+            output.append(f'-{line[1:]}')
             continue
         output.append(line)
 

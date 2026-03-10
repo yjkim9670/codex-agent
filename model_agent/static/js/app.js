@@ -41,6 +41,7 @@ const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
 const REMOTE_STREAM_POLL_MS = 2500;
 const STREAM_IDLE_WARNING_MS = 15000;
+const SESSION_LIST_EMPTY_RETRY_MS = 120;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -2751,12 +2752,26 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
     state.loading = true;
     setStatus('Loading sessions...');
     try {
-        const response = await fetch('/api/model/sessions');
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to load sessions.');
+        const fetchSessionsSnapshot = async () => {
+            const response = await fetch('/api/model/sessions', {
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache' }
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result?.error || 'Failed to load sessions.');
+            }
+            return Array.isArray(result?.sessions) ? result.sessions : [];
+        };
+
+        const previousSessions = Array.isArray(state.sessions) ? state.sessions.slice() : [];
+        let nextSessions = await fetchSessionsSnapshot();
+        if (nextSessions.length === 0 && previousSessions.length > 0) {
+            await new Promise(resolve => window.setTimeout(resolve, SESSION_LIST_EMPTY_RETRY_MS));
+            nextSessions = await fetchSessionsSnapshot();
         }
-        state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+
+        state.sessions = nextSessions;
         renderSessions();
 
         let activeId = selectSessionId || (preserveActive ? state.activeSessionId : null);
@@ -4654,7 +4669,10 @@ async function loadSession(sessionId) {
     if (!sessionId) return;
     setStatus('Loading session...');
     try {
-        const response = await fetch(`/api/model/sessions/${sessionId}`);
+        const response = await fetch(`/api/model/sessions/${sessionId}`, {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache' }
+        });
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to load session.');

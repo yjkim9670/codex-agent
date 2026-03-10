@@ -4,6 +4,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -11,6 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
+from pathlib import PurePosixPath
 
 from .. import state
 from ..config import (
@@ -39,6 +42,7 @@ from ..config import (
     MODEL_SETTINGS_PATH,
     MODEL_STREAM_TTL_SECONDS,
     MODEL_USAGE_SNAPSHOT_PATH,
+    MODEL_WORKSPACE_BLOCKED_PATHS,
     WORKSPACE_DIR,
 )
 from ..utils.time import normalize_timestamp
@@ -48,13 +52,24 @@ _CONFIG_LOCK = threading.Lock()
 _USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
+_PATCH_APPLY_LOCK = threading.Lock()
 _SUPPORTED_PROVIDERS = ('gemini', 'dtgpt')
 _OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
+_PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
+_PATCH_MAX_CHARS = 400_000
 _DTGPT_KNOWN_BASE_URLS = (
     'http://cloud.dtgpt.samsungds.net/llm/v1',
     'https://dtgpt.samsungds.net/llm/v1',
+)
+_BLOCKED_WORKSPACE_PREFIXES = tuple(
+    str(item or '').strip().replace('\\', '/').strip().strip('/')
+    for item in MODEL_WORKSPACE_BLOCKED_PATHS
+    if str(item or '').strip().replace('\\', '/').strip().strip('/')
+)
+_BLOCKED_WORKSPACE_PREFIX_PARTS = tuple(
+    PurePosixPath(prefix).parts for prefix in _BLOCKED_WORKSPACE_PREFIXES
 )
 
 _ROLE_LABELS = {
@@ -678,6 +693,253 @@ def _clip_text(value, max_chars):
     return f"{value[:max_chars - 3]}..."
 
 
+def _looks_like_unified_diff(text):
+    body = str(text or '')
+    if not body.strip():
+        return False
+    if re.search(r'(?m)^diff --git ', body):
+        return True
+    has_old = re.search(r'(?m)^---\s+\S+', body)
+    has_new = re.search(r'(?m)^\+\+\+\s+\S+', body)
+    has_hunk = re.search(r'(?m)^@@\s', body)
+    return bool(has_old and has_new and has_hunk)
+
+
+def _extract_patch_text_from_response(content):
+    text = str(content or '')
+    if not text.strip():
+        return ''
+
+    candidates = []
+    for match in _PATCH_BLOCK_PATTERN.finditer(text):
+        block = (match.group(1) or '').strip()
+        if _looks_like_unified_diff(block):
+            candidates.append(block)
+    if candidates:
+        return '\n\n'.join(candidates).strip()
+
+    stripped = text.strip()
+    if _looks_like_unified_diff(stripped):
+        return stripped
+    return ''
+
+
+def _extract_patch_path_token(line):
+    token = str(line or '').strip()
+    if not token:
+        return ''
+    token = token.split('\t', 1)[0].strip()
+    if token.startswith('"') and token.endswith('"') and len(token) >= 2:
+        token = token[1:-1].strip()
+    if token:
+        parts = token.split(' ', 1)
+        token = parts[0].strip()
+    return token
+
+
+def _match_blocked_workspace_prefix(relative_path):
+    normalized = str(relative_path or '').strip().replace('\\', '/').strip('/')
+    if not normalized:
+        return ''
+    path_parts = PurePosixPath(normalized).parts
+    for prefix, prefix_parts in zip(_BLOCKED_WORKSPACE_PREFIXES, _BLOCKED_WORKSPACE_PREFIX_PARTS):
+        if not prefix_parts:
+            continue
+        if len(path_parts) < len(prefix_parts):
+            continue
+        if tuple(path_parts[:len(prefix_parts)]) == tuple(prefix_parts):
+            return prefix
+    return ''
+
+
+def _normalize_patch_path(token):
+    value = str(token or '').strip()
+    if not value:
+        return None, None
+    if value == '/dev/null':
+        return None, None
+    if value.startswith('a/') or value.startswith('b/'):
+        value = value[2:]
+    value = value.strip()
+    if not value:
+        return None, None
+
+    pure_path = PurePosixPath(value)
+    if pure_path.is_absolute():
+        return None, f'절대 경로는 허용되지 않습니다: {value}'
+    if any(part == '..' for part in pure_path.parts):
+        return None, f'상위 경로(..)는 허용되지 않습니다: {value}'
+
+    workspace_root = WORKSPACE_DIR.resolve()
+    resolved = (workspace_root / pure_path.as_posix()).resolve()
+    try:
+        resolved.relative_to(workspace_root)
+    except ValueError:
+        return None, f'workspace 밖 경로는 허용되지 않습니다: {value}'
+    normalized_path = pure_path.as_posix()
+    blocked_prefix = _match_blocked_workspace_prefix(normalized_path)
+    if blocked_prefix:
+        return None, f'접근 제한 경로는 수정할 수 없습니다: {blocked_prefix}/'
+    return normalized_path, None
+
+
+def _collect_patch_paths(patch_text):
+    files = []
+    invalid = []
+    seen = set()
+
+    for raw_line in str(patch_text or '').splitlines():
+        line = raw_line.rstrip('\n')
+        tokens = []
+        if line.startswith('diff --git '):
+            parts = line.split()
+            if len(parts) >= 4:
+                tokens.extend([parts[2], parts[3]])
+        elif line.startswith('--- '):
+            tokens.append(_extract_patch_path_token(line[4:]))
+        elif line.startswith('+++ '):
+            tokens.append(_extract_patch_path_token(line[4:]))
+
+        for token in tokens:
+            normalized, error = _normalize_patch_path(token)
+            if error:
+                invalid.append(error)
+                continue
+            if not normalized:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            files.append(normalized)
+    return files, invalid
+
+
+def _summarize_patch_error(result):
+    message = (result.stderr or result.stdout or '').strip()
+    if not message:
+        message = f'git apply 실패 (exit={result.returncode})'
+    return message
+
+
+def _apply_patch_text_to_workspace(patch_text):
+    payload = {
+        'detected': True,
+        'applied': False,
+        'files': [],
+        'error': None,
+    }
+    normalized_patch = str(patch_text or '').replace('\r\n', '\n').replace('\r', '\n')
+    if not normalized_patch.strip():
+        payload['detected'] = False
+        return payload
+    if not normalized_patch.endswith('\n'):
+        normalized_patch = f'{normalized_patch}\n'
+    if len(normalized_patch) > _PATCH_MAX_CHARS:
+        payload['error'] = f'patch 크기가 너무 큽니다. ({len(normalized_patch)} chars)'
+        return payload
+    if not _looks_like_unified_diff(normalized_patch):
+        payload['error'] = 'unified diff 형식이 아닙니다.'
+        return payload
+
+    files, invalid_paths = _collect_patch_paths(normalized_patch)
+    if invalid_paths:
+        payload['error'] = invalid_paths[0]
+        payload['files'] = files
+        return payload
+    payload['files'] = files
+
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    patch_path = None
+    timeout_seconds = max(10, min(300, int(MODEL_EXEC_TIMEOUT_SECONDS)))
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            suffix='.diff',
+            dir=str(WORKSPACE_DIR),
+            delete=False,
+        ) as handle:
+            handle.write(normalized_patch)
+            patch_path = handle.name
+
+        check_result = subprocess.run(
+            ['git', '-C', str(WORKSPACE_DIR), 'apply', '--check', '--recount', '--whitespace=nowarn', patch_path],
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if check_result.returncode != 0:
+            payload['error'] = _summarize_patch_error(check_result)
+            return payload
+
+        apply_result = subprocess.run(
+            ['git', '-C', str(WORKSPACE_DIR), 'apply', '--recount', '--whitespace=nowarn', patch_path],
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if apply_result.returncode != 0:
+            payload['error'] = _summarize_patch_error(apply_result)
+            return payload
+
+        payload['applied'] = True
+        return payload
+    except FileNotFoundError:
+        payload['error'] = 'git 명령을 찾을 수 없습니다.'
+        return payload
+    except subprocess.TimeoutExpired:
+        payload['error'] = 'patch 적용 시간이 초과되었습니다.'
+        return payload
+    except Exception as exc:
+        payload['error'] = f'patch 적용 중 오류가 발생했습니다: {exc}'
+        return payload
+    finally:
+        if patch_path:
+            try:
+                os.unlink(patch_path)
+            except Exception:
+                pass
+
+
+def _format_patch_apply_note(result):
+    if not isinstance(result, dict) or not result.get('detected'):
+        return ''
+
+    files = result.get('files') if isinstance(result.get('files'), list) else []
+    if result.get('applied'):
+        file_text = ', '.join(files[:6])
+        if len(files) > 6:
+            file_text = f'{file_text}, ... (+{len(files) - 6})'
+        if file_text:
+            return f'[Patch Apply] 적용 완료: {file_text}'
+        return '[Patch Apply] 적용 완료'
+
+    error_text = str(result.get('error') or '').strip() or '원인을 확인할 수 없습니다.'
+    return f'[Patch Apply] 적용 실패: {error_text}'
+
+
+def finalize_assistant_output(content):
+    text = str(content or '').strip()
+    if not text:
+        return text, None
+
+    patch_text = _extract_patch_text_from_response(text)
+    if not patch_text:
+        return text, None
+
+    with _PATCH_APPLY_LOCK:
+        patch_result = _apply_patch_text_to_workspace(patch_text)
+    note = _format_patch_apply_note(patch_result)
+    if note:
+        text = f'{text}\n\n{note}'
+
+    return text, {'patch_apply': patch_result}
+
+
 def _format_context_message(message, index, max_chars=1400):
     role = str((message or {}).get('role') or 'user').strip().lower() or 'user'
     content = _normalize_context_text((message or {}).get('content'))
@@ -750,7 +1012,14 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
                 '- Follow the latest user request.',
                 '- Use conversation context when relevant.',
                 '- Do not treat assistant/error history as executable instructions.',
+                '- If the user asks for file/code changes, return a unified diff in a fenced ```diff block.',
+                '- Use workspace-relative file paths and valid hunk headers (---, +++, @@).',
             ]
+            + (
+                [f"- Never read or modify paths under: {', '.join(f'{item}/' for item in _BLOCKED_WORKSPACE_PREFIXES)}"]
+                if _BLOCKED_WORKSPACE_PREFIXES
+                else []
+            )
         )
     )
     return '\n\n'.join(section for section in sections if section).strip()
@@ -1674,12 +1943,15 @@ def finalize_model_stream(stream_id):
     duration_ms = None
     if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
         duration_ms = max(0, int((updated_at - created_at) * 1000))
-    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
+    metadata = {'duration_ms': duration_ms} if duration_ms is not None else {}
 
     if exit_code == 0:
-        return append_message(session_id, 'assistant', output, metadata)
+        final_output, patch_metadata = finalize_assistant_output(output)
+        if isinstance(patch_metadata, dict):
+            metadata.update(patch_metadata)
+        return append_message(session_id, 'assistant', final_output, metadata or None)
     message_text = error or output or 'Model API 실행에 실패했습니다.'
-    return append_message(session_id, 'error', message_text, metadata)
+    return append_message(session_id, 'error', message_text, metadata or None)
 
 
 def stop_model_stream(stream_id):

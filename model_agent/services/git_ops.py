@@ -6,8 +6,9 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 
-from ..config import REPO_ROOT, WORKSPACE_DIR
+from ..config import REPO_ROOT, WORKSPACE_DIR, MODEL_WORKSPACE_BLOCKED_PATHS
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
@@ -33,6 +34,14 @@ _GIT_MUTATION_LOCKS = {
 }
 _GIT_MUTATION_STATE_LOCK = threading.Lock()
 _GIT_ACTIVE_MUTATIONS = {}
+_BLOCKED_WORKSPACE_PREFIXES = tuple(
+    str(item or '').strip().replace('\\', '/').strip().strip('/')
+    for item in MODEL_WORKSPACE_BLOCKED_PATHS
+    if str(item or '').strip().replace('\\', '/').strip().strip('/')
+)
+_BLOCKED_WORKSPACE_PREFIX_PARTS = tuple(
+    PurePosixPath(prefix).parts for prefix in _BLOCKED_WORKSPACE_PREFIXES
+)
 
 
 def _normalize_repo_target(value):
@@ -555,6 +564,85 @@ def _extract_changed_files(status_text):
     return [entry['path'] for entry in _extract_changed_file_details(status_text)]
 
 
+def _normalize_repo_relative_path(path):
+    if not isinstance(path, str):
+        return ''
+    normalized = path.strip().replace('\\', '/')
+    while normalized.startswith('./'):
+        normalized = normalized[2:]
+    if not normalized:
+        return ''
+    if normalized.startswith('/') or normalized.startswith('../') or '/..' in normalized:
+        return ''
+    return normalized
+
+
+def _match_blocked_workspace_prefix(relative_path):
+    normalized = _normalize_repo_relative_path(relative_path)
+    if not normalized:
+        return ''
+    path_parts = PurePosixPath(normalized).parts
+    for prefix, prefix_parts in zip(_BLOCKED_WORKSPACE_PREFIXES, _BLOCKED_WORKSPACE_PREFIX_PARTS):
+        if not prefix_parts:
+            continue
+        if len(path_parts) < len(prefix_parts):
+            continue
+        if tuple(path_parts[:len(prefix_parts)]) == tuple(prefix_parts):
+            return prefix
+    return ''
+
+
+def _repo_path_to_workspace_relative(repo_root, repo_relative_path):
+    normalized = _normalize_repo_relative_path(repo_relative_path)
+    if not normalized:
+        return ''
+    workspace_root = WORKSPACE_DIR.resolve()
+    try:
+        absolute = (Path(repo_root).resolve() / normalized).resolve()
+    except Exception:
+        return ''
+    try:
+        relative = absolute.relative_to(workspace_root)
+    except ValueError:
+        return ''
+    return relative.as_posix()
+
+
+def _is_repo_path_blocked(repo_root, repo_relative_path):
+    if not _BLOCKED_WORKSPACE_PREFIXES:
+        return False
+    workspace_relative = _repo_path_to_workspace_relative(repo_root, repo_relative_path)
+    if not workspace_relative:
+        return False
+    return bool(_match_blocked_workspace_prefix(workspace_relative))
+
+
+def _filter_blocked_repo_entries(repo_root, entries):
+    if not _BLOCKED_WORKSPACE_PREFIXES:
+        return entries
+    filtered = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get('path')
+        if _is_repo_path_blocked(repo_root, path):
+            continue
+        filtered.append(entry)
+    return filtered
+
+
+def _is_repo_root_blocked(repo_root):
+    if not _BLOCKED_WORKSPACE_PREFIXES:
+        return False, ''
+    workspace_root = WORKSPACE_DIR.resolve()
+    try:
+        relative = Path(repo_root).resolve().relative_to(workspace_root).as_posix()
+    except ValueError:
+        return False, ''
+    blocked = _match_blocked_workspace_prefix(relative)
+    return bool(blocked), blocked
+
+
 def _extract_name_status_details(status_text):
     entries = []
     for line in (status_text or '').splitlines():
@@ -589,20 +677,16 @@ def _build_commit_message(status_text, max_files=3):
     return f"{timestamp} {', '.join(listed)}{suffix}"
 
 
-def _normalize_selected_files(value):
+def _normalize_selected_files(value, repo_root=None):
     if not isinstance(value, list):
         return []
     normalized = []
     seen = set()
     for item in value:
-        if not isinstance(item, str):
-            continue
-        path = item.strip().replace('\\', '/')
+        path = _normalize_repo_relative_path(item)
         if not path:
             continue
-        while path.startswith('./'):
-            path = path[2:]
-        if not path or path.startswith('/') or path.startswith('../') or '/..' in path:
+        if repo_root is not None and _is_repo_path_blocked(repo_root, path):
             continue
         if path in seen:
             continue
@@ -688,6 +772,7 @@ def _read_changed_snapshot(repo_root, env):
     if status_error or not status_result or status_result.returncode != 0:
         return [], []
     changed_files_detail = _extract_changed_file_details(status_result.stdout or '')
+    changed_files_detail = _filter_blocked_repo_entries(repo_root, changed_files_detail)
     changed_files = [entry['path'] for entry in changed_files_detail]
     return changed_files_detail, changed_files
 
@@ -702,8 +787,35 @@ def _read_staged_snapshot(repo_root, env):
     if staged_error or not staged_result or staged_result.returncode != 0:
         return [], []
     staged_files_detail = _extract_name_status_details(staged_result.stdout or '')
+    staged_files_detail = _filter_blocked_repo_entries(repo_root, staged_files_detail)
     staged_files = [entry['path'] for entry in staged_files_detail]
     return staged_files_detail, staged_files
+
+
+def _read_blocked_staged_files(repo_root, env):
+    if not _BLOCKED_WORKSPACE_PREFIXES:
+        return []
+    staged_result, staged_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'diff', '--cached', '--name-only'],
+        repo_root,
+        15,
+        env
+    )
+    if staged_error or not staged_result or staged_result.returncode != 0:
+        return []
+    blocked = []
+    seen = set()
+    for raw_line in (staged_result.stdout or '').splitlines():
+        path = _normalize_repo_relative_path(raw_line)
+        if not path:
+            continue
+        if not _is_repo_path_blocked(repo_root, path):
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        blocked.append(path)
+    return blocked
 
 
 def _build_result(
@@ -818,6 +930,13 @@ def run_git_action(action, payload=None):
                     error_message='현재 repository: None'
                 )
             return {'error': error, 'error_code': 'repo_not_found', 'repo_target': repo_target}
+        repo_blocked, blocked_prefix = _is_repo_root_blocked(repo_root)
+        if repo_blocked:
+            return {
+                'error': f'접근 제한 경로입니다: {blocked_prefix}/',
+                'error_code': 'repo_access_blocked',
+                'repo_target': repo_target
+            }
 
         env = os.environ.copy()
         env.setdefault('GIT_TERMINAL_PROMPT', '0')
@@ -1042,9 +1161,9 @@ def run_git_action(action, payload=None):
                 )
 
             if action == 'stage':
-                selected_files = _normalize_selected_files(payload.get('files'))
+                selected_files = _normalize_selected_files(payload.get('files'), repo_root=repo_root)
                 if not selected_files:
-                    return {'error': '스테이징할 파일을 선택해주세요.'}
+                    return {'error': '스테이징 가능한 파일을 선택해주세요. (접근 제한 경로 제외)'}
 
                 replace_index = payload.get('replace')
                 if replace_index is None:
@@ -1103,6 +1222,15 @@ def run_git_action(action, payload=None):
                 )
 
             if action == 'commit':
+                blocked_staged_files = _read_blocked_staged_files(repo_root, env)
+                if blocked_staged_files:
+                    preview = ', '.join(blocked_staged_files[:5])
+                    if len(blocked_staged_files) > 5:
+                        preview = f'{preview}, ... (+{len(blocked_staged_files) - 5})'
+                    return {
+                        'error': f'접근 제한 경로가 stage 되어 있어 commit할 수 없습니다: {preview}',
+                        'error_code': 'blocked_paths_staged'
+                    }
                 staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
                 if not staged_files_detail:
                     return {'error': '스테이징된 변경 사항이 없습니다. 먼저 stage를 실행해주세요.'}

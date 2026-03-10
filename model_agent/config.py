@@ -36,6 +36,18 @@ def _read_csv_env(name):
     return [item.strip() for item in raw.split(',') if item.strip()]
 
 
+def _normalize_relative_prefix(value):
+    token = str(value or '').strip().replace('\\', '/')
+    while token.startswith('./'):
+        token = token[2:]
+    token = token.strip().strip('/')
+    if not token:
+        return ''
+    if token.startswith('/') or token.startswith('../') or '/..' in token:
+        return ''
+    return token
+
+
 MODEL_CHAT_STORE_PATH = WORKSPACE_DIR / 'model_chat_sessions.json'
 MODEL_SETTINGS_PATH = WORKSPACE_DIR / 'model_settings.json'
 MODEL_USAGE_SNAPSHOT_PATH = WORKSPACE_DIR / 'model_usage_summary.json'
@@ -59,6 +71,21 @@ if not MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS = list(_default_provider_options)
 if MODEL_DEFAULT_PROVIDER not in MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS.insert(0, MODEL_DEFAULT_PROVIDER)
+
+_workspace_blocked_paths = []
+for item in _read_csv_env('MODEL_WORKSPACE_BLOCKED_PATHS'):
+    normalized = _normalize_relative_prefix(item)
+    if normalized and normalized not in _workspace_blocked_paths:
+        _workspace_blocked_paths.append(normalized)
+if not _workspace_blocked_paths:
+    try:
+        relative_repo_path = REPO_ROOT.resolve().relative_to(WORKSPACE_DIR.resolve()).as_posix()
+    except ValueError:
+        relative_repo_path = ''
+    normalized_repo_path = _normalize_relative_prefix(relative_repo_path)
+    if normalized_repo_path:
+        _workspace_blocked_paths.append(normalized_repo_path)
+MODEL_WORKSPACE_BLOCKED_PATHS = _workspace_blocked_paths
 
 MODEL_GEMINI_API_KEY = os.environ.get('MODEL_GEMINI_API_KEY', os.environ.get('MODEL_API_KEY', '')).strip()
 MODEL_GEMINI_API_BASE_URL = (

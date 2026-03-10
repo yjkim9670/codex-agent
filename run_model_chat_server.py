@@ -168,6 +168,9 @@ def apply_runtime_environment(config, config_path):
     provider_options = _coerce_list(runtime_config.get('provider_options'))
     if provider_options:
         _set_env_default('MODEL_PROVIDER_OPTIONS', ','.join(provider_options))
+    workspace_blocked_paths = _coerce_list(runtime_config.get('workspace_blocked_paths'))
+    if workspace_blocked_paths:
+        _set_env_default('MODEL_WORKSPACE_BLOCKED_PATHS', ','.join(workspace_blocked_paths))
 
     providers_config = runtime_config.get('providers')
     if not isinstance(providers_config, dict):

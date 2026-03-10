@@ -18,6 +18,7 @@ from ..services.model_chat import (
     delete_session,
     ensure_default_title,
     execute_model_prompt,
+    finalize_assistant_output,
     finalize_model_stream,
     get_active_stream_id_for_session,
     get_model_options,
@@ -190,7 +191,10 @@ def model_session_message(session_id):
     if error:
         assistant_message = append_message(session_id, 'error', error, metadata)
     else:
-        assistant_message = append_message(session_id, 'assistant', output or '', metadata)
+        final_output, patch_metadata = finalize_assistant_output(output or '')
+        if isinstance(patch_metadata, dict):
+            metadata.update(patch_metadata)
+        assistant_message = append_message(session_id, 'assistant', final_output, metadata)
 
     session = get_session(session_id)
     return jsonify(

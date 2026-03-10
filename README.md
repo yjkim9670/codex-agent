@@ -36,6 +36,9 @@ python run_model_chat_server.py
 
 Model Agent listens on `http://localhost:3100` by default.
 
+If a model response includes a unified diff block (for example, fenced with `diff` or `patch`), Model Agent will attempt to apply it to `agent.workspace_dir` automatically via `git apply`.
+Paths configured in `agent.workspace_blocked_paths` are excluded from Patch Apply and git stage/commit actions.
+
 Run with the helper script:
 ```bash
 ./run_model_chat_server.sh
@@ -46,7 +49,7 @@ Run with the helper script:
 
 Update this single file to manage Model Agent runtime values:
 - `server.host`, `server.port`, `server.debug`, `server.use_reloader`, `server.threaded`
-- `agent.workspace_dir`, `agent.secret_key`, `agent.default_provider`, `agent.provider_options`
+- `agent.workspace_dir`, `agent.workspace_blocked_paths`, `agent.secret_key`, `agent.default_provider`, `agent.provider_options`
 - `agent.providers.gemini.api_key`, `agent.providers.gemini.api_base_url`, `agent.providers.gemini.default_model`, `agent.providers.gemini.model_options`
 - `agent.providers.dtgpt.api_key`, `agent.providers.dtgpt.api_key_env`, `agent.providers.dtgpt.api_key_header`, `agent.providers.dtgpt.api_key_prefix`, `agent.providers.dtgpt.api_base_url`, `agent.providers.dtgpt.api_base_urls`, `agent.providers.dtgpt.default_model`, `agent.providers.dtgpt.model_options`
 - `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`

@@ -187,7 +187,7 @@
                             <div class="usage-value" id="gemini-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
-                            <label class="model-label" for="gemini-model-input">Provider · Model · Reasoning mode</label>
+                            <label class="model-label" for="gemini-model-input">Provider · Model</label>
                             <div class="model-row model-row-combined has-apply">
                                 <div class="model-field model-field-provider">
                                     <select id="gemini-provider-select" class="model-select is-hidden" aria-label="Select provider" data-options='{{ provider_options|default([], true)|tojson }}'></select>
@@ -197,16 +197,12 @@
                                     <select id="gemini-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="gemini-model-input" class="model-input" type="text" placeholder="Default model">
                                 </div>
-                                <div class="model-field model-field-reasoning">
-                                    <select id="gemini-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning mode" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
-                                    <input id="gemini-reasoning-input" class="model-input" type="text" placeholder="Default mode">
-                                </div>
                                 <button
                                     class="btn ghost icon-only model-apply"
                                     type="button"
                                     id="gemini-model-apply"
-                                    aria-label="Apply provider, model, and reasoning mode settings"
-                                    title="Apply provider, model, and reasoning mode settings"
+                                    aria-label="Apply provider and model settings"
+                                    title="Apply provider and model settings"
                                 >
                                     <span class="sr-only">Apply settings</span>
                                 </button>
@@ -318,6 +314,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=61"></script>
+    <script src="/static/js/app.js?v=62"></script>
 </body>
 </html>

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, render_template, request
 from .blueprints import model_chat
 from .config import SECRET_KEY, WORKSPACE_DIR
 from .services.git_ops import get_current_branch_name
-from .services.model_chat import get_model_options, get_provider_options, get_reasoning_options, get_settings
+from .services.model_chat import get_model_options, get_provider_options, get_settings
 
 
 def _get_allowed_origins():
@@ -30,12 +30,10 @@ def create_model_app():
         current_branch_name = get_current_branch_name()
         current_settings = get_settings()
         current_provider = current_settings.get('provider')
-        current_model = current_settings.get('model')
         return render_template(
             'index.html',
             provider_options=get_provider_options(),
             model_options=get_model_options(current_provider),
-            reasoning_options=get_reasoning_options(current_provider, current_model),
             server_directory_name=server_directory_name,
             server_directory_path=str(server_directory),
             workspace_directory_name=workspace_directory_name,

@@ -21,8 +21,6 @@ const state = {
         providerOptions: [],
         model: null,
         modelOptions: [],
-        reasoningEffort: null,
-        reasoningOptions: [],
         usage: null,
         loaded: false
     }
@@ -129,6 +127,7 @@ let hoverTooltipInteractionsBound = false;
 let hoverTooltipLayer = null;
 let hoverTooltipAnchor = null;
 let hoverTooltipRefreshRaf = null;
+let settingsPreviewRequestId = 0;
 let liveWeatherCompactDatetime = '--';
 let liveWeatherCompactCurrentTemp = '--';
 let liveWeatherCompactWeatherText = '날씨 불러오는 중...';
@@ -469,23 +468,18 @@ function readOptionsFromData(element) {
     }
 }
 
-function primeSettingsOptionsFromDom(providerSelect, modelSelect, reasoningSelect) {
+function primeSettingsOptionsFromDom(providerSelect, modelSelect) {
     const providerOptions = readOptionsFromData(providerSelect);
     const modelOptions = readOptionsFromData(modelSelect);
-    const reasoningOptions = readOptionsFromData(reasoningSelect);
     if (providerOptions.length > 0) {
         state.settings.providerOptions = providerOptions;
     }
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
     }
-    if (reasoningOptions.length > 0) {
-        state.settings.reasoningOptions = reasoningOptions;
-    }
-    if (providerOptions.length > 0 || modelOptions.length > 0 || reasoningOptions.length > 0) {
+    if (providerOptions.length > 0 || modelOptions.length > 0) {
         updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
     }
 }
 
@@ -509,8 +503,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const modelSelect = document.getElementById('gemini-model-select');
     const modelInput = document.getElementById('gemini-model-input');
     const modelApply = document.getElementById('gemini-model-apply');
-    const reasoningSelect = document.getElementById('gemini-reasoning-select');
-    const reasoningInput = document.getElementById('gemini-reasoning-input');
     const controlsToggle = document.getElementById('gemini-controls-toggle');
     const controls = document.getElementById('gemini-controls');
     const gitBranch = document.getElementById('gemini-git-branch');
@@ -774,7 +766,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    primeSettingsOptionsFromDom(providerSelect, modelSelect, reasoningSelect);
+    primeSettingsOptionsFromDom(providerSelect, modelSelect);
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
@@ -793,7 +785,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(
         mobileMedia,
-        [providerInput, modelInput, reasoningInput, providerSelect, modelSelect, reasoningSelect]
+        [providerInput, modelInput, providerSelect, modelSelect]
     );
 
     if (providerSelect) {
@@ -801,10 +793,22 @@ document.addEventListener('DOMContentLoaded', () => {
             if (providerInput) {
                 providerInput.value = providerSelect.value || '';
             }
+            void previewSettingsControls({
+                provider: providerSelect.value.trim()
+            }).catch(error => {
+                setStatus(normalizeError(error, 'Failed to preview settings.'), true);
+            });
         });
     }
 
     if (providerInput) {
+        providerInput.addEventListener('change', () => {
+            void previewSettingsControls({
+                provider: providerInput.value.trim()
+            }).catch(error => {
+                setStatus(normalizeError(error, 'Failed to preview settings.'), true);
+            });
+        });
         providerInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') {
                 event.preventDefault();
@@ -824,10 +828,24 @@ document.addEventListener('DOMContentLoaded', () => {
             if (modelSelect.value && modelInput) {
                 modelInput.value = modelSelect.value;
             }
+            void previewSettingsControls({
+                provider: getSettingsProviderValue(),
+                model: modelSelect.value.trim()
+            }).catch(error => {
+                setStatus(normalizeError(error, 'Failed to preview settings.'), true);
+            });
         });
     }
 
     if (modelInput) {
+        modelInput.addEventListener('change', () => {
+            void previewSettingsControls({
+                provider: getSettingsProviderValue(),
+                model: modelInput.value.trim()
+            }).catch(error => {
+                setStatus(normalizeError(error, 'Failed to preview settings.'), true);
+            });
+        });
         modelInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') {
                 event.preventDefault();
@@ -839,23 +857,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modelApply) {
         modelApply.addEventListener('click', () => {
             void updateSettings();
-        });
-    }
-
-    if (reasoningSelect) {
-        reasoningSelect.addEventListener('change', () => {
-            if (reasoningSelect.value && reasoningInput) {
-                reasoningInput.value = reasoningSelect.value;
-            }
-        });
-    }
-
-    if (reasoningInput) {
-        reasoningInput.addEventListener('keydown', event => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                void updateSettings();
-            }
         });
     }
 
@@ -2771,36 +2772,52 @@ async function loadSettings({ silent = true } = {}) {
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/model/settings');
-        state.settings = {
-            provider: result?.settings?.provider || null,
-            providerOptions: Array.isArray(result?.provider_options)
-                ? result.provider_options
-                : [],
-            model: result?.settings?.model || null,
-            modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
-            reasoningEffort: result?.settings?.reasoning_effort || null,
-            reasoningOptions: Array.isArray(result?.reasoning_options)
-                ? result.reasoning_options
-                : [],
-            usage: result?.usage || null,
-            loaded: true
-        };
-        updateUsageSummary(state.settings.usage);
-        updateProviderControls(state.settings.provider, state.settings.providerOptions);
-        updateModelControls(state.settings.model, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(state.settings.provider, state.settings.model, state.settings.reasoningEffort);
+        applySettingsResult(result, { persisted: true });
     } catch (error) {
         updateUsageSummary(null);
         updateProviderControls(state.settings.provider, state.settings.providerOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(null, null, null, normalizeError(error, 'Failed to load settings.'));
+        setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
         }
     } finally {
         if (refreshBtn) refreshBtn.classList.remove('is-loading');
+    }
+}
+
+function applySettingsResult(result, { persisted = false, preserveSavedStatus = false } = {}) {
+    const persistedSettings = result?.settings && typeof result.settings === 'object'
+        ? result.settings
+        : {};
+    const previewSettings = result?.preview && typeof result.preview === 'object'
+        ? result.preview
+        : persistedSettings;
+    const providerOptions = Array.isArray(result?.provider_options)
+        ? result.provider_options
+        : (persisted ? [] : state.settings.providerOptions);
+    const modelOptions = Array.isArray(result?.model_options)
+        ? result.model_options
+        : (persisted ? [] : state.settings.modelOptions);
+
+    if (persisted) {
+        settingsPreviewRequestId += 1;
+        state.settings = {
+            provider: persistedSettings?.provider || null,
+            providerOptions,
+            model: persistedSettings?.model || null,
+            modelOptions,
+            usage: result?.usage || null,
+            loaded: true
+        };
+        updateUsageSummary(state.settings.usage);
+    }
+
+    updateProviderControls(previewSettings?.provider || null, providerOptions);
+    updateModelControls(previewSettings?.model || null, modelOptions);
+
+    if (persisted || preserveSavedStatus) {
+        setSettingsStatus(state.settings.provider, state.settings.model);
     }
 }
 
@@ -2858,6 +2875,35 @@ function updateUsageSummary(usage) {
         fallback.textContent = fallbackText;
         element.appendChild(fallback);
     }
+}
+
+function getSettingsProviderValue() {
+    const select = document.getElementById('gemini-provider-select');
+    const input = document.getElementById('gemini-provider-input');
+    return select && !select.classList.contains('is-hidden')
+        ? select.value.trim()
+        : (input ? input.value.trim() : '');
+}
+
+function getSettingsModelValue() {
+    const select = document.getElementById('gemini-model-select');
+    const input = document.getElementById('gemini-model-input');
+    return select && !select.classList.contains('is-hidden')
+        ? select.value.trim()
+        : (input ? input.value.trim() : '');
+}
+
+async function previewSettingsControls({ provider = null, model = null } = {}) {
+    const params = new URLSearchParams();
+    if (provider !== null) params.set('provider', provider);
+    if (model !== null) params.set('model', model);
+    const requestId = ++settingsPreviewRequestId;
+    const url = params.size > 0
+        ? `/api/model/settings?${params.toString()}`
+        : '/api/model/settings';
+    const result = await fetchJson(url, { cache: 'no-store' });
+    if (requestId !== settingsPreviewRequestId) return;
+    applySettingsResult(result, { preserveSavedStatus: true });
 }
 
 function updateProviderControls(provider, options) {
@@ -2936,49 +2982,9 @@ function updateModelControls(model, options) {
     if (field) {
         field.classList.toggle('is-select-only', hasOptions);
     }
-    setSettingsStatus(state.settings.provider, model, state.settings.reasoningEffort);
 }
 
-function updateReasoningControls(reasoning, options) {
-    const select = document.getElementById('gemini-reasoning-select');
-    const input = document.getElementById('gemini-reasoning-input');
-    const field = select ? select.closest('.model-field') : null;
-    const hasOptions = Array.isArray(options) && options.length > 0;
-    if (select) {
-        select.innerHTML = '';
-        if (hasOptions) {
-            select.classList.remove('is-hidden');
-            const placeholder = document.createElement('option');
-            placeholder.value = '';
-            placeholder.textContent = 'Select mode';
-            select.appendChild(placeholder);
-            options.forEach(item => {
-                const option = document.createElement('option');
-                option.value = item;
-                option.textContent = item;
-                select.appendChild(option);
-            });
-            if (reasoning) {
-                select.value = options.includes(reasoning) ? reasoning : '';
-            } else {
-                select.value = '';
-            }
-        } else {
-            select.classList.add('is-hidden');
-        }
-    }
-    if (input) {
-        input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Default mode';
-        input.disabled = hasOptions;
-        input.classList.toggle('is-hidden', hasOptions);
-    }
-    if (field) {
-        field.classList.toggle('is-select-only', hasOptions);
-    }
-}
-
-function setSettingsStatus(provider, model, reasoning, overrideText = null) {
+function setSettingsStatus(provider, model, overrideText = null) {
     const status = document.getElementById('gemini-model-status');
     const summary = document.getElementById('gemini-controls-summary');
     if (!status) return;
@@ -2987,64 +2993,32 @@ function setSettingsStatus(provider, model, reasoning, overrideText = null) {
         if (summary) summary.textContent = overrideText;
         return;
     }
-    if (!state.settings.loaded && !provider && !model && !reasoning) {
+    if (!state.settings.loaded && !provider && !model) {
         status.textContent = 'Refresh to load';
         if (summary) summary.textContent = 'Refresh to load';
         return;
     }
     const providerText = provider ? provider : 'default';
     const modelText = model ? model : 'default';
-    const reasoningText = reasoning ? reasoning : 'default';
-    const text = `Provider: ${providerText} · Model: ${modelText} · Reasoning: ${reasoningText}`;
+    const text = `Provider: ${providerText} · Model: ${modelText}`;
     status.textContent = text;
     if (summary) summary.textContent = text;
 }
 
 async function updateSettings() {
-    const input = document.getElementById('gemini-model-input');
-    const providerInput = document.getElementById('gemini-provider-input');
-    const providerSelect = document.getElementById('gemini-provider-select');
     const status = document.getElementById('gemini-model-status');
     const refreshBtn = document.getElementById('gemini-controls-refresh');
-    const modelSelect = document.getElementById('gemini-model-select');
-    const reasoningInput = document.getElementById('gemini-reasoning-input');
-    const reasoningSelect = document.getElementById('gemini-reasoning-select');
-    const provider = providerSelect && !providerSelect.classList.contains('is-hidden')
-        ? providerSelect.value.trim()
-        : (providerInput ? providerInput.value.trim() : '');
-    const model = modelSelect && !modelSelect.classList.contains('is-hidden')
-        ? modelSelect.value.trim()
-        : (input ? input.value.trim() : '');
-    const reasoning_effort = reasoningSelect && !reasoningSelect.classList.contains('is-hidden')
-        ? reasoningSelect.value.trim()
-        : (reasoningInput ? reasoningInput.value.trim() : '');
+    const provider = getSettingsProviderValue();
+    const model = getSettingsModelValue();
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/model/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, model, reasoning_effort })
+            body: JSON.stringify({ provider, model })
         });
-        state.settings.provider = result?.settings?.provider || null;
-        state.settings.providerOptions = Array.isArray(result?.provider_options)
-            ? result.provider_options
-            : state.settings.providerOptions;
-        state.settings.model = result?.settings?.model || null;
-        state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
-        state.settings.modelOptions = Array.isArray(result?.model_options)
-            ? result.model_options
-            : state.settings.modelOptions;
-        state.settings.reasoningOptions = Array.isArray(result?.reasoning_options)
-            ? result.reasoning_options
-            : state.settings.reasoningOptions;
-        state.settings.usage = result?.usage || state.settings.usage;
-        state.settings.loaded = true;
-        updateUsageSummary(state.settings.usage);
-        updateProviderControls(state.settings.provider, state.settings.providerOptions);
-        updateModelControls(state.settings.model, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        setSettingsStatus(state.settings.provider, state.settings.model, state.settings.reasoningEffort);
+        applySettingsResult(result, { persisted: true });
         if (status) status.textContent = 'Saved';
     } catch (error) {
         if (status) status.textContent = normalizeError(error, 'Failed to update settings.');

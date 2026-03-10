@@ -8,7 +8,6 @@ from ..config import (
     MODEL_MAX_MODEL_CHARS,
     MODEL_MAX_PROMPT_CHARS,
     MODEL_MAX_PROVIDER_CHARS,
-    MODEL_MAX_REASONING_CHARS,
     MODEL_MAX_TITLE_CHARS,
 )
 from ..services.model_chat import (
@@ -23,7 +22,6 @@ from ..services.model_chat import (
     get_active_stream_id_for_session,
     get_model_options,
     get_provider_options,
-    get_reasoning_options,
     get_session,
     get_settings,
     get_usage_summary,
@@ -31,6 +29,7 @@ from ..services.model_chat import (
     list_sessions,
     read_model_stream,
     rename_session,
+    resolve_settings_preview,
     start_model_stream_for_session,
     stop_model_stream,
     update_settings,
@@ -40,22 +39,30 @@ from ..services.git_ops import run_git_action
 bp = Blueprint('model_chat', __name__)
 
 
-def _build_settings_response():
+def _build_settings_response(provider=None, model=None):
     settings = get_settings()
-    provider = settings.get('provider')
-    model = settings.get('model')
+    preview = resolve_settings_preview(
+        provider=provider,
+        model=model,
+    )
+    preview_provider = preview.get('provider')
     return {
         'settings': settings,
+        'preview': preview,
         'provider_options': get_provider_options(),
-        'model_options': get_model_options(provider),
-        'reasoning_options': get_reasoning_options(provider, model),
+        'model_options': get_model_options(preview_provider),
         'usage': get_usage_summary(),
     }
 
 
 @bp.route('/api/model/settings')
 def model_settings():
-    return jsonify(_build_settings_response())
+    return jsonify(
+        _build_settings_response(
+            provider=request.args.get('provider'),
+            model=request.args.get('model'),
+        )
+    )
 
 
 @bp.route('/api/model/usage')
@@ -68,7 +75,6 @@ def model_settings_update():
     payload = request.get_json(silent=True) or {}
     provider = payload.get('provider')
     model = payload.get('model')
-    reasoning = payload.get('reasoning_effort')
 
     if provider is not None:
         provider = str(provider).strip()
@@ -78,12 +84,8 @@ def model_settings_update():
         model = str(model).strip()
         if len(model) > MODEL_MAX_MODEL_CHARS:
             return jsonify({'error': '모델 이름이 너무 깁니다.'}), 400
-    if reasoning is not None:
-        reasoning = str(reasoning).strip()
-        if len(reasoning) > MODEL_MAX_REASONING_CHARS:
-            return jsonify({'error': 'reasoning mode 값이 너무 깁니다.'}), 400
 
-    update_settings(provider=provider, model=model, reasoning_effort=reasoning)
+    update_settings(provider=provider, model=model)
     return jsonify(_build_settings_response())
 
 

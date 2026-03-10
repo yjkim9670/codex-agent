@@ -166,11 +166,8 @@ def apply_runtime_environment(config, config_path):
     _set_env_default('MODEL_DEFAULT_PROVIDER', runtime_config.get('default_provider'))
 
     provider_options = _coerce_list(runtime_config.get('provider_options'))
-    reasoning_options = _coerce_list(runtime_config.get('reasoning_options'))
     if provider_options:
         _set_env_default('MODEL_PROVIDER_OPTIONS', ','.join(provider_options))
-    if reasoning_options:
-        _set_env_default('MODEL_REASONING_OPTIONS', ','.join(reasoning_options))
 
     providers_config = runtime_config.get('providers')
     if not isinstance(providers_config, dict):
@@ -183,23 +180,15 @@ def apply_runtime_environment(config, config_path):
             'default_model': 'MODEL_GEMINI_DEFAULT_MODEL',
             'model_options': 'MODEL_GEMINI_MODEL_OPTIONS',
         },
-        'openai': {
-            'api_key': 'MODEL_OPENAI_API_KEY',
-            'api_base_url': 'MODEL_OPENAI_API_BASE_URL',
-            'default_model': 'MODEL_OPENAI_DEFAULT_MODEL',
-            'model_options': 'MODEL_OPENAI_MODEL_OPTIONS',
-        },
-        'kimi': {
-            'api_key': 'MODEL_KIMI_API_KEY',
-            'api_base_url': 'MODEL_KIMI_API_BASE_URL',
-            'default_model': 'MODEL_KIMI_DEFAULT_MODEL',
-            'model_options': 'MODEL_KIMI_MODEL_OPTIONS',
-        },
-        'glm': {
-            'api_key': 'MODEL_GLM_API_KEY',
-            'api_base_url': 'MODEL_GLM_API_BASE_URL',
-            'default_model': 'MODEL_GLM_DEFAULT_MODEL',
-            'model_options': 'MODEL_GLM_MODEL_OPTIONS',
+        'dtgpt': {
+            'api_key': 'MODEL_DTGPT_API_KEY',
+            'api_key_env': 'MODEL_DTGPT_API_KEY_ENV',
+            'api_key_header': 'MODEL_DTGPT_API_KEY_HEADER',
+            'api_key_prefix': 'MODEL_DTGPT_API_KEY_PREFIX',
+            'api_base_url': 'MODEL_DTGPT_API_BASE_URL',
+            'api_base_urls': 'MODEL_DTGPT_API_BASE_URLS',
+            'default_model': 'MODEL_DTGPT_DEFAULT_MODEL',
+            'model_options': 'MODEL_DTGPT_MODEL_OPTIONS',
         },
     }
 
@@ -223,12 +212,25 @@ def apply_runtime_environment(config, config_path):
 
     for provider_name, env_mapping in provider_env_mappings.items():
         provider_config = normalized_providers.get(provider_name, {})
-        _set_env_default(env_mapping['api_key'], provider_config.get('api_key'))
-        _set_env_default(env_mapping['api_base_url'], provider_config.get('api_base_url'))
-        _set_env_default(env_mapping['default_model'], provider_config.get('default_model'))
+        if env_mapping.get('api_key'):
+            _set_env_default(env_mapping['api_key'], provider_config.get('api_key'))
+        if env_mapping.get('api_key_env'):
+            _set_env_default(env_mapping['api_key_env'], provider_config.get('api_key_env'))
+        if env_mapping.get('api_key_header'):
+            _set_env_default(env_mapping['api_key_header'], provider_config.get('api_key_header'))
+        if env_mapping.get('api_key_prefix'):
+            _set_env_default(env_mapping['api_key_prefix'], provider_config.get('api_key_prefix'))
+        if env_mapping.get('api_base_url'):
+            _set_env_default(env_mapping['api_base_url'], provider_config.get('api_base_url'))
+        if env_mapping.get('api_base_urls'):
+            provider_base_urls = _coerce_list(provider_config.get('api_base_urls'))
+            if provider_base_urls:
+                _set_env_default(env_mapping['api_base_urls'], ','.join(provider_base_urls))
+        if env_mapping.get('default_model'):
+            _set_env_default(env_mapping['default_model'], provider_config.get('default_model'))
 
         provider_model_options = _coerce_list(provider_config.get('model_options'))
-        if provider_model_options:
+        if provider_model_options and env_mapping.get('model_options'):
             _set_env_default(env_mapping['model_options'], ','.join(provider_model_options))
 
     numeric_mappings = {
@@ -240,7 +242,6 @@ def apply_runtime_environment(config, config_path):
         'max_title_chars': 'MODEL_MAX_TITLE_CHARS',
         'max_provider_chars': 'MODEL_MAX_PROVIDER_CHARS',
         'max_model_chars': 'MODEL_MAX_MODEL_CHARS',
-        'max_reasoning_chars': 'MODEL_MAX_REASONING_CHARS'
     }
     for key, env_key in numeric_mappings.items():
         value = runtime_config.get(key)

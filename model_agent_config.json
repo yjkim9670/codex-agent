@@ -9,12 +9,10 @@
   "agent": {
     "workspace_dir": "../",
     "secret_key": "model-chat-secret-key-change-in-production",
-    "default_provider": "gemini",
+    "default_provider": "dtgpt",
     "provider_options": [
       "gemini",
-      "openai",
-      "kimi",
-      "glm"
+      "dtgpt"
     ],
     "providers": {
       "gemini": {
@@ -28,49 +26,24 @@
           "gemini-3.1-pro-preview"
         ]
       },
-      "openai": {
-        "api_key": "${MODEL_OPENAI_API_KEY}",
-        "api_base_url": "https://api.openai.com/v1",
-        "default_model": "gpt-5.4",
+      "dtgpt": {
+        "api_key": "dk--YE4pWyKu2b3HNdxoXqPplwLLGCk1tKviv_FPBH5TEM",
+        "api_key_env": "DTGPT_API_KEY",
+        "api_key_header": "Authorization",
+        "api_key_prefix": "Bearer",
+        "api_base_url": "http://cloud.dtgpt.samsungds.net/llm/v1",
+        "api_base_urls": [
+          "http://cloud.dtgpt.samsungds.net/llm/v1",
+          "https://dtgpt.samsungds.net/llm/v1"
+        ],
+        "default_model": "Kimi-K2.5",
         "model_options": [
-          "gpt-5.4",
-          "gpt-5.3-codex",
-          "gpt-5.2-codex",
-          "gpt-5.2"
-        ]
-      },
-      "kimi": {
-        "api_key": "${MODEL_KIMI_API_KEY}",
-        "api_base_url": "https://api.moonshot.cn/v1",
-        "default_model": "kimi-k2-0905-preview",
-        "model_options": [
-          "kimi-k2-0905-preview",
-          "kimi-k2-turbo-preview",
-          "kimi-thinking-preview",
-          "kimi-latest"
-        ]
-      },
-      "glm": {
-        "api_key": "${MODEL_GLM_API_KEY}",
-        "api_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "default_model": "glm-5",
-        "model_options": [
-          "glm-5",
-          "glm-4.7",
-          "glm-4.7-flash",
-          "glm-4.7-flashx"
+          "Kimi-K2.5",
+          "GLM4.7",
+          "openai/gpt-oss-120b"
         ]
       }
     },
-    "reasoning_options": [
-      "default",
-      "auto_edit",
-      "yolo",
-      "low",
-      "medium",
-      "high",
-      "xhigh"
-    ],
     "max_prompt_chars": 4000,
     "context_max_chars": 12000,
     "exec_timeout_seconds": 600,
@@ -78,7 +51,6 @@
     "stream_ttl_seconds": 900,
     "max_title_chars": 80,
     "max_provider_chars": 32,
-    "max_model_chars": 80,
-    "max_reasoning_chars": 40
+    "max_model_chars": 80
   }
 }

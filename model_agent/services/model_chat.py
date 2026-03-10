@@ -2,6 +2,8 @@
 
 import json
 import math
+import os
+import re
 import threading
 import time
 import urllib.error
@@ -19,27 +21,21 @@ from ..config import (
     MODEL_CHAT_STORE_PATH,
     MODEL_CONTEXT_MAX_CHARS,
     MODEL_DEFAULT_PROVIDER,
+    MODEL_DTGPT_API_BASE_URL,
+    MODEL_DTGPT_API_BASE_URLS,
+    MODEL_DTGPT_API_KEY,
+    MODEL_DTGPT_API_KEY_ENV,
+    MODEL_DTGPT_API_KEY_HEADER,
+    MODEL_DTGPT_API_KEY_PREFIX,
+    MODEL_DTGPT_DEFAULT_MODEL,
     MODEL_EXEC_TIMEOUT_SECONDS,
     MODEL_GEMINI_API_BASE_URL,
     MODEL_GEMINI_API_KEY,
     MODEL_GEMINI_DEFAULT_MODEL,
     MODEL_GEMINI_MODEL_OPTIONS,
-    MODEL_GLM_API_BASE_URL,
-    MODEL_GLM_API_KEY,
-    MODEL_GLM_DEFAULT_MODEL,
-    MODEL_GLM_MODEL_OPTIONS,
-    MODEL_KIMI_API_BASE_URL,
-    MODEL_KIMI_API_KEY,
-    MODEL_KIMI_DEFAULT_MODEL,
-    MODEL_KIMI_MODEL_OPTIONS,
-    MODEL_OPENAI_API_BASE_URL,
-    MODEL_OPENAI_API_KEY,
-    MODEL_OPENAI_DEFAULT_MODEL,
-    MODEL_OPENAI_MODEL_OPTIONS,
     MODEL_PROVIDER_DEFAULT_MODELS,
     MODEL_PROVIDER_MODEL_OPTIONS,
     MODEL_PROVIDER_OPTIONS,
-    MODEL_REASONING_OPTIONS,
     MODEL_SETTINGS_PATH,
     MODEL_STREAM_TTL_SECONDS,
     MODEL_USAGE_SNAPSHOT_PATH,
@@ -52,8 +48,14 @@ _CONFIG_LOCK = threading.Lock()
 _USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
-_SUPPORTED_PROVIDERS = ('gemini', 'openai', 'kimi', 'glm')
-_OPENAI_COMPATIBLE_PROVIDERS = ('openai', 'kimi', 'glm')
+_SUPPORTED_PROVIDERS = ('gemini', 'dtgpt')
+_OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
+_RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+_ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
+_DTGPT_KNOWN_BASE_URLS = (
+    'http://cloud.dtgpt.samsungds.net/llm/v1',
+    'https://dtgpt.samsungds.net/llm/v1',
+)
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -100,14 +102,22 @@ def _canonical_provider_name(value):
     aliases = {
         'gemini': 'gemini',
         'google': 'gemini',
-        'openai': 'openai',
-        'gpt': 'openai',
-        'kimi': 'kimi',
-        'moonshot': 'kimi',
-        'moonshotai': 'kimi',
-        'glm': 'glm',
-        'bigmodel': 'glm',
-        'zhipu': 'glm',
+        'dtgpt': 'dtgpt',
+        'dt-gpt': 'dtgpt',
+        'dt_gpt': 'dtgpt',
+        'dt gpt': 'dtgpt',
+        'samsung_dtgpt': 'dtgpt',
+        'samsung-dtgpt': 'dtgpt',
+        'samsung dtgpt': 'dtgpt',
+        'samsungds dtgpt': 'dtgpt',
+        'openai': 'dtgpt',
+        'gpt': 'dtgpt',
+        'kimi': 'dtgpt',
+        'moonshot': 'dtgpt',
+        'moonshotai': 'dtgpt',
+        'glm': 'dtgpt',
+        'bigmodel': 'dtgpt',
+        'zhipu': 'dtgpt',
     }
     return aliases.get(raw, '')
 
@@ -144,12 +154,8 @@ def _default_model_for_provider(provider):
     configured = MODEL_PROVIDER_DEFAULT_MODELS.get(normalized)
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
-    if normalized == 'glm':
-        return MODEL_GLM_DEFAULT_MODEL
-    if normalized == 'kimi':
-        return MODEL_KIMI_DEFAULT_MODEL
-    if normalized == 'openai':
-        return MODEL_OPENAI_DEFAULT_MODEL
+    if normalized == 'dtgpt':
+        return MODEL_DTGPT_DEFAULT_MODEL
     return MODEL_GEMINI_DEFAULT_MODEL
 
 
@@ -168,74 +174,6 @@ def get_model_options(provider=None):
     if default_model not in options:
         options.insert(0, default_model)
     return options
-
-
-def _base_reasoning_options():
-    options = []
-    for item in MODEL_REASONING_OPTIONS:
-        text = str(item or '').strip()
-        if not text or text in options:
-            continue
-        options.append(text)
-    if not options:
-        options = ['default', 'auto_edit', 'yolo']
-    return options
-
-
-def _model_reasoning_preferences(provider, model):
-    normalized_provider = _normalize_provider_name(provider)
-    model_key = str(model or '').strip().lower()
-
-    if normalized_provider == 'gemini':
-        if 'flash-lite' in model_key:
-            return ['default']
-        if 'pro' in model_key:
-            return ['default', 'auto_edit']
-        return ['default', 'auto_edit', 'yolo']
-
-    if normalized_provider == 'openai':
-        if 'codex' in model_key or model_key.startswith('gpt'):
-            return ['low', 'medium', 'high', 'xhigh']
-        return ['default', 'auto_edit', 'yolo']
-
-    if normalized_provider == 'kimi':
-        if 'thinking' in model_key:
-            return ['auto_edit', 'default']
-        if 'turbo' in model_key:
-            return ['default', 'auto_edit', 'yolo']
-        return ['default', 'auto_edit']
-
-    if normalized_provider == 'glm':
-        if 'flashx' in model_key:
-            return ['default', 'auto_edit', 'yolo']
-        if model_key.startswith('glm-5'):
-            return ['default', 'auto_edit']
-        return ['default', 'auto_edit']
-
-    return ['default', 'auto_edit', 'yolo']
-
-
-def get_reasoning_options(provider=None, model=None):
-    normalized_provider = _normalize_provider_name(provider)
-    normalized_model = _normalize_model_name(normalized_provider, model)
-    available = _base_reasoning_options()
-    preferred = _model_reasoning_preferences(normalized_provider, normalized_model)
-
-    options = []
-    for item in preferred:
-        if item not in available or item in options:
-            continue
-        options.append(item)
-    if not options:
-        options = list(available)
-    return options
-
-
-def _sanitize_reasoning_setting(value, provider, model):
-    raw = str(value or '').strip()
-    if not raw:
-        return None
-    return _normalize_reasoning_mode(raw, provider, model)
 
 
 def _resolve_existing_path(primary_path, legacy_path):
@@ -275,7 +213,6 @@ def _default_settings():
     return {
         'provider': provider,
         'model': _default_model_for_provider(provider),
-        'reasoning_effort': None,
     }
 
 
@@ -296,22 +233,18 @@ def _read_workspace_settings():
 
     provider = _normalize_provider_name(data.get('provider'))
     model = str(data.get('model') or '').strip() or _default_model_for_provider(provider)
-    reasoning = _sanitize_reasoning_setting(data.get('reasoning_effort'), provider, model)
     return {
         'provider': provider,
         'model': model,
-        'reasoning_effort': reasoning,
     }
 
 
 def _write_workspace_settings(settings):
     provider = _normalize_provider_name(settings.get('provider'))
     model = str(settings.get('model') or '').strip() or _default_model_for_provider(provider)
-    reasoning = _sanitize_reasoning_setting(settings.get('reasoning_effort'), provider, model)
     payload = {
         'provider': provider,
         'model': model,
-        'reasoning_effort': reasoning,
     }
     MODEL_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_SETTINGS_PATH.write_text(
@@ -328,47 +261,58 @@ def get_settings():
         return settings
 
 
-def update_settings(provider=None, model=None, reasoning_effort=None):
+def _resolve_settings_values(current, provider=None, model=None):
+    current_provider = _normalize_provider_name(current.get('provider'))
+    current_raw_model = str(current.get('model') or '').strip()
+    current_model = _normalize_model_name(current_provider, current_raw_model)
+    next_provider = current_provider
+    provider_changed = False
+    if provider is not None:
+        next_provider = _normalize_provider_name(provider)
+        provider_changed = next_provider != current_provider
+
+    if model is None:
+        next_model = _default_model_for_provider(next_provider) if provider_changed else current_model
+    else:
+        raw_model = str(model).strip()
+        if provider_changed and raw_model:
+            preview_model = _normalize_model_name(next_provider, raw_model)
+            if raw_model == current_raw_model or preview_model == current_model:
+                raw_model = ''
+        next_model = _normalize_model_name(next_provider, raw_model)
+
+    return {
+        'provider': next_provider,
+        'model': next_model,
+    }
+
+
+def resolve_settings_preview(provider=None, model=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
-        next_provider = _normalize_provider_name(current.get('provider'))
-        next_model = str(current.get('model') or '').strip() or _default_model_for_provider(next_provider)
-        next_reasoning = str(current.get('reasoning_effort') or '').strip() or None
+        return _resolve_settings_values(
+            current,
+            provider=provider,
+            model=model,
+        )
 
-        provider_changed = False
-        if provider is not None:
-            normalized_provider = _normalize_provider_name(provider)
-            if normalized_provider != next_provider:
-                provider_changed = True
-            next_provider = normalized_provider
 
-        if model is not None:
-            next_model = str(model).strip() or _default_model_for_provider(next_provider)
-        elif provider_changed:
-            next_model = _default_model_for_provider(next_provider)
-
-        if reasoning_effort is not None:
-            next_reasoning = _sanitize_reasoning_setting(reasoning_effort, next_provider, next_model)
-        else:
-            next_reasoning = _sanitize_reasoning_setting(next_reasoning, next_provider, next_model)
-
-        payload = {
-            'provider': next_provider,
-            'model': next_model,
-            'reasoning_effort': next_reasoning,
-        }
+def update_settings(provider=None, model=None):
+    with _CONFIG_LOCK:
+        current = _read_workspace_settings()
+        payload = _resolve_settings_values(
+            current,
+            provider=provider,
+            model=model,
+        )
         _write_workspace_settings(payload)
         return payload
 
 
 def _provider_account_name(provider):
     normalized = _normalize_provider_name(provider)
-    if normalized == 'glm':
-        return 'GLM API'
-    if normalized == 'kimi':
-        return 'Kimi API'
-    if normalized == 'openai':
-        return 'OpenAI API'
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        return 'Samsung DTGPT API'
     return 'Gemini API'
 
 
@@ -866,41 +810,6 @@ def build_model_prompt(messages, prompt):
     return structured_prompt[-max_chars:]
 
 
-def _normalize_reasoning_mode(value, provider=None, model=None):
-    allowed_options = get_reasoning_options(provider, model)
-    if not allowed_options:
-        allowed_options = ['default']
-
-    mode = str(value or '').strip().lower().replace('-', '_')
-    if mode in allowed_options:
-        return mode
-
-    # OpenAI codex/gpt UI uses low/medium/high/xhigh; map legacy internal values.
-    reverse_legacy_map = {
-        'default': 'medium',
-        'auto_edit': 'high',
-        'yolo': 'xhigh',
-    }
-    if mode in reverse_legacy_map:
-        mapped = reverse_legacy_map[mode]
-        if mapped in allowed_options:
-            return mapped
-
-    legacy_map = {
-        'low': 'default',
-        'medium': 'default',
-        'high': 'auto_edit',
-        'xhigh': 'yolo',
-    }
-    if mode in legacy_map:
-        mapped = legacy_map[mode]
-        if mapped in allowed_options:
-            return mapped
-    if 'default' in allowed_options:
-        return 'default'
-    return allowed_options[0]
-
-
 def _normalize_model_name(provider, value):
     normalized_provider = _normalize_provider_name(provider)
     raw = str(value or '').strip()
@@ -920,94 +829,152 @@ def _normalize_model_name(provider, value):
         return alias_map.get(alias_key, raw)
 
     alias_key = raw.lower()
-    if normalized_provider == 'kimi':
+    if normalized_provider == 'dtgpt':
         alias_map = {
-            'auto': MODEL_KIMI_DEFAULT_MODEL,
-            'k2': 'kimi-k2-0905-preview',
-            'k2.5': 'kimi-k2-0905-preview',
-            'k2-turbo': 'kimi-k2-turbo-preview',
-            'thinking': 'kimi-thinking-preview',
+            'auto': MODEL_DTGPT_DEFAULT_MODEL,
+            'k2.5': 'Kimi-K2.5',
+            'kimi-k2.5': 'Kimi-K2.5',
+            'glm4.7': 'GLM4.7',
+            'oss-120b': 'openai/gpt-oss-120b',
+            'gpt-oss-120b': 'openai/gpt-oss-120b',
         }
         return alias_map.get(alias_key, raw)
 
-    if normalized_provider == 'glm':
-        alias_map = {
-            'auto': MODEL_GLM_DEFAULT_MODEL,
-            'glm5': 'glm-5',
-            'glm4.7': 'glm-4.7',
-            'glm4.7-flash': 'glm-4.7-flash',
-            'glm4.7-flashx': 'glm-4.7-flashx',
-        }
-        return alias_map.get(alias_key, raw)
-
-    alias_map = {
-        'auto': MODEL_OPENAI_DEFAULT_MODEL,
-        'codex': 'gpt-5.3-codex',
-        'mini': 'gpt-5.2',
-        'smart': MODEL_OPENAI_DEFAULT_MODEL,
-        'reasoning': MODEL_OPENAI_DEFAULT_MODEL,
-    }
-    return alias_map.get(alias_key, raw)
+    return raw
 
 
-def _build_generation_config(reasoning_mode):
-    temperature_map = {
-        'default': 0.2,
-        'auto_edit': 0.45,
-        'yolo': 0.8,
-        'low': 0.1,
-        'medium': 0.2,
-        'high': 0.45,
-        'xhigh': 0.8,
-    }
-    temperature = temperature_map.get(reasoning_mode, 0.2)
-    return {'temperature': temperature}
+def _build_generation_config():
+    return {'temperature': 0.2}
 
 
 def _provider_label(provider):
     normalized = _normalize_provider_name(provider)
-    if normalized == 'glm':
-        return 'GLM API'
-    if normalized == 'kimi':
-        return 'Kimi API'
-    if normalized == 'openai':
-        return 'OpenAI API'
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        return 'Samsung DTGPT API'
     return 'Gemini API'
 
 
 def _provider_api_key(provider):
     normalized = _normalize_provider_name(provider)
-    if normalized == 'glm':
-        return MODEL_GLM_API_KEY
-    if normalized == 'kimi':
-        return MODEL_KIMI_API_KEY
-    if normalized == 'openai':
-        return MODEL_OPENAI_API_KEY
-    return MODEL_GEMINI_API_KEY
+    configured_key = ''
+    fallback_env_name = ''
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        configured_key = MODEL_DTGPT_API_KEY
+        fallback_env_name = MODEL_DTGPT_API_KEY_ENV
+    else:
+        configured_key = MODEL_GEMINI_API_KEY
+
+    resolved = _resolve_env_reference(str(configured_key or '').strip())
+    normalized_key = str(resolved or '').strip()
+    if normalized_key:
+        return normalized_key
+    if fallback_env_name:
+        from_env = str(os.getenv(fallback_env_name) or '').strip()
+        if from_env:
+            return from_env
+    return ''
+
+
+def _provider_api_key_header(provider):
+    normalized = _normalize_provider_name(provider)
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        header_name = str(_resolve_env_reference(str(MODEL_DTGPT_API_KEY_HEADER or '').strip()) or '').strip()
+        return header_name or 'Authorization'
+    return ''
+
+
+def _provider_api_key_prefix(provider):
+    normalized = _normalize_provider_name(provider)
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        key_prefix = str(_resolve_env_reference(str(MODEL_DTGPT_API_KEY_PREFIX or '').strip()) or '').strip()
+        return key_prefix or 'Bearer'
+    return ''
 
 
 def _provider_api_base_url(provider):
     normalized = _normalize_provider_name(provider)
-    if normalized == 'glm':
-        return MODEL_GLM_API_BASE_URL
-    if normalized == 'kimi':
-        return MODEL_KIMI_API_BASE_URL
-    if normalized == 'openai':
-        return MODEL_OPENAI_API_BASE_URL
-    return MODEL_GEMINI_API_BASE_URL
+    base_url = ''
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        base_url = MODEL_DTGPT_API_BASE_URL
+    else:
+        base_url = MODEL_GEMINI_API_BASE_URL
+    return str(_resolve_env_reference(str(base_url or '').strip()) or '').strip()
 
 
 def _has_valid_api_key(provider):
     key = str(_provider_api_key(provider) or '').strip()
     if not key:
         return False
-    if key.startswith('${') and key.endswith('}'):
+    return not _is_placeholder_api_key(key)
+
+
+def _resolve_env_reference(value):
+    token = str(value or '').strip()
+    if not token:
+        return token
+    match = _ENV_REFERENCE_PATTERN.match(token)
+    if match:
+        return os.environ.get(match.group(1), '')
+    if token.lower().startswith('env:'):
+        env_name = token[4:].strip()
+        if env_name:
+            return os.environ.get(env_name, '')
+    return token
+
+
+def _is_placeholder_api_key(value):
+    token = str(value or '').strip()
+    if not token:
         return False
-    if key.lower().startswith('env:'):
-        return False
-    if key.upper().startswith('YOUR_'):
-        return False
-    return True
+    if _ENV_REFERENCE_PATTERN.match(token):
+        return True
+    if token.lower().startswith('env:'):
+        return True
+    if token.upper().startswith('YOUR_'):
+        return True
+    return False
+
+
+def _build_auth_header_value(api_key, key_prefix='Bearer'):
+    normalized_key = str(api_key or '').strip()
+    normalized_prefix = str(key_prefix or '').strip()
+    if not normalized_key:
+        return ''
+    if not normalized_prefix:
+        return normalized_key
+    prefix_with_space = f'{normalized_prefix} '
+    if normalized_key.lower().startswith(prefix_with_space.lower()):
+        return normalized_key
+    return f'{normalized_prefix} {normalized_key}'.strip()
+
+
+def _provider_api_base_urls(provider):
+    normalized = _normalize_provider_name(provider)
+    candidates = []
+    primary = str(_provider_api_base_url(normalized) or '').strip()
+    if primary:
+        candidates.append(primary)
+
+    if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
+        for item in MODEL_DTGPT_API_BASE_URLS:
+            token = str(_resolve_env_reference(str(item or '').strip()) or '').strip()
+            if token:
+                candidates.append(token)
+        if any('dtgpt.samsungds.net' in item.lower() for item in candidates):
+            candidates.extend(_DTGPT_KNOWN_BASE_URLS)
+
+    deduped = []
+    seen = set()
+    for item in candidates:
+        normalized_item = item.rstrip('/')
+        if not normalized_item:
+            continue
+        key = normalized_item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized_item)
+    return deduped
 
 
 def _extract_api_error_message(payload):
@@ -1053,13 +1020,14 @@ def _build_json_request(url, payload, headers=None):
 def _build_gemini_api_url(model, stream=False):
     escaped_model = urllib.parse.quote(model, safe='-._~')
     endpoint = 'streamGenerateContent' if stream else 'generateContent'
-    query = f"key={urllib.parse.quote_plus(MODEL_GEMINI_API_KEY)}"
+    gemini_key = _provider_api_key('gemini')
+    query = f"key={urllib.parse.quote_plus(gemini_key)}"
     if stream:
         query = f'{query}&alt=sse'
     return f'{MODEL_GEMINI_API_BASE_URL}/models/{escaped_model}:{endpoint}?{query}'
 
 
-def _build_gemini_payload(prompt, reasoning_mode):
+def _build_gemini_payload(prompt):
     return {
         'contents': [
             {
@@ -1067,20 +1035,26 @@ def _build_gemini_payload(prompt, reasoning_mode):
                 'parts': [{'text': str(prompt or '')}],
             }
         ],
-        'generationConfig': _build_generation_config(reasoning_mode),
+        'generationConfig': _build_generation_config(),
     }
 
 
-def _build_openai_compatible_api_url(provider):
-    base_url = _provider_api_base_url(provider)
-    return f'{base_url}/chat/completions'
+def _build_openai_compatible_api_urls(provider):
+    endpoints = []
+    for base_url in _provider_api_base_urls(provider):
+        normalized = base_url.rstrip('/')
+        if normalized.lower().endswith('/chat/completions'):
+            endpoints.append(normalized)
+        else:
+            endpoints.append(f'{normalized}/chat/completions')
+    return endpoints
 
 
-def _build_openai_payload(prompt, model, reasoning_mode, stream=False):
+def _build_openai_payload(prompt, model, stream=False):
     payload = {
         'model': model,
         'messages': [{'role': 'user', 'content': str(prompt or '')}],
-        'temperature': _build_generation_config(reasoning_mode)['temperature'],
+        'temperature': _build_generation_config()['temperature'],
     }
     if stream:
         payload['stream'] = True
@@ -1175,11 +1149,11 @@ def _extract_openai_usage(payload):
     return usage if isinstance(usage, dict) else None
 
 
-def _execute_gemini_prompt(prompt, model, reasoning_mode):
+def _execute_gemini_prompt(prompt, model):
     if not _has_valid_api_key('gemini'):
         return None, 'Gemini API 키가 설정되지 않았습니다.'
 
-    payload = _build_gemini_payload(prompt, reasoning_mode)
+    payload = _build_gemini_payload(prompt)
     url = _build_gemini_api_url(model, stream=False)
     request = _build_json_request(url, payload, headers={'Content-Type': 'application/json'})
     timeout_seconds = max(1, int(min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS)))
@@ -1215,7 +1189,7 @@ def _execute_gemini_prompt(prompt, model, reasoning_mode):
     return None, 'Gemini API 실행에 실패했습니다.'
 
 
-def _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode):
+def _execute_openai_compatible_prompt(provider, prompt, model):
     normalized_provider = _normalize_provider_name(provider)
     label = _provider_label(normalized_provider)
     api_key = _provider_api_key(normalized_provider)
@@ -1223,46 +1197,63 @@ def _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode):
     if not _has_valid_api_key(normalized_provider):
         return None, f'{label} 키가 설정되지 않았습니다.'
 
-    payload = _build_openai_payload(prompt, model, reasoning_mode, stream=False)
-    request = _build_json_request(
-        _build_openai_compatible_api_url(normalized_provider),
-        payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-        },
-    )
+    endpoints = _build_openai_compatible_api_urls(normalized_provider)
+    if not endpoints:
+        return None, f'{label} API 주소가 비어 있습니다.'
+
+    payload = _build_openai_payload(prompt, model, stream=False)
+    auth_header = _provider_api_key_header(normalized_provider)
+    auth_prefix = _provider_api_key_prefix(normalized_provider)
+    auth_value = _build_auth_header_value(api_key, auth_prefix)
+    headers = {'Content-Type': 'application/json'}
+    if auth_value and auth_header:
+        headers[auth_header] = auth_value
+
     timeout_seconds = max(1, int(min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS)))
+    last_error = None
 
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        return None, _read_http_error_message(exc, normalized_provider)
-    except urllib.error.URLError as exc:
-        return None, f'{label} 연결에 실패했습니다: {exc.reason}'
-    except TimeoutError:
-        return None, f'{label} 응답 시간이 초과되었습니다.'
-    except Exception as exc:
-        return None, f'{label} 실행 중 오류가 발생했습니다: {exc}'
+    for endpoint in endpoints:
+        request = _build_json_request(endpoint, payload, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            message = _read_http_error_message(exc, normalized_provider)
+            status_code = getattr(exc, 'code', None)
+            if status_code in {400, 401, 403, 404, 415, 422}:
+                return None, message
+            last_error = f'{message} (endpoint: {endpoint})'
+            continue
+        except urllib.error.URLError as exc:
+            last_error = f'{label} 연결에 실패했습니다: {exc.reason} (endpoint: {endpoint})'
+            continue
+        except TimeoutError:
+            last_error = f'{label} 응답 시간이 초과되었습니다. (endpoint: {endpoint})'
+            continue
+        except Exception as exc:
+            last_error = f'{label} 실행 중 오류가 발생했습니다: {exc} (endpoint: {endpoint})'
+            continue
 
-    try:
-        payload = json.loads(raw.decode('utf-8', errors='replace'))
-    except Exception:
-        return None, f'{label} 응답을 파싱하지 못했습니다.'
+        try:
+            response_payload = json.loads(raw.decode('utf-8', errors='replace'))
+        except Exception:
+            last_error = f'{label} 응답을 파싱하지 못했습니다. (endpoint: {endpoint})'
+            continue
 
-    text = _extract_openai_response_text(payload).strip()
-    usage_payload = _extract_openai_usage(payload)
-    if usage_payload:
-        _update_usage_summary_from_openai_usage(normalized_provider, usage_payload)
+        text = _extract_openai_response_text(response_payload).strip()
+        usage_payload = _extract_openai_usage(response_payload)
+        if usage_payload:
+            _update_usage_summary_from_openai_usage(normalized_provider, usage_payload)
 
-    if text:
-        return text, None
+        if text:
+            return text, None
 
-    error_text = _extract_api_error_message(payload)
-    if error_text:
-        return None, error_text
-    return None, f'{label} 실행에 실패했습니다.'
+        error_text = _extract_api_error_message(response_payload)
+        if error_text:
+            return None, error_text
+        last_error = f'{label} 실행에 실패했습니다. (endpoint: {endpoint})'
+
+    return None, last_error or f'{label} 실행에 실패했습니다.'
 
 
 def execute_model_prompt(prompt):
@@ -1270,11 +1261,10 @@ def execute_model_prompt(prompt):
     settings = get_settings()
     provider = _normalize_provider_name(settings.get('provider'))
     model = _normalize_model_name(provider, settings.get('model'))
-    reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'), provider, model)
 
     if provider in _OPENAI_COMPATIBLE_PROVIDERS:
-        return _execute_openai_compatible_prompt(provider, prompt, model, reasoning_mode)
-    return _execute_gemini_prompt(prompt, model, reasoning_mode)
+        return _execute_openai_compatible_prompt(provider, prompt, model)
+    return _execute_gemini_prompt(prompt, model)
 
 
 def _append_stream_chunk(stream_id, key, chunk):
@@ -1365,7 +1355,7 @@ def _consume_sse_payload(stream_id, provider, state_holder, payload_text):
     return False
 
 
-def _run_model_stream(stream_id, prompt, provider, model, reasoning_mode):
+def _run_model_stream(stream_id, prompt, provider, model):
     normalized_provider = _normalize_provider_name(provider)
     if not _has_valid_api_key(normalized_provider):
         missing_label = _provider_label(normalized_provider)
@@ -1379,26 +1369,50 @@ def _run_model_stream(stream_id, prompt, provider, model, reasoning_mode):
                 stream['request_running'] = False
         return
 
+    request_candidates = []
     if normalized_provider in _OPENAI_COMPATIBLE_PROVIDERS:
-        request = _build_json_request(
-            _build_openai_compatible_api_url(normalized_provider),
-            _build_openai_payload(prompt, model, reasoning_mode, stream=True),
-            headers={
-                'Content-Type': 'application/json',
-                'Accept': 'text/event-stream',
-                'Authorization': f'Bearer {_provider_api_key(normalized_provider)}',
-            },
-        )
+        payload = _build_openai_payload(prompt, model, stream=True)
+        endpoints = _build_openai_compatible_api_urls(normalized_provider)
+        auth_header = _provider_api_key_header(normalized_provider)
+        auth_prefix = _provider_api_key_prefix(normalized_provider)
+        auth_value = _build_auth_header_value(_provider_api_key(normalized_provider), auth_prefix)
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+        }
+        if auth_value and auth_header:
+            headers[auth_header] = auth_value
+        for endpoint in endpoints:
+            request_candidates.append((endpoint, _build_json_request(endpoint, payload, headers=headers)))
     else:
-        request = _build_json_request(
-            _build_gemini_api_url(model, stream=True),
-            _build_gemini_payload(prompt, reasoning_mode),
-            headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'},
+        endpoint = _build_gemini_api_url(model, stream=True)
+        request_candidates.append(
+            (
+                endpoint,
+                _build_json_request(
+                    endpoint,
+                    _build_gemini_payload(prompt),
+                    headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream'},
+                ),
+            )
         )
+
+    if not request_candidates:
+        _append_stream_chunk(stream_id, 'error', f'{_provider_label(normalized_provider)} API 주소가 비어 있습니다.\n')
+        with state.model_streams_lock:
+            stream = state.model_streams.get(stream_id)
+            if stream:
+                stream['done'] = True
+                stream['exit_code'] = 1
+                stream['updated_at'] = time.time()
+                stream['request_running'] = False
+        return
 
     timeout_seconds = max(1, int(min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS)))
     state_holder = {'rendered_text': '', 'gemini_usage': None, 'openai_usage': None}
     cancelled = False
+    stream_exception = None
+    stream_exception_endpoint = ''
 
     with state.model_streams_lock:
         stream = state.model_streams.get(stream_id)
@@ -1406,42 +1420,66 @@ def _run_model_stream(stream_id, prompt, provider, model, reasoning_mode):
             stream['request_running'] = True
             stream['updated_at'] = time.time()
 
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            buffer = []
-            while True:
-                if _is_stream_cancelled(stream_id):
-                    cancelled = True
-                    break
+    for attempt_index, (endpoint, request) in enumerate(request_candidates):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                buffer = []
+                while True:
+                    if _is_stream_cancelled(stream_id):
+                        cancelled = True
+                        break
 
-                raw_line = response.readline()
-                if not raw_line:
-                    if buffer:
+                    raw_line = response.readline()
+                    if not raw_line:
+                        if buffer:
+                            payload_text = '\n'.join(buffer).strip()
+                            if _consume_sse_payload(stream_id, normalized_provider, state_holder, payload_text):
+                                break
+                        break
+
+                    line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
+                    if not line:
                         payload_text = '\n'.join(buffer).strip()
+                        buffer = []
                         if _consume_sse_payload(stream_id, normalized_provider, state_holder, payload_text):
                             break
-                    break
+                        continue
+                    if line.startswith(':'):
+                        continue
+                    if line.startswith('data:'):
+                        buffer.append(line[5:].strip())
+            stream_exception = None
+            stream_exception_endpoint = ''
+            break
+        except Exception as exc:
+            if _is_stream_cancelled(stream_id):
+                cancelled = True
+                stream_exception = None
+                stream_exception_endpoint = ''
+                break
+            stream_exception = exc
+            stream_exception_endpoint = endpoint
+            should_retry = False
+            if isinstance(exc, urllib.error.HTTPError):
+                status_code = getattr(exc, 'code', None)
+                should_retry = status_code in _RETRYABLE_HTTP_STATUS
+            elif isinstance(exc, (urllib.error.URLError, TimeoutError)):
+                should_retry = True
+            if should_retry and attempt_index + 1 < len(request_candidates):
+                continue
+            break
 
-                line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
-                if not line:
-                    payload_text = '\n'.join(buffer).strip()
-                    buffer = []
-                    if _consume_sse_payload(stream_id, normalized_provider, state_holder, payload_text):
-                        break
-                    continue
-                if line.startswith(':'):
-                    continue
-                if line.startswith('data:'):
-                    buffer.append(line[5:].strip())
-    except Exception as exc:
-        if isinstance(exc, urllib.error.HTTPError):
-            error_text = _read_http_error_message(exc, normalized_provider)
-        elif isinstance(exc, urllib.error.URLError):
-            error_text = f'{_provider_label(normalized_provider)} 연결에 실패했습니다: {exc.reason}'
-        elif isinstance(exc, TimeoutError):
+    if stream_exception is not None and not cancelled:
+        if isinstance(stream_exception, urllib.error.HTTPError):
+            error_text = _read_http_error_message(stream_exception, normalized_provider)
+        elif isinstance(stream_exception, urllib.error.URLError):
+            error_text = f'{_provider_label(normalized_provider)} 연결에 실패했습니다: {stream_exception.reason}'
+        elif isinstance(stream_exception, TimeoutError):
             error_text = f'{_provider_label(normalized_provider)} 응답 시간이 초과되었습니다.'
         else:
-            error_text = f'{_provider_label(normalized_provider)} 실행 중 오류가 발생했습니다: {exc}'
+            error_text = f'{_provider_label(normalized_provider)} 실행 중 오류가 발생했습니다: {stream_exception}'
+        if stream_exception_endpoint:
+            error_text = f'{error_text} (endpoint: {stream_exception_endpoint})'
         _append_stream_chunk(stream_id, 'error', f'{error_text}\n')
         with state.model_streams_lock:
             stream = state.model_streams.get(stream_id)
@@ -1470,7 +1508,7 @@ def _run_model_stream(stream_id, prompt, provider, model, reasoning_mode):
         finalize_model_stream(stream_id)
 
 
-def create_model_stream(session_id, prompt, provider, model, reasoning_mode):
+def create_model_stream(session_id, prompt, provider, model):
     stream_id = uuid.uuid4().hex
     stream = {
         'id': stream_id,
@@ -1492,7 +1530,7 @@ def create_model_stream(session_id, prompt, provider, model, reasoning_mode):
 
     thread = threading.Thread(
         target=_run_model_stream,
-        args=(stream_id, prompt, provider, model, reasoning_mode),
+        args=(stream_id, prompt, provider, model),
         daemon=True,
     )
     thread.start()
@@ -1548,14 +1586,12 @@ def start_model_stream_for_session(session_id, prompt, prompt_with_context):
         settings = get_settings()
         provider = _normalize_provider_name(settings.get('provider'))
         model = _normalize_model_name(provider, settings.get('model'))
-        reasoning_mode = _normalize_reasoning_mode(settings.get('reasoning_effort'), provider, model)
 
         stream_id = create_model_stream(
             session_id,
             prompt_with_context,
             provider,
             model,
-            reasoning_mode,
         )
         return {
             'ok': True,

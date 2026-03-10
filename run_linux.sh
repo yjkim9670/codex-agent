@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN=""
 
 # Linux route must use direct DTGPT endpoint only.
-export MODEL_DTGPT_API_BASE_URL="https://dtgpt.samsungds.net/llm/v1"
-export MODEL_DTGPT_API_BASE_URLS="https://dtgpt.samsungds.net/llm/v1"
+export MODEL_DTGPT_API_BASE_URL="http://dtgpt.samsungds.net/llm/v1"
+export MODEL_DTGPT_API_BASE_URLS="http://dtgpt.samsungds.net/llm/v1"
 
 if [[ -n "${TG_PYTHON:-}" ]]; then
     PYTHON_BIN="${TG_PYTHON}/python"

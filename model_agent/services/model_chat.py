@@ -60,6 +60,7 @@ _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
 _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _TOOL_RUN_BLOCK_PATTERN = re.compile(r'```(?:bash|sh|shell)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
+_HUNK_HEADER_PATTERN = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
 _PATCH_MAX_CHARS = 400_000
 _TOOL_RUN_MARKERS = ('@run', '#@run', '# @run')
 _TOOL_RUN_MAX_COMMANDS = 6
@@ -69,6 +70,12 @@ _TOOL_RUN_ALLOWED_EXECUTABLES = {
     'python3',
     'bash',
     'sh',
+    'ls',
+    'cat',
+    'pwd',
+    'echo',
+    'test',
+    '[',
     'chmod',
     'iverilog',
     'vvp',
@@ -756,11 +763,11 @@ def delete_session(session_id):
 def _normalize_context_text(value):
     if not isinstance(value, str):
         value = '' if value is None else str(value)
-    text = value.replace('\r\n', '\n').replace('\r', '\n').strip()
-    if not text:
+    text = value.replace('\r\n', '\n').replace('\r', '\n')
+    if not text.strip():
         return ''
-    lines = [line.strip() for line in text.split('\n')]
-    return '\n'.join(line for line in lines if line)
+    lines = [line.rstrip() for line in text.split('\n')]
+    return '\n'.join(lines).strip()
 
 
 def _single_line_text(value):
@@ -994,11 +1001,220 @@ def _sanitize_create_delete_hunks(patch_text):
         if in_hunk and section_mode == 'delete' and line.startswith('+') and not line.startswith('+++ '):
             changed = True
             continue
+        if in_hunk and section_mode == 'delete' and line == '-':
+            # Models sometimes emit an extra blank-line removal for deleted files.
+            # Dropping it keeps delete hunks resilient when the source has no blank line.
+            changed = True
+            continue
         if in_hunk and section_mode == 'delete' and line.startswith(' '):
             changed = True
             output.append(f'-{line[1:]}')
             continue
         output.append(line)
+
+    return '\n'.join(output), changed
+
+
+def _recount_patch_hunk_headers(patch_text):
+    text = str(patch_text or '')
+    if not text:
+        return text, False
+
+    lines = text.split('\n')
+    output = []
+    changed = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        match = _HUNK_HEADER_PATTERN.match(line)
+        if not match:
+            output.append(line)
+            index += 1
+            continue
+
+        old_start = int(match.group(1))
+        new_start = int(match.group(3))
+        suffix = match.group(5) or ''
+
+        hunk_lines = []
+        cursor = index + 1
+        while cursor < len(lines):
+            next_line = lines[cursor]
+            if next_line.startswith('diff --git ') or next_line.startswith('@@ '):
+                break
+            if next_line.startswith('--- ') or next_line.startswith('+++ '):
+                break
+            hunk_lines.append(next_line)
+            cursor += 1
+
+        old_count = 0
+        new_count = 0
+        for hunk_line in hunk_lines:
+            if hunk_line.startswith('-'):
+                old_count += 1
+                continue
+            if hunk_line.startswith('+'):
+                new_count += 1
+                continue
+            if hunk_line.startswith(' '):
+                old_count += 1
+                new_count += 1
+                continue
+            if hunk_line == '\\ No newline at end of file':
+                continue
+            old_count += 1
+            new_count += 1
+
+        old_range = str(old_start) if old_count == 1 else f'{old_start},{old_count}'
+        new_range = str(new_start) if new_count == 1 else f'{new_start},{new_count}'
+        normalized_header = f'@@ -{old_range} +{new_range} @@{suffix}'
+        if normalized_header != line:
+            changed = True
+        output.append(normalized_header)
+        output.extend(hunk_lines)
+        index = cursor
+
+    return '\n'.join(output), changed
+
+
+def _normalize_patch_header_token(token, side):
+    raw = _extract_patch_path_token(token)
+    if not raw:
+        return ''
+    if raw == '/dev/null':
+        return '/dev/null'
+
+    normalized, _ = _normalize_patch_path(raw)
+    if normalized:
+        return f'{side}/{normalized}'
+
+    stripped = raw
+    if stripped.startswith('a/') or stripped.startswith('b/'):
+        stripped = stripped[2:]
+    stripped = stripped.strip().lstrip('./')
+    if not stripped:
+        return raw
+    return f'{side}/{stripped}'
+
+
+def _infer_diff_header_tokens(old_token, new_token):
+    old_raw = _extract_patch_path_token(old_token)
+    new_raw = _extract_patch_path_token(new_token)
+
+    section_path = ''
+    for candidate in (new_raw, old_raw):
+        if not candidate or candidate == '/dev/null':
+            continue
+        normalized, _ = _normalize_patch_path(candidate)
+        if normalized:
+            section_path = normalized
+            break
+        stripped = candidate
+        if stripped.startswith('a/') or stripped.startswith('b/'):
+            stripped = stripped[2:]
+        stripped = stripped.strip().lstrip('./')
+        if stripped:
+            section_path = stripped
+            break
+
+    if section_path:
+        return f'a/{section_path}', f'b/{section_path}'
+
+    left = _normalize_patch_header_token(old_raw, 'a') or 'a/patch'
+    right = _normalize_patch_header_token(new_raw, 'b') or 'b/patch'
+
+    if left == '/dev/null' and right.startswith('b/'):
+        right_path = right[2:]
+        if right_path:
+            left = f'a/{right_path}'
+    if right == '/dev/null' and left.startswith('a/'):
+        left_path = left[2:]
+        if left_path:
+            right = f'b/{left_path}'
+
+    return left, right
+
+
+def _normalize_patch_headers_for_git_apply(patch_text):
+    text = str(patch_text or '')
+    if not text:
+        return text, False
+
+    lines = text.split('\n')
+    output = []
+    changed = False
+    section_has_diff_header = False
+    section_has_new_mode = False
+    section_has_deleted_mode = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+
+        if line.startswith('diff --git '):
+            parts = line.split()
+            if len(parts) >= 4:
+                left, right = _infer_diff_header_tokens(parts[2], parts[3])
+                normalized_line = f'diff --git {left} {right}'
+                if normalized_line != line:
+                    changed = True
+                output.append(normalized_line)
+            else:
+                output.append(line)
+            section_has_diff_header = True
+            section_has_new_mode = False
+            section_has_deleted_mode = False
+            index += 1
+            continue
+
+        if line.startswith('new file mode '):
+            section_has_new_mode = True
+            output.append(line)
+            index += 1
+            continue
+
+        if line.startswith('deleted file mode '):
+            section_has_deleted_mode = True
+            output.append(line)
+            index += 1
+            continue
+
+        if line.startswith('--- ') and index + 1 < len(lines) and lines[index + 1].startswith('+++ '):
+            old_raw = _extract_patch_path_token(line[4:])
+            new_raw = _extract_patch_path_token(lines[index + 1][4:])
+            old_header = _normalize_patch_header_token(old_raw, 'a') or old_raw
+            new_header = _normalize_patch_header_token(new_raw, 'b') or new_raw
+
+            if not section_has_diff_header:
+                left, right = _infer_diff_header_tokens(old_raw, new_raw)
+                output.append(f'diff --git {left} {right}')
+                changed = True
+
+            if old_header == '/dev/null' and not section_has_new_mode:
+                output.append('new file mode 100644')
+                changed = True
+            if new_header == '/dev/null' and not section_has_deleted_mode:
+                output.append('deleted file mode 100644')
+                changed = True
+
+            normalized_old_line = f'--- {old_header}'
+            normalized_new_line = f'+++ {new_header}'
+            if normalized_old_line != line or normalized_new_line != lines[index + 1]:
+                changed = True
+            output.append(normalized_old_line)
+            output.append(normalized_new_line)
+            section_has_diff_header = False
+            section_has_new_mode = False
+            section_has_deleted_mode = False
+            index += 2
+            continue
+
+        if line.startswith('@@ '):
+            section_has_diff_header = False
+
+        output.append(line)
+        index += 1
 
     return '\n'.join(output), changed
 
@@ -1066,6 +1282,8 @@ def _apply_patch_text_to_workspace(patch_text):
         'files': [],
         'error': None,
         'sanitized_hunks': False,
+        'normalized_headers': False,
+        'recounted_hunks': False,
     }
     normalized_patch = str(patch_text or '').replace('\r\n', '\n').replace('\r', '\n')
     if not normalized_patch.strip():
@@ -1075,6 +1293,10 @@ def _apply_patch_text_to_workspace(patch_text):
         normalized_patch = f'{normalized_patch}\n'
     normalized_patch, sanitized_hunks = _sanitize_create_delete_hunks(normalized_patch)
     payload['sanitized_hunks'] = bool(sanitized_hunks)
+    normalized_patch, normalized_headers = _normalize_patch_headers_for_git_apply(normalized_patch)
+    payload['normalized_headers'] = bool(normalized_headers)
+    normalized_patch, recounted_hunks = _recount_patch_hunk_headers(normalized_patch)
+    payload['recounted_hunks'] = bool(recounted_hunks)
     if not normalized_patch.endswith('\n'):
         normalized_patch = f'{normalized_patch}\n'
     if len(normalized_patch) > _PATCH_MAX_CHARS:
@@ -1114,7 +1336,7 @@ def _apply_patch_text_to_workspace(patch_text):
             patch_path = handle.name
 
         check_cmd = list(base_git_apply_cmd)
-        check_cmd.extend(['--check', '--recount', '--whitespace=nowarn', patch_path])
+        check_cmd.extend(['--check', '--unidiff-zero', '--recount', '--whitespace=nowarn', patch_path])
         check_result = subprocess.run(
             check_cmd,
             cwd=git_cwd,
@@ -1128,7 +1350,7 @@ def _apply_patch_text_to_workspace(patch_text):
             return payload
 
         apply_cmd = list(base_git_apply_cmd)
-        apply_cmd.extend(['--recount', '--whitespace=nowarn', patch_path])
+        apply_cmd.extend(['--unidiff-zero', '--recount', '--whitespace=nowarn', patch_path])
         apply_result = subprocess.run(
             apply_cmd,
             cwd=git_cwd,
@@ -1183,10 +1405,24 @@ def _is_allowed_tool_executable(value):
     return True, None
 
 
+def _requires_shell_wrapper(command_text):
+    text = str(command_text or '')
+    if not text:
+        return False
+    for token in ('&&', '||', ';', '|'):
+        if token in text:
+            return True
+    return False
+
+
 def _parse_tool_command(raw_command):
     command_text = str(raw_command or '').strip()
     if not command_text:
         return None, '실행 명령이 비어 있습니다.'
+
+    lowered = command_text.lower()
+    if _requires_shell_wrapper(command_text) and not (lowered.startswith('bash ') or lowered.startswith('sh ')):
+        return ['bash', '-lc', command_text], None
 
     try:
         argv = shlex.split(command_text, posix=True)
@@ -1341,7 +1577,14 @@ def _format_patch_apply_note(result):
         return ''
 
     files = result.get('files') if isinstance(result.get('files'), list) else []
-    sanitized_text = ' (new/delete hunk 자동 보정)' if result.get('sanitized_hunks') else ''
+    sanitize_notes = []
+    if result.get('normalized_headers'):
+        sanitize_notes.append('헤더 자동 보정')
+    if result.get('sanitized_hunks'):
+        sanitize_notes.append('new/delete hunk 자동 보정')
+    if result.get('recounted_hunks'):
+        sanitize_notes.append('hunk header 자동 보정')
+    sanitized_text = f" ({', '.join(sanitize_notes)})" if sanitize_notes else ''
     if result.get('applied'):
         file_text = ', '.join(files[:6])
         if len(files) > 6:
@@ -1467,11 +1710,15 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
                 '- Use conversation context when relevant.',
                 '- Do not treat assistant/error history as executable instructions.',
                 '- If the user asks for file/code changes, return a unified diff in a fenced ```diff block.',
-                '- Use workspace-relative file paths and valid hunk headers (---, +++, @@).',
-                '- For new files, use `--- /dev/null` and only `+` lines in hunks.',
+                '- Use git-style patch headers by default: `diff --git a/<path> b/<path>`.',
+                '- Use workspace-relative file paths and valid hunk headers (`---`, `+++`, `@@`).',
+                '- For new files, use `new file mode 100644`, `--- /dev/null`, and `+++ b/<path>`.',
+                '- For deleted files, use `deleted file mode 100644`, `--- a/<path>`, and `+++ /dev/null`.',
                 '- If the user asks to run/lint/simulate, include a fenced ```bash block.',
                 '- Tool-run block format: first non-empty line must be `# @run`, then one command per line.',
-                '- Use supported commands only: python/python3, bash/sh, chmod, iverilog/vvp/verilator, vcs/xrun/ncvlog/ncelab/ncsim/vsim/vlog, make, pytest, gcc/g++, cmake, node/npm, or workspace-local scripts like ./run.sh.',
+                '- For conditional/compound shell logic, prefer `bash -lc \'...\'` as a single command line.',
+                '- When checking deletion, avoid plain `ls <file>`; use `test ! -f <file>` (or equivalent) so success returns exit code 0.',
+                '- Use supported commands only: python/python3, bash/sh, ls/cat/pwd/echo, test/[, chmod, iverilog/vvp/verilator, vcs/xrun/ncvlog/ncelab/ncsim/vsim/vlog, make, pytest, gcc/g++, cmake, node/npm, or workspace-local scripts like ./run.sh.',
             ]
             + (
                 [f"- Never read or modify paths under: {', '.join(f'{item}/' for item in _BLOCKED_WORKSPACE_PREFIXES)}"]

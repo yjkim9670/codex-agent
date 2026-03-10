@@ -100,14 +100,12 @@ if not MODEL_DTGPT_API_BASE_URLS:
         MODEL_DTGPT_API_BASE_URLS = [
             MODEL_DTGPT_API_BASE_URL,
             'https://cloud.dtgpt.samsungds.net/llm/v1',
-            'https://dtgpt.samsungds.net/llm/v1',
+            'http://cloud.dtgpt.samsungds.net/llm/v1',
         ]
     else:
         MODEL_DTGPT_API_BASE_URLS = [
             MODEL_DTGPT_API_BASE_URL,
             'https://dtgpt.samsungds.net/llm/v1',
-            'https://cloud.dtgpt.samsungds.net/llm/v1',
-            'http://cloud.dtgpt.samsungds.net/llm/v1',
         ]
 
 MODEL_GEMINI_DEFAULT_MODEL = (

@@ -45,24 +45,38 @@ Run with the helper script:
 ./run_model_chat_server.sh
 ```
 
-Run with TG_PYTHON (in-house Linux environment):
+Run on Linux:
 ```bash
-export TG_PYTHON=/path/to/tg_python
-./run_model_chat_server_tg.sh
+./run_linux.sh
 ```
 
-Both shell launchers default to quiet mode (`MODEL_CHAT_QUIET=1`) to suppress verbose Python/werkzeug info logs.
+Run on Linux with TG_PYTHON (in-house environment):
+```bash
+export TG_PYTHON=/path/to/tg_python
+./run_linux.sh
+```
+
+Run on Windows (PowerShell):
+```powershell
+./run_window.ps1
+```
+
+The launcher defaults to quiet mode (`MODEL_CHAT_QUIET=1`) to suppress verbose Python/werkzeug info logs.
 To keep logs visible, set:
 ```bash
 MODEL_CHAT_QUIET=0 ./run_model_chat_server.sh
 ```
+
+Endpoint routing by launcher:
+- `run_linux.sh`: DTGPT direct endpoint only (`https://dtgpt.samsungds.net/llm/v1`)
+- `run_window.ps1`: DTGPT cloud endpoint only (`http://cloud.dtgpt.samsungds.net/llm/v1`)
 
 Default config is Linux-friendly for file edits:
 - `agent.workspace_dir` = `./workspace`
 - `agent.workspace_blocked_paths` = `[]`
 
 ## Generate Model Agent Bundle Script
-If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, `run_model_chat_server_tg.sh`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
+If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, `run_linux.sh`, `run_window.ps1`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
 
 ```bash
 python generate_model_agent_bundle.py --output /tmp/model_agent_bundle.sh

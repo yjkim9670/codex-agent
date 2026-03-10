@@ -16,7 +16,8 @@ SOURCE_PATHS = (
     "model_agent",
     "run_model_chat_server.py",
     "run_model_chat_server.sh",
-    "run_model_chat_server_tg.sh",
+    "run_linux.sh",
+    "run_window.ps1",
     "model_agent_config.json",
 )
 
@@ -129,13 +130,13 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate a shell installer that restores model_agent, run_model_chat_server scripts, and model_agent_config.json via gzip+base64 payloads."
+        description="Generate a shell installer that restores model_agent, launcher scripts, and model_agent_config.json via gzip+base64 payloads."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parent,
-        help="Repository root containing model_agent, run_model_chat_server.*, and model_agent_config.json",
+        help="Repository root containing model_agent, run_model_chat_server.py/.sh, run_linux.sh, run_window.ps1, and model_agent_config.json",
     )
     parser.add_argument(
         "--output",
@@ -157,7 +158,9 @@ def main() -> int:
     installer_text = _render_installer(repo_root, files)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(installer_text, encoding="utf-8")
+    # Force LF so generated shell scripts remain executable on Linux even when
+    # this generator is run on Windows.
+    output_path.write_text(installer_text, encoding="utf-8", newline="\n")
     output_path.chmod(0o755)
 
     print(f"Generated: {output_path}")

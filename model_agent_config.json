@@ -34,8 +34,9 @@
         "api_key_env": "DTGPT_API_KEY",
         "api_key_header": "Authorization",
         "api_key_prefix": "Bearer",
-        "api_base_url": "https://cloud.dtgpt.samsungds.net/llm/v1",
+        "api_base_url": "https://dtgpt.samsungds.net/llm/v1",
         "api_base_urls": [
+          "https://dtgpt.samsungds.net/llm/v1",
           "https://cloud.dtgpt.samsungds.net/llm/v1",
           "http://cloud.dtgpt.samsungds.net/llm/v1"
         ],

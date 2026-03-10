@@ -75,6 +75,10 @@ Update this single file to manage Model Agent runtime values:
 - `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`
 - `agent.max_title_chars`, `agent.max_provider_chars`, `agent.max_model_chars`
 
+DTGPT endpoint order is platform-aware:
+- Windows prefers `cloud.dtgpt.samsungds.net`
+- Linux prefers `dtgpt.samsungds.net`
+
 ### API Key Options
 `model_agent_config.json` supports both:
 - direct key values (plain text)

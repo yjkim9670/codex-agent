@@ -60,6 +60,7 @@ _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
 _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _PATCH_MAX_CHARS = 400_000
 _DTGPT_KNOWN_BASE_URLS = (
+    'https://dtgpt.samsungds.net/llm/v1',
     'https://cloud.dtgpt.samsungds.net/llm/v1',
     'http://cloud.dtgpt.samsungds.net/llm/v1',
 )
@@ -98,6 +99,29 @@ _TOKEN_PART_KEYS = (
     'output_tokens',
     'reasoning_output_tokens',
 )
+
+
+def _is_windows_platform():
+    return os.name == 'nt'
+
+
+def _dtgpt_endpoint_rank(url):
+    lowered = str(url or '').strip().lower()
+    is_cloud = 'cloud.dtgpt.samsungds.net' in lowered
+    is_direct = '://dtgpt.samsungds.net' in lowered
+
+    if _is_windows_platform():
+        if is_cloud:
+            return 0
+        if is_direct:
+            return 1
+        return 2
+
+    if is_direct:
+        return 0
+    if is_cloud:
+        return 1
+    return 2
 
 
 def _coerce_non_negative_int(value):
@@ -1231,6 +1255,7 @@ def _provider_api_base_urls(provider):
                 candidates.append(token)
         if any('dtgpt.samsungds.net' in item.lower() for item in candidates):
             candidates.extend(_DTGPT_KNOWN_BASE_URLS)
+        candidates = sorted(candidates, key=_dtgpt_endpoint_rank)
 
     deduped = []
     seen = set()

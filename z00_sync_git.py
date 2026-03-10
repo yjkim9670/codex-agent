@@ -85,6 +85,18 @@ GIT_CLONE_TIMEOUT = 240   # Clone/sync operation (avg 35s, generous buffer for n
 KST = timezone(timedelta(hours=9))  # Korea Standard Time (GMT+9)
 
 
+def _as_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _strip_text(value: object) -> str:
+    return _as_text(value).strip()
+
+
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
     raw = os.environ.get(name, str(default))
     try:
@@ -107,7 +119,7 @@ def _read_bool_env(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return _strip_text(raw).lower() in {"1", "true", "yes", "on"}
 
 
 # Global I/O semaphore settings (cross-process)
@@ -136,7 +148,7 @@ def _git_env() -> Dict[str, str]:
     return env
 
 
-def _convert_to_kst_string(iso_date_str: str) -> str:
+def _convert_to_kst_string(iso_date_str: Optional[str]) -> str:
     """
     Convert ISO8601 date string to KST format with text representation.
 
@@ -146,6 +158,7 @@ def _convert_to_kst_string(iso_date_str: str) -> str:
     Returns:
         Formatted string in KST (e.g., "2025-12-08 15:30:00 KST")
     """
+    text = _as_text(iso_date_str)
     try:
         # Parse ISO8601 string (handles various formats including timezone offsets)
         # Try different formats
@@ -155,13 +168,13 @@ def _convert_to_kst_string(iso_date_str: str) -> str:
             "%Y-%m-%d %H:%M:%S%z",   # 2025-12-08 15:30:00+0900
         ]:
             try:
-                dt = datetime.strptime(iso_date_str.strip(), fmt)
+                dt = datetime.strptime(text.strip(), fmt)
                 break
             except ValueError:
                 continue
         else:
             # If no format matched, return original string
-            return iso_date_str
+            return text
 
         # Convert to KST
         dt_kst = dt.astimezone(KST)
@@ -171,7 +184,7 @@ def _convert_to_kst_string(iso_date_str: str) -> str:
 
     except Exception:
         # If conversion fails, return original string
-        return iso_date_str
+        return text
 
 
 class GlobalIOSemaphore:
@@ -569,7 +582,7 @@ class GitManager:
                 timeout=timeout,
                 env=env,
             )
-            return completed.stdout.strip()
+            return _strip_text(completed.stdout)
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f"Git command timed out: {' '.join(command)}") from e
         except subprocess.CalledProcessError as e:
@@ -607,8 +620,8 @@ class GitManager:
                 )
                 log_fn("Updated remote 'origin' URL.")
 
-    def _normalize_rel_path(self, rel_path: str) -> str:
-        return rel_path.replace("\\", "/").strip("/")
+    def _normalize_rel_path(self, rel_path: object) -> str:
+        return _as_text(rel_path).replace("\\", "/").strip("/")
 
     def _compare_key(self, rel_path: str) -> str:
         normalized = self._normalize_rel_path(rel_path)
@@ -1159,7 +1172,7 @@ class GitManager:
 
         # Check explicit directories and wildcard directory patterns.
         for pattern in self.protect_dirs:
-            norm_pat = self._normalize_rel_path(pattern.rstrip("\\/"))
+            norm_pat = self._normalize_rel_path(_as_text(pattern).rstrip("\\/"))
             if not norm_pat:
                 continue
             pat_key = self._compare_key(norm_pat)
@@ -3007,7 +3020,7 @@ def cli_select_repo() -> Tuple[Optional[str], Optional[str]]:
     print("Select Mode:")
     print("[1] Normal Mode (Run once)")
     print("[2] Loop Mode (Repeat)")
-    m = input("Choice (1/2): ").strip()
+    m = _strip_text(input("Choice (1/2): "))
     mode = "Loop Mode" if m == "2" else "Normal Mode"
 
     print("\nSelect Repository:")
@@ -3015,7 +3028,7 @@ def cli_select_repo() -> Tuple[Optional[str], Optional[str]]:
         print(f"[{i}] {r}")
     
     try:
-        r_idx = int(input(f"Choice (1-{len(REPO_CHOICES)}): ").strip()) - 1
+        r_idx = int(_strip_text(input(f"Choice (1-{len(REPO_CHOICES)}): "))) - 1
         repo = REPO_CHOICES[r_idx]
     except (ValueError, IndexError):
         print("Invalid selection.")
@@ -3116,7 +3129,7 @@ def main():
                 for i, b in enumerate(branches, 1):
                     print(f"[{i}] {b}")
 
-                sel = input("Select branch number: ").strip()
+                sel = _strip_text(input("Select branch number: "))
                 branch = branches[int(sel)-1]
 
                 manager.sync(repo, branch, True, logging.info)

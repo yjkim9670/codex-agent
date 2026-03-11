@@ -141,22 +141,7 @@ CLAUDE_CODE_COMMAND = (
     os.environ.get("MODEL_CLAUDE_CODE_COMMAND", os.environ.get("MODEL_CLAUDE_COMMAND", "claude")).strip()
     or "claude"
 )
-CLAUDE_CODE_PERMISSION_MODE = (
-    os.environ.get("MODEL_CLAUDE_CODE_PERMISSION_MODE", os.environ.get("MODEL_CLAUDE_PERMISSION_MODE", "default"))
-    .strip()
-    or "default"
-)
-CLAUDE_CODE_TOOLS = (
-    os.environ.get("MODEL_CLAUDE_CODE_TOOLS", os.environ.get("MODEL_CLAUDE_TOOLS", ""))
-)
-CLAUDE_CODE_DEFAULT_MODEL = (
-    os.environ.get(
-        "MODEL_CLAUDE_CODE_DEFAULT_MODEL",
-        os.environ.get("MODEL_CLAUDE_DEFAULT_MODEL", "sonnet"),
-    )
-    .strip()
-    or "sonnet"
-)
+CLAUDE_CODE_DEFAULT_MODEL = "default"
 
 PROVIDER_DEFAULT_MODELS = {
     "gemini": GEMINI_DEFAULT_MODEL,
@@ -189,18 +174,7 @@ DTGPT_MODEL_OPTIONS = _read_csv_env("MODEL_DTGPT_MODEL_OPTIONS")
 if not DTGPT_MODEL_OPTIONS:
     DTGPT_MODEL_OPTIONS = _default_dtgpt_options
 
-_default_claude_code_options = sorted(
-    {
-        CLAUDE_CODE_DEFAULT_MODEL,
-        "sonnet",
-        "opus",
-    }
-)
-CLAUDE_CODE_MODEL_OPTIONS = _read_csv_env("MODEL_CLAUDE_CODE_MODEL_OPTIONS")
-if not CLAUDE_CODE_MODEL_OPTIONS:
-    CLAUDE_CODE_MODEL_OPTIONS = _read_csv_env("MODEL_CLAUDE_MODEL_OPTIONS")
-if not CLAUDE_CODE_MODEL_OPTIONS:
-    CLAUDE_CODE_MODEL_OPTIONS = _default_claude_code_options
+CLAUDE_CODE_MODEL_OPTIONS = [CLAUDE_CODE_DEFAULT_MODEL]
 
 PROVIDER_MODEL_OPTIONS = {
     "gemini": GEMINI_MODEL_OPTIONS,

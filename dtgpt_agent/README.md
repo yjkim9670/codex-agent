@@ -19,7 +19,8 @@ Out-of-scope in this implementation:
 - `dtgpt_agent/storage.py`: session/settings JSON persistence
 - `dtgpt_agent/config.py`: environment/config values
 - `dtgpt_agent/__main__.py`: app launcher (`python -m dtgpt_agent`)
-- `dtgpt_agent/run_dtgpt_agent.sh`: quiet shell launcher (suppresses GUI noise logs by default, auto-loads `model_agent_env.local.sh` if present)
+- `run_dtgpt_agent.sh`: quiet shell launcher at repo root (suppresses GUI noise logs by default, auto-loads `model_agent_env.local.sh` if present)
+- `dtgpt_agent/run_dtgpt_agent.sh`: internal launcher used by root script
 
 ## Run
 
@@ -31,13 +32,13 @@ python -m dtgpt_agent
 Or run through shell wrapper:
 
 ```bash
-./dtgpt_agent/run_dtgpt_agent.sh
+./run_dtgpt_agent.sh
 ```
 
 To show every GUI stderr line (disable noise filtering):
 
 ```bash
-DTGPT_AGENT_SHOW_GUI_NOISE=1 ./dtgpt_agent/run_dtgpt_agent.sh
+DTGPT_AGENT_SHOW_GUI_NOISE=1 ./run_dtgpt_agent.sh
 ```
 
 Input note:
@@ -61,13 +62,10 @@ Provider settings:
 - `MODEL_DTGPT_API_KEY_PREFIX` (default: `Bearer`)
 - `MODEL_DTGPT_API_KEY_ENV` (default: `DTGPT_API_KEY`)
 - `MODEL_CLAUDE_CODE_COMMAND` (default: `claude`)
-- `MODEL_CLAUDE_CODE_DEFAULT_MODEL` (default: `sonnet`)
-- `MODEL_CLAUDE_CODE_MODEL_OPTIONS` (comma-separated)
-- `MODEL_CLAUDE_CODE_PERMISSION_MODE` (default: `default`)
-- `MODEL_CLAUDE_CODE_TOOLS` (default: empty string, disables tools in `--print` mode)
 
 Claude Code note:
-- Non-interactive execution uses `claude -p --output-format json`.
+- Non-interactive execution uses `claude -p "<prompt>"`.
+- `--model` 옵션은 사용하지 않으며, Claude는 기본 모델로만 실행됩니다.
 - Claude authentication must be valid (`claude` login/session). If expired, provider responses return the CLI error text.
 
 Behavior tuning:
@@ -80,6 +78,7 @@ Behavior tuning:
 
 Generate a single installer shell script that restores:
 - `dtgpt_agent/`
+- `run_dtgpt_agent.sh`
 - `model_agent_env.local.sh` (contains your DTGPT/Gemini API keys)
 
 The generated installer is copied to clipboard by default:

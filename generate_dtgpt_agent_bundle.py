@@ -14,6 +14,7 @@ from pathlib import Path
 
 SOURCE_PATHS = (
     "dtgpt_agent",
+    "run_dtgpt_agent.sh",
     "model_agent_env.local.sh",
 )
 
@@ -93,6 +94,18 @@ def _render_installer(repo_root: Path, files: list[Path]) -> str:
         lines.append(marker)
         lines.append("")
 
+    lines.extend(
+        [
+            'if [[ -f "${TARGET_ROOT%/}/run_dtgpt_agent.sh" ]]; then',
+            '  chmod +x "${TARGET_ROOT%/}/run_dtgpt_agent.sh"',
+            "fi",
+            'if [[ -f "${TARGET_ROOT%/}/dtgpt_agent/run_dtgpt_agent.sh" ]]; then',
+            '  chmod +x "${TARGET_ROOT%/}/dtgpt_agent/run_dtgpt_agent.sh"',
+            "fi",
+            "",
+        ]
+    )
+
     lines.append('echo "Completed. Files restored under: $TARGET_ROOT"')
     lines.append("")
     return "\n".join(lines)
@@ -126,13 +139,13 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate a shell installer that restores dtgpt_agent and model_agent_env.local.sh via gzip+base64 payloads."
+        description="Generate a shell installer that restores dtgpt_agent, run_dtgpt_agent.sh, and model_agent_env.local.sh via gzip+base64 payloads."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parent,
-        help="Repository root containing dtgpt_agent and model_agent_env.local.sh.",
+        help="Repository root containing dtgpt_agent, run_dtgpt_agent.sh, and model_agent_env.local.sh.",
     )
     parser.add_argument(
         "--output",

@@ -263,16 +263,16 @@ class DtgptAgentApp:
         )
 
         style.configure(
-            "Icon.TButton",
-            padding=(6, 2),
+            "Copy.TButton",
+            padding=(10, 4),
             borderwidth=0,
             focusthickness=0,
             background=_UI_COLORS["surface_muted"],
             foreground=_UI_COLORS["text"],
-            font=(self.ui_font_family, 9),
+            font=(self.ui_font_family, 10, "bold"),
         )
         style.map(
-            "Icon.TButton",
+            "Copy.TButton",
             background=[("active", "#d9e3f0"), ("disabled", "#eef2f7")],
             foreground=[("disabled", "#9aa8ba")],
         )
@@ -474,6 +474,7 @@ class DtgptAgentApp:
         self.input_text.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.input_text.bind("<Control-Return>", self._on_send_shortcut)
         self.input_text.bind("<Command-Return>", self._on_send_shortcut)
+        self.input_text.bind("<Shift-space>", self._on_shift_space_for_ime)
 
         self.send_button = ttk.Button(input_wrap, text="Send", command=self._send_message, style="Primary.TButton")
         self.send_button.grid(row=0, column=1, sticky="ns")
@@ -714,10 +715,10 @@ class DtgptAgentApp:
 
         ttk.Button(
             code_header,
-            text="⧉",
-            style="Icon.TButton",
+            text="Copy",
+            style="Copy.TButton",
             command=lambda snippet=code_text: self._copy_to_clipboard(snippet, "코드블록을 복사했습니다."),
-            width=3,
+            width=5,
         ).pack(side="right")
 
         line_count = max(3, min(18, code_text.count("\n") + 1))
@@ -787,10 +788,10 @@ class DtgptAgentApp:
         raw_message = str(content or "")
         ttk.Button(
             bubble_header,
-            text="⧉",
-            style="Icon.TButton",
+            text="Copy",
+            style="Copy.TButton",
             command=lambda text_to_copy=raw_message: self._copy_to_clipboard(text_to_copy, "메시지를 복사했습니다."),
-            width=3,
+            width=5,
         ).pack(side="right")
 
         bubble_body = tk.Frame(bubble, bg=bubble_bg)
@@ -995,6 +996,10 @@ class DtgptAgentApp:
 
     def _on_send_shortcut(self, _event=None):
         self._send_message()
+        return "break"
+
+    def _on_shift_space_for_ime(self, _event=None):
+        # Keep Shift+Space available for IME language toggle without inserting a space.
         return "break"
 
     def _set_busy(self, is_busy: bool, status: str | None = None) -> None:

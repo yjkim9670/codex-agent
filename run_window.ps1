@@ -10,7 +10,7 @@ Set-Location (Split-Path -Parent $ScriptDir)
 
 # Windows route must use cloud DTGPT endpoint only.
 $env:MODEL_DTGPT_API_BASE_URL = "http://cloud.dtgpt.samsungds.net/llm/v1"
-$env:MODEL_DTGPT_API_BASE_URLS = "http://cloud.dtgpt.samsungds.net/llm/v1,https://cloud.dtgpt.samsungds.net/llm/v1"
+$env:MODEL_DTGPT_API_BASE_URLS = "http://cloud.dtgpt.samsungds.net/llm/v1"
 
 if (-not $env:MODEL_CHAT_QUIET) {
     $env:MODEL_CHAT_QUIET = "1"

@@ -68,7 +68,7 @@ MODEL_CHAT_QUIET=0 ./run_model_chat_server.sh
 ```
 
 Endpoint routing by launcher:
-- `run_linux.sh`: DTGPT direct endpoint only (`https://dtgpt.samsungds.net/llm/v1`)
+- `run_linux.sh`: DTGPT direct endpoint only (`http://dtgpt.samsungds.net/llm/v1`)
 - `run_window.ps1`: DTGPT cloud endpoint only (`http://cloud.dtgpt.samsungds.net/llm/v1`)
 
 Default config is Linux-friendly for file edits:

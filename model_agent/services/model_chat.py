@@ -74,6 +74,8 @@ _TOOL_RUN_ALLOWED_EXECUTABLES = {
     'cat',
     'pwd',
     'echo',
+    'mkdir',
+    'rm',
     'test',
     '[',
     'chmod',
@@ -96,11 +98,10 @@ _TOOL_RUN_ALLOWED_EXECUTABLES = {
     'npm',
 }
 _DTGPT_KNOWN_BASE_URLS_LINUX = (
-    'https://dtgpt.samsungds.net/llm/v1',
+    'http://dtgpt.samsungds.net/llm/v1',
 )
 _DTGPT_KNOWN_BASE_URLS_WINDOWS = (
     'http://cloud.dtgpt.samsungds.net/llm/v1',
-    'https://cloud.dtgpt.samsungds.net/llm/v1',
 )
 _BLOCKED_WORKSPACE_PREFIXES = tuple(
     str(item or '').strip().replace('\\', '/').strip().strip('/')
@@ -880,14 +881,17 @@ def _match_blocked_workspace_prefix(relative_path):
 
 
 def _normalize_patch_path(token):
-    value = str(token or '').strip()
+    value = str(token or '').strip().replace('\\', '/')
     if not value:
         return None, None
     if value == '/dev/null':
         return None, None
     if value.startswith('a/') or value.startswith('b/'):
         value = value[2:]
-    value = value.strip()
+    value = value.strip().lstrip('./')
+    # Some model outputs include a workspace/ prefix even though paths should be workspace-relative.
+    while value.startswith('workspace/'):
+        value = value[len('workspace/'):]
     if not value:
         return None, None
 
@@ -1226,6 +1230,27 @@ def _summarize_patch_error(result):
     return message
 
 
+def _is_patch_already_applied(base_git_apply_cmd, patch_path, git_cwd, timeout_seconds):
+    reverse_check_cmd = list(base_git_apply_cmd)
+    reverse_check_cmd.extend([
+        '--reverse',
+        '--check',
+        '--unidiff-zero',
+        '--recount',
+        '--whitespace=nowarn',
+        patch_path,
+    ])
+    reverse_result = subprocess.run(
+        reverse_check_cmd,
+        cwd=git_cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    return reverse_result.returncode == 0
+
+
 def _resolve_git_apply_scope(workspace_dir, timeout_seconds):
     workspace_root = Path(workspace_dir).resolve()
     default_scope = {
@@ -1279,6 +1304,7 @@ def _apply_patch_text_to_workspace(patch_text):
     payload = {
         'detected': True,
         'applied': False,
+        'already_applied': False,
         'files': [],
         'error': None,
         'sanitized_hunks': False,
@@ -1346,6 +1372,11 @@ def _apply_patch_text_to_workspace(patch_text):
             check=False,
         )
         if check_result.returncode != 0:
+            if _is_patch_already_applied(base_git_apply_cmd, patch_path, git_cwd, timeout_seconds):
+                payload['applied'] = True
+                payload['already_applied'] = True
+                payload['error'] = None
+                return payload
             payload['error'] = _summarize_patch_error(check_result)
             return payload
 
@@ -1360,6 +1391,11 @@ def _apply_patch_text_to_workspace(patch_text):
             check=False,
         )
         if apply_result.returncode != 0:
+            if _is_patch_already_applied(base_git_apply_cmd, patch_path, git_cwd, timeout_seconds):
+                payload['applied'] = True
+                payload['already_applied'] = True
+                payload['error'] = None
+                return payload
             payload['error'] = _summarize_patch_error(apply_result)
             return payload
 
@@ -1586,12 +1622,13 @@ def _format_patch_apply_note(result):
         sanitize_notes.append('hunk header 자동 보정')
     sanitized_text = f" ({', '.join(sanitize_notes)})" if sanitize_notes else ''
     if result.get('applied'):
+        status_text = '이미 적용된 변경으로 처리' if result.get('already_applied') else '적용 완료'
         file_text = ', '.join(files[:6])
         if len(files) > 6:
             file_text = f'{file_text}, ... (+{len(files) - 6})'
         if file_text:
-            return f'[Patch Apply] 적용 완료{sanitized_text}: {file_text}'
-        return f'[Patch Apply] 적용 완료{sanitized_text}'
+            return f'[Patch Apply] {status_text}{sanitized_text}: {file_text}'
+        return f'[Patch Apply] {status_text}{sanitized_text}'
 
     error_text = str(result.get('error') or '').strip() or '원인을 확인할 수 없습니다.'
     return f'[Patch Apply] 적용 실패{sanitized_text}: {error_text}'
@@ -1718,7 +1755,7 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
                 '- Tool-run block format: first non-empty line must be `# @run`, then one command per line.',
                 '- For conditional/compound shell logic, prefer `bash -lc \'...\'` as a single command line.',
                 '- When checking deletion, avoid plain `ls <file>`; use `test ! -f <file>` (or equivalent) so success returns exit code 0.',
-                '- Use supported commands only: python/python3, bash/sh, ls/cat/pwd/echo, test/[, chmod, iverilog/vvp/verilator, vcs/xrun/ncvlog/ncelab/ncsim/vsim/vlog, make, pytest, gcc/g++, cmake, node/npm, or workspace-local scripts like ./run.sh.',
+                '- Use supported commands only: python/python3, bash/sh, ls/cat/pwd/echo, mkdir/rm, test/[, chmod, iverilog/vvp/verilator, vcs/xrun/ncvlog/ncelab/ncsim/vsim/vlog, make, pytest, gcc/g++, cmake, node/npm, or workspace-local scripts like ./run.sh.',
             ]
             + (
                 [f"- Never read or modify paths under: {', '.join(f'{item}/' for item in _BLOCKED_WORKSPACE_PREFIXES)}"]

@@ -89,7 +89,7 @@ MODEL_DTGPT_API_KEY = os.environ.get('MODEL_DTGPT_API_KEY', '').strip()
 MODEL_DTGPT_API_KEY_ENV = os.environ.get('MODEL_DTGPT_API_KEY_ENV', 'DTGPT_API_KEY').strip() or 'DTGPT_API_KEY'
 MODEL_DTGPT_API_KEY_HEADER = os.environ.get('MODEL_DTGPT_API_KEY_HEADER', 'Authorization').strip() or 'Authorization'
 MODEL_DTGPT_API_KEY_PREFIX = os.environ.get('MODEL_DTGPT_API_KEY_PREFIX', 'Bearer').strip() or 'Bearer'
-_default_dtgpt_api_base_url = 'http://cloud.dtgpt.samsungds.net/llm/v1' if IS_WINDOWS else 'https://dtgpt.samsungds.net/llm/v1'
+_default_dtgpt_api_base_url = 'http://cloud.dtgpt.samsungds.net/llm/v1' if IS_WINDOWS else 'http://dtgpt.samsungds.net/llm/v1'
 MODEL_DTGPT_API_BASE_URL = (
     os.environ.get('MODEL_DTGPT_API_BASE_URL', _default_dtgpt_api_base_url).strip().rstrip('/')
     or _default_dtgpt_api_base_url
@@ -99,13 +99,12 @@ if not MODEL_DTGPT_API_BASE_URLS:
     if IS_WINDOWS:
         MODEL_DTGPT_API_BASE_URLS = [
             MODEL_DTGPT_API_BASE_URL,
-            'https://cloud.dtgpt.samsungds.net/llm/v1',
             'http://cloud.dtgpt.samsungds.net/llm/v1',
         ]
     else:
         MODEL_DTGPT_API_BASE_URLS = [
             MODEL_DTGPT_API_BASE_URL,
-            'https://dtgpt.samsungds.net/llm/v1',
+            'http://dtgpt.samsungds.net/llm/v1',
         ]
 
 MODEL_GEMINI_DEFAULT_MODEL = (

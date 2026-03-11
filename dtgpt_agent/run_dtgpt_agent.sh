@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON_BIN=""
+LOCAL_ENV_SCRIPT="${REPO_ROOT}/model_agent_env.local.sh"
 
 if [[ -n "${TG_PYTHON:-}" ]]; then
     PYTHON_BIN="${TG_PYTHON}/python"
@@ -23,6 +24,11 @@ else
 fi
 
 cd "${REPO_ROOT}"
+
+if [[ -f "${LOCAL_ENV_SCRIPT}" ]]; then
+    # shellcheck disable=SC1090
+    source "${LOCAL_ENV_SCRIPT}"
+fi
 
 # Default behavior suppresses noisy GUI environment logs (Gtk/Gdk/Qt/Xlib/etc.).
 # Set DTGPT_AGENT_SHOW_GUI_NOISE=1 to print all stderr lines unchanged.

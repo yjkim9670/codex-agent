@@ -18,7 +18,7 @@ Out-of-scope in this implementation:
 - `dtgpt_agent/storage.py`: session/settings JSON persistence
 - `dtgpt_agent/config.py`: environment/config values
 - `dtgpt_agent/__main__.py`: app launcher (`python -m dtgpt_agent`)
-- `dtgpt_agent/run_dtgpt_agent.sh`: quiet shell launcher (suppresses GUI noise logs by default)
+- `dtgpt_agent/run_dtgpt_agent.sh`: quiet shell launcher (suppresses GUI noise logs by default, auto-loads `model_agent_env.local.sh` if present)
 
 ## Run
 
@@ -65,11 +65,17 @@ Behavior tuning:
 
 ## Bundle generator
 
-Generate a single installer shell script that restores the entire `dtgpt_agent/` directory and copy it to clipboard by default:
+Generate a single installer shell script that restores:
+- `dtgpt_agent/`
+- `model_agent_env.local.sh` (contains your DTGPT/Gemini API keys)
+
+The generated installer is copied to clipboard by default:
 
 ```bash
 python generate_dtgpt_agent_bundle.py --output /tmp/dtgpt_agent_bundle.sh
 ```
+
+`model_agent_env.local.sh` is bundled as-is. Handle the generated bundle script as a secret file.
 
 Skip clipboard copy:
 

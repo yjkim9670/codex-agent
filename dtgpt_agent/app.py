@@ -13,10 +13,29 @@ from .chat_service import ChatService
 from .config import MAX_PROMPT_CHARS, MAX_TITLE_CHARS
 
 _ROLE_LABELS = {
-    "user": "User",
+    "user": "You",
     "assistant": "Assistant",
     "system": "System",
     "error": "Error",
+}
+
+_UI_COLORS = {
+    "bg": "#edf1f7",
+    "surface": "#ffffff",
+    "surface_alt": "#f5f8fc",
+    "surface_muted": "#e8eef7",
+    "text": "#0f172a",
+    "muted": "#5b6b83",
+    "border": "#d4dde8",
+    "primary": "#0f766e",
+    "primary_hover": "#0d625c",
+    "primary_soft": "#d7f3ef",
+    "success": "#0f766e",
+    "user_bubble": "#dbeafe",
+    "assistant_bubble": "#ecfeff",
+    "system_bubble": "#fff7ed",
+    "error_bubble": "#fee2e2",
+    "error_text": "#7f1d1d",
 }
 
 
@@ -47,54 +66,209 @@ class DtgptAgentApp:
         self.provider_var = tk.StringVar(value="")
         self.model_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Ready")
+        self.session_title_var = tk.StringVar(value="No session selected")
 
         self.root.title("DTGPT Agent")
-        self.root.geometry("1200x760")
-        self.root.minsize(920, 560)
+        self.root.geometry("1260x820")
+        self.root.minsize(980, 620)
+        self.root.configure(bg=_UI_COLORS["bg"])
 
+        self._configure_styles()
         self._build_ui()
         self._load_initial_data()
         self._poll_worker_events()
 
+    def _configure_styles(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        self.root.option_add("*Font", "{Segoe UI} 10")
+
+        style.configure("App.TFrame", background=_UI_COLORS["bg"])
+        style.configure(
+            "Card.TFrame",
+            background=_UI_COLORS["surface"],
+            relief="flat",
+            borderwidth=1,
+        )
+
+        style.configure(
+            "AppTitle.TLabel",
+            background=_UI_COLORS["bg"],
+            foreground=_UI_COLORS["text"],
+            font=("Segoe UI Semibold", 20),
+        )
+        style.configure(
+            "AppSubtitle.TLabel",
+            background=_UI_COLORS["bg"],
+            foreground=_UI_COLORS["muted"],
+            font=("Segoe UI", 10),
+        )
+        style.configure(
+            "SectionTitle.TLabel",
+            background=_UI_COLORS["surface"],
+            foreground=_UI_COLORS["text"],
+            font=("Segoe UI Semibold", 12),
+        )
+        style.configure(
+            "SectionMeta.TLabel",
+            background=_UI_COLORS["surface"],
+            foreground=_UI_COLORS["muted"],
+            font=("Segoe UI", 9),
+        )
+        style.configure(
+            "FieldLabel.TLabel",
+            background=_UI_COLORS["surface"],
+            foreground=_UI_COLORS["muted"],
+            font=("Segoe UI Semibold", 9),
+        )
+        style.configure(
+            "Status.TLabel",
+            background=_UI_COLORS["surface"],
+            foreground=_UI_COLORS["success"],
+            font=("Segoe UI Semibold", 9),
+        )
+        style.configure(
+            "ChatTitle.TLabel",
+            background=_UI_COLORS["surface"],
+            foreground=_UI_COLORS["text"],
+            font=("Segoe UI Semibold", 12),
+        )
+
+        style.configure(
+            "Primary.TButton",
+            background=_UI_COLORS["primary"],
+            foreground="#ffffff",
+            padding=(12, 8),
+            borderwidth=0,
+            focusthickness=0,
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("active", _UI_COLORS["primary_hover"]), ("disabled", "#93a4b6")],
+            foreground=[("disabled", "#e2e8f0")],
+        )
+
+        style.configure(
+            "Ghost.TButton",
+            background=_UI_COLORS["surface_muted"],
+            foreground=_UI_COLORS["text"],
+            padding=(10, 7),
+            borderwidth=0,
+            focusthickness=0,
+        )
+        style.map(
+            "Ghost.TButton",
+            background=[("active", "#d9e3f0"), ("disabled", "#eef2f7")],
+            foreground=[("disabled", "#9aa8ba")],
+        )
+
+        style.configure(
+            "Modern.TCombobox",
+            fieldbackground=_UI_COLORS["surface_alt"],
+            background=_UI_COLORS["surface_alt"],
+            foreground=_UI_COLORS["text"],
+            bordercolor=_UI_COLORS["border"],
+            lightcolor=_UI_COLORS["border"],
+            darkcolor=_UI_COLORS["border"],
+            arrowcolor=_UI_COLORS["text"],
+            padding=5,
+        )
+        style.map(
+            "Modern.TCombobox",
+            fieldbackground=[("readonly", _UI_COLORS["surface_alt"]), ("disabled", "#eef2f7")],
+            foreground=[("disabled", "#9aa8ba")],
+        )
+
     def _build_ui(self) -> None:
-        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=1)
         self.root.columnconfigure(0, weight=1)
 
-        top_bar = ttk.Frame(self.root, padding=(10, 8))
-        top_bar.grid(row=0, column=0, sticky="ew")
-        top_bar.columnconfigure(6, weight=1)
+        header = ttk.Frame(self.root, style="App.TFrame", padding=(18, 14, 18, 6))
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
 
-        ttk.Label(top_bar, text="Provider").grid(row=0, column=0, padx=(0, 8), sticky="w")
-        self.provider_combo = ttk.Combobox(top_bar, textvariable=self.provider_var, state="readonly", width=18)
-        self.provider_combo.grid(row=0, column=1, padx=(0, 14), sticky="w")
+        ttk.Label(header, text="DTGPT Workspace", style="AppTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            header,
+            text="Session chat with provider/model switching in a modern desktop shell",
+            style="AppSubtitle.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        control_card = ttk.Frame(self.root, style="Card.TFrame", padding=(16, 12))
+        control_card.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+        control_card.columnconfigure(5, weight=1)
+
+        ttk.Label(control_card, text="Provider", style="FieldLabel.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.provider_combo = ttk.Combobox(
+            control_card,
+            textvariable=self.provider_var,
+            state="readonly",
+            width=16,
+            style="Modern.TCombobox",
+        )
+        self.provider_combo.grid(row=0, column=1, sticky="w", padx=(0, 14))
         self.provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
 
-        ttk.Label(top_bar, text="Model").grid(row=0, column=2, padx=(0, 8), sticky="w")
-        self.model_combo = ttk.Combobox(top_bar, textvariable=self.model_var, state="readonly", width=34)
-        self.model_combo.grid(row=0, column=3, padx=(0, 12), sticky="w")
+        ttk.Label(control_card, text="Model", style="FieldLabel.TLabel").grid(row=0, column=2, sticky="w", padx=(0, 8))
+        self.model_combo = ttk.Combobox(
+            control_card,
+            textvariable=self.model_var,
+            state="readonly",
+            width=34,
+            style="Modern.TCombobox",
+        )
+        self.model_combo.grid(row=0, column=3, sticky="w", padx=(0, 12))
 
-        self.apply_settings_button = ttk.Button(top_bar, text="Apply", command=self._apply_settings)
-        self.apply_settings_button.grid(row=0, column=4, padx=(0, 14), sticky="w")
+        self.apply_settings_button = ttk.Button(
+            control_card,
+            text="Apply",
+            command=self._apply_settings,
+            style="Primary.TButton",
+        )
+        self.apply_settings_button.grid(row=0, column=4, sticky="w")
 
-        self.status_label = ttk.Label(top_bar, textvariable=self.status_var, anchor="e")
-        self.status_label.grid(row=0, column=6, sticky="ew")
+        self.status_label = ttk.Label(control_card, textvariable=self.status_var, style="Status.TLabel", anchor="e")
+        self.status_label.grid(row=0, column=5, sticky="ew")
 
         body = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
-        body.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        body.grid(row=2, column=0, sticky="nsew", padx=18, pady=(0, 18))
 
-        left_frame = ttk.Frame(body, padding=(8, 8))
-        left_frame.columnconfigure(0, weight=1)
-        left_frame.rowconfigure(1, weight=1)
-        body.add(left_frame, weight=1)
+        left_card = ttk.Frame(body, style="Card.TFrame", padding=(12, 12, 12, 12))
+        left_card.columnconfigure(0, weight=1)
+        left_card.rowconfigure(2, weight=1)
+        body.add(left_card, weight=1)
 
-        ttk.Label(left_frame, text="Sessions").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(left_card, text="Conversations", style="SectionTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            left_card,
+            text="Create, rename, or remove sessions.",
+            style="SectionMeta.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
 
-        session_list_wrap = ttk.Frame(left_frame)
-        session_list_wrap.grid(row=1, column=0, sticky="nsew")
+        session_list_wrap = ttk.Frame(left_card, style="Card.TFrame")
+        session_list_wrap.grid(row=2, column=0, sticky="nsew")
         session_list_wrap.rowconfigure(0, weight=1)
         session_list_wrap.columnconfigure(0, weight=1)
 
-        self.session_listbox = tk.Listbox(session_list_wrap, exportselection=False)
+        self.session_listbox = tk.Listbox(
+            session_list_wrap,
+            exportselection=False,
+            activestyle="none",
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=_UI_COLORS["border"],
+            highlightcolor=_UI_COLORS["primary"],
+            background=_UI_COLORS["surface_alt"],
+            foreground=_UI_COLORS["text"],
+            selectbackground=_UI_COLORS["primary"],
+            selectforeground="#ffffff",
+            font=("Segoe UI", 10),
+        )
         self.session_listbox.grid(row=0, column=0, sticky="nsew")
         self.session_listbox.bind("<<ListboxSelect>>", self._on_session_selected)
 
@@ -102,44 +276,210 @@ class DtgptAgentApp:
         session_scroll.grid(row=0, column=1, sticky="ns")
         self.session_listbox.configure(yscrollcommand=session_scroll.set)
 
-        session_button_row = ttk.Frame(left_frame)
-        session_button_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        session_button_row = ttk.Frame(left_card, style="Card.TFrame")
+        session_button_row.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         session_button_row.columnconfigure((0, 1, 2), weight=1)
 
-        self.new_session_button = ttk.Button(session_button_row, text="New", command=self._create_session)
+        self.new_session_button = ttk.Button(
+            session_button_row,
+            text="New",
+            command=self._create_session,
+            style="Ghost.TButton",
+        )
         self.new_session_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
-        self.rename_session_button = ttk.Button(session_button_row, text="Rename", command=self._rename_session)
+        self.rename_session_button = ttk.Button(
+            session_button_row,
+            text="Rename",
+            command=self._rename_session,
+            style="Ghost.TButton",
+        )
         self.rename_session_button.grid(row=0, column=1, sticky="ew", padx=(0, 6))
 
-        self.delete_session_button = ttk.Button(session_button_row, text="Delete", command=self._delete_session)
+        self.delete_session_button = ttk.Button(
+            session_button_row,
+            text="Delete",
+            command=self._delete_session,
+            style="Ghost.TButton",
+        )
         self.delete_session_button.grid(row=0, column=2, sticky="ew")
 
-        right_frame = ttk.Frame(body, padding=(8, 8))
-        right_frame.columnconfigure(0, weight=1)
-        right_frame.rowconfigure(0, weight=1)
-        right_frame.rowconfigure(1, weight=0)
-        body.add(right_frame, weight=3)
+        right_card = ttk.Frame(body, style="Card.TFrame", padding=(12, 12, 12, 12))
+        right_card.columnconfigure(0, weight=1)
+        right_card.rowconfigure(1, weight=1)
+        body.add(right_card, weight=3)
+
+        chat_header = ttk.Frame(right_card, style="Card.TFrame")
+        chat_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        chat_header.columnconfigure(0, weight=1)
+
+        ttk.Label(chat_header, textvariable=self.session_title_var, style="ChatTitle.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            chat_header,
+            text="Ctrl+Enter to send",
+            style="SectionMeta.TLabel",
+            anchor="e",
+        ).grid(row=0, column=1, sticky="e")
 
         self.chat_view = ScrolledText(
-            right_frame,
+            right_card,
             wrap=tk.WORD,
-            height=30,
             state="disabled",
-            font=("TkTextFont", 10),
+            height=30,
+            font=("Segoe UI", 10),
+            borderwidth=0,
+            relief="flat",
+            padx=6,
+            pady=8,
+            background=_UI_COLORS["surface_alt"],
+            foreground=_UI_COLORS["text"],
+            insertbackground=_UI_COLORS["text"],
+            selectbackground="#bfdbfe",
         )
-        self.chat_view.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+        self.chat_view.grid(row=1, column=0, sticky="nsew")
+        self._configure_chat_tags()
 
-        input_row = ttk.Frame(right_frame)
-        input_row.grid(row=1, column=0, sticky="ew")
-        input_row.columnconfigure(0, weight=1)
+        input_wrap = ttk.Frame(right_card, style="Card.TFrame", padding=(0, 10, 0, 0))
+        input_wrap.grid(row=2, column=0, sticky="ew")
+        input_wrap.columnconfigure(0, weight=1)
 
-        self.input_text = tk.Text(input_row, height=5, wrap=tk.WORD, font=("TkTextFont", 10))
+        self.input_text = tk.Text(
+            input_wrap,
+            height=5,
+            wrap=tk.WORD,
+            font=("Segoe UI", 10),
+            borderwidth=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground=_UI_COLORS["border"],
+            highlightcolor=_UI_COLORS["primary"],
+            background="#f8fafc",
+            foreground=_UI_COLORS["text"],
+            insertbackground=_UI_COLORS["text"],
+            padx=8,
+            pady=6,
+        )
         self.input_text.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.input_text.bind("<Control-Return>", self._on_send_shortcut)
 
-        self.send_button = ttk.Button(input_row, text="Send", command=self._send_message)
+        self.send_button = ttk.Button(input_wrap, text="Send", command=self._send_message, style="Primary.TButton")
         self.send_button.grid(row=0, column=1, sticky="ns")
+
+    def _configure_chat_tags(self) -> None:
+        self.chat_view.tag_configure(
+            "header_user",
+            foreground="#1d4ed8",
+            font=("Segoe UI Semibold", 9),
+            spacing1=2,
+            spacing3=2,
+            lmargin1=140,
+            lmargin2=140,
+            rmargin=18,
+        )
+        self.chat_view.tag_configure(
+            "header_assistant",
+            foreground="#0f766e",
+            font=("Segoe UI Semibold", 9),
+            spacing1=2,
+            spacing3=2,
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+        )
+        self.chat_view.tag_configure(
+            "header_system",
+            foreground="#9a3412",
+            font=("Segoe UI Semibold", 9),
+            spacing1=2,
+            spacing3=2,
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+        )
+        self.chat_view.tag_configure(
+            "header_error",
+            foreground=_UI_COLORS["error_text"],
+            font=("Segoe UI Semibold", 9),
+            spacing1=2,
+            spacing3=2,
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+        )
+
+        self.chat_view.tag_configure(
+            "body_user",
+            background=_UI_COLORS["user_bubble"],
+            foreground=_UI_COLORS["text"],
+            lmargin1=140,
+            lmargin2=140,
+            rmargin=18,
+            spacing1=2,
+            spacing3=4,
+            font=("Segoe UI", 10),
+        )
+        self.chat_view.tag_configure(
+            "body_assistant",
+            background=_UI_COLORS["assistant_bubble"],
+            foreground=_UI_COLORS["text"],
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+            spacing1=2,
+            spacing3=4,
+            font=("Segoe UI", 10),
+        )
+        self.chat_view.tag_configure(
+            "body_system",
+            background=_UI_COLORS["system_bubble"],
+            foreground="#7c2d12",
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+            spacing1=2,
+            spacing3=4,
+            font=("Segoe UI", 10),
+        )
+        self.chat_view.tag_configure(
+            "body_error",
+            background=_UI_COLORS["error_bubble"],
+            foreground=_UI_COLORS["error_text"],
+            lmargin1=18,
+            lmargin2=18,
+            rmargin=140,
+            spacing1=2,
+            spacing3=4,
+            font=("Segoe UI", 10),
+        )
+        self.chat_view.tag_configure("message_gap", spacing1=2, spacing3=8)
+
+    def _chat_tags_for_role(self, role: str) -> tuple[str, str]:
+        normalized = str(role or "assistant").lower()
+        if normalized == "user":
+            return "header_user", "body_user"
+        if normalized == "error":
+            return "header_error", "body_error"
+        if normalized == "system":
+            return "header_system", "body_system"
+        return "header_assistant", "body_assistant"
+
+    def _insert_message_block(self, role: str, content: str, created_at: str | None = None) -> None:
+        normalized_role = str(role or "assistant").lower()
+        role_label = _ROLE_LABELS.get(normalized_role, normalized_role.capitalize() or "Assistant")
+        timestamp = _format_timestamp(created_at)
+        header_tag, body_tag = self._chat_tags_for_role(normalized_role)
+
+        text = str(content or "")
+        if not text.strip():
+            text = "(empty)"
+        if not text.endswith("\n"):
+            text += "\n"
+
+        self.chat_view.insert(tk.END, f"{role_label}  {timestamp}\n", header_tag)
+        self.chat_view.insert(tk.END, text, body_tag)
+        self.chat_view.insert(tk.END, "\n", "message_gap")
 
     def _load_initial_data(self) -> None:
         self._load_settings_controls()
@@ -204,6 +544,7 @@ class DtgptAgentApp:
     def _open_session(self, session_id: str) -> None:
         session = self.service.get_session(session_id)
         if not session:
+            self.session_title_var.set("No session selected")
             self.status_var.set("Session not found.")
             return
 
@@ -219,25 +560,22 @@ class DtgptAgentApp:
         for message in messages:
             if not isinstance(message, dict):
                 continue
-            role = str(message.get("role") or "assistant").lower()
-            role_label = _ROLE_LABELS.get(role, role.capitalize() or "Assistant")
-            created_at = _format_timestamp(message.get("created_at"))
-            content = str(message.get("content") or "")
-
-            header = f"[{created_at}] {role_label}\n"
-            self.chat_view.insert(tk.END, header)
-            self.chat_view.insert(tk.END, f"{content}\n\n")
+            self._insert_message_block(
+                role=str(message.get("role") or "assistant"),
+                content=str(message.get("content") or ""),
+                created_at=message.get("created_at"),
+            )
 
         self.chat_view.configure(state="disabled")
         self.chat_view.see(tk.END)
 
         title = str(session.get("title") or "New session")
+        self.session_title_var.set(title)
         self.status_var.set(f"Selected session: {title}")
 
     def _append_local_user_message(self, prompt: str) -> None:
         self.chat_view.configure(state="normal")
-        self.chat_view.insert(tk.END, f"[{_format_timestamp(datetime.now().isoformat())}] User\n")
-        self.chat_view.insert(tk.END, f"{prompt}\n\n")
+        self._insert_message_block("user", prompt, datetime.now().astimezone().isoformat(timespec="seconds"))
         self.chat_view.configure(state="disabled")
         self.chat_view.see(tk.END)
 
@@ -329,6 +667,7 @@ class DtgptAgentApp:
             return
 
         self.current_session_id = None
+        self.session_title_var.set("No session selected")
         self._refresh_session_list()
         self.status_var.set("Session deleted.")
 
@@ -391,17 +730,21 @@ class DtgptAgentApp:
     def _send_message_worker(self, session_id: str, prompt: str) -> None:
         try:
             payload = self.service.send_message(session_id=session_id, prompt=prompt)
-            self._event_queue.put({
-                "type": "send_success",
-                "session_id": session_id,
-                "payload": payload,
-            })
+            self._event_queue.put(
+                {
+                    "type": "send_success",
+                    "session_id": session_id,
+                    "payload": payload,
+                }
+            )
         except Exception as exc:
-            self._event_queue.put({
-                "type": "send_error",
-                "session_id": session_id,
-                "error": str(exc),
-            })
+            self._event_queue.put(
+                {
+                    "type": "send_error",
+                    "session_id": session_id,
+                    "error": str(exc),
+                }
+            )
 
     def _poll_worker_events(self) -> None:
         try:

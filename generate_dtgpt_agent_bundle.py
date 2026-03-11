@@ -14,6 +14,7 @@ from pathlib import Path
 
 SOURCE_PATHS = (
     "dtgpt_agent",
+    "model_agent_env.local.sh",
 )
 
 SKIP_PARTS = {"__pycache__", ".DS_Store"}
@@ -125,13 +126,13 @@ def _copy_to_clipboard(text: str) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Generate a shell installer that restores dtgpt_agent via gzip+base64 payloads."
+        description="Generate a shell installer that restores dtgpt_agent and model_agent_env.local.sh via gzip+base64 payloads."
     )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=Path(__file__).resolve().parent,
-        help="Repository root containing dtgpt_agent.",
+        help="Repository root containing dtgpt_agent and model_agent_env.local.sh.",
     )
     parser.add_argument(
         "--output",

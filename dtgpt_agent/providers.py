@@ -1,16 +1,21 @@
-"""Provider access helpers for Gemini and DTGPT."""
+"""Provider access helpers for Gemini, DTGPT, and Claude Code."""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from .config import (
     API_TIMEOUT_SECONDS,
+    CLAUDE_CODE_COMMAND,
+    CLAUDE_CODE_DEFAULT_MODEL,
+    CLAUDE_CODE_PERMISSION_MODE,
+    CLAUDE_CODE_TOOLS,
     DEFAULT_PROVIDER,
     DTGPT_API_KEY,
     DTGPT_API_KEY_ENV,
@@ -29,9 +34,10 @@ from .config import (
     PROVIDER_DEFAULT_MODELS,
     PROVIDER_MODEL_OPTIONS,
     PROVIDER_OPTIONS,
+    WORKSPACE_DIR,
 )
 
-SUPPORTED_PROVIDERS = ("gemini", "dtgpt_oa", "dtgpt_cae")
+SUPPORTED_PROVIDERS = ("gemini", "dtgpt_oa", "dtgpt_cae", "claude_code")
 OPENAI_COMPATIBLE_PROVIDERS = ("dtgpt_oa", "dtgpt_cae")
 ENV_REFERENCE_PATTERN = re.compile(r"^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$")
 
@@ -115,6 +121,12 @@ def canonical_provider_name(value: str | None) -> str:
         "dtgpt-cae": "dtgpt_cae",
         "dtgpt cae": "dtgpt_cae",
         "cae": "dtgpt_cae",
+        "claude": "claude_code",
+        "claude_code": "claude_code",
+        "claude-code": "claude_code",
+        "claude code": "claude_code",
+        "anthropic": "claude_code",
+        "anthropic claude": "claude_code",
     }
     return aliases.get(raw, "")
 
@@ -151,6 +163,8 @@ def default_model_for_provider(provider: str | None) -> str:
         return configured.strip()
     if normalized in OPENAI_COMPATIBLE_PROVIDERS:
         return DTGPT_DEFAULT_MODEL
+    if normalized == "claude_code":
+        return CLAUDE_CODE_DEFAULT_MODEL
     return GEMINI_DEFAULT_MODEL
 
 
@@ -181,6 +195,16 @@ def normalize_model_name(provider: str | None, value: str | None) -> str:
             "glm4.7": "GLM4.7",
             "oss-120b": "openai/gpt-oss-120b",
             "gpt-oss-120b": "openai/gpt-oss-120b",
+        }
+        return alias_map.get(alias_key, raw)
+
+    if normalized_provider == "claude_code":
+        alias_key = raw.lower()
+        alias_map = {
+            "auto": CLAUDE_CODE_DEFAULT_MODEL,
+            "sonnet": "sonnet",
+            "opus": "opus",
+            "haiku": "haiku",
         }
         return alias_map.get(alias_key, raw)
 
@@ -472,6 +496,53 @@ def _extract_openai_response_text(payload) -> str:
     return "".join(chunks)
 
 
+def _extract_claude_code_result_text(raw_text: str) -> tuple[str, bool]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return "", False
+
+    payload = None
+    try:
+        payload = json.loads(text)
+    except Exception:
+        for line in reversed(text.splitlines()):
+            candidate = line.strip()
+            if not candidate:
+                continue
+            try:
+                payload = json.loads(candidate)
+                break
+            except Exception:
+                continue
+
+    if not isinstance(payload, dict):
+        return text, False
+
+    result_text = str(payload.get("result") or "").strip()
+    is_error = bool(payload.get("is_error"))
+    if result_text:
+        return result_text, is_error
+    return "", is_error
+
+
+def _build_claude_code_command(prompt: str, model: str) -> list[str]:
+    command = [CLAUDE_CODE_COMMAND, "-p", "--output-format", "json", "--no-session-persistence"]
+
+    permission_mode = str(_resolve_env_reference(CLAUDE_CODE_PERMISSION_MODE) or "").strip()
+    if permission_mode:
+        command.extend(["--permission-mode", permission_mode])
+
+    tools_configured = str(_resolve_env_reference(CLAUDE_CODE_TOOLS))
+    command.extend(["--tools", tools_configured])
+
+    normalized_model = str(model or "").strip()
+    if normalized_model:
+        command.extend(["--model", normalized_model])
+
+    command.append(str(prompt or ""))
+    return command
+
+
 def execute_gemini_prompt(prompt: str, model: str) -> tuple[str | None, str | None]:
     if not _has_valid_api_key("gemini"):
         return None, "Gemini API key is not configured."
@@ -575,12 +646,56 @@ def execute_dtgpt_prompt(
     return None, last_error or f"{provider_label} request failed."
 
 
+def execute_claude_code_prompt(prompt: str, model: str) -> tuple[str | None, str | None]:
+    workspace_path = WORKSPACE_DIR
+    try:
+        workspace_path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    cmd = _build_claude_code_command(prompt, model)
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(workspace_path),
+            capture_output=True,
+            text=True,
+            timeout=max(1, int(API_TIMEOUT_SECONDS)),
+            check=False,
+        )
+    except FileNotFoundError:
+        return None, f"Claude Code command not found: {CLAUDE_CODE_COMMAND}"
+    except subprocess.TimeoutExpired:
+        return None, "Claude Code request timed out."
+    except Exception as exc:
+        return None, f"Claude Code request failed: {exc}"
+
+    response_text, response_is_error = _extract_claude_code_result_text(result.stdout)
+    stderr_text = str(result.stderr or "").strip()
+
+    if response_is_error:
+        if response_text:
+            return None, response_text
+        if stderr_text:
+            return None, stderr_text
+        return None, "Claude Code returned an error."
+
+    if response_text:
+        return response_text, None
+
+    if result.returncode != 0:
+        return None, stderr_text or "Claude Code execution failed."
+    return None, "Claude Code returned an empty response."
+
+
 def execute_prompt(
     provider: str | None, prompt: str, model: str | None
 ) -> tuple[str | None, str | None]:
     normalized_provider = normalize_provider_name(provider)
     normalized_model = normalize_model_name(normalized_provider, model)
 
+    if normalized_provider == "claude_code":
+        return execute_claude_code_prompt(prompt, normalized_model)
     if normalized_provider in OPENAI_COMPATIBLE_PROVIDERS:
         return execute_dtgpt_prompt(normalized_provider, prompt, normalized_model)
     return execute_gemini_prompt(prompt, normalized_model)

@@ -69,7 +69,7 @@ DEFAULT_PROVIDER = (
 
 PROVIDER_OPTIONS = _read_csv_env("DTGPT_AGENT_PROVIDER_OPTIONS")
 if not PROVIDER_OPTIONS:
-    PROVIDER_OPTIONS = ["gemini", "dtgpt_oa", "dtgpt_cae"]
+    PROVIDER_OPTIONS = ["gemini", "dtgpt_oa", "dtgpt_cae", "claude_code"]
 
 GEMINI_API_KEY = os.environ.get("MODEL_GEMINI_API_KEY", os.environ.get("MODEL_API_KEY", "")).strip()
 GEMINI_API_BASE_URL = (
@@ -137,11 +137,32 @@ GEMINI_DEFAULT_MODEL = (
     or "gemini-flash-latest"
 )
 DTGPT_DEFAULT_MODEL = os.environ.get("MODEL_DTGPT_DEFAULT_MODEL", "Kimi-K2.5").strip() or "Kimi-K2.5"
+CLAUDE_CODE_COMMAND = (
+    os.environ.get("MODEL_CLAUDE_CODE_COMMAND", os.environ.get("MODEL_CLAUDE_COMMAND", "claude")).strip()
+    or "claude"
+)
+CLAUDE_CODE_PERMISSION_MODE = (
+    os.environ.get("MODEL_CLAUDE_CODE_PERMISSION_MODE", os.environ.get("MODEL_CLAUDE_PERMISSION_MODE", "default"))
+    .strip()
+    or "default"
+)
+CLAUDE_CODE_TOOLS = (
+    os.environ.get("MODEL_CLAUDE_CODE_TOOLS", os.environ.get("MODEL_CLAUDE_TOOLS", ""))
+)
+CLAUDE_CODE_DEFAULT_MODEL = (
+    os.environ.get(
+        "MODEL_CLAUDE_CODE_DEFAULT_MODEL",
+        os.environ.get("MODEL_CLAUDE_DEFAULT_MODEL", "sonnet"),
+    )
+    .strip()
+    or "sonnet"
+)
 
 PROVIDER_DEFAULT_MODELS = {
     "gemini": GEMINI_DEFAULT_MODEL,
     "dtgpt_oa": DTGPT_DEFAULT_MODEL,
     "dtgpt_cae": DTGPT_DEFAULT_MODEL,
+    "claude_code": CLAUDE_CODE_DEFAULT_MODEL,
 }
 
 _default_gemini_options = sorted(
@@ -168,8 +189,22 @@ DTGPT_MODEL_OPTIONS = _read_csv_env("MODEL_DTGPT_MODEL_OPTIONS")
 if not DTGPT_MODEL_OPTIONS:
     DTGPT_MODEL_OPTIONS = _default_dtgpt_options
 
+_default_claude_code_options = sorted(
+    {
+        CLAUDE_CODE_DEFAULT_MODEL,
+        "sonnet",
+        "opus",
+    }
+)
+CLAUDE_CODE_MODEL_OPTIONS = _read_csv_env("MODEL_CLAUDE_CODE_MODEL_OPTIONS")
+if not CLAUDE_CODE_MODEL_OPTIONS:
+    CLAUDE_CODE_MODEL_OPTIONS = _read_csv_env("MODEL_CLAUDE_MODEL_OPTIONS")
+if not CLAUDE_CODE_MODEL_OPTIONS:
+    CLAUDE_CODE_MODEL_OPTIONS = _default_claude_code_options
+
 PROVIDER_MODEL_OPTIONS = {
     "gemini": GEMINI_MODEL_OPTIONS,
     "dtgpt_oa": DTGPT_MODEL_OPTIONS,
     "dtgpt_cae": DTGPT_MODEL_OPTIONS,
+    "claude_code": CLAUDE_CODE_MODEL_OPTIONS,
 }

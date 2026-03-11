@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import messagebox, simpledialog, ttk
-from tkinter.scrolledtext import ScrolledText
 
 from .chat_service import ChatService
 from .config import MAX_PROMPT_CHARS, MAX_TITLE_CHARS
@@ -29,14 +30,22 @@ _UI_COLORS = {
     "border": "#d4dde8",
     "primary": "#0f766e",
     "primary_hover": "#0d625c",
-    "primary_soft": "#d7f3ef",
     "success": "#0f766e",
     "user_bubble": "#dbeafe",
     "assistant_bubble": "#ecfeff",
     "system_bubble": "#fff7ed",
     "error_bubble": "#fee2e2",
     "error_text": "#7f1d1d",
+    "quote_bar": "#94a3b8",
+    "code_bg": "#0b1220",
+    "code_border": "#334155",
+    "code_text": "#e2e8f0",
+    "code_meta": "#93c5fd",
 }
+
+_FENCE_PATTERN = re.compile(r"^\s*```\s*([A-Za-z0-9_+\-\.#]*)\s*$")
+_UNORDERED_LIST_PATTERN = re.compile(r"^\s*[-*+]\s+")
+_ORDERED_LIST_PATTERN = re.compile(r"^\s*(\d+)\.\s+")
 
 
 def _format_timestamp(value: str | None) -> str:
@@ -47,6 +56,87 @@ def _format_timestamp(value: str | None) -> str:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return str(value)
+
+
+def _normalize_text(value: str | None) -> str:
+    return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _select_ui_font(root: tk.Misc) -> str:
+    preferred = (
+        "Malgun Gothic",
+        "Apple SD Gothic Neo",
+        "Noto Sans CJK KR",
+        "Noto Sans KR",
+        "NanumGothic",
+        "Segoe UI",
+        "Arial",
+    )
+    available = set(tkfont.families(root))
+    for family in preferred:
+        if family in available:
+            return family
+    return "TkDefaultFont"
+
+
+def _select_mono_font(root: tk.Misc) -> str:
+    preferred = (
+        "Cascadia Code",
+        "JetBrains Mono",
+        "D2Coding",
+        "Consolas",
+        "Menlo",
+        "Monaco",
+        "Courier New",
+        "Liberation Mono",
+        "DejaVu Sans Mono",
+    )
+    available = set(tkfont.families(root))
+    for family in preferred:
+        if family in available:
+            return family
+    return "TkFixedFont"
+
+
+def _split_markdown_sections(text: str) -> list[tuple[str, str, str]]:
+    normalized = _normalize_text(text)
+    lines = normalized.split("\n")
+
+    sections: list[tuple[str, str, str]] = []
+    markdown_lines: list[str] = []
+    code_lines: list[str] = []
+    code_lang = ""
+    in_code = False
+
+    for line in lines:
+        match = _FENCE_PATTERN.match(line)
+        if match:
+            if in_code:
+                sections.append(("code", code_lang, "\n".join(code_lines)))
+                code_lines = []
+                code_lang = ""
+                in_code = False
+            else:
+                if markdown_lines:
+                    sections.append(("markdown", "", "\n".join(markdown_lines)))
+                    markdown_lines = []
+                code_lang = str(match.group(1) or "").strip()
+                in_code = True
+            continue
+
+        if in_code:
+            code_lines.append(line)
+        else:
+            markdown_lines.append(line)
+
+    if in_code:
+        sections.append(("code", code_lang, "\n".join(code_lines)))
+    if markdown_lines:
+        sections.append(("markdown", "", "\n".join(markdown_lines)))
+
+    if not sections:
+        sections.append(("markdown", "", ""))
+    return sections
 
 
 class DtgptAgentApp:
@@ -62,16 +152,27 @@ class DtgptAgentApp:
         self._is_busy = False
 
         self._event_queue: queue.Queue = queue.Queue()
+        self._chat_layout_after_id: str | None = None
+        self._bubble_max_width_px = 760
 
         self.provider_var = tk.StringVar(value="")
         self.model_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Ready")
         self.session_title_var = tk.StringVar(value="No session selected")
 
+        self.ui_font_family = _select_ui_font(root)
+        self.mono_font_family = _select_mono_font(root)
+
         self.root.title("DTGPT Agent")
         self.root.geometry("1260x820")
         self.root.minsize(980, 620)
         self.root.configure(bg=_UI_COLORS["bg"])
+
+        # Enable IME path where supported so Korean input works reliably.
+        try:
+            self.root.tk.call("tk", "useinputmethods", True)
+        except tk.TclError:
+            pass
 
         self._configure_styles()
         self._build_ui()
@@ -85,57 +186,52 @@ class DtgptAgentApp:
         except tk.TclError:
             pass
 
-        self.root.option_add("*Font", "{Segoe UI} 10")
+        self.root.option_add("*Font", f"{{{self.ui_font_family}}} 10")
 
         style.configure("App.TFrame", background=_UI_COLORS["bg"])
-        style.configure(
-            "Card.TFrame",
-            background=_UI_COLORS["surface"],
-            relief="flat",
-            borderwidth=1,
-        )
+        style.configure("Card.TFrame", background=_UI_COLORS["surface"], relief="flat", borderwidth=1)
 
         style.configure(
             "AppTitle.TLabel",
             background=_UI_COLORS["bg"],
             foreground=_UI_COLORS["text"],
-            font=("Segoe UI Semibold", 20),
+            font=(self.ui_font_family, 20, "bold"),
         )
         style.configure(
             "AppSubtitle.TLabel",
             background=_UI_COLORS["bg"],
             foreground=_UI_COLORS["muted"],
-            font=("Segoe UI", 10),
+            font=(self.ui_font_family, 10),
         )
         style.configure(
             "SectionTitle.TLabel",
             background=_UI_COLORS["surface"],
             foreground=_UI_COLORS["text"],
-            font=("Segoe UI Semibold", 12),
+            font=(self.ui_font_family, 12, "bold"),
         )
         style.configure(
             "SectionMeta.TLabel",
             background=_UI_COLORS["surface"],
             foreground=_UI_COLORS["muted"],
-            font=("Segoe UI", 9),
+            font=(self.ui_font_family, 9),
         )
         style.configure(
             "FieldLabel.TLabel",
             background=_UI_COLORS["surface"],
             foreground=_UI_COLORS["muted"],
-            font=("Segoe UI Semibold", 9),
+            font=(self.ui_font_family, 9, "bold"),
         )
         style.configure(
             "Status.TLabel",
             background=_UI_COLORS["surface"],
             foreground=_UI_COLORS["success"],
-            font=("Segoe UI Semibold", 9),
+            font=(self.ui_font_family, 9, "bold"),
         )
         style.configure(
             "ChatTitle.TLabel",
             background=_UI_COLORS["surface"],
             foreground=_UI_COLORS["text"],
-            font=("Segoe UI Semibold", 12),
+            font=(self.ui_font_family, 12, "bold"),
         )
 
         style.configure(
@@ -162,6 +258,21 @@ class DtgptAgentApp:
         )
         style.map(
             "Ghost.TButton",
+            background=[("active", "#d9e3f0"), ("disabled", "#eef2f7")],
+            foreground=[("disabled", "#9aa8ba")],
+        )
+
+        style.configure(
+            "Icon.TButton",
+            padding=(6, 2),
+            borderwidth=0,
+            focusthickness=0,
+            background=_UI_COLORS["surface_muted"],
+            foreground=_UI_COLORS["text"],
+            font=(self.ui_font_family, 9),
+        )
+        style.map(
+            "Icon.TButton",
             background=[("active", "#d9e3f0"), ("disabled", "#eef2f7")],
             foreground=[("disabled", "#9aa8ba")],
         )
@@ -267,7 +378,7 @@ class DtgptAgentApp:
             foreground=_UI_COLORS["text"],
             selectbackground=_UI_COLORS["primary"],
             selectforeground="#ffffff",
-            font=("Segoe UI", 10),
+            font=(self.ui_font_family, 10),
         )
         self.session_listbox.grid(row=0, column=0, sticky="nsew")
         self.session_listbox.bind("<<ListboxSelect>>", self._on_session_selected)
@@ -280,12 +391,7 @@ class DtgptAgentApp:
         session_button_row.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         session_button_row.columnconfigure((0, 1, 2), weight=1)
 
-        self.new_session_button = ttk.Button(
-            session_button_row,
-            text="New",
-            command=self._create_session,
-            style="Ghost.TButton",
-        )
+        self.new_session_button = ttk.Button(session_button_row, text="New", command=self._create_session, style="Ghost.TButton")
         self.new_session_button.grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
         self.rename_session_button = ttk.Button(
@@ -313,33 +419,36 @@ class DtgptAgentApp:
         chat_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         chat_header.columnconfigure(0, weight=1)
 
-        ttk.Label(chat_header, textvariable=self.session_title_var, style="ChatTitle.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        ttk.Label(
-            chat_header,
-            text="Ctrl+Enter to send",
-            style="SectionMeta.TLabel",
-            anchor="e",
-        ).grid(row=0, column=1, sticky="e")
+        ttk.Label(chat_header, textvariable=self.session_title_var, style="ChatTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(chat_header, text="Ctrl+Enter to send", style="SectionMeta.TLabel", anchor="e").grid(row=0, column=1, sticky="e")
 
-        self.chat_view = ScrolledText(
-            right_card,
-            wrap=tk.WORD,
-            state="disabled",
-            height=30,
-            font=("Segoe UI", 10),
-            borderwidth=0,
-            relief="flat",
-            padx=6,
-            pady=8,
+        chat_wrap = ttk.Frame(right_card, style="Card.TFrame")
+        chat_wrap.grid(row=1, column=0, sticky="nsew")
+        chat_wrap.rowconfigure(0, weight=1)
+        chat_wrap.columnconfigure(0, weight=1)
+
+        self.chat_canvas = tk.Canvas(
+            chat_wrap,
             background=_UI_COLORS["surface_alt"],
-            foreground=_UI_COLORS["text"],
-            insertbackground=_UI_COLORS["text"],
-            selectbackground="#bfdbfe",
+            highlightthickness=1,
+            highlightbackground=_UI_COLORS["border"],
+            bd=0,
+            relief="flat",
         )
-        self.chat_view.grid(row=1, column=0, sticky="nsew")
-        self._configure_chat_tags()
+        self.chat_canvas.grid(row=0, column=0, sticky="nsew")
+
+        chat_scrollbar = ttk.Scrollbar(chat_wrap, orient="vertical", command=self.chat_canvas.yview)
+        chat_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.chat_canvas.configure(yscrollcommand=chat_scrollbar.set)
+
+        self.chat_inner = tk.Frame(self.chat_canvas, bg=_UI_COLORS["surface_alt"])
+        self._chat_window_id = self.chat_canvas.create_window((0, 0), window=self.chat_inner, anchor="nw")
+
+        self.chat_inner.bind("<Configure>", self._on_chat_inner_configure)
+        self.chat_canvas.bind("<Configure>", self._on_chat_canvas_configure)
+        self.chat_canvas.bind("<MouseWheel>", self._on_chat_mousewheel)
+        self.chat_canvas.bind("<Button-4>", self._on_chat_mousewheel_linux_up)
+        self.chat_canvas.bind("<Button-5>", self._on_chat_mousewheel_linux_down)
 
         input_wrap = ttk.Frame(right_card, style="Card.TFrame", padding=(0, 10, 0, 0))
         input_wrap.grid(row=2, column=0, sticky="ew")
@@ -349,7 +458,7 @@ class DtgptAgentApp:
             input_wrap,
             height=5,
             wrap=tk.WORD,
-            font=("Segoe UI", 10),
+            font=(self.ui_font_family, 11),
             borderwidth=1,
             relief="solid",
             highlightthickness=1,
@@ -360,126 +469,345 @@ class DtgptAgentApp:
             insertbackground=_UI_COLORS["text"],
             padx=8,
             pady=6,
+            undo=True,
         )
         self.input_text.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self.input_text.bind("<Control-Return>", self._on_send_shortcut)
+        self.input_text.bind("<Command-Return>", self._on_send_shortcut)
 
         self.send_button = ttk.Button(input_wrap, text="Send", command=self._send_message, style="Primary.TButton")
         self.send_button.grid(row=0, column=1, sticky="ns")
 
-    def _configure_chat_tags(self) -> None:
-        self.chat_view.tag_configure(
-            "header_user",
-            foreground="#1d4ed8",
-            font=("Segoe UI Semibold", 9),
-            spacing1=2,
-            spacing3=2,
-            lmargin1=140,
-            lmargin2=140,
-            rmargin=18,
-        )
-        self.chat_view.tag_configure(
-            "header_assistant",
-            foreground="#0f766e",
-            font=("Segoe UI Semibold", 9),
-            spacing1=2,
-            spacing3=2,
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-        )
-        self.chat_view.tag_configure(
-            "header_system",
-            foreground="#9a3412",
-            font=("Segoe UI Semibold", 9),
-            spacing1=2,
-            spacing3=2,
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-        )
-        self.chat_view.tag_configure(
-            "header_error",
-            foreground=_UI_COLORS["error_text"],
-            font=("Segoe UI Semibold", 9),
-            spacing1=2,
-            spacing3=2,
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-        )
+    def _on_chat_inner_configure(self, _event=None) -> None:
+        self.chat_canvas.configure(scrollregion=self.chat_canvas.bbox("all"))
 
-        self.chat_view.tag_configure(
-            "body_user",
-            background=_UI_COLORS["user_bubble"],
-            foreground=_UI_COLORS["text"],
-            lmargin1=140,
-            lmargin2=140,
-            rmargin=18,
-            spacing1=2,
-            spacing3=4,
-            font=("Segoe UI", 10),
-        )
-        self.chat_view.tag_configure(
-            "body_assistant",
-            background=_UI_COLORS["assistant_bubble"],
-            foreground=_UI_COLORS["text"],
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-            spacing1=2,
-            spacing3=4,
-            font=("Segoe UI", 10),
-        )
-        self.chat_view.tag_configure(
-            "body_system",
-            background=_UI_COLORS["system_bubble"],
-            foreground="#7c2d12",
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-            spacing1=2,
-            spacing3=4,
-            font=("Segoe UI", 10),
-        )
-        self.chat_view.tag_configure(
-            "body_error",
-            background=_UI_COLORS["error_bubble"],
-            foreground=_UI_COLORS["error_text"],
-            lmargin1=18,
-            lmargin2=18,
-            rmargin=140,
-            spacing1=2,
-            spacing3=4,
-            font=("Segoe UI", 10),
-        )
-        self.chat_view.tag_configure("message_gap", spacing1=2, spacing3=8)
+    def _on_chat_canvas_configure(self, event) -> None:
+        self.chat_canvas.itemconfigure(self._chat_window_id, width=event.width)
+        next_max_width = max(280, int(event.width * 0.8))
+        if abs(next_max_width - self._bubble_max_width_px) >= 12:
+            self._bubble_max_width_px = next_max_width
+            self._schedule_chat_layout_refresh()
 
-    def _chat_tags_for_role(self, role: str) -> tuple[str, str]:
+    def _schedule_chat_layout_refresh(self) -> None:
+        if self._chat_layout_after_id:
+            try:
+                self.root.after_cancel(self._chat_layout_after_id)
+            except Exception:
+                pass
+        self._chat_layout_after_id = self.root.after(90, self._rerender_current_session)
+
+    def _rerender_current_session(self) -> None:
+        self._chat_layout_after_id = None
+        if not self.current_session_id:
+            return
+        session = self.service.get_session(self.current_session_id)
+        if session:
+            self._render_session(session)
+
+    def _on_chat_mousewheel(self, event) -> str:
+        if event.delta:
+            self.chat_canvas.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _on_chat_mousewheel_linux_up(self, _event) -> str:
+        self.chat_canvas.yview_scroll(-1, "units")
+        return "break"
+
+    def _on_chat_mousewheel_linux_down(self, _event) -> str:
+        self.chat_canvas.yview_scroll(1, "units")
+        return "break"
+
+    def _copy_to_clipboard(self, text: str, status_message: str) -> None:
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(text or ""))
+            self.root.update_idletasks()
+            self.status_var.set(status_message)
+        except Exception as exc:
+            messagebox.showerror("Copy failed", str(exc))
+
+    def _clear_chat_items(self) -> None:
+        for child in self.chat_inner.winfo_children():
+            child.destroy()
+
+    def _bubble_wrap_width(self) -> int:
+        return max(220, self._bubble_max_width_px - 46)
+
+    def _is_markdown_special_line(self, stripped: str) -> bool:
+        if not stripped:
+            return False
+        if stripped.startswith("#"):
+            return True
+        if stripped.startswith(">"):
+            return True
+        if _UNORDERED_LIST_PATTERN.match(stripped):
+            return True
+        if _ORDERED_LIST_PATTERN.match(stripped):
+            return True
+        return False
+
+    def _render_markdown_message(self, parent: tk.Widget, markdown_text: str, bubble_bg: str, text_color: str) -> None:
+        normalized = _normalize_text(markdown_text)
+        lines = normalized.split("\n")
+
+        if not normalized.strip():
+            self._render_markdown_line(parent, "(empty)", bubble_bg, text_color, "body")
+            return
+
+        idx = 0
+        while idx < len(lines):
+            raw_line = lines[idx]
+            stripped = raw_line.strip()
+
+            if not stripped:
+                spacer = tk.Frame(parent, bg=bubble_bg, height=4)
+                spacer.pack(fill="x")
+                idx += 1
+                continue
+
+            if stripped.startswith("### "):
+                self._render_markdown_line(parent, stripped[4:].strip(), bubble_bg, text_color, "h3")
+                idx += 1
+                continue
+
+            if stripped.startswith("## "):
+                self._render_markdown_line(parent, stripped[3:].strip(), bubble_bg, text_color, "h2")
+                idx += 1
+                continue
+
+            if stripped.startswith("# "):
+                self._render_markdown_line(parent, stripped[2:].strip(), bubble_bg, text_color, "h1")
+                idx += 1
+                continue
+
+            if _UNORDERED_LIST_PATTERN.match(stripped):
+                items: list[str] = []
+                while idx < len(lines):
+                    line = lines[idx].strip()
+                    if not _UNORDERED_LIST_PATTERN.match(line):
+                        break
+                    items.append(_UNORDERED_LIST_PATTERN.sub("", line, count=1).strip())
+                    idx += 1
+                for item in items:
+                    self._render_markdown_line(parent, f"• {item}", bubble_bg, text_color, "list")
+                continue
+
+            if _ORDERED_LIST_PATTERN.match(stripped):
+                items: list[str] = []
+                while idx < len(lines):
+                    line = lines[idx].strip()
+                    if not _ORDERED_LIST_PATTERN.match(line):
+                        break
+                    match = _ORDERED_LIST_PATTERN.match(line)
+                    number = match.group(1) if match else "1"
+                    body = _ORDERED_LIST_PATTERN.sub("", line, count=1).strip()
+                    items.append(f"{number}. {body}")
+                    idx += 1
+                for item in items:
+                    self._render_markdown_line(parent, item, bubble_bg, text_color, "list")
+                continue
+
+            if stripped.startswith(">"):
+                quote_lines: list[str] = []
+                while idx < len(lines):
+                    line = lines[idx].strip()
+                    if not line.startswith(">"):
+                        break
+                    quote_lines.append(line[1:].strip())
+                    idx += 1
+                self._render_quote_block(parent, "\n".join(quote_lines), bubble_bg, text_color)
+                continue
+
+            paragraph_lines = [raw_line.rstrip()]
+            idx += 1
+            while idx < len(lines):
+                next_stripped = lines[idx].strip()
+                if not next_stripped:
+                    break
+                if self._is_markdown_special_line(next_stripped):
+                    break
+                paragraph_lines.append(lines[idx].rstrip())
+                idx += 1
+
+            self._render_markdown_line(parent, "\n".join(paragraph_lines), bubble_bg, text_color, "body")
+
+    def _render_markdown_line(self, parent: tk.Widget, text: str, bg: str, fg: str, kind: str) -> None:
+        font_size = 10
+        font_weight = "normal"
+
+        if kind == "h1":
+            font_size = 14
+            font_weight = "bold"
+        elif kind == "h2":
+            font_size = 13
+            font_weight = "bold"
+        elif kind == "h3":
+            font_size = 12
+            font_weight = "bold"
+        elif kind == "list":
+            font_size = 10
+            font_weight = "normal"
+
+        line = tk.Message(
+            parent,
+            text=str(text or ""),
+            bg=bg,
+            fg=fg,
+            anchor="w",
+            justify="left",
+            width=self._bubble_wrap_width(),
+            font=(self.ui_font_family, font_size, font_weight),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+        )
+        line.pack(anchor="w", fill="x", pady=(0, 2))
+
+    def _render_quote_block(self, parent: tk.Widget, text: str, bg: str, fg: str) -> None:
+        quote_wrap = tk.Frame(parent, bg=bg)
+        quote_wrap.pack(fill="x", pady=(1, 3))
+
+        bar = tk.Frame(quote_wrap, bg=_UI_COLORS["quote_bar"], width=3)
+        bar.pack(side="left", fill="y", padx=(0, 8))
+
+        line = tk.Message(
+            quote_wrap,
+            text=str(text or ""),
+            bg=bg,
+            fg=fg,
+            anchor="w",
+            justify="left",
+            width=max(160, self._bubble_wrap_width() - 16),
+            font=(self.ui_font_family, 10, "normal"),
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+        )
+        line.pack(side="left", fill="x", expand=True)
+
+    def _render_code_block(self, parent: tk.Widget, code: str, language: str) -> None:
+        code_text = str(code or "")
+        code_wrap = tk.Frame(
+            parent,
+            bg=_UI_COLORS["code_bg"],
+            highlightthickness=1,
+            highlightbackground=_UI_COLORS["code_border"],
+            bd=0,
+        )
+        code_wrap.pack(fill="x", pady=(2, 4))
+
+        code_header = tk.Frame(code_wrap, bg=_UI_COLORS["code_bg"])
+        code_header.pack(fill="x", padx=8, pady=(6, 2))
+
+        lang_text = str(language or "code").strip() or "code"
+        tk.Label(
+            code_header,
+            text=lang_text,
+            bg=_UI_COLORS["code_bg"],
+            fg=_UI_COLORS["code_meta"],
+            font=(self.ui_font_family, 9, "bold"),
+        ).pack(side="left")
+
+        ttk.Button(
+            code_header,
+            text="⧉",
+            style="Icon.TButton",
+            command=lambda snippet=code_text: self._copy_to_clipboard(snippet, "코드블록을 복사했습니다."),
+            width=3,
+        ).pack(side="right")
+
+        line_count = max(3, min(18, code_text.count("\n") + 1))
+        char_width = max(28, min(120, int(self._bubble_wrap_width() / 8)))
+
+        code_view = tk.Text(
+            code_wrap,
+            height=line_count,
+            width=char_width,
+            wrap=tk.WORD,
+            bg=_UI_COLORS["code_bg"],
+            fg=_UI_COLORS["code_text"],
+            insertbackground=_UI_COLORS["code_text"],
+            borderwidth=0,
+            relief="flat",
+            padx=8,
+            pady=6,
+            font=(self.mono_font_family, 10),
+        )
+        code_view.pack(fill="x", padx=6, pady=(0, 8))
+        code_view.insert("1.0", code_text)
+        code_view.configure(state="disabled")
+
+    def _bubble_bg_for_role(self, role: str) -> str:
         normalized = str(role or "assistant").lower()
         if normalized == "user":
-            return "header_user", "body_user"
+            return _UI_COLORS["user_bubble"]
         if normalized == "error":
-            return "header_error", "body_error"
+            return _UI_COLORS["error_bubble"]
         if normalized == "system":
-            return "header_system", "body_system"
-        return "header_assistant", "body_assistant"
+            return _UI_COLORS["system_bubble"]
+        return _UI_COLORS["assistant_bubble"]
 
-    def _insert_message_block(self, role: str, content: str, created_at: str | None = None) -> None:
+    def _render_message_bubble(self, role: str, content: str, created_at: str | None = None) -> None:
         normalized_role = str(role or "assistant").lower()
         role_label = _ROLE_LABELS.get(normalized_role, normalized_role.capitalize() or "Assistant")
         timestamp = _format_timestamp(created_at)
-        header_tag, body_tag = self._chat_tags_for_role(normalized_role)
+        align_right = normalized_role == "user"
 
-        text = str(content or "")
-        if not text.strip():
-            text = "(empty)"
-        if not text.endswith("\n"):
-            text += "\n"
+        bubble_bg = self._bubble_bg_for_role(normalized_role)
+        text_color = _UI_COLORS["error_text"] if normalized_role == "error" else _UI_COLORS["text"]
 
-        self.chat_view.insert(tk.END, f"{role_label}  {timestamp}\n", header_tag)
-        self.chat_view.insert(tk.END, text, body_tag)
-        self.chat_view.insert(tk.END, "\n", "message_gap")
+        row = tk.Frame(self.chat_inner, bg=_UI_COLORS["surface_alt"])
+        row.pack(fill="x", padx=10, pady=4)
+
+        bubble = tk.Frame(
+            row,
+            bg=bubble_bg,
+            highlightthickness=1,
+            highlightbackground=_UI_COLORS["border"],
+            bd=0,
+        )
+        bubble.pack(side="right" if align_right else "left", anchor="e" if align_right else "w", padx=2)
+
+        bubble_header = tk.Frame(bubble, bg=bubble_bg)
+        bubble_header.pack(fill="x", padx=10, pady=(8, 3))
+
+        tk.Label(
+            bubble_header,
+            text=f"{role_label} · {timestamp}",
+            bg=bubble_bg,
+            fg=_UI_COLORS["muted"],
+            font=(self.ui_font_family, 9, "bold"),
+            anchor="w",
+        ).pack(side="left")
+
+        raw_message = str(content or "")
+        ttk.Button(
+            bubble_header,
+            text="⧉",
+            style="Icon.TButton",
+            command=lambda text_to_copy=raw_message: self._copy_to_clipboard(text_to_copy, "메시지를 복사했습니다."),
+            width=3,
+        ).pack(side="right")
+
+        bubble_body = tk.Frame(bubble, bg=bubble_bg)
+        bubble_body.pack(fill="x", padx=10, pady=(0, 9))
+
+        sections = _split_markdown_sections(raw_message)
+        for index, (kind, language, section_text) in enumerate(sections):
+            if kind == "code":
+                self._render_code_block(bubble_body, section_text, language)
+            else:
+                self._render_markdown_message(bubble_body, section_text, bubble_bg, text_color)
+            if index + 1 < len(sections):
+                tk.Frame(bubble_body, bg=bubble_bg, height=4).pack(fill="x")
+
+    def _scroll_chat_to_bottom(self) -> None:
+        self.chat_canvas.update_idletasks()
+        self.chat_canvas.yview_moveto(1.0)
 
     def _load_initial_data(self) -> None:
         self._load_settings_controls()
@@ -554,30 +882,24 @@ class DtgptAgentApp:
     def _render_session(self, session: dict) -> None:
         messages = session.get("messages", []) if isinstance(session, dict) else []
 
-        self.chat_view.configure(state="normal")
-        self.chat_view.delete("1.0", tk.END)
-
+        self._clear_chat_items()
         for message in messages:
             if not isinstance(message, dict):
                 continue
-            self._insert_message_block(
+            self._render_message_bubble(
                 role=str(message.get("role") or "assistant"),
                 content=str(message.get("content") or ""),
                 created_at=message.get("created_at"),
             )
 
-        self.chat_view.configure(state="disabled")
-        self.chat_view.see(tk.END)
-
         title = str(session.get("title") or "New session")
         self.session_title_var.set(title)
         self.status_var.set(f"Selected session: {title}")
+        self.root.after_idle(self._scroll_chat_to_bottom)
 
     def _append_local_user_message(self, prompt: str) -> None:
-        self.chat_view.configure(state="normal")
-        self._insert_message_block("user", prompt, datetime.now().astimezone().isoformat(timespec="seconds"))
-        self.chat_view.configure(state="disabled")
-        self.chat_view.see(tk.END)
+        self._render_message_bubble("user", prompt, datetime.now().astimezone().isoformat(timespec="seconds"))
+        self.root.after_idle(self._scroll_chat_to_bottom)
 
     def _on_provider_changed(self, _event=None) -> None:
         provider = self.provider_var.get().strip()
@@ -730,21 +1052,9 @@ class DtgptAgentApp:
     def _send_message_worker(self, session_id: str, prompt: str) -> None:
         try:
             payload = self.service.send_message(session_id=session_id, prompt=prompt)
-            self._event_queue.put(
-                {
-                    "type": "send_success",
-                    "session_id": session_id,
-                    "payload": payload,
-                }
-            )
+            self._event_queue.put({"type": "send_success", "session_id": session_id, "payload": payload})
         except Exception as exc:
-            self._event_queue.put(
-                {
-                    "type": "send_error",
-                    "session_id": session_id,
-                    "error": str(exc),
-                }
-            )
+            self._event_queue.put({"type": "send_error", "session_id": session_id, "error": str(exc)})
 
     def _poll_worker_events(self) -> None:
         try:

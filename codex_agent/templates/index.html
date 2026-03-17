@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=76">
+    <link rel="stylesheet" href="/static/css/app.css?v=77">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -169,6 +169,18 @@
                     <div id="codex-chat-messages" class="chat-messages">
                         <div class="chat-placeholder">Select a session or create a new one.</div>
                     </div>
+                    <button
+                        class="chat-scroll-bottom"
+                        type="button"
+                        id="codex-chat-scroll-bottom"
+                        aria-label="Scroll to latest message"
+                        title="Scroll to latest message"
+                        aria-hidden="true"
+                        tabindex="-1"
+                    >
+                        <span aria-hidden="true">↓</span>
+                        <span class="sr-only">Scroll to latest message</span>
+                    </button>
                 </div>
 
                 <div class="chat-controls is-collapsed" id="codex-controls">
@@ -314,6 +326,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=63"></script>
+    <script src="/static/js/app.js?v=64"></script>
 </body>
 </html>

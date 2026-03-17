@@ -4,3 +4,4 @@ __pycache__/
 model_agent_env.local.sh
 workspace/
 .sync_runtime/
+.venv/

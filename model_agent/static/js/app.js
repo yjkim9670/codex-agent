@@ -492,6 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const refreshBtn = document.getElementById('gemini-chat-refresh');
     const chatFullscreenBtn = document.getElementById('gemini-chat-fullscreen');
     const messages = document.getElementById('gemini-chat-messages');
+    const scrollToLatestBtn = document.getElementById('gemini-chat-scroll-bottom');
     const streamMonitorCloseBtn = document.getElementById('gemini-stream-monitor-close');
     const streamMonitorToggle = document.getElementById('gemini-stream-monitor-toggle');
     const streamMonitor = document.getElementById('gemini-stream-monitor');
@@ -822,6 +823,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (messages) {
         messages.addEventListener('scroll', () => {
             handleMessageScroll(messages);
+        });
+        handleMessageScroll(messages);
+    }
+
+    if (scrollToLatestBtn) {
+        scrollToLatestBtn.addEventListener('click', () => {
+            setAutoScrollEnabled(true);
+            scrollToBottom(true);
         });
     }
 
@@ -4864,8 +4873,6 @@ async function sendPrompt(prompt) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
         return;
     }
-    pinAutoScrollForSession(sessionId);
-    scrollToBottom(true);
     if (sessionState) {
         sessionState.sending = true;
     }
@@ -5273,16 +5280,53 @@ function getRoleLabel(role) {
     return 'Message';
 }
 
+function getChatMessagesContainer() {
+    return document.getElementById('gemini-chat-messages');
+}
+
+function isMessageListNearBottom(container) {
+    if (!container) return true;
+    const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
+    const distanceFromBottom = Math.max(
+        0,
+        container.scrollHeight - container.scrollTop - container.clientHeight
+    );
+    return distanceFromBottom <= threshold;
+}
+
+function setScrollToBottomButtonVisible(isVisible) {
+    const button = document.getElementById('gemini-chat-scroll-bottom');
+    if (!button) return;
+    const visible = Boolean(isVisible);
+    button.classList.toggle('is-visible', visible);
+    button.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    button.tabIndex = visible ? 0 : -1;
+}
+
+function syncScrollToBottomButton(container = null) {
+    const target = container || getChatMessagesContainer();
+    if (!target) {
+        setScrollToBottomButtonVisible(false);
+        return;
+    }
+    const hasOverflow = target.scrollHeight - target.clientHeight > 1;
+    const shouldShow = hasOverflow && !isMessageListNearBottom(target);
+    setScrollToBottomButtonVisible(shouldShow);
+}
+
 function scrollToBottom(force = false) {
-    const container = document.getElementById('gemini-chat-messages');
+    const container = getChatMessagesContainer();
     if (!container) return;
-    const forceByPinnedSession = shouldForceAutoScroll();
-    if (!force && !state.autoScrollEnabled && !forceByPinnedSession) return;
-    if (force || forceByPinnedSession) {
+    if (!force && !state.autoScrollEnabled) {
+        syncScrollToBottomButton(container);
+        return;
+    }
+    if (force) {
         setAutoScrollEnabled(true);
     }
     const scroll = () => {
         container.scrollTop = container.scrollHeight;
+        syncScrollToBottomButton(container);
     };
     if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(scroll);
@@ -5293,36 +5337,20 @@ function scrollToBottom(force = false) {
 
 function handleMessageScroll(container) {
     if (!container) return;
-    if (shouldForceAutoScroll()) {
-        setAutoScrollEnabled(true);
-        return;
-    }
-    const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
-    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    setAutoScrollEnabled(distanceFromBottom <= threshold);
+    setAutoScrollEnabled(isMessageListNearBottom(container));
 }
 
 function setAutoScrollEnabled(isEnabled) {
     state.autoScrollEnabled = Boolean(isEnabled);
+    syncScrollToBottomButton();
 }
 
 function pinAutoScrollForSession(sessionId) {
-    if (!sessionId) return;
-    state.autoScrollPinnedSessionId = sessionId;
-    setAutoScrollEnabled(true);
+    void sessionId;
 }
 
 function unpinAutoScrollForSession(sessionId = null) {
-    if (!state.autoScrollPinnedSessionId) return;
-    if (sessionId && state.autoScrollPinnedSessionId !== sessionId) return;
-    state.autoScrollPinnedSessionId = null;
-}
-
-function shouldForceAutoScroll() {
-    const pinnedSessionId = state.autoScrollPinnedSessionId;
-    if (!pinnedSessionId) return false;
-    if (pinnedSessionId !== state.activeSessionId) return false;
-    return isSessionBusy(pinnedSessionId);
+    void sessionId;
 }
 
 function setMarkdownContent(element, content) {

@@ -10,7 +10,6 @@ const state = {
     liveClockTimer: null,
     responseTimerId: null,
     responseTimerSessionId: null,
-    weatherRefreshTimer: null,
     autoScrollEnabled: true,
     autoScrollPinnedSessionId: null,
     autoScrollThreshold: 48,
@@ -44,7 +43,6 @@ const STREAM_IDLE_WARNING_MS = 15000;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
-const WEATHER_REFRESH_MS = 10 * 60 * 1000;
 const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
@@ -102,6 +100,8 @@ let hasManualTheme = false;
 let gitBranchStatusCache = {
     count: null,
     branch: '',
+    aheadCount: null,
+    behindCount: null,
     changedFiles: [],
     isStale: false,
     fetchedAt: 0
@@ -559,8 +559,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
     );
 
-    // Reset commit highlight until fresh git status arrives.
+    // Reset git highlights until fresh git status arrives.
     updateGitCommitButtonState({ count: 0, changedFiles: [] });
+    updateGitPushButtonState({ aheadCount: 0 });
     initializeHoverTooltipInteractions();
     initializeHeaderActionTooltips({
         themeToggle,
@@ -948,12 +949,6 @@ function initializeLiveWeatherPanel(mobileMedia) {
         void requestWeatherPermission();
     });
     void loadLiveWeatherData();
-    if (state.weatherRefreshTimer) {
-        window.clearInterval(state.weatherRefreshTimer);
-    }
-    state.weatherRefreshTimer = window.setInterval(() => {
-        void loadLiveWeatherData({ silent: true });
-    }, WEATHER_REFRESH_MS);
 }
 
 async function maybeRequestWeatherPermissionOnTap() {
@@ -1093,10 +1088,7 @@ function updateLiveWeatherPanelTitle() {
 }
 
 function syncLiveWeatherLayout(isMobile) {
-    if (!isMobile) {
-        setLiveWeatherCompact(false, { persist: false });
-        return;
-    }
+    void isMobile;
     const compact = readLiveWeatherCompactPreference(true);
     setLiveWeatherCompact(compact, { persist: false });
 }
@@ -1540,6 +1532,12 @@ function initializeHeaderActionTooltips({
 }
 
 function normalizeGitChangedFilesCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Math.round(numeric));
+}
+
+function normalizeGitDivergenceCount(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
     return Math.max(0, Math.round(numeric));
@@ -3407,6 +3405,19 @@ function updateGitCommitButtonState(status) {
     });
 }
 
+function getGitAheadCountFromStatus(status) {
+    if (!status || typeof status !== 'object') return null;
+    return normalizeGitDivergenceCount(status.aheadCount);
+}
+
+function updateGitPushButtonState(status) {
+    const aheadCount = getGitAheadCountFromStatus(status);
+    const hasPendingPush = Number.isFinite(aheadCount) && aheadCount > 0;
+    document.querySelectorAll('.git-action-push').forEach(button => {
+        button.classList.toggle('is-ready', hasPendingPush);
+    });
+}
+
 function applyGitBranchStatusToElement(element, status) {
     if (!element || !status) return;
     const branchName = typeof status.branch === 'string' ? status.branch.trim() : '';
@@ -4045,9 +4056,13 @@ async function fetchGitStatus(force = false) {
         const changedFiles = detailedFiles.length
             ? detailedFiles
             : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+        const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
+        const behindCount = normalizeGitDivergenceCount(result?.behind_count);
         gitBranchStatusCache = {
             count,
             branch,
+            aheadCount,
+            behindCount,
             changedFiles,
             isStale: false,
             fetchedAt: Date.now()
@@ -4057,6 +4072,8 @@ async function fetchGitStatus(force = false) {
         gitBranchStatusCache = {
             count: null,
             branch: gitBranchStatusCache.branch || '',
+            aheadCount: null,
+            behindCount: null,
             changedFiles: [],
             isStale: true,
             fetchedAt: Date.now()
@@ -4079,6 +4096,7 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
         applyGitBranchStatusToElement(branchElement, status);
     }
     updateGitCommitButtonState(status);
+    updateGitPushButtonState(status);
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }

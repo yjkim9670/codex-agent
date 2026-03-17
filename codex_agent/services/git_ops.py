@@ -717,12 +717,20 @@ def _build_result(
     changed_files_detail, changed_files = _read_changed_snapshot(repo_root, env)
     staged_files_detail, staged_files = _read_staged_snapshot(repo_root, env)
     branch_name = _read_current_branch(repo_root, env)
+    upstream_branch = _read_upstream_branch(repo_root, env)
+    ahead_count = None
+    behind_count = None
+    if upstream_branch and _ref_exists(repo_root, env, upstream_branch):
+        ahead_count, behind_count = _read_divergence_counts(repo_root, env, 'HEAD', upstream_branch)
     payload = {
         'ok': exit_code == 0,
         'exit_code': exit_code,
         'stdout': (stdout or '').strip(),
         'stderr': (stderr or '').strip(),
         'branch': branch_name,
+        'upstream_branch': upstream_branch,
+        'ahead_count': ahead_count,
+        'behind_count': behind_count,
         'changed_files_count': len(changed_files),
         'changed_files': changed_files,
         'changed_files_detail': changed_files_detail,

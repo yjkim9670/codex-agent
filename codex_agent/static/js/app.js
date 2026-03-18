@@ -556,6 +556,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const syncOverlayCommitBtn = document.getElementById('codex-sync-overlay-commit');
     const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
     const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
+    const messageLogOverlay = document.getElementById('codex-message-log-overlay');
+    const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
+    const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
     );
@@ -695,6 +698,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (syncOverlayCloseFooter) {
         syncOverlayCloseFooter.addEventListener('click', closeGitSyncOverlay);
     }
+    if (messageLogOverlay) {
+        messageLogOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeMessageLogOverlay();
+            }
+        });
+    }
+    if (messageLogOverlayClose) {
+        messageLogOverlayClose.addEventListener('click', closeMessageLogOverlay);
+    }
+    if (messageLogOverlayCloseFooter) {
+        messageLogOverlayCloseFooter.addEventListener('click', closeMessageLogOverlay);
+    }
     if (syncOverlayRefreshBtn) {
         syncOverlayRefreshBtn.addEventListener('click', () => {
             void refreshGitSyncOverlayHistory({ force: true });
@@ -737,6 +754,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
+        if (isMessageLogOverlayOpen()) {
+            closeMessageLogOverlay();
+            return;
+        }
         if (isGitSyncOverlayOpen()) {
             closeGitSyncOverlay();
             return;
@@ -3648,6 +3669,9 @@ function openGitBranchOverlay() {
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
     }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
     if (elements.commitMessage) {
@@ -3665,7 +3689,7 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitSyncOverlayOpen()) {
+    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -3929,6 +3953,9 @@ function openGitSyncOverlay() {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
@@ -3952,7 +3979,60 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function getMessageLogOverlayElements() {
+    const overlay = document.getElementById('codex-message-log-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        title: document.getElementById('codex-message-log-overlay-title'),
+        subtitle: document.getElementById('codex-message-log-overlay-subtitle'),
+        content: document.getElementById('codex-message-log-overlay-content')
+    };
+}
+
+function isMessageLogOverlayOpen() {
+    const overlay = document.getElementById('codex-message-log-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openMessageLogOverlay(title, detailText) {
+    const elements = getMessageLogOverlayElements();
+    if (!elements) return;
+    const normalizedTitle = String(title || '').trim();
+    const normalizedText = normalizeDetailText(detailText);
+    if (!normalizedText) return;
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (elements.title) {
+        elements.title.textContent = normalizedTitle || '상세 로그';
+    }
+    if (elements.subtitle) {
+        elements.subtitle.textContent = '최종응답과 별도로 수집된 상세 내용';
+    }
+    if (elements.content) {
+        elements.content.textContent = normalizedText;
+        elements.content.scrollTop = 0;
+    }
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+}
+
+function closeMessageLogOverlay() {
+    const elements = getMessageLogOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -4860,6 +4940,7 @@ function renderMessages(messages) {
         }
         setMessageFinalizeReason(footer, message?.finalize_reason);
         setMessageFinalizeComparison(footer, message);
+        setMessageDetailLogLink(footer, message);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -4897,6 +4978,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     }
     setMessageFinalizeReason(footer, message?.finalize_reason);
     setMessageFinalizeComparison(footer, message);
+    setMessageDetailLogLink(footer, message);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -5308,6 +5390,10 @@ async function finishStream(streamId, result) {
         stream.entry?.footer,
         savedMessage || result || null
     );
+    setMessageDetailLogLink(
+        stream.entry?.footer,
+        savedMessage || result || null
+    );
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
@@ -5586,19 +5672,15 @@ function buildMessageDetailText(message) {
 function setMarkdownContent(element, content, options = {}) {
     if (!element) return;
     const messageContent = String(content || '');
-    const message = options && typeof options === 'object' ? options.message : null;
-    const detailText = buildMessageDetailText(message);
     const wasExpanded = Boolean(element.querySelector('details.message-details')?.open);
-    element.innerHTML = renderMessageContent(messageContent, {
-        expanded: wasExpanded,
-        detailText
-    });
+    const normalizedExpanded = options && typeof options === 'object' && typeof options.expanded === 'boolean'
+        ? options.expanded
+        : wasExpanded;
+    element.innerHTML = renderMessageContent(messageContent, normalizedExpanded);
     element.dataset.messageContent = messageContent;
-    element.dataset.messageDetailText = detailText;
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;
-        wrapper.dataset.messageDetailText = detailText;
     }
 }
 
@@ -5693,6 +5775,25 @@ function createMessageFooter() {
     footer.dataset.durationText = '';
     footer.dataset.finalizeText = '';
     footer.dataset.finalizeTimingText = '';
+    footer.dataset.detailText = '';
+    footer.dataset.detailTitle = '';
+
+    const text = document.createElement('span');
+    text.className = 'message-footer-text';
+    footer.appendChild(text);
+
+    const detailLink = document.createElement('button');
+    detailLink.type = 'button';
+    detailLink.className = 'message-detail-link is-hidden';
+    detailLink.textContent = '상세 로그 보기';
+    detailLink.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const detailText = normalizeDetailText(footer.dataset.detailText);
+        if (!detailText) return;
+        openMessageLogOverlay(footer.dataset.detailTitle || '상세 로그', detailText);
+    });
+    footer.appendChild(detailLink);
     return footer;
 }
 
@@ -5713,6 +5814,7 @@ function syncMessageFooter(footer) {
     const durationText = footer.dataset.durationText || '';
     const finalizeText = footer.dataset.finalizeText || '';
     const finalizeTimingText = footer.dataset.finalizeTimingText || '';
+    const detailText = normalizeDetailText(footer.dataset.detailText);
     const parts = [];
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
@@ -5723,8 +5825,17 @@ function syncMessageFooter(footer) {
     if (finalizeText) {
         parts.push(finalizeText);
     }
-    footer.textContent = parts.join(' · ');
-    footer.classList.toggle('is-visible', parts.length > 0);
+    const textElement = footer.querySelector('.message-footer-text');
+    if (textElement) {
+        textElement.textContent = parts.join(' · ');
+    } else {
+        footer.textContent = parts.join(' · ');
+    }
+    const detailLink = footer.querySelector('.message-detail-link');
+    if (detailLink) {
+        detailLink.classList.toggle('is-hidden', !detailText);
+    }
+    footer.classList.toggle('is-visible', parts.length > 0 || Boolean(detailText));
 }
 
 function setMessageDuration(footer, durationMs) {
@@ -5749,6 +5860,24 @@ function setMessageFinalizeComparison(footer, message) {
         return;
     }
     footer.dataset.finalizeTimingText = `CLI 종료→최종응답 ${comparison.lagText}`;
+    syncMessageFooter(footer);
+}
+
+function setMessageDetailLogLink(footer, message) {
+    if (!footer) return;
+    const detailText = buildMessageDetailText(message);
+    if (!detailText) {
+        footer.dataset.detailText = '';
+        footer.dataset.detailTitle = '';
+        syncMessageFooter(footer);
+        return;
+    }
+    const timestamp = formatTimestamp(getMessageTimestampValue(message));
+    const roleLabel = getRoleLabel(message?.role);
+    footer.dataset.detailText = detailText;
+    footer.dataset.detailTitle = timestamp
+        ? `${roleLabel} · ${timestamp} · 상세 로그`
+        : `${roleLabel} · 상세 로그`;
     syncMessageFooter(footer);
 }
 
@@ -5947,26 +6076,10 @@ function renderMessageContent(content, options = {}) {
     const expanded = typeof options === 'boolean'
         ? options
         : Boolean(options?.expanded);
-    const detailText = typeof options === 'boolean'
-        ? ''
-        : normalizeDetailText(options?.detailText);
-    const detailMarkup = detailText
-        ? `<div class="message-work-details"><pre><code>${escapeHtml(detailText)}</code></pre></div>`
-        : '';
     const summaryText = expanded ? '자세히 숨기기' : '자세히 보기';
 
     if (!shouldCollapseMessage(text)) {
-        if (!detailMarkup) {
-            return renderMarkdown(text);
-        }
-        const openAttr = expanded ? ' open' : '';
-        return [
-            `<div class="message-full">${renderMarkdown(text)}</div>`,
-            `<details class="message-details"${openAttr}>`,
-            `<summary>${summaryText}</summary>`,
-            detailMarkup,
-            `</details>`
-        ].join('');
+        return renderMarkdown(text);
     }
 
     const previewText = buildMessagePreview(text);
@@ -5976,7 +6089,6 @@ function renderMessageContent(content, options = {}) {
         `<details class="message-details"${openAttr}>`,
         `<summary>${summaryText}</summary>`,
         `<div class="message-full">${renderMarkdown(text)}</div>`,
-        detailMarkup,
         `</details>`
     ].join('');
 }

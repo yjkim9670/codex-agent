@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=77">
+    <link rel="stylesheet" href="/static/css/app.css?v=78">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -326,6 +326,27 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=64"></script>
+    <div class="message-log-overlay" id="codex-message-log-overlay" aria-hidden="true">
+        <div class="message-log-overlay-backdrop" data-action="close"></div>
+        <div class="message-log-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-message-log-overlay-title">
+            <div class="message-log-overlay-header">
+                <div class="message-log-overlay-heading">
+                    <div class="message-log-overlay-title" id="codex-message-log-overlay-title">상세 로그</div>
+                    <div class="message-log-overlay-subtitle" id="codex-message-log-overlay-subtitle">-</div>
+                </div>
+                <button class="btn ghost icon-only message-log-overlay-close" type="button" id="codex-message-log-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="message-log-overlay-body">
+                <pre class="message-log-overlay-content" id="codex-message-log-overlay-content">상세 로그가 없습니다.</pre>
+            </div>
+            <div class="message-log-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-message-log-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=65"></script>
 </body>
 </html>

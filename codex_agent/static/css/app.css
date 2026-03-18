@@ -685,6 +685,103 @@ body {
     background: var(--surface);
 }
 
+.message-log-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 2400;
+}
+
+.message-log-overlay.is-visible {
+    display: flex;
+}
+
+.message-log-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+    backdrop-filter: none;
+}
+
+.message-log-overlay-card {
+    position: relative;
+    width: min(760px, calc(100vw - 48px));
+    max-height: min(86vh, 840px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.message-log-overlay-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.message-log-overlay-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.message-log-overlay-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.message-log-overlay-subtitle {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.message-log-overlay-close {
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.message-log-overlay-body {
+    padding: 16px 20px 18px;
+    overflow: hidden;
+}
+
+.message-log-overlay-content {
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 56vh;
+    overflow: auto;
+}
+
+.message-log-overlay-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
 .is-hidden {
     display: none !important;
 }
@@ -2253,20 +2350,6 @@ body {
     margin-top: 0;
 }
 
-.message-work-details {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px dashed var(--border);
-}
-
-.message-work-details pre {
-    margin: 0;
-    max-height: 280px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
 .message.user .message-details summary {
     color: rgba(255, 255, 255, 0.85);
 }
@@ -2289,6 +2372,34 @@ body {
     font-size: 10px;
     color: var(--text-tertiary);
     margin-top: 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.message-footer-text {
+    line-height: 1.35;
+}
+
+.message-detail-link {
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    font-size: 11px;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.message-detail-link:hover {
+    color: var(--accent-dark);
+}
+
+.message-detail-link:active {
+    transform: none;
 }
 
 .message.user .message-meta {
@@ -2296,7 +2407,12 @@ body {
 }
 
 .message.user .message-footer {
+    align-items: flex-end;
     text-align: right;
+}
+
+.message.user .message-detail-link {
+    color: rgba(255, 255, 255, 0.92);
 }
 
 .message.user .message-bubble {
@@ -2724,6 +2840,15 @@ label.hover-tooltip,
         max-height: calc(100dvh - 32px);
     }
 
+    .message-log-overlay {
+        padding: 16px;
+    }
+
+    .message-log-overlay-card {
+        width: min(680px, calc(100vw - 32px));
+        max-height: calc(100dvh - 32px);
+    }
+
     .branch-overlay-header,
     .branch-overlay-body,
     .branch-overlay-footer {
@@ -2734,6 +2859,13 @@ label.hover-tooltip,
     .sync-overlay-header,
     .sync-overlay-body,
     .sync-overlay-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
+    .message-log-overlay-header,
+    .message-log-overlay-body,
+    .message-log-overlay-footer {
         padding-left: 16px;
         padding-right: 16px;
     }

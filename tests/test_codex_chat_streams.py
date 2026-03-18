@@ -52,6 +52,7 @@ def _build_stream_state(stream_id, session_id, started_at, output_path):
         'process': None,
         'started_at': started_at,
         'last_output_at': started_at,
+        'process_exited_at': None,
         'completed_at': None,
         'saved_at': None,
         'finalize_reason': None,
@@ -173,7 +174,7 @@ def test_run_codex_stream_finalizes_on_post_output_idle(monkeypatch, isolated_co
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 0.03)
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
-    monkeypatch.setattr(codex_chat, 'CODEX_EXEC_TIMEOUT_SECONDS', 1)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 1)
 
     session = codex_chat.create_session('watchdog-finalize')
     session_id = session['id']
@@ -205,3 +206,65 @@ def test_run_codex_stream_finalizes_on_post_output_idle(monkeypatch, isolated_co
         assert stream is not None
         assert stream.get('done') is True
         assert stream.get('saved') is True
+
+
+class _ExitedWithoutFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        self.pid = 54321
+        self._return_code = 0
+        self.stdout = _FakePipe([])
+        self.stderr = _FakePipe([])
+        self._cmd = cmd
+        self._kwargs = kwargs
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
+def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithoutFinalMessageProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('final-response-timeout')
+    session_id = session['id']
+    stream_id = 'stream-final-response-timeout'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-final-response-timeout.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'timeout prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'final_response_timeout'
+    assert '최종 응답을 받지 못해 종료합니다' in saved_message['content']
+    assert isinstance(saved_message.get('finalize_lag_ms'), int)
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('done') is True
+        assert stream.get('saved') is True
+        assert stream.get('exit_code') == 124

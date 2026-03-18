@@ -5701,6 +5701,7 @@ function getFinalizeReasonLabel(reason) {
     if (!value || value === 'process_exit') return '';
     if (value === 'post_output_idle_timeout') return 'Delayed finalize';
     if (value === 'exec_timeout') return 'Timed out';
+    if (value === 'final_response_timeout') return 'Final response timeout';
     if (value === 'user_cancelled') return 'Stopped by user';
     if (value === 'process_start_failed') return 'CLI start failed';
     if (value === 'process_exit_error') return 'Exited with error';

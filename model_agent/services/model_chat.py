@@ -1,6 +1,7 @@
 """Model chat session storage and multi-provider execution helpers."""
 
 import json
+import logging
 import math
 import os
 import re
@@ -14,6 +15,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from .. import state
@@ -54,6 +56,8 @@ _USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _PATCH_APPLY_LOCK = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
+_FINALIZE_LAG_WARNING_MS = 5000
 _SUPPORTED_PROVIDERS = ('gemini', 'dtgpt')
 _OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -184,6 +188,23 @@ def _coerce_non_negative_int(value):
     if not math.isfinite(numeric) or numeric < 0:
         return None
     return int(numeric)
+
+
+def _coerce_float(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().replace(',', '')
+        if normalized.endswith('%'):
+            normalized = normalized[:-1].strip()
+        value = normalized
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 def _canonical_provider_name(value):
@@ -689,14 +710,14 @@ def create_session(title=None):
     return deepcopy(session)
 
 
-def append_message(session_id, role, content, metadata=None):
+def append_message(session_id, role, content, metadata=None, created_at=None):
     if content is None:
         content = ''
     message = {
         'id': uuid.uuid4().hex,
         'role': role,
         'content': str(content),
-        'created_at': normalize_timestamp(None),
+        'created_at': normalize_timestamp(created_at),
     }
     if isinstance(metadata, dict):
         for key, value in metadata.items():
@@ -2283,6 +2304,54 @@ def execute_model_prompt(prompt):
     return _execute_gemini_prompt(prompt, model)
 
 
+def _coerce_positive_seconds(value, default_value, minimum=0.01):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        numeric = float(default_value)
+    if numeric < minimum:
+        numeric = minimum
+    return float(numeric)
+
+
+def _iso_timestamp_from_epoch(value):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    return normalize_timestamp(datetime.fromtimestamp(numeric))
+
+
+def _epoch_to_millis(value):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    return int(numeric * 1000)
+
+
+def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_reason):
+    metadata = {}
+    duration_ms = None
+    if isinstance(started_at, (int, float)) and isinstance(completed_at, (int, float)):
+        duration_ms = max(0, int((completed_at - started_at) * 1000))
+        metadata['duration_ms'] = duration_ms
+
+    started_iso = _iso_timestamp_from_epoch(started_at)
+    completed_iso = _iso_timestamp_from_epoch(completed_at)
+    saved_iso = _iso_timestamp_from_epoch(saved_at)
+
+    if started_iso:
+        metadata['started_at'] = started_iso
+    if completed_iso:
+        metadata['completed_at'] = completed_iso
+    if saved_iso:
+        metadata['saved_at'] = saved_iso
+    if finalize_reason:
+        metadata['finalize_reason'] = str(finalize_reason)
+    if isinstance(completed_at, (int, float)) and isinstance(saved_at, (int, float)):
+        metadata['finalize_lag_ms'] = max(0, int((saved_at - completed_at) * 1000))
+
+    return metadata or None
+
+
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
@@ -2293,22 +2362,28 @@ def _append_stream_chunk(stream_id, key, chunk):
         if stream.get('cancelled'):
             return
         stream[key] += chunk
-        stream['updated_at'] = time.time()
+        now = time.time()
+        stream['updated_at'] = now
+        stream['last_output_at'] = now
+        if key == 'output':
+            stream['output_length'] = len(stream.get('output') or '')
+        elif key == 'error':
+            stream['error_length'] = len(stream.get('error') or '')
 
 
 def _snapshot_stream_runtime_locked(stream):
     now = time.time()
     process_running = bool(stream.get('request_running')) and not stream.get('done')
 
-    created_at = stream.get('created_at')
-    updated_at = stream.get('updated_at')
+    started_at = stream.get('started_at') or stream.get('created_at')
+    last_output_at = stream.get('last_output_at') or stream.get('updated_at')
     runtime_ms = None
     idle_ms = None
 
-    if isinstance(created_at, (int, float)):
-        runtime_ms = max(0, int((now - created_at) * 1000))
-    if isinstance(updated_at, (int, float)):
-        idle_ms = max(0, int((now - updated_at) * 1000))
+    if isinstance(started_at, (int, float)):
+        runtime_ms = max(0, int((now - started_at) * 1000))
+    if isinstance(last_output_at, (int, float)):
+        idle_ms = max(0, int((now - last_output_at) * 1000))
 
     return {
         'process_running': process_running,
@@ -2360,6 +2435,7 @@ def _consume_sse_payload(stream_id, provider, state_holder, payload_text):
             state_holder['openai_usage'] = usage_payload
         api_error = _extract_api_error_message(event_payload)
         if api_error and not delta:
+            state_holder['stream_error'] = api_error
             _append_stream_chunk(stream_id, 'error', f'{api_error}\n')
             return True
         return False
@@ -2373,15 +2449,33 @@ def _consume_sse_payload(stream_id, provider, state_holder, payload_text):
 
 def _run_model_stream(stream_id, prompt, provider, model):
     normalized_provider = _normalize_provider_name(provider)
+    exec_timeout_seconds = _coerce_positive_seconds(
+        min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS),
+        default_value=600,
+        minimum=1,
+    )
+
+    with state.model_streams_lock:
+        stream = state.model_streams.get(stream_id)
+        if stream:
+            stream['request_running'] = True
+            stream['updated_at'] = time.time()
+            started_at = stream.get('started_at') or stream.get('created_at')
+        else:
+            started_at = time.time()
+
     if not _has_valid_api_key(normalized_provider):
         missing_label = _provider_label(normalized_provider)
         _append_stream_chunk(stream_id, 'error', f'{missing_label} 키가 설정되지 않았습니다.\n')
         with state.model_streams_lock:
             stream = state.model_streams.get(stream_id)
             if stream:
+                now = time.time()
                 stream['done'] = True
                 stream['exit_code'] = 401
-                stream['updated_at'] = time.time()
+                stream['completed_at'] = now
+                stream['updated_at'] = now
+                stream['finalize_reason'] = 'process_start_failed'
                 stream['request_running'] = False
         return
 
@@ -2418,29 +2512,28 @@ def _run_model_stream(stream_id, prompt, provider, model):
         with state.model_streams_lock:
             stream = state.model_streams.get(stream_id)
             if stream:
+                now = time.time()
                 stream['done'] = True
                 stream['exit_code'] = 1
-                stream['updated_at'] = time.time()
+                stream['completed_at'] = now
+                stream['updated_at'] = now
+                stream['finalize_reason'] = 'process_start_failed'
                 stream['request_running'] = False
         return
 
-    timeout_seconds = max(1, int(min(MODEL_EXEC_TIMEOUT_SECONDS, MODEL_API_TIMEOUT_SECONDS)))
-    state_holder = {'rendered_text': '', 'gemini_usage': None, 'openai_usage': None}
+    timeout_seconds = max(1, int(exec_timeout_seconds))
+    state_holder = {'rendered_text': '', 'gemini_usage': None, 'openai_usage': None, 'stream_error': None}
     cancelled = False
     stream_exception = None
     stream_exception_endpoint = ''
-
-    with state.model_streams_lock:
-        stream = state.model_streams.get(stream_id)
-        if stream:
-            stream['request_running'] = True
-            stream['updated_at'] = time.time()
 
     for attempt_index, (endpoint, request) in enumerate(request_candidates):
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 buffer = []
                 while True:
+                    if isinstance(started_at, (int, float)) and time.time() - started_at >= exec_timeout_seconds:
+                        raise TimeoutError('model stream timed out')
                     if _is_stream_cancelled(stream_id):
                         cancelled = True
                         break
@@ -2500,9 +2593,12 @@ def _run_model_stream(stream_id, prompt, provider, model):
         with state.model_streams_lock:
             stream = state.model_streams.get(stream_id)
             if stream:
+                now = time.time()
                 stream['done'] = True
                 stream['exit_code'] = 1
-                stream['updated_at'] = time.time()
+                stream['completed_at'] = now
+                stream['updated_at'] = now
+                stream['finalize_reason'] = 'process_exit_error'
                 stream['request_running'] = False
         return
 
@@ -2511,21 +2607,30 @@ def _run_model_stream(stream_id, prompt, provider, model):
     if state_holder.get('openai_usage'):
         _update_usage_summary_from_openai_usage(normalized_provider, state_holder['openai_usage'])
 
+    has_stream_error = bool(state_holder.get('stream_error'))
     with state.model_streams_lock:
         stream = state.model_streams.get(stream_id)
         if stream:
+            now = time.time()
             stream['done'] = True
-            stream['exit_code'] = 130 if cancelled else 0
-            stream['updated_at'] = time.time()
+            stream['exit_code'] = 130 if cancelled else (1 if has_stream_error else 0)
+            stream['completed_at'] = now
+            stream['updated_at'] = now
             stream['request_running'] = False
             if cancelled:
                 stream['saved'] = True
+                stream['finalize_reason'] = 'user_cancelled'
+            elif has_stream_error:
+                stream['finalize_reason'] = 'process_exit_error'
+            else:
+                stream['finalize_reason'] = 'process_exit'
     if not cancelled:
         finalize_model_stream(stream_id)
 
 
 def create_model_stream(session_id, prompt, provider, model):
     stream_id = uuid.uuid4().hex
+    created_at = time.time()
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -2538,8 +2643,15 @@ def create_model_stream(session_id, prompt, provider, model):
         'exit_code': None,
         'cancelled': False,
         'request_running': False,
-        'created_at': time.time(),
-        'updated_at': time.time(),
+        'started_at': created_at,
+        'last_output_at': created_at,
+        'completed_at': None,
+        'saved_at': None,
+        'finalize_reason': None,
+        'output_length': 0,
+        'error_length': 0,
+        'created_at': created_at,
+        'updated_at': created_at,
     }
     with state.model_streams_lock:
         state.model_streams[stream_id] = stream
@@ -2550,7 +2662,11 @@ def create_model_stream(session_id, prompt, provider, model):
         daemon=True,
     )
     thread.start()
-    return stream_id
+    return {
+        'id': stream_id,
+        'started_at': int(created_at * 1000),
+        'created_at': int(created_at * 1000),
+    }
 
 
 def _get_session_submit_lock(session_id):
@@ -2603,7 +2719,7 @@ def start_model_stream_for_session(session_id, prompt, prompt_with_context):
         provider = _normalize_provider_name(settings.get('provider'))
         model = _normalize_model_name(provider, settings.get('model'))
 
-        stream_id = create_model_stream(
+        stream_info = create_model_stream(
             session_id,
             prompt_with_context,
             provider,
@@ -2611,7 +2727,8 @@ def start_model_stream_for_session(session_id, prompt, prompt_with_context):
         )
         return {
             'ok': True,
-            'stream_id': stream_id,
+            'stream_id': stream_info.get('id'),
+            'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
             'user_message': user_message,
         }
 
@@ -2632,10 +2749,14 @@ def list_model_streams(include_done=False):
                     'model': stream.get('model'),
                     'done': stream.get('done', False),
                     'cancelled': stream.get('cancelled', False),
-                    'output_length': len(stream.get('output') or ''),
-                    'error_length': len(stream.get('error') or ''),
-                    'created_at': int((stream.get('created_at') or 0) * 1000),
-                    'updated_at': int((stream.get('updated_at') or 0) * 1000),
+                    'output_length': int(stream.get('output_length') or len(stream.get('output') or '')),
+                    'error_length': int(stream.get('error_length') or len(stream.get('error') or '')),
+                    'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+                    'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
+                    'completed_at': _epoch_to_millis(stream.get('completed_at')),
+                    'saved_at': _epoch_to_millis(stream.get('saved_at')),
+                    'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
+                    'finalize_reason': stream.get('finalize_reason'),
                     'process_running': runtime.get('process_running', False),
                     'process_pid': runtime.get('process_pid'),
                     'runtime_ms': runtime.get('runtime_ms'),
@@ -2657,16 +2778,20 @@ def read_model_stream(stream_id, output_offset=0, error_offset=0):
         return {
             'output': output[output_offset:],
             'error': error[error_offset:],
-            'output_length': len(output),
-            'error_length': len(error),
+            'output_length': int(stream.get('output_length') or len(output)),
+            'error_length': int(stream.get('error_length') or len(error)),
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
             'session_id': stream['session_id'],
             'provider': stream.get('provider'),
             'model': stream.get('model'),
-            'created_at': int((stream.get('created_at') or 0) * 1000),
-            'updated_at': int((stream.get('updated_at') or 0) * 1000),
+            'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+            'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
+            'completed_at': _epoch_to_millis(stream.get('completed_at')),
+            'saved_at': _epoch_to_millis(stream.get('saved_at')),
+            'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
+            'finalize_reason': stream.get('finalize_reason'),
             'process_running': runtime.get('process_running', False),
             'process_pid': runtime.get('process_pid'),
             'runtime_ms': runtime.get('runtime_ms'),
@@ -2679,26 +2804,60 @@ def finalize_model_stream(stream_id):
         stream = state.model_streams.get(stream_id)
         if not stream or stream.get('saved') or not stream.get('done'):
             return None
+        now = time.time()
+        started_at = stream.get('started_at') or stream.get('created_at')
+        completed_at = stream.get('completed_at') or stream.get('updated_at') or now
+        stream['completed_at'] = completed_at
+        stream['saved_at'] = now
+        stream['updated_at'] = now
+
+        finalize_reason = stream.get('finalize_reason')
+        if not finalize_reason:
+            if stream.get('cancelled'):
+                finalize_reason = 'user_cancelled'
+            elif stream.get('exit_code') == 0:
+                finalize_reason = 'process_exit'
+            else:
+                finalize_reason = 'process_exit_error'
+            stream['finalize_reason'] = finalize_reason
+
         stream['saved'] = True
         output = (stream.get('output') or '').strip()
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
         exit_code = stream.get('exit_code')
-        created_at = stream.get('created_at')
-        updated_at = stream.get('updated_at') or time.time()
-
-    duration_ms = None
-    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
-        duration_ms = max(0, int((updated_at - created_at) * 1000))
-    metadata = {'duration_ms': duration_ms} if duration_ms is not None else {}
+    metadata = _build_stream_message_metadata(started_at, completed_at, now, finalize_reason)
+    created_at_value = _iso_timestamp_from_epoch(completed_at)
+    if metadata:
+        finalize_lag_ms = metadata.get('finalize_lag_ms')
+        if isinstance(finalize_lag_ms, (int, float)) and finalize_lag_ms >= _FINALIZE_LAG_WARNING_MS:
+            _LOGGER.warning(
+                'Model stream finalize lag is high (stream_id=%s, lag_ms=%s, reason=%s)',
+                stream_id,
+                finalize_lag_ms,
+                finalize_reason,
+            )
 
     if exit_code == 0:
         final_output, patch_metadata = finalize_assistant_output(output)
+        merged_metadata = dict(metadata or {})
         if isinstance(patch_metadata, dict):
-            metadata.update(patch_metadata)
-        return append_message(session_id, 'assistant', final_output, metadata or None)
+            merged_metadata.update(patch_metadata)
+        return append_message(
+            session_id,
+            'assistant',
+            final_output,
+            merged_metadata or None,
+            created_at=created_at_value,
+        )
     message_text = error or output or 'Model API 실행에 실패했습니다.'
-    return append_message(session_id, 'error', message_text, metadata or None)
+    return append_message(
+        session_id,
+        'error',
+        message_text,
+        metadata or None,
+        created_at=created_at_value,
+    )
 
 
 def stop_model_stream(stream_id):
@@ -2708,13 +2867,20 @@ def stop_model_stream(stream_id):
             return None
         if stream.get('cancelled'):
             return {'status': 'already_cancelled'}
+        now = time.time()
         stream['cancelled'] = True
-        stream['updated_at'] = time.time()
+        stream['done'] = True
+        stream['saved'] = True
+        stream['exit_code'] = 130
+        stream['completed_at'] = now
+        stream['updated_at'] = now
+        stream['finalize_reason'] = 'user_cancelled'
+        stream['request_running'] = False
         session_id = stream.get('session_id')
         output = (stream.get('output') or '').strip()
         error = (stream.get('error') or '').strip()
-        created_at = stream.get('created_at')
-        updated_at = stream.get('updated_at') or time.time()
+        started_at = stream.get('started_at') or stream.get('created_at')
+        completed_at = stream.get('completed_at')
 
     if output or error:
         combined = output or error
@@ -2724,20 +2890,27 @@ def stop_model_stream(stream_id):
     else:
         message_text = '사용자에 의해 중지되었습니다.'
 
-    duration_ms = None
-    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
-        duration_ms = max(0, int((updated_at - created_at) * 1000))
-    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
-    saved_message = append_message(session_id, 'error', message_text, metadata)
+    saved_at = time.time()
+    metadata = _build_stream_message_metadata(
+        started_at,
+        completed_at,
+        saved_at,
+        'user_cancelled',
+    )
+    saved_message = append_message(
+        session_id,
+        'error',
+        message_text,
+        metadata,
+        created_at=_iso_timestamp_from_epoch(completed_at),
+    )
 
     with state.model_streams_lock:
         stream = state.model_streams.get(stream_id)
         if stream:
             stream['saved'] = True
-            stream['done'] = True
-            stream['exit_code'] = 130
-            stream['request_running'] = False
-            stream['updated_at'] = time.time()
+            stream['saved_at'] = saved_at
+            stream['updated_at'] = saved_at
     return {'status': 'stopped', 'saved_message': saved_message}
 
 

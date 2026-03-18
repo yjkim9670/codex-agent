@@ -234,7 +234,13 @@ def model_session_message_stream(session_id):
             ), 409
         return jsonify({'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}), 500
 
-    return jsonify({'stream_id': start_result.get('stream_id'), 'user_message': start_result.get('user_message')})
+    return jsonify(
+        {
+            'stream_id': start_result.get('stream_id'),
+            'started_at': start_result.get('started_at'),
+            'user_message': start_result.get('user_message'),
+        }
+    )
 
 
 @bp.route('/api/model/streams/<stream_id>')

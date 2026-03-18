@@ -200,6 +200,15 @@ function formatElapsedTime(ms) {
     return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function normalizeStartedAt(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    if (numeric < 1000000000000) {
+        return Math.round(numeric * 1000);
+    }
+    return Math.round(numeric);
+}
+
 function isResponseStatusMessage(message) {
     if (typeof message !== 'string') return false;
     return message.startsWith('Waiting for model') || message.startsWith('Receiving response');
@@ -312,8 +321,8 @@ function updateResponseTimerForSession(sessionId, message, isError = false) {
     const responseStatus = isResponseStatusMessage(message);
     if (!isError && responseStatus) {
         if (!sessionState.responseStartedAt) {
-            const pendingStartedAt = sessionState.pendingSend?.startedAt;
-            const streamStartedAt = getSessionStream(sessionId)?.startedAt;
+            const pendingStartedAt = normalizeStartedAt(sessionState.pendingSend?.startedAt);
+            const streamStartedAt = normalizeStartedAt(getSessionStream(sessionId)?.startedAt);
             sessionState.responseStartedAt = pendingStartedAt || streamStartedAt || Date.now();
         }
         sessionState.responseStatus = message;
@@ -409,6 +418,7 @@ function createStreamState({
     startedAt = null
 }) {
     if (!id || !sessionId) return null;
+    const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
     const stream = {
         id,
         sessionId,
@@ -417,7 +427,7 @@ function createStreamState({
         output,
         error,
         entry,
-        startedAt: startedAt || Date.now(),
+        startedAt: normalizedStartedAt,
         processRunning: null,
         processPid: null,
         runtimeMs: null,
@@ -432,9 +442,7 @@ function createStreamState({
     if (sessionState) {
         sessionState.streamId = id;
         sessionState.sending = true;
-        if (!sessionState.responseStartedAt && stream.startedAt) {
-            sessionState.responseStartedAt = stream.startedAt;
-        }
+        sessionState.responseStartedAt = normalizedStartedAt;
     }
     return stream;
 }
@@ -2598,7 +2606,11 @@ async function maybeAttachRemoteStreamToActiveSession(streams = state.remoteStre
 
     state.remoteAttachInFlightSessions.add(sessionId);
     try {
-        return await connectToExistingStream(sessionId, remoteStreamId);
+        return await connectToExistingStream(
+            sessionId,
+            remoteStreamId,
+            remoteStream?.started_at ?? remoteStream?.created_at
+        );
     } finally {
         state.remoteAttachInFlightSessions.delete(sessionId);
     }
@@ -4452,7 +4464,10 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 outputOffset,
                 errorOffset,
                 entry: assistantEntry,
-                startedAt: Number.isFinite(pending.startedAt) ? pending.startedAt : Date.now()
+                startedAt: normalizeStartedAt(result?.started_at)
+                    || normalizeStartedAt(result?.created_at)
+                    || normalizeStartedAt(pending.startedAt)
+                    || Date.now()
             });
             if (!stream) {
                 clearPersistedStream(pending.id);
@@ -4489,7 +4504,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
     }
 }
 
-async function connectToExistingStream(sessionId, streamId) {
+async function connectToExistingStream(sessionId, streamId, startedAt = null) {
     if (!sessionId || !streamId) return false;
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.streamId === streamId) {
@@ -4498,15 +4513,16 @@ async function connectToExistingStream(sessionId, streamId) {
     if (sessionState?.streamId && sessionState.streamId !== streamId) {
         return false;
     }
+    const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
     persistActiveStream({
         id: streamId,
         sessionId,
-        startedAt: Date.now()
+        startedAt: normalizedStartedAt
     });
     await resumeStreamsFromStorage([{
         id: streamId,
         sessionId,
-        startedAt: Date.now()
+        startedAt: normalizedStartedAt
     }]);
     await refreshRemoteStreams({ force: true });
     const attachedState = getSessionState(sessionId);
@@ -4726,7 +4742,7 @@ function renderMessages(messages) {
         wrapper.classList.add(roleClass);
 
         const label = getRoleLabel(message?.role);
-        const timestamp = formatTimestamp(message?.created_at);
+        const timestamp = formatTimestamp(getMessageTimestampValue(message));
         const metaText = timestamp ? `${label} - ${timestamp}` : label;
         const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4739,6 +4755,7 @@ function renderMessages(messages) {
         if (Number.isFinite(durationMs)) {
             setMessageDuration(footer, durationMs);
         }
+        setMessageFinalizeReason(footer, message?.finalize_reason);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -4761,7 +4778,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     wrapper.classList.add(role);
 
     const label = getRoleLabel(role);
-    const timestamp = formatTimestamp(message?.created_at);
+    const timestamp = formatTimestamp(getMessageTimestampValue(message));
     const metaText = timestamp ? `${label} - ${timestamp}` : label;
     const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4774,6 +4791,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     if (Number.isFinite(durationMs)) {
         setMessageDuration(footer, durationMs);
     }
+    setMessageFinalizeReason(footer, message?.finalize_reason);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -4922,7 +4940,7 @@ async function sendPrompt(prompt) {
         if (assistantEntry) {
             setMessageStreaming(assistantEntry.wrapper, true);
         }
-        startStream(streamId, sessionId, assistantEntry, startedAt);
+        startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAt);
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -4940,7 +4958,11 @@ async function sendPrompt(prompt) {
             const activeStreamId = error?.payload?.active_stream_id;
             if (activeStreamId) {
                 setSessionStatus(sessionId, 'Another client is already responding. Connecting...');
-                const attached = await connectToExistingStream(sessionId, activeStreamId);
+                const attached = await connectToExistingStream(
+                    sessionId,
+                    activeStreamId,
+                    error?.payload?.started_at
+                );
                 if (attached) {
                     showToast('다른 브라우저에서 실행 중인 응답에 연결했습니다.', {
                         tone: 'success',
@@ -5162,10 +5184,21 @@ async function finishStream(streamId, result) {
         wrapper.classList.remove('assistant', 'error');
         wrapper.classList.add(savedMessage.role === 'error' ? 'error' : 'assistant');
     }
+    if (savedMessage && stream.entry?.meta) {
+        setMessageMetaLabel(
+            stream.entry.meta,
+            savedMessage.role || 'assistant',
+            getMessageTimestampValue(savedMessage)
+        );
+    }
     const savedDurationMs = Number(savedMessage?.duration_ms);
     if (Number.isFinite(savedDurationMs)) {
         setMessageDuration(stream.entry?.footer, savedDurationMs);
     }
+    setMessageFinalizeReason(
+        stream.entry?.footer,
+        savedMessage?.finalize_reason || result?.finalize_reason
+    );
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
@@ -5270,6 +5303,20 @@ function formatTimestamp(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
     return date.toLocaleString('ko-KR', { timeZone: KST_TIME_ZONE });
+}
+
+function getMessageTimestampValue(message) {
+    if (!message || typeof message !== 'object') return '';
+    return message.completed_at || message.created_at || '';
+}
+
+function setMessageMetaLabel(meta, role, timestampValue) {
+    if (!meta) return;
+    const textElement = meta.querySelector('.message-meta-text');
+    if (!textElement) return;
+    const label = getRoleLabel(role);
+    const timestamp = formatTimestamp(timestampValue);
+    textElement.textContent = timestamp ? `${label} - ${timestamp}` : label;
 }
 
 function getRoleLabel(role) {
@@ -5453,19 +5500,48 @@ function showMessageCopyFeedback(button) {
 function createMessageFooter() {
     const footer = document.createElement('div');
     footer.className = 'message-footer';
+    footer.dataset.durationText = '';
+    footer.dataset.finalizeText = '';
     return footer;
+}
+
+function getFinalizeReasonLabel(reason) {
+    const value = typeof reason === 'string' ? reason.trim() : '';
+    if (!value || value === 'process_exit') return '';
+    if (value === 'post_output_idle_timeout') return 'Delayed finalize';
+    if (value === 'exec_timeout') return 'Timed out';
+    if (value === 'user_cancelled') return 'Stopped by user';
+    if (value === 'process_start_failed') return 'API start failed';
+    if (value === 'process_exit_error') return 'Exited with error';
+    return `Finalize: ${value}`;
+}
+
+function syncMessageFooter(footer) {
+    if (!footer) return;
+    const durationText = footer.dataset.durationText || '';
+    const finalizeText = footer.dataset.finalizeText || '';
+    const parts = [];
+    if (durationText) {
+        parts.push(`총 걸린시간 ${durationText}`);
+    }
+    if (finalizeText) {
+        parts.push(finalizeText);
+    }
+    footer.textContent = parts.join(' · ');
+    footer.classList.toggle('is-visible', parts.length > 0);
 }
 
 function setMessageDuration(footer, durationMs) {
     if (!footer) return;
     const formatted = formatDuration(durationMs);
-    if (!formatted) {
-        footer.textContent = '';
-        footer.classList.remove('is-visible');
-        return;
-    }
-    footer.textContent = `총 걸린시간 ${formatted}`;
-    footer.classList.add('is-visible');
+    footer.dataset.durationText = formatted || '';
+    syncMessageFooter(footer);
+}
+
+function setMessageFinalizeReason(footer, finalizeReason) {
+    if (!footer) return;
+    footer.dataset.finalizeText = getFinalizeReasonLabel(finalizeReason);
+    syncMessageFooter(footer);
 }
 
 function formatDuration(durationMs) {

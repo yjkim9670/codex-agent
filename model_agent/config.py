@@ -32,6 +32,19 @@ def _read_positive_int_env(name, default, minimum=1):
     return parsed
 
 
+def _read_positive_float_env(name, default, minimum=0.01):
+    raw_value = os.environ.get(name, '').strip()
+    if not raw_value:
+        return float(default)
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        return float(default)
+    if parsed < minimum:
+        return float(default)
+    return float(parsed)
+
+
 def _read_csv_env(name):
     raw = os.environ.get(name, '')
     return [item.strip() for item in raw.split(',') if item.strip()]
@@ -61,6 +74,9 @@ MODEL_CONTEXT_MAX_CHARS = _read_positive_int_env('MODEL_CONTEXT_MAX_CHARS', 1200
 MODEL_EXEC_TIMEOUT_SECONDS = _read_positive_int_env('MODEL_EXEC_TIMEOUT_SECONDS', 600)
 MODEL_API_TIMEOUT_SECONDS = _read_positive_int_env('MODEL_API_TIMEOUT_SECONDS', MODEL_EXEC_TIMEOUT_SECONDS)
 MODEL_STREAM_TTL_SECONDS = _read_positive_int_env('MODEL_STREAM_TTL_SECONDS', 900)
+MODEL_STREAM_POLL_INTERVAL_SECONDS = _read_positive_float_env('MODEL_STREAM_POLL_INTERVAL_SECONDS', 0.5, minimum=0.05)
+MODEL_STREAM_POST_OUTPUT_IDLE_SECONDS = _read_positive_float_env('MODEL_STREAM_POST_OUTPUT_IDLE_SECONDS', 15, minimum=0.5)
+MODEL_STREAM_TERMINATE_GRACE_SECONDS = _read_positive_float_env('MODEL_STREAM_TERMINATE_GRACE_SECONDS', 3, minimum=0.5)
 MODEL_MAX_TITLE_CHARS = _read_positive_int_env('MODEL_MAX_TITLE_CHARS', 80)
 MODEL_MAX_PROVIDER_CHARS = _read_positive_int_env('MODEL_MAX_PROVIDER_CHARS', 32)
 MODEL_MAX_MODEL_CHARS = _read_positive_int_env('MODEL_MAX_MODEL_CHARS', 80)

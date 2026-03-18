@@ -2,6 +2,7 @@
 
 import base64
 import json
+import logging
 import math
 import re
 import subprocess
@@ -21,6 +22,9 @@ from ..config import (
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
+    CODEX_STREAM_POLL_INTERVAL_SECONDS,
+    CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS,
+    CODEX_STREAM_TERMINATE_GRACE_SECONDS,
     CODEX_STREAM_TTL_SECONDS,
     WORKSPACE_DIR,
 )
@@ -31,6 +35,8 @@ _CONFIG_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
+_LOGGER = logging.getLogger(__name__)
+_FINALIZE_LAG_WARNING_MS = 5000
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -638,14 +644,14 @@ def update_session_title(session_id, title):
         return deepcopy(session)
 
 
-def append_message(session_id, role, content, metadata=None):
+def append_message(session_id, role, content, metadata=None, created_at=None):
     if content is None:
         content = ''
     message = {
         'id': uuid.uuid4().hex,
         'role': role,
         'content': str(content),
-        'created_at': normalize_timestamp(None)
+        'created_at': normalize_timestamp(created_at)
     }
     if isinstance(metadata, dict):
         for key, value in metadata.items():
@@ -955,6 +961,114 @@ def execute_codex_prompt(prompt):
     return output_text, None
 
 
+def _coerce_positive_seconds(value, default_value, minimum=0.01):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        numeric = float(default_value)
+    if numeric < minimum:
+        numeric = minimum
+    return float(numeric)
+
+
+def _iso_timestamp_from_epoch(value):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    return normalize_timestamp(datetime.fromtimestamp(numeric))
+
+
+def _epoch_to_millis(value):
+    numeric = _coerce_float(value)
+    if numeric is None:
+        return None
+    return int(numeric * 1000)
+
+
+def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_reason):
+    metadata = {}
+    duration_ms = None
+    if isinstance(started_at, (int, float)) and isinstance(completed_at, (int, float)):
+        duration_ms = max(0, int((completed_at - started_at) * 1000))
+        metadata['duration_ms'] = duration_ms
+
+    started_iso = _iso_timestamp_from_epoch(started_at)
+    completed_iso = _iso_timestamp_from_epoch(completed_at)
+    saved_iso = _iso_timestamp_from_epoch(saved_at)
+
+    if started_iso:
+        metadata['started_at'] = started_iso
+    if completed_iso:
+        metadata['completed_at'] = completed_iso
+    if saved_iso:
+        metadata['saved_at'] = saved_iso
+    if finalize_reason:
+        metadata['finalize_reason'] = str(finalize_reason)
+    if isinstance(completed_at, (int, float)) and isinstance(saved_at, (int, float)):
+        metadata['finalize_lag_ms'] = max(0, int((saved_at - completed_at) * 1000))
+
+    return metadata or None
+
+
+def _read_output_last_message(path):
+    if not path:
+        return ''
+    try:
+        output_path = Path(path)
+    except Exception:
+        return ''
+    if not output_path.exists():
+        return ''
+    try:
+        return output_path.read_text(encoding='utf-8').strip()
+    except Exception:
+        return ''
+
+
+def _cleanup_output_last_message(path):
+    if not path:
+        return
+    try:
+        output_path = Path(path)
+    except Exception:
+        return
+    try:
+        output_path.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def _terminate_stream_process(process, grace_seconds):
+    if process is None:
+        return None
+    try:
+        if process.poll() is not None:
+            return process.poll()
+    except Exception:
+        return None
+
+    try:
+        process.terminate()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=grace_seconds)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=grace_seconds)
+        except Exception:
+            pass
+    try:
+        return process.poll()
+    except Exception:
+        return None
+
+
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
@@ -965,7 +1079,13 @@ def _append_stream_chunk(stream_id, key, chunk):
         if stream.get('cancelled'):
             return
         stream[key] += chunk
-        stream['updated_at'] = time.time()
+        now = time.time()
+        stream['updated_at'] = now
+        stream['last_output_at'] = now
+        if key == 'output':
+            stream['output_length'] = len(stream.get('output') or '')
+        elif key == 'error':
+            stream['error_length'] = len(stream.get('error') or '')
 
 
 def _snapshot_stream_runtime_locked(stream):
@@ -992,15 +1112,15 @@ def _snapshot_stream_runtime_locked(stream):
             process_running = False
             process_pid = None
 
-    created_at = stream.get('created_at')
-    updated_at = stream.get('updated_at')
+    started_at = stream.get('started_at') or stream.get('created_at')
+    last_output_at = stream.get('last_output_at') or stream.get('updated_at')
     runtime_ms = None
     idle_ms = None
 
-    if isinstance(created_at, (int, float)):
-        runtime_ms = max(0, int((now - created_at) * 1000))
-    if isinstance(updated_at, (int, float)):
-        idle_ms = max(0, int((now - updated_at) * 1000))
+    if isinstance(started_at, (int, float)):
+        runtime_ms = max(0, int((now - started_at) * 1000))
+    if isinstance(last_output_at, (int, float)):
+        idle_ms = max(0, int((now - last_output_at) * 1000))
 
     return {
         'process_running': process_running,
@@ -1022,7 +1142,39 @@ def _stream_reader(stream_id, pipe, key):
 
 
 def _run_codex_stream(stream_id, prompt):
-    cmd = _build_codex_command(prompt)
+    poll_interval_seconds = _coerce_positive_seconds(
+        CODEX_STREAM_POLL_INTERVAL_SECONDS,
+        default_value=0.5,
+        minimum=0.05
+    )
+    post_output_idle_seconds = _coerce_positive_seconds(
+        CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS,
+        default_value=15,
+        minimum=0.5
+    )
+    terminate_grace_seconds = _coerce_positive_seconds(
+        CODEX_STREAM_TERMINATE_GRACE_SECONDS,
+        default_value=3,
+        minimum=0.5
+    )
+    exec_timeout_seconds = _coerce_positive_seconds(
+        CODEX_EXEC_TIMEOUT_SECONDS,
+        default_value=600,
+        minimum=1
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        output_path = stream.get('output_path') if stream else None
+        started_at = stream.get('started_at') if stream else None
+
+    if not output_path:
+        output_path = str(WORKSPACE_DIR / f"codex_output_{stream_id}.txt")
+    if not isinstance(started_at, (int, float)):
+        started_at = time.time()
+
+    cmd = _build_codex_command(prompt, output_path=output_path)
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         process = subprocess.Popen(
             cmd,
@@ -1039,7 +1191,10 @@ def _run_codex_stream(stream_id, prompt):
             if stream:
                 stream['done'] = True
                 stream['exit_code'] = 127
-                stream['updated_at'] = time.time()
+                stream['completed_at'] = time.time()
+                stream['updated_at'] = stream['completed_at']
+                stream['finalize_reason'] = 'process_start_failed'
+        finalize_codex_stream(stream_id)
         return
     except Exception as exc:
         _append_stream_chunk(stream_id, 'error', f'Codex 실행 중 오류가 발생했습니다: {exc}\n')
@@ -1048,13 +1203,17 @@ def _run_codex_stream(stream_id, prompt):
             if stream:
                 stream['done'] = True
                 stream['exit_code'] = 1
-                stream['updated_at'] = time.time()
+                stream['completed_at'] = time.time()
+                stream['updated_at'] = stream['completed_at']
+                stream['finalize_reason'] = 'process_start_failed'
+        finalize_codex_stream(stream_id)
         return
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream:
             stream['process'] = process
+            stream['output_path'] = output_path
 
     stdout_thread = threading.Thread(
         target=_stream_reader,
@@ -1069,23 +1228,120 @@ def _run_codex_stream(stream_id, prompt):
     stdout_thread.start()
     stderr_thread.start()
 
-    exit_code = process.wait()
-    stdout_thread.join(timeout=1)
-    stderr_thread.join(timeout=1)
+    while True:
+        now = time.time()
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not stream:
+                break
+            if stream.get('saved'):
+                break
+
+            stream_started_at = stream.get('started_at') or stream.get('created_at') or started_at
+            last_output_at = (
+                stream.get('last_output_at')
+                or stream.get('updated_at')
+                or stream_started_at
+                or now
+            )
+            is_cancelled = bool(stream.get('cancelled'))
+
+        if is_cancelled:
+            _terminate_stream_process(process, terminate_grace_seconds)
+            break
+
+        exit_code = process.poll()
+        if exit_code is not None:
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = exit_code
+                    stream['completed_at'] = now
+                    stream['updated_at'] = now
+                    stream['process'] = None
+                    if not stream.get('finalize_reason'):
+                        stream['finalize_reason'] = 'process_exit'
+            break
+
+        if isinstance(stream_started_at, (int, float)) and now - stream_started_at >= exec_timeout_seconds:
+            _append_stream_chunk(stream_id, 'error', 'Codex 응답 시간이 초과되었습니다.\n')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = 124
+                    stream['completed_at'] = now
+                    stream['updated_at'] = now
+                    stream['finalize_reason'] = 'exec_timeout'
+                    stream['process'] = None
+            _terminate_stream_process(process, terminate_grace_seconds)
+            break
+
+        output_text = _read_output_last_message(output_path)
+        if (
+            output_text
+            and isinstance(last_output_at, (int, float))
+            and now - last_output_at >= post_output_idle_seconds
+        ):
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['output_last_message'] = output_text
+                    if not (stream.get('output') or '').strip():
+                        stream['output'] = output_text
+                        stream['output_length'] = len(stream.get('output') or '')
+                        stream['last_output_at'] = now
+                    stream['done'] = True
+                    stream['exit_code'] = 0
+                    stream['completed_at'] = now
+                    stream['updated_at'] = now
+                    stream['finalize_reason'] = 'post_output_idle_timeout'
+                    stream['process'] = None
+            _terminate_stream_process(process, terminate_grace_seconds)
+            break
+
+        time.sleep(poll_interval_seconds)
+
+    stdout_thread.join(timeout=terminate_grace_seconds)
+    stderr_thread.join(timeout=terminate_grace_seconds)
+
+    output_text = _read_output_last_message(output_path)
+    if output_text:
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                now = time.time()
+                stream['output_last_message'] = output_text
+                if not (stream.get('output') or '').strip():
+                    stream['output'] = output_text
+                    stream['output_length'] = len(stream.get('output') or '')
+                    stream['last_output_at'] = now
+                    stream['updated_at'] = now
+
+    _cleanup_output_last_message(output_path)
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream:
-            stream['done'] = True
-            stream['exit_code'] = exit_code
-            stream['updated_at'] = time.time()
             stream['process'] = None
+            if stream.get('done') and not isinstance(stream.get('completed_at'), (int, float)):
+                stream['completed_at'] = time.time()
+            if stream.get('done') and not stream.get('finalize_reason'):
+                if stream.get('cancelled'):
+                    stream['finalize_reason'] = 'user_cancelled'
+                elif stream.get('exit_code') == 0:
+                    stream['finalize_reason'] = 'process_exit'
+                else:
+                    stream['finalize_reason'] = 'process_exit_error'
+            stream['updated_at'] = time.time()
     finalize_codex_stream(stream_id)
 
 
 def create_codex_stream(session_id, prompt):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
+    output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -1096,6 +1352,15 @@ def create_codex_stream(session_id, prompt):
         'exit_code': None,
         'cancelled': False,
         'process': None,
+        'started_at': created_at,
+        'last_output_at': created_at,
+        'completed_at': None,
+        'saved_at': None,
+        'finalize_reason': None,
+        'output_path': str(output_path),
+        'output_last_message': '',
+        'output_length': 0,
+        'error_length': 0,
         'created_at': created_at,
         'updated_at': created_at
     }
@@ -1110,6 +1375,7 @@ def create_codex_stream(session_id, prompt):
     thread.start()
     return {
         'id': stream_id,
+        'started_at': int(created_at * 1000),
         'created_at': int(created_at * 1000)
     }
 
@@ -1167,7 +1433,7 @@ def start_codex_stream_for_session(session_id, prompt, prompt_with_context):
         return {
             'ok': True,
             'stream_id': stream_info.get('id'),
-            'started_at': stream_info.get('created_at'),
+            'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
             'user_message': user_message
         }
 
@@ -1191,10 +1457,14 @@ def list_codex_streams(include_done=False):
                 'session_id': stream.get('session_id'),
                 'done': stream.get('done', False),
                 'cancelled': stream.get('cancelled', False),
-                'output_length': len(stream.get('output') or ''),
-                'error_length': len(stream.get('error') or ''),
-                'created_at': int((stream.get('created_at') or 0) * 1000),
-                'updated_at': int((stream.get('updated_at') or 0) * 1000),
+                'output_length': int(stream.get('output_length') or len(stream.get('output') or '')),
+                'error_length': int(stream.get('error_length') or len(stream.get('error') or '')),
+                'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+                'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
+                'completed_at': _epoch_to_millis(stream.get('completed_at')),
+                'saved_at': _epoch_to_millis(stream.get('saved_at')),
+                'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
+                'finalize_reason': stream.get('finalize_reason'),
                 'process_running': runtime.get('process_running', False),
                 'process_pid': runtime.get('process_pid'),
                 'runtime_ms': runtime.get('runtime_ms'),
@@ -1215,14 +1485,18 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
         data = {
             'output': output[output_offset:],
             'error': error[error_offset:],
-            'output_length': len(output),
-            'error_length': len(error),
+            'output_length': int(stream.get('output_length') or len(output)),
+            'error_length': int(stream.get('error_length') or len(error)),
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
             'session_id': stream['session_id'],
-            'created_at': int((stream.get('created_at') or 0) * 1000),
-            'updated_at': int((stream.get('updated_at') or 0) * 1000),
+            'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+            'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
+            'completed_at': _epoch_to_millis(stream.get('completed_at')),
+            'saved_at': _epoch_to_millis(stream.get('saved_at')),
+            'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
+            'finalize_reason': stream.get('finalize_reason'),
             'process_running': runtime.get('process_running', False),
             'process_pid': runtime.get('process_pid'),
             'runtime_ms': runtime.get('runtime_ms'),
@@ -1236,23 +1510,64 @@ def finalize_codex_stream(stream_id):
         stream = state.codex_streams.get(stream_id)
         if not stream or stream.get('saved') or not stream.get('done'):
             return None
+        now = time.time()
+        started_at = stream.get('started_at') or stream.get('created_at')
+        completed_at = stream.get('completed_at') or stream.get('updated_at') or now
+        stream['completed_at'] = completed_at
+        stream['saved_at'] = now
+        stream['updated_at'] = now
+
+        finalize_reason = stream.get('finalize_reason')
+        if not finalize_reason:
+            if stream.get('cancelled'):
+                finalize_reason = 'user_cancelled'
+            elif stream.get('exit_code') == 0:
+                finalize_reason = 'process_exit'
+            else:
+                finalize_reason = 'process_exit_error'
+            stream['finalize_reason'] = finalize_reason
+
         stream['saved'] = True
         output = (stream.get('output') or '').strip()
+        output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
         exit_code = stream.get('exit_code')
-        created_at = stream.get('created_at')
-        updated_at = stream.get('updated_at') or time.time()
+        output_path = stream.get('output_path')
 
-    duration_ms = None
-    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
-        duration_ms = max(0, int((updated_at - created_at) * 1000))
-    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
+    output_from_file = _read_output_last_message(output_path)
+    if output_from_file:
+        output_last_message = output_from_file
+    _cleanup_output_last_message(output_path)
 
+    metadata = _build_stream_message_metadata(started_at, completed_at, now, finalize_reason)
+    created_at_value = _iso_timestamp_from_epoch(completed_at)
+    if metadata:
+        finalize_lag_ms = metadata.get('finalize_lag_ms')
+        if isinstance(finalize_lag_ms, (int, float)) and finalize_lag_ms >= _FINALIZE_LAG_WARNING_MS:
+            _LOGGER.warning(
+                'Codex stream finalize lag is high (stream_id=%s, lag_ms=%s, reason=%s)',
+                stream_id,
+                finalize_lag_ms,
+                finalize_reason
+            )
+    final_output = output_last_message or output
     if exit_code == 0:
-        return append_message(session_id, 'assistant', output, metadata)
-    message_text = error or output or 'Codex 실행에 실패했습니다.'
-    return append_message(session_id, 'error', message_text, metadata)
+        return append_message(
+            session_id,
+            'assistant',
+            final_output,
+            metadata,
+            created_at=created_at_value
+        )
+    message_text = error or final_output or 'Codex 실행에 실패했습니다.'
+    return append_message(
+        session_id,
+        'error',
+        message_text,
+        metadata,
+        created_at=created_at_value
+    )
 
 
 def stop_codex_stream(stream_id):
@@ -1262,54 +1577,82 @@ def stop_codex_stream(stream_id):
             return None
         if stream.get('cancelled'):
             return {'status': 'already_cancelled'}
+        now = time.time()
         stream['cancelled'] = True
-        stream['updated_at'] = time.time()
+        stream['done'] = True
+        stream['saved'] = True
+        stream['exit_code'] = 130
+        stream['completed_at'] = now
+        stream['updated_at'] = now
+        stream['finalize_reason'] = 'user_cancelled'
         process = stream.get('process')
         session_id = stream.get('session_id')
         output = (stream.get('output') or '').strip()
+        output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
-        created_at = stream.get('created_at')
-        updated_at = stream.get('updated_at') or time.time()
+        started_at = stream.get('started_at') or stream.get('created_at')
+        completed_at = stream.get('completed_at')
+        output_path = stream.get('output_path')
 
-    if process and process.poll() is None:
-        try:
-            process.terminate()
-        except Exception:
-            pass
+    grace_seconds = _coerce_positive_seconds(
+        CODEX_STREAM_TERMINATE_GRACE_SECONDS,
+        default_value=3,
+        minimum=0.5
+    )
+    _terminate_stream_process(process, grace_seconds)
+
+    output_from_file = _read_output_last_message(output_path)
+    if output_from_file:
+        output_last_message = output_from_file
+    _cleanup_output_last_message(output_path)
 
     message_text = None
-    if output or error:
-        combined = output or error
-        if output and error:
-            combined = f"{output}\n{error}"
+    if output_last_message or output or error:
+        selected_output = output_last_message or output
+        combined = selected_output or error
+        if selected_output and error:
+            combined = f"{selected_output}\n{error}"
         message_text = f"{combined}\n\n[사용자 중지]"
     else:
         message_text = '사용자에 의해 중지되었습니다.'
 
-    duration_ms = None
-    if isinstance(created_at, (int, float)) and isinstance(updated_at, (int, float)):
-        duration_ms = max(0, int((updated_at - created_at) * 1000))
-    metadata = {'duration_ms': duration_ms} if duration_ms is not None else None
-    saved_message = append_message(session_id, 'error', message_text, metadata)
+    saved_at = time.time()
+    metadata = _build_stream_message_metadata(
+        started_at,
+        completed_at,
+        saved_at,
+        'user_cancelled'
+    )
+    saved_message = append_message(
+        session_id,
+        'error',
+        message_text,
+        metadata,
+        created_at=_iso_timestamp_from_epoch(completed_at)
+    )
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream:
             stream['saved'] = True
-            stream['done'] = True
-            stream['exit_code'] = 130
-            stream['updated_at'] = time.time()
+            stream['saved_at'] = saved_at
+            stream['updated_at'] = saved_at
+            stream['process'] = None
     return {'status': 'stopped', 'saved_message': saved_message}
 
 
 def cleanup_codex_streams():
     now = time.time()
-    stale_ids = []
+    stale_paths = []
     with state.codex_streams_lock:
+        stale_ids = []
         for stream_id, stream in state.codex_streams.items():
             if not stream.get('done'):
                 continue
             if now - stream.get('updated_at', now) > CODEX_STREAM_TTL_SECONDS:
                 stale_ids.append(stream_id)
+                stale_paths.append(stream.get('output_path'))
         for stream_id in stale_ids:
             state.codex_streams.pop(stream_id, None)
+    for output_path in stale_paths:
+        _cleanup_output_last_message(output_path)

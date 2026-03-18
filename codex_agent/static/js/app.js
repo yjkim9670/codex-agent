@@ -2605,7 +2605,11 @@ async function maybeAttachRemoteStreamToActiveSession(streams = state.remoteStre
 
     state.remoteAttachInFlightSessions.add(sessionId);
     try {
-        return await connectToExistingStream(sessionId, remoteStreamId, remoteStream?.created_at);
+        return await connectToExistingStream(
+            sessionId,
+            remoteStreamId,
+            remoteStream?.started_at ?? remoteStream?.created_at
+        );
     } finally {
         state.remoteAttachInFlightSessions.delete(sessionId);
     }
@@ -4570,7 +4574,10 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 outputOffset,
                 errorOffset,
                 entry: assistantEntry,
-                startedAt: normalizeStartedAt(result?.created_at) || normalizeStartedAt(pending.startedAt) || Date.now()
+                startedAt: normalizeStartedAt(result?.started_at)
+                    || normalizeStartedAt(result?.created_at)
+                    || normalizeStartedAt(pending.startedAt)
+                    || Date.now()
             });
             if (!stream) {
                 clearPersistedStream(pending.id);
@@ -4838,7 +4845,7 @@ function renderMessages(messages) {
         wrapper.classList.add(roleClass);
 
         const label = getRoleLabel(message?.role);
-        const timestamp = formatTimestamp(message?.created_at);
+        const timestamp = formatTimestamp(getMessageTimestampValue(message));
         const metaText = timestamp ? `${label} - ${timestamp}` : label;
         const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4851,6 +4858,7 @@ function renderMessages(messages) {
         if (Number.isFinite(durationMs)) {
             setMessageDuration(footer, durationMs);
         }
+        setMessageFinalizeReason(footer, message?.finalize_reason);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -4873,7 +4881,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     wrapper.classList.add(role);
 
     const label = getRoleLabel(role);
-    const timestamp = formatTimestamp(message?.created_at);
+    const timestamp = formatTimestamp(getMessageTimestampValue(message));
     const metaText = timestamp ? `${label} - ${timestamp}` : label;
     const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4886,6 +4894,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     if (Number.isFinite(durationMs)) {
         setMessageDuration(footer, durationMs);
     }
+    setMessageFinalizeReason(footer, message?.finalize_reason);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -5278,10 +5287,21 @@ async function finishStream(streamId, result) {
         wrapper.classList.remove('assistant', 'error');
         wrapper.classList.add(savedMessage.role === 'error' ? 'error' : 'assistant');
     }
+    if (savedMessage && stream.entry?.meta) {
+        setMessageMetaLabel(
+            stream.entry.meta,
+            savedMessage.role || 'assistant',
+            getMessageTimestampValue(savedMessage)
+        );
+    }
     const savedDurationMs = Number(savedMessage?.duration_ms);
     if (Number.isFinite(savedDurationMs)) {
         setMessageDuration(stream.entry?.footer, savedDurationMs);
     }
+    setMessageFinalizeReason(
+        stream.entry?.footer,
+        savedMessage?.finalize_reason || result?.finalize_reason
+    );
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
@@ -5388,6 +5408,20 @@ function formatTimestamp(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '';
     return date.toLocaleString('ko-KR', { timeZone: KST_TIME_ZONE });
+}
+
+function getMessageTimestampValue(message) {
+    if (!message || typeof message !== 'object') return '';
+    return message.completed_at || message.created_at || '';
+}
+
+function setMessageMetaLabel(meta, role, timestampValue) {
+    if (!meta) return;
+    const textElement = meta.querySelector('.message-meta-text');
+    if (!textElement) return;
+    const label = getRoleLabel(role);
+    const timestamp = formatTimestamp(timestampValue);
+    textElement.textContent = timestamp ? `${label} - ${timestamp}` : label;
 }
 
 function getRoleLabel(role) {
@@ -5571,19 +5605,48 @@ function showMessageCopyFeedback(button) {
 function createMessageFooter() {
     const footer = document.createElement('div');
     footer.className = 'message-footer';
+    footer.dataset.durationText = '';
+    footer.dataset.finalizeText = '';
     return footer;
+}
+
+function getFinalizeReasonLabel(reason) {
+    const value = typeof reason === 'string' ? reason.trim() : '';
+    if (!value || value === 'process_exit') return '';
+    if (value === 'post_output_idle_timeout') return 'Delayed finalize';
+    if (value === 'exec_timeout') return 'Timed out';
+    if (value === 'user_cancelled') return 'Stopped by user';
+    if (value === 'process_start_failed') return 'CLI start failed';
+    if (value === 'process_exit_error') return 'Exited with error';
+    return `Finalize: ${value}`;
+}
+
+function syncMessageFooter(footer) {
+    if (!footer) return;
+    const durationText = footer.dataset.durationText || '';
+    const finalizeText = footer.dataset.finalizeText || '';
+    const parts = [];
+    if (durationText) {
+        parts.push(`총 걸린시간 ${durationText}`);
+    }
+    if (finalizeText) {
+        parts.push(finalizeText);
+    }
+    footer.textContent = parts.join(' · ');
+    footer.classList.toggle('is-visible', parts.length > 0);
 }
 
 function setMessageDuration(footer, durationMs) {
     if (!footer) return;
     const formatted = formatDuration(durationMs);
-    if (!formatted) {
-        footer.textContent = '';
-        footer.classList.remove('is-visible');
-        return;
-    }
-    footer.textContent = `총 걸린시간 ${formatted}`;
-    footer.classList.add('is-visible');
+    footer.dataset.durationText = formatted || '';
+    syncMessageFooter(footer);
+}
+
+function setMessageFinalizeReason(footer, finalizeReason) {
+    if (!footer) return;
+    footer.dataset.finalizeText = getFinalizeReasonLabel(finalizeReason);
+    syncMessageFooter(footer);
 }
 
 function formatDuration(durationMs) {

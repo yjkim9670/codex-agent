@@ -2249,6 +2249,24 @@ body {
     margin-top: 8px;
 }
 
+.message-bubble > .message-full:first-child {
+    margin-top: 0;
+}
+
+.message-work-details {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+}
+
+.message-work-details pre {
+    margin: 0;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 .message.user .message-details summary {
     color: rgba(255, 255, 255, 0.85);
 }

@@ -24,6 +24,7 @@ from ..config import (
     LEGACY_MODEL_SETTINGS_PATH,
     LEGACY_MODEL_USAGE_SNAPSHOT_PATH,
     MODEL_API_TIMEOUT_SECONDS,
+    MODEL_CLAUDE_DEFAULT_MODEL,
     MODEL_CHAT_STORE_PATH,
     MODEL_CONTEXT_MAX_CHARS,
     MODEL_DEFAULT_PROVIDER,
@@ -43,6 +44,7 @@ from ..config import (
     MODEL_PROVIDER_MODEL_OPTIONS,
     MODEL_PROVIDER_OPTIONS,
     MODEL_SETTINGS_PATH,
+    MODEL_STREAM_TERMINATE_GRACE_SECONDS,
     MODEL_STREAM_TTL_SECONDS,
     MODEL_USAGE_SNAPSHOT_PATH,
     MODEL_WORKSPACE_BLOCKED_PATHS,
@@ -58,7 +60,7 @@ _SESSION_SUBMIT_LOCKS = {}
 _PATCH_APPLY_LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
 _FINALIZE_LAG_WARNING_MS = 5000
-_SUPPORTED_PROVIDERS = ('gemini', 'dtgpt')
+_SUPPORTED_PROVIDERS = ('gemini', 'dtgpt', 'claude')
 _OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
@@ -228,6 +230,8 @@ def _canonical_provider_name(value):
         'glm': 'dtgpt',
         'bigmodel': 'dtgpt',
         'zhipu': 'dtgpt',
+        'claude': 'claude',
+        'anthropic': 'claude',
     }
     return aliases.get(raw, '')
 
@@ -253,6 +257,10 @@ def get_provider_options():
         options.append(provider)
     if not options:
         options = list(_SUPPORTED_PROVIDERS)
+    else:
+        for provider in _SUPPORTED_PROVIDERS:
+            if provider not in options:
+                options.append(provider)
     default_provider = _normalize_provider_name(MODEL_DEFAULT_PROVIDER)
     if default_provider not in options:
         options.insert(0, default_provider)
@@ -264,6 +272,8 @@ def _default_model_for_provider(provider):
     configured = MODEL_PROVIDER_DEFAULT_MODELS.get(normalized)
     if isinstance(configured, str) and configured.strip():
         return configured.strip()
+    if normalized == 'claude':
+        return MODEL_CLAUDE_DEFAULT_MODEL
     if normalized == 'dtgpt':
         return MODEL_DTGPT_DEFAULT_MODEL
     return MODEL_GEMINI_DEFAULT_MODEL
@@ -271,6 +281,8 @@ def _default_model_for_provider(provider):
 
 def get_model_options(provider=None):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return [_default_model_for_provider('claude')]
     configured = MODEL_PROVIDER_MODEL_OPTIONS.get(normalized)
     if not isinstance(configured, list):
         configured = []
@@ -442,6 +454,8 @@ def update_settings(provider=None, model=None):
 
 def _provider_account_name(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return 'Claude CLI'
     if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
         return 'Samsung DTGPT API'
     return 'Gemini API'
@@ -1872,6 +1886,12 @@ def _normalize_model_name(provider, value):
         }
         return alias_map.get(alias_key, raw)
 
+    if normalized_provider == 'claude':
+        alias_map = {
+            'auto': MODEL_CLAUDE_DEFAULT_MODEL,
+        }
+        return alias_map.get(alias_key, raw)
+
     return raw
 
 
@@ -1881,6 +1901,8 @@ def _build_generation_config():
 
 def _provider_label(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return 'Claude CLI'
     if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
         return 'Samsung DTGPT API'
     return 'Gemini API'
@@ -1888,6 +1910,8 @@ def _provider_label(provider):
 
 def _provider_api_key(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return ''
     configured_key = ''
     fallback_env_name = ''
     if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
@@ -1925,6 +1949,8 @@ def _provider_api_key_prefix(provider):
 
 def _provider_api_base_url(provider):
     normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return ''
     base_url = ''
     if normalized in _OPENAI_COMPATIBLE_PROVIDERS:
         base_url = MODEL_DTGPT_API_BASE_URL
@@ -1934,6 +1960,9 @@ def _provider_api_base_url(provider):
 
 
 def _has_valid_api_key(provider):
+    normalized = _normalize_provider_name(provider)
+    if normalized == 'claude':
+        return True
     key = str(_provider_api_key(provider) or '').strip()
     if not key:
         return False
@@ -2293,12 +2322,49 @@ def _execute_openai_compatible_prompt(provider, prompt, model):
     return None, last_error or f'{label} 실행에 실패했습니다.'
 
 
+def _build_claude_command(prompt):
+    return ['claude', '-p', str(prompt or '')]
+
+
+def _execute_claude_prompt(prompt):
+    cmd = _build_claude_command(prompt)
+    timeout_seconds = max(1, int(MODEL_EXEC_TIMEOUT_SECONDS))
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None, 'claude 명령을 찾을 수 없습니다.'
+    except subprocess.TimeoutExpired:
+        return None, 'Claude CLI 응답 시간이 초과되었습니다.'
+    except Exception as exc:
+        return None, f'Claude CLI 실행 중 오류가 발생했습니다: {exc}'
+
+    output_text = (result.stdout or '').strip()
+    error_text = (result.stderr or '').strip()
+
+    if result.returncode != 0:
+        return None, error_text or output_text or 'Claude CLI 실행에 실패했습니다.'
+    if output_text:
+        return output_text, None
+    if error_text:
+        return None, error_text
+    return None, 'Claude CLI 응답이 비어 있습니다.'
+
+
 def execute_model_prompt(prompt):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     settings = get_settings()
     provider = _normalize_provider_name(settings.get('provider'))
     model = _normalize_model_name(provider, settings.get('model'))
 
+    if provider == 'claude':
+        return _execute_claude_prompt(prompt)
     if provider in _OPENAI_COMPATIBLE_PROVIDERS:
         return _execute_openai_compatible_prompt(provider, prompt, model)
     return _execute_gemini_prompt(prompt, model)
@@ -2352,6 +2418,47 @@ def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_
     return metadata or None
 
 
+def _stream_reader(stream_id, pipe, key):
+    try:
+        for line in iter(pipe.readline, ''):
+            _append_stream_chunk(stream_id, key, line)
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
+def _terminate_stream_process(process, grace_seconds):
+    if process is None:
+        return None
+    try:
+        if process.poll() is not None:
+            return process.poll()
+    except Exception:
+        return None
+
+    try:
+        process.terminate()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=grace_seconds)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=grace_seconds)
+        except Exception:
+            pass
+    try:
+        return process.poll()
+    except Exception:
+        return None
+
+
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
@@ -2373,7 +2480,27 @@ def _append_stream_chunk(stream_id, key, chunk):
 
 def _snapshot_stream_runtime_locked(stream):
     now = time.time()
+    process = stream.get('process')
     process_running = bool(stream.get('request_running')) and not stream.get('done')
+    process_pid = None
+
+    if process is not None:
+        process_pid = getattr(process, 'pid', None)
+        try:
+            return_code = process.poll()
+        except Exception:
+            return_code = None
+        if return_code is None:
+            process_running = True
+        else:
+            stream['done'] = True
+            if stream.get('exit_code') is None:
+                stream['exit_code'] = return_code
+            stream['request_running'] = False
+            stream['process'] = None
+            stream['updated_at'] = now
+            process_running = False
+            process_pid = None
 
     started_at = stream.get('started_at') or stream.get('created_at')
     last_output_at = stream.get('last_output_at') or stream.get('updated_at')
@@ -2387,7 +2514,7 @@ def _snapshot_stream_runtime_locked(stream):
 
     return {
         'process_running': process_running,
-        'process_pid': None,
+        'process_pid': process_pid,
         'runtime_ms': runtime_ms,
         'idle_ms': idle_ms,
     }
@@ -2447,6 +2574,130 @@ def _consume_sse_payload(stream_id, provider, state_holder, payload_text):
     return False
 
 
+def _run_claude_cli_stream(stream_id, prompt, exec_timeout_seconds, started_at):
+    cmd = _build_claude_command(prompt)
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(WORKSPACE_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        _append_stream_chunk(stream_id, 'error', 'claude 명령을 찾을 수 없습니다.\n')
+        with state.model_streams_lock:
+            stream = state.model_streams.get(stream_id)
+            if stream:
+                now = time.time()
+                stream['done'] = True
+                stream['exit_code'] = 127
+                stream['completed_at'] = now
+                stream['updated_at'] = now
+                stream['finalize_reason'] = 'process_start_failed'
+                stream['request_running'] = False
+        return
+    except Exception as exc:
+        _append_stream_chunk(stream_id, 'error', f'Claude CLI 실행 중 오류가 발생했습니다: {exc}\n')
+        with state.model_streams_lock:
+            stream = state.model_streams.get(stream_id)
+            if stream:
+                now = time.time()
+                stream['done'] = True
+                stream['exit_code'] = 1
+                stream['completed_at'] = now
+                stream['updated_at'] = now
+                stream['finalize_reason'] = 'process_start_failed'
+                stream['request_running'] = False
+        return
+
+    with state.model_streams_lock:
+        stream = state.model_streams.get(stream_id)
+        if stream:
+            stream['process'] = process
+
+    stdout_thread = threading.Thread(
+        target=_stream_reader,
+        args=(stream_id, process.stdout, 'output'),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_stream_reader,
+        args=(stream_id, process.stderr, 'error'),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+
+    cancelled = False
+    while True:
+        now = time.time()
+        if isinstance(started_at, (int, float)) and now - started_at >= exec_timeout_seconds:
+            _append_stream_chunk(stream_id, 'error', 'Claude CLI 응답 시간이 초과되었습니다.\n')
+            _terminate_stream_process(process, 1)
+            with state.model_streams_lock:
+                stream = state.model_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = 124
+                    stream['completed_at'] = now
+                    stream['updated_at'] = now
+                    stream['finalize_reason'] = 'exec_timeout'
+                    stream['request_running'] = False
+                    stream['process'] = None
+            break
+
+        if _is_stream_cancelled(stream_id):
+            cancelled = True
+            grace_seconds = _coerce_positive_seconds(
+                MODEL_STREAM_TERMINATE_GRACE_SECONDS,
+                default_value=3,
+                minimum=0.5,
+            )
+            _terminate_stream_process(process, grace_seconds)
+            break
+
+        exit_code = process.poll()
+        if exit_code is not None:
+            with state.model_streams_lock:
+                stream = state.model_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = exit_code
+                    stream['completed_at'] = now
+                    stream['updated_at'] = now
+                    stream['request_running'] = False
+                    stream['process'] = None
+                    if exit_code == 0:
+                        stream['finalize_reason'] = 'process_exit'
+                    else:
+                        stream['finalize_reason'] = 'process_exit_error'
+            break
+
+        time.sleep(0.1)
+
+    stdout_thread.join(timeout=1)
+    stderr_thread.join(timeout=1)
+
+    with state.model_streams_lock:
+        stream = state.model_streams.get(stream_id)
+        if stream:
+            stream['request_running'] = False
+            stream['process'] = None
+            if cancelled:
+                stream['saved'] = True
+                stream['finalize_reason'] = 'user_cancelled'
+                if stream.get('exit_code') is None:
+                    stream['exit_code'] = 130
+                if not isinstance(stream.get('completed_at'), (int, float)):
+                    stream['completed_at'] = time.time()
+                stream['updated_at'] = time.time()
+
+    if not cancelled:
+        finalize_model_stream(stream_id)
+
+
 def _run_model_stream(stream_id, prompt, provider, model):
     normalized_provider = _normalize_provider_name(provider)
     exec_timeout_seconds = _coerce_positive_seconds(
@@ -2463,6 +2714,10 @@ def _run_model_stream(stream_id, prompt, provider, model):
             started_at = stream.get('started_at') or stream.get('created_at')
         else:
             started_at = time.time()
+
+    if normalized_provider == 'claude':
+        _run_claude_cli_stream(stream_id, prompt, exec_timeout_seconds, started_at)
+        return
 
     if not _has_valid_api_key(normalized_provider):
         missing_label = _provider_label(normalized_provider)
@@ -2643,6 +2898,7 @@ def create_model_stream(session_id, prompt, provider, model):
         'exit_code': None,
         'cancelled': False,
         'request_running': False,
+        'process': None,
         'started_at': created_at,
         'last_output_at': created_at,
         'completed_at': None,
@@ -2822,6 +3078,7 @@ def finalize_model_stream(stream_id):
             stream['finalize_reason'] = finalize_reason
 
         stream['saved'] = True
+        stream['process'] = None
         output = (stream.get('output') or '').strip()
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
@@ -2876,11 +3133,19 @@ def stop_model_stream(stream_id):
         stream['updated_at'] = now
         stream['finalize_reason'] = 'user_cancelled'
         stream['request_running'] = False
+        process = stream.get('process')
         session_id = stream.get('session_id')
         output = (stream.get('output') or '').strip()
         error = (stream.get('error') or '').strip()
         started_at = stream.get('started_at') or stream.get('created_at')
         completed_at = stream.get('completed_at')
+
+    grace_seconds = _coerce_positive_seconds(
+        MODEL_STREAM_TERMINATE_GRACE_SECONDS,
+        default_value=3,
+        minimum=0.5,
+    )
+    _terminate_stream_process(process, grace_seconds)
 
     if output or error:
         combined = output or error
@@ -2911,6 +3176,7 @@ def stop_model_stream(stream_id):
             stream['saved'] = True
             stream['saved_at'] = saved_at
             stream['updated_at'] = saved_at
+            stream['process'] = None
     return {'status': 'stopped', 'saved_message': saved_message}
 
 

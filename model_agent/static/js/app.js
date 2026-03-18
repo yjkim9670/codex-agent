@@ -65,10 +65,10 @@ const WEATHER_GEO_RETRY_OPTIONS = Object.freeze({
     maximumAge: 0
 });
 const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
-const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 동탄(신동)';
+const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 반월동';
 const DEFAULT_WEATHER_POSITION = Object.freeze({
-    latitude: 37.2053,
-    longitude: 127.1067,
+    latitude: 37.23018,
+    longitude: 127.06497,
     label: DEFAULT_WEATHER_LOCATION_LABEL,
     isDefault: true
 });
@@ -1085,10 +1085,7 @@ function updateLiveWeatherPanelTitle() {
 }
 
 function syncLiveWeatherLayout(isMobile) {
-    if (!isMobile) {
-        setLiveWeatherCompact(false, { persist: false });
-        return;
-    }
+    void isMobile;
     const compact = readLiveWeatherCompactPreference(true);
     setLiveWeatherCompact(compact, { persist: false });
 }

@@ -93,7 +93,8 @@ def test_finalize_stream_uses_completed_at_metadata(monkeypatch, isolated_codex_
         )
         stream['done'] = True
         stream['exit_code'] = 0
-        stream['output'] = 'assistant text'
+        stream['output'] = 'step 1\nstep 2'
+        stream['output_last_message'] = 'assistant text'
         stream['output_length'] = len(stream['output'])
         stream['completed_at'] = 102.0
         stream['updated_at'] = 102.0
@@ -110,6 +111,8 @@ def test_finalize_stream_uses_completed_at_metadata(monkeypatch, isolated_codex_
     assert saved_message['duration_ms'] == 2000
     assert saved_message['finalize_reason'] == 'process_exit'
     assert saved_message['finalize_lag_ms'] == 3000
+    assert 'CLI stdout:' in saved_message.get('work_details', '')
+    assert 'step 1' in saved_message.get('work_details', '')
     assert saved_message['completed_at'] == saved_message['created_at']
 
 

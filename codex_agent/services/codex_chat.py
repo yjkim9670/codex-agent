@@ -18,10 +18,10 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
-    CODEX_EXEC_TIMEOUT_SECONDS,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
+    CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
     CODEX_STREAM_POLL_INTERVAL_SECONDS,
     CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS,
     CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -37,6 +37,7 @@ _SESSION_SUBMIT_LOCKS = {}
 _CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 _LOGGER = logging.getLogger(__name__)
 _FINALIZE_LAG_WARNING_MS = 5000
+_WORK_DETAILS_MAX_CHARS = 24000
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -929,13 +930,10 @@ def execute_codex_prompt(prompt):
             cwd=str(WORKSPACE_DIR),
             capture_output=True,
             text=True,
-            timeout=CODEX_EXEC_TIMEOUT_SECONDS,
             check=False
         )
     except FileNotFoundError:
         return None, 'codex 명령을 찾을 수 없습니다.'
-    except subprocess.TimeoutExpired:
-        return None, 'Codex 응답 시간이 초과되었습니다.'
     except Exception as exc:
         return None, f'Codex 실행 중 오류가 발생했습니다: {exc}'
 
@@ -1007,6 +1005,45 @@ def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_
         metadata['finalize_lag_ms'] = max(0, int((saved_at - completed_at) * 1000))
 
     return metadata or None
+
+
+def _normalize_stream_log_text(value):
+    if not isinstance(value, str):
+        value = '' if value is None else str(value)
+    return value.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def _clip_stream_log_detail(value, max_chars):
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= 96:
+        return value[-max_chars:]
+    tail_chars = max_chars - 80
+    tail = value[-tail_chars:]
+    return '\n'.join([
+        f'(로그가 길어 최근 {tail_chars}자만 저장했습니다.)',
+        '...',
+        tail
+    ])
+
+
+def _build_work_details(stdout_text, final_output_text, stderr_text):
+    stdout_value = _normalize_stream_log_text(stdout_text)
+    final_value = _normalize_stream_log_text(final_output_text)
+    stderr_value = _normalize_stream_log_text(stderr_text)
+
+    sections = []
+    if stdout_value and stdout_value != final_value:
+        sections.append(f"CLI stdout:\n{stdout_value}")
+    if stderr_value:
+        sections.append(f"CLI stderr:\n{stderr_value}")
+    if not sections:
+        return None
+
+    detail_text = '\n\n'.join(section for section in sections if section).strip()
+    if not detail_text:
+        return None
+    return _clip_stream_log_detail(detail_text, _WORK_DETAILS_MAX_CHARS)
 
 
 def _read_output_last_message(path):
@@ -1552,6 +1589,11 @@ def finalize_codex_stream(stream_id):
                 finalize_reason
             )
     final_output = output_last_message or output
+    work_details = _build_work_details(output, final_output, error)
+    if work_details:
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata['work_details'] = work_details
     if exit_code == 0:
         return append_message(
             session_id,
@@ -1623,6 +1665,11 @@ def stop_codex_stream(stream_id):
         saved_at,
         'user_cancelled'
     )
+    work_details = _build_work_details(output, output_last_message or output, error)
+    if work_details:
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata['work_details'] = work_details
     saved_message = append_message(
         session_id,
         'error',

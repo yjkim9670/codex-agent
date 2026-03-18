@@ -82,7 +82,7 @@ MODEL_MAX_PROVIDER_CHARS = _read_positive_int_env('MODEL_MAX_PROVIDER_CHARS', 32
 MODEL_MAX_MODEL_CHARS = _read_positive_int_env('MODEL_MAX_MODEL_CHARS', 80)
 
 MODEL_DEFAULT_PROVIDER = os.environ.get('MODEL_DEFAULT_PROVIDER', 'gemini').strip().lower() or 'gemini'
-_default_provider_options = ['gemini', 'dtgpt']
+_default_provider_options = ['gemini', 'dtgpt', 'claude']
 MODEL_PROVIDER_OPTIONS = _read_csv_env('MODEL_PROVIDER_OPTIONS')
 if not MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS = list(_default_provider_options)
@@ -128,9 +128,11 @@ MODEL_GEMINI_DEFAULT_MODEL = (
     or 'gemini-flash-latest'
 )
 MODEL_DTGPT_DEFAULT_MODEL = os.environ.get('MODEL_DTGPT_DEFAULT_MODEL', 'Kimi-K2.5').strip() or 'Kimi-K2.5'
+MODEL_CLAUDE_DEFAULT_MODEL = os.environ.get('MODEL_CLAUDE_DEFAULT_MODEL', 'claude').strip() or 'claude'
 MODEL_PROVIDER_DEFAULT_MODELS = {
     'gemini': MODEL_GEMINI_DEFAULT_MODEL,
     'dtgpt': MODEL_DTGPT_DEFAULT_MODEL,
+    'claude': MODEL_CLAUDE_DEFAULT_MODEL,
 }
 MODEL_DEFAULT_MODEL = MODEL_PROVIDER_DEFAULT_MODELS.get(MODEL_DEFAULT_PROVIDER, MODEL_GEMINI_DEFAULT_MODEL)
 
@@ -154,9 +156,17 @@ MODEL_DTGPT_MODEL_OPTIONS = _read_csv_env('MODEL_DTGPT_MODEL_OPTIONS')
 if not MODEL_DTGPT_MODEL_OPTIONS:
     MODEL_DTGPT_MODEL_OPTIONS = _default_dtgpt_model_options
 
+_default_claude_model_options = sorted({
+    MODEL_CLAUDE_DEFAULT_MODEL,
+})
+MODEL_CLAUDE_MODEL_OPTIONS = _read_csv_env('MODEL_CLAUDE_MODEL_OPTIONS')
+if not MODEL_CLAUDE_MODEL_OPTIONS:
+    MODEL_CLAUDE_MODEL_OPTIONS = _default_claude_model_options
+
 MODEL_PROVIDER_MODEL_OPTIONS = {
     'gemini': MODEL_GEMINI_MODEL_OPTIONS,
     'dtgpt': MODEL_DTGPT_MODEL_OPTIONS,
+    'claude': MODEL_CLAUDE_MODEL_OPTIONS,
 }
 
 KST = timezone(timedelta(hours=9))

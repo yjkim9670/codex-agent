@@ -4851,7 +4851,7 @@ function renderMessages(messages) {
 
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        setMarkdownContent(bubble, message?.content || '');
+        setMarkdownContent(bubble, message?.content || '', { message });
 
         const footer = createMessageFooter();
         const durationMs = Number(message?.duration_ms);
@@ -4859,6 +4859,7 @@ function renderMessages(messages) {
             setMessageDuration(footer, durationMs);
         }
         setMessageFinalizeReason(footer, message?.finalize_reason);
+        setMessageFinalizeComparison(footer, message);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -4887,7 +4888,7 @@ function appendMessageToDOM(message, roleOverride = null) {
 
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
-    setMarkdownContent(bubble, message?.content || '');
+    setMarkdownContent(bubble, message?.content || '', { message });
 
     const footer = createMessageFooter();
     const durationMs = Number(message?.duration_ms);
@@ -4895,6 +4896,7 @@ function appendMessageToDOM(message, roleOverride = null) {
         setMessageDuration(footer, durationMs);
     }
     setMessageFinalizeReason(footer, message?.finalize_reason);
+    setMessageFinalizeComparison(footer, message);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -5281,7 +5283,7 @@ async function finishStream(streamId, result) {
     const bubble = stream.entry?.bubble;
     const savedMessage = result?.saved_message || null;
     if (savedMessage && typeof savedMessage.content === 'string' && bubble) {
-        setMarkdownContent(bubble, savedMessage.content);
+        setMarkdownContent(bubble, savedMessage.content, { message: savedMessage });
     }
     if (savedMessage && wrapper) {
         wrapper.classList.remove('assistant', 'error');
@@ -5302,13 +5304,17 @@ async function finishStream(streamId, result) {
         stream.entry?.footer,
         savedMessage?.finalize_reason || result?.finalize_reason
     );
+    setMessageFinalizeComparison(
+        stream.entry?.footer,
+        savedMessage || result || null
+    );
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
             wrapper.classList.add('error');
         }
-        const errorText = stream.error || stream.output || 'Codex execution failed.';
-        if (bubble) setMarkdownContent(bubble, errorText);
+        const errorText = savedMessage?.content || stream.error || stream.output || 'Codex execution failed.';
+        if (bubble) setMarkdownContent(bubble, errorText, { message: savedMessage || null });
     }
     clearStreamState(stream.id);
     const sessionId = stream.sessionId;
@@ -5505,15 +5511,94 @@ function unpinAutoScrollForSession(sessionId = null) {
     void sessionId;
 }
 
-function setMarkdownContent(element, content) {
+function normalizeDetailText(value) {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+    if (value === null || value === undefined) {
+        return '';
+    }
+    return String(value).trim();
+}
+
+function parseMessageDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+}
+
+function formatFinalizeLag(durationMs) {
+    if (!Number.isFinite(durationMs)) return '';
+    const roundedMs = Math.max(0, Math.round(durationMs));
+    if (roundedMs < 1000) {
+        return `${roundedMs}ms`;
+    }
+    if (roundedMs < 10000) {
+        return `${(roundedMs / 1000).toFixed(2)}초`;
+    }
+    return formatDuration(roundedMs);
+}
+
+function buildFinalizeComparison(message) {
+    if (!message || typeof message !== 'object') return null;
+    const cliDate = parseMessageDate(message.completed_at);
+    const finalDate = parseMessageDate(message.saved_at);
+    if (!cliDate || !finalDate) return null;
+
+    let lagMs = Number(message.finalize_lag_ms);
+    if (!Number.isFinite(lagMs)) {
+        lagMs = finalDate.getTime() - cliDate.getTime();
+    }
+    lagMs = Math.max(0, lagMs);
+    return {
+        cliAtText: formatTimestamp(cliDate.toISOString()),
+        finalAtText: formatTimestamp(finalDate.toISOString()),
+        lagMs,
+        lagText: formatFinalizeLag(lagMs)
+    };
+}
+
+function buildMessageDetailText(message) {
+    if (!message || typeof message !== 'object') return '';
+    const sections = [];
+    const comparison = buildFinalizeComparison(message);
+    if (comparison) {
+        sections.push([
+            '[응답 종료 시각 비교]',
+            `- CLI 답변 종료: ${comparison.cliAtText}`,
+            `- 최종응답 종료: ${comparison.finalAtText}`,
+            `- 차이: ${comparison.lagText} (${Math.max(0, Math.round(comparison.lagMs))}ms)`
+        ].join('\n'));
+    }
+
+    const workDetails = normalizeDetailText(message.work_details);
+    if (workDetails) {
+        sections.push([
+            '[작업 세부 로그]',
+            workDetails
+        ].join('\n'));
+    }
+
+    return sections.join('\n\n').trim();
+}
+
+function setMarkdownContent(element, content, options = {}) {
     if (!element) return;
     const messageContent = String(content || '');
+    const message = options && typeof options === 'object' ? options.message : null;
+    const detailText = buildMessageDetailText(message);
     const wasExpanded = Boolean(element.querySelector('details.message-details')?.open);
-    element.innerHTML = renderMessageContent(messageContent, wasExpanded);
+    element.innerHTML = renderMessageContent(messageContent, {
+        expanded: wasExpanded,
+        detailText
+    });
     element.dataset.messageContent = messageContent;
+    element.dataset.messageDetailText = detailText;
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;
+        wrapper.dataset.messageDetailText = detailText;
     }
 }
 
@@ -5607,6 +5692,7 @@ function createMessageFooter() {
     footer.className = 'message-footer';
     footer.dataset.durationText = '';
     footer.dataset.finalizeText = '';
+    footer.dataset.finalizeTimingText = '';
     return footer;
 }
 
@@ -5625,9 +5711,13 @@ function syncMessageFooter(footer) {
     if (!footer) return;
     const durationText = footer.dataset.durationText || '';
     const finalizeText = footer.dataset.finalizeText || '';
+    const finalizeTimingText = footer.dataset.finalizeTimingText || '';
     const parts = [];
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
+    }
+    if (finalizeTimingText) {
+        parts.push(finalizeTimingText);
     }
     if (finalizeText) {
         parts.push(finalizeText);
@@ -5646,6 +5736,18 @@ function setMessageDuration(footer, durationMs) {
 function setMessageFinalizeReason(footer, finalizeReason) {
     if (!footer) return;
     footer.dataset.finalizeText = getFinalizeReasonLabel(finalizeReason);
+    syncMessageFooter(footer);
+}
+
+function setMessageFinalizeComparison(footer, message) {
+    if (!footer) return;
+    const comparison = buildFinalizeComparison(message);
+    if (!comparison) {
+        footer.dataset.finalizeTimingText = '';
+        syncMessageFooter(footer);
+        return;
+    }
+    footer.dataset.finalizeTimingText = `CLI 종료→최종응답 ${comparison.lagText}`;
     syncMessageFooter(footer);
 }
 
@@ -5839,19 +5941,41 @@ function getStreamDuration(stream) {
     return Math.max(0, Date.now() - stream.startedAt);
 }
 
-function renderMessageContent(content, expanded = false) {
+function renderMessageContent(content, options = {}) {
     const text = String(content || '');
+    const expanded = typeof options === 'boolean'
+        ? options
+        : Boolean(options?.expanded);
+    const detailText = typeof options === 'boolean'
+        ? ''
+        : normalizeDetailText(options?.detailText);
+    const detailMarkup = detailText
+        ? `<div class="message-work-details"><pre><code>${escapeHtml(detailText)}</code></pre></div>`
+        : '';
+    const summaryText = expanded ? '자세히 숨기기' : '자세히 보기';
+
     if (!shouldCollapseMessage(text)) {
-        return renderMarkdown(text);
+        if (!detailMarkup) {
+            return renderMarkdown(text);
+        }
+        const openAttr = expanded ? ' open' : '';
+        return [
+            `<div class="message-full">${renderMarkdown(text)}</div>`,
+            `<details class="message-details"${openAttr}>`,
+            `<summary>${summaryText}</summary>`,
+            detailMarkup,
+            `</details>`
+        ].join('');
     }
+
     const previewText = buildMessagePreview(text);
     const openAttr = expanded ? ' open' : '';
-    const summaryText = expanded ? 'Hide full message' : 'Show full message';
     return [
         `<div class="message-preview">${renderMarkdown(previewText)}</div>`,
         `<details class="message-details"${openAttr}>`,
         `<summary>${summaryText}</summary>`,
         `<div class="message-full">${renderMarkdown(text)}</div>`,
+        detailMarkup,
         `</details>`
     ].join('');
 }

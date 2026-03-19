@@ -80,6 +80,43 @@ def test_append_message_preserves_created_at(isolated_codex_workspace):
     assert message['created_at'] == created_at
 
 
+def test_get_session_storage_summary_reports_work_detail_usage(isolated_codex_workspace):
+    session = codex_chat.create_session('storage-summary')
+    codex_chat.append_message(
+        session['id'],
+        'assistant',
+        'hello',
+        metadata={'work_details': 'line-1\nline-2'},
+    )
+
+    summary = codex_chat.get_session_storage_summary()
+
+    assert summary['path'].endswith('codex_chat_sessions.json')
+    assert summary['session_count'] == 1
+    assert summary['message_count'] == 1
+    assert summary['work_details_count'] == 1
+    assert summary['work_details_bytes'] == len('line-1\nline-2'.encode('utf-8'))
+    assert summary['total_bytes'] > 0
+
+
+def test_build_work_details_keeps_key_parts_for_long_code_logs():
+    code_lines = [f'line_{idx} = {idx}' for idx in range(140)]
+    code_lines[0] = 'def important_entry():'
+    code_lines[70] = 'class ImportantClass:'
+    code_lines[-1] = 'return line_139'
+    long_block = '\n'.join(code_lines)
+    stdout_text = f"```python\n{long_block}\n```"
+
+    details = codex_chat._build_work_details(stdout_text, '', '')
+
+    assert details is not None
+    assert 'CLI stdout:' in details
+    assert 'important_entry' in details
+    assert 'ImportantClass' in details
+    assert 'key parts only' in details
+    assert len(details) <= codex_chat._WORK_DETAILS_MAX_CHARS
+
+
 def test_finalize_stream_uses_completed_at_metadata(monkeypatch, isolated_codex_workspace):
     session = codex_chat.create_session('finalize-metadata')
     session_id = session['id']

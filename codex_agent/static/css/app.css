@@ -1255,6 +1255,13 @@ body {
     color: var(--text-tertiary);
 }
 
+.app-session-storage {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    word-break: break-word;
+}
+
 .layout {
     display: grid;
     grid-template-columns: clamp(206px, 21vw, 253px) minmax(0, 1fr);

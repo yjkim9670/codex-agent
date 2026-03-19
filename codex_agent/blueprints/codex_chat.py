@@ -15,6 +15,7 @@ from ..config import (
 from ..services.codex_chat import (
     append_message,
     build_codex_prompt,
+    get_session_storage_summary,
     create_session,
     cleanup_codex_streams,
     delete_session,
@@ -44,13 +45,17 @@ def codex_settings():
         'settings': get_settings(),
         'model_options': CODEX_MODEL_OPTIONS,
         'reasoning_options': CODEX_REASONING_OPTIONS,
-        'usage': get_usage_summary()
+        'usage': get_usage_summary(),
+        'session_storage': get_session_storage_summary(),
     })
 
 
 @bp.route('/api/codex/usage')
 def codex_usage():
-    return jsonify({'usage': get_usage_summary()})
+    return jsonify({
+        'usage': get_usage_summary(),
+        'session_storage': get_session_storage_summary(),
+    })
 
 
 @bp.route('/api/codex/settings', methods=['PATCH'])
@@ -71,13 +76,17 @@ def codex_settings_update():
         'settings': settings,
         'model_options': CODEX_MODEL_OPTIONS,
         'reasoning_options': CODEX_REASONING_OPTIONS,
-        'usage': get_usage_summary()
+        'usage': get_usage_summary(),
+        'session_storage': get_session_storage_summary(),
     })
 
 
 @bp.route('/api/codex/sessions')
 def codex_sessions():
-    return jsonify({'sessions': list_sessions()})
+    return jsonify({
+        'sessions': list_sessions(),
+        'session_storage': get_session_storage_summary(),
+    })
 
 
 @bp.route('/api/codex/sessions', methods=['POST'])
@@ -85,7 +94,10 @@ def codex_sessions_create():
     payload = request.get_json(silent=True) or {}
     title = (payload.get('title') or '').strip()
     session = create_session(title=title or None)
-    return jsonify({'session': session})
+    return jsonify({
+        'session': session,
+        'session_storage': get_session_storage_summary(),
+    })
 
 
 @bp.route('/api/codex/sessions/<session_id>')
@@ -132,7 +144,10 @@ def codex_session_delete(session_id):
     deleted = delete_session(session_id)
     if not deleted:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
-    return jsonify({'status': 'deleted'})
+    return jsonify({
+        'status': 'deleted',
+        'session_storage': get_session_storage_summary(),
+    })
 
 
 @bp.route('/api/codex/sessions/<session_id>/message', methods=['POST'])

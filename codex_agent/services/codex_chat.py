@@ -37,7 +37,21 @@ _SESSION_SUBMIT_LOCKS = {}
 _CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
 _LOGGER = logging.getLogger(__name__)
 _FINALIZE_LAG_WARNING_MS = 5000
-_WORK_DETAILS_MAX_CHARS = 24000
+_WORK_DETAILS_MAX_CHARS = 12000
+_WORK_DETAILS_SECTION_MAX_CHARS = 7200
+_WORK_DETAILS_CODE_TRIGGER_LINES = 48
+_WORK_DETAILS_CODE_HEAD_LINES = 18
+_WORK_DETAILS_CODE_TAIL_LINES = 12
+_WORK_DETAILS_CODE_KEY_LINE_LIMIT = 20
+_WORK_DETAILS_CODE_MAX_CHARS = 2600
+_WORK_DETAILS_CODE_FENCE_RE = re.compile(r'```([^\n`]*)\n(.*?)```', re.DOTALL)
+_WORK_DETAILS_KEY_CODE_LINE_RE = re.compile(
+    r'^\s*(?:'
+    r'async\s+def\s+|def\s+|class\s+|function\s+|const\s+|let\s+|var\s+|'
+    r'import\s+|from\s+|export\s+|interface\s+|type\s+|enum\s+|'
+    r'@@|diff --git|index\s+|---\s|\+\+\+\s'
+    r')'
+)
 
 _ROLE_LABELS = {
     'user': 'User',
@@ -570,6 +584,54 @@ def _sort_sessions(sessions):
     )
 
 
+def _safe_file_size(path):
+    try:
+        return max(0, int(path.stat().st_size))
+    except FileNotFoundError:
+        return 0
+    except Exception:
+        return 0
+
+
+def _collect_session_storage_summary(data):
+    sessions = data.get('sessions', []) if isinstance(data, dict) else []
+    if not isinstance(sessions, list):
+        sessions = []
+
+    message_count = 0
+    work_details_count = 0
+    work_details_bytes = 0
+
+    for session in sessions:
+        messages = session.get('messages', []) if isinstance(session, dict) else []
+        if not isinstance(messages, list):
+            continue
+        message_count += len(messages)
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            details = message.get('work_details')
+            if not isinstance(details, str) or not details:
+                continue
+            work_details_count += 1
+            work_details_bytes += len(details.encode('utf-8'))
+
+    store_bytes = _safe_file_size(CODEX_CHAT_STORE_PATH)
+    return {
+        'path': str(CODEX_CHAT_STORE_PATH),
+        'total_bytes': store_bytes,
+        'session_count': len(sessions),
+        'message_count': message_count,
+        'work_details_count': work_details_count,
+        'work_details_bytes': work_details_bytes,
+    }
+
+
+def get_session_storage_summary():
+    data = _load_data()
+    return _collect_session_storage_summary(data)
+
+
 def _find_session(sessions, session_id):
     for session in sessions:
         if session.get('id') == session_id:
@@ -1027,16 +1089,172 @@ def _clip_stream_log_detail(value, max_chars):
     ])
 
 
+def _is_key_code_line(line):
+    if not isinstance(line, str):
+        return False
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return bool(_WORK_DETAILS_KEY_CODE_LINE_RE.match(stripped))
+
+
+def _is_code_like_line(line):
+    if _is_key_code_line(line):
+        return True
+    if not isinstance(line, str):
+        return False
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(('+', '-')) and len(stripped) > 1:
+        second = stripped[1]
+        if second not in (' ', '\t', '+', '-'):
+            return True
+    if stripped.endswith(('{', '}', ');', '}:', '];')):
+        return True
+    return False
+
+
+def _pick_key_indices(indices, limit):
+    if not indices:
+        return []
+    if limit <= 0:
+        return []
+    if len(indices) <= limit:
+        return indices
+    if limit <= 2:
+        return indices[:limit]
+    head_count = max(1, limit // 2)
+    tail_count = max(1, limit - head_count)
+    return indices[:head_count] + indices[-tail_count:]
+
+
+def _render_compact_lines(lines, selected_indices):
+    if not lines:
+        return ''
+    rendered = []
+    previous_index = None
+    for index in selected_indices:
+        if previous_index is not None and index - previous_index > 1:
+            omitted = index - previous_index - 1
+            rendered.append(f'... ({omitted} lines omitted)')
+        rendered.append(lines[index])
+        previous_index = index
+    return '\n'.join(rendered).strip()
+
+
+def _compact_code_block_text(code_text):
+    if not isinstance(code_text, str):
+        code_text = '' if code_text is None else str(code_text)
+    source = code_text.strip('\n')
+    if not source:
+        return ''
+    lines = source.split('\n')
+    line_count = len(lines)
+    if (
+        line_count <= _WORK_DETAILS_CODE_TRIGGER_LINES
+        and len(source) <= _WORK_DETAILS_CODE_MAX_CHARS
+    ):
+        return source
+
+    selected = set()
+    head_count = min(_WORK_DETAILS_CODE_HEAD_LINES, line_count)
+    tail_count = min(_WORK_DETAILS_CODE_TAIL_LINES, line_count)
+    selected.update(range(head_count))
+    selected.update(range(max(0, line_count - tail_count), line_count))
+
+    key_indices = [index for index, line in enumerate(lines) if _is_key_code_line(line)]
+    for index in _pick_key_indices(key_indices, _WORK_DETAILS_CODE_KEY_LINE_LIMIT):
+        selected.add(index)
+
+    selected_indices = sorted(selected)
+    compacted = _render_compact_lines(lines, selected_indices)
+    if not compacted:
+        compacted = '\n'.join(lines[:head_count] + lines[-tail_count:]).strip()
+
+    if len(compacted) > _WORK_DETAILS_CODE_MAX_CHARS:
+        compacted = _clip_text(compacted, _WORK_DETAILS_CODE_MAX_CHARS)
+
+    if line_count > len(selected_indices):
+        compacted = '\n'.join([
+            compacted,
+            f'... ({line_count} lines total, key parts only)'
+        ]).strip()
+    return compacted
+
+
+def _compact_fenced_code_blocks(text):
+    if not text:
+        return ''
+
+    def _replace(match):
+        language = (match.group(1) or '').strip()
+        code_body = match.group(2) or ''
+        compacted = _compact_code_block_text(code_body)
+        opening = f'```{language}'.rstrip()
+        return f'{opening}\n{compacted}\n```'
+
+    return _WORK_DETAILS_CODE_FENCE_RE.sub(_replace, text)
+
+
+def _compact_dense_code_regions(text):
+    if not text:
+        return ''
+    lines = text.split('\n')
+    if len(lines) < _WORK_DETAILS_CODE_TRIGGER_LINES:
+        return text
+
+    regions = []
+    region_start = None
+    for index, line in enumerate(lines):
+        if _is_code_like_line(line):
+            if region_start is None:
+                region_start = index
+            continue
+        if region_start is not None:
+            if index - region_start >= _WORK_DETAILS_CODE_TRIGGER_LINES:
+                regions.append((region_start, index))
+            region_start = None
+    if region_start is not None and len(lines) - region_start >= _WORK_DETAILS_CODE_TRIGGER_LINES:
+        regions.append((region_start, len(lines)))
+
+    if not regions:
+        return text
+
+    output_lines = []
+    cursor = 0
+    for start, end in regions:
+        output_lines.extend(lines[cursor:start])
+        compacted = _compact_code_block_text('\n'.join(lines[start:end]))
+        output_lines.append('[code block summarized]')
+        output_lines.extend(compacted.split('\n'))
+        cursor = end
+    output_lines.extend(lines[cursor:])
+    return '\n'.join(output_lines).strip()
+
+
+def _compact_stream_log_section(value):
+    normalized = _normalize_stream_log_text(value)
+    if not normalized:
+        return ''
+    compacted = _compact_fenced_code_blocks(normalized)
+    compacted = _compact_dense_code_regions(compacted)
+    return _clip_stream_log_detail(compacted, _WORK_DETAILS_SECTION_MAX_CHARS)
+
+
 def _build_work_details(stdout_text, final_output_text, stderr_text):
     stdout_value = _normalize_stream_log_text(stdout_text)
     final_value = _normalize_stream_log_text(final_output_text)
     stderr_value = _normalize_stream_log_text(stderr_text)
 
+    compacted_stdout = _compact_stream_log_section(stdout_value)
+    compacted_stderr = _compact_stream_log_section(stderr_value)
+
     sections = []
-    if stdout_value and stdout_value != final_value:
-        sections.append(f"CLI stdout:\n{stdout_value}")
-    if stderr_value:
-        sections.append(f"CLI stderr:\n{stderr_value}")
+    if compacted_stdout and stdout_value != final_value:
+        sections.append(f"CLI stdout:\n{compacted_stdout}")
+    if compacted_stderr:
+        sections.append(f"CLI stderr:\n{compacted_stderr}")
     if not sections:
         return None
 

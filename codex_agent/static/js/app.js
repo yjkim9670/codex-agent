@@ -1,6 +1,7 @@
 const state = {
     sessions: [],
     activeSessionId: null,
+    sessionStorage: null,
     loading: false,
     sessionStates: {},
     streams: {},
@@ -2807,6 +2808,8 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
             timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
         });
         state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+        state.sessionStorage = result?.session_storage || null;
+        updateSessionStorageSummary(state.sessionStorage);
         renderSessions();
 
         let activeId = selectSessionId || (preserveActive ? state.activeSessionId : null);
@@ -2854,6 +2857,10 @@ async function loadSettings({ silent = true } = {}) {
             usage: result?.usage || null,
             loaded: true
         };
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
@@ -2876,6 +2883,10 @@ async function refreshUsageSummary({ silent = true } = {}) {
         const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
         const usage = result?.usage ?? null;
         state.settings.usage = usage;
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
         updateUsageSummary(usage);
     } catch (error) {
         const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
@@ -4860,6 +4871,10 @@ async function createSession(selectAfter = true) {
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({})
         });
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
         const sessionId = result?.session?.id;
         upsertSessionSummary(result?.session);
         if (selectAfter && sessionId) {
@@ -5468,10 +5483,14 @@ async function deleteSession(sessionId) {
     if (!confirmed) return;
     setStatus('Deleting session...');
     try {
-        await fetchJson(`/api/codex/sessions/${sessionId}`, {
+        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
             method: 'DELETE',
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS
         });
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
         removeSessionSummary(sessionId);
         if (state.activeSessionId === sessionId) {
             state.activeSessionId = null;
@@ -5899,6 +5918,61 @@ function formatDuration(durationMs) {
 function formatNumber(value) {
     if (!Number.isFinite(value)) return '0';
     return value.toLocaleString('en-US');
+}
+
+function formatStorageBytes(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '--';
+    if (numeric < 1024) return `${Math.round(numeric)} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let amount = numeric / 1024;
+    let unitIndex = 0;
+    while (amount >= 1024 && unitIndex < units.length - 1) {
+        amount /= 1024;
+        unitIndex += 1;
+    }
+    const rounded = amount >= 100 ? amount.toFixed(0) : amount.toFixed(1);
+    return `${rounded.replace(/\.0$/, '')} ${units[unitIndex]}`;
+}
+
+function updateSessionStorageSummary(storage) {
+    const element = document.getElementById('codex-session-storage');
+    if (!element) return;
+
+    const totalBytes = Number(storage?.total_bytes);
+    if (!Number.isFinite(totalBytes) || totalBytes < 0) {
+        element.textContent = '세션 저장 용량 --';
+        element.setAttribute('title', '세션 저장소 정보를 불러오지 못했습니다.');
+        return;
+    }
+
+    const totalText = formatStorageBytes(totalBytes);
+    const detailBytes = Number(storage?.work_details_bytes);
+    const hasDetailBytes = Number.isFinite(detailBytes) && detailBytes > 0;
+    const detailText = hasDetailBytes ? formatStorageBytes(detailBytes) : '0 B';
+
+    const messageCount = Number(storage?.message_count);
+    const detailCount = Number(storage?.work_details_count);
+    const pathText = typeof storage?.path === 'string' ? storage.path : '';
+
+    element.textContent = hasDetailBytes
+        ? `세션 저장 용량 ${totalText} · 상세로그 ${detailText}`
+        : `세션 저장 용량 ${totalText}`;
+
+    const tooltipParts = [
+        `총 용량 ${totalText}`,
+        `상세로그 ${detailText}`,
+    ];
+    if (Number.isFinite(messageCount)) {
+        tooltipParts.push(`메시지 ${formatNumber(messageCount)}개`);
+    }
+    if (Number.isFinite(detailCount)) {
+        tooltipParts.push(`상세로그 항목 ${formatNumber(detailCount)}개`);
+    }
+    if (pathText) {
+        tooltipParts.push(pathText);
+    }
+    element.setAttribute('title', tooltipParts.join(' · '));
 }
 
 function normalizeUsedPercent(value) {

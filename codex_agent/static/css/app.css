@@ -29,9 +29,9 @@
     --message-line-height: 1.5;
     --streaming-bubble-height: 240px;
     --mobile-viewport-height: 100dvh;
-    --radius-lg: 15px;
-    --radius-md: 10px;
-    --radius-sm: 7px;
+    --radius-lg: 13px;
+    --radius-md: 9px;
+    --radius-sm: 6px;
     --radius-pill: 999px;
     --icon-button-size: 32px;
     --sidebar-collapsed-height: 58px;
@@ -1249,15 +1249,23 @@ body {
     line-height: 1.3;
 }
 
+.app-header-subline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
 .app-workspace {
-    margin: 2px 0 0;
+    margin: 0;
     font-size: 11px;
     font-weight: 700;
     color: var(--text-tertiary);
 }
 
 .app-header-details {
-    margin-top: 3px;
+    margin-top: 0;
 }
 
 .app-header-details-summary {
@@ -1359,7 +1367,7 @@ body {
 .chat {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
+    border-radius: 10px;
     padding: 12px;
     min-height: 0;
     box-shadow: var(--card-shadow);
@@ -1458,7 +1466,7 @@ body {
 
 .session-item {
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: 7px;
     padding: 10px 12px;
     background: var(--surface-muted);
     display: flex;
@@ -1891,7 +1899,7 @@ body {
 .chat-frame {
     flex: 1;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: 7px;
     padding: 12px;
     background: var(--surface-muted);
     box-shadow: none;
@@ -2974,34 +2982,44 @@ label.hover-tooltip,
         width: auto;
         min-width: 0;
         display: flex;
-        flex-direction: column;
-        align-items: flex-end;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: nowrap;
+        white-space: nowrap;
         gap: 6px;
     }
 
     .theme-toggle {
         width: auto;
         justify-content: flex-end;
+        flex: 0 0 auto;
     }
 
     .git-actions {
         width: auto;
+        flex: 0 0 auto;
+        align-items: center;
         justify-content: flex-end;
         gap: 6px;
         flex-wrap: nowrap;
     }
 
     .git-branch {
-        max-width: 118px;
-        min-width: 72px;
-        flex: 0 1 118px;
+        max-width: 96px;
+        min-width: 64px;
+        flex: 0 1 96px;
     }
 
     .app-header h1 {
         font-size: 20px;
     }
 
-    .app-workspace,
+    .app-workspace {
+        margin-top: 0;
+        font-size: 12px;
+        line-height: 1.3;
+    }
+
     .app-header-details-body p {
         margin-top: 4px;
         font-size: 12px;

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=79">
+    <link rel="stylesheet" href="/static/css/app.css?v=80">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -13,8 +13,13 @@
             <div class="app-header-main">
                 <h1>Codex Agent</h1>
                 <p class="app-workspace">{{ workspace_directory_name }}</p>
-                <p>Manage Codex Agent sessions.</p>
-                <p class="app-session-storage" id="codex-session-storage">세션 저장 용량 확인 중...</p>
+                <details class="app-header-details" id="codex-header-details">
+                    <summary class="app-header-details-summary">세부 정보</summary>
+                    <div class="app-header-details-body">
+                        <p class="app-description">Manage Codex Agent sessions.</p>
+                        <p class="app-session-storage" id="codex-session-storage">세션 저장 용량 확인 중...</p>
+                    </div>
+                </details>
             </div>
             <div class="header-actions">
                 <div class="theme-toggle">

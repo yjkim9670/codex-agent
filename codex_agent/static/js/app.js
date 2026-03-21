@@ -6077,6 +6077,17 @@ function formatCompactTokenCount(value) {
     return String(Math.round(numeric));
 }
 
+function countLiveSessionCount() {
+    if (!Array.isArray(state.sessions) || state.sessions.length === 0) return 0;
+    return state.sessions.reduce((count, session) => {
+        const sessionId = session?.id;
+        if (!sessionId) return count;
+        const sessionState = getSessionState(sessionId);
+        const hasPending = Boolean(sessionState?.sending || sessionState?.pendingSend);
+        return count + (isSessionStreaming(sessionId) || hasPending ? 1 : 0);
+    }, 0);
+}
+
 function updateSessionsHeaderSummary() {
     const titleElement = document.getElementById('codex-sessions-title');
     const sessionsPanel = document.querySelector('.sessions');
@@ -6094,11 +6105,12 @@ function updateSessionsHeaderSummary() {
             return sum + (Number.isFinite(tokenCount) ? Math.max(0, tokenCount) : 0);
         }, 0)
         : 0;
-    const summaryText = `${sessionCount} sessions · ${formatCompactTokenCount(totalTokens)} tok`;
+    const liveCount = countLiveSessionCount();
+    const summaryText = `${liveCount} live · ${sessionCount}s · ${formatCompactTokenCount(totalTokens)} tok`;
     titleElement.textContent = summaryText;
     titleElement.setAttribute(
         'title',
-        `Total sessions ${formatNumber(sessionCount)} · Total tokens ${formatNumber(totalTokens)}`
+        `Live sessions ${formatNumber(liveCount)} · Total sessions ${formatNumber(sessionCount)} · Total tokens ${formatNumber(totalTokens)}`
     );
 }
 

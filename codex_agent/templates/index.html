@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=85">
+    <link rel="stylesheet" href="/static/css/app.css?v=87">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
-<body>
+<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
     <div class="app">
         <header class="app-header">
             <div class="app-header-main">
@@ -355,6 +355,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=68"></script>
+    <script src="/static/js/app.js?v=70"></script>
 </body>
 </html>

@@ -826,6 +826,78 @@ body {
     background: transparent;
 }
 
+.message-log-overlay-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 12px;
+    table-layout: fixed;
+}
+
+.message-log-overlay-content th,
+.message-log-overlay-content td {
+    border: 1px solid var(--border);
+    padding: 7px 9px;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.message-log-overlay-content th {
+    background: var(--surface-raised);
+    font-weight: 700;
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-header {
+    background: linear-gradient(180deg, rgba(59, 130, 246, 0.13) 0%, var(--surface-raised) 100%);
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-content {
+    background: var(--surface);
+    border-color: rgba(59, 130, 246, 0.34);
+    font-size: 14px;
+    line-height: 1.62;
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-content h1,
+.message-log-overlay.is-preview-mode .message-log-overlay-content h2,
+.message-log-overlay.is-preview-mode .message-log-overlay-content h3 {
+    color: var(--accent);
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-content code {
+    background: rgba(59, 130, 246, 0.12);
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-content th {
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.message-log-overlay.is-detail-mode .message-log-overlay-header {
+    background: var(--surface-raised);
+}
+
+.message-log-overlay.is-detail-mode .message-log-overlay-content {
+    background: var(--surface-muted);
+    border-style: dashed;
+    border-color: rgba(15, 23, 42, 0.25);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.message-log-overlay.is-detail-mode .message-log-overlay-content h1,
+.message-log-overlay.is-detail-mode .message-log-overlay-content h2,
+.message-log-overlay.is-detail-mode .message-log-overlay-content h3 {
+    color: var(--text-secondary);
+}
+
+.message-log-overlay.is-detail-mode .message-log-overlay-content pre {
+    background: rgba(15, 23, 42, 0.06);
+}
+
+.message-log-overlay.is-detail-mode .message-log-overlay-content th {
+    background: rgba(15, 23, 42, 0.08);
+}
+
 .message-log-overlay-footer {
     display: flex;
     justify-content: flex-end;

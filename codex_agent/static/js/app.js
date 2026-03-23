@@ -83,6 +83,20 @@ const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
 const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
+const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
+const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
+const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
+const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
+const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
+    '/home/',
+    '/Users/',
+    '/opt/',
+    '/var/',
+    '/tmp/',
+    '/srv/',
+    '/mnt/',
+    '/Volumes/'
+]);
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
@@ -4011,12 +4025,121 @@ function isMessageLogOverlayOpen() {
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
-function openMessageLogOverlay(title, detailText, subtitleText = '') {
+function normalizeMessageLogOverlayMode(value) {
+    if (value === MESSAGE_LOG_OVERLAY_MODE_PREVIEW) {
+        return MESSAGE_LOG_OVERLAY_MODE_PREVIEW;
+    }
+    return MESSAGE_LOG_OVERLAY_MODE_DETAIL;
+}
+
+function normalizeFilesystemPath(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    let normalized = raw.replace(/\\/g, '/');
+    if (normalized.length > 1) {
+        normalized = normalized.replace(/\/+$/g, '');
+    }
+    return normalized;
+}
+
+function getMessageLogPathRoots() {
+    const roots = [];
+    if (typeof document === 'undefined' || !document.body) {
+        return roots;
+    }
+    const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
+    const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
+    if (workspacePath) {
+        roots.push({ path: workspacePath, label: '$workspace' });
+    }
+    if (serverPath && serverPath !== workspacePath) {
+        roots.push({ path: serverPath, label: '$server' });
+    }
+    roots.sort((a, b) => b.path.length - a.path.length);
+    return roots;
+}
+
+function splitTrailingPathPunctuation(value) {
+    const source = String(value || '');
+    const match = source.match(/([.,;:!?]+)$/);
+    if (!match) {
+        return {
+            core: source,
+            suffix: ''
+        };
+    }
+    return {
+        core: source.slice(0, -match[1].length),
+        suffix: match[1]
+    };
+}
+
+function isLikelyAbsoluteFilesystemPath(path, roots = []) {
+    const normalized = normalizeFilesystemPath(path);
+    if (!normalized) return false;
+    if (/^[A-Za-z]:\//.test(normalized)) {
+        return normalized.split('/').filter(Boolean).length >= 2;
+    }
+    if (!normalized.startsWith('/')) return false;
+    if (roots.some(root => normalized === root.path || normalized.startsWith(`${root.path}/`))) {
+        return true;
+    }
+    return ABSOLUTE_PATH_HINT_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+function shortenAbsoluteFilesystemPath(path, roots = []) {
+    const normalized = normalizeFilesystemPath(path);
+    if (!normalized) return '';
+    const mapped = roots.find(root => normalized === root.path || normalized.startsWith(`${root.path}/`));
+    if (mapped) {
+        if (normalized === mapped.path) {
+            return mapped.label;
+        }
+        return `${mapped.label}/${normalized.slice(mapped.path.length + 1)}`;
+    }
+    if (/^[A-Za-z]:\//.test(normalized)) {
+        const drive = normalized.slice(0, 2);
+        const segments = normalized.slice(2).split('/').filter(Boolean);
+        if (segments.length <= 3) {
+            return `${drive}/${segments.join('/')}`;
+        }
+        return `${drive}/.../${segments.slice(-2).join('/')}`;
+    }
+    if (!normalized.startsWith('/')) return normalized;
+    const segments = normalized.split('/').filter(Boolean);
+    if (segments.length <= 4) return normalized;
+    return `/${segments[0]}/.../${segments.slice(-2).join('/')}`;
+}
+
+function shortenAbsolutePathsInText(text) {
+    const source = String(text || '');
+    if (!source) return '';
+    const roots = getMessageLogPathRoots();
+    const pathPattern = /(^|[\s([{"'`])((?:[A-Za-z]:[\\/]|\/)[^\s<>"'`)\]}]+)/g;
+    return source.replace(pathPattern, (match, prefix, candidate) => {
+        const candidateText = String(candidate || '');
+        if (!candidateText) return match;
+        const { core, suffix } = splitTrailingPathPunctuation(candidateText);
+        const normalizedCore = normalizeFilesystemPath(core);
+        if (!isLikelyAbsoluteFilesystemPath(normalizedCore, roots)) {
+            return match;
+        }
+        const shortened = shortenAbsoluteFilesystemPath(normalizedCore, roots);
+        if (!shortened || shortened === normalizedCore) {
+            return `${prefix}${core}${suffix}`;
+        }
+        return `${prefix}${shortened}${suffix}`;
+    });
+}
+
+function openMessageLogOverlay(title, detailText, subtitleText = '', options = {}) {
     const elements = getMessageLogOverlayElements();
     if (!elements) return;
     const normalizedTitle = String(title || '').trim();
     const normalizedText = normalizeDetailText(detailText);
     const normalizedSubtitle = String(subtitleText || '').trim();
+    const requestedMode = options && typeof options === 'object' ? options.mode : '';
+    const overlayMode = normalizeMessageLogOverlayMode(requestedMode);
     if (!normalizedText) return;
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
@@ -4024,14 +4147,29 @@ function openMessageLogOverlay(title, detailText, subtitleText = '') {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
+    if (elements.overlay) {
+        elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
+        elements.overlay.classList.add(
+            overlayMode === MESSAGE_LOG_OVERLAY_MODE_PREVIEW
+                ? MESSAGE_LOG_OVERLAY_CLASS_PREVIEW
+                : MESSAGE_LOG_OVERLAY_CLASS_DETAIL
+        );
+        elements.overlay.dataset.viewMode = overlayMode;
+    }
     if (elements.title) {
         elements.title.textContent = normalizedTitle || '상세 로그';
     }
     if (elements.subtitle) {
-        elements.subtitle.textContent = normalizedSubtitle || '최종응답과 별도로 수집된 상세 내용';
+        const defaultSubtitle = overlayMode === MESSAGE_LOG_OVERLAY_MODE_PREVIEW
+            ? '미리보기에서 생략된 전체 메시지'
+            : '최종응답과 별도로 수집된 상세 내용';
+        elements.subtitle.textContent = normalizedSubtitle || defaultSubtitle;
     }
     if (elements.content) {
-        elements.content.innerHTML = renderMarkdown(normalizedText);
+        const renderText = overlayMode === MESSAGE_LOG_OVERLAY_MODE_PREVIEW
+            ? shortenAbsolutePathsInText(normalizedText)
+            : normalizedText;
+        elements.content.innerHTML = renderMarkdown(renderText);
         elements.content.scrollTop = 0;
     }
     elements.overlay.classList.add('is-visible');
@@ -4043,6 +4181,8 @@ function closeMessageLogOverlay() {
     const elements = getMessageLogOverlayElements();
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
+    elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
+    delete elements.overlay.dataset.viewMode;
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
@@ -5825,7 +5965,8 @@ function createMessageFooter() {
         openMessageLogOverlay(
             footer.dataset.previewTitle || '전체 메시지',
             previewText,
-            footer.dataset.previewSubtitle || '미리보기에서 생략된 전체 메시지'
+            footer.dataset.previewSubtitle || '미리보기에서 생략된 전체 메시지',
+            { mode: MESSAGE_LOG_OVERLAY_MODE_PREVIEW }
         );
     });
     footer.appendChild(previewLink);
@@ -5839,7 +5980,12 @@ function createMessageFooter() {
         event.stopPropagation();
         const detailText = normalizeDetailText(footer.dataset.detailText);
         if (!detailText) return;
-        openMessageLogOverlay(footer.dataset.detailTitle || '상세 로그', detailText);
+        openMessageLogOverlay(
+            footer.dataset.detailTitle || '상세 로그',
+            detailText,
+            '',
+            { mode: MESSAGE_LOG_OVERLAY_MODE_DETAIL }
+        );
     });
     footer.appendChild(detailLink);
     return footer;
@@ -6302,17 +6448,131 @@ function renderMarkdown(text) {
     }).join('');
 }
 
-function renderInlineMarkdown(text) {
-    let html = text;
-    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+function renderInlineMarkdownSpans(text) {
+    let html = String(text || '');
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-    html = html.replace(/\n/g, '<br>');
+    html = html.replace(
+        /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
     return html;
+}
+
+function splitMarkdownTableRow(line) {
+    const source = String(line || '').trim();
+    if (!source.includes('|')) return [];
+    let row = source;
+    if (row.startsWith('|')) row = row.slice(1);
+    if (row.endsWith('|')) row = row.slice(0, -1);
+    if (!row.includes('|')) return [];
+    return row.split('|').map(cell => cell.trim());
+}
+
+function parseMarkdownTableAlignment(cell) {
+    const compact = String(cell || '').replace(/\s+/g, '');
+    if (!/^:?-{3,}:?$/.test(compact)) return '';
+    if (compact.startsWith(':') && compact.endsWith(':')) return 'center';
+    if (compact.endsWith(':')) return 'right';
+    return 'left';
+}
+
+function getMarkdownTableAlignAttr(alignment) {
+    if (alignment === 'center') return ' style="text-align:center"';
+    if (alignment === 'right') return ' style="text-align:right"';
+    if (alignment === 'left') return ' style="text-align:left"';
+    return '';
+}
+
+function parseMarkdownTable(lines, startIndex) {
+    if (!Array.isArray(lines) || startIndex + 1 >= lines.length) return null;
+    const headerLine = lines[startIndex];
+    const separatorLine = lines[startIndex + 1];
+    if (!headerLine?.includes('|') || !separatorLine?.includes('|')) return null;
+
+    const headerCells = splitMarkdownTableRow(headerLine);
+    const separatorCells = splitMarkdownTableRow(separatorLine);
+    if (headerCells.length < 2 || separatorCells.length !== headerCells.length) {
+        return null;
+    }
+
+    const alignments = separatorCells.map(parseMarkdownTableAlignment);
+    if (alignments.some(alignment => !alignment)) {
+        return null;
+    }
+
+    const bodyRows = [];
+    let index = startIndex + 2;
+    while (index < lines.length) {
+        const line = lines[index];
+        if (!line || !line.includes('|')) break;
+        const cells = splitMarkdownTableRow(line);
+        if (!cells.length) break;
+        const normalizedCells = [];
+        for (let cellIndex = 0; cellIndex < headerCells.length; cellIndex += 1) {
+            normalizedCells.push(cells[cellIndex] || '');
+        }
+        bodyRows.push(normalizedCells);
+        index += 1;
+    }
+
+    const headHtml = headerCells.map((cell, cellIndex) => {
+        const attr = getMarkdownTableAlignAttr(alignments[cellIndex]);
+        return `<th${attr}>${renderInlineMarkdownSpans(cell)}</th>`;
+    }).join('');
+
+    const bodyHtml = bodyRows.length > 0
+        ? `<tbody>${bodyRows.map(row => {
+            const rowHtml = row.map((cell, cellIndex) => {
+                const attr = getMarkdownTableAlignAttr(alignments[cellIndex]);
+                return `<td${attr}>${renderInlineMarkdownSpans(cell)}</td>`;
+            }).join('');
+            return `<tr>${rowHtml}</tr>`;
+        }).join('')}</tbody>`
+        : '';
+
+    return {
+        html: `<table class="markdown-table"><thead><tr>${headHtml}</tr></thead>${bodyHtml}</table>`,
+        nextIndex: index
+    };
+}
+
+function renderInlineMarkdownLine(line) {
+    const heading3 = String(line || '').match(/^\s*###\s+(.+?)\s*$/);
+    if (heading3) return `<h3>${renderInlineMarkdownSpans(heading3[1])}</h3>`;
+    const heading2 = String(line || '').match(/^\s*##\s+(.+?)\s*$/);
+    if (heading2) return `<h2>${renderInlineMarkdownSpans(heading2[1])}</h2>`;
+    const heading1 = String(line || '').match(/^\s*#\s+(.+?)\s*$/);
+    if (heading1) return `<h1>${renderInlineMarkdownSpans(heading1[1])}</h1>`;
+    return renderInlineMarkdownSpans(line);
+}
+
+function renderInlineMarkdown(text) {
+    const lines = String(text || '').split('\n');
+    const parts = [];
+    let plainLines = [];
+
+    const flushPlainLines = () => {
+        if (plainLines.length === 0) return;
+        parts.push(plainLines.map(renderInlineMarkdownLine).join('<br>'));
+        plainLines = [];
+    };
+
+    let lineIndex = 0;
+    while (lineIndex < lines.length) {
+        const table = parseMarkdownTable(lines, lineIndex);
+        if (table) {
+            flushPlainLines();
+            parts.push(table.html);
+            lineIndex = table.nextIndex;
+            continue;
+        }
+        plainLines.push(lines[lineIndex]);
+        lineIndex += 1;
+    }
+    flushPlainLines();
+    return parts.join('');
 }
 
 function escapeHtml(value) {

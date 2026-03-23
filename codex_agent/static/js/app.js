@@ -4170,6 +4170,7 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
             ? shortenAbsolutePathsInText(normalizedText)
             : normalizedText;
         elements.content.innerHTML = renderMarkdown(renderText);
+        hydrateMessageLabelLinks(elements.content);
         elements.content.scrollTop = 0;
     }
     elements.overlay.classList.add('is-visible');
@@ -5841,6 +5842,7 @@ function setMarkdownContent(element, content, options = {}) {
     const messageContent = String(content || '');
     const messageData = options && typeof options === 'object' ? options.message || null : null;
     element.innerHTML = renderMessageContent(messageContent);
+    hydrateMessageLabelLinks(element);
     element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
@@ -5953,10 +5955,14 @@ function createMessageFooter() {
     text.className = 'message-footer-text';
     footer.appendChild(text);
 
+    const linkGroup = document.createElement('div');
+    linkGroup.className = 'message-footer-links is-hidden';
+    footer.appendChild(linkGroup);
+
     const previewLink = document.createElement('button');
     previewLink.type = 'button';
     previewLink.className = 'message-preview-link message-detail-link is-hidden';
-    previewLink.textContent = '자세히 보기';
+    previewLink.textContent = '🔎 자세히 보기';
     previewLink.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
@@ -5969,12 +5975,12 @@ function createMessageFooter() {
             { mode: MESSAGE_LOG_OVERLAY_MODE_PREVIEW }
         );
     });
-    footer.appendChild(previewLink);
+    linkGroup.appendChild(previewLink);
 
     const detailLink = document.createElement('button');
     detailLink.type = 'button';
     detailLink.className = 'message-log-link message-detail-link is-hidden';
-    detailLink.textContent = '상세 로그 보기';
+    detailLink.textContent = '🧾 상세 로그 보기';
     detailLink.addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
@@ -5987,7 +5993,7 @@ function createMessageFooter() {
             { mode: MESSAGE_LOG_OVERLAY_MODE_DETAIL }
         );
     });
-    footer.appendChild(detailLink);
+    linkGroup.appendChild(detailLink);
     return footer;
 }
 
@@ -6033,6 +6039,10 @@ function syncMessageFooter(footer) {
     const detailLink = footer.querySelector('.message-log-link');
     if (detailLink) {
         detailLink.classList.toggle('is-hidden', !detailText);
+    }
+    const linkGroup = footer.querySelector('.message-footer-links');
+    if (linkGroup) {
+        linkGroup.classList.toggle('is-hidden', !previewText && !detailText);
     }
     footer.classList.toggle('is-visible', parts.length > 0 || Boolean(previewText) || Boolean(detailText));
 }
@@ -6448,15 +6458,92 @@ function renderMarkdown(text) {
     }).join('');
 }
 
+function decodeHtmlEntities(value) {
+    const source = String(value || '');
+    if (!source.includes('&')) return source;
+    return source
+        .replace(/&amp;/g, '&')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, '\'')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+}
+
+function normalizeMarkdownLinkHref(value) {
+    const decoded = decodeHtmlEntities(value);
+    if (!decoded) return '';
+    return decoded.trim();
+}
+
+function isHttpMarkdownHref(value) {
+    return /^https?:\/\//i.test(String(value || ''));
+}
+
+function normalizeFileSchemePath(value) {
+    const source = String(value || '').trim();
+    if (!source) return '';
+    if (!/^file:\/\//i.test(source)) return source;
+    let pathText = source.replace(/^file:\/\//i, '');
+    if (!pathText) return '';
+    if (/^\/[A-Za-z]:\//.test(pathText)) {
+        pathText = pathText.slice(1);
+    } else if (!/^[A-Za-z]:\//.test(pathText) && !pathText.startsWith('/')) {
+        pathText = `/${pathText}`;
+    }
+    return pathText;
+}
+
+function resolveAbsoluteFilesystemPathFromMarkdownHref(value) {
+    const normalizedHref = normalizeMarkdownLinkHref(value);
+    if (!normalizedHref) return '';
+    const candidate = normalizeFilesystemPath(normalizeFileSchemePath(normalizedHref));
+    if (!candidate) return '';
+    if (!isLikelyAbsoluteFilesystemPath(candidate, getMessageLogPathRoots())) {
+        return '';
+    }
+    return candidate;
+}
+
+function renderMarkdownLink(label, href) {
+    const rawLabel = String(label || '');
+    const displayLabel = rawLabel.trim() || '링크';
+    const normalizedHref = normalizeMarkdownLinkHref(href);
+    if (!normalizedHref) {
+        return displayLabel;
+    }
+
+    if (isHttpMarkdownHref(normalizedHref)) {
+        return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noopener noreferrer">${displayLabel}</a>`;
+    }
+
+    const absolutePath = resolveAbsoluteFilesystemPathFromMarkdownHref(normalizedHref);
+    if (!absolutePath) {
+        return displayLabel;
+    }
+
+    const shortenedPath = shortenAbsoluteFilesystemPath(absolutePath, getMessageLogPathRoots()) || absolutePath;
+    const tooltipText = `파일 경로: ${shortenedPath}`;
+    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${displayLabel}</a>`;
+}
+
+function hydrateMessageLabelLinks(container) {
+    if (!container || !(container instanceof Element)) return;
+    container.querySelectorAll('a.message-label-link').forEach(link => {
+        if (!(link instanceof HTMLAnchorElement)) return;
+        if (link.dataset.linkBound === '1') return;
+        link.dataset.linkBound = '1';
+        link.addEventListener('click', event => {
+            event.preventDefault();
+        });
+    });
+}
+
 function renderInlineMarkdownSpans(text) {
     let html = String(text || '');
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(
-        /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-    );
+    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => renderMarkdownLink(label, href));
     return html;
 }
 

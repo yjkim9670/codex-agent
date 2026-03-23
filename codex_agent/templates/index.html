@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=89">
+    <link rel="stylesheet" href="/static/css/app.css?v=91">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -14,13 +14,9 @@
                 <h1>Codex Agent</h1>
                 <div class="app-header-subline">
                     <p class="app-workspace">{{ workspace_directory_name }}</p>
-                    <details class="app-header-details" id="codex-header-details">
-                        <summary class="app-header-details-summary">세부 정보</summary>
-                        <div class="app-header-details-body">
-                            <p class="app-description">Manage Codex Agent sessions.</p>
-                            <p class="app-session-storage" id="codex-session-storage">세션 저장 용량 확인 중...</p>
-                        </div>
-                    </details>
+                    <button class="app-header-details-summary" type="button" id="codex-header-details-trigger">세부 정보</button>
+                    <span class="sr-only" id="codex-header-description">Manage Codex Agent sessions.</span>
+                    <span class="sr-only" id="codex-session-storage">세션 저장 용량 확인 중...</span>
                 </div>
             </div>
             <div class="header-actions">
@@ -57,13 +53,6 @@
                         <span class="live-weather-title" id="codex-live-weather-title">Clock &amp; Weather</span>
                         <div class="live-weather-actions sessions-actions">
                             <button
-                                class="btn secondary icon-only live-weather-permission"
-                                type="button"
-                                id="codex-weather-permission"
-                                aria-label="위치 권한 요청"
-                                title="위치 권한 요청"
-                            ></button>
-                            <button
                                 class="btn ghost icon-only sessions-toggle live-weather-compact-toggle is-collapsed"
                                 type="button"
                                 id="codex-live-weather-toggle"
@@ -82,7 +71,7 @@
                             </div>
                             <div class="live-weather-divider" aria-hidden="true"></div>
                             <div class="live-weather-current">
-                                <div class="live-weather-label" id="codex-weather-location">위치 확인 중...</div>
+                                <div class="live-weather-label" id="codex-weather-location">화성시 반월동</div>
                                 <div class="live-weather-value" id="codex-weather-current">날씨 불러오는 중...</div>
                                 <div class="live-weather-hint">오늘/내일 예보는 아래에서 확인할 수 있습니다</div>
                             </div>
@@ -355,6 +344,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=72"></script>
+    <script src="/static/js/app.js?v=74"></script>
 </body>
 </html>

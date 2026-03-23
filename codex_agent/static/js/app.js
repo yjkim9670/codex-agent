@@ -44,28 +44,17 @@ const STREAM_IDLE_WARNING_MS = 15000;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
-const WEATHER_POSITION_KEY = 'codexWeatherPosition';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'codex-toast-layer';
 const HOVER_TOOLTIP_LAYER_ID = 'codex-hover-tooltip-layer';
 const HOVER_TOOLTIP_OFFSET_PX = 8;
 const HOVER_TOOLTIP_VIEWPORT_MARGIN_PX = 10;
-const WEATHER_GEO_PRIMARY_OPTIONS = Object.freeze({
-    enableHighAccuracy: false,
-    timeout: 12000,
-    maximumAge: 10 * 60 * 1000
-});
-const WEATHER_GEO_RETRY_OPTIONS = Object.freeze({
-    enableHighAccuracy: true,
-    timeout: 20000,
-    maximumAge: 0
-});
 const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
-const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 동탄(신동)';
+const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 반월동';
 const DEFAULT_WEATHER_POSITION = Object.freeze({
-    latitude: 37.2053,
-    longitude: 127.1067,
+    latitude: 37.23018,
+    longitude: 127.06497,
     label: DEFAULT_WEATHER_LOCATION_LABEL,
     isDefault: true
 });
@@ -574,6 +563,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
     const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
+    const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
     );
@@ -607,6 +597,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (newSessionBtn) {
         newSessionBtn.addEventListener('click', async () => {
             await createSession(true);
+        });
+    }
+
+    if (headerDetailsTrigger) {
+        headerDetailsTrigger.addEventListener('click', event => {
+            event.preventDefault();
+            showHeaderDetailsToast();
         });
     }
 
@@ -967,8 +964,7 @@ async function initializeApp() {
 function initializeLiveWeatherPanel(mobileMedia) {
     const panel = document.getElementById('codex-live-weather-panel');
     const toggle = document.getElementById('codex-live-weather-toggle');
-    const permissionToggle = document.getElementById('codex-weather-permission');
-    if (!panel || !toggle || !permissionToggle) return;
+    if (!panel || !toggle) return;
 
     initializeHoverTooltipInteractions();
     syncLiveWeatherLayout(Boolean(mobileMedia?.matches));
@@ -976,7 +972,6 @@ function initializeLiveWeatherPanel(mobileMedia) {
     const serverDirectoryPath = document.getElementById('codex-server-directory-path');
     setHoverTooltip(serverDirectory, serverDirectory?.textContent || '');
     setHoverTooltip(serverDirectoryPath, serverDirectoryPath?.textContent || '');
-    syncHoverTooltipFromLabel(permissionToggle);
     updateLiveDatetime();
     if (state.liveClockTimer) {
         window.clearInterval(state.liveClockTimer);
@@ -985,26 +980,8 @@ function initializeLiveWeatherPanel(mobileMedia) {
     toggle.addEventListener('click', () => {
         const isCompact = panel.classList.contains('is-compact');
         setLiveWeatherCompact(!isCompact);
-        if (isCompact) {
-            void maybeRequestWeatherPermissionOnTap();
-        }
-    });
-    permissionToggle.addEventListener('click', event => {
-        event.stopPropagation();
-        void requestWeatherPermission();
     });
     void loadLiveWeatherData();
-}
-
-async function maybeRequestWeatherPermissionOnTap() {
-    const storedPosition = readStoredWeatherPosition();
-    if (storedPosition) return;
-    const permissionState = await readGeolocationPermissionState();
-    if (permissionState === 'granted') {
-        void loadLiveWeatherData({ silent: true });
-        return;
-    }
-    await requestWeatherPermission({ silentFailure: true, skipPermissionCheck: true });
 }
 
 function readLiveWeatherCompactPreference(defaultCompact) {
@@ -1588,7 +1565,7 @@ function normalizeGitDivergenceCount(value) {
     return Math.max(0, Math.round(numeric));
 }
 
-async function loadLiveWeatherData({ silent = false, positionOverride = null } = {}) {
+async function loadLiveWeatherData({ silent = false } = {}) {
     const locationElement = document.getElementById('codex-weather-location');
     const currentElement = document.getElementById('codex-weather-current');
     const todayElement = document.getElementById('codex-weather-today');
@@ -1596,7 +1573,7 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
 
     if (!silent) {
-        setTextWithTooltip(locationElement, '위치 확인 중...');
+        setTextWithTooltip(locationElement, DEFAULT_WEATHER_LOCATION_LABEL);
         setTextWithTooltip(currentElement, '날씨 불러오는 중...');
         setTextWithTooltip(todayElement, '불러오는 중...');
         setTextWithTooltip(tomorrowElement, '불러오는 중...');
@@ -1604,96 +1581,15 @@ async function loadLiveWeatherData({ silent = false, positionOverride = null } =
     }
 
     try {
-        const position = positionOverride || await resolveWeatherPosition();
-        if (!position) {
-            renderWeatherError('위치 확인 불가', '브라우저 위치 권한을 허용해 주세요.');
-            return;
-        }
-
-        const defaultLabel = position?.label || '';
-        const coordinateLabel = formatCoordinateLabel(position);
-        const useDefaultLabel = Boolean(position?.isDefault && defaultLabel);
-        const [locationName, weather] = await Promise.all([
-            useDefaultLabel
-                ? Promise.resolve(defaultLabel)
-                : fetchLocationName(position.latitude, position.longitude).catch(() => ''),
-            fetchWeatherForecast(position.latitude, position.longitude)
-        ]);
+        const position = getDefaultWeatherPosition();
+        const weather = await fetchWeatherForecast(position.latitude, position.longitude);
 
         renderWeatherSummary({
-            locationName: locationName || defaultLabel || coordinateLabel || '알 수 없는 위치',
+            locationName: position.label || DEFAULT_WEATHER_LOCATION_LABEL,
             weather
         });
     } catch (error) {
-        renderWeatherError('날씨 정보를 불러올 수 없음', normalizeError(error, '날씨 정보를 불러오지 못했습니다.'));
-    }
-}
-
-async function requestWeatherPermission({ silentFailure = false, skipPermissionCheck = false } = {}) {
-    const locationElement = document.getElementById('codex-weather-location');
-    const currentElement = document.getElementById('codex-weather-current');
-    if (locationElement) {
-        setTextWithTooltip(locationElement, '위치 권한 요청 중...');
-    }
-    if (currentElement) {
-        setTextWithTooltip(currentElement, '브라우저 권한 응답 대기 중...');
-        syncWeatherCurrentRowTooltip(currentElement);
-    }
-    try {
-        if (!skipPermissionCheck) {
-            const permissionState = await readGeolocationPermissionState();
-            if (permissionState === 'denied') {
-                notifyWeatherLocationFailure(
-                    new Error('위치 권한이 거부되었습니다.'),
-                    DEFAULT_WEATHER_LOCATION_LABEL
-                );
-                await loadLiveWeatherData({
-                    silent: true,
-                    positionOverride: getDefaultWeatherPosition()
-                });
-                return;
-            }
-        }
-        const position = await getCurrentGeoPositionWithRetry();
-        writeStoredWeatherPosition(position);
-        await loadLiveWeatherData({ silent: true, positionOverride: position });
-    } catch (error) {
-        notifyWeatherLocationFailure(error, DEFAULT_WEATHER_LOCATION_LABEL);
-        const stored = readStoredWeatherPosition();
-        await loadLiveWeatherData({
-            silent: true,
-            positionOverride: stored || getDefaultWeatherPosition()
-        });
-        if (silentFailure) return;
-        void error;
-    }
-}
-
-async function readGeolocationPermissionState() {
-    try {
-        if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
-            return '';
-        }
-        const status = await navigator.permissions.query({ name: 'geolocation' });
-        return status?.state || '';
-    } catch (error) {
-        return '';
-    }
-}
-
-async function resolveWeatherPosition() {
-    try {
-        const current = await getCurrentGeoPositionWithRetry();
-        writeStoredWeatherPosition(current);
-        return current;
-    } catch (error) {
-        const stored = readStoredWeatherPosition();
-        if (stored) {
-            notifyWeatherLocationFailure(error, '저장된 위치');
-            return stored;
-        }
-        notifyWeatherLocationFailure(error, DEFAULT_WEATHER_LOCATION_LABEL);
-        return getDefaultWeatherPosition();
+        renderWeatherError(DEFAULT_WEATHER_LOCATION_LABEL, normalizeError(error, '날씨 정보를 불러오지 못했습니다.'));
     }
 }
 
@@ -1704,107 +1600,6 @@ function getDefaultWeatherPosition() {
         label: DEFAULT_WEATHER_POSITION.label,
         isDefault: true
     };
-}
-
-function getCurrentGeoPositionWithRetry() {
-    return getCurrentGeoPosition(WEATHER_GEO_PRIMARY_OPTIONS).catch(primaryError => {
-        return getCurrentGeoPosition(WEATHER_GEO_RETRY_OPTIONS).catch(retryError => {
-            throw retryError || primaryError;
-        });
-    });
-}
-
-function normalizeGeoPositionError(error) {
-    if (!error || typeof error !== 'object') {
-        return new Error('현재 위치를 가져오지 못했습니다.');
-    }
-    if (error.code === 1) {
-        return new Error('위치 권한이 거부되었습니다.');
-    }
-    if (error.code === 2) {
-        return new Error('위치 정보를 확인할 수 없습니다.');
-    }
-    if (error.code === 3) {
-        return new Error('위치 확인 시간이 초과되었습니다.');
-    }
-    return error;
-}
-
-function getCurrentGeoPosition(options = WEATHER_GEO_PRIMARY_OPTIONS) {
-    return new Promise((resolve, reject) => {
-        if (!isGeolocationAllowedContext()) {
-            reject(new Error('위치 접근은 HTTPS 또는 localhost에서만 가능합니다.'));
-            return;
-        }
-        if (!navigator.geolocation) {
-            reject(new Error('이 브라우저는 위치 정보를 지원하지 않습니다.'));
-            return;
-        }
-        navigator.geolocation.getCurrentPosition(
-            position => {
-                resolve({
-                    latitude: Number(position.coords?.latitude),
-                    longitude: Number(position.coords?.longitude)
-                });
-            },
-            error => {
-                reject(normalizeGeoPositionError(error));
-            },
-            options
-        );
-    });
-}
-
-function isGeolocationAllowedContext() {
-    if (window.isSecureContext) return true;
-    const hostname = window.location?.hostname || '';
-    return ['localhost', '127.0.0.1', '::1'].includes(hostname);
-}
-
-function readStoredWeatherPosition() {
-    try {
-        const raw = localStorage.getItem(WEATHER_POSITION_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        const latitude = Number(parsed?.latitude);
-        const longitude = Number(parsed?.longitude);
-        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
-        return { latitude, longitude };
-    } catch (error) {
-        return null;
-    }
-}
-
-function writeStoredWeatherPosition(position) {
-    const latitude = Number(position?.latitude);
-    const longitude = Number(position?.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
-    try {
-        localStorage.setItem(
-            WEATHER_POSITION_KEY,
-            JSON.stringify({
-                latitude,
-                longitude,
-                updatedAt: Date.now()
-            })
-        );
-    } catch (error) {
-        void error;
-    }
-}
-
-function notifyWeatherLocationFailure(error, fallbackLabel = DEFAULT_WEATHER_LOCATION_LABEL) {
-    const fallback = String(fallbackLabel || '').trim() || DEFAULT_WEATHER_LOCATION_LABEL;
-    const message = `현재 위치를 불러오지 못했습니다. ${fallback} 날씨를 표시합니다.`;
-    void error;
-    showToast(message, { tone: 'error', durationMs: WEATHER_LOCATION_FAILURE_TOAST_MS });
-}
-
-function formatCoordinateLabel(position) {
-    const latitude = Number(position?.latitude);
-    const longitude = Number(position?.longitude);
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '';
-    return `위도 ${latitude.toFixed(3)} · 경도 ${longitude.toFixed(3)}`;
 }
 
 function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
@@ -1835,6 +1630,22 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
     }, visibleMs);
 }
 
+function showHeaderDetailsToast() {
+    const descriptionElement = document.getElementById('codex-header-description');
+    const storageElement = document.getElementById('codex-session-storage');
+    const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Agent sessions.').trim();
+    const storageText = String(storageElement?.textContent || '').trim();
+    const parts = [];
+    if (descriptionText) {
+        parts.push(descriptionText);
+    }
+    if (storageText) {
+        parts.push(storageText);
+    }
+    const message = parts.length > 0 ? parts.join(' · ') : '세부 정보가 없습니다.';
+    showToast(message, { tone: 'default', durationMs: 4600 });
+}
+
 function ensureToastLayer() {
     const existing = document.getElementById(TOAST_LAYER_ID);
     if (existing) return existing;
@@ -1847,26 +1658,6 @@ function ensureToastLayer() {
     layer.setAttribute('aria-atomic', 'true');
     document.body.appendChild(layer);
     return layer;
-}
-
-async function fetchLocationName(latitude, longitude) {
-    const url = new URL('https://geocoding-api.open-meteo.com/v1/reverse');
-    url.searchParams.set('latitude', String(latitude));
-    url.searchParams.set('longitude', String(longitude));
-    url.searchParams.set('count', '1');
-    url.searchParams.set('language', 'ko');
-
-    const response = await fetch(url.toString());
-    if (!response.ok) {
-        throw new Error(`위치 정보를 확인하지 못했습니다. (${response.status})`);
-    }
-    const payload = await response.json();
-    const first = Array.isArray(payload?.results) ? payload.results[0] : null;
-    if (!first) return '';
-
-    const city = first.city || first.town || first.village || first.name || '';
-    const region = first.admin1 || first.country_code || '';
-    return [city, region].filter(Boolean).join(', ');
 }
 
 async function fetchWeatherForecast(latitude, longitude) {
@@ -4161,15 +3952,12 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
     }
     if (elements.subtitle) {
         const defaultSubtitle = overlayMode === MESSAGE_LOG_OVERLAY_MODE_PREVIEW
-            ? '미리보기에서 생략된 전체 메시지'
+            ? '메시지 전체 보기'
             : '최종응답과 별도로 수집된 상세 내용';
         elements.subtitle.textContent = normalizedSubtitle || defaultSubtitle;
     }
     if (elements.content) {
-        const renderText = overlayMode === MESSAGE_LOG_OVERLAY_MODE_PREVIEW
-            ? shortenAbsolutePathsInText(normalizedText)
-            : normalizedText;
-        elements.content.innerHTML = renderMarkdown(renderText);
+        elements.content.innerHTML = renderMarkdown(normalizedText);
         hydrateMessageLabelLinks(elements.content);
         elements.content.scrollTop = 0;
     }
@@ -6120,14 +5908,6 @@ function buildMessagePreviewTitle(role, timestampValue) {
 function setMessagePreviewLink(footer, content, message = null, wrapper = null) {
     if (!footer) return;
     const messageText = String(content || '');
-    if (!shouldCollapseMessage(messageText)) {
-        footer.dataset.previewText = '';
-        footer.dataset.previewTitle = '';
-        footer.dataset.previewSubtitle = '';
-        syncMessageFooter(footer);
-        return;
-    }
-
     const normalizedText = normalizeDetailText(messageText);
     if (!normalizedText) {
         footer.dataset.previewText = '';
@@ -6142,6 +5922,13 @@ function setMessagePreviewLink(footer, content, message = null, wrapper = null) 
         ? wrapper.dataset.messageRole.trim()
         : '';
     const role = messageRole || wrapperRole || resolveMessageRoleFromWrapper(wrapper) || 'message';
+    if (role === 'user') {
+        footer.dataset.previewText = '';
+        footer.dataset.previewTitle = '';
+        footer.dataset.previewSubtitle = '';
+        syncMessageFooter(footer);
+        return;
+    }
 
     const messageTimestamp = typeof getMessageTimestampValue(message) === 'string'
         ? getMessageTimestampValue(message).trim()
@@ -6153,7 +5940,7 @@ function setMessagePreviewLink(footer, content, message = null, wrapper = null) 
 
     footer.dataset.previewText = normalizedText;
     footer.dataset.previewTitle = buildMessagePreviewTitle(role, timestampValue);
-    footer.dataset.previewSubtitle = '미리보기에서 생략된 전체 메시지';
+    footer.dataset.previewSubtitle = '메시지 전체 보기';
     syncMessageFooter(footer);
 }
 
@@ -6416,13 +6203,7 @@ function getStreamDuration(stream) {
 
 function renderMessageContent(content) {
     const text = String(content || '');
-
-    if (!shouldCollapseMessage(text)) {
-        return renderMarkdown(text);
-    }
-
-    const previewText = buildMessagePreview(text);
-    return `<div class="message-preview">${renderMarkdown(previewText)}</div>`;
+    return renderMarkdown(text);
 }
 
 function shouldCollapseMessage(text) {

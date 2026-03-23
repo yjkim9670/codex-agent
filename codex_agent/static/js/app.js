@@ -4031,7 +4031,7 @@ function openMessageLogOverlay(title, detailText, subtitleText = '') {
         elements.subtitle.textContent = normalizedSubtitle || '최종응답과 별도로 수집된 상세 내용';
     }
     if (elements.content) {
-        elements.content.textContent = normalizedText;
+        elements.content.innerHTML = renderMarkdown(normalizedText);
         elements.content.scrollTop = 0;
     }
     elements.overlay.classList.add('is-visible');
@@ -5678,7 +5678,7 @@ function buildMessageDetailText(message) {
     const comparison = buildFinalizeComparison(message);
     if (comparison) {
         sections.push([
-            '[응답 종료 시각 비교]',
+            '## 응답 종료 시각 비교',
             `- CLI 답변 종료: ${comparison.cliAtText}`,
             `- 최종응답 종료: ${comparison.finalAtText}`,
             `- 차이: ${comparison.lagText} (${Math.max(0, Math.round(comparison.lagMs))}ms)`
@@ -5688,9 +5688,9 @@ function buildMessageDetailText(message) {
     const workDetails = normalizeDetailText(message.work_details);
     if (workDetails) {
         sections.push([
-            '[작업 세부 로그]',
+            '## 작업 세부 로그',
             workDetails
-        ].join('\n'));
+        ].join('\n\n'));
     }
 
     return sections.join('\n\n').trim();

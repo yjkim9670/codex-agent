@@ -760,17 +760,70 @@ body {
 
 .message-log-overlay-content {
     margin: 0;
-    padding: 12px 14px;
+    padding: 14px 16px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--surface-muted);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
-    white-space: pre-wrap;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.55;
+    font-family: var(--font-sans);
+    white-space: normal;
+    overflow-wrap: anywhere;
     word-break: break-word;
     max-height: 56vh;
     overflow: auto;
+}
+
+.message-log-overlay-content h1,
+.message-log-overlay-content h2,
+.message-log-overlay-content h3 {
+    margin: 0 0 10px;
+    line-height: 1.35;
+}
+
+.message-log-overlay-content h1 {
+    font-size: 20px;
+}
+
+.message-log-overlay-content h2 {
+    font-size: 17px;
+}
+
+.message-log-overlay-content h3 {
+    font-size: 15px;
+}
+
+.message-log-overlay-content p {
+    margin: 0 0 10px;
+}
+
+.message-log-overlay-content a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.message-log-overlay-content code {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--code-bg);
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+
+.message-log-overlay-content pre {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--code-bg);
+    overflow: auto;
+}
+
+.message-log-overlay-content pre code {
+    padding: 0;
+    background: transparent;
 }
 
 .message-log-overlay-footer {

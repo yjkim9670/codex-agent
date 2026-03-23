@@ -4011,11 +4011,12 @@ function isMessageLogOverlayOpen() {
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
-function openMessageLogOverlay(title, detailText) {
+function openMessageLogOverlay(title, detailText, subtitleText = '') {
     const elements = getMessageLogOverlayElements();
     if (!elements) return;
     const normalizedTitle = String(title || '').trim();
     const normalizedText = normalizeDetailText(detailText);
+    const normalizedSubtitle = String(subtitleText || '').trim();
     if (!normalizedText) return;
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
@@ -4027,7 +4028,7 @@ function openMessageLogOverlay(title, detailText) {
         elements.title.textContent = normalizedTitle || '상세 로그';
     }
     if (elements.subtitle) {
-        elements.subtitle.textContent = '최종응답과 별도로 수집된 상세 내용';
+        elements.subtitle.textContent = normalizedSubtitle || '최종응답과 별도로 수집된 상세 내용';
     }
     if (elements.content) {
         elements.content.textContent = normalizedText;
@@ -4938,9 +4939,11 @@ function renderMessages(messages) {
         wrapper.className = 'message';
         const roleClass = message?.role || 'assistant';
         wrapper.classList.add(roleClass);
+        const timestampValue = getMessageTimestampValue(message);
+        setMessageWrapperIdentity(wrapper, roleClass, timestampValue);
 
         const label = getRoleLabel(message?.role);
-        const timestamp = formatTimestamp(getMessageTimestampValue(message));
+        const timestamp = formatTimestamp(timestampValue);
         const metaText = timestamp ? `${label} - ${timestamp}` : label;
         const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4956,6 +4959,7 @@ function renderMessages(messages) {
         setMessageFinalizeReason(footer, message?.finalize_reason);
         setMessageFinalizeComparison(footer, message);
         setMessageDetailLogLink(footer, message);
+        setMessagePreviewLink(footer, message?.content || '', message, wrapper);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -4976,9 +4980,11 @@ function appendMessageToDOM(message, roleOverride = null) {
     wrapper.className = 'message';
     const role = roleOverride || message?.role || 'assistant';
     wrapper.classList.add(role);
+    const timestampValue = getMessageTimestampValue(message);
+    setMessageWrapperIdentity(wrapper, role, timestampValue);
 
     const label = getRoleLabel(role);
-    const timestamp = formatTimestamp(getMessageTimestampValue(message));
+    const timestamp = formatTimestamp(timestampValue);
     const metaText = timestamp ? `${label} - ${timestamp}` : label;
     const meta = buildMessageMeta(metaText, wrapper);
 
@@ -4994,6 +5000,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     setMessageFinalizeReason(footer, message?.finalize_reason);
     setMessageFinalizeComparison(footer, message);
     setMessageDetailLogLink(footer, message);
+    setMessagePreviewLink(footer, message?.content || '', message, wrapper);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -5533,6 +5540,7 @@ function setMessageMetaLabel(meta, role, timestampValue) {
     const label = getRoleLabel(role);
     const timestamp = formatTimestamp(timestampValue);
     textElement.textContent = timestamp ? `${label} - ${timestamp}` : label;
+    setMessageWrapperIdentity(meta.closest('.message'), role, timestampValue);
 }
 
 function getRoleLabel(role) {
@@ -5691,15 +5699,16 @@ function buildMessageDetailText(message) {
 function setMarkdownContent(element, content, options = {}) {
     if (!element) return;
     const messageContent = String(content || '');
-    const wasExpanded = Boolean(element.querySelector('details.message-details')?.open);
-    const normalizedExpanded = options && typeof options === 'object' && typeof options.expanded === 'boolean'
-        ? options.expanded
-        : wasExpanded;
-    element.innerHTML = renderMessageContent(messageContent, normalizedExpanded);
+    const messageData = options && typeof options === 'object' ? options.message || null : null;
+    element.innerHTML = renderMessageContent(messageContent);
     element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;
+        const footer = wrapper.querySelector('.message-footer');
+        if (footer) {
+            setMessagePreviewLink(footer, messageContent, messageData, wrapper);
+        }
     }
 }
 
@@ -5794,6 +5803,9 @@ function createMessageFooter() {
     footer.dataset.durationText = '';
     footer.dataset.finalizeText = '';
     footer.dataset.finalizeTimingText = '';
+    footer.dataset.previewText = '';
+    footer.dataset.previewTitle = '';
+    footer.dataset.previewSubtitle = '';
     footer.dataset.detailText = '';
     footer.dataset.detailTitle = '';
 
@@ -5801,9 +5813,26 @@ function createMessageFooter() {
     text.className = 'message-footer-text';
     footer.appendChild(text);
 
+    const previewLink = document.createElement('button');
+    previewLink.type = 'button';
+    previewLink.className = 'message-preview-link message-detail-link is-hidden';
+    previewLink.textContent = '자세히 보기';
+    previewLink.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const previewText = normalizeDetailText(footer.dataset.previewText);
+        if (!previewText) return;
+        openMessageLogOverlay(
+            footer.dataset.previewTitle || '전체 메시지',
+            previewText,
+            footer.dataset.previewSubtitle || '미리보기에서 생략된 전체 메시지'
+        );
+    });
+    footer.appendChild(previewLink);
+
     const detailLink = document.createElement('button');
     detailLink.type = 'button';
-    detailLink.className = 'message-detail-link is-hidden';
+    detailLink.className = 'message-log-link message-detail-link is-hidden';
     detailLink.textContent = '상세 로그 보기';
     detailLink.addEventListener('click', event => {
         event.preventDefault();
@@ -5833,6 +5862,7 @@ function syncMessageFooter(footer) {
     const durationText = footer.dataset.durationText || '';
     const finalizeText = footer.dataset.finalizeText || '';
     const finalizeTimingText = footer.dataset.finalizeTimingText || '';
+    const previewText = normalizeDetailText(footer.dataset.previewText);
     const detailText = normalizeDetailText(footer.dataset.detailText);
     const parts = [];
     if (durationText) {
@@ -5850,11 +5880,15 @@ function syncMessageFooter(footer) {
     } else {
         footer.textContent = parts.join(' · ');
     }
-    const detailLink = footer.querySelector('.message-detail-link');
+    const previewLink = footer.querySelector('.message-preview-link');
+    if (previewLink) {
+        previewLink.classList.toggle('is-hidden', !previewText);
+    }
+    const detailLink = footer.querySelector('.message-log-link');
     if (detailLink) {
         detailLink.classList.toggle('is-hidden', !detailText);
     }
-    footer.classList.toggle('is-visible', parts.length > 0 || Boolean(detailText));
+    footer.classList.toggle('is-visible', parts.length > 0 || Boolean(previewText) || Boolean(detailText));
 }
 
 function setMessageDuration(footer, durationMs) {
@@ -5897,6 +5931,73 @@ function setMessageDetailLogLink(footer, message) {
     footer.dataset.detailTitle = timestamp
         ? `${roleLabel} · ${timestamp} · 상세 로그`
         : `${roleLabel} · 상세 로그`;
+    syncMessageFooter(footer);
+}
+
+function resolveMessageRoleFromWrapper(wrapper) {
+    if (!wrapper) return '';
+    if (wrapper.classList.contains('user')) return 'user';
+    if (wrapper.classList.contains('assistant')) return 'assistant';
+    if (wrapper.classList.contains('system')) return 'system';
+    if (wrapper.classList.contains('error')) return 'error';
+    return '';
+}
+
+function setMessageWrapperIdentity(wrapper, role, timestampValue) {
+    if (!wrapper) return;
+    const normalizedRole = typeof role === 'string' ? role.trim() : '';
+    const normalizedTimestampValue = timestampValue === undefined || timestampValue === null
+        ? ''
+        : String(timestampValue).trim();
+    wrapper.dataset.messageRole = normalizedRole;
+    wrapper.dataset.messageTimestampValue = normalizedTimestampValue;
+}
+
+function buildMessagePreviewTitle(role, timestampValue) {
+    const roleLabel = getRoleLabel(role);
+    const timestamp = formatTimestamp(timestampValue);
+    return timestamp
+        ? `${roleLabel} · ${timestamp} · 전체 메시지`
+        : `${roleLabel} · 전체 메시지`;
+}
+
+function setMessagePreviewLink(footer, content, message = null, wrapper = null) {
+    if (!footer) return;
+    const messageText = String(content || '');
+    if (!shouldCollapseMessage(messageText)) {
+        footer.dataset.previewText = '';
+        footer.dataset.previewTitle = '';
+        footer.dataset.previewSubtitle = '';
+        syncMessageFooter(footer);
+        return;
+    }
+
+    const normalizedText = normalizeDetailText(messageText);
+    if (!normalizedText) {
+        footer.dataset.previewText = '';
+        footer.dataset.previewTitle = '';
+        footer.dataset.previewSubtitle = '';
+        syncMessageFooter(footer);
+        return;
+    }
+
+    const messageRole = typeof message?.role === 'string' ? message.role.trim() : '';
+    const wrapperRole = typeof wrapper?.dataset?.messageRole === 'string'
+        ? wrapper.dataset.messageRole.trim()
+        : '';
+    const role = messageRole || wrapperRole || resolveMessageRoleFromWrapper(wrapper) || 'message';
+
+    const messageTimestamp = typeof getMessageTimestampValue(message) === 'string'
+        ? getMessageTimestampValue(message).trim()
+        : '';
+    const wrapperTimestamp = typeof wrapper?.dataset?.messageTimestampValue === 'string'
+        ? wrapper.dataset.messageTimestampValue.trim()
+        : '';
+    const timestampValue = messageTimestamp || wrapperTimestamp;
+
+    footer.dataset.previewText = normalizedText;
+    footer.dataset.previewTitle = buildMessagePreviewTitle(role, timestampValue);
+    footer.dataset.previewSubtitle = '미리보기에서 생략된 전체 메시지';
     syncMessageFooter(footer);
 }
 
@@ -6157,26 +6258,15 @@ function getStreamDuration(stream) {
     return Math.max(0, Date.now() - stream.startedAt);
 }
 
-function renderMessageContent(content, options = {}) {
+function renderMessageContent(content) {
     const text = String(content || '');
-    const expanded = typeof options === 'boolean'
-        ? options
-        : Boolean(options?.expanded);
-    const summaryText = expanded ? '자세히 숨기기' : '자세히 보기';
 
     if (!shouldCollapseMessage(text)) {
         return renderMarkdown(text);
     }
 
     const previewText = buildMessagePreview(text);
-    const openAttr = expanded ? ' open' : '';
-    return [
-        `<div class="message-preview">${renderMarkdown(previewText)}</div>`,
-        `<details class="message-details"${openAttr}>`,
-        `<summary>${summaryText}</summary>`,
-        `<div class="message-full">${renderMarkdown(text)}</div>`,
-        `</details>`
-    ].join('');
+    return `<div class="message-preview">${renderMarkdown(previewText)}</div>`;
 }
 
 function shouldCollapseMessage(text) {

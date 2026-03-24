@@ -4,13 +4,59 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 
-if [[ ! -d "${VENV_DIR}" ]]; then
-    echo "Venv not found at ${VENV_DIR}. Create it with: python -m venv .venv"
-    exit 1
-fi
+resolve_host_python() {
+    if command -v python3 >/dev/null 2>&1; then
+        echo "python3"
+        return 0
+    fi
+    if command -v python >/dev/null 2>&1; then
+        echo "python"
+        return 0
+    fi
+    return 1
+}
 
-# shellcheck disable=SC1091
-source "${VENV_DIR}/bin/activate"
+ensure_venv_python() {
+    local venv_dir="$1"
+    local host_python
+    host_python="$(resolve_host_python)" || {
+        echo "Python executable not found on PATH." >&2
+        return 1
+    }
+
+    if [[ ! -x "${venv_dir}/bin/python" ]]; then
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..."
+        rm -rf "${venv_dir}"
+        "${host_python}" -m venv "${venv_dir}"
+    fi
+
+    if [[ ! -x "${venv_dir}/bin/python" ]]; then
+        echo "Failed to create a usable venv at ${venv_dir}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${venv_dir}/bin/python"
+}
+
+ensure_requirements() {
+    local venv_python="$1"
+    local requirements_path="$2"
+
+    if [[ ! -f "${requirements_path}" ]]; then
+        return 0
+    fi
+
+    if "${venv_python}" -c "import flask" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "[INFO] Installing Python dependencies from ${requirements_path}..."
+    "${venv_python}" -m pip install --upgrade pip
+    "${venv_python}" -m pip install -r "${requirements_path}"
+}
+
+PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
+ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
 
 PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${PARENT_DIR}"
@@ -63,7 +109,7 @@ while (($#)); do
 done
 
 if ((show_help == 1)); then
-    exec python "${SCRIPT_DIR}/run_codex_chat_server.py" "${original_args[@]}"
+    exec "${PYTHON_BIN}" "${SCRIPT_DIR}/run_codex_chat_server.py" "${original_args[@]}"
 fi
 
 if [[ ! "${requested_port}" =~ ^[0-9]+$ ]]; then
@@ -102,4 +148,4 @@ while port_in_use "${final_port}"; do
     final_port="${next_port}"
 done
 
-exec python "${SCRIPT_DIR}/run_codex_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"
+exec "${PYTHON_BIN}" "${SCRIPT_DIR}/run_codex_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"

@@ -8,6 +8,57 @@ PYTHON_BIN=""
 export MODEL_DTGPT_API_BASE_URL="http://dtgpt.samsungds.net/llm/v1"
 export MODEL_DTGPT_API_BASE_URLS="http://dtgpt.samsungds.net/llm/v1"
 
+resolve_host_python() {
+    if command -v python3 >/dev/null 2>&1; then
+        echo "python3"
+        return 0
+    fi
+    if command -v python >/dev/null 2>&1; then
+        echo "python"
+        return 0
+    fi
+    return 1
+}
+
+ensure_venv_python() {
+    local venv_dir="$1"
+    local host_python
+    host_python="$(resolve_host_python)" || {
+        echo "Python executable not found on PATH." >&2
+        return 1
+    }
+
+    if [[ ! -x "${venv_dir}/bin/python" ]]; then
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..."
+        rm -rf "${venv_dir}"
+        "${host_python}" -m venv "${venv_dir}"
+    fi
+
+    if [[ ! -x "${venv_dir}/bin/python" ]]; then
+        echo "Failed to create a usable venv at ${venv_dir}" >&2
+        return 1
+    fi
+
+    printf '%s\n' "${venv_dir}/bin/python"
+}
+
+ensure_requirements() {
+    local venv_python="$1"
+    local requirements_path="$2"
+
+    if [[ ! -f "${requirements_path}" ]]; then
+        return 0
+    fi
+
+    if "${venv_python}" -c "import flask" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "[INFO] Installing Python dependencies from ${requirements_path}..."
+    "${venv_python}" -m pip install --upgrade pip
+    "${venv_python}" -m pip install -r "${requirements_path}"
+}
+
 if [[ -n "${TG_PYTHON:-}" ]]; then
     PYTHON_BIN="${TG_PYTHON}/python"
     if [[ ! -x "${PYTHON_BIN}" ]]; then
@@ -16,13 +67,8 @@ if [[ -n "${TG_PYTHON:-}" ]]; then
     fi
 else
     VENV_DIR="${SCRIPT_DIR}/.venv"
-    if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "Venv not found at ${VENV_DIR}. Create it with: python -m venv .venv or set TG_PYTHON." >&2
-        exit 1
-    fi
-    # shellcheck disable=SC1091
-    source "${VENV_DIR}/bin/activate"
-    PYTHON_BIN="python"
+    PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
+    ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
 fi
 
 PARENT_DIR="$(dirname "${SCRIPT_DIR}")"

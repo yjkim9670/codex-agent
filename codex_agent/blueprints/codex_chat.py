@@ -34,6 +34,11 @@ from ..services.codex_chat import (
     update_settings,
     stop_codex_stream,
 )
+from ..services.file_browser import (
+    FileBrowserError,
+    list_directory,
+    read_file,
+)
 from ..services.git_ops import run_git_action
 
 bp = Blueprint('codex_chat', __name__)
@@ -272,6 +277,36 @@ def codex_stream_stop(stream_id):
     result = stop_codex_stream(stream_id)
     if not result:
         return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/list', methods=['POST'])
+def codex_files_list():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = list_directory(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/read', methods=['POST'])
+def codex_files_read():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = read_file(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
     return jsonify(result)
 
 

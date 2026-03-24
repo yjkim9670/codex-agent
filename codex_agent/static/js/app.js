@@ -76,6 +76,14 @@ const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
 const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
+const FILE_BROWSER_ROOT_SERVER = 'server';
+const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
+const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
+const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
+const FILE_BROWSER_ROOT_LABELS = Object.freeze({
+    [FILE_BROWSER_ROOT_SERVER]: '서버 디렉터리',
+    [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
+});
 const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
     '/home/',
     '/Users/',
@@ -125,6 +133,9 @@ let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
     [GIT_SYNC_TARGET_CODEX_AGENT]: false
 };
+let fileBrowserRoot = FILE_BROWSER_ROOT_SERVER;
+let fileBrowserPath = '';
+let fileBrowserSelectedPath = '';
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -550,6 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitCommitBtn = document.getElementById('codex-git-commit');
     const gitPushBtn = document.getElementById('codex-git-push');
     const gitSyncBtn = document.getElementById('codex-git-sync');
+    const fileBrowserBtn = document.getElementById('codex-file-browser-open');
     const branchOverlayCommitBtn = document.getElementById('codex-branch-overlay-commit');
     const branchOverlayPushBtn = document.getElementById('codex-branch-overlay-push');
     const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
@@ -563,6 +575,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
     const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
+    const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
+    const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
+    const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
+    const fileBrowserRefreshBtn = document.getElementById('codex-file-browser-refresh');
+    const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
@@ -578,6 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
         gitCommitBtn,
         gitPushBtn,
         gitSyncBtn,
+        fileBrowserBtn,
         refreshBtn
     });
 
@@ -623,6 +641,12 @@ document.addEventListener('DOMContentLoaded', () => {
         gitSyncBtn.addEventListener('click', event => {
             event.preventDefault();
             openGitSyncOverlay();
+        });
+    }
+    if (fileBrowserBtn) {
+        fileBrowserBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openFileBrowserOverlay();
         });
     }
     if (branchOverlayCommitBtn) {
@@ -724,6 +748,48 @@ document.addEventListener('DOMContentLoaded', () => {
     if (messageLogOverlayCloseFooter) {
         messageLogOverlayCloseFooter.addEventListener('click', closeMessageLogOverlay);
     }
+    if (fileBrowserOverlay) {
+        fileBrowserOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeFileBrowserOverlay();
+            }
+        });
+    }
+    if (fileBrowserOverlayClose) {
+        fileBrowserOverlayClose.addEventListener('click', closeFileBrowserOverlay);
+    }
+    if (fileBrowserOverlayCloseFooter) {
+        fileBrowserOverlayCloseFooter.addEventListener('click', closeFileBrowserOverlay);
+    }
+    if (fileBrowserRefreshBtn) {
+        fileBrowserRefreshBtn.addEventListener('click', () => {
+            void refreshFileBrowserDirectory({ force: true });
+        });
+    }
+    if (fileBrowserUpBtn) {
+        fileBrowserUpBtn.addEventListener('click', () => {
+            if (!fileBrowserPath) return;
+            const parentPath = getFileBrowserParentPath(fileBrowserPath);
+            void refreshFileBrowserDirectory({
+                root: fileBrowserRoot,
+                path: parentPath,
+                force: true
+            });
+        });
+    }
+    document.querySelectorAll('.file-browser-root-target[data-root-target]').forEach(button => {
+        button.addEventListener('click', () => {
+            const nextRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
+            if (!nextRoot || nextRoot === fileBrowserRoot) return;
+            fileBrowserRoot = nextRoot;
+            fileBrowserPath = '';
+            fileBrowserSelectedPath = '';
+            clearFileBrowserViewer();
+            updateFileBrowserRootButtons();
+            void refreshFileBrowserDirectory({ root: nextRoot, path: '', force: true });
+        });
+    });
     if (syncOverlayRefreshBtn) {
         syncOverlayRefreshBtn.addEventListener('click', () => {
             void refreshGitSyncOverlayHistory({ force: true });
@@ -766,6 +832,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
+        if (isFileBrowserOverlayOpen()) {
+            closeFileBrowserOverlay();
+            return;
+        }
         if (isMessageLogOverlayOpen()) {
             closeMessageLogOverlay();
             return;
@@ -1544,10 +1614,11 @@ function initializeHeaderActionTooltips({
     gitCommitBtn,
     gitPushBtn,
     gitSyncBtn,
+    fileBrowserBtn,
     refreshBtn
 } = {}) {
     syncHoverTooltipFromLabel(gitBranch);
-    [gitCommitBtn, gitPushBtn, gitSyncBtn, refreshBtn].forEach(button => {
+    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, refreshBtn].forEach(button => {
         syncHoverTooltipFromLabel(button);
     });
     updateThemeSwitchTooltip(themeToggle);
@@ -3098,6 +3169,7 @@ function getRecoverableGitActionButtons() {
         '#codex-git-commit',
         '#codex-git-push',
         '#codex-git-sync',
+        '#codex-file-browser-open',
         '#codex-branch-overlay-commit',
         '#codex-branch-overlay-push',
         '#codex-sync-overlay-fetch',
@@ -3488,6 +3560,9 @@ function openGitBranchOverlay() {
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
     if (elements.commitMessage) {
@@ -3505,7 +3580,7 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {
+    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -3769,6 +3844,9 @@ function openGitSyncOverlay() {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
@@ -3795,7 +3873,7 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -3973,9 +4051,542 @@ function closeMessageLogOverlay() {
     elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
     delete elements.overlay.dataset.viewMode;
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isFileBrowserOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
+}
+
+function normalizeFileBrowserRoot(value) {
+    const root = String(value || '').trim();
+    return root === FILE_BROWSER_ROOT_WORKSPACE
+        ? FILE_BROWSER_ROOT_WORKSPACE
+        : FILE_BROWSER_ROOT_SERVER;
+}
+
+function normalizeFileBrowserRelativePath(value) {
+    const source = String(value || '').trim().replace(/\\/g, '/');
+    if (!source || source === '.') return '';
+    return source
+        .replace(/^\/+/g, '')
+        .replace(/\/+/g, '/')
+        .replace(/\/+$/g, '');
+}
+
+function getFileBrowserParentPath(path) {
+    const normalized = normalizeFileBrowserRelativePath(path);
+    if (!normalized || !normalized.includes('/')) return '';
+    return normalized.slice(0, normalized.lastIndexOf('/'));
+}
+
+function getFileBrowserRootLabel(root) {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    return FILE_BROWSER_ROOT_LABELS[normalizedRoot] || normalizedRoot;
+}
+
+function getFileBrowserAbsoluteRoots() {
+    if (typeof document === 'undefined' || !document.body) {
+        return [];
+    }
+    const roots = [];
+    const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
+    const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
+    if (serverPath) {
+        roots.push({
+            root: FILE_BROWSER_ROOT_SERVER,
+            path: serverPath,
+            display: '$server'
+        });
+    }
+    if (workspacePath) {
+        roots.push({
+            root: FILE_BROWSER_ROOT_WORKSPACE,
+            path: workspacePath,
+            display: '$workspace'
+        });
+    }
+    roots.sort((a, b) => b.path.length - a.path.length);
+    return roots;
+}
+
+function resolveFileBrowserTargetFromAbsolutePath(value) {
+    const normalized = normalizeFilesystemPath(value);
+    if (!normalized) return null;
+    const roots = getFileBrowserAbsoluteRoots();
+    const matched = roots.find(root => normalized === root.path || normalized.startsWith(`${root.path}/`));
+    if (!matched) return null;
+    if (normalized === matched.path) {
+        return {
+            root: matched.root,
+            path: ''
+        };
+    }
+    return {
+        root: matched.root,
+        path: normalized.slice(matched.path.length + 1)
+    };
+}
+
+function getFileBrowserElements() {
+    const overlay = document.getElementById('codex-file-browser-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        subtitle: document.getElementById('codex-file-browser-overlay-subtitle'),
+        path: document.getElementById('codex-file-browser-path'),
+        meta: document.getElementById('codex-file-browser-meta'),
+        loading: document.getElementById('codex-file-browser-loading'),
+        empty: document.getElementById('codex-file-browser-empty'),
+        list: document.getElementById('codex-file-browser-list'),
+        viewerMeta: document.getElementById('codex-file-browser-viewer-meta'),
+        viewerContent: document.getElementById('codex-file-browser-viewer-content'),
+        upBtn: document.getElementById('codex-file-browser-up'),
+        refreshBtn: document.getElementById('codex-file-browser-refresh'),
+        rootButtons: Array.from(
+            overlay.querySelectorAll('.file-browser-root-target[data-root-target]')
+        )
+    };
+}
+
+function isFileBrowserOverlayOpen() {
+    const overlay = document.getElementById('codex-file-browser-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function updateFileBrowserRootButtons() {
+    const elements = getFileBrowserElements();
+    if (!elements || !Array.isArray(elements.rootButtons)) return;
+    elements.rootButtons.forEach(button => {
+        const buttonRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
+        const isActive = buttonRoot === fileBrowserRoot;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('secondary', isActive);
+        button.classList.toggle('ghost', !isActive);
+    });
+}
+
+function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
+    const elements = getFileBrowserElements();
+    if (!elements?.path) return;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
+    const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE ? '$workspace' : '$server';
+    const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
+    elements.path.textContent = display;
+
+    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
+    const absolutePath = absoluteRoot
+        ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
+        : display;
+    setHoverTooltip(elements.path, absolutePath);
+}
+
+function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    const loading = Boolean(isLoading);
+    if (elements.loading) {
+        elements.loading.textContent = message;
+        elements.loading.classList.toggle('is-hidden', !loading);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', loading);
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+    if (elements.refreshBtn) {
+        elements.refreshBtn.disabled = loading;
+    }
+    if (elements.upBtn) {
+        elements.upBtn.disabled = loading || !fileBrowserPath;
+    }
+    if (Array.isArray(elements.rootButtons)) {
+        elements.rootButtons.forEach(button => {
+            button.disabled = loading;
+        });
+    }
+}
+
+function clearFileBrowserViewer(message = '파일을 선택하세요.') {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    if (elements.viewerMeta) {
+        elements.viewerMeta.textContent = '파일을 선택하면 미리보기가 표시됩니다.';
+    }
+    if (elements.viewerContent) {
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = message;
+        elements.viewerContent.appendChild(placeholder);
+    }
+}
+
+function formatFileBrowserSize(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '--';
+    if (numeric < 1024) return `${Math.round(numeric)} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let amount = numeric / 1024;
+    let unitIndex = 0;
+    while (amount >= 1024 && unitIndex < units.length - 1) {
+        amount /= 1024;
+        unitIndex += 1;
+    }
+    const rounded = amount >= 100 ? amount.toFixed(0) : amount.toFixed(1);
+    return `${rounded.replace(/\.0$/, '')} ${units[unitIndex]}`;
+}
+
+function applyFileBrowserSelectionState() {
+    const elements = getFileBrowserElements();
+    if (!elements?.list) return;
+    const normalizedSelection = normalizeFileBrowserRelativePath(fileBrowserSelectedPath);
+    elements.list.querySelectorAll('button.file-browser-entry[data-entry-path]').forEach(button => {
+        const candidate = normalizeFileBrowserRelativePath(button.dataset?.entryPath || '');
+        button.classList.toggle('is-active', Boolean(normalizedSelection) && candidate === normalizedSelection);
+    });
+}
+
+function renderFileBrowserList(entries) {
+    const elements = getFileBrowserElements();
+    if (!elements?.list) return;
+    elements.list.innerHTML = '';
+    const rows = Array.isArray(entries) ? entries : [];
+    rows.forEach(entry => {
+        const entryPath = normalizeFileBrowserRelativePath(entry?.path || '');
+        const entryType = entry?.type === 'dir' ? 'dir' : 'file';
+        if (!entryPath) return;
+
+        const item = document.createElement('li');
+        item.className = 'file-browser-list-item';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `file-browser-entry${entryType === 'dir' ? ' is-dir' : ''}`;
+        button.dataset.entryPath = entryPath;
+        button.dataset.entryType = entryType;
+
+        const badge = document.createElement('span');
+        badge.className = 'file-browser-entry-badge';
+        badge.textContent = entryType === 'dir' ? 'DIR' : 'FILE';
+        button.appendChild(badge);
+
+        const name = document.createElement('span');
+        name.className = 'file-browser-entry-name';
+        name.textContent = String(entry?.name || entryPath);
+        button.appendChild(name);
+
+        const meta = document.createElement('span');
+        meta.className = 'file-browser-entry-meta';
+        meta.textContent = entryType === 'dir'
+            ? 'folder'
+            : formatFileBrowserSize(entry?.size);
+        button.appendChild(meta);
+
+        button.addEventListener('click', () => {
+            if (entryType === 'dir') {
+                fileBrowserSelectedPath = '';
+                clearFileBrowserViewer();
+                void refreshFileBrowserDirectory({
+                    root: fileBrowserRoot,
+                    path: entryPath,
+                    force: true
+                });
+                return;
+            }
+            void openFileInBrowserOverlay(entryPath, { root: fileBrowserRoot });
+        });
+
+        item.appendChild(button);
+        elements.list.appendChild(item);
+    });
+    applyFileBrowserSelectionState();
+}
+
+async function fetchFileBrowserDirectory(root, path = '') {
+    return fetchJson('/api/codex/files/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path)
+        })
+    });
+}
+
+async function fetchFileBrowserFile(root, path) {
+    return fetchJson('/api/codex/files/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path)
+        })
+    });
+}
+
+async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = fileBrowserPath, force = false } = {}) {
+    void force;
+    const elements = getFileBrowserElements();
+    if (!elements) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+
+    setFileBrowserDirectoryLoading(true);
+    if (elements.meta) {
+        elements.meta.textContent = '디렉터리 목록을 불러오는 중...';
+    }
+
+    try {
+        const result = await fetchFileBrowserDirectory(normalizedRoot, normalizedPath);
+        fileBrowserRoot = normalizeFileBrowserRoot(result?.root || normalizedRoot);
+        fileBrowserPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        updateFileBrowserRootButtons();
+        setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath, result?.root_path || '');
+
+        const entries = Array.isArray(result?.entries) ? result.entries : [];
+        renderFileBrowserList(entries);
+
+        if (elements.meta) {
+            const countText = `항목 ${entries.length}개`;
+            elements.meta.textContent = result?.truncated
+                ? `${countText} (일부만 표시됨)`
+                : countText;
+        }
+        if (elements.empty) {
+            elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
+            elements.empty.classList.toggle('is-hidden', entries.length !== 0);
+        }
+        if (elements.list) {
+            elements.list.classList.toggle('is-hidden', entries.length === 0);
+        }
+        if (elements.subtitle) {
+            elements.subtitle.textContent = `${getFileBrowserRootLabel(fileBrowserRoot)} · ${fileBrowserPath || '/'}`;
+        }
+        if (elements.upBtn) {
+            const canGoUp = Boolean(result?.can_go_up) || Boolean(fileBrowserPath);
+            elements.upBtn.disabled = !canGoUp;
+        }
+        if (elements.loading) {
+            elements.loading.classList.add('is-hidden');
+        }
+        return result;
+    } catch (error) {
+        if (elements.meta) {
+            elements.meta.textContent = normalizeError(error, '디렉터리 목록을 불러오지 못했습니다.');
+        }
+        if (elements.list) {
+            elements.list.classList.add('is-hidden');
+            elements.list.innerHTML = '';
+        }
+        if (elements.empty) {
+            elements.empty.textContent = '디렉터리 목록을 불러오지 못했습니다.';
+            elements.empty.classList.remove('is-hidden');
+        }
+        showToast(normalizeError(error, '파일 브라우저 목록 조회에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return null;
+    } finally {
+        setFileBrowserDirectoryLoading(false);
+    }
+}
+
+function renderFileBrowserViewer(result) {
+    const elements = getFileBrowserElements();
+    if (!elements?.viewerContent) return;
+
+    const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
+    const language = typeof result?.language === 'string' ? result.language.trim() : '';
+    const isHtml = Boolean(result?.is_html);
+    const isScript = Boolean(result?.is_script);
+    const isBinary = Boolean(result?.is_binary);
+    const sizeText = formatFileBrowserSize(result?.size);
+    const infoParts = [normalizedPath || '(unknown path)'];
+    if (sizeText && sizeText !== '--') {
+        infoParts.push(sizeText);
+    }
+    if (language) {
+        infoParts.push(language);
+    } else if (isBinary) {
+        infoParts.push('binary');
+    }
+    if (elements.viewerMeta) {
+        elements.viewerMeta.textContent = infoParts.join(' · ');
+        if (result?.truncated) {
+            const note = document.createElement('span');
+            note.className = 'file-browser-truncated-note';
+            note.textContent = '미리보기 용량 제한으로 일부만 표시됩니다.';
+            elements.viewerMeta.appendChild(note);
+        }
+    }
+
+    elements.viewerContent.innerHTML = '';
+    if (isBinary) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = 'Binary 파일은 미리보기에서 지원되지 않습니다.';
+        elements.viewerContent.appendChild(placeholder);
+        return;
+    }
+
+    const text = typeof result?.content === 'string' ? result.content : '';
+    if (!text) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = '표시할 파일 내용이 없습니다.';
+        elements.viewerContent.appendChild(placeholder);
+        return;
+    }
+
+    if (isHtml) {
+        const iframe = document.createElement('iframe');
+        iframe.className = 'file-browser-html-preview';
+        iframe.setAttribute('sandbox', '');
+        iframe.srcdoc = text;
+        elements.viewerContent.appendChild(iframe);
+        return;
+    }
+
+    const pre = document.createElement('pre');
+    pre.className = 'file-browser-source';
+    if (isScript) {
+        pre.innerHTML = highlightScriptContent(text, language);
+    } else {
+        pre.textContent = text;
+    }
+    elements.viewerContent.appendChild(pre);
+}
+
+async function openFileInBrowserOverlay(path, { root = fileBrowserRoot, fallbackToDirectory = false } = {}) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    if (!normalizedPath) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const elements = getFileBrowserElements();
+    if (!elements) return null;
+
+    if (elements.viewerMeta) {
+        elements.viewerMeta.textContent = `${normalizedPath} · 불러오는 중...`;
+    }
+    if (elements.viewerContent) {
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = '파일을 불러오는 중...';
+        elements.viewerContent.appendChild(placeholder);
+    }
+
+    try {
+        const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
+        fileBrowserSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        renderFileBrowserViewer(result);
+        applyFileBrowserSelectionState();
+        return result;
+    } catch (error) {
+        const payload = getGitErrorPayload(error);
+        if (fallbackToDirectory && payload?.error_code === 'not_file') {
+            fileBrowserSelectedPath = '';
+            clearFileBrowserViewer('폴더가 선택되었습니다. 왼쪽 목록에서 파일을 선택하세요.');
+            await refreshFileBrowserDirectory({
+                root: normalizedRoot,
+                path: normalizedPath,
+                force: true
+            });
+            return {
+                opened_directory: true,
+                path: normalizedPath
+            };
+        }
+        if (elements.viewerMeta) {
+            elements.viewerMeta.textContent = normalizedPath;
+        }
+        if (elements.viewerContent) {
+            elements.viewerContent.innerHTML = '';
+            const placeholder = document.createElement('div');
+            placeholder.className = 'file-browser-placeholder';
+            placeholder.textContent = normalizeError(error, '파일을 열지 못했습니다.');
+            elements.viewerContent.appendChild(placeholder);
+        }
+        showToast(normalizeError(error, '파일 열기에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return null;
+    }
+}
+
+function openFileBrowserOverlay(options = {}) {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
+
+    const requestedRoot = normalizeFileBrowserRoot(options?.root || fileBrowserRoot);
+    const requestedFilePath = normalizeFileBrowserRelativePath(options?.filePath || '');
+    const requestedPath = normalizeFileBrowserRelativePath(
+        options?.path || getFileBrowserParentPath(requestedFilePath)
+    );
+
+    fileBrowserRoot = requestedRoot;
+    fileBrowserPath = requestedPath;
+    fileBrowserSelectedPath = requestedFilePath;
+
+    updateFileBrowserRootButtons();
+    setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath);
+    clearFileBrowserViewer(requestedFilePath ? '파일을 여는 중...' : '파일을 선택하세요.');
+
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+
+    void (async () => {
+        const listed = await refreshFileBrowserDirectory({
+            root: requestedRoot,
+            path: requestedPath,
+            force: true
+        });
+        if (!listed || !requestedFilePath) return;
+        await openFileInBrowserOverlay(requestedFilePath, {
+            root: requestedRoot,
+            fallbackToDirectory: true
+        });
+    })();
+}
+
+function closeFileBrowserOverlay() {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function openFileBrowserFromAbsolutePath(absolutePath) {
+    const target = resolveFileBrowserTargetFromAbsolutePath(absolutePath);
+    if (!target) {
+        return false;
+    }
+    if (!target.path) {
+        openFileBrowserOverlay({ root: target.root, path: '' });
+        return true;
+    }
+    openFileBrowserOverlay({
+        root: target.root,
+        filePath: target.path
+    });
+    return true;
 }
 
 async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRepoTarget) {
@@ -6239,6 +6850,201 @@ function renderMarkdown(text) {
     }).join('');
 }
 
+function getScriptHighlightConfig(language) {
+    const normalized = String(language || '').trim().toLowerCase();
+    const javascriptKeywords = new Set([
+        'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+        'default', 'delete', 'do', 'else', 'export', 'extends', 'finally', 'for', 'function',
+        'if', 'import', 'in', 'instanceof', 'let', 'new', 'of', 'return', 'static', 'super',
+        'switch', 'throw', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield'
+    ]);
+    const typescriptKeywords = new Set([
+        ...javascriptKeywords,
+        'abstract', 'declare', 'enum', 'implements', 'interface', 'keyof', 'namespace',
+        'private', 'protected', 'public', 'readonly', 'type'
+    ]);
+    const pythonKeywords = new Set([
+        'and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del',
+        'elif', 'else', 'except', 'finally', 'for', 'from', 'global', 'if', 'import', 'in',
+        'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while',
+        'with', 'yield'
+    ]);
+    const shellKeywords = new Set([
+        'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case',
+        'esac', 'function', 'select', 'in'
+    ]);
+    const powershellKeywords = new Set([
+        'begin', 'break', 'catch', 'class', 'continue', 'data', 'do', 'else', 'elseif', 'end',
+        'exit', 'filter', 'finally', 'for', 'foreach', 'from', 'function', 'if', 'in', 'param',
+        'return', 'switch', 'throw', 'trap', 'try', 'until', 'using', 'var', 'while'
+    ]);
+
+    if (normalized === 'javascript' || normalized === 'jsx') {
+        return {
+            allowDollar: true,
+            lineComment: '//',
+            blockComment: true,
+            keywords: javascriptKeywords,
+            literals: new Set(['false', 'null', 'true', 'undefined'])
+        };
+    }
+    if (normalized === 'typescript' || normalized === 'tsx') {
+        return {
+            allowDollar: true,
+            lineComment: '//',
+            blockComment: true,
+            keywords: typescriptKeywords,
+            literals: new Set(['false', 'null', 'true', 'undefined'])
+        };
+    }
+    if (normalized === 'python') {
+        return {
+            allowDollar: false,
+            lineComment: '#',
+            blockComment: false,
+            tripleQuote: true,
+            keywords: pythonKeywords,
+            literals: new Set(['false', 'none', 'true'])
+        };
+    }
+    if (normalized === 'bash' || normalized === 'shell') {
+        return {
+            allowDollar: false,
+            lineComment: '#',
+            blockComment: false,
+            keywords: shellKeywords,
+            literals: new Set([])
+        };
+    }
+    if (normalized === 'powershell') {
+        return {
+            allowDollar: true,
+            lineComment: '#',
+            blockComment: false,
+            keywords: powershellKeywords,
+            literals: new Set(['$false', '$null', '$true'])
+        };
+    }
+    return null;
+}
+
+function wrapScriptToken(type, text) {
+    return `<span class="file-code-token-${type}">${escapeHtml(text)}</span>`;
+}
+
+function isScriptIdentifierStart(char, allowDollar = false) {
+    if (!char) return false;
+    if (allowDollar && char === '$') return true;
+    return /[A-Za-z_]/.test(char);
+}
+
+function isScriptIdentifierPart(char, allowDollar = false) {
+    if (!char) return false;
+    if (allowDollar && char === '$') return true;
+    return /[A-Za-z0-9_]/.test(char);
+}
+
+function highlightScriptContent(content, language) {
+    const source = String(content || '');
+    const config = getScriptHighlightConfig(language);
+    if (!config) {
+        return escapeHtml(source);
+    }
+
+    let cursor = 0;
+    let output = '';
+    while (cursor < source.length) {
+        const current = source[cursor];
+        const next = source[cursor + 1] || '';
+
+        if (config.lineComment === '//' && current === '/' && next === '/') {
+            const end = source.indexOf('\n', cursor);
+            const sliceEnd = end === -1 ? source.length : end;
+            output += wrapScriptToken('comment', source.slice(cursor, sliceEnd));
+            cursor = sliceEnd;
+            continue;
+        }
+        if (config.lineComment === '#' && current === '#') {
+            const end = source.indexOf('\n', cursor);
+            const sliceEnd = end === -1 ? source.length : end;
+            output += wrapScriptToken('comment', source.slice(cursor, sliceEnd));
+            cursor = sliceEnd;
+            continue;
+        }
+        if (config.blockComment && current === '/' && next === '*') {
+            const end = source.indexOf('*/', cursor + 2);
+            const sliceEnd = end === -1 ? source.length : end + 2;
+            output += wrapScriptToken('comment', source.slice(cursor, sliceEnd));
+            cursor = sliceEnd;
+            continue;
+        }
+
+        const isQuote = current === '\'' || current === '"' || current === '`';
+        if (isQuote) {
+            const quote = current;
+            if (config.tripleQuote && (quote === '\'' || quote === '"') && source.startsWith(quote.repeat(3), cursor)) {
+                const end = source.indexOf(quote.repeat(3), cursor + 3);
+                const sliceEnd = end === -1 ? source.length : end + 3;
+                output += wrapScriptToken('string', source.slice(cursor, sliceEnd));
+                cursor = sliceEnd;
+                continue;
+            }
+            let index = cursor + 1;
+            while (index < source.length) {
+                const char = source[index];
+                if (char === '\\') {
+                    index += 2;
+                    continue;
+                }
+                if (char === quote) {
+                    index += 1;
+                    break;
+                }
+                index += 1;
+            }
+            output += wrapScriptToken('string', source.slice(cursor, Math.min(index, source.length)));
+            cursor = Math.min(index, source.length);
+            continue;
+        }
+
+        const previous = cursor > 0 ? source[cursor - 1] : '';
+        const numberMatch = source.slice(cursor).match(
+            /^(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/
+        );
+        if (
+            numberMatch
+            && numberMatch[0]
+            && !isScriptIdentifierPart(previous, config.allowDollar)
+        ) {
+            output += wrapScriptToken('number', numberMatch[0]);
+            cursor += numberMatch[0].length;
+            continue;
+        }
+
+        if (isScriptIdentifierStart(current, config.allowDollar)) {
+            let index = cursor + 1;
+            while (index < source.length && isScriptIdentifierPart(source[index], config.allowDollar)) {
+                index += 1;
+            }
+            const word = source.slice(cursor, index);
+            const lowered = word.toLowerCase();
+            if (config.keywords.has(lowered)) {
+                output += wrapScriptToken('keyword', word);
+            } else if (config.literals.has(lowered) || config.literals.has(word)) {
+                output += wrapScriptToken('literal', word);
+            } else {
+                output += escapeHtml(word);
+            }
+            cursor = index;
+            continue;
+        }
+
+        output += escapeHtml(current);
+        cursor += 1;
+    }
+    return output;
+}
+
 function decodeHtmlEntities(value) {
     const source = String(value || '');
     if (!source.includes('&')) return source;
@@ -6315,6 +7121,15 @@ function hydrateMessageLabelLinks(container) {
         link.dataset.linkBound = '1';
         link.addEventListener('click', event => {
             event.preventDefault();
+            const absolutePath = normalizeFilesystemPath(link.dataset?.filePath || '');
+            if (!absolutePath) return;
+            const opened = openFileBrowserFromAbsolutePath(absolutePath);
+            if (!opened) {
+                showToast('현재 브라우저 루트에서 접근할 수 없는 파일입니다.', {
+                    tone: 'error',
+                    durationMs: 3600
+                });
+            }
         });
     });
 }

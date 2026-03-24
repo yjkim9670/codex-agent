@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=93">
+    <link rel="stylesheet" href="/static/css/app.css?v=96">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -351,7 +351,7 @@
             <div class="file-browser-overlay-header">
                 <div class="file-browser-overlay-heading">
                     <div class="file-browser-overlay-title" id="codex-file-browser-overlay-title">파일 브라우저</div>
-                    <div class="file-browser-overlay-subtitle" id="codex-file-browser-overlay-subtitle">서버 디렉터리</div>
+                    <div class="file-browser-overlay-subtitle" id="codex-file-browser-overlay-subtitle">Workspace</div>
                 </div>
                 <button class="btn ghost icon-only file-browser-overlay-close" type="button" id="codex-file-browser-overlay-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
@@ -359,28 +359,26 @@
             </div>
             <div class="file-browser-overlay-body">
                 <div class="file-browser-overlay-tools">
-                    <div class="file-browser-root-targets" role="group" aria-label="Browse root target">
-                        <button
-                            class="btn secondary file-browser-root-target is-active"
-                            type="button"
-                            id="codex-file-browser-root-server"
-                            data-root-target="server"
-                        >서버 디렉터리</button>
-                        <button
-                            class="btn ghost file-browser-root-target"
-                            type="button"
-                            id="codex-file-browser-root-workspace"
-                            data-root-target="workspace"
-                        >Workspace</button>
+                    <div class="file-browser-filter-tools" role="group" aria-label="File filters">
+                        <label class="file-browser-toggle" for="codex-file-browser-show-hidden">
+                            <input type="checkbox" id="codex-file-browser-show-hidden">
+                            숨김 파일 표시
+                        </label>
+                        <label class="file-browser-toggle" for="codex-file-browser-show-pycache">
+                            <input type="checkbox" id="codex-file-browser-show-pycache">
+                            pycache 표시
+                        </label>
                     </div>
                     <div class="file-browser-nav-tools">
+                        <button class="btn ghost file-browser-back is-hidden" type="button" id="codex-file-browser-back">목록으로</button>
+                        <button class="btn ghost file-browser-fullscreen" type="button" id="codex-file-browser-fullscreen" aria-pressed="false">내용 전체화면</button>
                         <button class="btn ghost file-browser-up" type="button" id="codex-file-browser-up">상위 폴더</button>
                         <button class="btn ghost icon-only file-browser-refresh" type="button" id="codex-file-browser-refresh" aria-label="목록 새로고침" title="목록 새로고침">
                             <span class="sr-only">목록 새로고침</span>
                         </button>
                     </div>
                 </div>
-                <div class="file-browser-path" id="codex-file-browser-path">$server</div>
+                <div class="file-browser-path" id="codex-file-browser-path">$workspace</div>
                 <div class="file-browser-layout">
                     <div class="file-browser-list-panel">
                         <div class="file-browser-meta" id="codex-file-browser-meta">디렉터리 목록을 불러오는 중...</div>
@@ -400,6 +398,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=75"></script>
+    <script src="/static/js/app.js?v=78"></script>
 </body>
 </html>

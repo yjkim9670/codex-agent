@@ -27,18 +27,18 @@ ensure_venv_python() {
     local venv_dir="$1"
     local host_python
     host_python="$(resolve_host_python)" || {
-        echo "Python executable not found on PATH."
+        echo "Python executable not found on PATH." >&2
         return 1
     }
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "Venv python missing at ${venv_dir}/bin/python. Recreating..."
+        echo "Venv python missing at ${venv_dir}/bin/python. Recreating..." >echo "Venv python missing at /bin/python. Recreating..." >&22
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "Failed to create a usable venv at ${venv_dir}"
+        echo "Failed to create a usable venv at ${venv_dir}" >echo "Failed to create a usable venv at " >&22
         return 1
     fi
 

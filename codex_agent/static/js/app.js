@@ -76,12 +76,12 @@ const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
 const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
-const FILE_BROWSER_ROOT_SERVER = 'server';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
+const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
+const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
-    [FILE_BROWSER_ROOT_SERVER]: '서버 디렉터리',
     [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
 });
 const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
@@ -133,9 +133,15 @@ let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
     [GIT_SYNC_TARGET_CODEX_AGENT]: false
 };
-let fileBrowserRoot = FILE_BROWSER_ROOT_SERVER;
+let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
 let fileBrowserPath = '';
 let fileBrowserSelectedPath = '';
+let fileBrowserShowHiddenEntries = false;
+let fileBrowserShowPycacheEntries = false;
+let fileBrowserViewerFullscreen = false;
+let fileBrowserMobileView = FILE_BROWSER_MOBILE_VIEW_LIST;
+let fileBrowserCachedEntries = [];
+let fileBrowserCachedTruncated = false;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -579,7 +585,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
     const fileBrowserRefreshBtn = document.getElementById('codex-file-browser-refresh');
+    const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
+    const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserShowHiddenToggle = document.getElementById('codex-file-browser-show-hidden');
+    const fileBrowserShowPycacheToggle = document.getElementById('codex-file-browser-show-pycache');
     const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
@@ -646,7 +656,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserBtn) {
         fileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
-            openFileBrowserOverlay();
+            openFileBrowserOverlay({
+                root: FILE_BROWSER_ROOT_WORKSPACE,
+                path: ''
+            });
         });
     }
     if (branchOverlayCommitBtn) {
@@ -767,6 +780,11 @@ document.addEventListener('DOMContentLoaded', () => {
             void refreshFileBrowserDirectory({ force: true });
         });
     }
+    if (fileBrowserBackBtn) {
+        fileBrowserBackBtn.addEventListener('click', () => {
+            setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
+        });
+    }
     if (fileBrowserUpBtn) {
         fileBrowserUpBtn.addEventListener('click', () => {
             if (!fileBrowserPath) return;
@@ -776,6 +794,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 path: parentPath,
                 force: true
             });
+        });
+    }
+    updateFileBrowserFilterToggleState();
+    setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+    if (fileBrowserShowHiddenToggle) {
+        fileBrowserShowHiddenToggle.addEventListener('change', () => {
+            fileBrowserShowHiddenEntries = Boolean(fileBrowserShowHiddenToggle.checked);
+            rerenderFileBrowserDirectoryFromCache();
+        });
+    }
+    if (fileBrowserShowPycacheToggle) {
+        fileBrowserShowPycacheToggle.addEventListener('change', () => {
+            fileBrowserShowPycacheEntries = Boolean(fileBrowserShowPycacheToggle.checked);
+            rerenderFileBrowserDirectoryFromCache();
+        });
+    }
+    if (fileBrowserFullscreenBtn) {
+        fileBrowserFullscreenBtn.addEventListener('click', () => {
+            setFileBrowserViewerFullscreen(!fileBrowserViewerFullscreen);
         });
     }
     document.querySelectorAll('.file-browser-root-target[data-root-target]').forEach(button => {
@@ -939,15 +976,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
+    setFileBrowserMobileView(fileBrowserMobileView);
+    setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', event => {
             syncSessionsLayout(event.matches);
             syncLiveWeatherLayout(event.matches);
+            setFileBrowserMobileView(fileBrowserMobileView);
+            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         });
     } else if (typeof mobileMedia.addListener === 'function') {
         mobileMedia.addListener(event => {
             syncSessionsLayout(event.matches);
             syncLiveWeatherLayout(event.matches);
+            setFileBrowserMobileView(fileBrowserMobileView);
+            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         });
     }
 
@@ -3911,6 +3954,73 @@ function normalizeFilesystemPath(value) {
     return normalized;
 }
 
+function normalizePositiveInteger(value) {
+    const parsed = Number.parseInt(String(value || '').trim(), 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+}
+
+function normalizeSourceLineNumber(value) {
+    return normalizePositiveInteger(value);
+}
+
+function normalizeSourceColumnNumber(value) {
+    return normalizePositiveInteger(value);
+}
+
+function formatFilesystemPathWithLocation(path, line = null, column = null) {
+    const normalizedPath = normalizeFilesystemPath(path);
+    if (!normalizedPath) return '';
+    const normalizedLine = normalizeSourceLineNumber(line);
+    if (!normalizedLine) return normalizedPath;
+    const normalizedColumn = normalizeSourceColumnNumber(column);
+    if (!normalizedColumn) return `${normalizedPath}:${normalizedLine}`;
+    return `${normalizedPath}:${normalizedLine}:${normalizedColumn}`;
+}
+
+function parseAbsoluteFilesystemTarget(value, roots = getMessageLogPathRoots()) {
+    const normalized = normalizeFilesystemPath(value);
+    if (!normalized) return null;
+
+    let path = normalized;
+    let line = null;
+    let column = null;
+
+    const fragmentMatch = path.match(/^(.*)#L(\d+)(?:C(\d+))?$/i);
+    if (fragmentMatch) {
+        path = normalizeFilesystemPath(fragmentMatch[1]);
+        line = normalizeSourceLineNumber(fragmentMatch[2]);
+        column = normalizeSourceColumnNumber(fragmentMatch[3]);
+    }
+
+    const lineSuffixMatch = path.match(/^(.*):(\d+)(?::(\d+))?$/);
+    if (lineSuffixMatch) {
+        const candidatePath = normalizeFilesystemPath(lineSuffixMatch[1]);
+        const candidateLine = normalizeSourceLineNumber(lineSuffixMatch[2]);
+        const candidateColumn = normalizeSourceColumnNumber(lineSuffixMatch[3]);
+        if (
+            candidatePath
+            && !/^[A-Za-z]:$/.test(candidatePath)
+            && candidateLine
+            && isLikelyAbsoluteFilesystemPath(candidatePath, roots)
+        ) {
+            path = candidatePath;
+            line = candidateLine;
+            column = candidateColumn;
+        }
+    }
+
+    if (!isLikelyAbsoluteFilesystemPath(path, roots)) {
+        return null;
+    }
+
+    return {
+        absolutePath: path,
+        line: normalizeSourceLineNumber(line),
+        column: normalizeSourceColumnNumber(column)
+    };
+}
+
 function getMessageLogPathRoots() {
     const roots = [];
     if (typeof document === 'undefined' || !document.body) {
@@ -4057,10 +4167,8 @@ function closeMessageLogOverlay() {
 }
 
 function normalizeFileBrowserRoot(value) {
-    const root = String(value || '').trim();
-    return root === FILE_BROWSER_ROOT_WORKSPACE
-        ? FILE_BROWSER_ROOT_WORKSPACE
-        : FILE_BROWSER_ROOT_SERVER;
+    void value;
+    return FILE_BROWSER_ROOT_WORKSPACE;
 }
 
 function normalizeFileBrowserRelativePath(value) {
@@ -4088,15 +4196,7 @@ function getFileBrowserAbsoluteRoots() {
         return [];
     }
     const roots = [];
-    const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
-    if (serverPath) {
-        roots.push({
-            root: FILE_BROWSER_ROOT_SERVER,
-            path: serverPath,
-            display: '$server'
-        });
-    }
     if (workspacePath) {
         roots.push({
             root: FILE_BROWSER_ROOT_WORKSPACE,
@@ -4139,8 +4239,12 @@ function getFileBrowserElements() {
         list: document.getElementById('codex-file-browser-list'),
         viewerMeta: document.getElementById('codex-file-browser-viewer-meta'),
         viewerContent: document.getElementById('codex-file-browser-viewer-content'),
+        backBtn: document.getElementById('codex-file-browser-back'),
         upBtn: document.getElementById('codex-file-browser-up'),
         refreshBtn: document.getElementById('codex-file-browser-refresh'),
+        fullscreenBtn: document.getElementById('codex-file-browser-fullscreen'),
+        showHiddenToggle: document.getElementById('codex-file-browser-show-hidden'),
+        showPycacheToggle: document.getElementById('codex-file-browser-show-pycache'),
         rootButtons: Array.from(
             overlay.querySelectorAll('.file-browser-root-target[data-root-target]')
         )
@@ -4165,11 +4269,11 @@ function updateFileBrowserRootButtons() {
 }
 
 function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
+    void root;
     const elements = getFileBrowserElements();
     if (!elements?.path) return;
-    const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE ? '$workspace' : '$server';
+    const displayPrefix = '$workspace';
     const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
     elements.path.textContent = display;
 
@@ -4178,6 +4282,97 @@ function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '')
         ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
         : display;
     setHoverTooltip(elements.path, absolutePath);
+}
+
+function setFileBrowserViewerFullscreen(isFullscreen) {
+    const elements = getFileBrowserElements();
+    if (!elements?.overlay) return;
+    fileBrowserViewerFullscreen = Boolean(isFullscreen);
+    const overlayFullscreen = !isMobileLayout() && fileBrowserViewerFullscreen;
+    elements.overlay.classList.toggle('is-viewer-fullscreen', overlayFullscreen);
+    if (elements.fullscreenBtn) {
+        const buttonLabel = fileBrowserViewerFullscreen ? '목록 보기' : '내용 전체화면';
+        elements.fullscreenBtn.setAttribute('aria-pressed', fileBrowserViewerFullscreen ? 'true' : 'false');
+        elements.fullscreenBtn.setAttribute('title', buttonLabel);
+        elements.fullscreenBtn.textContent = buttonLabel;
+    }
+}
+
+function normalizeFileBrowserMobileView(value) {
+    return value === FILE_BROWSER_MOBILE_VIEW_VIEWER
+        ? FILE_BROWSER_MOBILE_VIEW_VIEWER
+        : FILE_BROWSER_MOBILE_VIEW_LIST;
+}
+
+function setFileBrowserMobileView(view = FILE_BROWSER_MOBILE_VIEW_LIST) {
+    const elements = getFileBrowserElements();
+    if (!elements?.overlay) return;
+    fileBrowserMobileView = normalizeFileBrowserMobileView(view);
+    const mobile = isMobileLayout();
+    elements.overlay.classList.toggle(
+        'is-mobile-list-view',
+        mobile && fileBrowserMobileView === FILE_BROWSER_MOBILE_VIEW_LIST
+    );
+    elements.overlay.classList.toggle(
+        'is-mobile-viewer-view',
+        mobile && fileBrowserMobileView === FILE_BROWSER_MOBILE_VIEW_VIEWER
+    );
+    if (elements.backBtn) {
+        const showBack = mobile && fileBrowserMobileView === FILE_BROWSER_MOBILE_VIEW_VIEWER;
+        elements.backBtn.classList.toggle('is-hidden', !showBack);
+        elements.backBtn.disabled = !mobile;
+    }
+}
+
+function formatFileBrowserModifiedAt(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+    const date = new Date(numeric * 1000);
+    if (!Number.isFinite(date.getTime())) return '--';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hour = String(date.getHours()).padStart(2, '0');
+    const minute = String(date.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function isFileBrowserHiddenEntry(entry) {
+    const name = String(entry?.name || '').trim();
+    return name.startsWith('.');
+}
+
+function isFileBrowserPycacheEntry(entry) {
+    const entryType = entry?.type === 'dir' ? 'dir' : 'file';
+    if (entryType !== 'dir') return false;
+    const name = String(entry?.name || '').trim().toLowerCase();
+    if (!name) return false;
+    if (name === '__pycache__') return true;
+    return name.includes('pycache');
+}
+
+function filterFileBrowserEntries(entries) {
+    const rows = Array.isArray(entries) ? entries : [];
+    return rows.filter(entry => {
+        if (!fileBrowserShowHiddenEntries && isFileBrowserHiddenEntry(entry)) {
+            return false;
+        }
+        if (!fileBrowserShowPycacheEntries && isFileBrowserPycacheEntry(entry)) {
+            return false;
+        }
+        return true;
+    });
+}
+
+function updateFileBrowserFilterToggleState() {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    if (elements.showHiddenToggle) {
+        elements.showHiddenToggle.checked = fileBrowserShowHiddenEntries;
+    }
+    if (elements.showPycacheToggle) {
+        elements.showPycacheToggle.checked = fileBrowserShowPycacheEntries;
+    }
 }
 
 function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -4199,6 +4394,18 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
     }
     if (elements.upBtn) {
         elements.upBtn.disabled = loading || !fileBrowserPath;
+    }
+    if (elements.backBtn) {
+        elements.backBtn.disabled = loading || !isMobileLayout();
+    }
+    if (elements.fullscreenBtn) {
+        elements.fullscreenBtn.disabled = loading;
+    }
+    if (elements.showHiddenToggle) {
+        elements.showHiddenToggle.disabled = loading;
+    }
+    if (elements.showPycacheToggle) {
+        elements.showPycacheToggle.disabled = loading;
     }
     if (Array.isArray(elements.rootButtons)) {
         elements.rootButtons.forEach(button => {
@@ -4247,6 +4454,48 @@ function applyFileBrowserSelectionState() {
     });
 }
 
+function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    const allEntries = Array.isArray(entries) ? entries : [];
+    const visibleEntries = filterFileBrowserEntries(allEntries);
+    const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
+
+    renderFileBrowserList(visibleEntries);
+
+    if (elements.meta) {
+        const countText = filteredCount > 0
+            ? `항목 ${visibleEntries.length}/${allEntries.length}개`
+            : `항목 ${visibleEntries.length}개`;
+        const extra = [];
+        if (filteredCount > 0) {
+            extra.push(`숨김 ${filteredCount}개`);
+        }
+        if (truncated) {
+            extra.push('일부만 표시됨');
+        }
+        elements.meta.textContent = extra.length > 0 ? `${countText} (${extra.join(', ')})` : countText;
+    }
+
+    if (elements.empty) {
+        if (visibleEntries.length === 0 && allEntries.length > 0) {
+            elements.empty.textContent = '필터 조건으로 모든 항목이 숨겨져 있습니다.';
+        } else {
+            elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
+        }
+        elements.empty.classList.toggle('is-hidden', visibleEntries.length !== 0);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', visibleEntries.length === 0);
+    }
+}
+
+function rerenderFileBrowserDirectoryFromCache() {
+    renderFileBrowserDirectoryEntries(fileBrowserCachedEntries, {
+        truncated: fileBrowserCachedTruncated
+    });
+}
+
 function renderFileBrowserList(entries) {
     const elements = getFileBrowserElements();
     if (!elements?.list) return;
@@ -4266,26 +4515,24 @@ function renderFileBrowserList(entries) {
         button.dataset.entryPath = entryPath;
         button.dataset.entryType = entryType;
 
-        const badge = document.createElement('span');
-        badge.className = 'file-browser-entry-badge';
-        badge.textContent = entryType === 'dir' ? 'DIR' : 'FILE';
-        button.appendChild(badge);
-
         const name = document.createElement('span');
         name.className = 'file-browser-entry-name';
-        name.textContent = String(entry?.name || entryPath);
+        const baseName = String(entry?.name || entryPath);
+        name.textContent = entryType === 'dir' ? `${baseName}/` : baseName;
         button.appendChild(name);
 
         const meta = document.createElement('span');
         meta.className = 'file-browser-entry-meta';
-        meta.textContent = entryType === 'dir'
-            ? 'folder'
-            : formatFileBrowserSize(entry?.size);
+        const typeText = entryType === 'dir' ? 'folder' : 'file';
+        const sizeText = formatFileBrowserSize(entry?.size);
+        const modifiedText = formatFileBrowserModifiedAt(entry?.modified_at);
+        meta.textContent = `${typeText} · ${sizeText} · ${modifiedText}`;
         button.appendChild(meta);
 
         button.addEventListener('click', () => {
             if (entryType === 'dir') {
                 fileBrowserSelectedPath = '';
+                setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
                 clearFileBrowserViewer();
                 void refreshFileBrowserDirectory({
                     root: fileBrowserRoot,
@@ -4347,21 +4594,11 @@ async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = file
         setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath, result?.root_path || '');
 
         const entries = Array.isArray(result?.entries) ? result.entries : [];
-        renderFileBrowserList(entries);
-
-        if (elements.meta) {
-            const countText = `항목 ${entries.length}개`;
-            elements.meta.textContent = result?.truncated
-                ? `${countText} (일부만 표시됨)`
-                : countText;
-        }
-        if (elements.empty) {
-            elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
-            elements.empty.classList.toggle('is-hidden', entries.length !== 0);
-        }
-        if (elements.list) {
-            elements.list.classList.toggle('is-hidden', entries.length === 0);
-        }
+        fileBrowserCachedEntries = entries;
+        fileBrowserCachedTruncated = Boolean(result?.truncated);
+        renderFileBrowserDirectoryEntries(fileBrowserCachedEntries, {
+            truncated: fileBrowserCachedTruncated
+        });
         if (elements.subtitle) {
             elements.subtitle.textContent = `${getFileBrowserRootLabel(fileBrowserRoot)} · ${fileBrowserPath || '/'}`;
         }
@@ -4374,6 +4611,8 @@ async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = file
         }
         return result;
     } catch (error) {
+        fileBrowserCachedEntries = [];
+        fileBrowserCachedTruncated = false;
         if (elements.meta) {
             elements.meta.textContent = normalizeError(error, '디렉터리 목록을 불러오지 못했습니다.');
         }
@@ -4395,9 +4634,79 @@ async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = file
     }
 }
 
-function renderFileBrowserViewer(result) {
+function isMarkdownLanguage(language) {
+    return String(language || '').trim().toLowerCase() === 'markdown';
+}
+
+function buildFileBrowserSourceViewer(content, { language = '', isScript = false, highlightLine = null } = {}) {
+    const normalizedContent = String(content || '').replace(/\r\n/g, '\n');
+    const lines = normalizedContent.split('\n');
+    const lineCount = Math.max(1, lines.length);
+    const source = document.createElement('div');
+    source.className = 'file-browser-source';
+    source.style.setProperty('--file-browser-line-digit-width', String(Math.max(2, String(lineCount).length)));
+
+    let highlightFound = false;
+    for (let index = 0; index < lineCount; index += 1) {
+        const lineNumber = index + 1;
+        const lineText = lines[index] || '';
+
+        const row = document.createElement('div');
+        row.className = 'file-browser-source-line';
+        row.dataset.lineNumber = String(lineNumber);
+        if (highlightLine && lineNumber === highlightLine) {
+            row.classList.add('is-target');
+            highlightFound = true;
+        }
+
+        const number = document.createElement('span');
+        number.className = 'file-browser-source-line-number';
+        number.textContent = String(lineNumber);
+
+        const line = document.createElement('span');
+        line.className = 'file-browser-source-line-content';
+        if (isScript) {
+            const highlightedLine = highlightScriptContent(lineText, language);
+            line.innerHTML = highlightedLine || '&nbsp;';
+        } else {
+            line.innerHTML = lineText ? escapeHtml(lineText) : '&nbsp;';
+        }
+
+        row.appendChild(number);
+        row.appendChild(line);
+        source.appendChild(row);
+    }
+
+    return {
+        element: source,
+        lineCount,
+        highlightFound
+    };
+}
+
+function revealFileBrowserSourceLine(lineNumber) {
+    const requestedLine = normalizeSourceLineNumber(lineNumber);
+    if (!requestedLine) return false;
+    const elements = getFileBrowserElements();
+    if (!elements?.viewerContent) return false;
+    const target = elements.viewerContent.querySelector(
+        `.file-browser-source-line[data-line-number="${requestedLine}"]`
+    );
+    if (!(target instanceof HTMLElement)) return false;
+    target.scrollIntoView({
+        block: 'center',
+        inline: 'nearest',
+        behavior: 'smooth'
+    });
+    return true;
+}
+
+function renderFileBrowserViewer(result, options = {}) {
     const elements = getFileBrowserElements();
     if (!elements?.viewerContent) return;
+
+    const requestedLine = normalizeSourceLineNumber(options?.line);
+    const requestedColumn = normalizeSourceColumnNumber(options?.column);
 
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
@@ -4413,6 +4722,10 @@ function renderFileBrowserViewer(result) {
         infoParts.push(language);
     } else if (isBinary) {
         infoParts.push('binary');
+    }
+    if (requestedLine) {
+        const lineInfo = requestedColumn ? `line ${requestedLine}:${requestedColumn}` : `line ${requestedLine}`;
+        infoParts.push(lineInfo);
     }
     if (elements.viewerMeta) {
         elements.viewerMeta.textContent = infoParts.join(' · ');
@@ -4442,7 +4755,7 @@ function renderFileBrowserViewer(result) {
         return;
     }
 
-    if (isHtml) {
+    if (isHtml && !requestedLine) {
         const iframe = document.createElement('iframe');
         iframe.className = 'file-browser-html-preview';
         iframe.setAttribute('sandbox', '');
@@ -4451,25 +4764,55 @@ function renderFileBrowserViewer(result) {
         return;
     }
 
-    const pre = document.createElement('pre');
-    pre.className = 'file-browser-source';
-    if (isScript) {
-        pre.innerHTML = highlightScriptContent(text, language);
-    } else {
-        pre.textContent = text;
+    if (isMarkdownLanguage(language) && !requestedLine) {
+        const article = document.createElement('article');
+        article.className = 'file-browser-markdown';
+        article.innerHTML = renderMarkdown(text);
+        hydrateMessageLabelLinks(article);
+        elements.viewerContent.appendChild(article);
+        return;
     }
-    elements.viewerContent.appendChild(pre);
+
+    const sourceView = buildFileBrowserSourceViewer(text, {
+        language,
+        isScript,
+        highlightLine: requestedLine
+    });
+    elements.viewerContent.appendChild(sourceView.element);
+
+    if (!requestedLine) return;
+    if (!sourceView.highlightFound) {
+        showToast(`요청한 라인 ${requestedLine}을 찾을 수 없습니다. (총 ${sourceView.lineCount}줄)`, {
+            tone: 'default',
+            durationMs: 3400
+        });
+        return;
+    }
+    requestAnimationFrame(() => {
+        revealFileBrowserSourceLine(requestedLine);
+    });
 }
 
-async function openFileInBrowserOverlay(path, { root = fileBrowserRoot, fallbackToDirectory = false } = {}) {
+async function openFileInBrowserOverlay(
+    path,
+    {
+        root = fileBrowserRoot,
+        fallbackToDirectory = false,
+        line = null,
+        column = null
+    } = {}
+) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
     if (!normalizedPath) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
+    const requestedLine = normalizeSourceLineNumber(line);
+    const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getFileBrowserElements();
     if (!elements) return null;
 
     if (elements.viewerMeta) {
-        elements.viewerMeta.textContent = `${normalizedPath} · 불러오는 중...`;
+        const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
+        elements.viewerMeta.textContent = `${displayPath} · 불러오는 중...`;
     }
     if (elements.viewerContent) {
         elements.viewerContent.innerHTML = '';
@@ -4482,8 +4825,12 @@ async function openFileInBrowserOverlay(path, { root = fileBrowserRoot, fallback
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         fileBrowserSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
-        renderFileBrowserViewer(result);
+        renderFileBrowserViewer(result, {
+            line: requestedLine,
+            column: requestedColumn
+        });
         applyFileBrowserSelectionState();
+        setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_VIEWER);
         return result;
     } catch (error) {
         const payload = getGitErrorPayload(error);
@@ -4533,6 +4880,8 @@ function openFileBrowserOverlay(options = {}) {
 
     const requestedRoot = normalizeFileBrowserRoot(options?.root || fileBrowserRoot);
     const requestedFilePath = normalizeFileBrowserRelativePath(options?.filePath || '');
+    const requestedLine = normalizeSourceLineNumber(options?.line);
+    const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const requestedPath = normalizeFileBrowserRelativePath(
         options?.path || getFileBrowserParentPath(requestedFilePath)
     );
@@ -4542,8 +4891,20 @@ function openFileBrowserOverlay(options = {}) {
     fileBrowserSelectedPath = requestedFilePath;
 
     updateFileBrowserRootButtons();
+    updateFileBrowserFilterToggleState();
+    setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+    setFileBrowserMobileView(
+        requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST
+    );
     setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath);
-    clearFileBrowserViewer(requestedFilePath ? '파일을 여는 중...' : '파일을 선택하세요.');
+    if (requestedFilePath) {
+        const lineSuffix = requestedLine
+            ? (requestedColumn ? ` (line ${requestedLine}:${requestedColumn})` : ` (line ${requestedLine})`)
+            : '';
+        clearFileBrowserViewer(`파일을 여는 중...${lineSuffix}`);
+    } else {
+        clearFileBrowserViewer('파일을 선택하세요.');
+    }
 
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
@@ -4558,7 +4919,9 @@ function openFileBrowserOverlay(options = {}) {
         if (!listed || !requestedFilePath) return;
         await openFileInBrowserOverlay(requestedFilePath, {
             root: requestedRoot,
-            fallbackToDirectory: true
+            fallbackToDirectory: true,
+            line: requestedLine,
+            column: requestedColumn
         });
     })();
 }
@@ -4566,6 +4929,7 @@ function openFileBrowserOverlay(options = {}) {
 function closeFileBrowserOverlay() {
     const elements = getFileBrowserElements();
     if (!elements) return;
+    setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {
@@ -4573,18 +4937,27 @@ function closeFileBrowserOverlay() {
     }
 }
 
-function openFileBrowserFromAbsolutePath(absolutePath) {
+function openFileBrowserFromAbsolutePath(absolutePath, options = {}) {
     const target = resolveFileBrowserTargetFromAbsolutePath(absolutePath);
+    const requestedLine = normalizeSourceLineNumber(options?.line);
+    const requestedColumn = normalizeSourceColumnNumber(options?.column);
     if (!target) {
         return false;
     }
     if (!target.path) {
-        openFileBrowserOverlay({ root: target.root, path: '' });
+        openFileBrowserOverlay({
+            root: target.root,
+            path: '',
+            line: requestedLine,
+            column: requestedColumn
+        });
         return true;
     }
     openFileBrowserOverlay({
         root: target.root,
-        filePath: target.path
+        filePath: target.path,
+        line: requestedLine,
+        column: requestedColumn
     });
     return true;
 }
@@ -7080,15 +7453,12 @@ function normalizeFileSchemePath(value) {
     return pathText;
 }
 
-function resolveAbsoluteFilesystemPathFromMarkdownHref(value) {
+function resolveAbsoluteFilesystemTargetFromMarkdownHref(value) {
     const normalizedHref = normalizeMarkdownLinkHref(value);
-    if (!normalizedHref) return '';
+    if (!normalizedHref) return null;
     const candidate = normalizeFilesystemPath(normalizeFileSchemePath(normalizedHref));
-    if (!candidate) return '';
-    if (!isLikelyAbsoluteFilesystemPath(candidate, getMessageLogPathRoots())) {
-        return '';
-    }
-    return candidate;
+    if (!candidate) return null;
+    return parseAbsoluteFilesystemTarget(candidate, getMessageLogPathRoots());
 }
 
 function renderMarkdownLink(label, href) {
@@ -7103,14 +7473,19 @@ function renderMarkdownLink(label, href) {
         return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noopener noreferrer">${displayLabel}</a>`;
     }
 
-    const absolutePath = resolveAbsoluteFilesystemPathFromMarkdownHref(normalizedHref);
-    if (!absolutePath) {
+    const fileTarget = resolveAbsoluteFilesystemTargetFromMarkdownHref(normalizedHref);
+    if (!fileTarget?.absolutePath) {
         return displayLabel;
     }
 
+    const absolutePath = fileTarget.absolutePath;
+    const line = normalizeSourceLineNumber(fileTarget.line);
+    const column = normalizeSourceColumnNumber(fileTarget.column);
+
     const shortenedPath = shortenAbsoluteFilesystemPath(absolutePath, getMessageLogPathRoots()) || absolutePath;
-    const tooltipText = `파일 경로: ${shortenedPath}`;
-    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${displayLabel}</a>`;
+    const shortenedPathWithLocation = formatFilesystemPathWithLocation(shortenedPath, line, column);
+    const tooltipText = `파일 경로: ${shortenedPathWithLocation}`;
+    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${displayLabel}</a>`;
 }
 
 function hydrateMessageLabelLinks(container) {
@@ -7123,7 +7498,12 @@ function hydrateMessageLabelLinks(container) {
             event.preventDefault();
             const absolutePath = normalizeFilesystemPath(link.dataset?.filePath || '');
             if (!absolutePath) return;
-            const opened = openFileBrowserFromAbsolutePath(absolutePath);
+            const targetLine = normalizeSourceLineNumber(link.dataset?.fileLine || '');
+            const targetColumn = normalizeSourceColumnNumber(link.dataset?.fileColumn || '');
+            const opened = openFileBrowserFromAbsolutePath(absolutePath, {
+                line: targetLine,
+                column: targetColumn
+            });
             if (!opened) {
                 showToast('현재 브라우저 루트에서 접근할 수 없는 파일입니다.', {
                     tone: 'error',

@@ -29,7 +29,7 @@ ensure_venv_python() {
     }
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..."
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >echo "[INFO] Venv python missing at /bin/python. Recreating..." >&22
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi

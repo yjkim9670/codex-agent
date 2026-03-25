@@ -2,7 +2,7 @@
 
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from ..config import (
     CODEX_MAX_MODEL_CHARS,
@@ -38,6 +38,7 @@ from ..services.file_browser import (
     FileBrowserError,
     list_directory,
     read_file,
+    read_file_raw,
 )
 from ..services.git_ops import run_git_action
 
@@ -308,6 +309,23 @@ def codex_files_read():
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
     return jsonify(result)
+
+
+@bp.route('/api/codex/files/raw/<root_key>/<path:relative_path>')
+def codex_files_raw(root_key, relative_path):
+    try:
+        result = read_file_raw(
+            root_key=root_key,
+            relative_path=relative_path,
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+    mime_type = result.get('mime_type') or 'application/octet-stream'
+    response = Response(result.get('content') or b'', mimetype=mime_type)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 @bp.route('/api/codex/git/<action>', methods=['POST', 'GET'])

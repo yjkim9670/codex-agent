@@ -102,6 +102,7 @@ const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
+const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
 const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
@@ -750,21 +751,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserBtn) {
         fileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
-            if (isWorkModeEnabled()) {
-                if (isMobileLayout()) {
-                    setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-                }
-                void refreshWorkModeFileDirectory({
-                    root: workModeFileRoot,
-                    path: workModeFilePath,
-                    force: true
-                });
+            if (isFileBrowserOverlayOpen()) {
+                closeFileBrowserOverlay();
                 return;
             }
-            openFileBrowserOverlay({
-                root: FILE_BROWSER_ROOT_WORKSPACE,
-                path: ''
-            });
+            openFileBrowserOverlay();
         });
     }
     if (workModeToggleBtn) {
@@ -5065,6 +5056,20 @@ function normalizeFileBrowserRelativePath(value) {
         .replace(/\/+$/g, '');
 }
 
+function buildFileBrowserRawFileUrl(root, relativePath) {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
+    if (!normalizedPath) return '';
+    const encodedRoot = encodeURIComponent(normalizedRoot);
+    const encodedPath = normalizedPath
+        .split('/')
+        .filter(Boolean)
+        .map(segment => encodeURIComponent(segment))
+        .join('/');
+    if (!encodedPath) return '';
+    return `${FILE_BROWSER_RAW_FILE_ENDPOINT}/${encodedRoot}/${encodedPath}`;
+}
+
 function getFileBrowserParentPath(path) {
     const normalized = normalizeFileBrowserRelativePath(path);
     if (!normalized || !normalized.includes('/')) return '';
@@ -5524,6 +5529,7 @@ async function openFileInWorkModePanel(
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
         renderFileBrowserViewerIntoElements(elements, result, {
+            root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
         });
@@ -6323,6 +6329,7 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
 
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
+    const previewRoot = normalizeFileBrowserRoot(options?.root || result?.root || fileBrowserRoot);
 
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
@@ -6372,10 +6379,15 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     }
 
     if (isHtml && !requestedLine) {
+        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         const iframe = document.createElement('iframe');
         iframe.className = 'file-browser-html-preview';
-        iframe.setAttribute('sandbox', '');
-        iframe.srcdoc = text;
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
+        if (previewUrl) {
+            iframe.src = previewUrl;
+        } else {
+            iframe.srcdoc = text;
+        }
         elements.viewerContent.appendChild(iframe);
         return;
     }
@@ -6448,6 +6460,7 @@ async function openFileInBrowserOverlay(
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         fileBrowserSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
         renderFileBrowserViewer(result, {
+            root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
         });
@@ -6512,13 +6525,24 @@ function openFileBrowserOverlay(options = {}) {
         closeMessageLogOverlay();
     }
 
-    const requestedRoot = normalizeFileBrowserRoot(options?.root || fileBrowserRoot);
-    const requestedFilePath = normalizeFileBrowserRelativePath(options?.filePath || '');
-    const requestedLine = normalizeSourceLineNumber(options?.line);
-    const requestedColumn = normalizeSourceColumnNumber(options?.column);
-    const requestedPath = normalizeFileBrowserRelativePath(
-        options?.path || getFileBrowserParentPath(requestedFilePath)
+    const hasRoot = Object.prototype.hasOwnProperty.call(options, 'root');
+    const hasFilePath = Object.prototype.hasOwnProperty.call(options, 'filePath');
+    const hasPath = Object.prototype.hasOwnProperty.call(options, 'path');
+    const hasLine = Object.prototype.hasOwnProperty.call(options, 'line');
+    const hasColumn = Object.prototype.hasOwnProperty.call(options, 'column');
+
+    const requestedRoot = normalizeFileBrowserRoot(
+        hasRoot ? options?.root : fileBrowserRoot
     );
+    const requestedFilePath = normalizeFileBrowserRelativePath(
+        hasFilePath ? options?.filePath : (hasPath ? '' : fileBrowserSelectedPath)
+    );
+    const requestedLine = normalizeSourceLineNumber(hasLine ? options?.line : null);
+    const requestedColumn = normalizeSourceColumnNumber(hasColumn ? options?.column : null);
+    const requestedPathSource = hasPath
+        ? options?.path
+        : (hasFilePath ? getFileBrowserParentPath(requestedFilePath) : fileBrowserPath);
+    const requestedPath = normalizeFileBrowserRelativePath(requestedPathSource);
 
     fileBrowserRoot = requestedRoot;
     fileBrowserPath = requestedPath;
@@ -6528,9 +6552,10 @@ function openFileBrowserOverlay(options = {}) {
     updateFileBrowserFilterToggleState();
     applyFileBrowserColumnWidths({ persist: false });
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-    setFileBrowserMobileView(
-        requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST
-    );
+    const initialMobileView = (hasPath || hasFilePath)
+        ? (requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST)
+        : fileBrowserMobileView;
+    setFileBrowserMobileView(initialMobileView);
     setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath);
     if (requestedFilePath) {
         const lineSuffix = requestedLine
@@ -6573,7 +6598,6 @@ function closeFileBrowserOverlay() {
     if (!elements) return;
     stopFileBrowserResize();
     stopFileBrowserColumnResize();
-    setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {

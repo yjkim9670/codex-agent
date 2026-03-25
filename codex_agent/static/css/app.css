@@ -3015,6 +3015,7 @@ body.is-work-mode-resizing * {
     min-height: 24px;
 }
 
+.chat-header-mobile-browser,
 .chat-header-fullscreen {
     border: 1px solid var(--border);
     background: var(--surface-muted);
@@ -3030,6 +3031,10 @@ body.is-work-mode-resizing * {
     transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
 }
 
+.chat-header-mobile-browser {
+    background-image: var(--icon-browse);
+}
+
 .chat-header-fullscreen {
     background-image: var(--icon-fullscreen-enter);
 }
@@ -3038,11 +3043,13 @@ body.is-work-mode-resizing * {
     background-image: var(--icon-fullscreen-exit);
 }
 
+.chat-header-mobile-browser:hover,
 .chat-header-fullscreen:hover {
     background-color: var(--surface-raised);
     border-color: var(--accent);
 }
 
+.chat-header-mobile-browser:active,
 .chat-header-fullscreen:active {
     transform: none;
 }
@@ -3800,6 +3807,7 @@ body.is-work-mode-resizing * {
 
 .btn:disabled,
 .session-action:disabled,
+.chat-header-mobile-browser:disabled,
 .chat-header-fullscreen:disabled,
 .chat-controls-toggle:disabled,
 .live-weather-compact-toggle:disabled {
@@ -3810,6 +3818,7 @@ body.is-work-mode-resizing * {
 
 .btn.is-loading,
 .session-action.is-loading,
+.chat-header-mobile-browser.is-loading,
 .chat-header-fullscreen.is-loading {
     cursor: wait;
 }
@@ -3818,6 +3827,7 @@ body.is-work-mode-resizing * {
 .session-action:focus-visible,
 .session-select:focus-visible,
 .sessions-toggle:focus-visible,
+.chat-header-mobile-browser:focus-visible,
 .chat-header-fullscreen:focus-visible,
 .chat-controls-toggle:focus-visible,
 .live-weather-compact-toggle:focus-visible {
@@ -4137,6 +4147,23 @@ label.hover-tooltip,
 
     .app.is-work-mode .work-mode-file-divider {
         display: none !important;
+    }
+
+    .app.is-work-mode .app-header-main {
+        display: none;
+    }
+
+    .app.is-work-mode .app-header {
+        margin-bottom: 6px;
+        gap: 4px;
+    }
+
+    .app.is-work-mode .header-actions {
+        justify-content: flex-end;
+    }
+
+    .app.is-work-mode .layout {
+        gap: 0;
     }
 
     .app.is-work-mode.is-work-mode-mobile-chat .chat {

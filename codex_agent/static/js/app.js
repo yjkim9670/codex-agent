@@ -631,6 +631,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
+    const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
     const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
@@ -808,6 +809,14 @@ document.addEventListener('DOMContentLoaded', () => {
         workModeChatBackBtn.addEventListener('click', event => {
             event.preventDefault();
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+        });
+    }
+    if (workModeMobileBrowserBtn) {
+        workModeMobileBrowserBtn.addEventListener('click', event => {
+            event.preventDefault();
+            if (!isWorkModeEnabled() || !isMobileLayout()) return;
+            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+            void ensureWorkModeFilePanelContent();
         });
     }
     if (workModeFileFullscreenBtn) {
@@ -2244,6 +2253,7 @@ function getWorkModeElements() {
         layout: document.querySelector('.layout'),
         toggle: document.getElementById('codex-work-mode-toggle'),
         divider: document.getElementById('codex-work-mode-divider'),
+        mobileBrowserBtn: document.getElementById('codex-work-mode-mobile-browser'),
         preview: document.getElementById('codex-work-mode-preview')
     };
 }
@@ -2306,6 +2316,12 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
             'is-work-mode-mobile-viewer',
             applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER
         );
+    }
+
+    const showMobileBrowserButton = applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT;
+    if (elements?.mobileBrowserBtn) {
+        elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
+        elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
     }
 
     const showChatButton = applyMobileView && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;

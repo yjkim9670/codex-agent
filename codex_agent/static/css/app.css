@@ -2117,6 +2117,13 @@ body.is-work-mode-resizing .work-mode-divider::before {
     gap: 8px;
 }
 
+.work-mode-preview-chat,
+.work-mode-preview-back {
+    display: none;
+}
+
+.work-mode-preview-chat,
+.work-mode-preview-back,
 .work-mode-preview-up {
     min-height: 30px;
     padding: 6px 10px;
@@ -4083,11 +4090,10 @@ label.hover-tooltip,
     }
 
     #codex-work-mode-toggle {
-        display: none;
+        display: inline-flex;
     }
 
-    .work-mode-divider,
-    .work-mode-preview {
+    .work-mode-divider {
         display: none !important;
     }
 
@@ -4098,14 +4104,73 @@ label.hover-tooltip,
     }
 
     .app.is-work-mode .sidebar-stack {
+        display: none;
+    }
+
+    .app.is-work-mode .chat,
+    .app.is-work-mode .work-mode-preview {
+        width: auto;
+        flex: 1 1 auto;
+        min-height: 0;
+        border-radius: 10px;
+    }
+
+    .app.is-work-mode .work-mode-preview {
+        display: flex;
+        padding: 10px;
+        gap: 8px;
+    }
+
+    .app.is-work-mode .work-mode-preview-chat,
+    .app.is-work-mode .work-mode-preview-back {
+        display: inline-flex;
+    }
+
+    .app.is-work-mode .work-mode-preview-fullscreen {
+        display: none;
+    }
+
+    .app.is-work-mode .work-mode-file-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr);
+    }
+
+    .app.is-work-mode .work-mode-file-divider {
+        display: none !important;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-chat .chat {
         display: flex;
     }
 
-    .app.is-work-mode .chat {
-        width: auto;
-        flex: 1 1 auto;
-        border-top-right-radius: 10px;
-        border-bottom-right-radius: 10px;
+    .app.is-work-mode.is-work-mode-mobile-chat .work-mode-preview {
+        display: none !important;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-list .chat,
+    .app.is-work-mode.is-work-mode-mobile-viewer .chat {
+        display: none !important;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-list .work-mode-preview,
+    .app.is-work-mode.is-work-mode-mobile-viewer .work-mode-preview {
+        display: flex !important;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-list .work-mode-file-list-panel {
+        display: flex;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-list .file-browser-viewer-panel {
+        display: none;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-viewer .work-mode-file-list-panel {
+        display: none;
+    }
+
+    .app.is-work-mode.is-work-mode-mobile-viewer .file-browser-viewer-panel {
+        display: flex;
     }
 
     .app.is-mobile-keyboard-open {

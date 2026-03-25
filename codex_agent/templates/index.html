@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=97">
+    <link rel="stylesheet" href="/static/css/app.css?v=98">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -272,6 +272,8 @@
                 <div class="work-mode-preview-header">
                     <div class="work-mode-preview-title">Docs Preview</div>
                     <div class="work-mode-preview-actions">
+                        <button class="btn ghost file-browser-back work-mode-preview-chat is-hidden" type="button" id="codex-work-mode-chat-back">채팅으로</button>
+                        <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="codex-work-mode-file-back">목록으로</button>
                         <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
                         <button
                             class="btn ghost icon-only work-mode-preview-fullscreen"
@@ -560,6 +562,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=80"></script>
+    <script src="/static/js/app.js?v=81"></script>
 </body>
 </html>

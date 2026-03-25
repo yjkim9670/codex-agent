@@ -63,6 +63,7 @@
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
+    --icon-chevron-left: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 6 9 12 15 18'/></svg>");
     --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
@@ -124,6 +125,7 @@
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
+    --icon-chevron-left: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 6 9 12 15 18'/></svg>");
     --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
@@ -769,6 +771,11 @@ body {
     gap: 10px;
     padding: 14px 16px 16px;
     overflow: hidden;
+    --work-mode-file-list-width: 36%;
+    --work-mode-file-col-name-width: 320px;
+    --work-mode-file-col-size-width: 92px;
+    --work-mode-file-col-modified-width: 146px;
+    --work-mode-file-col-gap: 8px;
 }
 
 .file-browser-overlay-tools {
@@ -784,6 +791,11 @@ body {
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+}
+
+.file-browser-overlay.is-viewer-fullscreen .file-browser-filter-tools,
+.file-browser-overlay.is-mobile-viewer-view .file-browser-filter-tools {
+    display: none;
 }
 
 .file-browser-toggle {
@@ -863,11 +875,20 @@ body {
     display: none;
 }
 
+.file-browser-overlay.is-viewer-fullscreen .work-mode-file-divider {
+    display: none;
+}
+
 .file-browser-overlay.is-mobile-list-view .file-browser-viewer-panel {
     display: none;
 }
 
 .file-browser-overlay.is-mobile-viewer-view .file-browser-list-panel {
+    display: none;
+}
+
+.file-browser-overlay.is-mobile-list-view .work-mode-file-divider,
+.file-browser-overlay.is-mobile-viewer-view .work-mode-file-divider {
     display: none;
 }
 
@@ -1063,6 +1084,23 @@ body {
     line-height: 1.32;
 }
 
+.file-browser-markdown h4,
+.file-browser-markdown h5,
+.file-browser-markdown h6 {
+    margin: 8px 0 6px;
+    line-height: 1.34;
+}
+
+.file-browser-markdown p {
+    margin: 8px 0 10px;
+}
+
+.file-browser-markdown hr {
+    margin: 12px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
 .file-browser-markdown a {
     color: var(--accent);
     text-decoration: underline;
@@ -1098,6 +1136,21 @@ body {
 
 .file-browser-markdown li + li {
     margin-top: 4px;
+}
+
+.file-browser-markdown .markdown-task-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.file-browser-markdown .markdown-task-item label {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.file-browser-markdown .markdown-task-item input[type="checkbox"] {
+    margin: 2px 0 0;
 }
 
 .file-browser-markdown blockquote {
@@ -2172,6 +2225,34 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
     scrollbar-gutter: stable both-edges;
 }
 
+.work-mode-file-hscroll {
+    flex: 0 0 12px;
+    min-height: 12px;
+    overflow-x: scroll;
+    overflow-y: hidden;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+}
+
+.work-mode-file-hscroll-track {
+    width: 100%;
+    height: 1px;
+}
+
+.work-mode-file-hscroll::-webkit-scrollbar {
+    height: 10px;
+}
+
+.work-mode-file-hscroll::-webkit-scrollbar-track {
+    background: var(--surface-muted);
+}
+
+.work-mode-file-hscroll::-webkit-scrollbar-thumb {
+    background: rgba(93, 116, 143, 0.82);
+}
+
 .work-mode-file-table {
     display: flex;
     flex-direction: column;
@@ -2677,7 +2758,44 @@ body.is-work-mode-resizing * {
 .chat-header-actions {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+}
+
+.chat-session-nav {
+    display: none;
+    align-items: center;
+    gap: 4px;
+}
+
+.app.is-work-mode .chat-session-nav {
+    display: inline-flex;
+}
+
+.chat-session-nav .btn.icon-only {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+}
+
+.chat-session-new,
+.chat-session-prev,
+.chat-session-next {
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
+    background-color: var(--surface-muted);
+}
+
+.chat-session-new {
+    background-image: var(--icon-plus);
+}
+
+.chat-session-prev {
+    background-image: var(--icon-chevron-left);
+}
+
+.chat-session-next {
+    background-image: var(--icon-chevron-right);
 }
 
 .stream-monitor {

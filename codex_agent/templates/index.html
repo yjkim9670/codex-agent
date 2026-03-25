@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=96">
+    <link rel="stylesheet" href="/static/css/app.css?v=97">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -119,6 +119,29 @@
                         <div id="codex-chat-meta" class="chat-meta"></div>
                     </div>
                     <div class="chat-header-actions">
+                        <div class="chat-session-nav" role="group" aria-label="Session quick navigation">
+                            <button
+                                class="btn ghost icon-only chat-session-new"
+                                type="button"
+                                id="codex-chat-new-session-inline"
+                                aria-label="Create new session"
+                                title="Create new session"
+                            ></button>
+                            <button
+                                class="btn ghost icon-only chat-session-prev"
+                                type="button"
+                                id="codex-chat-session-prev"
+                                aria-label="Go to previous session"
+                                title="Go to previous session"
+                            ></button>
+                            <button
+                                class="btn ghost icon-only chat-session-next"
+                                type="button"
+                                id="codex-chat-session-next"
+                                aria-label="Go to next session"
+                                title="Go to next session"
+                            ></button>
+                        </div>
                         <button
                             class="chat-header-fullscreen"
                             type="button"
@@ -308,6 +331,9 @@
                                 <ul class="file-browser-list work-mode-file-list is-hidden" id="codex-work-mode-file-list"></ul>
                             </div>
                         </div>
+                        <div class="work-mode-file-hscroll" id="codex-work-mode-file-hscroll" aria-hidden="true">
+                            <div class="work-mode-file-hscroll-track" id="codex-work-mode-file-hscroll-track"></div>
+                        </div>
                     </div>
                     <div
                         class="work-mode-file-divider"
@@ -469,13 +495,59 @@
                     </div>
                 </div>
                 <div class="file-browser-path" id="codex-file-browser-path">$workspace</div>
-                <div class="file-browser-layout">
-                    <div class="file-browser-list-panel">
+                <div class="file-browser-layout work-mode-file-layout" id="codex-file-browser-layout">
+                    <div class="file-browser-list-panel work-mode-file-list-panel">
                         <div class="file-browser-meta" id="codex-file-browser-meta">디렉터리 목록을 불러오는 중...</div>
-                        <div class="file-browser-loading" id="codex-file-browser-loading">디렉터리 목록을 불러오는 중...</div>
-                        <div class="file-browser-empty is-hidden" id="codex-file-browser-empty">표시할 파일이 없습니다.</div>
-                        <ul class="file-browser-list is-hidden" id="codex-file-browser-list"></ul>
+                        <div class="work-mode-file-grid-scroll" id="codex-file-browser-grid-scroll">
+                            <div class="work-mode-file-table" id="codex-file-browser-table">
+                                <div class="work-mode-file-columns" id="codex-file-browser-columns">
+                                    <div class="work-mode-file-col-heading work-mode-file-col-name">
+                                        <span class="work-mode-file-col-label">이름</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="name"
+                                            aria-label="이름 컬럼 폭 조정"
+                                            title="이름 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                    <div class="work-mode-file-col-heading work-mode-file-col-size">
+                                        <span class="work-mode-file-col-label">용량</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="size"
+                                            aria-label="용량 컬럼 폭 조정"
+                                            title="용량 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                    <div class="work-mode-file-col-heading work-mode-file-col-modified">
+                                        <span class="work-mode-file-col-label">수정시각</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="modified"
+                                            aria-label="수정시각 컬럼 폭 조정"
+                                            title="수정시각 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                </div>
+                                <div class="file-browser-loading" id="codex-file-browser-loading">디렉터리 목록을 불러오는 중...</div>
+                                <div class="file-browser-empty is-hidden" id="codex-file-browser-empty">표시할 파일이 없습니다.</div>
+                                <ul class="file-browser-list work-mode-file-list is-hidden" id="codex-file-browser-list"></ul>
+                            </div>
+                        </div>
+                        <div class="work-mode-file-hscroll" id="codex-file-browser-hscroll" aria-hidden="true">
+                            <div class="work-mode-file-hscroll-track" id="codex-file-browser-hscroll-track"></div>
+                        </div>
                     </div>
+                    <div
+                        class="work-mode-file-divider"
+                        id="codex-file-browser-divider"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="파일 목록과 미리보기 너비 조정"
+                    ></div>
                     <div class="file-browser-viewer-panel">
                         <div class="file-browser-viewer-meta" id="codex-file-browser-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
                         <div class="file-browser-viewer-content" id="codex-file-browser-viewer-content">파일을 선택하세요.</div>
@@ -488,6 +560,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=78"></script>
+    <script src="/static/js/app.js?v=80"></script>
 </body>
 </html>

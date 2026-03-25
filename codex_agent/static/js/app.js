@@ -43,6 +43,8 @@ const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
 const WORK_MODE_MIN_PREVIEW_WIDTH_PX = 320;
 const WORK_MODE_FILE_SPLIT_KEY = 'codexWorkModeFileSplit';
 const WORK_MODE_FILE_COLUMNS_KEY = 'codexWorkModeFileColumns';
+const FILE_BROWSER_SPLIT_KEY = 'codexFileBrowserSplit';
+const FILE_BROWSER_COLUMNS_KEY = 'codexFileBrowserColumns';
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
 const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
@@ -163,6 +165,15 @@ let fileBrowserViewerFullscreen = false;
 let fileBrowserMobileView = FILE_BROWSER_MOBILE_VIEW_LIST;
 let fileBrowserCachedEntries = [];
 let fileBrowserCachedTruncated = false;
+let fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
+let fileBrowserResizePointerId = null;
+let fileBrowserColumnResizeState = null;
+let fileBrowserHorizontalSyncLock = false;
+let fileBrowserColumnWidths = {
+    name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
+    size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
+    modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
+};
 let workModeSplitRatio = WORK_MODE_DEFAULT_SPLIT;
 let workModeResizePointerId = null;
 let workModeFileRoot = FILE_BROWSER_ROOT_WORKSPACE;
@@ -174,6 +185,7 @@ let workModeFileViewerFullscreen = false;
 let workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let workModeFileResizePointerId = null;
 let workModeFileColumnResizeState = null;
+let workModeFileHorizontalSyncLock = false;
 let workModeFileColumnWidths = {
     name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
@@ -581,6 +593,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('codex-chat-form');
     const input = document.getElementById('codex-chat-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
+    const newSessionInlineBtn = document.getElementById('codex-chat-new-session-inline');
+    const chatSessionPrevBtn = document.getElementById('codex-chat-session-prev');
+    const chatSessionNextBtn = document.getElementById('codex-chat-session-next');
     const refreshBtn = document.getElementById('codex-chat-refresh');
     const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
     const messages = document.getElementById('codex-chat-messages');
@@ -611,6 +626,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
+    const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
+    const workModeFileHScroll = document.getElementById('codex-work-mode-file-hscroll');
     const workModeFileColumnResizers = Array.from(
         document.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]')
     );
@@ -634,6 +651,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserDivider = document.getElementById('codex-file-browser-divider');
+    const fileBrowserGridScroll = document.getElementById('codex-file-browser-grid-scroll');
+    const fileBrowserHScroll = document.getElementById('codex-file-browser-hscroll');
+    const fileBrowserColumnResizers = Array.from(
+        document.querySelectorAll('#codex-file-browser-columns [data-resize-col]')
+    );
     const fileBrowserShowHiddenToggle = document.getElementById('codex-file-browser-show-hidden');
     const fileBrowserShowPycacheToggle = document.getElementById('codex-file-browser-show-pycache');
     const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
@@ -672,6 +695,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (newSessionBtn) {
         newSessionBtn.addEventListener('click', async () => {
             await createSession(true);
+        });
+    }
+
+    if (newSessionInlineBtn) {
+        newSessionInlineBtn.addEventListener('click', async () => {
+            await createSession(true);
+        });
+    }
+
+    if (chatSessionPrevBtn) {
+        chatSessionPrevBtn.addEventListener('click', async () => {
+            await moveToAdjacentSession(-1);
+        });
+    }
+
+    if (chatSessionNextBtn) {
+        chatSessionNextBtn.addEventListener('click', async () => {
+            await moveToAdjacentSession(1);
         });
     }
 
@@ -734,12 +775,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     if (workModeFileRefreshBtn) {
-        workModeFileRefreshBtn.addEventListener('click', () => {
-            void refreshWorkModeFileDirectory({
+        workModeFileRefreshBtn.addEventListener('click', async () => {
+            const listed = await refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: workModeFilePath,
                 force: true
             });
+            if (!listed) return;
+            await refreshWorkModeFilePreviewSelection();
         });
     }
     if (workModeFileUpBtn) {
@@ -766,6 +809,10 @@ document.addEventListener('DOMContentLoaded', () => {
             workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: true });
         });
+    }
+    if (workModeFileGridScroll && workModeFileHScroll) {
+        workModeFileGridScroll.addEventListener('scroll', handleWorkModeFileGridScroll, { passive: true });
+        workModeFileHScroll.addEventListener('scroll', handleWorkModeFileHScroll, { passive: true });
     }
     workModeFileColumnResizers.forEach(resizer => {
         resizer.addEventListener('pointerdown', event => {
@@ -886,8 +933,10 @@ document.addEventListener('DOMContentLoaded', () => {
         fileBrowserOverlayCloseFooter.addEventListener('click', closeFileBrowserOverlay);
     }
     if (fileBrowserRefreshBtn) {
-        fileBrowserRefreshBtn.addEventListener('click', () => {
-            void refreshFileBrowserDirectory({ force: true });
+        fileBrowserRefreshBtn.addEventListener('click', async () => {
+            const listed = await refreshFileBrowserDirectory({ force: true });
+            if (!listed) return;
+            await refreshFileBrowserPreviewSelection();
         });
     }
     if (fileBrowserBackBtn) {
@@ -906,6 +955,26 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    if (fileBrowserDivider) {
+        fileBrowserDivider.addEventListener('pointerdown', startFileBrowserResize);
+        fileBrowserDivider.addEventListener('dblclick', event => {
+            event.preventDefault();
+            if (!isFileBrowserOverlayOpen()) return;
+            fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
+            applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: true });
+        });
+    }
+    if (fileBrowserGridScroll && fileBrowserHScroll) {
+        fileBrowserGridScroll.addEventListener('scroll', handleFileBrowserGridScroll, { passive: true });
+        fileBrowserHScroll.addEventListener('scroll', handleFileBrowserHScroll, { passive: true });
+    }
+    fileBrowserColumnResizers.forEach(resizer => {
+        resizer.addEventListener('pointerdown', event => {
+            startFileBrowserColumnResize(event, resizer.dataset?.resizeCol || '');
+        });
+    });
+    fileBrowserSplitRatio = readFileBrowserSplitPreference();
+    fileBrowserColumnWidths = readFileBrowserColumnsPreference();
     updateFileBrowserFilterToggleState();
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
     if (fileBrowserShowHiddenToggle) {
@@ -1047,14 +1116,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const app = document.querySelector('.app');
             const isEnabled = app?.classList.contains(CHAT_FULLSCREEN_CLASS);
             const nextEnabled = !isEnabled;
-            if (nextEnabled && isWorkModeEnabled()) {
-                setWorkModeEnabled(false, { persist: true, notifyOnMobile: false });
-            }
             setChatFullscreen(nextEnabled);
         });
         const app = document.querySelector('.app');
         updateChatFullscreenButton(chatFullscreenBtn, app?.classList.contains(CHAT_FULLSCREEN_CLASS));
     }
+    updateChatSessionNavigationButtons();
 
     if (streamMonitorCloseBtn) {
         streamMonitorCloseBtn.addEventListener('click', () => {
@@ -1115,9 +1182,15 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     window.addEventListener('resize', () => {
-        if (!isWorkModeEnabled()) return;
-        applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
-        applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+        if (isWorkModeEnabled()) {
+            applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+            applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+        }
+        if (isFileBrowserOverlayOpen()) {
+            applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
+            syncFileBrowserHorizontalScrollMetrics();
+        }
+        syncWorkModeFileHorizontalScrollMetrics();
     });
 
     setupMobileViewportBehavior(mobileMedia, input);
@@ -2101,6 +2174,46 @@ function updateChatFullscreenButton(button, enabled) {
     button.setAttribute('title', label);
 }
 
+function getActiveSessionIndex() {
+    if (!Array.isArray(state.sessions) || state.sessions.length === 0) return -1;
+    if (!state.activeSessionId) return -1;
+    return state.sessions.findIndex(session => session?.id === state.activeSessionId);
+}
+
+function getAdjacentSessionId(step) {
+    const direction = Math.sign(Number(step));
+    if (!Number.isFinite(direction) || direction === 0) return null;
+    const activeIndex = getActiveSessionIndex();
+    if (activeIndex < 0) return null;
+    const targetIndex = activeIndex + direction;
+    if (targetIndex < 0 || targetIndex >= state.sessions.length) return null;
+    const target = state.sessions[targetIndex];
+    return target?.id || null;
+}
+
+async function moveToAdjacentSession(step) {
+    const targetId = getAdjacentSessionId(step);
+    if (!targetId || targetId === state.activeSessionId) return;
+    await loadSession(targetId);
+}
+
+function updateChatSessionNavigationButtons() {
+    const prevButton = document.getElementById('codex-chat-session-prev');
+    const nextButton = document.getElementById('codex-chat-session-next');
+    if (!prevButton && !nextButton) return;
+
+    const activeIndex = getActiveSessionIndex();
+    const hasSessions = Array.isArray(state.sessions) && state.sessions.length > 0;
+    const hasActive = hasSessions && activeIndex >= 0;
+
+    if (prevButton) {
+        prevButton.disabled = !(hasActive && activeIndex > 0);
+    }
+    if (nextButton) {
+        nextButton.disabled = !(hasActive && activeIndex < state.sessions.length - 1);
+    }
+}
+
 function setChatFullscreen(enabled) {
     const app = document.querySelector('.app');
     const button = document.getElementById('codex-chat-fullscreen');
@@ -2127,6 +2240,8 @@ function getWorkModeFileElements() {
         preview,
         layout: document.getElementById('codex-work-mode-file-layout'),
         gridScroll: document.getElementById('codex-work-mode-file-grid-scroll'),
+        hScroll: document.getElementById('codex-work-mode-file-hscroll'),
+        hScrollTrack: document.getElementById('codex-work-mode-file-hscroll-track'),
         table: document.getElementById('codex-work-mode-file-table'),
         columns: document.getElementById('codex-work-mode-file-columns'),
         divider: document.getElementById('codex-work-mode-file-divider'),
@@ -2178,6 +2293,7 @@ function setWorkModeFileViewerFullscreen(isFullscreen) {
     if (!fullscreenEnabled && isWorkModeEnabled()) {
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     }
+    syncWorkModeFileHorizontalScrollMetrics();
 }
 
 function normalizeWorkModeFileSplitRatio(value) {
@@ -2222,6 +2338,7 @@ function applyWorkModeFileSplitRatio(ratio = workModeFileSplitRatio, { persist =
     const listWidth = clampWorkModeFileListWidth(desiredWidth, totalWidth);
     workModeFileSplitRatio = totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT;
     elements.preview.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
+    syncWorkModeFileHorizontalScrollMetrics();
     if (persist) {
         persistWorkModeFileSplitPreference(workModeFileSplitRatio);
     }
@@ -2240,6 +2357,63 @@ function updateWorkModeFileSplitFromPointer(clientX, { persist = false } = {}) {
     applyWorkModeFileSplitRatio(ratio, { persist: false });
     if (persist) {
         persistWorkModeFileSplitPreference(workModeFileSplitRatio);
+    }
+}
+
+function syncWorkModeFileHorizontalScrollMetrics() {
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll || !elements?.hScroll || !elements?.hScrollTrack || !elements?.table) return;
+    if (!isWorkModeEnabled() || isMobileLayout()) return;
+
+    const viewportWidth = Math.max(0, Math.round(elements.gridScroll.clientWidth));
+    const contentWidth = Math.max(
+        Math.round(elements.table.scrollWidth || 0),
+        Math.round(elements.columns?.scrollWidth || 0),
+        Math.round(elements.list?.scrollWidth || 0)
+    );
+    const effectiveWidth = Math.max(viewportWidth, contentWidth);
+    elements.hScrollTrack.style.width = `${effectiveWidth}px`;
+
+    const maxScroll = Math.max(0, contentWidth - viewportWidth);
+    const gridScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.gridScroll.scrollLeft || 0)));
+    const railScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.hScroll.scrollLeft || 0)));
+    const nextScrollLeft = Math.max(gridScrollLeft, railScrollLeft);
+
+    if (workModeFileHorizontalSyncLock) return;
+    workModeFileHorizontalSyncLock = true;
+    try {
+        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextScrollLeft) {
+            elements.gridScroll.scrollLeft = nextScrollLeft;
+        }
+        if (Math.round(elements.hScroll.scrollLeft || 0) !== nextScrollLeft) {
+            elements.hScroll.scrollLeft = nextScrollLeft;
+        }
+    } finally {
+        workModeFileHorizontalSyncLock = false;
+    }
+}
+
+function handleWorkModeFileGridScroll() {
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll || !elements?.hScroll) return;
+    if (workModeFileHorizontalSyncLock) return;
+    workModeFileHorizontalSyncLock = true;
+    try {
+        elements.hScroll.scrollLeft = elements.gridScroll.scrollLeft;
+    } finally {
+        workModeFileHorizontalSyncLock = false;
+    }
+}
+
+function handleWorkModeFileHScroll() {
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll || !elements?.hScroll) return;
+    if (workModeFileHorizontalSyncLock) return;
+    workModeFileHorizontalSyncLock = true;
+    try {
+        elements.gridScroll.scrollLeft = elements.hScroll.scrollLeft;
+    } finally {
+        workModeFileHorizontalSyncLock = false;
     }
 }
 
@@ -2302,6 +2476,7 @@ function applyWorkModeFileColumnWidths({ persist = false } = {}) {
     elements.preview.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
     elements.preview.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
     elements.preview.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
+    syncWorkModeFileHorizontalScrollMetrics();
     if (persist) {
         persistWorkModeFileColumnsPreference();
     }
@@ -2433,6 +2608,9 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
         applyWorkModeFileColumnWidths({ persist: false });
         setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
+        requestAnimationFrame(() => {
+            syncWorkModeFileHorizontalScrollMetrics();
+        });
         void ensureWorkModeFilePanelContent();
     } else {
         setWorkModeFileViewerFullscreen(false);
@@ -2453,6 +2631,9 @@ function initializeWorkMode(isMobile) {
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
+    requestAnimationFrame(() => {
+        syncWorkModeFileHorizontalScrollMetrics();
+    });
 }
 
 function handleWorkModeMediaChange(isMobile) {
@@ -2471,6 +2652,9 @@ function handleWorkModeMediaChange(isMobile) {
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+    requestAnimationFrame(() => {
+        syncWorkModeFileHorizontalScrollMetrics();
+    });
 }
 
 function updateWorkModeSplitFromPointer(clientX, { persist = false } = {}) {
@@ -2492,7 +2676,9 @@ function updateWorkModeSplitFromPointer(clientX, { persist = false } = {}) {
 function syncWorkModeResizeBodyClass() {
     const active = workModeResizePointerId !== null
         || workModeFileResizePointerId !== null
-        || Boolean(workModeFileColumnResizeState);
+        || Boolean(workModeFileColumnResizeState)
+        || fileBrowserResizePointerId !== null
+        || Boolean(fileBrowserColumnResizeState);
     document.body.classList.toggle('is-work-mode-resizing', active);
 }
 
@@ -3380,6 +3566,7 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
             renderMessages([]);
             updateHeader(null);
         }
+        updateChatSessionNavigationButtons();
         syncActiveSessionControls();
         syncActiveSessionStatus();
     } catch (error) {
@@ -4861,17 +5048,27 @@ function getFileBrowserElements() {
     return {
         overlay,
         subtitle: document.getElementById('codex-file-browser-overlay-subtitle'),
+        layout: document.getElementById('codex-file-browser-layout'),
+        gridScroll: document.getElementById('codex-file-browser-grid-scroll'),
+        hScroll: document.getElementById('codex-file-browser-hscroll'),
+        hScrollTrack: document.getElementById('codex-file-browser-hscroll-track'),
+        table: document.getElementById('codex-file-browser-table'),
+        columns: document.getElementById('codex-file-browser-columns'),
+        divider: document.getElementById('codex-file-browser-divider'),
         path: document.getElementById('codex-file-browser-path'),
         meta: document.getElementById('codex-file-browser-meta'),
         loading: document.getElementById('codex-file-browser-loading'),
         empty: document.getElementById('codex-file-browser-empty'),
         list: document.getElementById('codex-file-browser-list'),
+        listPanel: overlay.querySelector('.file-browser-list-panel'),
+        viewerPanel: overlay.querySelector('.file-browser-viewer-panel'),
         viewerMeta: document.getElementById('codex-file-browser-viewer-meta'),
         viewerContent: document.getElementById('codex-file-browser-viewer-content'),
         backBtn: document.getElementById('codex-file-browser-back'),
         upBtn: document.getElementById('codex-file-browser-up'),
         refreshBtn: document.getElementById('codex-file-browser-refresh'),
         fullscreenBtn: document.getElementById('codex-file-browser-fullscreen'),
+        colResizers: Array.from(overlay.querySelectorAll('#codex-file-browser-columns [data-resize-col]')),
         showHiddenToggle: document.getElementById('codex-file-browser-show-hidden'),
         showPycacheToggle: document.getElementById('codex-file-browser-show-pycache'),
         rootButtons: Array.from(
@@ -4897,36 +5094,30 @@ function updateFileBrowserRootButtons() {
     });
 }
 
-function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
-    void root;
-    const elements = getFileBrowserElements();
-    if (!elements?.path) return;
+function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '') {
+    if (!pathElement) return;
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const displayPrefix = '$workspace';
     const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
-    elements.path.textContent = display;
+    pathElement.textContent = display;
 
     const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
     const absolutePath = absoluteRoot
         ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
         : display;
-    setHoverTooltip(elements.path, absolutePath);
+    setHoverTooltip(pathElement, absolutePath);
+}
+
+function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
+    void root;
+    const elements = getFileBrowserElements();
+    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
 }
 
 function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = '') {
     void root;
     const elements = getWorkModeFileElements();
-    if (!elements?.path) return;
-    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const displayPrefix = '$workspace';
-    const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
-    elements.path.textContent = display;
-
-    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
-    const absolutePath = absoluteRoot
-        ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
-        : display;
-    setHoverTooltip(elements.path, absolutePath);
+    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
 }
 
 function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -4961,10 +5152,12 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     if (elements.divider) {
         elements.divider.classList.toggle('is-disabled', loading || workModeFileViewerFullscreen);
     }
+    requestAnimationFrame(() => {
+        syncWorkModeFileHorizontalScrollMetrics();
+    });
 }
 
-function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
-    const elements = getWorkModeFileElements();
+function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하세요.') {
     if (!elements) return;
     if (elements.viewerMeta) {
         elements.viewerMeta.textContent = '파일을 선택하면 미리보기가 표시됩니다.';
@@ -4978,73 +5171,137 @@ function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     }
 }
 
-function applyWorkModeFileSelectionState() {
+function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     const elements = getWorkModeFileElements();
-    if (!elements?.list) return;
-    const normalizedSelection = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
-    elements.list.querySelectorAll('button.work-mode-file-entry[data-entry-path]').forEach(button => {
+    setFilePanelViewerPlaceholder(elements, message);
+}
+
+function applyFilePanelSelectionState(listElement, selectedPath) {
+    if (!(listElement instanceof Element)) return;
+    const normalizedSelection = normalizeFileBrowserRelativePath(selectedPath);
+    listElement.querySelectorAll('button.work-mode-file-entry[data-entry-path]').forEach(button => {
         const candidate = normalizeFileBrowserRelativePath(button.dataset?.entryPath || '');
         button.classList.toggle('is-active', Boolean(normalizedSelection) && candidate === normalizedSelection);
     });
 }
 
-function renderWorkModeFileList(entries) {
-    const elements = getWorkModeFileElements();
+function renderFilePanelList(entries, {
+    elements,
+    selectedPath = '',
+    includeParentEntry = false,
+    parentEntryPath = '',
+    onOpenDirectory = null,
+    onOpenFile = null,
+    onAfterRender = null
+} = {}) {
     if (!elements?.list) return;
     elements.list.innerHTML = '';
     const rows = Array.isArray(entries) ? entries : [];
-    rows.forEach(entry => {
+    const normalizedParentPath = normalizeFileBrowserRelativePath(parentEntryPath);
+
+    const appendEntryRow = (entry, { isParentEntry = false } = {}) => {
         const entryPath = normalizeFileBrowserRelativePath(entry?.path || '');
         const entryType = entry?.type === 'dir' ? 'dir' : 'file';
-        if (!entryPath) return;
+        if (!entryPath && !isParentEntry) return;
+        const resolvedPath = isParentEntry ? normalizedParentPath : entryPath;
 
         const item = document.createElement('li');
         item.className = 'file-browser-list-item';
 
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = `work-mode-file-entry${entryType === 'dir' ? ' is-dir' : ''}`;
-        button.dataset.entryPath = entryPath;
+        button.className = `work-mode-file-entry${entryType === 'dir' ? ' is-dir' : ''}${isParentEntry ? ' is-parent-entry' : ''}`;
+        button.dataset.entryPath = resolvedPath;
         button.dataset.entryType = entryType;
+        if (isParentEntry) {
+            button.dataset.parentEntry = 'true';
+        }
 
         const name = document.createElement('span');
         name.className = 'work-mode-file-cell work-mode-file-cell-name';
-        const baseName = String(entry?.name || entryPath);
-        name.textContent = entryType === 'dir' ? `${baseName}/` : baseName;
-        name.title = baseName;
+        const baseName = isParentEntry ? '..' : String(entry?.name || entryPath);
+        name.textContent = isParentEntry
+            ? '..'
+            : (entryType === 'dir' ? `${baseName}/` : baseName);
+        name.title = isParentEntry ? '상위 폴더로 이동' : baseName;
         button.appendChild(name);
 
         const size = document.createElement('span');
         size.className = 'work-mode-file-cell work-mode-file-cell-size';
         const sizeText = formatFileBrowserSize(entry?.size);
-        size.textContent = entryType === 'dir' ? '-' : sizeText;
+        size.textContent = isParentEntry ? '-' : (entryType === 'dir' ? '-' : sizeText);
         button.appendChild(size);
 
         const modified = document.createElement('span');
         modified.className = 'work-mode-file-cell work-mode-file-cell-modified';
-        const modifiedText = formatFileBrowserModifiedAt(entry?.modified_at);
+        const modifiedText = isParentEntry ? '-' : formatFileBrowserModifiedAt(entry?.modified_at);
         modified.textContent = modifiedText;
         modified.title = modifiedText;
         button.appendChild(modified);
 
         button.addEventListener('click', () => {
             if (entryType === 'dir') {
-                workModeFileSelectedPath = '';
-                clearWorkModeFileViewer('파일을 선택하세요.');
-                void refreshWorkModeFileDirectory({
-                    root: workModeFileRoot,
-                    path: entryPath,
-                    force: true
-                });
+                if (typeof onOpenDirectory === 'function') {
+                    onOpenDirectory(resolvedPath, entry);
+                }
                 return;
             }
-            void openFileInWorkModePanel(entryPath, { root: workModeFileRoot });
+            if (typeof onOpenFile === 'function') {
+                onOpenFile(resolvedPath, entry);
+            }
         });
 
         item.appendChild(button);
         elements.list.appendChild(item);
+    };
+
+    if (includeParentEntry) {
+        appendEntryRow({
+            path: normalizedParentPath,
+            type: 'dir',
+            name: '..'
+        }, { isParentEntry: true });
+    }
+
+    rows.forEach(entry => {
+        appendEntryRow(entry);
     });
-    applyWorkModeFileSelectionState();
+    applyFilePanelSelectionState(elements.list, selectedPath);
+    if (typeof onAfterRender === 'function') {
+        onAfterRender();
+    }
+}
+
+function applyWorkModeFileSelectionState() {
+    const elements = getWorkModeFileElements();
+    applyFilePanelSelectionState(elements?.list, workModeFileSelectedPath);
+}
+
+function renderWorkModeFileList(entries, { includeParentEntry = false, parentEntryPath = '' } = {}) {
+    const elements = getWorkModeFileElements();
+    renderFilePanelList(entries, {
+        elements,
+        selectedPath: workModeFileSelectedPath,
+        includeParentEntry,
+        parentEntryPath,
+        onOpenDirectory: entryPath => {
+            workModeFileSelectedPath = '';
+            clearWorkModeFileViewer('파일을 선택하세요.');
+            void refreshWorkModeFileDirectory({
+                root: workModeFileRoot,
+                path: entryPath,
+                force: true
+            });
+        },
+        onOpenFile: entryPath => {
+            void openFileInWorkModePanel(entryPath, { root: workModeFileRoot });
+        },
+        onAfterRender: () => {
+            requestAnimationFrame(() => {
+                syncWorkModeFileHorizontalScrollMetrics();
+            });
+        }
+    });
 }
 
 function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {}) {
@@ -5052,9 +5309,14 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
     if (!elements) return;
     const allEntries = Array.isArray(entries) ? entries : [];
     const visibleEntries = filterFileBrowserEntries(allEntries);
+    const hasParentEntry = Boolean(normalizeFileBrowserRelativePath(workModeFilePath));
+    const parentEntryPath = getFileBrowserParentPath(workModeFilePath);
     const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
 
-    renderWorkModeFileList(visibleEntries);
+    renderWorkModeFileList(visibleEntries, {
+        includeParentEntry: hasParentEntry,
+        parentEntryPath
+    });
 
     if (elements.meta) {
         const countText = filteredCount > 0
@@ -5076,10 +5338,12 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
         } else {
             elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
         }
-        elements.empty.classList.toggle('is-hidden', visibleEntries.length !== 0);
+        const hasRows = visibleEntries.length > 0 || hasParentEntry;
+        elements.empty.classList.toggle('is-hidden', hasRows);
     }
     if (elements.list) {
-        elements.list.classList.toggle('is-hidden', visibleEntries.length === 0);
+        const hasRows = visibleEntries.length > 0 || hasParentEntry;
+        elements.list.classList.toggle('is-hidden', !hasRows);
     }
 }
 
@@ -5272,18 +5536,282 @@ async function ensureWorkModeFilePanelContent() {
     }
 }
 
+async function refreshWorkModeFilePreviewSelection() {
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    if (!selectedPath) return null;
+    return openFileInWorkModePanel(selectedPath, {
+        root: workModeFileRoot,
+        fallbackToDirectory: true
+    });
+}
+
+function readFileBrowserSplitPreference() {
+    try {
+        return normalizeWorkModeFileSplitRatio(localStorage.getItem(FILE_BROWSER_SPLIT_KEY));
+    } catch (error) {
+        return WORK_MODE_FILE_DEFAULT_SPLIT;
+    }
+}
+
+function persistFileBrowserSplitPreference(ratio) {
+    try {
+        localStorage.setItem(FILE_BROWSER_SPLIT_KEY, String(normalizeWorkModeFileSplitRatio(ratio)));
+    } catch (error) {
+        void error;
+    }
+}
+
+function readFileBrowserColumnsPreference() {
+    const fallback = {
+        name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
+        size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
+        modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
+    };
+    try {
+        const raw = localStorage.getItem(FILE_BROWSER_COLUMNS_KEY);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return {
+            name: normalizeWorkModeFileColumnWidth('name', parsed?.name),
+            size: normalizeWorkModeFileColumnWidth('size', parsed?.size),
+            modified: normalizeWorkModeFileColumnWidth('modified', parsed?.modified)
+        };
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function persistFileBrowserColumnsPreference() {
+    try {
+        localStorage.setItem(FILE_BROWSER_COLUMNS_KEY, JSON.stringify(fileBrowserColumnWidths));
+    } catch (error) {
+        void error;
+    }
+}
+
+function applyFileBrowserSplitRatio(ratio = fileBrowserSplitRatio, { persist = false } = {}) {
+    const elements = getFileBrowserElements();
+    if (!elements?.overlay || !elements?.layout) return;
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
+    if (totalWidth <= 0) return;
+
+    const nextRatio = normalizeWorkModeFileSplitRatio(ratio);
+    const desiredWidth = totalWidth * nextRatio;
+    const listWidth = clampWorkModeFileListWidth(desiredWidth, totalWidth);
+    fileBrowserSplitRatio = totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT;
+    elements.overlay.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
+    syncFileBrowserHorizontalScrollMetrics();
+    if (persist) {
+        persistFileBrowserSplitPreference(fileBrowserSplitRatio);
+    }
+}
+
+function updateFileBrowserSplitFromPointer(clientX, { persist = false } = {}) {
+    const elements = getFileBrowserElements();
+    if (!elements?.layout) return;
+    const layoutRect = elements.layout.getBoundingClientRect();
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, layoutRect.width - dividerWidth);
+    if (totalWidth <= 0) return;
+    const rawWidth = Number(clientX) - layoutRect.left;
+    const listWidth = clampWorkModeFileListWidth(rawWidth, totalWidth);
+    const ratio = listWidth / totalWidth;
+    applyFileBrowserSplitRatio(ratio, { persist: false });
+    if (persist) {
+        persistFileBrowserSplitPreference(fileBrowserSplitRatio);
+    }
+}
+
+function applyFileBrowserColumnWidths({ persist = false } = {}) {
+    const elements = getFileBrowserElements();
+    if (!elements?.overlay) return;
+    const nameWidth = normalizeWorkModeFileColumnWidth('name', fileBrowserColumnWidths.name);
+    const sizeWidth = normalizeWorkModeFileColumnWidth('size', fileBrowserColumnWidths.size);
+    const modifiedWidth = normalizeWorkModeFileColumnWidth('modified', fileBrowserColumnWidths.modified);
+    fileBrowserColumnWidths = {
+        name: nameWidth,
+        size: sizeWidth,
+        modified: modifiedWidth
+    };
+    elements.overlay.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
+    elements.overlay.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
+    elements.overlay.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
+    syncFileBrowserHorizontalScrollMetrics();
+    if (persist) {
+        persistFileBrowserColumnsPreference();
+    }
+}
+
+function syncFileBrowserHorizontalScrollMetrics() {
+    const elements = getFileBrowserElements();
+    if (!elements?.gridScroll || !elements?.hScroll || !elements?.hScrollTrack || !elements?.table) return;
+    if (isMobileLayout()) return;
+    if (!isFileBrowserOverlayOpen()) return;
+
+    const viewportWidth = Math.max(0, Math.round(elements.gridScroll.clientWidth));
+    const contentWidth = Math.max(
+        Math.round(elements.table.scrollWidth || 0),
+        Math.round(elements.columns?.scrollWidth || 0),
+        Math.round(elements.list?.scrollWidth || 0)
+    );
+    const effectiveWidth = Math.max(viewportWidth, contentWidth);
+    elements.hScrollTrack.style.width = `${effectiveWidth}px`;
+
+    const maxScroll = Math.max(0, contentWidth - viewportWidth);
+    const gridScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.gridScroll.scrollLeft || 0)));
+    const railScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.hScroll.scrollLeft || 0)));
+    const nextScrollLeft = Math.max(gridScrollLeft, railScrollLeft);
+
+    if (fileBrowserHorizontalSyncLock) return;
+    fileBrowserHorizontalSyncLock = true;
+    try {
+        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextScrollLeft) {
+            elements.gridScroll.scrollLeft = nextScrollLeft;
+        }
+        if (Math.round(elements.hScroll.scrollLeft || 0) !== nextScrollLeft) {
+            elements.hScroll.scrollLeft = nextScrollLeft;
+        }
+    } finally {
+        fileBrowserHorizontalSyncLock = false;
+    }
+}
+
+function handleFileBrowserGridScroll() {
+    const elements = getFileBrowserElements();
+    if (!elements?.gridScroll || !elements?.hScroll) return;
+    if (fileBrowserHorizontalSyncLock) return;
+    fileBrowserHorizontalSyncLock = true;
+    try {
+        elements.hScroll.scrollLeft = elements.gridScroll.scrollLeft;
+    } finally {
+        fileBrowserHorizontalSyncLock = false;
+    }
+}
+
+function handleFileBrowserHScroll() {
+    const elements = getFileBrowserElements();
+    if (!elements?.gridScroll || !elements?.hScroll) return;
+    if (fileBrowserHorizontalSyncLock) return;
+    fileBrowserHorizontalSyncLock = true;
+    try {
+        elements.gridScroll.scrollLeft = elements.hScroll.scrollLeft;
+    } finally {
+        fileBrowserHorizontalSyncLock = false;
+    }
+}
+
+function stopFileBrowserResize() {
+    if (fileBrowserResizePointerId === null) return;
+    fileBrowserResizePointerId = null;
+    syncWorkModeResizeBodyClass();
+    window.removeEventListener('pointermove', handleFileBrowserResizePointerMove);
+    window.removeEventListener('pointerup', handleFileBrowserResizePointerUp);
+    window.removeEventListener('pointercancel', handleFileBrowserResizePointerUp);
+}
+
+function handleFileBrowserResizePointerMove(event) {
+    if (fileBrowserResizePointerId === null || event.pointerId !== fileBrowserResizePointerId) return;
+    if (!isFileBrowserOverlayOpen() || isMobileLayout() || fileBrowserViewerFullscreen) return;
+    event.preventDefault();
+    updateFileBrowserSplitFromPointer(event.clientX, { persist: false });
+}
+
+function handleFileBrowserResizePointerUp(event) {
+    if (fileBrowserResizePointerId === null || event.pointerId !== fileBrowserResizePointerId) return;
+    event.preventDefault();
+    updateFileBrowserSplitFromPointer(event.clientX, { persist: true });
+    stopFileBrowserResize();
+}
+
+function startFileBrowserResize(event) {
+    if (!event || event.button !== 0) return;
+    if (!isFileBrowserOverlayOpen() || isMobileLayout() || fileBrowserViewerFullscreen) return;
+    const elements = getFileBrowserElements();
+    if (elements?.divider?.classList.contains('is-disabled')) return;
+    event.preventDefault();
+    fileBrowserResizePointerId = event.pointerId;
+    syncWorkModeResizeBodyClass();
+    window.addEventListener('pointermove', handleFileBrowserResizePointerMove);
+    window.addEventListener('pointerup', handleFileBrowserResizePointerUp);
+    window.addEventListener('pointercancel', handleFileBrowserResizePointerUp);
+}
+
+function stopFileBrowserColumnResize() {
+    if (!fileBrowserColumnResizeState) return;
+    fileBrowserColumnResizeState = null;
+    syncWorkModeResizeBodyClass();
+    window.removeEventListener('pointermove', handleFileBrowserColumnResizePointerMove);
+    window.removeEventListener('pointerup', handleFileBrowserColumnResizePointerUp);
+    window.removeEventListener('pointercancel', handleFileBrowserColumnResizePointerUp);
+}
+
+function handleFileBrowserColumnResizePointerMove(event) {
+    const state = fileBrowserColumnResizeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    const delta = Number(event.clientX) - state.startX;
+    const width = state.startWidth + delta;
+    const normalized = normalizeWorkModeFileColumnWidth(state.column, width);
+    if (!normalized) return;
+    fileBrowserColumnWidths[state.column] = normalized;
+    applyFileBrowserColumnWidths({ persist: false });
+}
+
+function handleFileBrowserColumnResizePointerUp(event) {
+    const state = fileBrowserColumnResizeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    applyFileBrowserColumnWidths({ persist: true });
+    stopFileBrowserColumnResize();
+}
+
+function startFileBrowserColumnResize(event, column) {
+    const targetColumn = normalizeWorkModeFileColumnName(column);
+    if (!targetColumn || !event || event.button !== 0) return;
+    if (!isFileBrowserOverlayOpen() || isMobileLayout() || fileBrowserViewerFullscreen) return;
+    event.preventDefault();
+    fileBrowserColumnResizeState = {
+        pointerId: event.pointerId,
+        column: targetColumn,
+        startX: Number(event.clientX),
+        startWidth: normalizeWorkModeFileColumnWidth(targetColumn, fileBrowserColumnWidths[targetColumn])
+    };
+    syncWorkModeResizeBodyClass();
+    window.addEventListener('pointermove', handleFileBrowserColumnResizePointerMove);
+    window.addEventListener('pointerup', handleFileBrowserColumnResizePointerUp);
+    window.addEventListener('pointercancel', handleFileBrowserColumnResizePointerUp);
+}
+
 function setFileBrowserViewerFullscreen(isFullscreen) {
     const elements = getFileBrowserElements();
     if (!elements?.overlay) return;
     fileBrowserViewerFullscreen = Boolean(isFullscreen);
     const overlayFullscreen = !isMobileLayout() && fileBrowserViewerFullscreen;
+    if (overlayFullscreen) {
+        stopFileBrowserResize();
+        stopFileBrowserColumnResize();
+    }
     elements.overlay.classList.toggle('is-viewer-fullscreen', overlayFullscreen);
+    if (elements.divider) {
+        elements.divider.classList.toggle('is-disabled', overlayFullscreen);
+    }
+    if (Array.isArray(elements.colResizers)) {
+        const disableColumnResize = overlayFullscreen || isMobileLayout() || !isFileBrowserOverlayOpen();
+        elements.colResizers.forEach(handle => {
+            handle.disabled = disableColumnResize;
+        });
+    }
     if (elements.fullscreenBtn) {
         const buttonLabel = fileBrowserViewerFullscreen ? '목록 보기' : '내용 전체화면';
         elements.fullscreenBtn.setAttribute('aria-pressed', fileBrowserViewerFullscreen ? 'true' : 'false');
         elements.fullscreenBtn.setAttribute('title', buttonLabel);
         elements.fullscreenBtn.textContent = buttonLabel;
     }
+    if (!overlayFullscreen && isFileBrowserOverlayOpen()) {
+        applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
+    }
+    syncFileBrowserHorizontalScrollMetrics();
 }
 
 function normalizeFileBrowserMobileView(value) {
@@ -5310,6 +5838,20 @@ function setFileBrowserMobileView(view = FILE_BROWSER_MOBILE_VIEW_LIST) {
         elements.backBtn.classList.toggle('is-hidden', !showBack);
         elements.backBtn.disabled = !mobile;
     }
+    if (elements.divider) {
+        const disableDivider = mobile || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen();
+        elements.divider.classList.toggle('is-disabled', disableDivider);
+    }
+    if (Array.isArray(elements.colResizers)) {
+        const disableColumnResize = mobile || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen();
+        elements.colResizers.forEach(handle => {
+            handle.disabled = disableColumnResize;
+        });
+    }
+    if (!mobile && isFileBrowserOverlayOpen() && !fileBrowserViewerFullscreen) {
+        applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
+    }
+    syncFileBrowserHorizontalScrollMetrics();
 }
 
 function formatFileBrowserModifiedAt(value) {
@@ -5389,6 +5931,18 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
     if (elements.fullscreenBtn) {
         elements.fullscreenBtn.disabled = loading;
     }
+    if (Array.isArray(elements.colResizers)) {
+        const disableColumnResize = loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen();
+        elements.colResizers.forEach(handle => {
+            handle.disabled = disableColumnResize;
+        });
+    }
+    if (elements.divider) {
+        elements.divider.classList.toggle(
+            'is-disabled',
+            loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen()
+        );
+    }
     if (elements.showHiddenToggle) {
         elements.showHiddenToggle.disabled = loading;
     }
@@ -5400,21 +5954,14 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
             button.disabled = loading;
         });
     }
+    requestAnimationFrame(() => {
+        syncFileBrowserHorizontalScrollMetrics();
+    });
 }
 
 function clearFileBrowserViewer(message = '파일을 선택하세요.') {
     const elements = getFileBrowserElements();
-    if (!elements) return;
-    if (elements.viewerMeta) {
-        elements.viewerMeta.textContent = '파일을 선택하면 미리보기가 표시됩니다.';
-    }
-    if (elements.viewerContent) {
-        elements.viewerContent.innerHTML = '';
-        const placeholder = document.createElement('div');
-        placeholder.className = 'file-browser-placeholder';
-        placeholder.textContent = message;
-        elements.viewerContent.appendChild(placeholder);
-    }
+    setFilePanelViewerPlaceholder(elements, message);
 }
 
 function formatFileBrowserSize(value) {
@@ -5434,12 +5981,7 @@ function formatFileBrowserSize(value) {
 
 function applyFileBrowserSelectionState() {
     const elements = getFileBrowserElements();
-    if (!elements?.list) return;
-    const normalizedSelection = normalizeFileBrowserRelativePath(fileBrowserSelectedPath);
-    elements.list.querySelectorAll('button.file-browser-entry[data-entry-path]').forEach(button => {
-        const candidate = normalizeFileBrowserRelativePath(button.dataset?.entryPath || '');
-        button.classList.toggle('is-active', Boolean(normalizedSelection) && candidate === normalizedSelection);
-    });
+    applyFilePanelSelectionState(elements?.list, fileBrowserSelectedPath);
 }
 
 function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) {
@@ -5447,9 +5989,14 @@ function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) 
     if (!elements) return;
     const allEntries = Array.isArray(entries) ? entries : [];
     const visibleEntries = filterFileBrowserEntries(allEntries);
+    const hasParentEntry = Boolean(normalizeFileBrowserRelativePath(fileBrowserPath));
+    const parentEntryPath = getFileBrowserParentPath(fileBrowserPath);
     const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
 
-    renderFileBrowserList(visibleEntries);
+    renderFileBrowserList(visibleEntries, {
+        includeParentEntry: hasParentEntry,
+        parentEntryPath
+    });
 
     if (elements.meta) {
         const countText = filteredCount > 0
@@ -5471,10 +6018,12 @@ function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) 
         } else {
             elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
         }
-        elements.empty.classList.toggle('is-hidden', visibleEntries.length !== 0);
+        const hasRows = visibleEntries.length > 0 || hasParentEntry;
+        elements.empty.classList.toggle('is-hidden', hasRows);
     }
     if (elements.list) {
-        elements.list.classList.toggle('is-hidden', visibleEntries.length === 0);
+        const hasRows = visibleEntries.length > 0 || hasParentEntry;
+        elements.list.classList.toggle('is-hidden', !hasRows);
     }
 }
 
@@ -5484,58 +6033,32 @@ function rerenderFileBrowserDirectoryFromCache() {
     });
 }
 
-function renderFileBrowserList(entries) {
+function renderFileBrowserList(entries, { includeParentEntry = false, parentEntryPath = '' } = {}) {
     const elements = getFileBrowserElements();
-    if (!elements?.list) return;
-    elements.list.innerHTML = '';
-    const rows = Array.isArray(entries) ? entries : [];
-    rows.forEach(entry => {
-        const entryPath = normalizeFileBrowserRelativePath(entry?.path || '');
-        const entryType = entry?.type === 'dir' ? 'dir' : 'file';
-        if (!entryPath) return;
-
-        const item = document.createElement('li');
-        item.className = 'file-browser-list-item';
-
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = `file-browser-entry${entryType === 'dir' ? ' is-dir' : ''}`;
-        button.dataset.entryPath = entryPath;
-        button.dataset.entryType = entryType;
-
-        const name = document.createElement('span');
-        name.className = 'file-browser-entry-name';
-        const baseName = String(entry?.name || entryPath);
-        name.textContent = entryType === 'dir' ? `${baseName}/` : baseName;
-        button.appendChild(name);
-
-        const meta = document.createElement('span');
-        meta.className = 'file-browser-entry-meta';
-        const typeText = entryType === 'dir' ? 'folder' : 'file';
-        const sizeText = formatFileBrowserSize(entry?.size);
-        const modifiedText = formatFileBrowserModifiedAt(entry?.modified_at);
-        meta.textContent = `${typeText} · ${sizeText} · ${modifiedText}`;
-        button.appendChild(meta);
-
-        button.addEventListener('click', () => {
-            if (entryType === 'dir') {
-                fileBrowserSelectedPath = '';
-                setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
-                clearFileBrowserViewer();
-                void refreshFileBrowserDirectory({
-                    root: fileBrowserRoot,
-                    path: entryPath,
-                    force: true
-                });
-                return;
-            }
+    renderFilePanelList(entries, {
+        elements,
+        selectedPath: fileBrowserSelectedPath,
+        includeParentEntry,
+        parentEntryPath,
+        onOpenDirectory: entryPath => {
+            fileBrowserSelectedPath = '';
+            setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
+            clearFileBrowserViewer();
+            void refreshFileBrowserDirectory({
+                root: fileBrowserRoot,
+                path: entryPath,
+                force: true
+            });
+        },
+        onOpenFile: entryPath => {
             void openFileInBrowserOverlay(entryPath, { root: fileBrowserRoot });
-        });
-
-        item.appendChild(button);
-        elements.list.appendChild(item);
+        },
+        onAfterRender: () => {
+            requestAnimationFrame(() => {
+                syncFileBrowserHorizontalScrollMetrics();
+            });
+        }
     });
-    applyFileBrowserSelectionState();
 }
 
 async function fetchFileBrowserDirectory(root, path = '') {
@@ -5792,6 +6315,7 @@ async function openFileInBrowserOverlay(
     {
         root = fileBrowserRoot,
         fallbackToDirectory = false,
+        showViewerOnSuccess = true,
         line = null,
         column = null
     } = {}
@@ -5824,7 +6348,9 @@ async function openFileInBrowserOverlay(
             column: requestedColumn
         });
         applyFileBrowserSelectionState();
-        setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_VIEWER);
+        if (showViewerOnSuccess) {
+            setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_VIEWER);
+        }
         return result;
     } catch (error) {
         const payload = getGitErrorPayload(error);
@@ -5859,6 +6385,16 @@ async function openFileInBrowserOverlay(
     }
 }
 
+async function refreshFileBrowserPreviewSelection() {
+    const selectedPath = normalizeFileBrowserRelativePath(fileBrowserSelectedPath);
+    if (!selectedPath) return null;
+    return openFileInBrowserOverlay(selectedPath, {
+        root: fileBrowserRoot,
+        fallbackToDirectory: true,
+        showViewerOnSuccess: false
+    });
+}
+
 function openFileBrowserOverlay(options = {}) {
     const elements = getFileBrowserElements();
     if (!elements) return;
@@ -5886,6 +6422,7 @@ function openFileBrowserOverlay(options = {}) {
 
     updateFileBrowserRootButtons();
     updateFileBrowserFilterToggleState();
+    applyFileBrowserColumnWidths({ persist: false });
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
     setFileBrowserMobileView(
         requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST
@@ -5903,6 +6440,13 @@ function openFileBrowserOverlay(options = {}) {
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    requestAnimationFrame(() => {
+        applyFileBrowserColumnWidths({ persist: false });
+        applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
+        setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+        setFileBrowserMobileView(fileBrowserMobileView);
+        syncFileBrowserHorizontalScrollMetrics();
+    });
 
     void (async () => {
         const listed = await refreshFileBrowserDirectory({
@@ -5923,6 +6467,8 @@ function openFileBrowserOverlay(options = {}) {
 function closeFileBrowserOverlay() {
     const elements = getFileBrowserElements();
     if (!elements) return;
+    stopFileBrowserResize();
+    stopFileBrowserColumnResize();
     setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
@@ -6659,6 +7205,7 @@ function renderSessions() {
     if (!list) return;
     list.innerHTML = '';
     updateSessionsHeaderSummary();
+    updateChatSessionNavigationButtons();
 
     if (!state.sessions.length) {
         const empty = document.createElement('div');
@@ -8212,15 +8759,8 @@ function buildMessagePreview(text) {
 }
 
 function renderMarkdown(text) {
-    const safe = escapeHtml(String(text || ''));
-    const blocks = safe.split(/```/);
-    return blocks.map((block, index) => {
-        if (index % 2 === 1) {
-            const trimmed = block.replace(/^\n+|\n+$/g, '');
-            return `<pre><code>${trimmed}</code></pre>`;
-        }
-        return renderInlineMarkdown(block);
-    }).join('');
+    const normalized = String(text || '').replace(/\r\n/g, '\n');
+    return renderInlineMarkdown(normalized);
 }
 
 function getScriptHighlightConfig(language) {
@@ -8464,18 +9004,19 @@ function resolveAbsoluteFilesystemTargetFromMarkdownHref(value) {
 function renderMarkdownLink(label, href) {
     const rawLabel = String(label || '');
     const displayLabel = rawLabel.trim() || '링크';
+    const safeLabel = escapeHtml(displayLabel);
     const normalizedHref = normalizeMarkdownLinkHref(href);
     if (!normalizedHref) {
-        return displayLabel;
+        return safeLabel;
     }
 
     if (isHttpMarkdownHref(normalizedHref)) {
-        return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noopener noreferrer">${displayLabel}</a>`;
+        return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noopener noreferrer">${safeLabel}</a>`;
     }
 
     const fileTarget = resolveAbsoluteFilesystemTargetFromMarkdownHref(normalizedHref);
     if (!fileTarget?.absolutePath) {
-        return displayLabel;
+        return safeLabel;
     }
 
     const absolutePath = fileTarget.absolutePath;
@@ -8485,7 +9026,7 @@ function renderMarkdownLink(label, href) {
     const shortenedPath = shortenAbsoluteFilesystemPath(absolutePath, getMessageLogPathRoots()) || absolutePath;
     const shortenedPathWithLocation = formatFilesystemPathWithLocation(shortenedPath, line, column);
     const tooltipText = `파일 경로: ${shortenedPathWithLocation}`;
-    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${displayLabel}</a>`;
+    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${safeLabel}</a>`;
 }
 
 function hydrateMessageLabelLinks(container) {
@@ -8515,12 +9056,176 @@ function hydrateMessageLabelLinks(container) {
 }
 
 function renderInlineMarkdownSpans(text) {
-    let html = String(text || '');
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => renderMarkdownLink(label, href));
+    const source = String(text || '');
+    const inlineCodeTokens = [];
+    let html = source.replace(/`([^`\n]+)`/g, (match, codeText) => {
+        const token = `@@MDCODE${inlineCodeTokens.length}@@`;
+        inlineCodeTokens.push(`<code>${escapeHtml(codeText)}</code>`);
+        return token;
+    });
+
+    html = escapeHtml(html);
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
+        return renderMarkdownLink(decodeHtmlEntities(label), decodeHtmlEntities(href));
+    });
+    html = html.replace(/@@MDCODE(\d+)@@/g, (match, indexText) => {
+        const index = Number(indexText);
+        return inlineCodeTokens[index] || '';
+    });
     return html;
+}
+
+function parseMarkdownFenceStart(line) {
+    const source = String(line || '');
+    const match = source.match(/^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+.#-]*)\s*$/);
+    if (!match) return null;
+    const fence = match[1];
+    return {
+        markerChar: fence[0],
+        markerSize: fence.length,
+        language: String(match[2] || '').trim().toLowerCase()
+    };
+}
+
+function parseMarkdownFencedCodeBlock(lines, startIndex) {
+    if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
+    const opener = parseMarkdownFenceStart(lines[startIndex]);
+    if (!opener) return null;
+
+    let index = startIndex + 1;
+    const codeLines = [];
+    while (index < lines.length) {
+        const current = String(lines[index] || '');
+        const closeMatch = current.match(/^\s*(`{3,}|~{3,})\s*$/);
+        if (
+            closeMatch
+            && closeMatch[1]
+            && closeMatch[1][0] === opener.markerChar
+            && closeMatch[1].length >= opener.markerSize
+        ) {
+            index += 1;
+            break;
+        }
+        codeLines.push(current);
+        index += 1;
+    }
+
+    const codeText = codeLines.join('\n');
+    const codeHtml = opener.language
+        ? highlightScriptContent(codeText, opener.language)
+        : escapeHtml(codeText);
+    const languageClass = opener.language ? ` class="language-${escapeHtml(opener.language)}"` : '';
+    return {
+        html: `<pre><code${languageClass}>${codeHtml}</code></pre>`,
+        nextIndex: index
+    };
+}
+
+function parseMarkdownHeadingLine(line) {
+    const source = String(line || '');
+    const match = source.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (!match) return null;
+    return {
+        level: Math.max(1, Math.min(6, match[1].length)),
+        text: match[2]
+    };
+}
+
+function isMarkdownHorizontalRule(line) {
+    const source = String(line || '').trim();
+    if (!source) return false;
+    return /^(-\s*){3,}$/.test(source)
+        || /^(\*\s*){3,}$/.test(source)
+        || /^(_\s*){3,}$/.test(source);
+}
+
+function parseMarkdownListLine(line) {
+    const source = String(line || '');
+    const unordered = source.match(/^\s*([-+*])\s+(.+)$/);
+    if (unordered) {
+        return {
+            ordered: false,
+            number: null,
+            content: unordered[2]
+        };
+    }
+    const ordered = source.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (ordered) {
+        return {
+            ordered: true,
+            number: Number(ordered[1]) || 1,
+            content: ordered[2]
+        };
+    }
+    return null;
+}
+
+function parseMarkdownList(lines, startIndex) {
+    if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
+    const first = parseMarkdownListLine(lines[startIndex]);
+    if (!first) return null;
+
+    const ordered = first.ordered;
+    const startNumber = first.number || 1;
+    const items = [];
+    let index = startIndex;
+    while (index < lines.length) {
+        const parsed = parseMarkdownListLine(lines[index]);
+        if (!parsed || parsed.ordered !== ordered) break;
+
+        const content = String(parsed.content || '').trim();
+        const taskMatch = content.match(/^\[( |x|X)\]\s+(.*)$/);
+        if (taskMatch) {
+            const checked = /x/i.test(taskMatch[1]);
+            const labelHtml = renderInlineMarkdownSpans(taskMatch[2]);
+            items.push(
+                `<li class="markdown-task-item"><label><input type="checkbox" disabled${checked ? ' checked' : ''}><span>${labelHtml}</span></label></li>`
+            );
+        } else {
+            items.push(`<li>${renderInlineMarkdownSpans(content)}</li>`);
+        }
+        index += 1;
+    }
+
+    if (items.length === 0) return null;
+    const tag = ordered ? 'ol' : 'ul';
+    const startAttr = ordered && startNumber > 1 ? ` start="${startNumber}"` : '';
+    const hasTaskItems = items.some(item => item.includes('markdown-task-item'));
+    const classAttr = hasTaskItems ? ' class="markdown-task-list"' : '';
+    return {
+        html: `<${tag}${startAttr}${classAttr}>${items.join('')}</${tag}>`,
+        nextIndex: index
+    };
+}
+
+function parseMarkdownBlockquote(lines, startIndex) {
+    if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
+    const quoteLines = [];
+    let index = startIndex;
+    let matched = false;
+    while (index < lines.length) {
+        const source = String(lines[index] || '');
+        if (!source.trim()) {
+            if (!matched) break;
+            quoteLines.push('');
+            index += 1;
+            continue;
+        }
+        const marker = source.match(/^\s{0,3}>\s?(.*)$/);
+        if (!marker) break;
+        matched = true;
+        quoteLines.push(marker[1] || '');
+        index += 1;
+    }
+    if (!matched) return null;
+    const innerHtml = renderInlineMarkdown(quoteLines.join('\n'));
+    return {
+        html: `<blockquote>${innerHtml}</blockquote>`,
+        nextIndex: index
+    };
 }
 
 function splitMarkdownTableRow(line) {
@@ -8601,40 +9306,81 @@ function parseMarkdownTable(lines, startIndex) {
     };
 }
 
-function renderInlineMarkdownLine(line) {
-    const heading3 = String(line || '').match(/^\s*###\s+(.+?)\s*$/);
-    if (heading3) return `<h3>${renderInlineMarkdownSpans(heading3[1])}</h3>`;
-    const heading2 = String(line || '').match(/^\s*##\s+(.+?)\s*$/);
-    if (heading2) return `<h2>${renderInlineMarkdownSpans(heading2[1])}</h2>`;
-    const heading1 = String(line || '').match(/^\s*#\s+(.+?)\s*$/);
-    if (heading1) return `<h1>${renderInlineMarkdownSpans(heading1[1])}</h1>`;
-    return renderInlineMarkdownSpans(line);
+function isMarkdownBlockBoundary(lines, index) {
+    const line = String(lines[index] || '');
+    if (!line.trim()) return true;
+    if (parseMarkdownFenceStart(line)) return true;
+    if (parseMarkdownHeadingLine(line)) return true;
+    if (isMarkdownHorizontalRule(line)) return true;
+    if (parseMarkdownListLine(line)) return true;
+    if (/^\s{0,3}>\s?/.test(line)) return true;
+    if (parseMarkdownTable(lines, index)) return true;
+    return false;
 }
 
 function renderInlineMarkdown(text) {
-    const lines = String(text || '').split('\n');
+    const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
     const parts = [];
-    let plainLines = [];
-
-    const flushPlainLines = () => {
-        if (plainLines.length === 0) return;
-        parts.push(plainLines.map(renderInlineMarkdownLine).join('<br>'));
-        plainLines = [];
-    };
-
     let lineIndex = 0;
     while (lineIndex < lines.length) {
+        while (lineIndex < lines.length && !String(lines[lineIndex] || '').trim()) {
+            lineIndex += 1;
+        }
+        if (lineIndex >= lines.length) break;
+
+        const fenced = parseMarkdownFencedCodeBlock(lines, lineIndex);
+        if (fenced) {
+            parts.push(fenced.html);
+            lineIndex = fenced.nextIndex;
+            continue;
+        }
+
         const table = parseMarkdownTable(lines, lineIndex);
         if (table) {
-            flushPlainLines();
             parts.push(table.html);
             lineIndex = table.nextIndex;
             continue;
         }
-        plainLines.push(lines[lineIndex]);
-        lineIndex += 1;
+
+        const heading = parseMarkdownHeadingLine(lines[lineIndex]);
+        if (heading) {
+            parts.push(`<h${heading.level}>${renderInlineMarkdownSpans(heading.text)}</h${heading.level}>`);
+            lineIndex += 1;
+            continue;
+        }
+
+        if (isMarkdownHorizontalRule(lines[lineIndex])) {
+            parts.push('<hr>');
+            lineIndex += 1;
+            continue;
+        }
+
+        const blockquote = parseMarkdownBlockquote(lines, lineIndex);
+        if (blockquote) {
+            parts.push(blockquote.html);
+            lineIndex = blockquote.nextIndex;
+            continue;
+        }
+
+        const list = parseMarkdownList(lines, lineIndex);
+        if (list) {
+            parts.push(list.html);
+            lineIndex = list.nextIndex;
+            continue;
+        }
+
+        const paragraphLines = [];
+        while (lineIndex < lines.length) {
+            const candidate = String(lines[lineIndex] || '');
+            if (!candidate.trim()) break;
+            if (paragraphLines.length > 0 && isMarkdownBlockBoundary(lines, lineIndex)) break;
+            paragraphLines.push(candidate.trim());
+            lineIndex += 1;
+        }
+        if (paragraphLines.length > 0) {
+            parts.push(`<p>${paragraphLines.map(renderInlineMarkdownSpans).join('<br>')}</p>`);
+        }
     }
-    flushPlainLines();
     return parts.join('');
 }
 

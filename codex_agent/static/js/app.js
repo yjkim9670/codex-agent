@@ -35,6 +35,27 @@ const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
+const WORK_MODE_CLASS = 'is-work-mode';
+const WORK_MODE_KEY = 'codexWorkModeEnabled';
+const WORK_MODE_SPLIT_KEY = 'codexWorkModeSplit';
+const WORK_MODE_DEFAULT_SPLIT = 0.58;
+const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
+const WORK_MODE_MIN_PREVIEW_WIDTH_PX = 320;
+const WORK_MODE_FILE_SPLIT_KEY = 'codexWorkModeFileSplit';
+const WORK_MODE_FILE_COLUMNS_KEY = 'codexWorkModeFileColumns';
+const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
+const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
+const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
+const WORK_MODE_FILE_COLUMN_DEFAULTS = Object.freeze({
+    name: 320,
+    size: 92,
+    modified: 146
+});
+const WORK_MODE_FILE_COLUMN_LIMITS = Object.freeze({
+    name: Object.freeze({ min: 180, max: 520 }),
+    size: Object.freeze({ min: 72, max: 220 }),
+    modified: Object.freeze({ min: 110, max: 280 })
+});
 const THEME_KEY = 'codexTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
@@ -142,6 +163,22 @@ let fileBrowserViewerFullscreen = false;
 let fileBrowserMobileView = FILE_BROWSER_MOBILE_VIEW_LIST;
 let fileBrowserCachedEntries = [];
 let fileBrowserCachedTruncated = false;
+let workModeSplitRatio = WORK_MODE_DEFAULT_SPLIT;
+let workModeResizePointerId = null;
+let workModeFileRoot = FILE_BROWSER_ROOT_WORKSPACE;
+let workModeFilePath = '';
+let workModeFileSelectedPath = '';
+let workModeFileCachedEntries = [];
+let workModeFileCachedTruncated = false;
+let workModeFileViewerFullscreen = false;
+let workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
+let workModeFileResizePointerId = null;
+let workModeFileColumnResizeState = null;
+let workModeFileColumnWidths = {
+    name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
+    size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
+    modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
+};
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -568,6 +605,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitPushBtn = document.getElementById('codex-git-push');
     const gitSyncBtn = document.getElementById('codex-git-sync');
     const fileBrowserBtn = document.getElementById('codex-file-browser-open');
+    const workModeToggleBtn = document.getElementById('codex-work-mode-toggle');
+    const workModeDivider = document.getElementById('codex-work-mode-divider');
+    const workModeFileRefreshBtn = document.getElementById('codex-work-mode-file-refresh');
+    const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
+    const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
+    const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
+    const workModeFileColumnResizers = Array.from(
+        document.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]')
+    );
     const branchOverlayCommitBtn = document.getElementById('codex-branch-overlay-commit');
     const branchOverlayPushBtn = document.getElementById('codex-branch-overlay-push');
     const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
@@ -606,6 +652,7 @@ document.addEventListener('DOMContentLoaded', () => {
         gitPushBtn,
         gitSyncBtn,
         fileBrowserBtn,
+        workModeToggleBtn,
         refreshBtn
     });
 
@@ -656,12 +703,75 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserBtn) {
         fileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
+            if (isWorkModeEnabled()) {
+                void refreshWorkModeFileDirectory({
+                    root: workModeFileRoot,
+                    path: workModeFilePath,
+                    force: true
+                });
+                return;
+            }
             openFileBrowserOverlay({
                 root: FILE_BROWSER_ROOT_WORKSPACE,
                 path: ''
             });
         });
     }
+    if (workModeToggleBtn) {
+        workModeToggleBtn.addEventListener('click', event => {
+            event.preventDefault();
+            const enabled = isWorkModeEnabled();
+            setWorkModeEnabled(!enabled, { persist: true, notifyOnMobile: true });
+        });
+    }
+    if (workModeDivider) {
+        workModeDivider.addEventListener('pointerdown', startWorkModeResize);
+        workModeDivider.addEventListener('dblclick', event => {
+            event.preventDefault();
+            if (!isWorkModeEnabled()) return;
+            workModeSplitRatio = WORK_MODE_DEFAULT_SPLIT;
+            applyWorkModeSplitRatio(workModeSplitRatio, { persist: true });
+        });
+    }
+    if (workModeFileRefreshBtn) {
+        workModeFileRefreshBtn.addEventListener('click', () => {
+            void refreshWorkModeFileDirectory({
+                root: workModeFileRoot,
+                path: workModeFilePath,
+                force: true
+            });
+        });
+    }
+    if (workModeFileUpBtn) {
+        workModeFileUpBtn.addEventListener('click', () => {
+            if (!workModeFilePath) return;
+            void refreshWorkModeFileDirectory({
+                root: workModeFileRoot,
+                path: getFileBrowserParentPath(workModeFilePath),
+                force: true
+            });
+        });
+    }
+    if (workModeFileFullscreenBtn) {
+        workModeFileFullscreenBtn.addEventListener('click', event => {
+            event.preventDefault();
+            setWorkModeFileViewerFullscreen(!workModeFileViewerFullscreen);
+        });
+    }
+    if (workModeFileDivider) {
+        workModeFileDivider.addEventListener('pointerdown', startWorkModeFileResize);
+        workModeFileDivider.addEventListener('dblclick', event => {
+            event.preventDefault();
+            if (!isWorkModeEnabled()) return;
+            workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
+            applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: true });
+        });
+    }
+    workModeFileColumnResizers.forEach(resizer => {
+        resizer.addEventListener('pointerdown', event => {
+            startWorkModeFileColumnResize(event, resizer.dataset?.resizeCol || '');
+        });
+    });
     if (branchOverlayCommitBtn) {
         branchOverlayCommitBtn.addEventListener('click', () => {
             void handleGitCommit(branchOverlayCommitBtn);
@@ -936,7 +1046,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chatFullscreenBtn.addEventListener('click', () => {
             const app = document.querySelector('.app');
             const isEnabled = app?.classList.contains(CHAT_FULLSCREEN_CLASS);
-            setChatFullscreen(!isEnabled);
+            const nextEnabled = !isEnabled;
+            if (nextEnabled && isWorkModeEnabled()) {
+                setWorkModeEnabled(false, { persist: true, notifyOnMobile: false });
+            }
+            setChatFullscreen(nextEnabled);
         });
         const app = document.querySelector('.app');
         updateChatFullscreenButton(chatFullscreenBtn, app?.classList.contains(CHAT_FULLSCREEN_CLASS));
@@ -978,12 +1092,18 @@ document.addEventListener('DOMContentLoaded', () => {
     syncControlsLayout();
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+    initializeWorkMode(mobileMedia.matches);
+    setWorkModeFileViewerFullscreen(false);
+    if (isWorkModeEnabled()) {
+        applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+    }
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', event => {
             syncSessionsLayout(event.matches);
             syncLiveWeatherLayout(event.matches);
             setFileBrowserMobileView(fileBrowserMobileView);
             setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+            handleWorkModeMediaChange(event.matches);
         });
     } else if (typeof mobileMedia.addListener === 'function') {
         mobileMedia.addListener(event => {
@@ -991,8 +1111,14 @@ document.addEventListener('DOMContentLoaded', () => {
             syncLiveWeatherLayout(event.matches);
             setFileBrowserMobileView(fileBrowserMobileView);
             setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+            handleWorkModeMediaChange(event.matches);
         });
     }
+    window.addEventListener('resize', () => {
+        if (!isWorkModeEnabled()) return;
+        applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+        applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+    });
 
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(mobileMedia, [modelInput, reasoningInput, modelSelect, reasoningSelect]);
@@ -1658,10 +1784,11 @@ function initializeHeaderActionTooltips({
     gitPushBtn,
     gitSyncBtn,
     fileBrowserBtn,
+    workModeToggleBtn,
     refreshBtn
 } = {}) {
     syncHoverTooltipFromLabel(gitBranch);
-    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, refreshBtn].forEach(button => {
+    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, workModeToggleBtn, refreshBtn].forEach(button => {
         syncHoverTooltipFromLabel(button);
     });
     updateThemeSwitchTooltip(themeToggle);
@@ -1981,6 +2108,508 @@ function setChatFullscreen(enabled) {
     const isEnabled = Boolean(enabled);
     app.classList.toggle(CHAT_FULLSCREEN_CLASS, isEnabled);
     updateChatFullscreenButton(button, isEnabled);
+}
+
+function getWorkModeElements() {
+    return {
+        app: document.querySelector('.app'),
+        layout: document.querySelector('.layout'),
+        toggle: document.getElementById('codex-work-mode-toggle'),
+        divider: document.getElementById('codex-work-mode-divider'),
+        preview: document.getElementById('codex-work-mode-preview')
+    };
+}
+
+function getWorkModeFileElements() {
+    const preview = document.getElementById('codex-work-mode-preview');
+    if (!preview) return null;
+    return {
+        preview,
+        layout: document.getElementById('codex-work-mode-file-layout'),
+        gridScroll: document.getElementById('codex-work-mode-file-grid-scroll'),
+        table: document.getElementById('codex-work-mode-file-table'),
+        columns: document.getElementById('codex-work-mode-file-columns'),
+        divider: document.getElementById('codex-work-mode-file-divider'),
+        path: document.getElementById('codex-work-mode-file-path'),
+        meta: document.getElementById('codex-work-mode-file-meta'),
+        loading: document.getElementById('codex-work-mode-file-loading'),
+        empty: document.getElementById('codex-work-mode-file-empty'),
+        list: document.getElementById('codex-work-mode-file-list'),
+        listPanel: preview.querySelector('.work-mode-file-list-panel'),
+        viewerPanel: preview.querySelector('.file-browser-viewer-panel'),
+        viewerMeta: document.getElementById('codex-work-mode-file-viewer-meta'),
+        viewerContent: document.getElementById('codex-work-mode-file-viewer-content'),
+        refreshBtn: document.getElementById('codex-work-mode-file-refresh'),
+        upBtn: document.getElementById('codex-work-mode-file-up'),
+        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen'),
+        colResizers: Array.from(preview.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]'))
+    };
+}
+
+function setWorkModeFileViewerFullscreen(isFullscreen) {
+    const elements = getWorkModeFileElements();
+    workModeFileViewerFullscreen = Boolean(isFullscreen);
+    const fullscreenEnabled = Boolean(workModeFileViewerFullscreen && isWorkModeEnabled() && !isMobileLayout());
+    if (fullscreenEnabled) {
+        stopWorkModeFileResize();
+        stopWorkModeFileColumnResize();
+    }
+
+    if (elements?.preview) {
+        elements.preview.classList.toggle('is-viewer-fullscreen', fullscreenEnabled);
+    }
+    if (elements?.divider) {
+        elements.divider.classList.toggle('is-disabled', fullscreenEnabled);
+    }
+    if (Array.isArray(elements?.colResizers)) {
+        const disableColumnResize = fullscreenEnabled || !isWorkModeEnabled() || isMobileLayout();
+        elements.colResizers.forEach(handle => {
+            handle.disabled = disableColumnResize;
+        });
+    }
+    if (elements?.fullscreenBtn) {
+        elements.fullscreenBtn.classList.toggle('is-active', fullscreenEnabled);
+        elements.fullscreenBtn.setAttribute('aria-pressed', fullscreenEnabled ? 'true' : 'false');
+        const nextLabel = fullscreenEnabled ? '파일 목록 보기' : '파일 내용 전체화면';
+        elements.fullscreenBtn.setAttribute('aria-label', nextLabel);
+        elements.fullscreenBtn.setAttribute('title', nextLabel);
+        syncHoverTooltipFromLabel(elements.fullscreenBtn, nextLabel);
+    }
+    if (!fullscreenEnabled && isWorkModeEnabled()) {
+        applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+    }
+}
+
+function normalizeWorkModeFileSplitRatio(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return WORK_MODE_FILE_DEFAULT_SPLIT;
+    return Math.min(0.72, Math.max(0.2, numeric));
+}
+
+function readWorkModeFileSplitPreference() {
+    try {
+        return normalizeWorkModeFileSplitRatio(localStorage.getItem(WORK_MODE_FILE_SPLIT_KEY));
+    } catch (error) {
+        return WORK_MODE_FILE_DEFAULT_SPLIT;
+    }
+}
+
+function persistWorkModeFileSplitPreference(ratio) {
+    try {
+        localStorage.setItem(WORK_MODE_FILE_SPLIT_KEY, String(normalizeWorkModeFileSplitRatio(ratio)));
+    } catch (error) {
+        void error;
+    }
+}
+
+function clampWorkModeFileListWidth(listWidthPx, totalWidthPx) {
+    const total = Number(totalWidthPx);
+    if (!Number.isFinite(total) || total <= 0) return WORK_MODE_FILE_MIN_LIST_WIDTH_PX;
+    const min = Math.min(WORK_MODE_FILE_MIN_LIST_WIDTH_PX, Math.max(170, total - WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX));
+    const max = Math.max(min, total - WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX);
+    return Math.min(max, Math.max(min, Number(listWidthPx)));
+}
+
+function applyWorkModeFileSplitRatio(ratio = workModeFileSplitRatio, { persist = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.preview || !elements?.layout) return;
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
+    if (totalWidth <= 0) return;
+
+    const nextRatio = normalizeWorkModeFileSplitRatio(ratio);
+    const desiredWidth = totalWidth * nextRatio;
+    const listWidth = clampWorkModeFileListWidth(desiredWidth, totalWidth);
+    workModeFileSplitRatio = totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT;
+    elements.preview.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
+    if (persist) {
+        persistWorkModeFileSplitPreference(workModeFileSplitRatio);
+    }
+}
+
+function updateWorkModeFileSplitFromPointer(clientX, { persist = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.layout) return;
+    const layoutRect = elements.layout.getBoundingClientRect();
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, layoutRect.width - dividerWidth);
+    if (totalWidth <= 0) return;
+    const rawWidth = Number(clientX) - layoutRect.left;
+    const listWidth = clampWorkModeFileListWidth(rawWidth, totalWidth);
+    const ratio = listWidth / totalWidth;
+    applyWorkModeFileSplitRatio(ratio, { persist: false });
+    if (persist) {
+        persistWorkModeFileSplitPreference(workModeFileSplitRatio);
+    }
+}
+
+function normalizeWorkModeFileColumnName(column) {
+    const normalized = String(column || '').trim().toLowerCase();
+    if (normalized === 'name' || normalized === 'size' || normalized === 'modified') {
+        return normalized;
+    }
+    return '';
+}
+
+function normalizeWorkModeFileColumnWidth(column, width) {
+    const key = normalizeWorkModeFileColumnName(column);
+    if (!key) return null;
+    const limits = WORK_MODE_FILE_COLUMN_LIMITS[key];
+    const numeric = Number(width);
+    if (!Number.isFinite(numeric)) return WORK_MODE_FILE_COLUMN_DEFAULTS[key];
+    return Math.min(limits.max, Math.max(limits.min, Math.round(numeric)));
+}
+
+function readWorkModeFileColumnsPreference() {
+    const fallback = {
+        name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
+        size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
+        modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
+    };
+    try {
+        const raw = localStorage.getItem(WORK_MODE_FILE_COLUMNS_KEY);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return {
+            name: normalizeWorkModeFileColumnWidth('name', parsed?.name),
+            size: normalizeWorkModeFileColumnWidth('size', parsed?.size),
+            modified: normalizeWorkModeFileColumnWidth('modified', parsed?.modified)
+        };
+    } catch (error) {
+        return fallback;
+    }
+}
+
+function persistWorkModeFileColumnsPreference() {
+    try {
+        localStorage.setItem(WORK_MODE_FILE_COLUMNS_KEY, JSON.stringify(workModeFileColumnWidths));
+    } catch (error) {
+        void error;
+    }
+}
+
+function applyWorkModeFileColumnWidths({ persist = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.preview) return;
+    const nameWidth = normalizeWorkModeFileColumnWidth('name', workModeFileColumnWidths.name);
+    const sizeWidth = normalizeWorkModeFileColumnWidth('size', workModeFileColumnWidths.size);
+    const modifiedWidth = normalizeWorkModeFileColumnWidth('modified', workModeFileColumnWidths.modified);
+    workModeFileColumnWidths = {
+        name: nameWidth,
+        size: sizeWidth,
+        modified: modifiedWidth
+    };
+    elements.preview.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
+    elements.preview.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
+    elements.preview.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
+    if (persist) {
+        persistWorkModeFileColumnsPreference();
+    }
+}
+
+function isWorkModeEnabled() {
+    const app = document.querySelector('.app');
+    return Boolean(app?.classList.contains(WORK_MODE_CLASS));
+}
+
+function normalizeWorkModeSplitRatio(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return WORK_MODE_DEFAULT_SPLIT;
+    return Math.min(0.82, Math.max(0.3, numeric));
+}
+
+function updateWorkModeToggleButton(button, enabled, { disabled = false } = {}) {
+    if (!button) return;
+    const isEnabled = Boolean(enabled);
+    const isDisabled = Boolean(disabled);
+    button.classList.toggle('is-active', isEnabled);
+    button.setAttribute('aria-pressed', String(isEnabled));
+    button.disabled = isDisabled;
+    const label = isEnabled ? 'Disable work mode' : 'Enable work mode';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    syncHoverTooltipFromLabel(button, label);
+}
+
+function readWorkModePreference() {
+    try {
+        return localStorage.getItem(WORK_MODE_KEY) === '1';
+    } catch (error) {
+        return false;
+    }
+}
+
+function persistWorkModePreference(enabled) {
+    try {
+        localStorage.setItem(WORK_MODE_KEY, enabled ? '1' : '0');
+    } catch (error) {
+        void error;
+    }
+}
+
+function readWorkModeSplitPreference() {
+    try {
+        return normalizeWorkModeSplitRatio(localStorage.getItem(WORK_MODE_SPLIT_KEY));
+    } catch (error) {
+        return WORK_MODE_DEFAULT_SPLIT;
+    }
+}
+
+function persistWorkModeSplitPreference(ratio) {
+    try {
+        localStorage.setItem(WORK_MODE_SPLIT_KEY, String(normalizeWorkModeSplitRatio(ratio)));
+    } catch (error) {
+        void error;
+    }
+}
+
+function clampWorkModeChatWidth(chatWidthPx, contentWidthPx) {
+    const total = Number(contentWidthPx);
+    if (!Number.isFinite(total) || total <= 0) return WORK_MODE_MIN_CHAT_WIDTH_PX;
+    const min = Math.min(WORK_MODE_MIN_CHAT_WIDTH_PX, Math.max(240, total - WORK_MODE_MIN_PREVIEW_WIDTH_PX));
+    const max = Math.max(min, total - WORK_MODE_MIN_PREVIEW_WIDTH_PX);
+    return Math.min(max, Math.max(min, Number(chatWidthPx)));
+}
+
+function applyWorkModeSplitRatio(ratio = workModeSplitRatio, { persist = false } = {}) {
+    const elements = getWorkModeElements();
+    if (!elements.app || !elements.layout) return;
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
+    if (totalWidth <= 0) return;
+
+    const nextRatio = normalizeWorkModeSplitRatio(ratio);
+    const desiredWidth = totalWidth * nextRatio;
+    const chatWidth = clampWorkModeChatWidth(desiredWidth, totalWidth);
+    workModeSplitRatio = totalWidth > 0 ? (chatWidth / totalWidth) : WORK_MODE_DEFAULT_SPLIT;
+    elements.app.style.setProperty('--work-mode-chat-width', `${Math.round(chatWidth)}px`);
+    if (persist) {
+        persistWorkModeSplitPreference(workModeSplitRatio);
+    }
+}
+
+function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } = {}) {
+    const elements = getWorkModeElements();
+    if (!elements.app) return false;
+    const wantsEnabled = Boolean(enabled);
+    const mobile = isMobileLayout();
+    if (wantsEnabled && mobile) {
+        if (notifyOnMobile) {
+            showToast('작업 모드는 데스크톱 화면에서만 사용할 수 있습니다.', {
+                tone: 'default',
+                durationMs: 3200
+            });
+        }
+        updateWorkModeToggleButton(elements.toggle, false, { disabled: true });
+        return false;
+    }
+
+    if (wantsEnabled) {
+        if (elements.app.classList.contains(CHAT_FULLSCREEN_CLASS)) {
+            setChatFullscreen(false);
+        }
+        if (isFileBrowserOverlayOpen()) {
+            closeFileBrowserOverlay();
+        }
+    } else {
+        if (workModeResizePointerId !== null) {
+            stopWorkModeResize();
+        }
+        stopWorkModeFileResize();
+        stopWorkModeFileColumnResize();
+    }
+
+    elements.app.classList.toggle(WORK_MODE_CLASS, wantsEnabled);
+    if (elements.preview) {
+        elements.preview.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
+    }
+    if (elements.divider) {
+        elements.divider.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
+    }
+    updateWorkModeToggleButton(elements.toggle, wantsEnabled, { disabled: mobile });
+
+    if (wantsEnabled) {
+        applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+        applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+        applyWorkModeFileColumnWidths({ persist: false });
+        setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
+        void ensureWorkModeFilePanelContent();
+    } else {
+        setWorkModeFileViewerFullscreen(false);
+    }
+
+    if (persist) {
+        persistWorkModePreference(wantsEnabled);
+    }
+    return wantsEnabled;
+}
+
+function initializeWorkMode(isMobile) {
+    workModeSplitRatio = readWorkModeSplitPreference();
+    workModeFileSplitRatio = readWorkModeFileSplitPreference();
+    workModeFileColumnWidths = readWorkModeFileColumnsPreference();
+    const preferred = readWorkModePreference();
+    setWorkModeEnabled(!isMobile && preferred, { persist: false, notifyOnMobile: false });
+    applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+    applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+    applyWorkModeFileColumnWidths({ persist: false });
+}
+
+function handleWorkModeMediaChange(isMobile) {
+    const elements = getWorkModeElements();
+    if (isMobile) {
+        setWorkModeEnabled(false, { persist: false, notifyOnMobile: false });
+        setWorkModeFileViewerFullscreen(false);
+        updateWorkModeToggleButton(elements.toggle, false, { disabled: true });
+        return;
+    }
+    updateWorkModeToggleButton(elements.toggle, isWorkModeEnabled(), { disabled: false });
+    if (readWorkModePreference() && !isWorkModeEnabled()) {
+        setWorkModeEnabled(true, { persist: false, notifyOnMobile: false });
+    }
+    applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+    applyWorkModeFileColumnWidths({ persist: false });
+    setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
+    applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+}
+
+function updateWorkModeSplitFromPointer(clientX, { persist = false } = {}) {
+    const elements = getWorkModeElements();
+    if (!elements.layout) return;
+    const layoutRect = elements.layout.getBoundingClientRect();
+    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
+    const totalWidth = Math.max(0, layoutRect.width - dividerWidth);
+    if (totalWidth <= 0) return;
+    const rawWidth = Number(clientX) - layoutRect.left;
+    const chatWidth = clampWorkModeChatWidth(rawWidth, totalWidth);
+    const ratio = chatWidth / totalWidth;
+    applyWorkModeSplitRatio(ratio, { persist: false });
+    if (persist) {
+        persistWorkModeSplitPreference(workModeSplitRatio);
+    }
+}
+
+function syncWorkModeResizeBodyClass() {
+    const active = workModeResizePointerId !== null
+        || workModeFileResizePointerId !== null
+        || Boolean(workModeFileColumnResizeState);
+    document.body.classList.toggle('is-work-mode-resizing', active);
+}
+
+function stopWorkModeResize() {
+    if (workModeResizePointerId === null) return;
+    workModeResizePointerId = null;
+    syncWorkModeResizeBodyClass();
+    window.removeEventListener('pointermove', handleWorkModeResizePointerMove);
+    window.removeEventListener('pointerup', handleWorkModeResizePointerUp);
+    window.removeEventListener('pointercancel', handleWorkModeResizePointerUp);
+}
+
+function handleWorkModeResizePointerMove(event) {
+    if (workModeResizePointerId === null || event.pointerId !== workModeResizePointerId) return;
+    if (!isWorkModeEnabled()) return;
+    event.preventDefault();
+    updateWorkModeSplitFromPointer(event.clientX, { persist: false });
+}
+
+function handleWorkModeResizePointerUp(event) {
+    if (workModeResizePointerId === null || event.pointerId !== workModeResizePointerId) return;
+    event.preventDefault();
+    updateWorkModeSplitFromPointer(event.clientX, { persist: true });
+    stopWorkModeResize();
+}
+
+function startWorkModeResize(event) {
+    if (!event || event.button !== 0) return;
+    if (!isWorkModeEnabled() || isMobileLayout()) return;
+    event.preventDefault();
+    workModeResizePointerId = event.pointerId;
+    syncWorkModeResizeBodyClass();
+    window.addEventListener('pointermove', handleWorkModeResizePointerMove);
+    window.addEventListener('pointerup', handleWorkModeResizePointerUp);
+    window.addEventListener('pointercancel', handleWorkModeResizePointerUp);
+}
+
+function stopWorkModeFileResize() {
+    if (workModeFileResizePointerId === null) return;
+    workModeFileResizePointerId = null;
+    syncWorkModeResizeBodyClass();
+    window.removeEventListener('pointermove', handleWorkModeFileResizePointerMove);
+    window.removeEventListener('pointerup', handleWorkModeFileResizePointerUp);
+    window.removeEventListener('pointercancel', handleWorkModeFileResizePointerUp);
+}
+
+function handleWorkModeFileResizePointerMove(event) {
+    if (workModeFileResizePointerId === null || event.pointerId !== workModeFileResizePointerId) return;
+    if (!isWorkModeEnabled() || workModeFileViewerFullscreen) return;
+    event.preventDefault();
+    updateWorkModeFileSplitFromPointer(event.clientX, { persist: false });
+}
+
+function handleWorkModeFileResizePointerUp(event) {
+    if (workModeFileResizePointerId === null || event.pointerId !== workModeFileResizePointerId) return;
+    event.preventDefault();
+    updateWorkModeFileSplitFromPointer(event.clientX, { persist: true });
+    stopWorkModeFileResize();
+}
+
+function startWorkModeFileResize(event) {
+    if (!event || event.button !== 0) return;
+    if (!isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen) return;
+    const elements = getWorkModeFileElements();
+    if (elements?.divider?.classList.contains('is-disabled')) return;
+    event.preventDefault();
+    workModeFileResizePointerId = event.pointerId;
+    syncWorkModeResizeBodyClass();
+    window.addEventListener('pointermove', handleWorkModeFileResizePointerMove);
+    window.addEventListener('pointerup', handleWorkModeFileResizePointerUp);
+    window.addEventListener('pointercancel', handleWorkModeFileResizePointerUp);
+}
+
+function stopWorkModeFileColumnResize() {
+    if (!workModeFileColumnResizeState) return;
+    workModeFileColumnResizeState = null;
+    syncWorkModeResizeBodyClass();
+    window.removeEventListener('pointermove', handleWorkModeFileColumnResizePointerMove);
+    window.removeEventListener('pointerup', handleWorkModeFileColumnResizePointerUp);
+    window.removeEventListener('pointercancel', handleWorkModeFileColumnResizePointerUp);
+}
+
+function handleWorkModeFileColumnResizePointerMove(event) {
+    const state = workModeFileColumnResizeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    const delta = Number(event.clientX) - state.startX;
+    const width = state.startWidth + delta;
+    const normalized = normalizeWorkModeFileColumnWidth(state.column, width);
+    if (!normalized) return;
+    workModeFileColumnWidths[state.column] = normalized;
+    applyWorkModeFileColumnWidths({ persist: false });
+}
+
+function handleWorkModeFileColumnResizePointerUp(event) {
+    const state = workModeFileColumnResizeState;
+    if (!state || event.pointerId !== state.pointerId) return;
+    event.preventDefault();
+    applyWorkModeFileColumnWidths({ persist: true });
+    stopWorkModeFileColumnResize();
+}
+
+function startWorkModeFileColumnResize(event, column) {
+    const targetColumn = normalizeWorkModeFileColumnName(column);
+    if (!targetColumn || !event || event.button !== 0) return;
+    if (!isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen) return;
+    event.preventDefault();
+    workModeFileColumnResizeState = {
+        pointerId: event.pointerId,
+        column: targetColumn,
+        startX: Number(event.clientX),
+        startWidth: normalizeWorkModeFileColumnWidth(targetColumn, workModeFileColumnWidths[targetColumn])
+    };
+    syncWorkModeResizeBodyClass();
+    window.addEventListener('pointermove', handleWorkModeFileColumnResizePointerMove);
+    window.addEventListener('pointerup', handleWorkModeFileColumnResizePointerUp);
+    window.addEventListener('pointercancel', handleWorkModeFileColumnResizePointerUp);
 }
 
 function syncSessionsLayout(isMobile) {
@@ -4284,6 +4913,365 @@ function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '')
     setHoverTooltip(elements.path, absolutePath);
 }
 
+function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = '') {
+    void root;
+    const elements = getWorkModeFileElements();
+    if (!elements?.path) return;
+    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
+    const displayPrefix = '$workspace';
+    const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
+    elements.path.textContent = display;
+
+    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
+    const absolutePath = absoluteRoot
+        ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
+        : display;
+    setHoverTooltip(elements.path, absolutePath);
+}
+
+function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
+    const elements = getWorkModeFileElements();
+    if (!elements) return;
+    const loading = Boolean(isLoading);
+    if (elements.loading) {
+        elements.loading.textContent = message;
+        elements.loading.classList.toggle('is-hidden', !loading);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', loading);
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+    if (elements.refreshBtn) {
+        elements.refreshBtn.disabled = loading;
+    }
+    if (elements.upBtn) {
+        elements.upBtn.disabled = loading || !workModeFilePath;
+    }
+    if (elements.fullscreenBtn) {
+        elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || isMobileLayout();
+    }
+    if (Array.isArray(elements.colResizers)) {
+        const disableColumnResize = loading || !isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen;
+        elements.colResizers.forEach(handle => {
+            handle.disabled = disableColumnResize;
+        });
+    }
+    if (elements.divider) {
+        elements.divider.classList.toggle('is-disabled', loading || workModeFileViewerFullscreen);
+    }
+}
+
+function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
+    const elements = getWorkModeFileElements();
+    if (!elements) return;
+    if (elements.viewerMeta) {
+        elements.viewerMeta.textContent = '파일을 선택하면 미리보기가 표시됩니다.';
+    }
+    if (elements.viewerContent) {
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = message;
+        elements.viewerContent.appendChild(placeholder);
+    }
+}
+
+function applyWorkModeFileSelectionState() {
+    const elements = getWorkModeFileElements();
+    if (!elements?.list) return;
+    const normalizedSelection = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    elements.list.querySelectorAll('button.work-mode-file-entry[data-entry-path]').forEach(button => {
+        const candidate = normalizeFileBrowserRelativePath(button.dataset?.entryPath || '');
+        button.classList.toggle('is-active', Boolean(normalizedSelection) && candidate === normalizedSelection);
+    });
+}
+
+function renderWorkModeFileList(entries) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.list) return;
+    elements.list.innerHTML = '';
+    const rows = Array.isArray(entries) ? entries : [];
+    rows.forEach(entry => {
+        const entryPath = normalizeFileBrowserRelativePath(entry?.path || '');
+        const entryType = entry?.type === 'dir' ? 'dir' : 'file';
+        if (!entryPath) return;
+
+        const item = document.createElement('li');
+        item.className = 'file-browser-list-item';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `work-mode-file-entry${entryType === 'dir' ? ' is-dir' : ''}`;
+        button.dataset.entryPath = entryPath;
+        button.dataset.entryType = entryType;
+
+        const name = document.createElement('span');
+        name.className = 'work-mode-file-cell work-mode-file-cell-name';
+        const baseName = String(entry?.name || entryPath);
+        name.textContent = entryType === 'dir' ? `${baseName}/` : baseName;
+        name.title = baseName;
+        button.appendChild(name);
+
+        const size = document.createElement('span');
+        size.className = 'work-mode-file-cell work-mode-file-cell-size';
+        const sizeText = formatFileBrowserSize(entry?.size);
+        size.textContent = entryType === 'dir' ? '-' : sizeText;
+        button.appendChild(size);
+
+        const modified = document.createElement('span');
+        modified.className = 'work-mode-file-cell work-mode-file-cell-modified';
+        const modifiedText = formatFileBrowserModifiedAt(entry?.modified_at);
+        modified.textContent = modifiedText;
+        modified.title = modifiedText;
+        button.appendChild(modified);
+
+        button.addEventListener('click', () => {
+            if (entryType === 'dir') {
+                workModeFileSelectedPath = '';
+                clearWorkModeFileViewer('파일을 선택하세요.');
+                void refreshWorkModeFileDirectory({
+                    root: workModeFileRoot,
+                    path: entryPath,
+                    force: true
+                });
+                return;
+            }
+            void openFileInWorkModePanel(entryPath, { root: workModeFileRoot });
+        });
+
+        item.appendChild(button);
+        elements.list.appendChild(item);
+    });
+    applyWorkModeFileSelectionState();
+}
+
+function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements) return;
+    const allEntries = Array.isArray(entries) ? entries : [];
+    const visibleEntries = filterFileBrowserEntries(allEntries);
+    const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
+
+    renderWorkModeFileList(visibleEntries);
+
+    if (elements.meta) {
+        const countText = filteredCount > 0
+            ? `항목 ${visibleEntries.length}/${allEntries.length}개`
+            : `항목 ${visibleEntries.length}개`;
+        const extra = [];
+        if (filteredCount > 0) {
+            extra.push(`숨김 ${filteredCount}개`);
+        }
+        if (truncated) {
+            extra.push('일부만 표시됨');
+        }
+        elements.meta.textContent = extra.length > 0 ? `${countText} (${extra.join(', ')})` : countText;
+    }
+
+    if (elements.empty) {
+        if (visibleEntries.length === 0 && allEntries.length > 0) {
+            elements.empty.textContent = '필터 조건으로 모든 항목이 숨겨져 있습니다.';
+        } else {
+            elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
+        }
+        elements.empty.classList.toggle('is-hidden', visibleEntries.length !== 0);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', visibleEntries.length === 0);
+    }
+}
+
+async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = workModeFilePath, force = false } = {}) {
+    void force;
+    const elements = getWorkModeFileElements();
+    if (!elements) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+
+    setWorkModeFileDirectoryLoading(true);
+    if (elements.meta) {
+        elements.meta.textContent = '디렉터리 목록을 불러오는 중...';
+    }
+
+    try {
+        const result = await fetchFileBrowserDirectory(normalizedRoot, normalizedPath);
+        workModeFileRoot = normalizeFileBrowserRoot(result?.root || normalizedRoot);
+        workModeFilePath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath, result?.root_path || '');
+
+        const entries = Array.isArray(result?.entries) ? result.entries : [];
+        workModeFileCachedEntries = entries;
+        workModeFileCachedTruncated = Boolean(result?.truncated);
+        renderWorkModeFileDirectoryEntries(workModeFileCachedEntries, {
+            truncated: workModeFileCachedTruncated
+        });
+        if (elements.upBtn) {
+            const canGoUp = Boolean(result?.can_go_up) || Boolean(workModeFilePath);
+            elements.upBtn.disabled = !canGoUp;
+        }
+        if (elements.loading) {
+            elements.loading.classList.add('is-hidden');
+        }
+        return result;
+    } catch (error) {
+        workModeFileCachedEntries = [];
+        workModeFileCachedTruncated = false;
+        if (elements.meta) {
+            elements.meta.textContent = normalizeError(error, '디렉터리 목록을 불러오지 못했습니다.');
+        }
+        if (elements.list) {
+            elements.list.classList.add('is-hidden');
+            elements.list.innerHTML = '';
+        }
+        if (elements.empty) {
+            elements.empty.textContent = '디렉터리 목록을 불러오지 못했습니다.';
+            elements.empty.classList.remove('is-hidden');
+        }
+        showToast(normalizeError(error, '작업 모드 문서 목록 조회에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return null;
+    } finally {
+        setWorkModeFileDirectoryLoading(false);
+    }
+}
+
+async function openFileInWorkModePanel(
+    path,
+    {
+        root = workModeFileRoot,
+        fallbackToDirectory = false,
+        line = null,
+        column = null
+    } = {}
+) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    if (!normalizedPath) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const requestedLine = normalizeSourceLineNumber(line);
+    const requestedColumn = normalizeSourceColumnNumber(column);
+    const elements = getWorkModeFileElements();
+    if (!elements) return null;
+
+    if (elements.viewerMeta) {
+        const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
+        elements.viewerMeta.textContent = `${displayPath} · 불러오는 중...`;
+    }
+    if (elements.viewerContent) {
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = '파일을 불러오는 중...';
+        elements.viewerContent.appendChild(placeholder);
+    }
+
+    try {
+        const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
+        workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        renderFileBrowserViewerIntoElements(elements, result, {
+            line: requestedLine,
+            column: requestedColumn
+        });
+        applyWorkModeFileSelectionState();
+        return result;
+    } catch (error) {
+        const payload = getGitErrorPayload(error);
+        if (fallbackToDirectory && payload?.error_code === 'not_file') {
+            workModeFileSelectedPath = '';
+            clearWorkModeFileViewer('폴더가 선택되었습니다. 목록에서 파일을 선택하세요.');
+            await refreshWorkModeFileDirectory({
+                root: normalizedRoot,
+                path: normalizedPath,
+                force: true
+            });
+            return {
+                opened_directory: true,
+                path: normalizedPath
+            };
+        }
+        if (elements.viewerMeta) {
+            elements.viewerMeta.textContent = normalizedPath;
+        }
+        if (elements.viewerContent) {
+            elements.viewerContent.innerHTML = '';
+            const placeholder = document.createElement('div');
+            placeholder.className = 'file-browser-placeholder';
+            placeholder.textContent = normalizeError(error, '파일을 열지 못했습니다.');
+            elements.viewerContent.appendChild(placeholder);
+        }
+        showToast(normalizeError(error, '작업 모드 파일 열기에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return null;
+    }
+}
+
+function openWorkModeFileTarget(target, options = {}) {
+    if (!target) return false;
+    const requestedLine = normalizeSourceLineNumber(options?.line);
+    const requestedColumn = normalizeSourceColumnNumber(options?.column);
+    const requestedRoot = normalizeFileBrowserRoot(target.root);
+    const requestedFilePath = normalizeFileBrowserRelativePath(target.path || '');
+    const requestedPath = normalizeFileBrowserRelativePath(
+        requestedFilePath ? getFileBrowserParentPath(requestedFilePath) : ''
+    );
+
+    workModeFileRoot = requestedRoot;
+    workModeFilePath = requestedPath;
+    workModeFileSelectedPath = requestedFilePath;
+    setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
+    if (requestedFilePath) {
+        const lineSuffix = requestedLine
+            ? (requestedColumn ? ` (line ${requestedLine}:${requestedColumn})` : ` (line ${requestedLine})`)
+            : '';
+        clearWorkModeFileViewer(`파일을 여는 중...${lineSuffix}`);
+    } else {
+        clearWorkModeFileViewer('파일을 선택하세요.');
+    }
+
+    void (async () => {
+        const listed = await refreshWorkModeFileDirectory({
+            root: requestedRoot,
+            path: requestedPath,
+            force: true
+        });
+        if (!listed || !requestedFilePath) return;
+        await openFileInWorkModePanel(requestedFilePath, {
+            root: requestedRoot,
+            fallbackToDirectory: true,
+            line: requestedLine,
+            column: requestedColumn
+        });
+    })();
+    return true;
+}
+
+async function ensureWorkModeFilePanelContent() {
+    if (!isWorkModeEnabled()) return;
+    const hasEntries = Array.isArray(workModeFileCachedEntries) && workModeFileCachedEntries.length > 0;
+    const hasSelection = Boolean(normalizeFileBrowserRelativePath(workModeFileSelectedPath));
+    if (!hasEntries) {
+        const listed = await refreshWorkModeFileDirectory({
+            root: workModeFileRoot,
+            path: workModeFilePath,
+            force: true
+        });
+        if (!listed) return;
+    }
+    if (hasSelection) {
+        await openFileInWorkModePanel(workModeFileSelectedPath, {
+            root: workModeFileRoot,
+            fallbackToDirectory: true
+        });
+    } else if (!hasEntries) {
+        clearWorkModeFileViewer('파일을 선택하세요.');
+    }
+}
+
 function setFileBrowserViewerFullscreen(isFullscreen) {
     const elements = getFileBrowserElements();
     if (!elements?.overlay) return;
@@ -4684,14 +5672,11 @@ function buildFileBrowserSourceViewer(content, { language = '', isScript = false
     };
 }
 
-function revealFileBrowserSourceLine(lineNumber) {
+function revealFileBrowserSourceLineInContainer(container, lineNumber) {
     const requestedLine = normalizeSourceLineNumber(lineNumber);
     if (!requestedLine) return false;
-    const elements = getFileBrowserElements();
-    if (!elements?.viewerContent) return false;
-    const target = elements.viewerContent.querySelector(
-        `.file-browser-source-line[data-line-number="${requestedLine}"]`
-    );
+    if (!(container instanceof Element)) return false;
+    const target = container.querySelector(`.file-browser-source-line[data-line-number="${requestedLine}"]`);
     if (!(target instanceof HTMLElement)) return false;
     target.scrollIntoView({
         block: 'center',
@@ -4701,8 +5686,12 @@ function revealFileBrowserSourceLine(lineNumber) {
     return true;
 }
 
-function renderFileBrowserViewer(result, options = {}) {
+function revealFileBrowserSourceLine(lineNumber) {
     const elements = getFileBrowserElements();
+    return revealFileBrowserSourceLineInContainer(elements?.viewerContent, lineNumber);
+}
+
+function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     if (!elements?.viewerContent) return;
 
     const requestedLine = normalizeSourceLineNumber(options?.line);
@@ -4789,8 +5778,13 @@ function renderFileBrowserViewer(result, options = {}) {
         return;
     }
     requestAnimationFrame(() => {
-        revealFileBrowserSourceLine(requestedLine);
+        revealFileBrowserSourceLineInContainer(elements.viewerContent, requestedLine);
     });
+}
+
+function renderFileBrowserViewer(result, options = {}) {
+    const elements = getFileBrowserElements();
+    renderFileBrowserViewerIntoElements(elements, result, options);
 }
 
 async function openFileInBrowserOverlay(
@@ -4943,6 +5937,12 @@ function openFileBrowserFromAbsolutePath(absolutePath, options = {}) {
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     if (!target) {
         return false;
+    }
+    if (isWorkModeEnabled()) {
+        return openWorkModeFileTarget(target, {
+            line: requestedLine,
+            column: requestedColumn
+        });
     }
     if (!target.path) {
         openFileBrowserOverlay({

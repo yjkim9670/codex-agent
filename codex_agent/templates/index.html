@@ -42,6 +42,9 @@
                     <button class="btn ghost icon-only git-action-push" type="button" id="codex-git-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch"></button>
                     <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Open repository sync panel" title="Open repository sync panel"></button>
                     <button class="btn ghost icon-only git-action-browse" type="button" id="codex-file-browser-open" aria-label="Open file browser" title="Open file browser"></button>
+                    <button class="btn ghost icon-only work-mode-toggle" type="button" id="codex-work-mode-toggle" aria-pressed="false" aria-label="Enable work mode" title="Enable work mode">
+                        <span class="sr-only">Work mode</span>
+                    </button>
                     <button class="btn ghost icon-only sessions-refresh" type="button" id="codex-chat-refresh" aria-label="Refresh all panels" title="Refresh all panels"></button>
                 </div>
             </div>
@@ -231,6 +234,93 @@
                 </form>
 
                 <div id="codex-chat-status" class="chat-status">Idle</div>
+            </section>
+
+            <div
+                class="work-mode-divider"
+                id="codex-work-mode-divider"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize work mode panels"
+                aria-hidden="true"
+            ></div>
+
+            <section class="work-mode-preview" id="codex-work-mode-preview" aria-hidden="true">
+                <div class="work-mode-preview-header">
+                    <div class="work-mode-preview-title">Docs Preview</div>
+                    <div class="work-mode-preview-actions">
+                        <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
+                        <button
+                            class="btn ghost icon-only work-mode-preview-fullscreen"
+                            type="button"
+                            id="codex-work-mode-file-fullscreen"
+                            aria-pressed="false"
+                            aria-label="파일 내용 전체화면"
+                            title="파일 내용 전체화면"
+                        >
+                            <span class="sr-only">파일 내용 전체화면</span>
+                        </button>
+                        <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
+                            <span class="sr-only">문서 목록 새로고침</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
+                <div class="file-browser-layout work-mode-file-layout" id="codex-work-mode-file-layout">
+                    <div class="file-browser-list-panel work-mode-file-list-panel">
+                        <div class="file-browser-meta" id="codex-work-mode-file-meta">디렉터리 목록을 불러오는 중...</div>
+                        <div class="work-mode-file-grid-scroll" id="codex-work-mode-file-grid-scroll">
+                            <div class="work-mode-file-table" id="codex-work-mode-file-table">
+                                <div class="work-mode-file-columns" id="codex-work-mode-file-columns">
+                                    <div class="work-mode-file-col-heading work-mode-file-col-name">
+                                        <span class="work-mode-file-col-label">이름</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="name"
+                                            aria-label="이름 컬럼 폭 조정"
+                                            title="이름 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                    <div class="work-mode-file-col-heading work-mode-file-col-size">
+                                        <span class="work-mode-file-col-label">용량</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="size"
+                                            aria-label="용량 컬럼 폭 조정"
+                                            title="용량 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                    <div class="work-mode-file-col-heading work-mode-file-col-modified">
+                                        <span class="work-mode-file-col-label">수정시각</span>
+                                        <button
+                                            class="work-mode-file-col-resizer"
+                                            type="button"
+                                            data-resize-col="modified"
+                                            aria-label="수정시각 컬럼 폭 조정"
+                                            title="수정시각 컬럼 폭 조정"
+                                        ></button>
+                                    </div>
+                                </div>
+                                <div class="file-browser-loading" id="codex-work-mode-file-loading">디렉터리 목록을 불러오는 중...</div>
+                                <div class="file-browser-empty is-hidden" id="codex-work-mode-file-empty">표시할 파일이 없습니다.</div>
+                                <ul class="file-browser-list work-mode-file-list is-hidden" id="codex-work-mode-file-list"></ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div
+                        class="work-mode-file-divider"
+                        id="codex-work-mode-file-divider"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label="파일 목록과 미리보기 너비 조정"
+                    ></div>
+                    <div class="file-browser-viewer-panel">
+                        <div class="file-browser-viewer-meta" id="codex-work-mode-file-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
+                        <div class="file-browser-viewer-content" id="codex-work-mode-file-viewer-content">파일을 선택하세요.</div>
+                    </div>
+                </div>
             </section>
         </main>
     </div>

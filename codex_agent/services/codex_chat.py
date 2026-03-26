@@ -1,14 +1,17 @@
 """Codex chat session storage and execution helpers."""
 
 import base64
+import hashlib
 import json
 import logging
 import math
+import os
 import re
 import subprocess
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -31,12 +34,29 @@ from ..config import (
 )
 from ..utils.time import normalize_timestamp
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX fallback
+    msvcrt = None
+
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
-_CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
+_AUTH_STATE_LOCK = threading.Lock()
+_CODEX_HOME = Path.home() / '.codex'
+_CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
+_CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
+_CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
+_ALLOW_COMPETING_PROCESSES = str(
+    os.environ.get('CODEX_ALLOW_COMPETING_PROCESSES') or ''
+).strip().lower() in ('1', 'true', 'yes', 'on')
 _LOGGER = logging.getLogger(__name__)
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -84,6 +104,10 @@ _TOKEN_PART_KEYS = (
 
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
+_AUTH_REFRESH_ERROR_RE = re.compile(
+    r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
+    re.IGNORECASE
+)
 
 
 def _load_data():
@@ -107,6 +131,16 @@ def _save_data(data):
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding='utf-8'
     )
+
+
+def _write_json_atomic(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding='utf-8'
+    )
+    temp_path.replace(path)
 
 
 _TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
@@ -186,6 +220,270 @@ def _parse_toml_value(raw_value):
     if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
         return cleaned[1:-1]
     return cleaned
+
+
+def _summarize_auth_failure_text(text, max_chars=240):
+    summary = ' '.join(str(text or '').split())
+    if len(summary) <= max_chars:
+        return summary
+    return f'{summary[:max_chars - 1]}…'
+
+
+def _read_auth_fingerprint():
+    try:
+        raw = _CODEX_AUTH_PATH.read_text(encoding='utf-8')
+    except Exception:
+        return ''
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _load_auth_state():
+    try:
+        raw = _CODEX_AUTH_STATE_PATH.read_text(encoding='utf-8')
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _clear_auth_state_locked():
+    try:
+        _CODEX_AUTH_STATE_PATH.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
+
+
+def _build_auth_block_message(reason=''):
+    base = (
+        'Codex 인증이 잠겨 있습니다. 다른 Codex 세션을 모두 종료한 뒤 '
+        '`codex logout` 후 `codex login`을 다시 실행해 주세요.'
+    )
+    detail = _summarize_auth_failure_text(reason)
+    if not detail:
+        return base
+    return f'{base} ({detail})'
+
+
+def _is_auth_refresh_failure_text(text):
+    normalized = str(text or '').strip()
+    if not normalized:
+        return False
+    return bool(_AUTH_REFRESH_ERROR_RE.search(normalized))
+
+
+def _mark_auth_failure(reason):
+    payload = {
+        'blocked': True,
+        'reason': _summarize_auth_failure_text(reason),
+        'auth_hash': _read_auth_fingerprint(),
+        'updated_at': normalize_timestamp(None),
+    }
+    with _AUTH_STATE_LOCK:
+        _write_json_atomic(_CODEX_AUTH_STATE_PATH, payload)
+
+
+def get_auth_block_error():
+    with _AUTH_STATE_LOCK:
+        state = _load_auth_state()
+        if not state.get('blocked'):
+            return ''
+        expected_hash = str(state.get('auth_hash') or '').strip()
+        current_hash = _read_auth_fingerprint()
+        if expected_hash and current_hash and current_hash != expected_hash:
+            _clear_auth_state_locked()
+            return ''
+        return _build_auth_block_message(state.get('reason'))
+
+
+def _list_competing_codex_processes():
+    if _ALLOW_COMPETING_PROCESSES:
+        return []
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid=,args='],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+
+    current_pid = os.getpid()
+    current_workspace = str(WORKSPACE_DIR)
+    processes = []
+    seen = set()
+
+    for raw_line in (result.stdout or '').splitlines():
+        line = str(raw_line or '').strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid_text, command = parts
+        try:
+            pid = int(pid_text)
+        except Exception:
+            continue
+        if pid == current_pid:
+            continue
+
+        normalized_command = ' '.join(str(command or '').split())
+        if not normalized_command:
+            continue
+
+        label = ''
+        if 'run_codex_chat_server.py' in normalized_command:
+            label = '중복 codex_agent 서버' if current_workspace in normalized_command else '다른 codex_agent 서버'
+        elif 'codex app-server' in normalized_command:
+            label = 'Codex app-server'
+        elif re.search(r'(^|\s)node\s+\S*/codex(?:\s|$)', normalized_command):
+            label = 'Codex CLI 런처'
+        elif re.search(r'(^|\s|/)(?:codex)(?:\s|$)', normalized_command):
+            label = 'Codex CLI'
+        else:
+            continue
+
+        dedupe_key = (pid, normalized_command)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        processes.append({
+            'pid': pid,
+            'label': label,
+            'command': normalized_command,
+        })
+
+    processes.sort(key=lambda item: (item.get('label') or '', item.get('pid') or 0))
+    return processes
+
+
+def get_competing_codex_process_error():
+    processes = _list_competing_codex_processes()
+    if not processes:
+        return ''
+    details = []
+    for process in processes[:4]:
+        command = _summarize_auth_failure_text(process.get('command'), max_chars=120)
+        details.append(
+            f"{process.get('label')} pid={process.get('pid')} ({command})"
+        )
+    remaining_count = max(0, len(processes) - len(details))
+    if remaining_count:
+        details.append(f'외 {remaining_count}개')
+    detail_text = '; '.join(details)
+    return (
+        '다른 Codex 프로세스가 실행 중이라 refresh token 충돌이 다시 발생할 수 있습니다. '
+        '다른 브라우저, VS Code, Codex Agent 세션을 먼저 종료한 뒤 다시 시도해 주세요.'
+        f' ({detail_text})'
+    )
+
+
+def _apply_auth_failure_guard(text):
+    if not _is_auth_refresh_failure_text(text):
+        return str(text or '')
+    _mark_auth_failure(text)
+    return get_auth_block_error() or _build_auth_block_message(text)
+
+
+def _lock_file_handle(handle):
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:  # pragma: no cover - Windows only
+        while True:
+            try:
+                handle.seek(0)
+                handle.write(' ')
+                handle.flush()
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError:
+                time.sleep(0.05)
+
+
+def _unlock_file_handle(handle):
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:  # pragma: no cover - Windows only
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            return
+
+
+@contextmanager
+def _acquire_codex_exec_lock():
+    _CODEX_EXEC_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = _CODEX_EXEC_LOCK_PATH.open('a+', encoding='utf-8')
+    wait_started_at = time.time()
+    acquired_at = wait_started_at
+    try:
+        _lock_file_handle(lock_handle)
+        acquired_at = time.time()
+        try:
+            lock_handle.seek(0)
+            lock_handle.truncate()
+            lock_handle.write(json.dumps({
+                'pid': os.getpid(),
+                'workspace_dir': str(WORKSPACE_DIR),
+                'acquired_at': normalize_timestamp(datetime.fromtimestamp(acquired_at)),
+            }, ensure_ascii=False, indent=2))
+            lock_handle.flush()
+        except Exception:
+            pass
+        yield {
+            'wait_ms': max(0, int((acquired_at - wait_started_at) * 1000)),
+            'acquired_at': acquired_at,
+        }
+    finally:
+        try:
+            lock_handle.seek(0)
+            lock_handle.truncate()
+            lock_handle.flush()
+        except Exception:
+            pass
+        _unlock_file_handle(lock_handle)
+        lock_handle.close()
+
+
+def _build_duration_breakdown(started_at, cli_started_at=None, completed_at=None, saved_at=None):
+    breakdown = {}
+    if not isinstance(started_at, (int, float)):
+        return breakdown
+
+    effective_completed_at = completed_at if isinstance(completed_at, (int, float)) else None
+    effective_saved_at = saved_at if isinstance(saved_at, (int, float)) else effective_completed_at
+    effective_cli_started_at = cli_started_at if isinstance(cli_started_at, (int, float)) else None
+
+    if effective_saved_at is not None:
+        breakdown['duration_ms'] = max(0, int((effective_saved_at - started_at) * 1000))
+
+    queue_wait_ms = 0
+    if effective_cli_started_at is not None:
+        queue_wait_ms = max(0, int((effective_cli_started_at - started_at) * 1000))
+    if queue_wait_ms > 0:
+        breakdown['queue_wait_ms'] = queue_wait_ms
+
+    if effective_completed_at is not None:
+        if effective_cli_started_at is not None:
+            cli_runtime_ms = max(0, int((effective_completed_at - effective_cli_started_at) * 1000))
+        else:
+            cli_runtime_ms = max(0, int((effective_completed_at - started_at) * 1000))
+        breakdown['cli_runtime_ms'] = cli_runtime_ms
+
+    if effective_completed_at is not None and effective_saved_at is not None:
+        finalize_lag_ms = max(0, int((effective_saved_at - effective_completed_at) * 1000))
+        if finalize_lag_ms > 0:
+            breakdown['finalize_lag_ms'] = finalize_lag_ms
+
+    return breakdown
 
 
 def _parse_top_level_config(text):
@@ -1482,6 +1780,22 @@ def _extract_exec_json_summary(raw_stdout):
 
 
 def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
+    auth_block_error = get_auth_block_error()
+    if auth_block_error:
+        return None, auth_block_error, None, {
+            'duration_ms': 0,
+            'queue_wait_ms': 0,
+            'cli_runtime_ms': 0,
+            'finalize_lag_ms': 0,
+        }
+    competing_process_error = get_competing_codex_process_error()
+    if competing_process_error:
+        return None, competing_process_error, None, {
+            'duration_ms': 0,
+            'queue_wait_ms': 0,
+            'cli_runtime_ms': 0,
+            'finalize_lag_ms': 0,
+        }
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
     cmd = _build_codex_command(
@@ -1491,21 +1805,49 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    queued_at = time.time()
+    cli_started_at = None
+    completed_at = None
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(WORKSPACE_DIR),
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        with _acquire_codex_exec_lock() as lock_info:
+            auth_block_error = get_auth_block_error()
+            if auth_block_error:
+                return None, auth_block_error, None, {
+                    'duration_ms': max(0, int((time.time() - queued_at) * 1000)),
+                    'queue_wait_ms': int(lock_info.get('wait_ms') or 0),
+                    'cli_runtime_ms': 0,
+                    'finalize_lag_ms': 0,
+                }
+            competing_process_error = get_competing_codex_process_error()
+            if competing_process_error:
+                return None, competing_process_error, None, {
+                    'duration_ms': max(0, int((time.time() - queued_at) * 1000)),
+                    'queue_wait_ms': int(lock_info.get('wait_ms') or 0),
+                    'cli_runtime_ms': 0,
+                    'finalize_lag_ms': 0,
+                }
+            cli_started_at = lock_info.get('acquired_at') or time.time()
+            result = subprocess.run(
+                cmd,
+                cwd=str(WORKSPACE_DIR),
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            completed_at = time.time()
     except FileNotFoundError:
-        return None, 'codex 명령을 찾을 수 없습니다.', None
+        return None, 'codex 명령을 찾을 수 없습니다.', None, None
     except Exception as exc:
-        return None, f'Codex 실행 중 오류가 발생했습니다: {exc}', None
+        return None, f'Codex 실행 중 오류가 발생했습니다: {exc}', None, None
 
     json_summary = _extract_exec_json_summary(result.stdout or '')
     token_usage = json_summary.get('usage')
+    timing = _build_duration_breakdown(
+        queued_at,
+        cli_started_at=cli_started_at,
+        completed_at=completed_at,
+        saved_at=completed_at,
+    )
 
     output_text = ''
     if output_path.exists():
@@ -1526,9 +1868,10 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
 
     if result.returncode != 0:
         error_text = (result.stderr or '').strip()
-        return None, error_text or output_text or 'Codex 실행에 실패했습니다.', token_usage
+        message_text = error_text or output_text or 'Codex 실행에 실패했습니다.'
+        return None, _apply_auth_failure_guard(message_text), token_usage, timing
 
-    return output_text, None, token_usage
+    return output_text, None, token_usage, timing
 
 
 def _coerce_positive_seconds(value, default_value, minimum=0.01):
@@ -1554,27 +1897,30 @@ def _epoch_to_millis(value):
     return int(numeric * 1000)
 
 
-def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_reason):
+def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_reason, cli_started_at=None):
     metadata = {}
-    duration_ms = None
-    if isinstance(started_at, (int, float)) and isinstance(completed_at, (int, float)):
-        duration_ms = max(0, int((completed_at - started_at) * 1000))
-        metadata['duration_ms'] = duration_ms
+    metadata.update(_build_duration_breakdown(
+        started_at,
+        cli_started_at=cli_started_at,
+        completed_at=completed_at,
+        saved_at=saved_at,
+    ))
 
     started_iso = _iso_timestamp_from_epoch(started_at)
+    cli_started_iso = _iso_timestamp_from_epoch(cli_started_at)
     completed_iso = _iso_timestamp_from_epoch(completed_at)
     saved_iso = _iso_timestamp_from_epoch(saved_at)
 
     if started_iso:
         metadata['started_at'] = started_iso
+    if cli_started_iso:
+        metadata['cli_started_at'] = cli_started_iso
     if completed_iso:
         metadata['completed_at'] = completed_iso
     if saved_iso:
         metadata['saved_at'] = saved_iso
     if finalize_reason:
         metadata['finalize_reason'] = str(finalize_reason)
-    if isinstance(completed_at, (int, float)) and isinstance(saved_at, (int, float)):
-        metadata['finalize_lag_ms'] = max(0, int((saved_at - completed_at) * 1000))
 
     return metadata or None
 
@@ -1944,6 +2290,7 @@ def _handle_stream_json_output_line(stream_id, line):
 def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
+            _apply_auth_failure_guard(line)
             if key == 'output':
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)
@@ -2006,29 +2353,9 @@ def _run_codex_stream(stream_id, prompt):
         reasoning_override=reasoning_override,
     )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(WORKSPACE_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
-    except FileNotFoundError:
-        _append_stream_chunk(stream_id, 'error', 'codex 명령을 찾을 수 없습니다.\n')
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if stream:
-                stream['done'] = True
-                stream['exit_code'] = 127
-                stream['completed_at'] = time.time()
-                stream['updated_at'] = stream['completed_at']
-                stream['finalize_reason'] = 'process_start_failed'
-        finalize_codex_stream(stream_id)
-        return
-    except Exception as exc:
-        _append_stream_chunk(stream_id, 'error', f'Codex 실행 중 오류가 발생했습니다: {exc}\n')
+    auth_block_error = get_auth_block_error()
+    if auth_block_error:
+        _append_stream_chunk(stream_id, 'error', f'{auth_block_error}\n')
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             if stream:
@@ -2039,175 +2366,285 @@ def _run_codex_stream(stream_id, prompt):
                 stream['finalize_reason'] = 'process_start_failed'
         finalize_codex_stream(stream_id)
         return
-
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        if stream:
-            stream['process'] = process
-            stream['output_path'] = output_path
-
-    stdout_thread = threading.Thread(
-        target=_stream_reader,
-        args=(stream_id, process.stdout, 'output'),
-        daemon=True
-    )
-    stderr_thread = threading.Thread(
-        target=_stream_reader,
-        args=(stream_id, process.stderr, 'error'),
-        daemon=True
-    )
-    stdout_thread.start()
-    stderr_thread.start()
-
-    while True:
-        now = time.time()
+    competing_process_error = get_competing_codex_process_error()
+    if competing_process_error:
+        _append_stream_chunk(stream_id, 'error', f'{competing_process_error}\n')
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
-            if not stream:
-                break
-            if stream.get('saved'):
-                break
+            if stream:
+                stream['done'] = True
+                stream['exit_code'] = 1
+                stream['completed_at'] = time.time()
+                stream['updated_at'] = stream['completed_at']
+                stream['finalize_reason'] = 'process_start_blocked'
+        finalize_codex_stream(stream_id)
+        return
 
-            stream_started_at = stream.get('started_at') or stream.get('created_at') or started_at
-            last_output_at = (
-                stream.get('last_output_at')
-                or stream.get('updated_at')
-                or stream_started_at
-                or now
-            )
-            process_exited_at = stream.get('process_exited_at')
-            is_cancelled = bool(stream.get('cancelled'))
+    with _acquire_codex_exec_lock() as lock_info:
+        cli_started_at = lock_info.get('acquired_at') or time.time()
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream['cli_started_at'] = cli_started_at
+                stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
+                stream['updated_at'] = cli_started_at
 
-        if is_cancelled:
-            _terminate_stream_process(process, terminate_grace_seconds)
-            break
-
-        exit_code = process.poll()
-        if exit_code is not None:
+        auth_block_error = get_auth_block_error()
+        if auth_block_error:
+            _append_stream_chunk(stream_id, 'error', f'{auth_block_error}\n')
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
-                    if stream.get('exit_code') is None:
-                        stream['exit_code'] = exit_code
-                    if not isinstance(stream.get('process_exited_at'), (int, float)):
-                        stream['process_exited_at'] = now
-                    process_exited_at = stream.get('process_exited_at')
-                    if not isinstance(stream.get('completed_at'), (int, float)):
-                        stream['completed_at'] = process_exited_at or now
-                    stream['process'] = None
-                    stream['updated_at'] = now
-                    current_output = (stream.get('output') or '').strip()
-                    current_error = (stream.get('error') or '').strip()
-                else:
-                    current_output = ''
-                    current_error = ''
+                    stream['done'] = True
+                    stream['exit_code'] = 1
+                    stream['completed_at'] = time.time()
+                    stream['updated_at'] = stream['completed_at']
+                    stream['finalize_reason'] = 'process_start_failed'
+            finalize_codex_stream(stream_id)
+            return
+        competing_process_error = get_competing_codex_process_error()
+        if competing_process_error:
+            _append_stream_chunk(stream_id, 'error', f'{competing_process_error}\n')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = 1
+                    stream['completed_at'] = time.time()
+                    stream['updated_at'] = stream['completed_at']
+                    stream['finalize_reason'] = 'process_start_blocked'
+            finalize_codex_stream(stream_id)
+            return
 
-            output_text = _read_output_last_message(output_path)
-            has_final_response = bool(output_text.strip()) or bool(current_output) or bool(current_error)
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(WORKSPACE_DIR),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1
+            )
+        except FileNotFoundError:
+            _append_stream_chunk(stream_id, 'error', 'codex 명령을 찾을 수 없습니다.\n')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = 127
+                    stream['completed_at'] = time.time()
+                    stream['updated_at'] = stream['completed_at']
+                    stream['finalize_reason'] = 'process_start_failed'
+            finalize_codex_stream(stream_id)
+            return
+        except Exception as exc:
+            _append_stream_chunk(stream_id, 'error', f'Codex 실행 중 오류가 발생했습니다: {exc}\n')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['done'] = True
+                    stream['exit_code'] = 1
+                    stream['completed_at'] = time.time()
+                    stream['updated_at'] = stream['completed_at']
+                    stream['finalize_reason'] = 'process_start_failed'
+            finalize_codex_stream(stream_id)
+            return
 
-            if has_final_response:
-                with state.codex_streams_lock:
-                    stream = state.codex_streams.get(stream_id)
-                    if stream:
-                        done_now = time.time()
-                        if output_text:
-                            stream['output_last_message'] = output_text
-                            if not (stream.get('output') or '').strip():
-                                stream['output'] = output_text
-                                stream['output_length'] = len(stream.get('output') or '')
-                                stream['last_output_at'] = done_now
-                        stream['done'] = True
-                        stream['updated_at'] = done_now
-                        if not stream.get('finalize_reason'):
-                            if stream.get('exit_code') == 0:
-                                stream['finalize_reason'] = 'process_exit'
-                            else:
-                                stream['finalize_reason'] = 'process_exit_error'
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream['process'] = process
+                stream['output_path'] = output_path
+
+        stdout_thread = threading.Thread(
+            target=_stream_reader,
+            args=(stream_id, process.stdout, 'output'),
+            daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=_stream_reader,
+            args=(stream_id, process.stderr, 'error'),
+            daemon=True
+        )
+        stdout_thread.start()
+        stderr_thread.start()
+
+        while True:
+            now = time.time()
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if not stream:
+                    break
+                if stream.get('saved'):
+                    break
+
+                stream_started_at = stream.get('started_at') or stream.get('created_at') or started_at
+                last_output_at = (
+                    stream.get('last_output_at')
+                    or stream.get('updated_at')
+                    or stream_started_at
+                    or now
+                )
+                process_exited_at = stream.get('process_exited_at')
+                is_cancelled = bool(stream.get('cancelled'))
+
+            if is_cancelled:
+                _terminate_stream_process(process, terminate_grace_seconds)
                 break
 
-            if not isinstance(process_exited_at, (int, float)):
-                process_exited_at = now
-            if now - process_exited_at >= final_response_timeout_seconds:
-                timeout_message = (
-                    f'CLI 종료 후 {int(final_response_timeout_seconds)}초 동안 '
-                    '최종 응답을 받지 못해 종료합니다.\n'
-                )
-                _append_stream_chunk(stream_id, 'error', timeout_message)
-                timeout_now = time.time()
+            exit_code = process.poll()
+            if exit_code is not None:
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)
                     if stream:
-                        stream['done'] = True
-                        stream['exit_code'] = 124
+                        if stream.get('exit_code') is None:
+                            stream['exit_code'] = exit_code
+                        if not isinstance(stream.get('process_exited_at'), (int, float)):
+                            stream['process_exited_at'] = now
+                        process_exited_at = stream.get('process_exited_at')
                         if not isinstance(stream.get('completed_at'), (int, float)):
-                            stream['completed_at'] = process_exited_at
-                        stream['updated_at'] = timeout_now
+                            stream['completed_at'] = process_exited_at or now
+                        if isinstance(stream.get('cli_started_at'), (int, float)):
+                            stream['cli_runtime_ms'] = max(
+                                0,
+                                int((stream['completed_at'] - stream['cli_started_at']) * 1000)
+                            )
                         stream['process'] = None
-                        stream['finalize_reason'] = 'final_response_timeout'
+                        stream['updated_at'] = now
+                        current_output = (stream.get('output') or '').strip()
+                        current_error = (stream.get('error') or '').strip()
+                    else:
+                        current_output = ''
+                        current_error = ''
+
+                output_text = _read_output_last_message(output_path)
+                has_final_response = bool(output_text.strip()) or bool(current_output) or bool(current_error)
+
+                if has_final_response:
+                    with state.codex_streams_lock:
+                        stream = state.codex_streams.get(stream_id)
+                        if stream:
+                            done_now = time.time()
+                            if output_text:
+                                stream['output_last_message'] = output_text
+                                if not (stream.get('output') or '').strip():
+                                    stream['output'] = output_text
+                                    stream['output_length'] = len(stream.get('output') or '')
+                                    stream['last_output_at'] = done_now
+                            stream['done'] = True
+                            stream['updated_at'] = done_now
+                            if not stream.get('finalize_reason'):
+                                if stream.get('exit_code') == 0:
+                                    stream['finalize_reason'] = 'process_exit'
+                                else:
+                                    stream['finalize_reason'] = 'process_exit_error'
+                    break
+
+                if not isinstance(process_exited_at, (int, float)):
+                    process_exited_at = now
+                if now - process_exited_at >= final_response_timeout_seconds:
+                    timeout_message = (
+                        f'CLI 종료 후 {int(final_response_timeout_seconds)}초 동안 '
+                        '최종 응답을 받지 못해 종료합니다.\n'
+                    )
+                    _append_stream_chunk(stream_id, 'error', timeout_message)
+                    timeout_now = time.time()
+                    with state.codex_streams_lock:
+                        stream = state.codex_streams.get(stream_id)
+                        if stream:
+                            stream['done'] = True
+                            stream['exit_code'] = 124
+                            if not isinstance(stream.get('completed_at'), (int, float)):
+                                stream['completed_at'] = process_exited_at
+                            if (
+                                isinstance(stream.get('cli_started_at'), (int, float))
+                                and isinstance(stream.get('completed_at'), (int, float))
+                            ):
+                                stream['cli_runtime_ms'] = max(
+                                    0,
+                                    int((stream['completed_at'] - stream['cli_started_at']) * 1000)
+                                )
+                            stream['updated_at'] = timeout_now
+                            stream['process'] = None
+                            stream['finalize_reason'] = 'final_response_timeout'
+                    break
+
+                time.sleep(poll_interval_seconds)
+                continue
+
+            output_text = _read_output_last_message(output_path)
+            if (
+                output_text
+                and isinstance(last_output_at, (int, float))
+                and now - last_output_at >= post_output_idle_seconds
+            ):
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    if stream:
+                        timeout_now = time.time()
+                        stream['output_last_message'] = output_text
+                        if not (stream.get('output') or '').strip():
+                            stream['output'] = output_text
+                            stream['output_length'] = len(stream.get('output') or '')
+                            stream['last_output_at'] = timeout_now
+                        stream['done'] = True
+                        stream['exit_code'] = 0
+                        stream['completed_at'] = timeout_now
+                        stream['updated_at'] = timeout_now
+                        stream['process_exited_at'] = timeout_now
+                        if isinstance(stream.get('cli_started_at'), (int, float)):
+                            stream['cli_runtime_ms'] = max(
+                                0,
+                                int((stream['completed_at'] - stream['cli_started_at']) * 1000)
+                            )
+                        stream['finalize_reason'] = 'post_output_idle_timeout'
+                        stream['process'] = None
+                _terminate_stream_process(process, terminate_grace_seconds)
                 break
 
             time.sleep(poll_interval_seconds)
-            continue
+
+        stdout_thread.join(timeout=terminate_grace_seconds)
+        stderr_thread.join(timeout=terminate_grace_seconds)
 
         output_text = _read_output_last_message(output_path)
-        if (
-            output_text
-            and isinstance(last_output_at, (int, float))
-            and now - last_output_at >= post_output_idle_seconds
-        ):
+        if output_text:
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
-                    timeout_now = time.time()
+                    now = time.time()
                     stream['output_last_message'] = output_text
                     if not (stream.get('output') or '').strip():
                         stream['output'] = output_text
                         stream['output_length'] = len(stream.get('output') or '')
-                        stream['last_output_at'] = timeout_now
-                    stream['done'] = True
-                    stream['exit_code'] = 0
-                    stream['completed_at'] = timeout_now
-                    stream['updated_at'] = timeout_now
-                    stream['process_exited_at'] = timeout_now
-                    stream['finalize_reason'] = 'post_output_idle_timeout'
-                    stream['process'] = None
-            _terminate_stream_process(process, terminate_grace_seconds)
-            break
+                        stream['last_output_at'] = now
+                        stream['updated_at'] = now
 
-        time.sleep(poll_interval_seconds)
+        _cleanup_output_last_message(output_path)
 
-    stdout_thread.join(timeout=terminate_grace_seconds)
-    stderr_thread.join(timeout=terminate_grace_seconds)
-
-    output_text = _read_output_last_message(output_path)
-    if output_text:
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             if stream:
-                now = time.time()
-                stream['output_last_message'] = output_text
-                if not (stream.get('output') or '').strip():
-                    stream['output'] = output_text
-                    stream['output_length'] = len(stream.get('output') or '')
-                    stream['last_output_at'] = now
-                    stream['updated_at'] = now
-
-    _cleanup_output_last_message(output_path)
-
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        if stream:
-            stream['process'] = None
-            if stream.get('done') and not isinstance(stream.get('completed_at'), (int, float)):
-                stream['completed_at'] = time.time()
-            if stream.get('done') and not stream.get('finalize_reason'):
-                if stream.get('cancelled'):
-                    stream['finalize_reason'] = 'user_cancelled'
-                elif stream.get('exit_code') == 0:
-                    stream['finalize_reason'] = 'process_exit'
-                else:
-                    stream['finalize_reason'] = 'process_exit_error'
-            stream['updated_at'] = time.time()
+                stream['process'] = None
+                if stream.get('done') and not isinstance(stream.get('completed_at'), (int, float)):
+                    stream['completed_at'] = time.time()
+                if (
+                    stream.get('done')
+                    and isinstance(stream.get('cli_started_at'), (int, float))
+                    and isinstance(stream.get('completed_at'), (int, float))
+                ):
+                    stream['cli_runtime_ms'] = max(
+                        0,
+                        int((stream['completed_at'] - stream['cli_started_at']) * 1000)
+                    )
+                if stream.get('done') and not stream.get('finalize_reason'):
+                    if stream.get('cancelled'):
+                        stream['finalize_reason'] = 'user_cancelled'
+                    elif stream.get('exit_code') == 0:
+                        stream['finalize_reason'] = 'process_exit'
+                    else:
+                        stream['finalize_reason'] = 'process_exit_error'
+                stream['updated_at'] = time.time()
     finalize_codex_stream(stream_id)
 
 
@@ -2230,10 +2667,13 @@ def create_codex_stream(session_id, prompt, model_override=None, reasoning_overr
         'process_exited_at': None,
         'completed_at': None,
         'saved_at': None,
+        'cli_started_at': None,
         'finalize_reason': None,
         'output_path': str(output_path),
         'output_last_message': '',
         'token_usage': _zero_token_usage(),
+        'queue_wait_ms': 0,
+        'cli_runtime_ms': None,
         'model_override': (str(model_override).strip() if model_override is not None else '') or None,
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'json_output': True,
@@ -2349,12 +2789,15 @@ def list_codex_streams(include_done=False):
                 'output_length': int(stream.get('output_length') or len(stream.get('output') or '')),
                 'error_length': int(stream.get('error_length') or len(stream.get('error') or '')),
                 'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+                'cli_started_at': _epoch_to_millis(stream.get('cli_started_at')),
                 'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
                 'process_exited_at': _epoch_to_millis(stream.get('process_exited_at')),
                 'completed_at': _epoch_to_millis(stream.get('completed_at')),
                 'saved_at': _epoch_to_millis(stream.get('saved_at')),
                 'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
                 'finalize_reason': stream.get('finalize_reason'),
+                'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
+                'cli_runtime_ms': stream.get('cli_runtime_ms'),
                 'token_usage': usage,
                 'input_tokens': usage.get('input_tokens', 0),
                 'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -2389,12 +2832,15 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'saved': stream.get('saved', False),
             'session_id': stream['session_id'],
             'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
+            'cli_started_at': _epoch_to_millis(stream.get('cli_started_at')),
             'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
             'process_exited_at': _epoch_to_millis(stream.get('process_exited_at')),
             'completed_at': _epoch_to_millis(stream.get('completed_at')),
             'saved_at': _epoch_to_millis(stream.get('saved_at')),
             'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
             'finalize_reason': stream.get('finalize_reason'),
+            'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
+            'cli_runtime_ms': stream.get('cli_runtime_ms'),
             'token_usage': usage,
             'input_tokens': usage.get('input_tokens', 0),
             'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -2416,6 +2862,7 @@ def finalize_codex_stream(stream_id):
             return None
         now = time.time()
         started_at = stream.get('started_at') or stream.get('created_at')
+        cli_started_at = stream.get('cli_started_at')
         completed_at = stream.get('completed_at') or stream.get('updated_at') or now
         stream['completed_at'] = completed_at
         stream['saved_at'] = now
@@ -2445,7 +2892,13 @@ def finalize_codex_stream(stream_id):
         output_last_message = output_from_file
     _cleanup_output_last_message(output_path)
 
-    metadata = _build_stream_message_metadata(started_at, completed_at, now, finalize_reason)
+    metadata = _build_stream_message_metadata(
+        started_at,
+        completed_at,
+        now,
+        finalize_reason,
+        cli_started_at=cli_started_at,
+    )
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
@@ -2478,7 +2931,7 @@ def finalize_codex_stream(stream_id):
             source='stream_finalize_success'
         )
         return saved_message
-    message_text = error or final_output or 'Codex 실행에 실패했습니다.'
+    message_text = _apply_auth_failure_guard(error or final_output or 'Codex 실행에 실패했습니다.')
     saved_message = append_message(
         session_id,
         'error',
@@ -2517,6 +2970,7 @@ def stop_codex_stream(stream_id):
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
         started_at = stream.get('started_at') or stream.get('created_at')
+        cli_started_at = stream.get('cli_started_at')
         completed_at = stream.get('completed_at')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
@@ -2548,7 +3002,8 @@ def stop_codex_stream(stream_id):
         started_at,
         completed_at,
         saved_at,
-        'user_cancelled'
+        'user_cancelled',
+        cli_started_at=cli_started_at,
     )
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     work_details = _build_work_details(output, output_last_message or output, error)

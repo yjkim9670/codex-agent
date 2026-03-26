@@ -7898,6 +7898,7 @@ function renderMessages(messages) {
         if (Number.isFinite(durationMs)) {
             setMessageDuration(footer, durationMs);
         }
+        setMessageTimingBreakdown(footer, message);
         setMessageFinalizeReason(footer, message?.finalize_reason);
         setMessageFinalizeComparison(footer, message);
         setMessageDetailLogLink(footer, message);
@@ -7959,6 +7960,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     if (Number.isFinite(durationMs)) {
         setMessageDuration(footer, durationMs);
     }
+    setMessageTimingBreakdown(footer, message);
     setMessageFinalizeReason(footer, message?.finalize_reason);
     setMessageFinalizeComparison(footer, message);
     setMessageDetailLogLink(footer, message);
@@ -8282,6 +8284,7 @@ async function stopStream(sessionId) {
         );
         const durationMs = getStreamDuration(stream);
         setMessageDuration(stream.entry?.footer, durationMs);
+        setMessageTimingBreakdown(stream.entry?.footer, result?.saved_message || null);
         setMessageStreaming(stream.entry?.wrapper, false);
         clearPersistedStream(stream.id);
         clearStreamState(stream.id);
@@ -8425,6 +8428,10 @@ async function finishStream(streamId, result) {
     if (Number.isFinite(savedDurationMs)) {
         setMessageDuration(stream.entry?.footer, savedDurationMs);
     }
+    setMessageTimingBreakdown(
+        stream.entry?.footer,
+        savedMessage || result || null
+    );
     setMessageFinalizeReason(
         stream.entry?.footer,
         savedMessage?.finalize_reason || result?.finalize_reason
@@ -9021,6 +9028,8 @@ function createMessageFooter() {
     footer.className = 'message-footer';
     footer.dataset.tokenText = '';
     footer.dataset.durationText = '';
+    footer.dataset.cliRuntimeText = '';
+    footer.dataset.queueWaitText = '';
     footer.dataset.finalizeText = '';
     footer.dataset.finalizeTimingText = '';
     footer.dataset.previewText = '';
@@ -9091,6 +9100,8 @@ function syncMessageFooter(footer) {
     if (!footer) return;
     const tokenText = footer.dataset.tokenText || '';
     const durationText = footer.dataset.durationText || '';
+    const cliRuntimeText = footer.dataset.cliRuntimeText || '';
+    const queueWaitText = footer.dataset.queueWaitText || '';
     const finalizeText = footer.dataset.finalizeText || '';
     const finalizeTimingText = footer.dataset.finalizeTimingText || '';
     const previewText = normalizeDetailText(footer.dataset.previewText);
@@ -9101,6 +9112,12 @@ function syncMessageFooter(footer) {
     }
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
+    }
+    if (cliRuntimeText) {
+        parts.push(`실행 ${cliRuntimeText}`);
+    }
+    if (queueWaitText) {
+        parts.push(`대기 ${queueWaitText}`);
     }
     if (finalizeTimingText) {
         parts.push(finalizeTimingText);
@@ -9133,6 +9150,19 @@ function setMessageDuration(footer, durationMs) {
     if (!footer) return;
     const formatted = formatDuration(durationMs);
     footer.dataset.durationText = formatted || '';
+    syncMessageFooter(footer);
+}
+
+function setMessageTimingBreakdown(footer, message) {
+    if (!footer) return;
+    const cliRuntimeMs = Number(message?.cli_runtime_ms);
+    const queueWaitMs = Number(message?.queue_wait_ms);
+    footer.dataset.cliRuntimeText = Number.isFinite(cliRuntimeMs) && cliRuntimeMs > 0
+        ? (formatDuration(cliRuntimeMs) || '')
+        : '';
+    footer.dataset.queueWaitText = Number.isFinite(queueWaitMs) && queueWaitMs > 0
+        ? (formatDuration(queueWaitMs) || '')
+        : '';
     syncMessageFooter(footer);
 }
 

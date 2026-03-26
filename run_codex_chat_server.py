@@ -52,6 +52,11 @@ def parse_args():
         action='store_true',
         help='Skip git repo check when running Codex CLI.',
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable Flask debug mode and auto reloader.',
+    )
     args = parser.parse_args()
     if args.port < 1 or args.port > 65535:
         parser.error('--port must be between 1 and 65535')
@@ -72,11 +77,15 @@ if __name__ == '__main__':
         sys.exit(1)
 
     app = create_codex_app()
-    use_reloader = True
+    env_debug = os.environ.get('CODEX_CHAT_DEBUG', '').strip().lower() in {
+        '1', 'true', 'yes', 'on'
+    }
+    debug_mode = bool(args.debug or env_debug)
+    use_reloader = debug_mode
     print("[INFO] Starting Codex Chat Server...")
     print(f"[INFO] Access the Codex chat API at: http://localhost:{args.port}")
     app.run(
-        debug=True,
+        debug=debug_mode,
         host=args.host,
         port=args.port,
         use_reloader=use_reloader,

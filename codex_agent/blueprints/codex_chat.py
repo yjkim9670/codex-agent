@@ -23,6 +23,8 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
+    get_auth_block_error,
+    get_competing_codex_process_error,
     get_session,
     get_settings,
     get_usage_summary,
@@ -234,6 +236,12 @@ def codex_session_message(session_id):
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    auth_block_error = get_auth_block_error()
+    if auth_block_error:
+        return jsonify({'error': auth_block_error}), 503
+    competing_process_error = get_competing_codex_process_error()
+    if competing_process_error:
+        return jsonify({'error': competing_process_error}), 409
     active_stream_id = get_active_stream_id_for_session(session_id)
     if active_stream_id:
         return jsonify({
@@ -254,13 +262,21 @@ def codex_session_message(session_id):
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
 
     started_at = time.time()
-    output, error, token_usage = execute_codex_prompt(
+    output, error, token_usage, timing = execute_codex_prompt(
         prompt_with_context,
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
-    duration_ms = max(0, int((time.time() - started_at) * 1000))
+    saved_at = time.time()
+    duration_ms = max(0, int((saved_at - started_at) * 1000))
     metadata = {'duration_ms': duration_ms}
+    if isinstance(timing, dict):
+        queue_wait_ms = int(timing.get('queue_wait_ms') or 0)
+        cli_runtime_ms = int(timing.get('cli_runtime_ms') or 0)
+        finalize_lag_ms = max(0, duration_ms - queue_wait_ms - cli_runtime_ms)
+        metadata['queue_wait_ms'] = queue_wait_ms
+        metadata['cli_runtime_ms'] = cli_runtime_ms
+        metadata['finalize_lag_ms'] = finalize_lag_ms
     if isinstance(token_usage, dict):
         metadata['token_usage'] = token_usage
         metadata['token_count'] = int(token_usage.get('total_tokens') or 0)
@@ -303,6 +319,12 @@ def codex_session_message_stream(session_id):
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+    auth_block_error = get_auth_block_error()
+    if auth_block_error:
+        return jsonify({'error': auth_block_error}), 503
+    competing_process_error = get_competing_codex_process_error()
+    if competing_process_error:
+        return jsonify({'error': competing_process_error}), 409
 
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)

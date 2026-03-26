@@ -3381,6 +3381,10 @@ body.is-work-mode-resizing * {
     grid-template-columns: minmax(0, 1fr) minmax(0, 132px) var(--icon-button-size);
 }
 
+.model-row.model-row-single {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .model-select,
 .model-input {
     border: 1px solid var(--border);
@@ -3443,6 +3447,14 @@ body.is-work-mode-resizing * {
     align-items: end;
 }
 
+.chat-submit-column {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    align-self: flex-end;
+}
+
 .chat-input textarea {
     width: 100%;
     min-height: 70px;
@@ -3455,6 +3467,24 @@ body.is-work-mode-resizing * {
     background: var(--surface);
     color: var(--text-primary);
     resize: vertical;
+}
+
+.chat-plan-mode-toggle {
+    min-width: 42px;
+    height: 22px;
+    min-height: 22px;
+    padding: 0 8px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.01em;
+}
+
+.chat-plan-mode-toggle.is-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
 }
 
 #codex-chat-send {
@@ -3561,6 +3591,11 @@ body.is-work-mode-resizing * {
     word-break: break-word;
 }
 
+.message-bubble:empty {
+    min-width: 12ch;
+    min-height: calc((var(--message-line-height) * 1em) + 20px);
+}
+
 .message-preview {
     white-space: pre-wrap;
 }
@@ -3628,13 +3663,13 @@ body.is-work-mode-resizing * {
 .message.assistant,
 .message.error,
 .message.system {
-    width: 100%;
+    width: fit-content;
+    max-width: 100%;
     min-width: 0;
 }
 
 .message.is-streaming .message-bubble {
-    height: var(--streaming-bubble-height);
-    min-height: var(--streaming-bubble-height);
+    min-height: calc((var(--message-line-height) * 1em) + 20px);
     max-height: var(--streaming-bubble-height);
     overflow: auto;
     scrollbar-gutter: stable;
@@ -3723,6 +3758,14 @@ body.is-work-mode-resizing * {
 .message-bubble h2,
 .message-bubble h3 {
     margin: 6px 0;
+}
+
+.message-bubble p {
+    margin: 0;
+}
+
+.message-bubble p + p {
+    margin-top: 4px;
 }
 
 .message-bubble code {
@@ -4058,6 +4101,10 @@ label.hover-tooltip,
 
     .chat-input {
         gap: 8px;
+    }
+
+    .chat-submit-column {
+        gap: 4px;
     }
 
     .chat-input textarea {
@@ -4448,6 +4495,10 @@ label.hover-tooltip,
         padding-bottom: env(safe-area-inset-bottom);
         z-index: 1;
         align-items: end;
+    }
+
+    .chat-submit-column {
+        gap: 4px;
     }
 
     .chat-input textarea {

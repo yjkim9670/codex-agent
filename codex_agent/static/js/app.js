@@ -19,6 +19,8 @@ const state = {
     settings: {
         model: null,
         modelOptions: [],
+        planModeModel: null,
+        planModeEnabled: false,
         reasoningEffort: null,
         reasoningOptions: [],
         usage: null,
@@ -505,6 +507,12 @@ function attachSessionStreamEntry(sessionId) {
     if (!assistantEntry) return;
     stream.entry = assistantEntry;
     setMessageStreaming(assistantEntry.wrapper, true);
+    if (stream.tokenUsage) {
+        setMessageTokenUsage(
+            assistantEntry.footer,
+            { role: 'assistant', token_usage: stream.tokenUsage, content: stream.output || '' }
+        );
+    }
     updateStreamEntry(stream);
 }
 
@@ -514,6 +522,7 @@ function createStreamState({
     entry = null,
     output = '',
     error = '',
+    tokenUsage = null,
     outputOffset = 0,
     errorOffset = 0,
     startedAt = null
@@ -527,6 +536,7 @@ function createStreamState({
         errorOffset,
         output,
         error,
+        tokenUsage,
         entry,
         startedAt: normalizedStartedAt,
         processRunning: null,
@@ -579,17 +589,21 @@ function readOptionsFromData(element) {
     }
 }
 
-function primeSettingsOptionsFromDom(modelSelect, reasoningSelect) {
+function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect) {
     const modelOptions = readOptionsFromData(modelSelect);
+    const planModeModelOptions = readOptionsFromData(planModeModelSelect);
     const reasoningOptions = readOptionsFromData(reasoningSelect);
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
+    } else if (planModeModelOptions.length > 0) {
+        state.settings.modelOptions = planModeModelOptions;
     }
     if (reasoningOptions.length > 0) {
         state.settings.reasoningOptions = reasoningOptions;
     }
-    if (modelOptions.length > 0 || reasoningOptions.length > 0) {
+    if (modelOptions.length > 0 || planModeModelOptions.length > 0 || reasoningOptions.length > 0) {
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
     }
 }
@@ -616,6 +630,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const modelSelect = document.getElementById('codex-model-select');
     const modelInput = document.getElementById('codex-model-input');
     const modelApply = document.getElementById('codex-model-apply');
+    const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
+    const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
+    const planModeToggle = document.getElementById('codex-plan-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
@@ -1177,7 +1194,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    primeSettingsOptionsFromDom(modelSelect, reasoningSelect);
+    primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect);
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
@@ -1218,7 +1235,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     setupMobileViewportBehavior(mobileMedia, input);
-    setupMobileSettingsInputBehavior(mobileMedia, [modelInput, reasoningInput, modelSelect, reasoningSelect]);
+    setupMobileSettingsInputBehavior(
+        mobileMedia,
+        [modelInput, planModeModelInput, reasoningInput, modelSelect, planModeModelSelect, reasoningSelect],
+    );
 
     if (messages) {
         messages.addEventListener('scroll', () => {
@@ -1257,6 +1277,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (planModeModelSelect) {
+        planModeModelSelect.addEventListener('change', () => {
+            if (planModeModelSelect.value && planModeModelInput) {
+                planModeModelInput.value = planModeModelSelect.value;
+            }
+        });
+    }
+
+    if (planModeModelInput) {
+        planModeModelInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void updateSettings();
+            }
+        });
+    }
+
     if (reasoningSelect) {
         reasoningSelect.addEventListener('change', () => {
             if (reasoningSelect.value && reasoningInput) {
@@ -1273,6 +1310,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    if (planModeToggle) {
+        planModeToggle.addEventListener('click', () => {
+            setPlanModeToggleState(!isPlanModeEnabled());
+        });
+    }
+    setPlanModeToggleState(state.settings.planModeEnabled);
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
@@ -3563,6 +3607,13 @@ async function pollStreamMonitor() {
         if (Number.isFinite(result?.idle_ms)) {
             current.idleMs = result.idle_ms;
         }
+        if (result?.token_usage && typeof result.token_usage === 'object') {
+            current.tokenUsage = result.token_usage;
+            setMessageTokenUsage(
+                current.entry?.footer,
+                { role: 'assistant', token_usage: current.tokenUsage, content: current.output || '' }
+            );
+        }
         if (result?.output) {
             current.output += result.output;
             current.outputOffset = Number.isFinite(result.output_length)
@@ -3661,6 +3712,8 @@ async function loadSettings({ silent = true } = {}) {
         state.settings = {
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
+            planModeModel: result?.settings?.plan_mode_model || null,
+            planModeEnabled: Boolean(state.settings?.planModeEnabled),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: Array.isArray(result?.reasoning_options)
                 ? result.reasoning_options
@@ -3674,11 +3727,13 @@ async function loadSettings({ silent = true } = {}) {
         }
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
@@ -3709,12 +3764,23 @@ function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
+    const tokenUsage = usage?.token_usage || null;
+    const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
     element.innerHTML = '';
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
     const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
-    if (!hasUsage) {
+    if (hasTokenUsage) {
+        const tokenEntries = [
+            buildTokenUsageEntry(tokenUsage?.today, 'Today'),
+            buildTokenUsageEntry(tokenUsage?.all_time, 'All')
+        ].filter(Boolean);
+        tokenEntries.forEach(entry => {
+            element.appendChild(entry);
+        });
+    }
+    if (!hasUsage && !hasTokenUsage) {
         const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         if (!accountName) {
             element.textContent = fallbackText;
@@ -3775,6 +3841,46 @@ function updateModelControls(model, options) {
     setSettingsStatus(model, state.settings.reasoningEffort);
 }
 
+function updatePlanModeModelControls(planModeModel, options) {
+    const select = document.getElementById('codex-plan-mode-model-select');
+    const input = document.getElementById('codex-plan-mode-model-input');
+    const field = select ? select.closest('.model-field') : null;
+    const hasOptions = Array.isArray(options) && options.length > 0;
+    if (select) {
+        select.innerHTML = '';
+        if (hasOptions) {
+            select.classList.remove('is-hidden');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Use default';
+            select.appendChild(placeholder);
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                select.appendChild(option);
+            });
+            if (planModeModel) {
+                select.value = options.includes(planModeModel) ? planModeModel : '';
+            } else {
+                select.value = '';
+            }
+        } else {
+            select.classList.add('is-hidden');
+        }
+    }
+    if (input) {
+        input.value = planModeModel || '';
+        input.placeholder = planModeModel ? planModeModel : 'Use default model';
+        input.disabled = hasOptions;
+        input.classList.toggle('is-hidden', hasOptions);
+    }
+    if (field) {
+        field.classList.toggle('is-select-only', hasOptions);
+    }
+    setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+}
+
 function updateReasoningControls(reasoning, options) {
     const select = document.getElementById('codex-reasoning-select');
     const input = document.getElementById('codex-reasoning-input');
@@ -3829,8 +3935,9 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         return;
     }
     const modelText = model ? model : 'default';
+    const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
     const reasoningText = reasoning ? reasoning : 'default';
-    const text = `Model: ${modelText} · Reasoning: ${reasoningText}`;
+    const text = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText}`;
     status.textContent = text;
     if (summary) summary.textContent = text;
 }
@@ -3840,11 +3947,16 @@ async function updateSettings() {
     const status = document.getElementById('codex-model-status');
     const refreshBtn = document.getElementById('codex-controls-refresh');
     const modelSelect = document.getElementById('codex-model-select');
+    const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
+    const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
         ? modelSelect.value.trim()
         : (input ? input.value.trim() : '');
+    const plan_mode_model = planModeModelSelect && !planModeModelSelect.classList.contains('is-hidden')
+        ? planModeModelSelect.value.trim()
+        : (planModeModelInput ? planModeModelInput.value.trim() : '');
     const reasoning_effort = reasoningSelect && !reasoningSelect.classList.contains('is-hidden')
         ? reasoningSelect.value.trim()
         : (reasoningInput ? reasoningInput.value.trim() : '');
@@ -3854,9 +3966,10 @@ async function updateSettings() {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, reasoning_effort })
+            body: JSON.stringify({ model, plan_mode_model, reasoning_effort })
         });
         state.settings.model = result?.settings?.model || null;
+        state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.modelOptions = Array.isArray(result?.model_options)
             ? result.model_options
@@ -3868,6 +3981,7 @@ async function updateSettings() {
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
+        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
@@ -7380,9 +7494,18 @@ function renderSessions() {
         const meta = document.createElement('div');
         meta.className = 'session-meta';
         const updated = formatTimestamp(session.updated_at);
-        const count = Number.isFinite(session.message_count) ? session.message_count : 0;
+        const count = resolveSessionMessageCount(session);
+        const tokenSummary = formatSessionTokenSummary(session);
         const metaText = document.createElement('span');
-        metaText.textContent = updated ? `Updated ${updated} - ${count} msgs` : `Messages ${count}`;
+        const metaParts = [];
+        if (updated) {
+            metaParts.push(`Updated ${updated}`);
+        }
+        metaParts.push(`${count} msgs`);
+        if (tokenSummary) {
+            metaParts.push(tokenSummary);
+        }
+        metaText.textContent = metaParts.join(' · ');
         meta.appendChild(metaText);
         if (isSessionStreaming(session.id)) {
             const spinner = document.createElement('span');
@@ -7431,17 +7554,22 @@ function renderSessions() {
 function upsertSessionSummary(session) {
     if (!session || !session.id) return;
     const fallbackMessages = Array.isArray(session.messages) ? session.messages : [];
-    const tokenCount = Number(session.token_count);
-    const resolvedTokenCount = Number.isFinite(tokenCount)
-        ? Math.max(0, Math.round(tokenCount))
-        : estimateSessionTokenCountFromMessages(fallbackMessages);
+    const usage = resolveSessionTokenUsage(session, fallbackMessages);
+    const resolvedCount = Number.isFinite(Number(session.message_count))
+        ? Math.max(0, Math.round(Number(session.message_count)))
+        : fallbackMessages.length;
     const summary = {
         id: session.id,
         title: session.title || 'New session',
         created_at: session.created_at,
         updated_at: session.updated_at,
-        message_count: fallbackMessages.length,
-        token_count: resolvedTokenCount
+        message_count: resolvedCount,
+        token_count: usage.totalTokens,
+        input_token_count: usage.inputTokens,
+        cached_input_token_count: usage.cachedInputTokens,
+        output_token_count: usage.outputTokens,
+        reasoning_output_token_count: usage.reasoningOutputTokens,
+        token_estimated: usage.estimated
     };
     const existingIndex = state.sessions.findIndex(item => item.id === session.id);
     if (existingIndex >= 0) {
@@ -7509,6 +7637,9 @@ async function loadSession(sessionId) {
         const previousSessionId = state.activeSessionId;
         state.activeSessionId = session?.id || sessionId;
         ensureSessionState(state.activeSessionId);
+        if (session?.id) {
+            upsertSessionSummary(session);
+        }
         if (previousSessionId && previousSessionId !== state.activeSessionId) {
             detachSessionStreamEntry(previousSessionId);
         }
@@ -7564,6 +7695,7 @@ function renderMessages(messages) {
         setMessageFinalizeComparison(footer, message);
         setMessageDetailLogLink(footer, message);
         setMessagePreviewLink(footer, message?.content || '', message, wrapper);
+        setMessageTokenUsage(footer, message);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
@@ -7605,6 +7737,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     setMessageFinalizeComparison(footer, message);
     setMessageDetailLogLink(footer, message);
     setMessagePreviewLink(footer, message?.content || '', message, wrapper);
+    setMessageTokenUsage(footer, message);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
@@ -7625,7 +7758,33 @@ function updateHeader(session) {
     }
     title.textContent = session.title || 'New session';
     const updated = formatTimestamp(session.updated_at);
-    meta.textContent = updated ? `Updated ${updated}` : '';
+    const count = resolveSessionMessageCount(session);
+    const tokenSummary = formatSessionTokenSummary(session);
+    const parts = [];
+    if (updated) {
+        parts.push(`Updated ${updated}`);
+    }
+    parts.push(`${count} msgs`);
+    if (tokenSummary) {
+        parts.push(tokenSummary);
+    }
+    meta.textContent = parts.join(' · ');
+}
+
+function isPlanModeEnabled() {
+    return Boolean(state.settings.planModeEnabled);
+}
+
+function setPlanModeToggleState(enabled) {
+    const normalized = Boolean(enabled);
+    state.settings.planModeEnabled = normalized;
+    const button = document.getElementById('codex-plan-mode-toggle');
+    if (!button) return;
+    button.classList.toggle('is-active', normalized);
+    button.setAttribute('aria-pressed', String(normalized));
+    const label = normalized ? 'Plan mode on' : 'Plan mode off';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
 }
 
 async function handleSubmit(event) {
@@ -7650,7 +7809,7 @@ async function handleSubmit(event) {
     const prompt = input.value.trim();
     if (!prompt) return;
     input.value = '';
-    await sendPrompt(prompt);
+    await sendPrompt(prompt, { planMode: isPlanModeEnabled() });
 }
 
 function beginPendingSend(sessionId) {
@@ -7687,7 +7846,7 @@ function cancelPendingSend(sessionId) {
     return true;
 }
 
-async function sendPrompt(prompt) {
+async function sendPrompt(prompt, { planMode = false } = {}) {
     let sessionId = state.activeSessionId;
     if (!sessionId) {
         const session = await createSession(true);
@@ -7718,7 +7877,7 @@ async function sendPrompt(prompt) {
         const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt }),
+            body: JSON.stringify({ prompt, plan_mode: Boolean(planMode) }),
             signal: controller.signal
         });
         clearPendingSend(sessionId, controller);
@@ -7870,6 +8029,10 @@ async function stopStream(sessionId) {
             const messageText = combined ? `${combined}\n\n[Stopped by user]` : '[Stopped by user]';
             setMarkdownContent(bubble, messageText);
         }
+        setMessageTokenUsage(
+            stream.entry?.footer,
+            { role: 'error', token_usage: stream.tokenUsage, content: stream.output || stream.error || '' }
+        );
         const durationMs = getStreamDuration(stream);
         setMessageDuration(stream.entry?.footer, durationMs);
         setMessageStreaming(stream.entry?.wrapper, false);
@@ -7972,6 +8135,12 @@ function updateStreamEntry(stream) {
     if (!bubble) return;
     const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
     setMarkdownContent(bubble, combined);
+    if (stream?.entry?.footer) {
+        setMessageTokenUsage(
+            stream.entry.footer,
+            { role: 'assistant', token_usage: stream.tokenUsage, content: combined }
+        );
+    }
     if (stream?.entry?.wrapper?.classList.contains('is-streaming')) {
         bubble.scrollTop = bubble.scrollHeight;
     }
@@ -8019,6 +8188,10 @@ async function finishStream(streamId, result) {
     setMessageDetailLogLink(
         stream.entry?.footer,
         savedMessage || result || null
+    );
+    setMessageTokenUsage(
+        stream.entry?.footer,
+        savedMessage || { role: 'assistant', token_usage: result?.token_usage || stream.tokenUsage, content: stream.output || '' }
     );
     if (exitCode !== 0) {
         if (wrapper) {
@@ -8402,9 +8575,202 @@ function showMessageCopyFeedback(button) {
     }, 1500);
 }
 
+function toNonNegativeInt(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return null;
+    return Math.round(numeric);
+}
+
+function resolveMessageTokenUsage(message, { fallbackToEstimate = true } = {}) {
+    const role = String(message?.role || 'assistant').trim().toLowerCase();
+    const usage = (message && typeof message.token_usage === 'object') ? message.token_usage : null;
+
+    let inputTokens = toNonNegativeInt(usage?.input_tokens);
+    let cachedInputTokens = toNonNegativeInt(usage?.cached_input_tokens);
+    let outputTokens = toNonNegativeInt(usage?.output_tokens);
+    let reasoningOutputTokens = toNonNegativeInt(usage?.reasoning_output_tokens);
+    let totalTokens = toNonNegativeInt(usage?.total_tokens);
+
+    if (inputTokens === null) inputTokens = toNonNegativeInt(message?.input_tokens);
+    if (cachedInputTokens === null) cachedInputTokens = toNonNegativeInt(message?.cached_input_tokens);
+    if (outputTokens === null) outputTokens = toNonNegativeInt(message?.output_tokens);
+    if (reasoningOutputTokens === null) reasoningOutputTokens = toNonNegativeInt(message?.reasoning_output_tokens);
+    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.total_tokens);
+    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.token_count);
+
+    if (inputTokens === null) inputTokens = 0;
+    if (cachedInputTokens === null) cachedInputTokens = 0;
+    if (outputTokens === null) outputTokens = 0;
+    if (reasoningOutputTokens === null) reasoningOutputTokens = 0;
+
+    let estimated = false;
+    const hasAnyExplicit = inputTokens > 0
+        || cachedInputTokens > 0
+        || outputTokens > 0
+        || reasoningOutputTokens > 0
+        || (totalTokens !== null && totalTokens > 0);
+
+    if (!hasAnyExplicit && fallbackToEstimate) {
+        const estimatedTokens = estimateTokensFromText(message?.content || '');
+        if (role === 'assistant' || role === 'error') {
+            outputTokens = estimatedTokens;
+        } else {
+            inputTokens = estimatedTokens;
+        }
+        totalTokens = estimatedTokens;
+        estimated = true;
+    }
+
+    if (totalTokens === null) {
+        totalTokens = inputTokens + outputTokens;
+        if (outputTokens === 0 && reasoningOutputTokens > 0) {
+            totalTokens += reasoningOutputTokens;
+        }
+    }
+
+    if (inputTokens === 0 && outputTokens === 0 && totalTokens > 0) {
+        if (role === 'assistant' || role === 'error') {
+            outputTokens = totalTokens;
+        } else {
+            inputTokens = totalTokens;
+        }
+    }
+
+    const hasData = inputTokens > 0
+        || cachedInputTokens > 0
+        || outputTokens > 0
+        || reasoningOutputTokens > 0
+        || totalTokens > 0;
+
+    return {
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens,
+        estimated,
+        hasData
+    };
+}
+
+function estimateSessionTokenUsageFromMessages(messages) {
+    if (!Array.isArray(messages)) {
+        return {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens: 0,
+            estimated: false
+        };
+    }
+
+    const aggregated = {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+        estimated: false
+    };
+    messages.forEach(message => {
+        const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
+        aggregated.inputTokens += usage.inputTokens;
+        aggregated.cachedInputTokens += usage.cachedInputTokens;
+        aggregated.outputTokens += usage.outputTokens;
+        aggregated.reasoningOutputTokens += usage.reasoningOutputTokens;
+        aggregated.totalTokens += usage.totalTokens;
+        aggregated.estimated = aggregated.estimated || usage.estimated;
+    });
+    return aggregated;
+}
+
+function resolveSessionTokenUsage(session, fallbackMessages = []) {
+    const sourceMessages = Array.isArray(session?.messages)
+        ? session.messages
+        : (Array.isArray(fallbackMessages) ? fallbackMessages : []);
+
+    const inputTokenCount = toNonNegativeInt(session?.input_token_count);
+    const cachedInputTokenCount = toNonNegativeInt(session?.cached_input_token_count);
+    const outputTokenCount = toNonNegativeInt(session?.output_token_count);
+    const reasoningOutputTokenCount = toNonNegativeInt(session?.reasoning_output_token_count);
+    const totalTokenCount = toNonNegativeInt(session?.token_count);
+
+    const hasSessionTokenData = inputTokenCount !== null
+        || cachedInputTokenCount !== null
+        || outputTokenCount !== null
+        || reasoningOutputTokenCount !== null
+        || totalTokenCount !== null;
+
+    if (hasSessionTokenData) {
+        const inputTokens = inputTokenCount !== null ? inputTokenCount : 0;
+        const cachedInputTokens = cachedInputTokenCount !== null ? cachedInputTokenCount : 0;
+        const outputTokens = outputTokenCount !== null ? outputTokenCount : 0;
+        const reasoningOutputTokens = reasoningOutputTokenCount !== null ? reasoningOutputTokenCount : 0;
+        let totalTokens = totalTokenCount;
+        if (totalTokens === null) {
+            totalTokens = inputTokens + outputTokens;
+            if (outputTokenCount === null && reasoningOutputTokens > 0) {
+                totalTokens += reasoningOutputTokens;
+            }
+        }
+        return {
+            inputTokens,
+            cachedInputTokens,
+            outputTokens,
+            reasoningOutputTokens,
+            totalTokens,
+            estimated: Boolean(session?.token_estimated),
+        };
+    }
+
+    return estimateSessionTokenUsageFromMessages(sourceMessages);
+}
+
+function resolveSessionMessageCount(session) {
+    const explicitCount = Number(session?.message_count);
+    if (Number.isFinite(explicitCount) && explicitCount >= 0) {
+        return Math.round(explicitCount);
+    }
+    if (Array.isArray(session?.messages)) {
+        return session.messages.length;
+    }
+    return 0;
+}
+
+function formatSessionTokenSummary(session) {
+    const usage = resolveSessionTokenUsage(session);
+    if (!usage || usage.totalTokens <= 0) return '';
+    const text = `In ${formatCompactTokenCount(usage.inputTokens)} / Out ${formatCompactTokenCount(usage.outputTokens)}`;
+    return usage.estimated ? `${text} ~` : text;
+}
+
+function formatMessageTokenSummary(message) {
+    const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
+    if (!usage.hasData) return '';
+    const parts = [
+        `Tok In ${formatCompactTokenCount(usage.inputTokens)}`,
+        `Out ${formatCompactTokenCount(usage.outputTokens)}`
+    ];
+    if (usage.cachedInputTokens > 0) {
+        parts.push(`Cached ${formatCompactTokenCount(usage.cachedInputTokens)}`);
+    }
+    if (usage.estimated) {
+        parts.push('~');
+    }
+    return parts.join(' · ');
+}
+
+function setMessageTokenUsage(footer, message) {
+    if (!footer) return;
+    footer.dataset.tokenText = formatMessageTokenSummary(message) || '';
+    syncMessageFooter(footer);
+}
+
 function createMessageFooter() {
     const footer = document.createElement('div');
     footer.className = 'message-footer';
+    footer.dataset.tokenText = '';
     footer.dataset.durationText = '';
     footer.dataset.finalizeText = '';
     footer.dataset.finalizeTimingText = '';
@@ -8474,12 +8840,16 @@ function getFinalizeReasonLabel(reason) {
 
 function syncMessageFooter(footer) {
     if (!footer) return;
+    const tokenText = footer.dataset.tokenText || '';
     const durationText = footer.dataset.durationText || '';
     const finalizeText = footer.dataset.finalizeText || '';
     const finalizeTimingText = footer.dataset.finalizeTimingText || '';
     const previewText = normalizeDetailText(footer.dataset.previewText);
     const detailText = normalizeDetailText(footer.dataset.detailText);
     const parts = [];
+    if (tokenText) {
+        parts.push(tokenText);
+    }
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
     }
@@ -8761,23 +9131,8 @@ function estimateTokensFromText(text) {
 }
 
 function estimateSessionTokenCountFromMessages(messages) {
-    if (!Array.isArray(messages)) return 0;
-    let total = 0;
-    messages.forEach(message => {
-        if (!message || typeof message !== 'object') return;
-        const totalTokens = Number(message.total_tokens);
-        const explicitTokens = Number(message.token_count);
-        if (Number.isFinite(totalTokens) && totalTokens >= 0) {
-            total += Math.round(totalTokens);
-            return;
-        }
-        if (Number.isFinite(explicitTokens) && explicitTokens >= 0) {
-            total += Math.round(explicitTokens);
-            return;
-        }
-        total += estimateTokensFromText(message.content);
-    });
-    return total;
+    const usage = estimateSessionTokenUsageFromMessages(messages);
+    return usage.totalTokens;
 }
 
 function formatCompactTokenCount(value) {
@@ -8863,6 +9218,57 @@ function buildUsageAccount(name) {
     const wrapper = document.createElement('div');
     wrapper.className = 'usage-account';
     wrapper.textContent = `Account: ${name}`;
+    return wrapper;
+}
+
+function normalizeTokenUsageEntry(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    const inputTokens = Number(entry.input_tokens);
+    const cachedInputTokens = Number(entry.cached_input_tokens);
+    const outputTokens = Number(entry.output_tokens);
+    const totalTokens = Number(entry.total_tokens);
+    const requests = Number(entry.requests);
+    const hasTokenData = [inputTokens, cachedInputTokens, outputTokens, totalTokens]
+        .some(value => Number.isFinite(value) && value > 0);
+    const hasRequestData = Number.isFinite(requests) && requests > 0;
+    if (!hasTokenData && !hasRequestData) return null;
+    return {
+        inputTokens: Number.isFinite(inputTokens) ? Math.max(0, Math.round(inputTokens)) : 0,
+        cachedInputTokens: Number.isFinite(cachedInputTokens) ? Math.max(0, Math.round(cachedInputTokens)) : 0,
+        outputTokens: Number.isFinite(outputTokens) ? Math.max(0, Math.round(outputTokens)) : 0,
+        totalTokens: Number.isFinite(totalTokens) ? Math.max(0, Math.round(totalTokens)) : 0,
+        requests: Number.isFinite(requests) ? Math.max(0, Math.round(requests)) : 0,
+        date: typeof entry.date === 'string' ? entry.date.trim() : ''
+    };
+}
+
+function buildTokenUsageEntry(entry, label) {
+    const details = normalizeTokenUsageEntry(entry);
+    if (!details) return null;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-entry';
+    const row = document.createElement('div');
+    row.className = 'usage-row';
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'usage-pill';
+    pill.disabled = true;
+    pill.textContent = label;
+    const value = document.createElement('span');
+    value.className = 'usage-remaining';
+    value.textContent = `In ${formatCompactTokenCount(details.inputTokens)} · Out ${formatCompactTokenCount(details.outputTokens)}`;
+    row.appendChild(pill);
+    row.appendChild(value);
+    wrapper.appendChild(row);
+
+    const reset = document.createElement('div');
+    reset.className = 'usage-reset';
+    const totalText = formatNumber(details.totalTokens);
+    const cachedText = formatNumber(details.cachedInputTokens);
+    const requestText = formatNumber(details.requests);
+    const dateText = details.date ? ` (${details.date})` : '';
+    reset.textContent = `Total ${totalText} · Cached ${cachedText} · Req ${requestText}${dateText}`;
+    wrapper.appendChild(reset);
     return wrapper;
 }
 

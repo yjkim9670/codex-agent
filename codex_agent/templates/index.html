@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=98">
+    <link rel="stylesheet" href="/static/css/app.css?v=100">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -226,7 +226,7 @@
                     </div>
                     <div class="chat-controls-body" id="codex-controls-body">
                         <div class="usage-card">
-                            <div class="usage-label">Limits</div>
+                            <div class="usage-label">Usage</div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
@@ -250,6 +250,13 @@
                                     <span class="sr-only">Apply settings</span>
                                 </button>
                             </div>
+                            <label class="model-sub-label" for="codex-plan-mode-model-input">Plan mode model</label>
+                            <div class="model-row model-row-single">
+                                <div class="model-field model-field-plan-model">
+                                    <select id="codex-plan-mode-model-select" class="model-select is-hidden" aria-label="Select plan mode model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-plan-mode-model-input" class="model-input" type="text" placeholder="Use default model">
+                                </div>
+                            </div>
                             <div class="model-status" id="codex-model-status">Refresh to load</div>
                         </div>
                     </div>
@@ -258,9 +265,12 @@
                 <form id="codex-chat-form" class="chat-input" autocomplete="off">
                     <label class="sr-only" for="codex-chat-input">Codex prompt</label>
                     <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
-                    <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
-                        <span class="sr-only">Send</span>
-                    </button>
+                    <div class="chat-submit-column">
+                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Plan mode off" title="Plan mode off">Plan</button>
+                        <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
+                            <span class="sr-only">Send</span>
+                        </button>
+                    </div>
                 </form>
 
                 <div id="codex-chat-status" class="chat-status">Idle</div>
@@ -569,6 +579,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=82"></script>
+    <script src="/static/js/app.js?v=85"></script>
 </body>
 </html>

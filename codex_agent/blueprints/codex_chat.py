@@ -30,6 +30,7 @@ from ..services.codex_chat import (
     read_codex_stream,
     list_sessions,
     rename_session,
+    record_token_usage_for_message,
     start_codex_stream_for_session,
     update_settings,
     stop_codex_stream,
@@ -43,6 +44,44 @@ from ..services.file_browser import (
 from ..services.git_ops import run_git_action
 
 bp = Blueprint('codex_chat', __name__)
+
+_PLAN_MODE_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
+_PLAN_MODE_PROMPT_SUFFIX = (
+    "## Plan Mode Guardrails\n"
+    "- Plan mode is enabled for this turn.\n"
+    "- Do not modify files.\n"
+    "- Do not run commands that create, edit, move, or delete files.\n"
+    "- Provide analysis and an implementation plan only.\n"
+    "- If changes are needed, describe proposed patches without applying them."
+)
+
+
+def _parse_plan_mode(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in _PLAN_MODE_TRUTHY_VALUES
+    return False
+
+
+def _append_plan_mode_guardrails(prompt_text):
+    normalized = str(prompt_text or '').strip()
+    if not normalized:
+        normalized = '(empty)'
+    return f'{normalized}\n\n{_PLAN_MODE_PROMPT_SUFFIX}'
+
+
+def _resolve_model_override(plan_mode=False):
+    if not plan_mode:
+        return None
+    settings = get_settings()
+    plan_mode_model = str(settings.get('plan_mode_model') or '').strip()
+    if plan_mode_model:
+        return plan_mode_model
+    default_model = str(settings.get('model') or '').strip()
+    return default_model or None
 
 
 @bp.route('/api/codex/settings')
@@ -69,6 +108,7 @@ def codex_settings_update():
     payload = request.get_json(silent=True) or {}
     model = payload.get('model')
     reasoning = payload.get('reasoning_effort')
+    plan_mode_model = payload.get('plan_mode_model')
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
@@ -77,7 +117,15 @@ def codex_settings_update():
         reasoning = str(reasoning).strip()
         if len(reasoning) > CODEX_MAX_REASONING_CHARS:
             return jsonify({'error': 'reasoning_effort가 너무 깁니다.'}), 400
-    settings = update_settings(model=model, reasoning_effort=reasoning)
+    if plan_mode_model is not None:
+        plan_mode_model = str(plan_mode_model).strip()
+        if len(plan_mode_model) > CODEX_MAX_MODEL_CHARS:
+            return jsonify({'error': 'plan_mode_model이 너무 깁니다.'}), 400
+    settings = update_settings(
+        model=model,
+        reasoning_effort=reasoning,
+        plan_mode_model=plan_mode_model,
+    )
     return jsonify({
         'settings': settings,
         'model_options': CODEX_MODEL_OPTIONS,
@@ -160,6 +208,7 @@ def codex_session_delete(session_id):
 def codex_session_message(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
+    plan_mode = _parse_plan_mode(payload.get('plan_mode'))
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -180,18 +229,39 @@ def codex_session_message(session_id):
     ensure_default_title(session_id, prompt)
 
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+    if plan_mode:
+        prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
+    model_override = _resolve_model_override(plan_mode=plan_mode)
     user_message = append_message(session_id, 'user', prompt)
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
 
     started_at = time.time()
-    output, error = execute_codex_prompt(prompt_with_context)
+    output, error, token_usage = execute_codex_prompt(
+        prompt_with_context,
+        model_override=model_override,
+    )
     duration_ms = max(0, int((time.time() - started_at) * 1000))
     metadata = {'duration_ms': duration_ms}
+    if isinstance(token_usage, dict):
+        metadata['token_usage'] = token_usage
+        metadata['token_count'] = int(token_usage.get('total_tokens') or 0)
+        metadata['total_tokens'] = int(token_usage.get('total_tokens') or 0)
+        metadata['input_tokens'] = int(token_usage.get('input_tokens') or 0)
+        metadata['cached_input_tokens'] = int(token_usage.get('cached_input_tokens') or 0)
+        metadata['output_tokens'] = int(token_usage.get('output_tokens') or 0)
+        metadata['reasoning_output_tokens'] = int(token_usage.get('reasoning_output_tokens') or 0)
     if error:
         assistant_message = append_message(session_id, 'error', error, metadata)
     else:
         assistant_message = append_message(session_id, 'assistant', output or '', metadata)
+    if assistant_message:
+        record_token_usage_for_message(
+            session_id=session_id,
+            message_id=assistant_message.get('id'),
+            token_usage=token_usage,
+            source='sync_message'
+        )
 
     session = get_session(session_id)
     return jsonify({
@@ -205,6 +275,7 @@ def codex_session_message(session_id):
 def codex_session_message_stream(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
+    plan_mode = _parse_plan_mode(payload.get('plan_mode'))
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -217,7 +288,15 @@ def codex_session_message_stream(session_id):
 
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
-    start_result = start_codex_stream_for_session(session_id, prompt, prompt_with_context)
+    if plan_mode:
+        prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
+    model_override = _resolve_model_override(plan_mode=plan_mode)
+    start_result = start_codex_stream_for_session(
+        session_id,
+        prompt,
+        prompt_with_context,
+        model_override=model_override,
+    )
     if not start_result.get('ok'):
         if start_result.get('already_running'):
             return jsonify({

@@ -158,3 +158,8 @@ Protection rules are read from `sync_protect.list`.
 ## GUI
 - `http://localhost:<port>/` serves the chat UI.
 - `http://localhost:<port>/health` returns JSON status.
+
+## Codex Token Monitoring
+- Codex usage now tracks prompt/response tokens separately (`input_tokens`, `output_tokens`) plus `cached_input_tokens`.
+- Aggregated counters are stored at `workspace/codex_token_usage.json`.
+- `GET /api/codex/usage` returns both rate-limit info and `token_usage` summary (`today`, `all_time`, `recent_days`).

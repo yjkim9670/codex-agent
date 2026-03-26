@@ -20,6 +20,7 @@ from ..config import (
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
+    CODEX_TOKEN_USAGE_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
     CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
     CODEX_STREAM_POLL_INTERVAL_SECONDS,
@@ -32,6 +33,7 @@ from ..utils.time import normalize_timestamp
 
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
+_TOKEN_USAGE_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _CODEX_AUTH_PATH = Path.home() / '.codex' / 'auth.json'
@@ -79,6 +81,9 @@ _TOKEN_PART_KEYS = (
     'output_tokens',
     'reasoning_output_tokens',
 )
+
+_TOKEN_LEDGER_VERSION = 1
+_TOKEN_LEDGER_EVENT_LIMIT = 4096
 
 
 def _load_data():
@@ -131,16 +136,19 @@ def _read_workspace_settings():
         return {}
     model = data.get('model')
     reasoning = data.get('reasoning_effort')
+    plan_mode_model = data.get('plan_mode_model')
     return {
         'model': model or None,
-        'reasoning_effort': reasoning or None
+        'reasoning_effort': reasoning or None,
+        'plan_mode_model': plan_mode_model or None,
     }
 
 
 def _write_workspace_settings(settings):
     payload = {
         'model': settings.get('model') or None,
-        'reasoning_effort': settings.get('reasoning_effort') or None
+        'reasoning_effort': settings.get('reasoning_effort') or None,
+        'plan_mode_model': settings.get('plan_mode_model') or None,
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CODEX_SETTINGS_PATH.write_text(
@@ -249,26 +257,33 @@ def get_settings():
         if CODEX_SETTINGS_PATH.exists():
             return _read_workspace_settings()
         workspace_settings = _read_workspace_settings()
-        if workspace_settings.get('model') or workspace_settings.get('reasoning_effort'):
+        if (
+            workspace_settings.get('model')
+            or workspace_settings.get('reasoning_effort')
+            or workspace_settings.get('plan_mode_model')
+        ):
             _write_workspace_settings(workspace_settings)
             return workspace_settings
         text = _read_codex_config_text()
         fallback = _parse_top_level_config(text)
         if fallback.get('model') or fallback.get('reasoning_effort'):
+            fallback['plan_mode_model'] = None
             _write_workspace_settings(fallback)
-            return fallback
-    return {'model': None, 'reasoning_effort': None}
+            return _read_workspace_settings()
+    return {'model': None, 'reasoning_effort': None, 'plan_mode_model': None}
 
 
-def update_settings(model=None, reasoning_effort=None):
+def update_settings(model=None, reasoning_effort=None, plan_mode_model=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         if not current and not CODEX_SETTINGS_PATH.exists():
             text = _read_codex_config_text()
             current = _parse_top_level_config(text)
+            current['plan_mode_model'] = None
         next_settings = {
             'model': current.get('model'),
-            'reasoning_effort': current.get('reasoning_effort')
+            'reasoning_effort': current.get('reasoning_effort'),
+            'plan_mode_model': current.get('plan_mode_model'),
         }
         if model is not None:
             model = str(model).strip()
@@ -276,6 +291,9 @@ def update_settings(model=None, reasoning_effort=None):
         if reasoning_effort is not None:
             reasoning_effort = str(reasoning_effort).strip()
             next_settings['reasoning_effort'] = reasoning_effort or None
+        if plan_mode_model is not None:
+            plan_mode_model = str(plan_mode_model).strip()
+            next_settings['plan_mode_model'] = plan_mode_model or None
         _write_workspace_settings(next_settings)
         return next_settings
 
@@ -339,14 +357,339 @@ def _extract_token_count_from_usage(value):
     total = _coerce_non_negative_int(value.get('total_tokens'))
     if total is not None:
         return total
+    input_tokens = _coerce_non_negative_int(value.get('input_tokens'))
+    output_tokens = _coerce_non_negative_int(value.get('output_tokens'))
+    reasoning_output_tokens = _coerce_non_negative_int(value.get('reasoning_output_tokens'))
+    if input_tokens is not None and output_tokens is not None:
+        return input_tokens + output_tokens
+    if input_tokens is not None and output_tokens is None and reasoning_output_tokens is not None:
+        return input_tokens + reasoning_output_tokens
     parts = []
-    for key in _TOKEN_PART_KEYS:
+    for key in ('input_tokens', 'output_tokens', 'reasoning_output_tokens'):
         count = _coerce_non_negative_int(value.get(key))
         if count is not None:
             parts.append(count)
-    if not parts:
+    if parts:
+        return sum(parts)
+    cached_only = _coerce_non_negative_int(value.get('cached_input_tokens'))
+    if cached_only is not None:
+        return 0
+    return None
+
+
+def _zero_token_usage():
+    return {
+        'input_tokens': 0,
+        'cached_input_tokens': 0,
+        'output_tokens': 0,
+        'reasoning_output_tokens': 0,
+        'total_tokens': 0,
+    }
+
+
+def _normalize_token_usage(value):
+    if not isinstance(value, dict):
         return None
-    return sum(parts)
+
+    input_tokens = _coerce_non_negative_int(value.get('input_tokens'))
+    cached_input_tokens = _coerce_non_negative_int(value.get('cached_input_tokens'))
+    output_tokens = _coerce_non_negative_int(value.get('output_tokens'))
+    reasoning_output_tokens = _coerce_non_negative_int(value.get('reasoning_output_tokens'))
+    total_tokens = _coerce_non_negative_int(value.get('total_tokens'))
+
+    has_any = any(
+        item is not None
+        for item in (
+            input_tokens,
+            cached_input_tokens,
+            output_tokens,
+            reasoning_output_tokens,
+            total_tokens,
+        )
+    )
+    if not has_any:
+        return None
+
+    normalized = _zero_token_usage()
+    if input_tokens is not None:
+        normalized['input_tokens'] = input_tokens
+    if cached_input_tokens is not None:
+        normalized['cached_input_tokens'] = cached_input_tokens
+    if output_tokens is not None:
+        normalized['output_tokens'] = output_tokens
+    if reasoning_output_tokens is not None:
+        normalized['reasoning_output_tokens'] = reasoning_output_tokens
+
+    if total_tokens is None:
+        if input_tokens is not None and output_tokens is not None:
+            total_tokens = normalized['input_tokens'] + normalized['output_tokens']
+        else:
+            total_tokens = normalized['input_tokens'] + normalized['output_tokens']
+            if output_tokens is None and reasoning_output_tokens is not None:
+                total_tokens += normalized['reasoning_output_tokens']
+    normalized['total_tokens'] = max(0, int(total_tokens))
+    return normalized
+
+
+def _token_usage_has_data(value):
+    usage = _normalize_token_usage(value)
+    if not usage:
+        return False
+    for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'):
+        if usage.get(key, 0) > 0:
+            return True
+    return False
+
+
+def _add_token_usage(base, delta):
+    left = _normalize_token_usage(base) or _zero_token_usage()
+    right = _normalize_token_usage(delta) or _zero_token_usage()
+    return {
+        'input_tokens': left['input_tokens'] + right['input_tokens'],
+        'cached_input_tokens': left['cached_input_tokens'] + right['cached_input_tokens'],
+        'output_tokens': left['output_tokens'] + right['output_tokens'],
+        'reasoning_output_tokens': left['reasoning_output_tokens'] + right['reasoning_output_tokens'],
+        'total_tokens': left['total_tokens'] + right['total_tokens'],
+    }
+
+
+def _extract_token_usage_from_message(message):
+    if not isinstance(message, dict):
+        return None
+
+    for key in _TOKEN_USAGE_KEYS:
+        usage = _normalize_token_usage(message.get(key))
+        if usage:
+            return usage
+
+    parts = {}
+    for key in (*_TOKEN_PART_KEYS, 'total_tokens'):
+        if key in message:
+            parts[key] = message.get(key)
+    usage = _normalize_token_usage(parts)
+    if usage:
+        return usage
+    return None
+
+
+def _estimate_fallback_token_usage(role, content):
+    estimated_tokens = _estimate_tokens_from_text(content)
+    usage = _zero_token_usage()
+    role_value = str(role or '').strip().lower()
+    if role_value in ('assistant', 'error'):
+        usage['output_tokens'] = estimated_tokens
+    else:
+        usage['input_tokens'] = estimated_tokens
+    usage['total_tokens'] = estimated_tokens
+    return usage
+
+
+def _estimate_session_token_usage(session):
+    messages = session.get('messages', []) if isinstance(session, dict) else []
+    if not isinstance(messages, list):
+        messages = []
+
+    total_usage = _zero_token_usage()
+    estimated = False
+    for message in messages:
+        usage = _extract_token_usage_from_message(message)
+        if not usage:
+            usage = _estimate_fallback_token_usage(
+                (message or {}).get('role'),
+                (message or {}).get('content')
+            )
+            estimated = True
+        total_usage = _add_token_usage(total_usage, usage)
+
+    total_usage['estimated'] = estimated
+    return total_usage
+
+
+def _empty_token_usage_ledger():
+    return {
+        'version': _TOKEN_LEDGER_VERSION,
+        'updated_at': normalize_timestamp(None),
+        'all_time': {
+            **_zero_token_usage(),
+            'requests': 0,
+        },
+        'by_day': {},
+        'by_session': {},
+        'events': {},
+    }
+
+
+def _normalize_token_usage_ledger_entry(value):
+    usage = _normalize_token_usage(value)
+    normalized = {
+        **(usage or _zero_token_usage()),
+        'requests': 0,
+    }
+    if isinstance(value, dict):
+        normalized['requests'] = _coerce_non_negative_int(value.get('requests')) or 0
+    return normalized
+
+
+def _load_token_usage_ledger():
+    if not CODEX_TOKEN_USAGE_PATH.exists():
+        return _empty_token_usage_ledger()
+    try:
+        data = json.loads(CODEX_TOKEN_USAGE_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return _empty_token_usage_ledger()
+    if not isinstance(data, dict):
+        return _empty_token_usage_ledger()
+
+    ledger = _empty_token_usage_ledger()
+    ledger['version'] = _coerce_non_negative_int(data.get('version')) or _TOKEN_LEDGER_VERSION
+    ledger['updated_at'] = normalize_timestamp(data.get('updated_at'))
+    ledger['all_time'] = _normalize_token_usage_ledger_entry(data.get('all_time'))
+
+    by_day = data.get('by_day')
+    if isinstance(by_day, dict):
+        normalized_by_day = {}
+        for day_key, entry in by_day.items():
+            day_text = str(day_key or '').strip()
+            if not day_text:
+                continue
+            normalized_by_day[day_text] = _normalize_token_usage_ledger_entry(entry)
+        ledger['by_day'] = normalized_by_day
+
+    by_session = data.get('by_session')
+    if isinstance(by_session, dict):
+        normalized_by_session = {}
+        for session_key, entry in by_session.items():
+            session_id = str(session_key or '').strip()
+            if not session_id:
+                continue
+            normalized_entry = _normalize_token_usage_ledger_entry(entry)
+            if isinstance(entry, dict):
+                updated_at = entry.get('updated_at')
+                source = entry.get('source')
+                if isinstance(updated_at, str) and updated_at.strip():
+                    normalized_entry['updated_at'] = updated_at.strip()
+                if isinstance(source, str) and source.strip():
+                    normalized_entry['source'] = source.strip()
+            normalized_by_session[session_id] = normalized_entry
+        ledger['by_session'] = normalized_by_session
+
+    events = data.get('events')
+    if isinstance(events, dict):
+        normalized_events = {}
+        for event_key, event_value in events.items():
+            event_id = str(event_key or '').strip()
+            if not event_id:
+                continue
+            if isinstance(event_value, str) and event_value.strip():
+                normalized_events[event_id] = event_value.strip()
+            else:
+                normalized_events[event_id] = normalize_timestamp(None)
+        ledger['events'] = normalized_events
+
+    return ledger
+
+
+def _save_token_usage_ledger(ledger):
+    CODEX_TOKEN_USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CODEX_TOKEN_USAGE_PATH.write_text(
+        json.dumps(ledger, ensure_ascii=False, indent=2),
+        encoding='utf-8'
+    )
+
+
+def _token_usage_today_key():
+    now = normalize_timestamp(None)
+    return now.split('T', 1)[0]
+
+
+def _record_token_usage(event_id, session_id, usage, source='stream'):
+    normalized_usage = _normalize_token_usage(usage)
+    if not normalized_usage or not _token_usage_has_data(normalized_usage):
+        return False
+
+    event_key = str(event_id or '').strip()
+    if not event_key:
+        event_key = uuid.uuid4().hex
+    session_key = str(session_id or '').strip() or '__unknown__'
+    now_iso = normalize_timestamp(None)
+    day_key = _token_usage_today_key()
+
+    with _TOKEN_USAGE_LOCK:
+        ledger = _load_token_usage_ledger()
+        events = ledger.setdefault('events', {})
+        if event_key in events:
+            return False
+
+        all_time = _normalize_token_usage_ledger_entry(ledger.get('all_time'))
+        combined_all_time = _add_token_usage(all_time, normalized_usage)
+        combined_all_time['requests'] = all_time.get('requests', 0) + 1
+        ledger['all_time'] = combined_all_time
+
+        by_day = ledger.setdefault('by_day', {})
+        day_entry = _normalize_token_usage_ledger_entry(by_day.get(day_key))
+        combined_day = _add_token_usage(day_entry, normalized_usage)
+        combined_day['requests'] = day_entry.get('requests', 0) + 1
+        by_day[day_key] = combined_day
+
+        by_session = ledger.setdefault('by_session', {})
+        session_entry = _normalize_token_usage_ledger_entry(by_session.get(session_key))
+        combined_session = _add_token_usage(session_entry, normalized_usage)
+        combined_session['requests'] = session_entry.get('requests', 0) + 1
+        combined_session['updated_at'] = now_iso
+        combined_session['source'] = str(source or 'stream')
+        by_session[session_key] = combined_session
+
+        events[event_key] = now_iso
+        if len(events) > _TOKEN_LEDGER_EVENT_LIMIT:
+            ordered_events = sorted(events.items(), key=lambda item: item[1])
+            for stale_key, _ in ordered_events[:-_TOKEN_LEDGER_EVENT_LIMIT]:
+                events.pop(stale_key, None)
+
+        ledger['updated_at'] = now_iso
+        _save_token_usage_ledger(ledger)
+        return True
+
+
+def get_token_usage_summary(recent_days=7):
+    day_limit = _coerce_non_negative_int(recent_days)
+    if day_limit is None or day_limit <= 0:
+        day_limit = 7
+
+    with _TOKEN_USAGE_LOCK:
+        ledger = _load_token_usage_ledger()
+
+    today_key = _token_usage_today_key()
+    today_entry = _normalize_token_usage_ledger_entry((ledger.get('by_day') or {}).get(today_key))
+    all_time = _normalize_token_usage_ledger_entry(ledger.get('all_time'))
+
+    day_items = []
+    for day_key, entry in (ledger.get('by_day') or {}).items():
+        day_items.append({
+            'date': day_key,
+            **_normalize_token_usage_ledger_entry(entry)
+        })
+    day_items.sort(key=lambda item: item.get('date', ''), reverse=True)
+
+    return {
+        'path': str(CODEX_TOKEN_USAGE_PATH),
+        'updated_at': ledger.get('updated_at'),
+        'all_time': all_time,
+        'today': {
+            'date': today_key,
+            **today_entry
+        },
+        'recent_days': day_items[:day_limit],
+    }
+
+
+def record_token_usage_for_message(session_id, message_id, token_usage, source='message'):
+    message_key = str(message_id or '').strip() or uuid.uuid4().hex
+    return _record_token_usage(
+        event_id=f'message:{message_key}',
+        session_id=session_id,
+        usage=token_usage,
+        source=source
+    )
 
 
 def _estimate_tokens_from_text(text):
@@ -371,23 +714,21 @@ def _estimate_message_tokens(message):
         if count is not None:
             return count
     parts = []
-    for key in _TOKEN_PART_KEYS:
+    for key in ('input_tokens', 'output_tokens', 'reasoning_output_tokens'):
         count = _coerce_non_negative_int(message.get(key))
         if count is not None:
             parts.append(count)
     if parts:
         return sum(parts)
+    cached_only = _coerce_non_negative_int(message.get('cached_input_tokens'))
+    if cached_only is not None:
+        return 0
     return _estimate_tokens_from_text(message.get('content'))
 
 
 def _estimate_session_tokens(session):
-    messages = session.get('messages', []) if isinstance(session, dict) else []
-    if not isinstance(messages, list):
-        return 0
-    total = 0
-    for message in messages:
-        total += _estimate_message_tokens(message)
-    return total
+    usage = _estimate_session_token_usage(session)
+    return int(usage.get('total_tokens') or 0)
 
 
 def _extract_limits(rate_limits):
@@ -545,8 +886,14 @@ def _read_account_name():
 
 def get_usage_summary():
     account_name = _read_account_name()
+    token_usage = get_token_usage_summary()
     if not CODEX_SESSIONS_PATH.exists():
-        return {'five_hour': None, 'weekly': None, 'account_name': account_name}
+        return {
+            'five_hour': None,
+            'weekly': None,
+            'account_name': account_name,
+            'token_usage': token_usage
+        }
     try:
         files = sorted(
             CODEX_SESSIONS_PATH.rglob('*.jsonl'),
@@ -554,7 +901,12 @@ def get_usage_summary():
             reverse=True
         )
     except Exception:
-        return {'five_hour': None, 'weekly': None, 'account_name': account_name}
+        return {
+            'five_hour': None,
+            'weekly': None,
+            'account_name': account_name,
+            'token_usage': token_usage
+        }
     best_limits = None
     best_timestamp = None
     for path in files[:80]:
@@ -572,8 +924,14 @@ def get_usage_summary():
             best_timestamp = event_timestamp
     if best_limits and (best_limits.get('five_hour') or best_limits.get('weekly')):
         best_limits['account_name'] = account_name
+        best_limits['token_usage'] = token_usage
         return best_limits
-    return {'five_hour': None, 'weekly': None, 'account_name': account_name}
+    return {
+        'five_hour': None,
+        'weekly': None,
+        'account_name': account_name,
+        'token_usage': token_usage
+    }
 
 
 def _sort_sessions(sessions):
@@ -657,13 +1015,19 @@ def list_sessions():
     sessions = _sort_sessions(data.get('sessions', []))
     summary = []
     for session in sessions:
+        usage = _estimate_session_token_usage(session)
         summary.append({
             'id': session.get('id'),
             'title': session.get('title') or 'New session',
             'created_at': session.get('created_at'),
             'updated_at': session.get('updated_at'),
             'message_count': len(session.get('messages', [])),
-            'token_count': _estimate_session_tokens(session)
+            'token_count': usage.get('total_tokens', 0),
+            'input_token_count': usage.get('input_tokens', 0),
+            'cached_input_token_count': usage.get('cached_input_tokens', 0),
+            'output_token_count': usage.get('output_tokens', 0),
+            'reasoning_output_token_count': usage.get('reasoning_output_tokens', 0),
+            'token_estimated': bool(usage.get('estimated'))
         })
     return summary
 
@@ -671,7 +1035,22 @@ def list_sessions():
 def get_session(session_id):
     data = _load_data()
     session = _find_session(data.get('sessions', []), session_id)
-    return deepcopy(session) if session else None
+    if not session:
+        return None
+    session_copy = deepcopy(session)
+    usage = _estimate_session_token_usage(session_copy)
+    messages = session_copy.get('messages', [])
+    if not isinstance(messages, list):
+        messages = []
+        session_copy['messages'] = messages
+    session_copy['message_count'] = len(messages)
+    session_copy['token_count'] = usage.get('total_tokens', 0)
+    session_copy['input_token_count'] = usage.get('input_tokens', 0)
+    session_copy['cached_input_token_count'] = usage.get('cached_input_tokens', 0)
+    session_copy['output_token_count'] = usage.get('output_tokens', 0)
+    session_copy['reasoning_output_token_count'] = usage.get('reasoning_output_tokens', 0)
+    session_copy['token_estimated'] = bool(usage.get('estimated'))
+    return session_copy
 
 
 def create_session(title=None):
@@ -944,7 +1323,7 @@ def build_codex_prompt(messages, prompt):
     return structured_prompt[-max_chars:]
 
 
-def _build_codex_command(prompt, output_path=None):
+def _build_codex_command(prompt, output_path=None, json_output=False, model_override=None):
     cmd = [
         'codex',
         'exec',
@@ -955,7 +1334,7 @@ def _build_codex_command(prompt, output_path=None):
     if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(WORKSPACE_DIR):
         cmd.append('--skip-git-repo-check')
     settings = get_settings()
-    model = settings.get('model')
+    model = (str(model_override).strip() if model_override is not None else '') or settings.get('model')
     if model:
         cmd.extend(['--model', model])
     reasoning_effort = settings.get('reasoning_effort')
@@ -964,6 +1343,8 @@ def _build_codex_command(prompt, output_path=None):
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
     if output_path:
         cmd.extend(['--output-last-message', str(output_path)])
+    if json_output:
+        cmd.append('--json')
     cmd.append(prompt)
     return cmd
 
@@ -982,10 +1363,110 @@ def _is_git_repository(path):
     return result.returncode == 0 and (result.stdout or '').strip().lower() == 'true'
 
 
-def execute_codex_prompt(prompt):
+def _parse_json_object(line):
+    if not isinstance(line, str):
+        return None
+    raw = line.strip()
+    if not raw:
+        return None
+    if not raw.startswith('{'):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _extract_usage_from_exec_event(event):
+    if not isinstance(event, dict):
+        return None
+
+    usage = None
+    event_type = str(event.get('type') or '').strip().lower()
+    if event_type == 'turn.completed':
+        usage = _normalize_token_usage(event.get('usage'))
+        if usage:
+            return usage
+
+    payload = event.get('payload')
+    if isinstance(payload, dict):
+        payload_type = str(payload.get('type') or '').strip().lower()
+        if payload_type == 'token_count':
+            info = payload.get('info')
+            if isinstance(info, dict):
+                for key in ('last_token_usage', 'total_token_usage'):
+                    usage = _normalize_token_usage(info.get(key))
+                    if usage:
+                        return usage
+            usage = _normalize_token_usage(payload.get('usage'))
+            if usage:
+                return usage
+
+    usage = _normalize_token_usage(event.get('usage'))
+    if usage:
+        return usage
+    return None
+
+
+def _extract_agent_text_from_exec_event(event):
+    if not isinstance(event, dict):
+        return ''
+    event_type = str(event.get('type') or '').strip().lower()
+    if event_type == 'item.completed':
+        item = event.get('item')
+        if isinstance(item, dict):
+            item_type = str(item.get('type') or '').strip().lower()
+            if item_type == 'agent_message':
+                text = item.get('text')
+                if isinstance(text, str):
+                    return text.strip()
+
+    payload = event.get('payload')
+    if isinstance(payload, dict):
+        payload_type = str(payload.get('type') or '').strip().lower()
+        if payload_type == 'output_text':
+            text = payload.get('text')
+            if isinstance(text, str):
+                return text.strip()
+    return ''
+
+
+def _extract_exec_json_summary(raw_stdout):
+    usage = None
+    text_candidates = []
+    raw_lines = []
+
+    for line in str(raw_stdout or '').splitlines():
+        event = _parse_json_object(line)
+        if not event:
+            continue
+        event_usage = _extract_usage_from_exec_event(event)
+        if event_usage:
+            usage = event_usage
+        text = _extract_agent_text_from_exec_event(event)
+        if text:
+            text_candidates.append(text)
+        raw_lines.append(line.strip())
+
+    return {
+        'usage': usage,
+        'last_text': text_candidates[-1] if text_candidates else '',
+        'event_count': len(raw_lines),
+    }
+
+
+def execute_codex_prompt(prompt, model_override=None):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
-    cmd = _build_codex_command(prompt, output_path=output_path)
+    cmd = _build_codex_command(
+        prompt,
+        output_path=output_path,
+        json_output=True,
+        model_override=model_override,
+    )
     try:
         result = subprocess.run(
             cmd,
@@ -995,9 +1476,12 @@ def execute_codex_prompt(prompt):
             check=False
         )
     except FileNotFoundError:
-        return None, 'codex 명령을 찾을 수 없습니다.'
+        return None, 'codex 명령을 찾을 수 없습니다.', None
     except Exception as exc:
-        return None, f'Codex 실행 중 오류가 발생했습니다: {exc}'
+        return None, f'Codex 실행 중 오류가 발생했습니다: {exc}', None
+
+    json_summary = _extract_exec_json_summary(result.stdout or '')
+    token_usage = json_summary.get('usage')
 
     output_text = ''
     if output_path.exists():
@@ -1012,13 +1496,15 @@ def execute_codex_prompt(prompt):
                 pass
 
     if not output_text:
+        output_text = json_summary.get('last_text') or ''
+    if not output_text:
         output_text = (result.stdout or '').strip()
 
     if result.returncode != 0:
         error_text = (result.stderr or '').strip()
-        return None, error_text or output_text or 'Codex 실행에 실패했습니다.'
+        return None, error_text or output_text or 'Codex 실행에 실패했습니다.', token_usage
 
-    return output_text, None
+    return output_text, None, token_usage
 
 
 def _coerce_positive_seconds(value, default_value, minimum=0.01):
@@ -1067,6 +1553,20 @@ def _build_stream_message_metadata(started_at, completed_at, saved_at, finalize_
         metadata['finalize_lag_ms'] = max(0, int((saved_at - completed_at) * 1000))
 
     return metadata or None
+
+
+def _attach_token_usage_metadata(metadata, token_usage):
+    usage = _normalize_token_usage(token_usage)
+    if not usage or not _token_usage_has_data(usage):
+        return metadata
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata['token_usage'] = usage
+    metadata['token_count'] = usage.get('total_tokens', 0)
+    metadata['total_tokens'] = usage.get('total_tokens', 0)
+    for key in _TOKEN_PART_KEYS:
+        metadata[key] = usage.get(key, 0)
+    return metadata
 
 
 def _normalize_stream_log_text(value):
@@ -1388,9 +1888,47 @@ def _snapshot_stream_runtime_locked(stream):
     }
 
 
+def _set_stream_token_usage(stream_id, usage):
+    normalized = _normalize_token_usage(usage)
+    if not normalized:
+        return
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream:
+            return
+        stream['token_usage'] = normalized
+        stream['updated_at'] = time.time()
+
+
+def _handle_stream_json_output_line(stream_id, line):
+    event = _parse_json_object(line)
+    if not event:
+        _append_stream_chunk(stream_id, 'output', line)
+        return
+
+    usage = _extract_usage_from_exec_event(event)
+    if usage:
+        _set_stream_token_usage(stream_id, usage)
+
+    text = _extract_agent_text_from_exec_event(event)
+    if text:
+        if not text.endswith('\n'):
+            text = f'{text}\n'
+        _append_stream_chunk(stream_id, 'output', text)
+
+
 def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
+            if key == 'output':
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    json_output = True
+                    if stream is not None:
+                        json_output = stream.get('json_output') is not False
+                if json_output:
+                    _handle_stream_json_output_line(stream_id, line)
+                    continue
             _append_stream_chunk(stream_id, key, line)
     finally:
         try:
@@ -1425,13 +1963,22 @@ def _run_codex_stream(stream_id, prompt):
         stream = state.codex_streams.get(stream_id)
         output_path = stream.get('output_path') if stream else None
         started_at = stream.get('started_at') if stream else None
+        model_override = stream.get('model_override') if stream else None
+        json_output = True
+        if stream is not None:
+            json_output = stream.get('json_output') is not False
 
     if not output_path:
         output_path = str(WORKSPACE_DIR / f"codex_output_{stream_id}.txt")
     if not isinstance(started_at, (int, float)):
         started_at = time.time()
 
-    cmd = _build_codex_command(prompt, output_path=output_path)
+    cmd = _build_codex_command(
+        prompt,
+        output_path=output_path,
+        json_output=json_output,
+        model_override=model_override,
+    )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         process = subprocess.Popen(
@@ -1638,7 +2185,7 @@ def _run_codex_stream(stream_id, prompt):
     finalize_codex_stream(stream_id)
 
 
-def create_codex_stream(session_id, prompt):
+def create_codex_stream(session_id, prompt, model_override=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
@@ -1660,6 +2207,9 @@ def create_codex_stream(session_id, prompt):
         'finalize_reason': None,
         'output_path': str(output_path),
         'output_last_message': '',
+        'token_usage': _zero_token_usage(),
+        'model_override': (str(model_override).strip() if model_override is not None else '') or None,
+        'json_output': True,
         'output_length': 0,
         'error_length': 0,
         'created_at': created_at,
@@ -1711,7 +2261,7 @@ def get_active_stream_id_for_session(session_id):
         return _find_active_stream_id_locked(session_id)
 
 
-def start_codex_stream_for_session(session_id, prompt, prompt_with_context):
+def start_codex_stream_for_session(session_id, prompt, prompt_with_context, model_override=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         with state.codex_streams_lock:
@@ -1730,7 +2280,11 @@ def start_codex_stream_for_session(session_id, prompt, prompt_with_context):
                 'error': '메시지를 저장하지 못했습니다.'
             }
 
-        stream_info = create_codex_stream(session_id, prompt_with_context)
+        stream_info = create_codex_stream(
+            session_id,
+            prompt_with_context,
+            model_override=model_override,
+        )
         return {
             'ok': True,
             'stream_id': stream_info.get('id'),
@@ -1753,6 +2307,7 @@ def list_codex_streams(include_done=False):
             if not include_done:
                 if stream.get('done') or stream.get('cancelled'):
                     continue
+            usage = _normalize_token_usage(stream.get('token_usage')) or _zero_token_usage()
             streams.append({
                 'id': stream.get('id'),
                 'session_id': stream.get('session_id'),
@@ -1767,6 +2322,12 @@ def list_codex_streams(include_done=False):
                 'saved_at': _epoch_to_millis(stream.get('saved_at')),
                 'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
                 'finalize_reason': stream.get('finalize_reason'),
+                'token_usage': usage,
+                'input_tokens': usage.get('input_tokens', 0),
+                'cached_input_tokens': usage.get('cached_input_tokens', 0),
+                'output_tokens': usage.get('output_tokens', 0),
+                'reasoning_output_tokens': usage.get('reasoning_output_tokens', 0),
+                'total_tokens': usage.get('total_tokens', 0),
                 'process_running': runtime.get('process_running', False),
                 'process_pid': runtime.get('process_pid'),
                 'runtime_ms': runtime.get('runtime_ms'),
@@ -1784,6 +2345,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
         runtime = _snapshot_stream_runtime_locked(stream)
         output = stream['output']
         error = stream['error']
+        usage = _normalize_token_usage(stream.get('token_usage')) or _zero_token_usage()
         data = {
             'output': output[output_offset:],
             'error': error[error_offset:],
@@ -1800,6 +2362,12 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'saved_at': _epoch_to_millis(stream.get('saved_at')),
             'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
             'finalize_reason': stream.get('finalize_reason'),
+            'token_usage': usage,
+            'input_tokens': usage.get('input_tokens', 0),
+            'cached_input_tokens': usage.get('cached_input_tokens', 0),
+            'output_tokens': usage.get('output_tokens', 0),
+            'reasoning_output_tokens': usage.get('reasoning_output_tokens', 0),
+            'total_tokens': usage.get('total_tokens', 0),
             'process_running': runtime.get('process_running', False),
             'process_pid': runtime.get('process_pid'),
             'runtime_ms': runtime.get('runtime_ms'),
@@ -1837,6 +2405,7 @@ def finalize_codex_stream(stream_id):
         session_id = stream.get('session_id')
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
+        token_usage = _normalize_token_usage(stream.get('token_usage'))
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -1844,6 +2413,7 @@ def finalize_codex_stream(stream_id):
     _cleanup_output_last_message(output_path)
 
     metadata = _build_stream_message_metadata(started_at, completed_at, now, finalize_reason)
+    metadata = _attach_token_usage_metadata(metadata, token_usage)
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
         finalize_lag_ms = metadata.get('finalize_lag_ms')
@@ -1861,21 +2431,35 @@ def finalize_codex_stream(stream_id):
             metadata = {}
         metadata['work_details'] = work_details
     if exit_code == 0:
-        return append_message(
+        saved_message = append_message(
             session_id,
             'assistant',
             final_output,
             metadata,
             created_at=created_at_value
         )
+        _record_token_usage(
+            event_id=f'stream:{stream_id}',
+            session_id=session_id,
+            usage=token_usage,
+            source='stream_finalize_success'
+        )
+        return saved_message
     message_text = error or final_output or 'Codex 실행에 실패했습니다.'
-    return append_message(
+    saved_message = append_message(
         session_id,
         'error',
         message_text,
         metadata,
         created_at=created_at_value
     )
+    _record_token_usage(
+        event_id=f'stream:{stream_id}',
+        session_id=session_id,
+        usage=token_usage,
+        source='stream_finalize_error'
+    )
+    return saved_message
 
 
 def stop_codex_stream(stream_id):
@@ -1902,6 +2486,7 @@ def stop_codex_stream(stream_id):
         started_at = stream.get('started_at') or stream.get('created_at')
         completed_at = stream.get('completed_at')
         output_path = stream.get('output_path')
+        token_usage = _normalize_token_usage(stream.get('token_usage'))
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -1932,6 +2517,7 @@ def stop_codex_stream(stream_id):
         saved_at,
         'user_cancelled'
     )
+    metadata = _attach_token_usage_metadata(metadata, token_usage)
     work_details = _build_work_details(output, output_last_message or output, error)
     if work_details:
         if not isinstance(metadata, dict):
@@ -1943,6 +2529,12 @@ def stop_codex_stream(stream_id):
         message_text,
         metadata,
         created_at=_iso_timestamp_from_epoch(completed_at)
+    )
+    _record_token_usage(
+        event_id=f'stream-stop:{stream_id}',
+        session_id=session_id,
+        usage=token_usage,
+        source='stream_user_cancelled'
     )
 
     with state.codex_streams_lock:

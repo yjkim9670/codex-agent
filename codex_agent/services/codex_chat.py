@@ -57,6 +57,9 @@ _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
 _ALLOW_COMPETING_PROCESSES = str(
     os.environ.get('CODEX_ALLOW_COMPETING_PROCESSES') or ''
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+_STRICT_COMPETING_PROCESSES = str(
+    os.environ.get('CODEX_STRICT_COMPETING_PROCESSES') or ''
+).strip().lower() in ('1', 'true', 'yes', 'on')
 _LOGGER = logging.getLogger(__name__)
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -302,7 +305,7 @@ def _list_competing_codex_processes():
         return []
     try:
         result = subprocess.run(
-            ['ps', '-eo', 'pid=,args='],
+            ['ps', '-eo', 'pid=,etimes=,args='],
             capture_output=True,
             text=True,
             check=False,
@@ -321,14 +324,18 @@ def _list_competing_codex_processes():
         line = str(raw_line or '').strip()
         if not line:
             continue
-        parts = line.split(None, 1)
-        if len(parts) != 2:
+        parts = line.split(None, 2)
+        if len(parts) != 3:
             continue
-        pid_text, command = parts
+        pid_text, elapsed_text, command = parts
         try:
             pid = int(pid_text)
         except Exception:
             continue
+        try:
+            elapsed_seconds = int(elapsed_text)
+        except Exception:
+            elapsed_seconds = 0
         if pid == current_pid:
             continue
 
@@ -336,15 +343,29 @@ def _list_competing_codex_processes():
         if not normalized_command:
             continue
 
+        # Ignore our own server process tree to avoid self false positives.
+        if 'run_codex_chat_server.py' in normalized_command and current_workspace in normalized_command:
+            continue
+
         label = ''
-        if 'run_codex_chat_server.py' in normalized_command:
-            label = '중복 codex_agent 서버' if current_workspace in normalized_command else '다른 codex_agent 서버'
+        blocking = False
+        is_codex_exec = bool(re.search(r'(^|\s)codex\s+exec(\s|$)', normalized_command))
+        is_node_codex_exec = bool(re.search(r'(^|\s)node\s+\S*/codex\s+exec(\s|$)', normalized_command))
+        if is_codex_exec or is_node_codex_exec:
+            label = 'Codex CLI exec'
+            blocking = True
         elif 'codex app-server' in normalized_command:
             label = 'Codex app-server'
+            blocking = bool(_STRICT_COMPETING_PROCESSES)
+        elif 'run_codex_chat_server.py' in normalized_command:
+            label = '다른 codex_agent 서버'
+            blocking = False
         elif re.search(r'(^|\s)node\s+\S*/codex(?:\s|$)', normalized_command):
             label = 'Codex CLI 런처'
+            blocking = bool(_STRICT_COMPETING_PROCESSES and elapsed_seconds >= 20)
         elif re.search(r'(^|\s|/)(?:codex)(?:\s|$)', normalized_command):
             label = 'Codex CLI'
+            blocking = bool(_STRICT_COMPETING_PROCESSES and elapsed_seconds >= 20)
         else:
             continue
 
@@ -356,29 +377,38 @@ def _list_competing_codex_processes():
             'pid': pid,
             'label': label,
             'command': normalized_command,
+            'blocking': blocking,
+            'elapsed_seconds': elapsed_seconds,
         })
 
-    processes.sort(key=lambda item: (item.get('label') or '', item.get('pid') or 0))
+    processes.sort(
+        key=lambda item: (
+            0 if item.get('blocking') else 1,
+            item.get('label') or '',
+            item.get('pid') or 0
+        )
+    )
     return processes
 
 
 def get_competing_codex_process_error():
     processes = _list_competing_codex_processes()
-    if not processes:
+    blocking_processes = [p for p in processes if p.get('blocking')]
+    if not blocking_processes:
         return ''
     details = []
-    for process in processes[:4]:
+    for process in blocking_processes[:4]:
         command = _summarize_auth_failure_text(process.get('command'), max_chars=120)
         details.append(
             f"{process.get('label')} pid={process.get('pid')} ({command})"
         )
-    remaining_count = max(0, len(processes) - len(details))
+    remaining_count = max(0, len(blocking_processes) - len(details))
     if remaining_count:
         details.append(f'외 {remaining_count}개')
     detail_text = '; '.join(details)
     return (
-        '다른 Codex 프로세스가 실행 중이라 refresh token 충돌이 다시 발생할 수 있습니다. '
-        '다른 브라우저, VS Code, Codex Agent 세션을 먼저 종료한 뒤 다시 시도해 주세요.'
+        '다른 Codex CLI 실행이 감지되어 refresh token 충돌이 다시 발생할 수 있습니다. '
+        '실행 중인 Codex CLI 작업을 먼저 종료한 뒤 다시 시도해 주세요.'
         f' ({detail_text})'
     )
 

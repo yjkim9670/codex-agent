@@ -2942,6 +2942,34 @@ function isMobileLayout() {
     return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
 }
 
+function mediaQueryMatches(query) {
+    if (!query || typeof window.matchMedia !== 'function') return false;
+    try {
+        return window.matchMedia(query).matches;
+    } catch (error) {
+        void error;
+    }
+    return false;
+}
+
+function isLikelyVirtualKeyboardEnvironment() {
+    const userAgentData = navigator.userAgentData;
+    if (userAgentData && typeof userAgentData.mobile === 'boolean' && userAgentData.mobile) {
+        return true;
+    }
+    const userAgent = String(navigator.userAgent || '');
+    if (/\b(Android|iPhone|iPad|iPod|Mobile)\b/i.test(userAgent)) {
+        return true;
+    }
+    const hasFinePointer = mediaQueryMatches('(any-pointer: fine)');
+    const hasCoarsePointer = mediaQueryMatches('(any-pointer: coarse)');
+    if (hasCoarsePointer && !hasFinePointer) {
+        return true;
+    }
+    const touchPoints = Number(navigator.maxTouchPoints || 0);
+    return touchPoints > 0 && !hasFinePointer;
+}
+
 function isEditableElement(element) {
     if (!element || typeof element.tagName !== 'string') return false;
     const tag = element.tagName.toLowerCase();
@@ -2964,7 +2992,7 @@ function isMobileKeyboardOpen(isMobile = isMobileLayout()) {
             return true;
         }
     }
-    return hasEditableFocus;
+    return hasEditableFocus && isLikelyVirtualKeyboardEnvironment();
 }
 
 function setMobileKeyboardOpen(open) {
@@ -7783,6 +7811,7 @@ function setPlanModeToggleState(enabled) {
     button.classList.toggle('is-active', normalized);
     button.setAttribute('aria-pressed', String(normalized));
     const label = normalized ? 'Plan mode on' : 'Plan mode off';
+    button.textContent = normalized ? 'Plan ON' : 'Plan OFF';
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
 }

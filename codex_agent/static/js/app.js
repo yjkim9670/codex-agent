@@ -20,6 +20,7 @@ const state = {
         model: null,
         modelOptions: [],
         planModeModel: null,
+        planModeReasoningEffort: null,
         planModeEnabled: false,
         reasoningEffort: null,
         reasoningOptions: [],
@@ -224,6 +225,8 @@ function ensureSessionState(sessionId) {
             sending: false,
             pendingSend: null,
             streamId: null,
+            queuedPrompts: [],
+            queueFlushing: false,
             status: 'Idle',
             statusIsError: false,
             responseStartedAt: null,
@@ -256,6 +259,56 @@ function isSessionBusy(sessionId) {
     const stream = getSessionStream(sessionId);
     const remoteStreaming = state.remoteStreamSessions?.has(sessionId);
     return Boolean(sessionState.sending || sessionState.pendingSend || stream || remoteStreaming);
+}
+
+function getQueuedPromptCount(sessionId) {
+    const sessionState = getSessionState(sessionId);
+    const queued = sessionState?.queuedPrompts;
+    if (!Array.isArray(queued)) return 0;
+    return queued.length;
+}
+
+function enqueuePrompt(sessionId, prompt, { planMode = false } = {}) {
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return 0;
+    if (!Array.isArray(sessionState.queuedPrompts)) {
+        sessionState.queuedPrompts = [];
+    }
+    sessionState.queuedPrompts.push({
+        prompt: String(prompt || ''),
+        planMode: Boolean(planMode),
+        queuedAt: Date.now()
+    });
+    return sessionState.queuedPrompts.length;
+}
+
+async function flushQueuedPrompts(sessionId) {
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return;
+    if (sessionState.queueFlushing) return;
+    if (isSessionBusy(sessionId)) return;
+    if (!Array.isArray(sessionState.queuedPrompts) || sessionState.queuedPrompts.length === 0) return;
+    sessionState.queueFlushing = true;
+    try {
+        while (!isSessionBusy(sessionId) && sessionState.queuedPrompts.length > 0) {
+            const next = sessionState.queuedPrompts.shift();
+            if (!next || typeof next.prompt !== 'string' || !next.prompt.trim()) {
+                continue;
+            }
+            if (sessionId === state.activeSessionId) {
+                syncActiveSessionControls();
+            }
+            await sendPrompt(next.prompt, {
+                sessionId,
+                planMode: Boolean(next.planMode)
+            });
+        }
+    } finally {
+        sessionState.queueFlushing = false;
+        if (sessionId === state.activeSessionId) {
+            syncActiveSessionControls();
+        }
+    }
 }
 
 function setSessionStatus(sessionId, message, isError = false) {
@@ -459,24 +512,35 @@ function syncActiveSessionControls() {
         ? Boolean(sessionState?.sending || sessionState?.pendingSend || getSessionStream(sessionId))
         : false;
     const remoteBusy = sessionId ? Boolean(state.remoteStreamSessions?.has(sessionId)) : false;
-    const isBusy = sessionId ? (localBusy || remoteBusy) : false;
-    const showStop = sessionId ? localBusy : false;
+    const queueCount = sessionId ? getQueuedPromptCount(sessionId) : 0;
+    const hasDraftPrompt = Boolean(input?.value?.trim());
+    const showQueue = sessionId ? (localBusy && hasDraftPrompt) : false;
+    const showStop = sessionId ? (localBusy && !hasDraftPrompt) : false;
+    const lockInput = sessionId ? (remoteBusy && !localBusy) : false;
     if (input) {
-        input.disabled = isBusy;
-        input.readOnly = isBusy;
-        input.setAttribute('aria-disabled', String(isBusy));
-        input.placeholder = isBusy
-            ? 'Response in progress for this session...'
+        input.disabled = lockInput;
+        input.readOnly = lockInput;
+        input.setAttribute('aria-disabled', String(lockInput));
+        input.placeholder = lockInput
+            ? 'Another client is responding for this session...'
+            : localBusy
+                ? `Response in progress... queue ready${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
             : CHAT_INPUT_DEFAULT_PLACEHOLDER;
     }
     if (sendBtn) {
         sendBtn.disabled = remoteBusy && !localBusy;
-        sendBtn.dataset.mode = showStop ? 'stop' : 'send';
-        sendBtn.setAttribute('aria-label', showStop ? 'Stop' : 'Send');
-        sendBtn.setAttribute('title', showStop ? 'Stop' : 'Send');
+        sendBtn.dataset.mode = showQueue ? 'queue' : (showStop ? 'stop' : 'send');
+        if (queueCount > 0) {
+            sendBtn.dataset.queueCount = String(queueCount);
+        } else {
+            delete sendBtn.dataset.queueCount;
+        }
+        const label = showQueue ? 'Queue' : (showStop ? 'Stop' : 'Send');
+        sendBtn.setAttribute('aria-label', label);
+        sendBtn.setAttribute('title', label);
         const srLabel = sendBtn.querySelector('.sr-only');
         if (srLabel) {
-            srLabel.textContent = showStop ? 'Stop' : 'Send';
+            srLabel.textContent = label;
         }
     }
 }
@@ -589,10 +653,11 @@ function readOptionsFromData(element) {
     }
 }
 
-function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect) {
+function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect) {
     const modelOptions = readOptionsFromData(modelSelect);
     const planModeModelOptions = readOptionsFromData(planModeModelSelect);
     const reasoningOptions = readOptionsFromData(reasoningSelect);
+    const planModeReasoningOptions = readOptionsFromData(planModeReasoningSelect);
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
     } else if (planModeModelOptions.length > 0) {
@@ -600,11 +665,19 @@ function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModel
     }
     if (reasoningOptions.length > 0) {
         state.settings.reasoningOptions = reasoningOptions;
+    } else if (planModeReasoningOptions.length > 0) {
+        state.settings.reasoningOptions = planModeReasoningOptions;
     }
-    if (modelOptions.length > 0 || planModeModelOptions.length > 0 || reasoningOptions.length > 0) {
+    if (
+        modelOptions.length > 0
+        || planModeModelOptions.length > 0
+        || reasoningOptions.length > 0
+        || planModeReasoningOptions.length > 0
+    ) {
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
     }
 }
 
@@ -632,6 +705,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const modelApply = document.getElementById('codex-model-apply');
     const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
     const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
+    const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
+    const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
@@ -714,6 +789,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 event.preventDefault();
                 handleSubmit();
             }
+        });
+        input.addEventListener('input', () => {
+            syncActiveSessionControls();
         });
     }
 
@@ -1194,7 +1272,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect);
+    primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect);
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
@@ -1237,7 +1315,16 @@ document.addEventListener('DOMContentLoaded', () => {
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(
         mobileMedia,
-        [modelInput, planModeModelInput, reasoningInput, modelSelect, planModeModelSelect, reasoningSelect],
+        [
+            modelInput,
+            planModeModelInput,
+            planModeReasoningInput,
+            reasoningInput,
+            modelSelect,
+            planModeModelSelect,
+            planModeReasoningSelect,
+            reasoningSelect
+        ],
     );
 
     if (messages) {
@@ -1304,6 +1391,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (reasoningInput) {
         reasoningInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void updateSettings();
+            }
+        });
+    }
+
+    if (planModeReasoningSelect) {
+        planModeReasoningSelect.addEventListener('change', () => {
+            if (planModeReasoningInput) {
+                planModeReasoningInput.value = planModeReasoningSelect.value || '';
+            }
+        });
+    }
+
+    if (planModeReasoningInput) {
+        planModeReasoningInput.addEventListener('keydown', event => {
             if (event.key === 'Enter') {
                 event.preventDefault();
                 void updateSettings();
@@ -3741,6 +3845,7 @@ async function loadSettings({ silent = true } = {}) {
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
             planModeModel: result?.settings?.plan_mode_model || null,
+            planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeEnabled: Boolean(state.settings?.planModeEnabled),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: Array.isArray(result?.reasoning_options)
@@ -3757,12 +3862,14 @@ async function loadSettings({ silent = true } = {}) {
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
@@ -3948,26 +4055,90 @@ function updateReasoningControls(reasoning, options) {
     }
 }
 
+function updatePlanModeReasoningControls(reasoning, options) {
+    const select = document.getElementById('codex-plan-mode-reasoning-select');
+    const input = document.getElementById('codex-plan-mode-reasoning-input');
+    const field = select ? select.closest('.model-field') : null;
+    const hasOptions = Array.isArray(options) && options.length > 0;
+    if (select) {
+        select.innerHTML = '';
+        if (hasOptions) {
+            select.classList.remove('is-hidden');
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Use default';
+            select.appendChild(placeholder);
+            options.forEach(item => {
+                const option = document.createElement('option');
+                option.value = item;
+                option.textContent = item;
+                select.appendChild(option);
+            });
+            if (reasoning) {
+                select.value = options.includes(reasoning) ? reasoning : '';
+            } else {
+                select.value = '';
+            }
+        } else {
+            select.classList.add('is-hidden');
+        }
+    }
+    if (input) {
+        input.value = reasoning || '';
+        input.placeholder = reasoning ? reasoning : 'Use default effort';
+        input.disabled = hasOptions;
+        input.classList.toggle('is-hidden', hasOptions);
+    }
+    if (field) {
+        field.classList.toggle('is-select-only', hasOptions);
+    }
+}
+
 function setSettingsStatus(model, reasoning, overrideText = null) {
     const status = document.getElementById('codex-model-status');
     const summary = document.getElementById('codex-controls-summary');
     if (!status) return;
     if (overrideText) {
         status.textContent = overrideText;
-        if (summary) summary.textContent = overrideText;
+        if (summary) {
+            summary.textContent = overrideText;
+            summary.title = overrideText;
+        }
         return;
     }
-    if (!state.settings.loaded && !model && !reasoning) {
+    if (!state.settings.loaded && !model && !reasoning && !state.settings.planModeReasoningEffort) {
         status.textContent = 'Refresh to load';
-        if (summary) summary.textContent = 'Refresh to load';
+        if (summary) {
+            summary.textContent = 'Refresh to load';
+            summary.title = 'Refresh to load';
+        }
         return;
     }
     const modelText = model ? model : 'default';
     const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
     const reasoningText = reasoning ? reasoning : 'default';
-    const text = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText}`;
-    status.textContent = text;
-    if (summary) summary.textContent = text;
+    const planModeReasoningText = state.settings.planModeReasoningEffort
+        ? state.settings.planModeReasoningEffort
+        : 'default';
+    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
+    const compactToken = value => (value === 'default' ? 'def' : value);
+    const compactSummaryParts = [
+        `M:${compactToken(modelText)}`,
+        `R:${compactToken(reasoningText)}`
+    ];
+    if (planModeModelText !== modelText || state.settings.planModeModel) {
+        compactSummaryParts.push(`P:${compactToken(planModeModelText)}`);
+    }
+    if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
+        compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
+    }
+    const compactSummary = compactSummaryParts.join(' · ');
+
+    status.textContent = fullText;
+    if (summary) {
+        summary.textContent = compactSummary;
+        summary.title = fullText;
+    }
 }
 
 async function updateSettings() {
@@ -3977,6 +4148,8 @@ async function updateSettings() {
     const modelSelect = document.getElementById('codex-model-select');
     const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
     const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
+    const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
+    const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
@@ -3988,17 +4161,21 @@ async function updateSettings() {
     const reasoning_effort = reasoningSelect && !reasoningSelect.classList.contains('is-hidden')
         ? reasoningSelect.value.trim()
         : (reasoningInput ? reasoningInput.value.trim() : '');
+    const plan_mode_reasoning_effort = planModeReasoningSelect && !planModeReasoningSelect.classList.contains('is-hidden')
+        ? planModeReasoningSelect.value.trim()
+        : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, plan_mode_model, reasoning_effort })
+            body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort })
         });
         state.settings.model = result?.settings?.model || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
+        state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
         state.settings.modelOptions = Array.isArray(result?.model_options)
             ? result.model_options
             : state.settings.modelOptions;
@@ -4011,6 +4188,7 @@ async function updateSettings() {
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
+        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
@@ -7713,6 +7891,7 @@ function renderMessages(messages) {
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         setMarkdownContent(bubble, message?.content || '', { message });
+        const streamIndicator = createMessageStreamIndicatorElement();
 
         const footer = createMessageFooter();
         const durationMs = Number(message?.duration_ms);
@@ -7727,11 +7906,29 @@ function renderMessages(messages) {
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
+        wrapper.appendChild(streamIndicator);
         wrapper.appendChild(footer);
         container.appendChild(wrapper);
     });
 
     scrollToBottom(true);
+}
+
+function createMessageStreamIndicatorElement() {
+    const indicator = document.createElement('div');
+    indicator.className = 'message-stream-indicator';
+    indicator.setAttribute('aria-hidden', 'true');
+    const bar = document.createElement('span');
+    bar.className = 'message-stream-indicator-bar';
+    const dot = document.createElement('span');
+    dot.className = 'message-stream-indicator-dot';
+    bar.appendChild(dot);
+    const text = document.createElement('span');
+    text.className = 'message-stream-indicator-text';
+    text.textContent = 'Responding...';
+    indicator.appendChild(bar);
+    indicator.appendChild(text);
+    return indicator;
 }
 
 function appendMessageToDOM(message, roleOverride = null) {
@@ -7755,6 +7952,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     setMarkdownContent(bubble, message?.content || '', { message });
+    const streamIndicator = createMessageStreamIndicatorElement();
 
     const footer = createMessageFooter();
     const durationMs = Number(message?.duration_ms);
@@ -7769,6 +7967,7 @@ function appendMessageToDOM(message, roleOverride = null) {
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
+    wrapper.appendChild(streamIndicator);
     wrapper.appendChild(footer);
     container.appendChild(wrapper);
     scrollToBottom();
@@ -7811,15 +8010,33 @@ function setPlanModeToggleState(enabled) {
     button.classList.toggle('is-active', normalized);
     button.setAttribute('aria-pressed', String(normalized));
     const label = normalized ? 'Plan mode on' : 'Plan mode off';
-    button.textContent = normalized ? 'Plan ON' : 'Plan OFF';
+    button.textContent = 'Plan';
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
 }
 
 async function handleSubmit(event) {
     if (event) event.preventDefault();
+    const input = document.getElementById('codex-chat-input');
+    if (!input) return;
+    const prompt = input.value.trim();
     const activeSessionId = state.activeSessionId;
-    if (activeSessionId && isSessionBusy(activeSessionId)) {
+    const sessionState = activeSessionId ? getSessionState(activeSessionId) : null;
+    const localBusy = activeSessionId
+        ? Boolean(sessionState?.sending || sessionState?.pendingSend || getSessionStream(activeSessionId))
+        : false;
+    if (activeSessionId && localBusy) {
+        if (prompt) {
+            const queuedCount = enqueuePrompt(activeSessionId, prompt, { planMode: isPlanModeEnabled() });
+            input.value = '';
+            setSessionStatus(activeSessionId, `Queued ${queuedCount} prompt${queuedCount === 1 ? '' : 's'}...`);
+            showToast(`Queued (${queuedCount})`, {
+                tone: 'success',
+                durationMs: 1800
+            });
+            syncActiveSessionControls();
+            return;
+        }
         if (getSessionStream(activeSessionId)) {
             await stopStream(activeSessionId);
             return;
@@ -7827,18 +8044,15 @@ async function handleSubmit(event) {
         if (cancelPendingSend(activeSessionId)) {
             return;
         }
-        const sessionState = getSessionState(activeSessionId);
         if (sessionState) {
             sessionState.sending = false;
         }
         syncActiveSessionControls();
+        void flushQueuedPrompts(activeSessionId);
     }
-    const input = document.getElementById('codex-chat-input');
-    if (!input) return;
-    const prompt = input.value.trim();
     if (!prompt) return;
     input.value = '';
-    await sendPrompt(prompt, { planMode: isPlanModeEnabled() });
+    await sendPrompt(prompt, { sessionId: activeSessionId, planMode: isPlanModeEnabled() });
 }
 
 function beginPendingSend(sessionId) {
@@ -7872,11 +8086,12 @@ function cancelPendingSend(sessionId) {
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
     }
+    void flushQueuedPrompts(sessionId);
     return true;
 }
 
-async function sendPrompt(prompt, { planMode = false } = {}) {
-    let sessionId = state.activeSessionId;
+async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMode = false } = {}) {
+    let sessionId = sessionIdOverride || state.activeSessionId;
     if (!sessionId) {
         const session = await createSession(true);
         sessionId = session?.id;
@@ -7953,6 +8168,7 @@ async function sendPrompt(prompt, { planMode = false } = {}) {
             if (sessionId === state.activeSessionId) {
                 syncActiveSessionControls();
             }
+            void flushQueuedPrompts(sessionId);
             return;
         }
         if (error?.status === 409 && error?.payload?.already_running) {
@@ -7983,6 +8199,7 @@ async function sendPrompt(prompt, { planMode = false } = {}) {
             if (sessionId === state.activeSessionId) {
                 syncActiveSessionControls();
             }
+            void flushQueuedPrompts(sessionId);
             return;
         }
         if (sessionState) {
@@ -7993,6 +8210,7 @@ async function sendPrompt(prompt, { planMode = false } = {}) {
         if (sessionId === state.activeSessionId) {
             syncActiveSessionControls();
         }
+        void flushQueuedPrompts(sessionId);
     }
 }
 
@@ -8078,6 +8296,7 @@ async function stopStream(sessionId) {
         }
         await loadSessions({ preserveActive: true, reloadActive: false });
         void refreshUsageSummary({ silent: true });
+        void flushQueuedPrompts(sessionId);
     } catch (error) {
         setSessionStatus(sessionId, normalizeError(error, 'Failed to stop stream.'), true);
     }
@@ -8244,6 +8463,7 @@ async function finishStream(streamId, result) {
     }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
     void refreshUsageSummary({ silent: true });
+    void flushQueuedPrompts(sessionId);
 }
 
 async function renameSession(session) {

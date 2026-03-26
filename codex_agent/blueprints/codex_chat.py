@@ -84,6 +84,16 @@ def _resolve_model_override(plan_mode=False):
     return default_model or None
 
 
+def _resolve_reasoning_override(plan_mode=False):
+    settings = get_settings()
+    if plan_mode:
+        plan_mode_reasoning = str(settings.get('plan_mode_reasoning_effort') or '').strip()
+        if plan_mode_reasoning:
+            return plan_mode_reasoning
+    default_reasoning = str(settings.get('reasoning_effort') or '').strip()
+    return default_reasoning or None
+
+
 @bp.route('/api/codex/settings')
 def codex_settings():
     return jsonify({
@@ -109,6 +119,7 @@ def codex_settings_update():
     model = payload.get('model')
     reasoning = payload.get('reasoning_effort')
     plan_mode_model = payload.get('plan_mode_model')
+    plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
@@ -121,10 +132,15 @@ def codex_settings_update():
         plan_mode_model = str(plan_mode_model).strip()
         if len(plan_mode_model) > CODEX_MAX_MODEL_CHARS:
             return jsonify({'error': 'plan_mode_model이 너무 깁니다.'}), 400
+    if plan_mode_reasoning is not None:
+        plan_mode_reasoning = str(plan_mode_reasoning).strip()
+        if len(plan_mode_reasoning) > CODEX_MAX_REASONING_CHARS:
+            return jsonify({'error': 'plan_mode_reasoning_effort가 너무 깁니다.'}), 400
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
         plan_mode_model=plan_mode_model,
+        plan_mode_reasoning_effort=plan_mode_reasoning,
     )
     return jsonify({
         'settings': settings,
@@ -232,6 +248,7 @@ def codex_session_message(session_id):
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
     model_override = _resolve_model_override(plan_mode=plan_mode)
+    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     user_message = append_message(session_id, 'user', prompt)
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
@@ -240,6 +257,7 @@ def codex_session_message(session_id):
     output, error, token_usage = execute_codex_prompt(
         prompt_with_context,
         model_override=model_override,
+        reasoning_override=reasoning_override,
     )
     duration_ms = max(0, int((time.time() - started_at) * 1000))
     metadata = {'duration_ms': duration_ms}
@@ -291,11 +309,13 @@ def codex_session_message_stream(session_id):
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
     model_override = _resolve_model_override(plan_mode=plan_mode)
+    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     start_result = start_codex_stream_for_session(
         session_id,
         prompt,
         prompt_with_context,
         model_override=model_override,
+        reasoning_override=reasoning_override,
     )
     if not start_result.get('ok'):
         if start_result.get('already_running'):

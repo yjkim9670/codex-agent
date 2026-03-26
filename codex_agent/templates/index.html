@@ -250,11 +250,15 @@
                                     <span class="sr-only">Apply settings</span>
                                 </button>
                             </div>
-                            <label class="model-sub-label" for="codex-plan-mode-model-input">Plan mode model</label>
-                            <div class="model-row model-row-single">
+                            <label class="model-sub-label" for="codex-plan-mode-model-input">Plan mode model · Reasoning effort</label>
+                            <div class="model-row">
                                 <div class="model-field model-field-plan-model">
                                     <select id="codex-plan-mode-model-select" class="model-select is-hidden" aria-label="Select plan mode model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="codex-plan-mode-model-input" class="model-input" type="text" placeholder="Use default model">
+                                </div>
+                                <div class="model-field model-field-reasoning">
+                                    <select id="codex-plan-mode-reasoning-select" class="model-select is-hidden" aria-label="Select plan mode reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
                             <div class="model-status" id="codex-model-status">Refresh to load</div>
@@ -266,7 +270,7 @@
                     <label class="sr-only" for="codex-chat-input">Codex prompt</label>
                     <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
                     <div class="chat-submit-column">
-                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Plan mode off" title="Plan mode off">Plan OFF</button>
+                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Plan mode off" title="Plan mode off">Plan</button>
                         <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
                             <span class="sr-only">Send</span>
                         </button>

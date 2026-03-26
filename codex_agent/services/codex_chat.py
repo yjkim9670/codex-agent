@@ -137,10 +137,12 @@ def _read_workspace_settings():
     model = data.get('model')
     reasoning = data.get('reasoning_effort')
     plan_mode_model = data.get('plan_mode_model')
+    plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
         'plan_mode_model': plan_mode_model or None,
+        'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
     }
 
 
@@ -149,6 +151,7 @@ def _write_workspace_settings(settings):
         'model': settings.get('model') or None,
         'reasoning_effort': settings.get('reasoning_effort') or None,
         'plan_mode_model': settings.get('plan_mode_model') or None,
+        'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CODEX_SETTINGS_PATH.write_text(
@@ -261,6 +264,7 @@ def get_settings():
             workspace_settings.get('model')
             or workspace_settings.get('reasoning_effort')
             or workspace_settings.get('plan_mode_model')
+            or workspace_settings.get('plan_mode_reasoning_effort')
         ):
             _write_workspace_settings(workspace_settings)
             return workspace_settings
@@ -268,22 +272,30 @@ def get_settings():
         fallback = _parse_top_level_config(text)
         if fallback.get('model') or fallback.get('reasoning_effort'):
             fallback['plan_mode_model'] = None
+            fallback['plan_mode_reasoning_effort'] = None
             _write_workspace_settings(fallback)
             return _read_workspace_settings()
-    return {'model': None, 'reasoning_effort': None, 'plan_mode_model': None}
+    return {
+        'model': None,
+        'reasoning_effort': None,
+        'plan_mode_model': None,
+        'plan_mode_reasoning_effort': None
+    }
 
 
-def update_settings(model=None, reasoning_effort=None, plan_mode_model=None):
+def update_settings(model=None, reasoning_effort=None, plan_mode_model=None, plan_mode_reasoning_effort=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         if not current and not CODEX_SETTINGS_PATH.exists():
             text = _read_codex_config_text()
             current = _parse_top_level_config(text)
             current['plan_mode_model'] = None
+            current['plan_mode_reasoning_effort'] = None
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
             'plan_mode_model': current.get('plan_mode_model'),
+            'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
         }
         if model is not None:
             model = str(model).strip()
@@ -294,6 +306,9 @@ def update_settings(model=None, reasoning_effort=None, plan_mode_model=None):
         if plan_mode_model is not None:
             plan_mode_model = str(plan_mode_model).strip()
             next_settings['plan_mode_model'] = plan_mode_model or None
+        if plan_mode_reasoning_effort is not None:
+            plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
+            next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None
         _write_workspace_settings(next_settings)
         return next_settings
 
@@ -1323,7 +1338,12 @@ def build_codex_prompt(messages, prompt):
     return structured_prompt[-max_chars:]
 
 
-def _build_codex_command(prompt, output_path=None, json_output=False, model_override=None):
+def _build_codex_command(
+        prompt,
+        output_path=None,
+        json_output=False,
+        model_override=None,
+        reasoning_override=None):
     cmd = [
         'codex',
         'exec',
@@ -1337,7 +1357,10 @@ def _build_codex_command(prompt, output_path=None, json_output=False, model_over
     model = (str(model_override).strip() if model_override is not None else '') or settings.get('model')
     if model:
         cmd.extend(['--model', model])
-    reasoning_effort = settings.get('reasoning_effort')
+    reasoning_effort = (
+        (str(reasoning_override).strip() if reasoning_override is not None else '')
+        or settings.get('reasoning_effort')
+    )
     if reasoning_effort:
         escaped_reasoning = _escape_toml_string(reasoning_effort)
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
@@ -1458,7 +1481,7 @@ def _extract_exec_json_summary(raw_stdout):
     }
 
 
-def execute_codex_prompt(prompt, model_override=None):
+def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
     cmd = _build_codex_command(
@@ -1466,6 +1489,7 @@ def execute_codex_prompt(prompt, model_override=None):
         output_path=output_path,
         json_output=True,
         model_override=model_override,
+        reasoning_override=reasoning_override,
     )
     try:
         result = subprocess.run(
@@ -1964,6 +1988,7 @@ def _run_codex_stream(stream_id, prompt):
         output_path = stream.get('output_path') if stream else None
         started_at = stream.get('started_at') if stream else None
         model_override = stream.get('model_override') if stream else None
+        reasoning_override = stream.get('reasoning_override') if stream else None
         json_output = True
         if stream is not None:
             json_output = stream.get('json_output') is not False
@@ -1978,6 +2003,7 @@ def _run_codex_stream(stream_id, prompt):
         output_path=output_path,
         json_output=json_output,
         model_override=model_override,
+        reasoning_override=reasoning_override,
     )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -2185,7 +2211,7 @@ def _run_codex_stream(stream_id, prompt):
     finalize_codex_stream(stream_id)
 
 
-def create_codex_stream(session_id, prompt, model_override=None):
+def create_codex_stream(session_id, prompt, model_override=None, reasoning_override=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
@@ -2209,6 +2235,7 @@ def create_codex_stream(session_id, prompt, model_override=None):
         'output_last_message': '',
         'token_usage': _zero_token_usage(),
         'model_override': (str(model_override).strip() if model_override is not None else '') or None,
+        'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'json_output': True,
         'output_length': 0,
         'error_length': 0,
@@ -2261,7 +2288,12 @@ def get_active_stream_id_for_session(session_id):
         return _find_active_stream_id_locked(session_id)
 
 
-def start_codex_stream_for_session(session_id, prompt, prompt_with_context, model_override=None):
+def start_codex_stream_for_session(
+        session_id,
+        prompt,
+        prompt_with_context,
+        model_override=None,
+        reasoning_override=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         with state.codex_streams_lock:
@@ -2284,6 +2316,7 @@ def start_codex_stream_for_session(session_id, prompt, prompt_with_context, mode
             session_id,
             prompt_with_context,
             model_override=model_override,
+            reasoning_override=reasoning_override,
         )
         return {
             'ok': True,

@@ -1182,6 +1182,191 @@ body {
     font-weight: 700;
 }
 
+.file-browser-mermaid {
+    margin: 12px 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    overflow: auto;
+}
+
+.file-browser-mermaid svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 auto;
+}
+
+.file-browser-mermaid-source {
+    margin: 0;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre;
+}
+
+.file-browser-mermaid-source code {
+    display: block;
+    padding: 0;
+    background: transparent;
+}
+
+.file-browser-mermaid.is-error {
+    border-color: rgba(217, 45, 76, 0.28);
+    background: var(--message-error-bg);
+}
+
+.file-browser-mermaid-error {
+    margin: 0 0 10px;
+    color: var(--danger);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.file-browser-spreadsheet {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    gap: 10px;
+    padding: 12px;
+}
+
+.file-browser-spreadsheet-summary {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.file-browser-spreadsheet-tabs {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+}
+
+.file-browser-spreadsheet-tab {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    padding: 7px 12px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.file-browser-spreadsheet-tab:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.file-browser-spreadsheet-tab.is-active {
+    border-color: var(--accent);
+    background: rgba(15, 76, 129, 0.12);
+    color: var(--accent);
+}
+
+.file-browser-spreadsheet-body {
+    flex: 1;
+    min-height: 0;
+}
+
+.file-browser-spreadsheet-sheet {
+    display: none;
+    min-height: 100%;
+}
+
+.file-browser-spreadsheet-sheet.is-active {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.file-browser-spreadsheet-sheet-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.file-browser-spreadsheet-sheet-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.file-browser-spreadsheet-grid {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+}
+
+.file-browser-spreadsheet-table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed;
+    font-size: 12px;
+}
+
+.file-browser-spreadsheet-table th,
+.file-browser-spreadsheet-table td {
+    min-width: 96px;
+    max-width: 240px;
+    padding: 7px 9px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.file-browser-spreadsheet-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    text-align: center;
+    font-weight: 700;
+}
+
+.file-browser-spreadsheet-corner,
+.file-browser-spreadsheet-row-header {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 60px;
+    max-width: 60px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    background: var(--surface-raised);
+}
+
+.file-browser-spreadsheet-corner {
+    z-index: 3;
+}
+
+.file-browser-spreadsheet-table tbody th {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.file-browser-spreadsheet-table tr:last-child td,
+.file-browser-spreadsheet-table tr:last-child th {
+    border-bottom: 0;
+}
+
+.file-browser-spreadsheet-table tr td:last-child,
+.file-browser-spreadsheet-table tr th:last-child {
+    border-right: 0;
+}
+
 [data-theme="dark"] .file-browser-source-line.is-target {
     background: rgba(74, 150, 255, 0.2);
 }
@@ -1192,6 +1377,11 @@ body {
 
 [data-theme="dark"] .file-browser-source-line.is-target .file-browser-source-line-content {
     background: rgba(74, 150, 255, 0.16);
+}
+
+[data-theme="dark"] .file-browser-spreadsheet-tab.is-active {
+    background: rgba(123, 143, 163, 0.2);
+    color: #d7e0e8;
 }
 
 .file-browser-html-preview {

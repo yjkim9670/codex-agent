@@ -107,6 +107,18 @@ const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
+const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
+const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
+const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
+const FILE_BROWSER_SPREADSHEET_EXTENSIONS = new Set([
+    '.xls',
+    '.xlsb',
+    '.xlsm',
+    '.xlsx',
+    '.xltm',
+    '.xltx',
+    '.ods'
+]);
 const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
@@ -218,6 +230,7 @@ let liveWeatherCompactWeatherText = '날씨 불러오는 중...';
 let liveWeatherCompactHighTemp = '--';
 let liveWeatherCompactLowTemp = '--';
 let liveWeatherCompactHasWeather = false;
+let mermaidRenderSerial = 0;
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -3516,6 +3529,9 @@ function applyTheme(theme, { persist = true } = {}) {
             void error;
         }
     }
+    requestAnimationFrame(() => {
+        void hydrateMermaidDiagrams(document.body);
+    });
 }
 
 function getStoredTheme() {
@@ -4439,6 +4455,55 @@ async function fetchJson(url, options = {}) {
         throw error;
     }
     throw new Error(text || 'Unexpected response format.');
+}
+
+async function fetchArrayBuffer(url, options = {}) {
+    const requestOptions = options && typeof options === 'object'
+        ? { ...options }
+        : {};
+    const timeoutMs = requestOptions.timeoutMs;
+    delete requestOptions.timeoutMs;
+    const timeoutController = createFetchTimeoutController(timeoutMs, requestOptions.signal);
+    if (timeoutController.signal) {
+        requestOptions.signal = timeoutController.signal;
+    }
+    let response;
+    try {
+        response = await fetch(url, requestOptions);
+    } catch (error) {
+        if (timeoutController.didTimeout()) {
+            const seconds = Math.max(1, Math.round(Number(timeoutMs) / 1000));
+            const timeoutError = new Error(`요청 시간이 초과되었습니다. (${seconds}초)`);
+            timeoutError.isTimeout = true;
+            timeoutError.timeoutMs = Number(timeoutMs);
+            timeoutError.cause = error;
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        timeoutController.clear();
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok) {
+        if (contentType.includes('application/json')) {
+            const data = await response.json();
+            const error = new Error(data?.error || `Request failed (${response.status})`);
+            error.status = response.status;
+            error.payload = data;
+            throw error;
+        }
+        const text = await response.text();
+        const error = new Error(text || `Request failed (${response.status})`);
+        error.status = response.status;
+        error.payload = text;
+        throw error;
+    }
+
+    return {
+        contentType,
+        buffer: await response.arrayBuffer()
+    };
 }
 
 function getGitErrorPayload(error) {
@@ -5517,7 +5582,7 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
     }
     if (elements.content) {
         elements.content.innerHTML = renderMarkdown(normalizedText);
-        hydrateMessageLabelLinks(elements.content);
+        hydrateRenderedMarkdown(elements.content);
         elements.content.scrollTop = 0;
     }
     elements.overlay.classList.add('is-visible');
@@ -6023,7 +6088,7 @@ async function openFileInWorkModePanel(
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
-        renderFileBrowserViewerIntoElements(elements, result, {
+        await renderFileBrowserViewerIntoElements(elements, result, {
             root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
@@ -6819,9 +6884,272 @@ function revealFileBrowserSourceLine(lineNumber) {
     return revealFileBrowserSourceLineInContainer(elements?.viewerContent, lineNumber);
 }
 
-function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
+function getFileBrowserViewerRenderToken() {
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isSpreadsheetPreviewableFile(path, mimeType = '') {
+    const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
+    const extensionMatch = normalizedPath.match(/(\.[^.\/]+)$/);
+    const extension = extensionMatch ? extensionMatch[1] : '';
+    if (extension && FILE_BROWSER_SPREADSHEET_EXTENSIONS.has(extension)) {
+        return true;
+    }
+    const normalizedMime = String(mimeType || '').trim().toLowerCase();
+    if (!normalizedMime) return false;
+    return normalizedMime.includes('spreadsheet')
+        || normalizedMime.includes('excel')
+        || normalizedMime.includes('sheet.binary');
+}
+
+function formatSpreadsheetColumnLabel(index) {
+    let value = Number(index);
+    if (!Number.isFinite(value) || value < 0) value = 0;
+    let label = '';
+    let cursor = Math.floor(value);
+    do {
+        label = String.fromCharCode(65 + (cursor % 26)) + label;
+        cursor = Math.floor(cursor / 26) - 1;
+    } while (cursor >= 0);
+    return label;
+}
+
+function getSpreadsheetCellDisplayValue(cell) {
+    if (!cell || typeof cell !== 'object') return '';
+    if (cell.w != null && cell.w !== '') {
+        return String(cell.w);
+    }
+    if (cell.v == null) {
+        return '';
+    }
+    return String(cell.v);
+}
+
+function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex) {
+    const xlsxApi = window.XLSX;
+    const sheet = workbook?.Sheets?.[sheetName];
+    const panel = document.createElement('section');
+    panel.className = 'file-browser-spreadsheet-sheet';
+    panel.dataset.sheetIndex = String(sheetIndex);
+
+    const title = document.createElement('div');
+    title.className = 'file-browser-spreadsheet-sheet-title';
+    title.textContent = sheetName || `Sheet ${sheetIndex + 1}`;
+    panel.appendChild(title);
+
+    if (!sheet || !sheet['!ref'] || !xlsxApi?.utils?.decode_range) {
+        const emptyState = document.createElement('div');
+        emptyState.className = 'file-browser-placeholder';
+        emptyState.textContent = '시트에 표시할 데이터가 없습니다.';
+        panel.appendChild(emptyState);
+        return panel;
+    }
+
+    let range;
+    try {
+        range = xlsxApi.utils.decode_range(sheet['!ref']);
+    } catch (error) {
+        const invalidState = document.createElement('div');
+        invalidState.className = 'file-browser-placeholder';
+        invalidState.textContent = '시트 범위를 해석하지 못했습니다.';
+        panel.appendChild(invalidState);
+        return panel;
+    }
+
+    const totalRows = Math.max(0, (range.e.r - range.s.r) + 1);
+    const totalCols = Math.max(0, (range.e.c - range.s.c) + 1);
+    if (!totalRows || !totalCols) {
+        const emptyState = document.createElement('div');
+        emptyState.className = 'file-browser-placeholder';
+        emptyState.textContent = '시트에 표시할 데이터가 없습니다.';
+        panel.appendChild(emptyState);
+        return panel;
+    }
+
+    const previewEndRow = Math.min(range.e.r, range.s.r + FILE_BROWSER_SPREADSHEET_MAX_ROWS - 1);
+    const previewEndCol = Math.min(range.e.c, range.s.c + FILE_BROWSER_SPREADSHEET_MAX_COLS - 1);
+    const isRowTruncated = previewEndRow < range.e.r;
+    const isColTruncated = previewEndCol < range.e.c;
+
+    const meta = document.createElement('div');
+    meta.className = 'file-browser-spreadsheet-sheet-meta';
+    const metaParts = [`${totalRows}행`, `${totalCols}열`];
+    if (isRowTruncated || isColTruncated) {
+        metaParts.push(`미리보기는 최대 ${FILE_BROWSER_SPREADSHEET_MAX_ROWS}행 / ${FILE_BROWSER_SPREADSHEET_MAX_COLS}열`);
+    }
+    meta.textContent = metaParts.join(' · ');
+    panel.appendChild(meta);
+
+    const grid = document.createElement('div');
+    grid.className = 'file-browser-spreadsheet-grid';
+
+    const table = document.createElement('table');
+    table.className = 'file-browser-spreadsheet-table';
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.className = 'file-browser-spreadsheet-corner';
+    corner.textContent = '#';
+    headerRow.appendChild(corner);
+    for (let colIndex = range.s.c; colIndex <= previewEndCol; colIndex += 1) {
+        const headerCell = document.createElement('th');
+        headerCell.textContent = formatSpreadsheetColumnLabel(colIndex);
+        headerRow.appendChild(headerCell);
+    }
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (let rowIndex = range.s.r; rowIndex <= previewEndRow; rowIndex += 1) {
+        const row = document.createElement('tr');
+        const rowHeader = document.createElement('th');
+        rowHeader.className = 'file-browser-spreadsheet-row-header';
+        rowHeader.textContent = String(rowIndex + 1);
+        row.appendChild(rowHeader);
+
+        for (let colIndex = range.s.c; colIndex <= previewEndCol; colIndex += 1) {
+            const cellElement = document.createElement('td');
+            const cellAddress = xlsxApi.utils.encode_cell({ r: rowIndex, c: colIndex });
+            const cellValue = getSpreadsheetCellDisplayValue(sheet[cellAddress]);
+            cellElement.textContent = cellValue;
+            row.appendChild(cellElement);
+        }
+        tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    grid.appendChild(table);
+    panel.appendChild(grid);
+    return panel;
+}
+
+function activateSpreadsheetSheetPreview(wrapper, targetIndex) {
+    if (!(wrapper instanceof Element)) return;
+    const normalizedIndex = Number.isFinite(Number(targetIndex)) ? String(Number(targetIndex)) : '0';
+    wrapper.querySelectorAll('.file-browser-spreadsheet-tab').forEach(button => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        const isActive = button.dataset.sheetIndex === normalizedIndex;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        button.tabIndex = isActive ? 0 : -1;
+    });
+    wrapper.querySelectorAll('.file-browser-spreadsheet-sheet').forEach(panel => {
+        if (!(panel instanceof HTMLElement)) return;
+        panel.classList.toggle('is-active', panel.dataset.sheetIndex === normalizedIndex);
+    });
+}
+
+function buildSpreadsheetPreview(workbook) {
+    const wrapper = document.createElement('section');
+    wrapper.className = 'file-browser-spreadsheet';
+
+    const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
+    if (sheetNames.length === 0) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = '워크북에 표시할 시트가 없습니다.';
+        wrapper.appendChild(placeholder);
+        return wrapper;
+    }
+
+    const visibleSheetNames = sheetNames.slice(0, FILE_BROWSER_SPREADSHEET_MAX_SHEETS);
+    const summary = document.createElement('div');
+    summary.className = 'file-browser-spreadsheet-summary';
+    const summaryParts = [`총 ${sheetNames.length}개 시트`];
+    if (sheetNames.length > FILE_BROWSER_SPREADSHEET_MAX_SHEETS) {
+        summaryParts.push(`앞 ${FILE_BROWSER_SPREADSHEET_MAX_SHEETS}개만 표시`);
+    }
+    summary.textContent = summaryParts.join(' · ');
+    wrapper.appendChild(summary);
+
+    if (visibleSheetNames.length > 1) {
+        const tabs = document.createElement('div');
+        tabs.className = 'file-browser-spreadsheet-tabs';
+        tabs.setAttribute('role', 'tablist');
+        tabs.setAttribute('aria-label', 'Workbook sheets');
+        visibleSheetNames.forEach((sheetName, sheetIndex) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'file-browser-spreadsheet-tab';
+            button.dataset.sheetIndex = String(sheetIndex);
+            button.setAttribute('role', 'tab');
+            button.textContent = sheetName || `Sheet ${sheetIndex + 1}`;
+            button.addEventListener('click', () => {
+                activateSpreadsheetSheetPreview(wrapper, sheetIndex);
+            });
+            tabs.appendChild(button);
+        });
+        wrapper.appendChild(tabs);
+    }
+
+    const body = document.createElement('div');
+    body.className = 'file-browser-spreadsheet-body';
+    visibleSheetNames.forEach((sheetName, sheetIndex) => {
+        body.appendChild(buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex));
+    });
+    wrapper.appendChild(body);
+    activateSpreadsheetSheetPreview(wrapper, 0);
+    return wrapper;
+}
+
+async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, renderToken) {
+    if (!(container instanceof HTMLElement)) return false;
+    const currentToken = String(renderToken || '');
+    const xlsxApi = window.XLSX;
+
+    container.innerHTML = '';
+    const loadingState = document.createElement('div');
+    loadingState.className = 'file-browser-placeholder';
+    loadingState.textContent = '스프레드시트 미리보기를 준비하는 중...';
+    container.appendChild(loadingState);
+
+    if (!previewUrl) {
+        loadingState.textContent = '스프레드시트 파일 주소를 만들지 못했습니다.';
+        return false;
+    }
+    if (!xlsxApi || typeof xlsxApi.read !== 'function') {
+        loadingState.textContent = '스프레드시트 미리보기 라이브러리를 불러오지 못했습니다.';
+        return false;
+    }
+
+    try {
+        const response = await fetchArrayBuffer(previewUrl, {
+            timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
+        });
+        if (container.dataset.renderToken !== currentToken) {
+            return false;
+        }
+        const workbook = xlsxApi.read(response.buffer, {
+            type: 'array',
+            cellFormula: false,
+            cellHTML: false,
+            cellStyles: false
+        });
+        const spreadsheetView = buildSpreadsheetPreview(workbook);
+        if (container.dataset.renderToken !== currentToken) {
+            return false;
+        }
+        container.innerHTML = '';
+        container.appendChild(spreadsheetView);
+        return true;
+    } catch (error) {
+        if (container.dataset.renderToken !== currentToken) {
+            return false;
+        }
+        container.innerHTML = '';
+        const errorState = document.createElement('div');
+        errorState.className = 'file-browser-placeholder';
+        errorState.textContent = normalizeError(error, '스프레드시트 미리보기를 불러오지 못했습니다.');
+        container.appendChild(errorState);
+        return false;
+    }
+}
+
+async function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     if (!elements?.viewerContent) return;
 
+    const renderToken = getFileBrowserViewerRenderToken();
+    elements.viewerContent.dataset.renderToken = renderToken;
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const previewRoot = normalizeFileBrowserRoot(options?.root || result?.root || fileBrowserRoot);
@@ -6831,6 +7159,7 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     const isHtml = Boolean(result?.is_html);
     const isScript = Boolean(result?.is_script);
     const isBinary = Boolean(result?.is_binary);
+    const isSpreadsheet = isSpreadsheetPreviewableFile(normalizedPath, result?.mime_type);
     const sizeText = formatFileBrowserSize(result?.size);
     const infoParts = [normalizedPath || '(unknown path)'];
     if (sizeText && sizeText !== '--') {
@@ -6838,10 +7167,12 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     }
     if (language) {
         infoParts.push(language);
+    } else if (isSpreadsheet) {
+        infoParts.push('spreadsheet');
     } else if (isBinary) {
         infoParts.push('binary');
     }
-    if (requestedLine) {
+    if (requestedLine && !isSpreadsheet) {
         const lineInfo = requestedColumn ? `line ${requestedLine}:${requestedColumn}` : `line ${requestedLine}`;
         infoParts.push(lineInfo);
     }
@@ -6856,6 +7187,12 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     }
 
     elements.viewerContent.innerHTML = '';
+    if (isSpreadsheet) {
+        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        await renderSpreadsheetPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken);
+        return;
+    }
+
     if (isBinary) {
         const placeholder = document.createElement('div');
         placeholder.className = 'file-browser-placeholder';
@@ -6891,8 +7228,8 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
         const article = document.createElement('article');
         article.className = 'file-browser-markdown';
         article.innerHTML = renderMarkdown(text);
-        hydrateMessageLabelLinks(article);
         elements.viewerContent.appendChild(article);
+        hydrateRenderedMarkdown(article);
         return;
     }
 
@@ -6916,9 +7253,9 @@ function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     });
 }
 
-function renderFileBrowserViewer(result, options = {}) {
+async function renderFileBrowserViewer(result, options = {}) {
     const elements = getFileBrowserElements();
-    renderFileBrowserViewerIntoElements(elements, result, options);
+    await renderFileBrowserViewerIntoElements(elements, result, options);
 }
 
 async function openFileInBrowserOverlay(
@@ -6954,7 +7291,7 @@ async function openFileInBrowserOverlay(
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         fileBrowserSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
-        renderFileBrowserViewer(result, {
+        await renderFileBrowserViewer(result, {
             root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
@@ -8909,7 +9246,7 @@ function setMarkdownContent(element, content, options = {}) {
     const messageContent = String(content || '');
     const messageData = options && typeof options === 'object' ? options.message || null : null;
     element.innerHTML = renderMessageContent(messageContent);
-    hydrateMessageLabelLinks(element);
+    hydrateRenderedMarkdown(element);
     element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
@@ -9767,6 +10104,112 @@ function renderMarkdown(text) {
     return renderInlineMarkdown(normalized);
 }
 
+function encodeMermaidDiagramSource(value) {
+    return encodeURIComponent(String(value || ''));
+}
+
+function decodeMermaidDiagramSource(value) {
+    const source = String(value || '');
+    if (!source) return '';
+    try {
+        return decodeURIComponent(source);
+    } catch (error) {
+        return source;
+    }
+}
+
+function getNormalizedMermaidFenceLanguage(language) {
+    const normalized = String(language || '').trim().toLowerCase();
+    if (normalized === 'mermaid') return 'mermaid';
+    if (normalized === 'flowchart' || normalized === 'graph') return 'flowchart';
+    if (normalized === 'gantt') return 'gantt';
+    return '';
+}
+
+function isMermaidFenceLanguage(language) {
+    return Boolean(getNormalizedMermaidFenceLanguage(language));
+}
+
+function normalizeMermaidFenceSource(language, source) {
+    const normalizedLanguage = getNormalizedMermaidFenceLanguage(language);
+    const text = String(source || '');
+    const trimmedLeading = text.replace(/^\s+/, '');
+
+    if (normalizedLanguage === 'flowchart') {
+        if (/^(?:flowchart|graph)\b/i.test(trimmedLeading)) {
+            return text;
+        }
+        return `flowchart TD\n${text}`;
+    }
+    if (normalizedLanguage === 'gantt') {
+        if (/^gantt\b/i.test(trimmedLeading)) {
+            return text;
+        }
+        return `gantt\n${text}`;
+    }
+    return text;
+}
+
+function getMermaidThemeName() {
+    return document.documentElement?.dataset?.theme === 'dark'
+        ? 'dark'
+        : 'default';
+}
+
+function hydrateRenderedMarkdown(container) {
+    if (!container || !(container instanceof Element)) return;
+    hydrateMessageLabelLinks(container);
+    void hydrateMermaidDiagrams(container);
+}
+
+async function hydrateMermaidDiagrams(container) {
+    if (!container || !(container instanceof Element)) return;
+    const mermaidApi = window.mermaid;
+    if (
+        !mermaidApi
+        || typeof mermaidApi.initialize !== 'function'
+        || typeof mermaidApi.render !== 'function'
+    ) {
+        return;
+    }
+
+    const theme = getMermaidThemeName();
+    mermaidApi.initialize({
+        startOnLoad: false,
+        theme
+    });
+
+    const diagrams = Array.from(container.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
+    for (const node of diagrams) {
+        if (!(node instanceof HTMLElement)) continue;
+        const source = decodeMermaidDiagramSource(node.dataset.mermaidSource || '');
+        if (!source.trim()) continue;
+        if (node.dataset.mermaidRendered === '1' && node.dataset.mermaidRenderedTheme === theme) {
+            continue;
+        }
+        try {
+            const renderId = `codex-mermaid-${mermaidRenderSerial += 1}`;
+            const renderResult = await mermaidApi.render(renderId, source);
+            if (decodeMermaidDiagramSource(node.dataset.mermaidSource || '') !== source) continue;
+            node.innerHTML = renderResult?.svg || '';
+            node.classList.remove('is-error');
+            node.dataset.mermaidRendered = '1';
+            node.dataset.mermaidRenderedTheme = theme;
+            if (typeof renderResult?.bindFunctions === 'function') {
+                renderResult.bindFunctions(node);
+            }
+        } catch (error) {
+            node.classList.add('is-error');
+            node.dataset.mermaidRendered = '0';
+            node.dataset.mermaidRenderedTheme = theme;
+            node.innerHTML = [
+                `<div class="file-browser-mermaid-error">${escapeHtml(normalizeError(error, 'Mermaid 렌더링에 실패했습니다.'))}</div>`,
+                `<pre class="file-browser-mermaid-source"><code>${escapeHtml(source)}</code></pre>`
+            ].join('');
+        }
+    }
+}
+
 function getScriptHighlightConfig(language) {
     const normalized = String(language || '').trim().toLowerCase();
     const javascriptKeywords = new Set([
@@ -10118,6 +10561,19 @@ function parseMarkdownFencedCodeBlock(lines, startIndex) {
     }
 
     const codeText = codeLines.join('\n');
+    if (isMermaidFenceLanguage(opener.language)) {
+        const mermaidSource = normalizeMermaidFenceSource(opener.language, codeText);
+        const encodedSource = escapeHtml(encodeMermaidDiagramSource(mermaidSource));
+        const safeSource = escapeHtml(mermaidSource);
+        return {
+            html: [
+                `<div class="file-browser-mermaid" data-mermaid-source="${encodedSource}" data-mermaid-rendered="0">`,
+                `<pre class="file-browser-mermaid-source"><code>${safeSource}</code></pre>`,
+                '</div>'
+            ].join(''),
+            nextIndex: index
+        };
+    }
     const codeHtml = opener.language
         ? highlightScriptContent(codeText, opener.language)
         : escapeHtml(codeText);

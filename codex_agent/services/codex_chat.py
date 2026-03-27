@@ -54,6 +54,9 @@ _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
+_ALLOW_PARALLEL_CLI_EXEC = str(
+    os.environ.get('CODEX_ALLOW_PARALLEL_CLI_EXEC') or '1'
+).strip().lower() in ('1', 'true', 'yes', 'on')
 _ALLOW_COMPETING_PROCESSES = str(
     os.environ.get('CODEX_ALLOW_COMPETING_PROCESSES') or ''
 ).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -392,6 +395,8 @@ def _list_competing_codex_processes():
 
 
 def get_competing_codex_process_error():
+    if _ALLOW_PARALLEL_CLI_EXEC and not _STRICT_COMPETING_PROCESSES:
+        return ''
     processes = _list_competing_codex_processes()
     blocking_processes = [p for p in processes if p.get('blocking')]
     if not blocking_processes:
@@ -481,6 +486,20 @@ def _acquire_codex_exec_lock():
             pass
         _unlock_file_handle(lock_handle)
         lock_handle.close()
+
+
+@contextmanager
+def _codex_exec_gate():
+    if _ALLOW_PARALLEL_CLI_EXEC:
+        now = time.time()
+        yield {
+            'wait_ms': 0,
+            'acquired_at': now,
+            'parallel': True,
+        }
+        return
+    with _acquire_codex_exec_lock() as lock_info:
+        yield lock_info
 
 
 def _build_duration_breakdown(started_at, cli_started_at=None, completed_at=None, saved_at=None):
@@ -1839,7 +1858,7 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
     cli_started_at = None
     completed_at = None
     try:
-        with _acquire_codex_exec_lock() as lock_info:
+        with _codex_exec_gate() as lock_info:
             auth_block_error = get_auth_block_error()
             if auth_block_error:
                 return None, auth_block_error, None, {
@@ -2410,7 +2429,7 @@ def _run_codex_stream(stream_id, prompt):
         finalize_codex_stream(stream_id)
         return
 
-    with _acquire_codex_exec_lock() as lock_info:
+    with _codex_exec_gate() as lock_info:
         cli_started_at = lock_info.get('acquired_at') or time.time()
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)

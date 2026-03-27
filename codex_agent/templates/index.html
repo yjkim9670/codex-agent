@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=102">
+    <link rel="stylesheet" href="/static/css/app.css?v=103">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -276,6 +276,11 @@
                         </button>
                     </div>
                 </form>
+
+                <div id="codex-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
+                    <div id="codex-chat-job-monitor-summary" class="chat-job-monitor-summary">실행 중인 job 없음</div>
+                    <ul id="codex-chat-job-monitor-list" class="chat-job-monitor-list"></ul>
+                </div>
 
                 <div id="codex-chat-status" class="chat-status">Idle</div>
             </section>
@@ -583,6 +588,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=86"></script>
+    <script src="/static/js/app.js?v=87"></script>
 </body>
 </html>

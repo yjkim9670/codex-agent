@@ -9,6 +9,7 @@ const state = {
     remoteAttachInFlightSessions: new Set(),
     remoteStreams: [],
     liveClockTimer: null,
+    jobMonitorTimerId: null,
     responseTimerId: null,
     responseTimerSessionId: null,
     autoScrollEnabled: true,
@@ -543,6 +544,163 @@ function syncActiveSessionControls() {
             srLabel.textContent = label;
         }
     }
+    renderRunningJobsMonitor();
+}
+
+function resolveRunningJobSessionTitle(sessionId) {
+    const targetId = String(sessionId || '').trim();
+    if (!targetId) return 'Session';
+    const summary = state.sessions.find(session => session?.id === targetId);
+    const title = String(summary?.title || '').trim();
+    if (title) return title;
+    if (targetId === state.activeSessionId) {
+        const headerTitle = String(document.getElementById('codex-chat-title')?.textContent || '').trim();
+        if (headerTitle && headerTitle !== 'Select a session') {
+            return headerTitle;
+        }
+    }
+    return `Session ${targetId.slice(0, 8)}`;
+}
+
+function resolveRemoteRuntimeMs(remoteStream, nowMs) {
+    if (!remoteStream) return null;
+    const runtimeMs = Number(remoteStream.runtime_ms ?? remoteStream.runtimeMs);
+    if (Number.isFinite(runtimeMs) && runtimeMs >= 0) {
+        return Math.max(0, Math.round(runtimeMs));
+    }
+    const startedAt = normalizeStartedAt(
+        remoteStream.started_at
+        ?? remoteStream.startedAt
+        ?? remoteStream.created_at
+        ?? remoteStream.createdAt
+    );
+    if (!startedAt) return null;
+    return Math.max(0, nowMs - startedAt);
+}
+
+function collectRunningJobs() {
+    const sessionIds = new Set();
+    state.sessions.forEach(session => {
+        if (session?.id) sessionIds.add(session.id);
+    });
+    Object.keys(state.sessionStates || {}).forEach(sessionId => {
+        if (sessionId) sessionIds.add(sessionId);
+    });
+    Object.values(state.streams || {}).forEach(stream => {
+        if (stream?.sessionId) sessionIds.add(stream.sessionId);
+    });
+    (state.remoteStreams || []).forEach(stream => {
+        const sessionId = stream?.session_id || stream?.sessionId;
+        if (sessionId) sessionIds.add(sessionId);
+    });
+
+    const nowMs = Date.now();
+    const jobs = [];
+    sessionIds.forEach(sessionId => {
+        const sessionState = getSessionState(sessionId);
+        const localStream = getSessionStream(sessionId);
+        const remoteStream = getRemoteStreamState(sessionId);
+        const hasRemoteStream = Boolean(state.remoteStreamSessions?.has(sessionId) || remoteStream);
+        if (!localStream && !sessionState?.pendingSend && !hasRemoteStream) return;
+
+        let phase = '';
+        let elapsedMs = null;
+        let order = 3;
+
+        if (localStream) {
+            phase = localStream.processRunning === false ? 'CLI finalizing' : 'CLI running';
+            elapsedMs = Number.isFinite(localStream.runtimeMs)
+                ? Math.max(0, Math.round(localStream.runtimeMs))
+                : Math.max(0, nowMs - (normalizeStartedAt(localStream.startedAt) || nowMs));
+            order = 0;
+        } else if (sessionState?.pendingSend) {
+            phase = 'Submitting';
+            const pendingStartedAt = normalizeStartedAt(sessionState.pendingSend.startedAt);
+            elapsedMs = pendingStartedAt ? Math.max(0, nowMs - pendingStartedAt) : null;
+            order = 1;
+        } else if (hasRemoteStream) {
+            const processRunning = remoteStream?.process_running;
+            if (processRunning === true) {
+                phase = 'Remote CLI running';
+            } else if (processRunning === false) {
+                phase = 'Remote finalizing';
+            } else {
+                phase = 'Remote streaming';
+            }
+            elapsedMs = resolveRemoteRuntimeMs(remoteStream, nowMs);
+            order = 2;
+        }
+
+        jobs.push({
+            sessionId,
+            title: resolveRunningJobSessionTitle(sessionId),
+            phase,
+            elapsedMs,
+            order,
+            active: sessionId === state.activeSessionId
+        });
+    });
+
+    jobs.sort((left, right) => {
+        const activeDiff = Number(right.active) - Number(left.active);
+        if (activeDiff !== 0) return activeDiff;
+        const orderDiff = (left.order || 0) - (right.order || 0);
+        if (orderDiff !== 0) return orderDiff;
+        const elapsedLeft = Number.isFinite(left.elapsedMs) ? left.elapsedMs : -1;
+        const elapsedRight = Number.isFinite(right.elapsedMs) ? right.elapsedMs : -1;
+        return elapsedRight - elapsedLeft;
+    });
+    return jobs;
+}
+
+function renderRunningJobsMonitor() {
+    const monitor = document.getElementById('codex-chat-job-monitor');
+    const summary = document.getElementById('codex-chat-job-monitor-summary');
+    const list = document.getElementById('codex-chat-job-monitor-list');
+    if (!monitor || !summary || !list) return;
+
+    const jobs = collectRunningJobs();
+    if (jobs.length === 0) {
+        monitor.classList.add('is-idle');
+        summary.textContent = '실행 중인 job 없음';
+        list.innerHTML = '';
+        return;
+    }
+
+    monitor.classList.remove('is-idle');
+    summary.textContent = jobs.length === 1
+        ? '실행 중인 job 1개'
+        : `실행 중인 job ${jobs.length}개`;
+    list.innerHTML = '';
+
+    const maxVisible = 4;
+    jobs.slice(0, maxVisible).forEach(job => {
+        const item = document.createElement('li');
+        item.className = 'chat-job-monitor-item';
+        if (job.active) {
+            item.classList.add('is-active');
+        }
+        const elapsedText = Number.isFinite(job.elapsedMs) ? formatElapsedTime(job.elapsedMs) : '';
+        item.textContent = elapsedText
+            ? `${job.title} · ${job.phase} · ${elapsedText}`
+            : `${job.title} · ${job.phase}`;
+        list.appendChild(item);
+    });
+
+    if (jobs.length > maxVisible) {
+        const moreItem = document.createElement('li');
+        moreItem.className = 'chat-job-monitor-item is-more';
+        moreItem.textContent = `외 ${jobs.length - maxVisible}개`;
+        list.appendChild(moreItem);
+    }
+}
+
+function startRunningJobsMonitorTicker() {
+    renderRunningJobsMonitor();
+    if (state.jobMonitorTimerId) {
+        window.clearInterval(state.jobMonitorTimerId);
+    }
+    state.jobMonitorTimerId = window.setInterval(renderRunningJobsMonitor, 1000);
 }
 
 function appendMessageToDOMIfActive(sessionId, message, roleOverride = null) {
@@ -1424,6 +1582,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
+    startRunningJobsMonitorTicker();
     initializeTheme(themeToggle, themeMedia);
     initializeLiveWeatherPanel(mobileMedia);
     if (streamMonitor) {
@@ -7676,6 +7835,7 @@ function renderSessions() {
         empty.className = 'empty-state';
         empty.textContent = 'No sessions yet.';
         list.appendChild(empty);
+        renderRunningJobsMonitor();
         return;
     }
 
@@ -7755,6 +7915,7 @@ function renderSessions() {
         item.appendChild(actions);
         list.appendChild(item);
     });
+    renderRunningJobsMonitor();
 }
 
 function upsertSessionSummary(session) {
@@ -8021,7 +8182,8 @@ async function handleSubmit(event) {
     if (event) event.preventDefault();
     const input = document.getElementById('codex-chat-input');
     if (!input) return;
-    const prompt = input.value.trim();
+    const draftPrompt = input.value;
+    const prompt = draftPrompt.trim();
     const activeSessionId = state.activeSessionId;
     const sessionState = activeSessionId ? getSessionState(activeSessionId) : null;
     const localBusy = activeSessionId
@@ -8054,7 +8216,18 @@ async function handleSubmit(event) {
     }
     if (!prompt) return;
     input.value = '';
-    await sendPrompt(prompt, { sessionId: activeSessionId, planMode: isPlanModeEnabled() });
+    const sendResult = await sendPrompt(prompt, {
+        sessionId: activeSessionId,
+        planMode: isPlanModeEnabled()
+    });
+    if (sendResult?.ok) return;
+    const latestInput = document.getElementById('codex-chat-input');
+    if (!latestInput) return;
+    if (state.activeSessionId !== activeSessionId) return;
+    if (latestInput.value !== '') return;
+    latestInput.value = draftPrompt;
+    latestInput.focus();
+    syncActiveSessionControls();
 }
 
 function beginPendingSend(sessionId) {
@@ -8101,13 +8274,13 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
 
     if (!sessionId) {
         setStatus('Failed to create a session.', true);
-        return;
+        return { ok: false, reason: 'session_create_failed' };
     }
 
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.sending) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
-        return;
+        return { ok: false, reason: 'already_sending' };
     }
     if (sessionState) {
         sessionState.sending = true;
@@ -8159,6 +8332,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             setMessageStreaming(assistantEntry.wrapper, true);
         }
         startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAt);
+        return { ok: true, reason: 'started' };
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -8171,7 +8345,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return;
+            return { ok: false, reason: 'canceled' };
         }
         if (error?.status === 409 && error?.payload?.already_running) {
             const activeStreamId = error?.payload?.active_stream_id;
@@ -8190,7 +8364,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return;
+                    return { ok: true, reason: 'attached_existing_stream' };
                 }
             }
             if (sessionState) {
@@ -8202,7 +8376,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return;
+            return { ok: false, reason: 'already_running' };
         }
         if (sessionState) {
             sessionState.sending = false;
@@ -8213,6 +8387,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             syncActiveSessionControls();
         }
         void flushQueuedPrompts(sessionId);
+        return { ok: false, reason: 'send_failed' };
     }
 }
 

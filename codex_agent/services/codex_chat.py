@@ -291,16 +291,11 @@ def _mark_auth_failure(reason):
 
 
 def get_auth_block_error():
+    # Parallel Codex CLI jobs are intentionally allowed.
+    # Clear stale guard state and never hard-block new executions.
     with _AUTH_STATE_LOCK:
-        state = _load_auth_state()
-        if not state.get('blocked'):
-            return ''
-        expected_hash = str(state.get('auth_hash') or '').strip()
-        current_hash = _read_auth_fingerprint()
-        if expected_hash and current_hash and current_hash != expected_hash:
-            _clear_auth_state_locked()
-            return ''
-        return _build_auth_block_message(state.get('reason'))
+        _clear_auth_state_locked()
+    return ''
 
 
 def _list_competing_codex_processes():
@@ -395,34 +390,18 @@ def _list_competing_codex_processes():
 
 
 def get_competing_codex_process_error():
-    if _ALLOW_PARALLEL_CLI_EXEC and not _STRICT_COMPETING_PROCESSES:
-        return ''
-    processes = _list_competing_codex_processes()
-    blocking_processes = [p for p in processes if p.get('blocking')]
-    if not blocking_processes:
-        return ''
-    details = []
-    for process in blocking_processes[:4]:
-        command = _summarize_auth_failure_text(process.get('command'), max_chars=120)
-        details.append(
-            f"{process.get('label')} pid={process.get('pid')} ({command})"
-        )
-    remaining_count = max(0, len(blocking_processes) - len(details))
-    if remaining_count:
-        details.append(f'외 {remaining_count}개')
-    detail_text = '; '.join(details)
-    return (
-        '다른 Codex CLI 실행이 감지되어 refresh token 충돌이 다시 발생할 수 있습니다. '
-        '실행 중인 Codex CLI 작업을 먼저 종료한 뒤 다시 시도해 주세요.'
-        f' ({detail_text})'
-    )
+    # Pre-blocking based on external Codex process detection is disabled.
+    return ''
 
 
 def _apply_auth_failure_guard(text):
-    if not _is_auth_refresh_failure_text(text):
-        return str(text or '')
-    _mark_auth_failure(text)
-    return get_auth_block_error() or _build_auth_block_message(text)
+    normalized = str(text or '')
+    if not _is_auth_refresh_failure_text(normalized):
+        return normalized
+    # Keep refresh-token failure text for visibility, but do not persist a lock.
+    with _AUTH_STATE_LOCK:
+        _clear_auth_state_locked()
+    return normalized
 
 
 def _lock_file_handle(handle):
@@ -490,16 +469,12 @@ def _acquire_codex_exec_lock():
 
 @contextmanager
 def _codex_exec_gate():
-    if _ALLOW_PARALLEL_CLI_EXEC:
-        now = time.time()
-        yield {
-            'wait_ms': 0,
-            'acquired_at': now,
-            'parallel': True,
-        }
-        return
-    with _acquire_codex_exec_lock() as lock_info:
-        yield lock_info
+    now = time.time()
+    yield {
+        'wait_ms': 0,
+        'acquired_at': now,
+        'parallel': True,
+    }
 
 
 def _build_duration_breakdown(started_at, cli_started_at=None, completed_at=None, saved_at=None):
@@ -1829,22 +1804,6 @@ def _extract_exec_json_summary(raw_stdout):
 
 
 def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
-    auth_block_error = get_auth_block_error()
-    if auth_block_error:
-        return None, auth_block_error, None, {
-            'duration_ms': 0,
-            'queue_wait_ms': 0,
-            'cli_runtime_ms': 0,
-            'finalize_lag_ms': 0,
-        }
-    competing_process_error = get_competing_codex_process_error()
-    if competing_process_error:
-        return None, competing_process_error, None, {
-            'duration_ms': 0,
-            'queue_wait_ms': 0,
-            'cli_runtime_ms': 0,
-            'finalize_lag_ms': 0,
-        }
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
     cmd = _build_codex_command(
@@ -1859,22 +1818,6 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
     completed_at = None
     try:
         with _codex_exec_gate() as lock_info:
-            auth_block_error = get_auth_block_error()
-            if auth_block_error:
-                return None, auth_block_error, None, {
-                    'duration_ms': max(0, int((time.time() - queued_at) * 1000)),
-                    'queue_wait_ms': int(lock_info.get('wait_ms') or 0),
-                    'cli_runtime_ms': 0,
-                    'finalize_lag_ms': 0,
-                }
-            competing_process_error = get_competing_codex_process_error()
-            if competing_process_error:
-                return None, competing_process_error, None, {
-                    'duration_ms': max(0, int((time.time() - queued_at) * 1000)),
-                    'queue_wait_ms': int(lock_info.get('wait_ms') or 0),
-                    'cli_runtime_ms': 0,
-                    'finalize_lag_ms': 0,
-                }
             cli_started_at = lock_info.get('acquired_at') or time.time()
             result = subprocess.run(
                 cmd,
@@ -2402,32 +2345,6 @@ def _run_codex_stream(stream_id, prompt):
         reasoning_override=reasoning_override,
     )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    auth_block_error = get_auth_block_error()
-    if auth_block_error:
-        _append_stream_chunk(stream_id, 'error', f'{auth_block_error}\n')
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if stream:
-                stream['done'] = True
-                stream['exit_code'] = 1
-                stream['completed_at'] = time.time()
-                stream['updated_at'] = stream['completed_at']
-                stream['finalize_reason'] = 'process_start_failed'
-        finalize_codex_stream(stream_id)
-        return
-    competing_process_error = get_competing_codex_process_error()
-    if competing_process_error:
-        _append_stream_chunk(stream_id, 'error', f'{competing_process_error}\n')
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if stream:
-                stream['done'] = True
-                stream['exit_code'] = 1
-                stream['completed_at'] = time.time()
-                stream['updated_at'] = stream['completed_at']
-                stream['finalize_reason'] = 'process_start_blocked'
-        finalize_codex_stream(stream_id)
-        return
 
     with _codex_exec_gate() as lock_info:
         cli_started_at = lock_info.get('acquired_at') or time.time()
@@ -2437,33 +2354,6 @@ def _run_codex_stream(stream_id, prompt):
                 stream['cli_started_at'] = cli_started_at
                 stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
                 stream['updated_at'] = cli_started_at
-
-        auth_block_error = get_auth_block_error()
-        if auth_block_error:
-            _append_stream_chunk(stream_id, 'error', f'{auth_block_error}\n')
-            with state.codex_streams_lock:
-                stream = state.codex_streams.get(stream_id)
-                if stream:
-                    stream['done'] = True
-                    stream['exit_code'] = 1
-                    stream['completed_at'] = time.time()
-                    stream['updated_at'] = stream['completed_at']
-                    stream['finalize_reason'] = 'process_start_failed'
-            finalize_codex_stream(stream_id)
-            return
-        competing_process_error = get_competing_codex_process_error()
-        if competing_process_error:
-            _append_stream_chunk(stream_id, 'error', f'{competing_process_error}\n')
-            with state.codex_streams_lock:
-                stream = state.codex_streams.get(stream_id)
-                if stream:
-                    stream['done'] = True
-                    stream['exit_code'] = 1
-                    stream['completed_at'] = time.time()
-                    stream['updated_at'] = stream['completed_at']
-                    stream['finalize_reason'] = 'process_start_blocked'
-            finalize_codex_stream(stream_id)
-            return
 
         try:
             process = subprocess.Popen(
@@ -2785,15 +2675,6 @@ def start_codex_stream_for_session(
         reasoning_override=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
-        with state.codex_streams_lock:
-            active_stream_id = _find_active_stream_id_locked(session_id)
-        if active_stream_id:
-            return {
-                'ok': False,
-                'already_running': True,
-                'active_stream_id': active_stream_id
-            }
-
         user_message = append_message(session_id, 'user', prompt)
         if not user_message:
             return {

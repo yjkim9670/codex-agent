@@ -23,8 +23,6 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
-    get_auth_block_error,
-    get_competing_codex_process_error,
     get_session,
     get_settings,
     get_usage_summary,
@@ -236,19 +234,6 @@ def codex_session_message(session_id):
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
-    auth_block_error = get_auth_block_error()
-    if auth_block_error:
-        return jsonify({'error': auth_block_error}), 503
-    competing_process_error = get_competing_codex_process_error()
-    if competing_process_error:
-        return jsonify({'error': competing_process_error}), 409
-    active_stream_id = get_active_stream_id_for_session(session_id)
-    if active_stream_id:
-        return jsonify({
-            'error': '이미 실행 중인 응답이 있습니다. 완료 후 다시 시도해 주세요.',
-            'active_stream_id': active_stream_id,
-            'already_running': True
-        }), 409
 
     ensure_default_title(session_id, prompt)
 
@@ -319,12 +304,6 @@ def codex_session_message_stream(session_id):
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
-    auth_block_error = get_auth_block_error()
-    if auth_block_error:
-        return jsonify({'error': auth_block_error}), 503
-    competing_process_error = get_competing_codex_process_error()
-    if competing_process_error:
-        return jsonify({'error': competing_process_error}), 409
 
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
@@ -340,12 +319,6 @@ def codex_session_message_stream(session_id):
         reasoning_override=reasoning_override,
     )
     if not start_result.get('ok'):
-        if start_result.get('already_running'):
-            return jsonify({
-                'error': '이미 실행 중인 응답이 있습니다. 기존 응답을 모니터링합니다.',
-                'active_stream_id': start_result.get('active_stream_id'),
-                'already_running': True
-            }), 409
         return jsonify({'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}), 500
 
     return jsonify({

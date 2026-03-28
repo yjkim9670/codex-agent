@@ -72,6 +72,7 @@ _WORK_DETAILS_CODE_HEAD_LINES = 18
 _WORK_DETAILS_CODE_TAIL_LINES = 12
 _WORK_DETAILS_CODE_KEY_LINE_LIMIT = 20
 _WORK_DETAILS_CODE_MAX_CHARS = 2600
+_AUTO_SESSION_TITLE_MAX_CHARS = 36
 _WORK_DETAILS_CODE_FENCE_RE = re.compile(r'```([^\n`]*)\n(.*?)```', re.DOTALL)
 _WORK_DETAILS_KEY_CODE_LINE_RE = re.compile(
     r'^\s*(?:'
@@ -1342,8 +1343,8 @@ def generate_session_title(prompt):
     normalized = ' '.join(str(prompt or '').strip().split())
     if not normalized:
         return 'New session'
-    if len(normalized) > 24:
-        return f"{normalized[:24]}..."
+    if len(normalized) > _AUTO_SESSION_TITLE_MAX_CHARS:
+        return f"{normalized[:_AUTO_SESSION_TITLE_MAX_CHARS]}..."
     return normalized
 
 

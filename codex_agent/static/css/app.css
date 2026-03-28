@@ -28,6 +28,8 @@
     --message-max-lines: 20;
     --message-line-height: 1.5;
     --streaming-bubble-height: 420px;
+    --chat-bubble-max-width: 80%;
+    --chat-action-button-width: 35px;
     --mobile-viewport-height: 100dvh;
     --app-max-width: 1200px;
     --radius-lg: 13px;
@@ -3652,7 +3654,7 @@ body.is-work-mode-resizing * {
     align-items: stretch;
     gap: 6px;
     align-self: flex-end;
-    min-width: 44px;
+    min-width: var(--chat-action-button-width);
 }
 
 .chat-input textarea {
@@ -3670,7 +3672,7 @@ body.is-work-mode-resizing * {
 }
 
 .chat-plan-mode-toggle {
-    min-width: 44px;
+    min-width: var(--chat-action-button-width);
     height: 24px;
     min-height: 24px;
     padding: 0 6px;
@@ -3685,7 +3687,7 @@ body.is-work-mode-resizing * {
     justify-self: stretch;
     align-self: flex-end;
     width: 100%;
-    min-width: 44px;
+    min-width: var(--chat-action-button-width);
     height: 42px;
     padding: 0;
     border-radius: var(--radius-sm);
@@ -3767,7 +3769,7 @@ body.is-work-mode-resizing * {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    max-width: 80%;
+    max-width: var(--chat-bubble-max-width);
     width: fit-content;
     align-self: flex-start;
     align-items: flex-start;
@@ -3912,7 +3914,7 @@ body.is-work-mode-resizing * {
 .message.error,
 .message.system {
     width: fit-content;
-    max-width: 100%;
+    max-width: var(--chat-bubble-max-width);
     min-width: 0;
 }
 
@@ -4418,7 +4420,7 @@ label.hover-tooltip,
 
     .chat-submit-column {
         gap: 4px;
-        min-width: 44px;
+        min-width: var(--chat-action-button-width);
     }
 
     .chat-input textarea {
@@ -4813,7 +4815,7 @@ label.hover-tooltip,
 
     .chat-submit-column {
         gap: 4px;
-        min-width: 44px;
+        min-width: var(--chat-action-button-width);
     }
 
     .chat-input textarea {
@@ -5078,6 +5080,6 @@ label.hover-tooltip,
     }
 
     .message {
-        max-width: 80%;
+        max-width: var(--chat-bubble-max-width);
     }
 }

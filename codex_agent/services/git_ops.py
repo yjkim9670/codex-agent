@@ -1,5 +1,6 @@
 """Git command helpers for Codex Agent."""
 
+from collections import Counter
 import os
 import subprocess
 import threading
@@ -577,14 +578,312 @@ def _extract_name_status_details(status_text):
     return entries
 
 
-def _build_commit_message(status_text, max_files=3):
+def _is_test_path(path):
+    normalized = str(path or '').strip().replace('\\', '/').lower()
+    if not normalized:
+        return False
+    base = os.path.basename(normalized)
+    if normalized.startswith('tests/') or '/tests/' in normalized or '/test/' in normalized:
+        return True
+    return (
+        base.startswith('test_')
+        or base.endswith('_test.py')
+        or base.endswith('.test.js')
+        or base.endswith('.test.jsx')
+        or base.endswith('.test.ts')
+        or base.endswith('.test.tsx')
+        or base.endswith('.spec.js')
+        or base.endswith('.spec.jsx')
+        or base.endswith('.spec.ts')
+        or base.endswith('.spec.tsx')
+    )
+
+
+def _is_doc_path(path):
+    normalized = str(path or '').strip().replace('\\', '/').lower()
+    if not normalized:
+        return False
+    if normalized.startswith('docs/') or '/docs/' in normalized:
+        return True
+    return normalized.endswith('.md') or normalized.endswith('.rst') or normalized.endswith('.txt')
+
+
+def _is_config_path(path):
+    normalized = str(path or '').strip().replace('\\', '/').lower()
+    if not normalized:
+        return False
+    base = os.path.basename(normalized)
+    config_names = {
+        'pyproject.toml',
+        'poetry.lock',
+        'requirements.txt',
+        'requirements-dev.txt',
+        'setup.py',
+        'setup.cfg',
+        'tox.ini',
+        'package.json',
+        'package-lock.json',
+        'pnpm-lock.yaml',
+        'yarn.lock',
+        '.gitignore',
+        '.gitattributes',
+        'dockerfile',
+        'docker-compose.yml',
+        'docker-compose.yaml',
+        'makefile',
+        '.env',
+        '.env.example'
+    }
+    if base in config_names:
+        return True
+    return (
+        normalized.endswith('.json')
+        or normalized.endswith('.toml')
+        or normalized.endswith('.yaml')
+        or normalized.endswith('.yml')
+        or normalized.endswith('.ini')
+        or normalized.endswith('.cfg')
+        or normalized.endswith('.conf')
+    )
+
+
+def _summarize_top_scopes(paths, max_items=3):
+    scope_counter = Counter()
+    for raw_path in paths:
+        path = str(raw_path or '').strip().replace('\\', '/')
+        if not path:
+            continue
+        segments = [segment for segment in path.split('/') if segment]
+        if not segments:
+            continue
+        scope = '/'.join(segments[:2]) if len(segments) >= 2 else segments[0]
+        scope_counter[scope] += 1
+    ranked = sorted(scope_counter.items(), key=lambda item: (-item[1], item[0]))
+    return [{'scope': scope, 'count': count} for scope, count in ranked[: max(1, int(max_items or 1))]]
+
+
+def _summarize_status_counts(status_counts):
+    if not isinstance(status_counts, dict):
+        return ''
+    labels = [
+        ('M', '수정'),
+        ('A', '추가'),
+        ('D', '삭제'),
+        ('R', '이동/이름변경'),
+        ('C', '복사'),
+        ('T', '타입변경'),
+        ('U', '충돌')
+    ]
+    chunks = []
+    for code, label in labels:
+        try:
+            count = int(status_counts.get(code) or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            chunks.append(f'{label} {count}')
+    return ', '.join(chunks)
+
+
+def _parse_numstat_output(numstat_text):
+    parsed = []
+    insertions = 0
+    deletions = 0
+    binary_files = 0
+    for line in (numstat_text or '').splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split('\t')
+        if len(parts) < 3:
+            continue
+        add_raw = parts[0].strip()
+        del_raw = parts[1].strip()
+        path = parts[-1].strip()
+        if not path:
+            continue
+        if ' -> ' in path:
+            path = path.split(' -> ')[-1].strip()
+        if not path:
+            continue
+        additions = int(add_raw) if add_raw.isdigit() else 0
+        removed = int(del_raw) if del_raw.isdigit() else 0
+        if add_raw == '-' or del_raw == '-':
+            binary_files += 1
+        insertions += additions
+        deletions += removed
+        parsed.append(
+            {
+                'path': path,
+                'additions': additions,
+                'deletions': removed,
+                'line_changes': additions + removed
+            }
+        )
+    return {
+        'insertions': insertions,
+        'deletions': deletions,
+        'binary_files': binary_files,
+        'file_stats': parsed
+    }
+
+
+def _analyze_staged_changes(repo_root, env, staged_files_detail):
+    detail = staged_files_detail if isinstance(staged_files_detail, list) else []
+    paths = []
+    status_counter = Counter()
+    for entry in detail:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get('path') or '').strip()
+        status = str(entry.get('status') or '').strip()
+        if not path:
+            continue
+        paths.append(path)
+        if status:
+            status_counter[status] += 1
+
+    numstat_result, numstat_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'diff', '--cached', '--numstat'],
+        repo_root,
+        20,
+        env
+    )
+    numstat = {
+        'insertions': 0,
+        'deletions': 0,
+        'binary_files': 0,
+        'file_stats': []
+    }
+    if not numstat_error and numstat_result and numstat_result.returncode == 0:
+        numstat = _parse_numstat_output(numstat_result.stdout or '')
+
+    top_files = sorted(
+        numstat.get('file_stats') or [],
+        key=lambda item: (-int(item.get('line_changes') or 0), str(item.get('path') or ''))
+    )[:3]
+
+    return {
+        'total_files': len(paths),
+        'status_counts': dict(status_counter),
+        'insertions': int(numstat.get('insertions') or 0),
+        'deletions': int(numstat.get('deletions') or 0),
+        'binary_files': int(numstat.get('binary_files') or 0),
+        'top_scopes': _summarize_top_scopes(paths, max_items=3),
+        'top_files': top_files,
+        'test_files': sum(1 for path in paths if _is_test_path(path)),
+        'doc_files': sum(1 for path in paths if _is_doc_path(path)),
+        'config_files': sum(1 for path in paths if _is_config_path(path))
+    }
+
+
+def _build_commit_analysis_lines(analysis):
+    if not isinstance(analysis, dict):
+        return []
+    lines = []
+    try:
+        total_files = int(analysis.get('total_files') or 0)
+    except (TypeError, ValueError):
+        total_files = 0
+    if total_files > 0:
+        status_text = _summarize_status_counts(analysis.get('status_counts') or {})
+        if status_text:
+            lines.append(f'파일 변경: {total_files}개 ({status_text})')
+        else:
+            lines.append(f'파일 변경: {total_files}개')
+
+    try:
+        insertions = int(analysis.get('insertions') or 0)
+    except (TypeError, ValueError):
+        insertions = 0
+    try:
+        deletions = int(analysis.get('deletions') or 0)
+    except (TypeError, ValueError):
+        deletions = 0
+    try:
+        binary_files = int(analysis.get('binary_files') or 0)
+    except (TypeError, ValueError):
+        binary_files = 0
+    if insertions > 0 or deletions > 0 or binary_files > 0:
+        line = f'라인 변경: +{insertions} / -{deletions}'
+        if binary_files > 0:
+            line += f' (바이너리 {binary_files}개)'
+        lines.append(line)
+
+    top_scopes = analysis.get('top_scopes') if isinstance(analysis.get('top_scopes'), list) else []
+    scope_chunks = []
+    for item in top_scopes[:3]:
+        if not isinstance(item, dict):
+            continue
+        scope = str(item.get('scope') or '').strip()
+        try:
+            count = int(item.get('count') or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if scope and count > 0:
+            scope_chunks.append(f'{scope}({count})')
+    if scope_chunks:
+        lines.append(f'주요 경로: {", ".join(scope_chunks)}')
+
+    category_chunks = []
+    for key, label in (
+        ('test_files', '테스트'),
+        ('doc_files', '문서'),
+        ('config_files', '설정')
+    ):
+        try:
+            count = int(analysis.get(key) or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            category_chunks.append(f'{label} {count}개')
+    if category_chunks:
+        lines.append(f'포함 범주: {", ".join(category_chunks)}')
+
+    top_files = analysis.get('top_files') if isinstance(analysis.get('top_files'), list) else []
+    file_chunks = []
+    for item in top_files[:3]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip()
+        try:
+            additions = int(item.get('additions') or 0)
+        except (TypeError, ValueError):
+            additions = 0
+        try:
+            removals = int(item.get('deletions') or 0)
+        except (TypeError, ValueError):
+            removals = 0
+        if path:
+            file_chunks.append(f'{path} (+{additions}/-{removals})')
+    if file_chunks:
+        lines.append(f'변경량 상위 파일: {", ".join(file_chunks)}')
+
+    return lines
+
+
+def _build_commit_message(status_text, max_files=3, analysis=None):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
     files = [path for path in _extract_changed_files(status_text) if not _is_history_file(path)]
     if not files:
-        return timestamp
-    listed = files[:max_files]
-    suffix = f" (+{len(files) - max_files})" if len(files) > max_files else ''
-    return f"{timestamp} {', '.join(listed)}{suffix}"
+        subject = timestamp
+    else:
+        listed = files[:max_files]
+        suffix = f" (+{len(files) - max_files})" if len(files) > max_files else ''
+        subject = f"{timestamp} {', '.join(listed)}{suffix}"
+
+    analysis_lines = _build_commit_analysis_lines(analysis)
+    body = ''
+    comment = ''
+    if analysis_lines:
+        body = '자동 분석 요약\n' + '\n'.join(f'- {line}' for line in analysis_lines)
+        comment = '; '.join(analysis_lines[:2])
+    return {
+        'subject': subject,
+        'body': body,
+        'comment': comment,
+        'analysis_lines': analysis_lines
+    }
 
 
 def _normalize_selected_files(value):
@@ -1113,14 +1412,31 @@ def run_git_action(action, payload=None):
                 if not staged_files_detail:
                     return {'error': '스테이징된 변경 사항이 없습니다. 먼저 stage를 실행해주세요.'}
 
-                commit_message = str(payload.get('message') or '').strip()
-                if not commit_message:
+                commit_analysis = _analyze_staged_changes(repo_root, env, staged_files_detail)
+                commit_analysis_lines = _build_commit_analysis_lines(commit_analysis)
+
+                commit_message_input = str(payload.get('message') or '').strip()
+                commit_message_subject = commit_message_input
+                commit_message_body = ''
+                commit_comment = '; '.join(commit_analysis_lines[:2]) if commit_analysis_lines else ''
+                if not commit_message_subject:
                     synthetic_status = '\n'.join(
                         f"M  {entry['path']}" for entry in staged_files_detail if entry.get('path')
                     )
-                    commit_message = _build_commit_message(synthetic_status)
+                    message_payload = _build_commit_message(
+                        synthetic_status,
+                        analysis=commit_analysis
+                    )
+                    commit_message_subject = str(message_payload.get('subject') or '').strip()
+                    commit_message_body = str(message_payload.get('body') or '').strip()
+                    commit_comment = str(message_payload.get('comment') or '').strip()
+                    message_lines = message_payload.get('analysis_lines')
+                    if isinstance(message_lines, list):
+                        commit_analysis_lines = [str(line).strip() for line in message_lines if str(line).strip()]
 
-                commit_cmd = ['git', '-C', str(repo_root), 'commit', '-m', commit_message]
+                commit_cmd = ['git', '-C', str(repo_root), 'commit', '-m', commit_message_subject]
+                if commit_message_body:
+                    commit_cmd.extend(['-m', commit_message_body])
                 commit_result, error = _run_checked(
                     commit_cmd,
                     repo_root,
@@ -1145,16 +1461,30 @@ def run_git_action(action, payload=None):
                 if not head_error and head_result and head_result.returncode == 0:
                     commit_hash = (head_result.stdout or '').strip()
 
+                commit_message_full = commit_message_subject
+                if commit_message_body:
+                    commit_message_full = f'{commit_message_subject}\n\n{commit_message_body}'
+                command_template = 'git commit -m <subject>'
+                if commit_message_body:
+                    command_template += ' -m <body>'
+
                 return _build_result(
                     repo_root,
                     env,
                     started_at,
-                    command='git commit -m <message>',
+                    command=command_template,
                     exit_code=commit_result.returncode,
                     stdout=commit_result.stdout,
                     stderr=commit_result.stderr,
                     extra={
-                        'commit_message': commit_message,
+                        'commit_message': commit_message_subject,
+                        'commit_message_subject': commit_message_subject,
+                        'commit_message_body': commit_message_body,
+                        'commit_message_full': commit_message_full,
+                        'commit_comment': commit_comment,
+                        'commit_analysis': commit_analysis,
+                        'commit_analysis_lines': commit_analysis_lines,
+                        'auto_generated_message': not bool(commit_message_input),
                         'commit_hash': commit_hash,
                         'repo_target': repo_target
                     }

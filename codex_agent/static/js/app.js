@@ -4321,11 +4321,11 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
     const compactToken = value => (value === 'default' ? 'def' : value);
     const compactSummaryParts = [
-        `M:${compactToken(modelText)}`,
+        `Model:${compactToken(modelText)}`,
         `R:${compactToken(reasoningText)}`
     ];
     if (planModeModelText !== modelText || state.settings.planModeModel) {
-        compactSummaryParts.push(`P:${compactToken(planModeModelText)}`);
+        compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
     }
     if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);

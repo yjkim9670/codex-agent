@@ -68,6 +68,8 @@ const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
 const REMOTE_STREAM_POLL_MS = 2500;
 const STREAM_IDLE_WARNING_MS = 15000;
+const MERMAID_VENDOR_SRC = '/static/vendor/mermaid-11.13.0.min.js';
+const XLSX_VENDOR_SRC = '/static/vendor/xlsx-0.18.5.full.min.js';
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -236,6 +238,103 @@ let liveWeatherCompactHighTemp = '--';
 let liveWeatherCompactLowTemp = '--';
 let liveWeatherCompactHasWeather = false;
 let mermaidRenderSerial = 0;
+let mermaidLoadPromise = null;
+let xlsxLoadPromise = null;
+let lastAppliedMobileViewportHeight = null;
+let sessionsRenderFrameId = 0;
+
+function runAfterAnimationFrame(callback) {
+    if (typeof callback !== 'function') return 0;
+    if (typeof window.requestAnimationFrame === 'function') {
+        return window.requestAnimationFrame(() => {
+            callback();
+        });
+    }
+    return window.setTimeout(() => {
+        callback();
+    }, 16);
+}
+
+function createRafThrottledHandler(callback) {
+    if (typeof callback !== 'function') {
+        return () => {};
+    }
+    let frameId = 0;
+    let queuedArgs = null;
+    return (...args) => {
+        queuedArgs = args;
+        if (frameId) return;
+        frameId = runAfterAnimationFrame(() => {
+            frameId = 0;
+            const latestArgs = queuedArgs;
+            queuedArgs = null;
+            callback(...(latestArgs || []));
+        });
+    };
+}
+
+function loadVendorScript(src) {
+    const source = String(src || '').trim();
+    if (!source) {
+        return Promise.reject(new Error('스크립트 경로가 비어 있습니다.'));
+    }
+    if (typeof document === 'undefined' || !document.head) {
+        return Promise.reject(new Error('문서를 사용할 수 없어 스크립트를 로드할 수 없습니다.'));
+    }
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = source;
+        script.async = true;
+        script.defer = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`스크립트를 불러오지 못했습니다: ${source}`));
+        document.head.appendChild(script);
+    });
+}
+
+function ensureMermaidApiLoaded() {
+    const mermaidApi = window.mermaid;
+    if (
+        mermaidApi
+        && typeof mermaidApi.initialize === 'function'
+        && typeof mermaidApi.render === 'function'
+    ) {
+        return Promise.resolve(mermaidApi);
+    }
+    if (!mermaidLoadPromise) {
+        mermaidLoadPromise = loadVendorScript(MERMAID_VENDOR_SRC)
+            .then(() => window.mermaid || null)
+            .catch(error => {
+                mermaidLoadPromise = null;
+                throw error;
+            });
+    }
+    return mermaidLoadPromise;
+}
+
+function ensureXlsxApiLoaded() {
+    const xlsxApi = window.XLSX;
+    if (xlsxApi && typeof xlsxApi.read === 'function') {
+        return Promise.resolve(xlsxApi);
+    }
+    if (!xlsxLoadPromise) {
+        xlsxLoadPromise = loadVendorScript(XLSX_VENDOR_SRC)
+            .then(() => window.XLSX || null)
+            .catch(error => {
+                xlsxLoadPromise = null;
+                throw error;
+            });
+    }
+    return xlsxLoadPromise;
+}
+
+function scheduleSessionsRender() {
+    if (sessionsRenderFrameId) return;
+    sessionsRenderFrameId = runAfterAnimationFrame(() => {
+        sessionsRenderFrameId = 0;
+        renderSessions();
+    });
+}
 
 function ensureSessionState(sessionId) {
     if (!sessionId) return null;
@@ -1495,7 +1594,7 @@ document.addEventListener('DOMContentLoaded', () => {
             handleWorkModeMediaChange(event.matches);
         });
     }
-    window.addEventListener('resize', () => {
+    const handleWindowLayoutResize = createRafThrottledHandler(() => {
         if (isWorkModeEnabled()) {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
@@ -1506,6 +1605,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         syncWorkModeFileHorizontalScrollMetrics();
     });
+    window.addEventListener('resize', handleWindowLayoutResize);
 
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(
@@ -3347,6 +3447,10 @@ function applyMobileViewportHeight() {
         : fallbackHeight;
     if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
     const clamped = Math.max(320, Math.round(nextHeight));
+    if (lastAppliedMobileViewportHeight === clamped) {
+        return;
+    }
+    lastAppliedMobileViewportHeight = clamped;
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
@@ -3364,39 +3468,49 @@ function normalizeMobileDocumentScroll(isMobile = isMobileLayout()) {
 }
 
 function setupMobileViewportBehavior(mobileMedia, input) {
-    applyMobileViewportHeight();
-    syncMobileKeyboardState(mobileMedia.matches);
-    normalizeMobileDocumentScroll(mobileMedia.matches);
-
-    const handleViewportChange = () => {
+    const syncViewportState = ({ normalizeScroll = false } = {}) => {
         applyMobileViewportHeight();
-        syncMobileKeyboardState(mobileMedia.matches);
-        normalizeMobileDocumentScroll(mobileMedia.matches);
+        const isMobile = mobileMedia.matches;
+        syncMobileKeyboardState(isMobile);
+        if (normalizeScroll) {
+            normalizeMobileDocumentScroll(isMobile);
+        }
+    };
+    syncViewportState({ normalizeScroll: true });
+
+    const handleViewportChange = createRafThrottledHandler(() => {
+        syncViewportState();
+    });
+
+    const handleLayoutModeChange = event => {
+        syncViewportState({ normalizeScroll: Boolean(event?.matches) });
     };
 
     if (typeof mobileMedia.addEventListener === 'function') {
-        mobileMedia.addEventListener('change', handleViewportChange);
+        mobileMedia.addEventListener('change', handleLayoutModeChange);
     } else if (typeof mobileMedia.addListener === 'function') {
-        mobileMedia.addListener(handleViewportChange);
+        mobileMedia.addListener(handleLayoutModeChange);
     }
 
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleViewportChange);
-        window.visualViewport.addEventListener('scroll', handleViewportChange);
+        window.visualViewport.addEventListener('resize', handleViewportChange, { passive: true });
+        window.visualViewport.addEventListener('scroll', handleViewportChange, { passive: true });
     }
     window.addEventListener('resize', handleViewportChange);
 
     if (!input) return;
     input.addEventListener('focus', () => {
         if (!mobileMedia.matches) return;
-        syncMobileKeyboardState(true);
-        normalizeMobileDocumentScroll(true);
-        window.setTimeout(handleViewportChange, 80);
+        syncViewportState({ normalizeScroll: true });
+        window.setTimeout(() => {
+            syncViewportState({ normalizeScroll: true });
+        }, 80);
     });
     input.addEventListener('blur', () => {
         if (!mobileMedia.matches) return;
-        normalizeMobileDocumentScroll(true);
-        window.setTimeout(handleViewportChange, 120);
+        window.setTimeout(() => {
+            syncViewportState({ normalizeScroll: true });
+        }, 120);
     });
 }
 
@@ -3438,17 +3552,23 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         keepFieldVisible(focusedField, behavior);
     };
 
+    let focusVisibilityScheduled = false;
+    let focusVisibilityTimeoutId = null;
     const scheduleFocusedFieldVisibility = () => {
         if (!mobileMedia.matches) return;
-        window.requestAnimationFrame(() => {
+        if (focusVisibilityTimeoutId) {
+            window.clearTimeout(focusVisibilityTimeoutId);
+        }
+        focusVisibilityTimeoutId = window.setTimeout(() => {
+            focusVisibilityTimeoutId = null;
+            keepFocusedFieldVisible('auto');
+        }, 140);
+        if (focusVisibilityScheduled) return;
+        focusVisibilityScheduled = true;
+        runAfterAnimationFrame(() => {
+            focusVisibilityScheduled = false;
             keepFocusedFieldVisible('auto');
         });
-        window.setTimeout(() => {
-            keepFocusedFieldVisible('auto');
-        }, 120);
-        window.setTimeout(() => {
-            keepFocusedFieldVisible('auto');
-        }, 280);
     };
 
     const applyMobileFocusState = focused => {
@@ -3469,14 +3589,14 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         setMobileKeyboardOpen(false);
     };
 
-    const handleMobileViewportChange = () => {
+    const handleMobileViewportChange = createRafThrottledHandler(() => {
         if (!mobileMedia.matches) {
             setMobileKeyboardOpen(false);
             return;
         }
         syncMobileKeyboardState(true);
         scheduleFocusedFieldVisibility();
-    };
+    });
 
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', handleLayoutModeChange);
@@ -3484,8 +3604,8 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         mobileMedia.addListener(handleLayoutModeChange);
     }
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleMobileViewportChange);
-        window.visualViewport.addEventListener('scroll', handleMobileViewportChange);
+        window.visualViewport.addEventListener('resize', handleMobileViewportChange, { passive: true });
+        window.visualViewport.addEventListener('scroll', handleMobileViewportChange, { passive: true });
     }
     window.addEventListener('resize', handleMobileViewportChange);
 
@@ -3781,7 +3901,7 @@ function updateRemoteStreamSessions(streams) {
     state.remoteStreamSessions = nextSet;
     state.remoteStreams = Array.isArray(streams) ? streams : [];
     if (changed) {
-        renderSessions();
+        scheduleSessionsRender();
         syncActiveSessionControls();
         syncRemoteActiveSessionStatus();
     }
@@ -7012,8 +7132,7 @@ function getSpreadsheetCellDisplayValue(cell) {
     return String(cell.v);
 }
 
-function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex) {
-    const xlsxApi = window.XLSX;
+function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) {
     const sheet = workbook?.Sheets?.[sheetName];
     const panel = document.createElement('section');
     panel.className = 'file-browser-spreadsheet-sheet';
@@ -7126,7 +7245,7 @@ function activateSpreadsheetSheetPreview(wrapper, targetIndex) {
     });
 }
 
-function buildSpreadsheetPreview(workbook) {
+function buildSpreadsheetPreview(workbook, xlsxApi) {
     const wrapper = document.createElement('section');
     wrapper.className = 'file-browser-spreadsheet';
 
@@ -7172,7 +7291,7 @@ function buildSpreadsheetPreview(workbook) {
     const body = document.createElement('div');
     body.className = 'file-browser-spreadsheet-body';
     visibleSheetNames.forEach((sheetName, sheetIndex) => {
-        body.appendChild(buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex));
+        body.appendChild(buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi));
     });
     wrapper.appendChild(body);
     activateSpreadsheetSheetPreview(wrapper, 0);
@@ -7182,7 +7301,6 @@ function buildSpreadsheetPreview(workbook) {
 async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, renderToken) {
     if (!(container instanceof HTMLElement)) return false;
     const currentToken = String(renderToken || '');
-    const xlsxApi = window.XLSX;
 
     container.innerHTML = '';
     const loadingState = document.createElement('div');
@@ -7193,6 +7311,12 @@ async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, rend
     if (!previewUrl) {
         loadingState.textContent = '스프레드시트 파일 주소를 만들지 못했습니다.';
         return false;
+    }
+    let xlsxApi = null;
+    try {
+        xlsxApi = await ensureXlsxApiLoaded();
+    } catch (error) {
+        void error;
     }
     if (!xlsxApi || typeof xlsxApi.read !== 'function') {
         loadingState.textContent = '스프레드시트 미리보기 라이브러리를 불러오지 못했습니다.';
@@ -7212,7 +7336,7 @@ async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, rend
             cellHTML: false,
             cellStyles: false
         });
-        const spreadsheetView = buildSpreadsheetPreview(workbook);
+        const spreadsheetView = buildSpreadsheetPreview(workbook, xlsxApi);
         if (container.dataset.renderToken !== currentToken) {
             return false;
         }
@@ -8944,7 +9068,7 @@ function beginStreamPolling(streamId) {
     if (!stream) return;
     stream.failureCount = 0;
     stream.pollDelay = STREAM_POLL_BASE_MS;
-    renderSessions();
+    scheduleSessionsRender();
     scheduleStreamPoll(streamId, 0);
 }
 
@@ -9087,7 +9211,10 @@ function updateStreamEntry(stream) {
     const bubble = stream?.entry?.bubble;
     if (!bubble) return;
     const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
-    setMarkdownContent(bubble, combined);
+    setMarkdownContent(bubble, combined, {
+        streaming: true,
+        skipPreviewUpdate: true
+    });
     if (stream?.entry?.footer) {
         setMessageTokenUsage(
             stream.entry.footer,
@@ -9114,6 +9241,9 @@ async function finishStream(streamId, result) {
     const savedMessage = result?.saved_message || null;
     if (savedMessage && typeof savedMessage.content === 'string' && bubble) {
         setMarkdownContent(bubble, savedMessage.content, { message: savedMessage });
+    } else if (bubble) {
+        const finalContent = stream.output + (stream.error ? `\n${stream.error}` : '');
+        setMarkdownContent(bubble, finalContent);
     }
     if (savedMessage && wrapper) {
         wrapper.classList.remove('assistant', 'error');
@@ -9434,15 +9564,31 @@ function buildMessageDetailText(message) {
 function setMarkdownContent(element, content, options = {}) {
     if (!element) return;
     const messageContent = String(content || '');
-    const messageData = options && typeof options === 'object' ? options.message || null : null;
-    element.innerHTML = renderMessageContent(messageContent);
-    hydrateRenderedMarkdown(element);
+    const renderOptions = options && typeof options === 'object' ? options : {};
+    const messageData = renderOptions.message || null;
+    const streaming = Boolean(renderOptions.streaming);
+    const skipPreviewUpdate = Boolean(renderOptions.skipPreviewUpdate);
+    const renderMode = streaming ? 'streaming' : 'markdown';
+    const previousMode = element.dataset.renderMode || '';
+    const previousContent = element.dataset.messageContent || '';
+    const needsRender = previousMode !== renderMode || previousContent !== messageContent;
+
+    if (needsRender) {
+        if (streaming) {
+            element.textContent = messageContent;
+        } else {
+            element.innerHTML = renderMessageContent(messageContent);
+            hydrateRenderedMarkdown(element);
+        }
+    }
+
+    element.dataset.renderMode = renderMode;
     element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;
         const footer = wrapper.querySelector('.message-footer');
-        if (footer) {
+        if (footer && !skipPreviewUpdate) {
             setMessagePreviewLink(footer, messageContent, messageData, wrapper);
         }
     }
@@ -10349,12 +10495,22 @@ function getMermaidThemeName() {
 function hydrateRenderedMarkdown(container) {
     if (!container || !(container instanceof Element)) return;
     hydrateMessageLabelLinks(container);
-    void hydrateMermaidDiagrams(container);
+    if (container.querySelector('.file-browser-mermaid[data-mermaid-source]')) {
+        void hydrateMermaidDiagrams(container);
+    }
 }
 
 async function hydrateMermaidDiagrams(container) {
     if (!container || !(container instanceof Element)) return;
-    const mermaidApi = window.mermaid;
+    const diagrams = Array.from(container.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
+    if (!diagrams.length) return;
+    let mermaidApi = null;
+    try {
+        mermaidApi = await ensureMermaidApiLoaded();
+    } catch (error) {
+        void error;
+        return;
+    }
     if (
         !mermaidApi
         || typeof mermaidApi.initialize !== 'function'
@@ -10368,8 +10524,6 @@ async function hydrateMermaidDiagrams(container) {
         startOnLoad: false,
         theme
     });
-
-    const diagrams = Array.from(container.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
     for (const node of diagrams) {
         if (!(node instanceof HTMLElement)) continue;
         const source = decodeMermaidDiagramSource(node.dataset.mermaidSource || '');

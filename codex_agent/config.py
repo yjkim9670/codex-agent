@@ -35,19 +35,43 @@ CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
-_default_model_options = sorted({
+CODEX_MODEL_ALIASES = {
+    'gpt-5.3-codex-spark': 'gpt-5.3-codex-mini'
+}
+
+
+def normalize_codex_model_name(model_name):
+    normalized = str(model_name or '').strip()
+    if not normalized:
+        return ''
+    return CODEX_MODEL_ALIASES.get(normalized, normalized)
+
+
+def _normalize_model_options(options):
+    normalized_options = []
+    seen = set()
+    for item in options:
+        normalized = normalize_codex_model_name(item)
+        if not normalized or normalized in seen:
+            continue
+        normalized_options.append(normalized)
+        seen.add(normalized)
+    return normalized_options
+
+
+_default_model_options = sorted(_normalize_model_options([
     'gpt-5.1-codex-max',
     'gpt-5.2',
     'gpt-5.2-codex',
     'gpt-5.3-codex',
-    'gpt-5.3-codex-spark',
+    'gpt-5.3-codex-mini',
     'gpt-5.4'
-})
-CODEX_MODEL_OPTIONS = [
+]))
+CODEX_MODEL_OPTIONS = _normalize_model_options(
     item.strip()
     for item in os.environ.get('CODEX_MODEL_OPTIONS', '').split(',')
     if item.strip()
-]
+)
 if not CODEX_MODEL_OPTIONS:
     CODEX_MODEL_OPTIONS = _default_model_options
 CODEX_REASONING_OPTIONS = [

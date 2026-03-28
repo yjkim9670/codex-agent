@@ -22,7 +22,7 @@ const state = {
         modelOptions: [],
         planModeModel: null,
         planModeReasoningEffort: null,
-        planModeEnabled: false,
+        planModeState: 'off',
         reasoningEffort: null,
         reasoningOptions: [],
         usage: null,
@@ -151,6 +151,10 @@ const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
     [GIT_SYNC_TARGET_CODEX_AGENT]: 'codex_agent Repo'
 });
+const PLAN_MODE_STATE_OFF = 'off';
+const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
+const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
+const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
@@ -324,6 +328,25 @@ async function flushQueuedPrompts(sessionId) {
             syncActiveSessionControls();
         }
     }
+}
+
+function flushReadyQueuedPrompts(sessionIds = null) {
+    const targets = new Set();
+    if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+        sessionIds.forEach(sessionId => {
+            if (sessionId) targets.add(String(sessionId));
+        });
+    } else {
+        Object.keys(state.sessionStates || {}).forEach(sessionId => {
+            if (sessionId) targets.add(String(sessionId));
+        });
+    }
+    targets.forEach(sessionId => {
+        if (!sessionId) return;
+        if (getQueuedPromptCount(sessionId) <= 0) return;
+        if (isSessionBusy(sessionId)) return;
+        void flushQueuedPrompts(sessionId);
+    });
 }
 
 function setSessionStatus(sessionId, message, isError = false) {
@@ -1589,10 +1612,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeToggle) {
         planModeToggle.addEventListener('click', () => {
-            setPlanModeToggleState(!isPlanModeEnabled());
+            setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
         });
     }
-    setPlanModeToggleState(state.settings.planModeEnabled);
+    setPlanModeToggleState(state.settings.planModeState);
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
@@ -3762,6 +3785,7 @@ function updateRemoteStreamSessions(streams) {
         syncActiveSessionControls();
         syncRemoteActiveSessionStatus();
     }
+    flushReadyQueuedPrompts();
 }
 
 function syncRemoteActiveSessionStatus() {
@@ -4044,7 +4068,7 @@ async function loadSettings({ silent = true } = {}) {
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
-            planModeEnabled: Boolean(state.settings?.planModeEnabled),
+            planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: Array.isArray(result?.reasoning_options)
                 ? result.reasoning_options
@@ -4825,6 +4849,7 @@ function getGitChangedFilesCountFromStatus(status) {
 function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
     document.querySelectorAll('.git-action-commit').forEach(button => {
+        if (button.id === 'codex-sync-overlay-commit') return;
         button.classList.toggle('is-ready', hasChanges);
     });
 }
@@ -4838,6 +4863,7 @@ function updateGitPushButtonState(status) {
     const aheadCount = getGitAheadCountFromStatus(status);
     const hasPendingPush = Number.isFinite(aheadCount) && aheadCount > 0;
     document.querySelectorAll('.git-action-push').forEach(button => {
+        if (button.id === 'codex-sync-overlay-push') return;
         button.classList.toggle('is-ready', hasPendingPush);
     });
 }
@@ -5112,6 +5138,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainRef: 'origin/main',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
+        changedCount: null,
         aheadCount: null,
         behindCount: null,
         fetchedAt: 0,
@@ -5160,6 +5187,35 @@ function getGitSyncOverlayElements() {
         empty: document.getElementById('codex-sync-overlay-empty'),
         list: document.getElementById('codex-sync-overlay-list')
     };
+}
+
+function updateGitSyncOverlayActionButtonState(status) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    const repoMissing = Boolean(status?.repoMissing);
+    const changedCount = normalizeGitChangedFilesCount(status?.changedCount);
+    const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
+    const behindCount = normalizeGitDivergenceCount(status?.behindCount);
+    const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
+    const hasPendingPush = !repoMissing && Number.isFinite(aheadCount) && aheadCount > 0;
+    const hasPendingSync = !repoMissing && Number.isFinite(behindCount) && behindCount > 0;
+
+    if (elements.commitBtn) {
+        elements.commitBtn.classList.toggle('is-ready', hasChanges);
+    }
+    if (elements.pushBtn) {
+        elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
+    }
+    if (elements.syncBtn) {
+        elements.syncBtn.classList.toggle('is-ready', hasPendingSync);
+    }
+}
+
+function syncGitSyncOverlayActionButtonsFromCache() {
+    if (!isGitSyncOverlayOpen()) return;
+    const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+    const cached = getGitSyncHistoryCache(target);
+    updateGitSyncOverlayActionButtonState(cached);
 }
 
 function setGitSyncOverlayLoading(isLoading) {
@@ -5216,6 +5272,7 @@ function setGitSyncOverlayRepoTarget(repoTarget) {
         elements.fetchBtn.textContent = 'origin/main fetch';
         syncHoverTooltipFromLabel(elements.fetchBtn, 'origin/main fetch');
     }
+    updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(target));
 }
 
 function normalizeGitHistoryEntries(value) {
@@ -5277,6 +5334,7 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
+    const changedCount = normalizeGitChangedFilesCount(history?.changedCount);
     const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
     const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
     const compareText = !repoMissing && aheadCount != null && behindCount != null
@@ -5333,6 +5391,12 @@ function renderGitSyncOverlay(history) {
         elements.empty.textContent = fallbackMessage;
         elements.empty.classList.toggle('is-hidden', remoteHistory.length !== 0);
     }
+    updateGitSyncOverlayActionButtonState({
+        repoMissing,
+        changedCount,
+        aheadCount,
+        behindCount
+    });
 }
 
 function isGitSyncOverlayOpen() {
@@ -7565,9 +7629,18 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
     const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
     try {
-        const history = await fetchGitSyncHistory(force, target);
-        renderGitSyncOverlay(history);
-        return history;
+        const [history, status] = await Promise.all([
+            fetchGitSyncHistory(force, target),
+            fetchGitStatusForRepoTarget(target, force).catch(() => null)
+        ]);
+        const changedCount = status ? getGitChangedFilesCountFromStatus(status) : null;
+        const merged = setGitSyncHistoryCache(target, {
+            changedCount: Number.isFinite(changedCount) ? changedCount : null,
+            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount
+        });
+        renderGitSyncOverlay(merged);
+        return merged;
     } catch (error) {
         renderGitSyncOverlay(getGitSyncHistoryCache(target));
         if (!silent) {
@@ -7644,6 +7717,14 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     }
     updateGitCommitButtonState(status);
     updateGitPushButtonState(status);
+    if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
+        setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
+            changedCount: getGitChangedFilesCountFromStatus(status),
+            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null
+        });
+    }
+    syncGitSyncOverlayActionButtonsFromCache();
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }
@@ -7722,6 +7803,8 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     });
     const count = normalizeGitChangedFilesCount(result?.changed_files_count);
     const branch = typeof result?.branch === 'string' ? result.branch : '';
+    const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
+    const behindCount = normalizeGitDivergenceCount(result?.behind_count);
     const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
     const changedFiles = detailedFiles.length
         ? detailedFiles
@@ -7729,6 +7812,8 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     return {
         count,
         branch,
+        aheadCount,
+        behindCount,
         changedFiles,
         isStale: false,
         fetchedAt: Date.now()
@@ -8521,19 +8606,93 @@ function updateHeader(session) {
     meta.textContent = parts.join(' · ');
 }
 
-function isPlanModeEnabled() {
-    return Boolean(state.settings.planModeEnabled);
+function normalizePlanModeState(value) {
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
+            return PLAN_MODE_STATE_PLAN_ONLY;
+        }
+        if (
+            normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
+            || normalized === 'auto'
+            || normalized === '2'
+        ) {
+            return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+        }
+    } else if (value === true) {
+        return PLAN_MODE_STATE_PLAN_ONLY;
+    }
+    return PLAN_MODE_STATE_OFF;
 }
 
-function setPlanModeToggleState(enabled) {
-    const normalized = Boolean(enabled);
-    state.settings.planModeEnabled = normalized;
+function getPlanModeState() {
+    return normalizePlanModeState(state.settings.planModeState);
+}
+
+function shouldUsePlanModeForRequest(planModeState = getPlanModeState()) {
+    return planModeState !== PLAN_MODE_STATE_OFF;
+}
+
+function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
+    return planModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+}
+
+function getNextPlanModeState(currentState = getPlanModeState()) {
+    if (currentState === PLAN_MODE_STATE_OFF) {
+        return PLAN_MODE_STATE_PLAN_ONLY;
+    }
+    if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
+        return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+    }
+    return PLAN_MODE_STATE_OFF;
+}
+
+function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState()) {
+    const normalizedPrompt = String(prompt || '').trim();
+    if (!sessionId || !normalizedPrompt) {
+        return {
+            addedCount: 0,
+            totalQueued: getQueuedPromptCount(sessionId)
+        };
+    }
+    const normalizedPlanModeState = normalizePlanModeState(planModeState);
+    let addedCount = 0;
+    if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
+        enqueuePrompt(sessionId, normalizedPrompt, { planMode: true });
+        enqueuePrompt(sessionId, PLAN_MODE_AUTO_EXECUTE_PROMPT, { planMode: false });
+        addedCount = 2;
+    } else {
+        enqueuePrompt(sessionId, normalizedPrompt, {
+            planMode: normalizedPlanModeState === PLAN_MODE_STATE_PLAN_ONLY
+        });
+        addedCount = 1;
+    }
+    return {
+        addedCount,
+        totalQueued: getQueuedPromptCount(sessionId)
+    };
+}
+
+function setPlanModeToggleState(nextState) {
+    const normalized = normalizePlanModeState(nextState);
+    state.settings.planModeState = normalized;
     const button = document.getElementById('codex-plan-mode-toggle');
     if (!button) return;
-    button.classList.toggle('is-active', normalized);
-    button.setAttribute('aria-pressed', String(normalized));
-    const label = normalized ? 'Plan mode on' : 'Plan mode off';
-    button.textContent = 'Plan';
+    const isActive = normalized !== PLAN_MODE_STATE_OFF;
+    const isPlanAndExecute = normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+    button.classList.toggle('is-active', isActive);
+    button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
+    button.setAttribute('aria-pressed', String(isActive));
+    let label = 'Plan mode off';
+    let buttonText = 'Plan';
+    if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
+        label = 'Plan mode on (planning only)';
+    } else if (isPlanAndExecute) {
+        label = 'Plan then execute mode on';
+        buttonText = 'Plan+';
+    }
+    button.dataset.planModeState = normalized;
+    button.textContent = buttonText;
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
 }
@@ -8546,12 +8705,11 @@ async function handleSubmit(event) {
     const prompt = draftPrompt.trim();
     const activeSessionId = state.activeSessionId;
     const sessionState = activeSessionId ? getSessionState(activeSessionId) : null;
-    const localBusy = activeSessionId
-        ? Boolean(sessionState?.sending || sessionState?.pendingSend || getSessionStream(activeSessionId))
-        : false;
-    if (activeSessionId && localBusy) {
+    const sessionBusy = activeSessionId ? isSessionBusy(activeSessionId) : false;
+    if (activeSessionId && sessionBusy) {
         if (prompt) {
-            const queuedCount = enqueuePrompt(activeSessionId, prompt, { planMode: isPlanModeEnabled() });
+            const queueResult = queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState());
+            const queuedCount = queueResult.totalQueued;
             input.value = '';
             setSessionStatus(activeSessionId, `Queued ${queuedCount} prompt${queuedCount === 1 ? '' : 's'}...`);
             showToast(`Queued (${queuedCount})`, {
@@ -8576,10 +8734,19 @@ async function handleSubmit(event) {
     }
     if (!prompt) return;
     input.value = '';
+    const planModeState = getPlanModeState();
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
-        planMode: isPlanModeEnabled()
+        planMode: shouldUsePlanModeForRequest(planModeState)
     });
+    if (sendResult?.ok && sendResult?.reason === 'started' && shouldAutoExecuteAfterPlan(planModeState)) {
+        const targetSessionId = sendResult.sessionId || state.activeSessionId || activeSessionId;
+        if (targetSessionId) {
+            queuePromptWithPlanMode(targetSessionId, PLAN_MODE_AUTO_EXECUTE_PROMPT, PLAN_MODE_STATE_OFF);
+            syncActiveSessionControls();
+            flushReadyQueuedPrompts([targetSessionId]);
+        }
+    }
     if (sendResult?.ok) return;
     const latestInput = document.getElementById('codex-chat-input');
     if (!latestInput) return;
@@ -8634,13 +8801,13 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
 
     if (!sessionId) {
         setStatus('Failed to create a session.', true);
-        return { ok: false, reason: 'session_create_failed' };
+        return { ok: false, reason: 'session_create_failed', sessionId: null };
     }
 
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.sending) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
-        return { ok: false, reason: 'already_sending' };
+        return { ok: false, reason: 'already_sending', sessionId };
     }
     if (sessionState) {
         sessionState.sending = true;
@@ -8692,7 +8859,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             setMessageStreaming(assistantEntry.wrapper, true);
         }
         startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAt);
-        return { ok: true, reason: 'started' };
+        return { ok: true, reason: 'started', sessionId };
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -8705,7 +8872,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'canceled' };
+            return { ok: false, reason: 'canceled', sessionId };
         }
         if (error?.status === 409 && error?.payload?.already_running) {
             const activeStreamId = error?.payload?.active_stream_id;
@@ -8724,7 +8891,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return { ok: true, reason: 'attached_existing_stream' };
+                    return { ok: true, reason: 'attached_existing_stream', sessionId };
                 }
             }
             if (sessionState) {
@@ -8736,7 +8903,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'already_running' };
+            return { ok: false, reason: 'already_running', sessionId };
         }
         if (sessionState) {
             sessionState.sending = false;
@@ -8747,7 +8914,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             syncActiveSessionControls();
         }
         void flushQueuedPrompts(sessionId);
-        return { ok: false, reason: 'send_failed' };
+        return { ok: false, reason: 'send_failed', sessionId };
     }
 }
 

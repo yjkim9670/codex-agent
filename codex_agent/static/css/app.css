@@ -1992,6 +1992,16 @@ body {
     background-color: rgba(24, 138, 66, 0.16);
 }
 
+.sync-overlay-sync.is-ready {
+    color: #188a42;
+    border-color: rgba(24, 138, 66, 0.45);
+    background-color: rgba(24, 138, 66, 0.12);
+}
+
+.sync-overlay-sync.is-ready:hover {
+    background-color: rgba(24, 138, 66, 0.2);
+}
+
 .git-action-sync,
 #codex-git-sync {
     background-image: var(--icon-overlay-open);
@@ -2051,6 +2061,16 @@ body {
 }
 
 [data-theme="dark"] .btn.ghost.git-action-push.is-ready:hover {
+    background-color: rgba(102, 138, 120, 0.36);
+}
+
+[data-theme="dark"] .sync-overlay-sync.is-ready {
+    color: #cfe2d6;
+    border-color: rgba(150, 188, 169, 0.45);
+    background-color: rgba(90, 125, 108, 0.28);
+}
+
+[data-theme="dark"] .sync-overlay-sync.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
 }
 
@@ -4144,6 +4164,18 @@ body.is-work-mode-resizing * {
 .btn.chat-plan-mode-toggle.is-active:hover {
     background-color: var(--accent-dark);
     border-color: var(--accent-dark);
+    color: #fff;
+}
+
+.btn.chat-plan-mode-toggle.is-plan-and-execute {
+    background-color: #1f6f4a;
+    border-color: #175137;
+    color: #fff;
+}
+
+.btn.chat-plan-mode-toggle.is-plan-and-execute:hover {
+    background-color: #175137;
+    border-color: #175137;
     color: #fff;
 }
 

@@ -31,6 +31,7 @@ from ..config import (
     CODEX_STREAM_TERMINATE_GRACE_SECONDS,
     CODEX_STREAM_TTL_SECONDS,
     WORKSPACE_DIR,
+    normalize_codex_model_name,
 )
 from ..utils.time import normalize_timestamp
 
@@ -162,6 +163,11 @@ def _read_codex_config_text():
         return ''
 
 
+def _normalize_model_setting(value):
+    normalized = normalize_codex_model_name(value)
+    return normalized or None
+
+
 def _read_workspace_settings():
     try:
         raw = CODEX_SETTINGS_PATH.read_text(encoding='utf-8')
@@ -175,9 +181,9 @@ def _read_workspace_settings():
         return {}
     if not isinstance(data, dict):
         return {}
-    model = data.get('model')
+    model = _normalize_model_setting(data.get('model'))
     reasoning = data.get('reasoning_effort')
-    plan_mode_model = data.get('plan_mode_model')
+    plan_mode_model = _normalize_model_setting(data.get('plan_mode_model'))
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
     return {
         'model': model or None,
@@ -189,9 +195,9 @@ def _read_workspace_settings():
 
 def _write_workspace_settings(settings):
     payload = {
-        'model': settings.get('model') or None,
+        'model': _normalize_model_setting(settings.get('model')),
         'reasoning_effort': settings.get('reasoning_effort') or None,
-        'plan_mode_model': settings.get('plan_mode_model') or None,
+        'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -530,7 +536,7 @@ def _parse_top_level_config(text):
         elif key == 'model_reasoning_effort':
             reasoning = value
     return {
-        'model': model or None,
+        'model': _normalize_model_setting(model),
         'reasoning_effort': reasoning or None
     }
 
@@ -621,14 +627,12 @@ def update_settings(model=None, reasoning_effort=None, plan_mode_model=None, pla
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
         }
         if model is not None:
-            model = str(model).strip()
-            next_settings['model'] = model or None
+            next_settings['model'] = _normalize_model_setting(model)
         if reasoning_effort is not None:
             reasoning_effort = str(reasoning_effort).strip()
             next_settings['reasoning_effort'] = reasoning_effort or None
         if plan_mode_model is not None:
-            plan_mode_model = str(plan_mode_model).strip()
-            next_settings['plan_mode_model'] = plan_mode_model or None
+            next_settings['plan_mode_model'] = _normalize_model_setting(plan_mode_model)
         if plan_mode_reasoning_effort is not None:
             plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
             next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None

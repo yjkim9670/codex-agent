@@ -142,6 +142,7 @@ const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
+const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
 const GIT_SYNC_TARGET_ORDER = Object.freeze([
     GIT_SYNC_TARGET_WORKSPACE,
     GIT_SYNC_TARGET_CODEX_AGENT
@@ -993,7 +994,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (headerDetailsTrigger) {
         headerDetailsTrigger.addEventListener('click', event => {
             event.preventDefault();
-            showHeaderDetailsToast();
+            void showHeaderDetailsToast();
         });
     }
 
@@ -2288,11 +2289,32 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
     }, visibleMs);
 }
 
-function showHeaderDetailsToast() {
+async function fetchCodexRestartPolicy() {
+    try {
+        const result = await fetchJson('/api/codex/runtime/restart-policy', {
+            cache: 'no-store',
+            timeoutMs: HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS
+        });
+        return result && typeof result === 'object' ? result : {};
+    } catch (error) {
+        return {
+            known: false,
+            use_reloader: null,
+            error: normalizeError(error, 'use_reloader 설정을 확인하지 못했습니다.')
+        };
+    }
+}
+
+async function showHeaderDetailsToast() {
     const descriptionElement = document.getElementById('codex-header-description');
     const storageElement = document.getElementById('codex-session-storage');
     const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Agent sessions.').trim();
     const storageText = String(storageElement?.textContent || '').trim();
+    const restartPolicy = await fetchCodexRestartPolicy();
+    const useReloader = restartPolicy?.use_reloader;
+    const restartText = typeof useReloader === 'boolean'
+        ? `코드 변경 감지 재시작(use_reloader): ${useReloader ? 'true' : 'false'}`
+        : '코드 변경 감지 재시작(use_reloader): 확인 불가';
     const parts = [];
     if (descriptionText) {
         parts.push(descriptionText);
@@ -2300,6 +2322,7 @@ function showHeaderDetailsToast() {
     if (storageText) {
         parts.push(storageText);
     }
+    parts.push(restartText);
     const message = parts.length > 0 ? parts.join(' · ') : '세부 정보가 없습니다.';
     showToast(message, { tone: 'default', durationMs: 4600 });
 }

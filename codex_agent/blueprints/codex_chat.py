@@ -1,6 +1,9 @@
 """Codex chat routes."""
 
+import json
+import re
 import time
+from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -11,6 +14,7 @@ from ..config import (
     CODEX_MAX_TITLE_CHARS,
     CODEX_MODEL_OPTIONS,
     CODEX_REASONING_OPTIONS,
+    REPO_ROOT,
 )
 from ..services.codex_chat import (
     append_message,
@@ -46,6 +50,7 @@ from ..services.git_ops import run_git_action
 bp = Blueprint('codex_chat', __name__)
 
 _PLAN_MODE_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
+_PLAN_MODE_FALSY_VALUES = {'0', 'false', 'no', 'off'}
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
     "- Plan mode is enabled for this turn.\n"
@@ -54,6 +59,13 @@ _PLAN_MODE_PROMPT_SUFFIX = (
     "- Provide analysis and an implementation plan only.\n"
     "- If changes are needed, describe proposed patches without applying them."
 )
+_PROC_MANAGER_JOBS_PATH = Path.home() / 'proc_manager_jobs.json'
+_CODEX_JOB_COMMAND_HINTS = ('run_codex_chat_server.sh', 'run_codex_chat_server.py')
+_CODEX_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
+    r'(?:^|\s)(?:export\s+)?CODEX_CHAT_DEBUG\s*=\s*([^\s;#]+)',
+    re.IGNORECASE,
+)
+_DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
 
 
 def _parse_plan_mode(value):
@@ -71,6 +83,163 @@ def _append_plan_mode_guardrails(prompt_text):
     if not normalized:
         normalized = '(empty)'
     return f'{normalized}\n\n{_PLAN_MODE_PROMPT_SUFFIX}'
+
+
+def _normalize_path_text(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    try:
+        return str(Path(text).expanduser().resolve())
+    except Exception:  # noqa: BLE001
+        return ''
+
+
+def _to_optional_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _PLAN_MODE_TRUTHY_VALUES:
+            return True
+        if lowered in _PLAN_MODE_FALSY_VALUES:
+            return False
+    return None
+
+
+def _extract_job_commands(job_config):
+    if not isinstance(job_config, dict):
+        return []
+    raw_commands = job_config.get('commands')
+    if raw_commands is None and 'cmd' in job_config:
+        raw_commands = job_config.get('cmd')
+
+    if isinstance(raw_commands, str):
+        parts = raw_commands.splitlines()
+    elif isinstance(raw_commands, list):
+        parts = []
+        for entry in raw_commands:
+            if isinstance(entry, str):
+                parts.extend(entry.splitlines())
+    else:
+        parts = []
+
+    commands = []
+    for part in parts:
+        text = str(part).strip()
+        if text:
+            commands.append(text)
+    return commands
+
+
+def _is_codex_chat_job_config(job_config):
+    commands = _extract_job_commands(job_config)
+    if commands:
+        merged = ' '.join(commands).lower()
+        for hint in _CODEX_JOB_COMMAND_HINTS:
+            if hint in merged:
+                return True
+    name = str(job_config.get('name') or '').lower()
+    return 'codex' in name and 'run_codex_chat_server' in name
+
+
+def _resolve_codex_use_reloader(job_config):
+    if not isinstance(job_config, dict):
+        return None
+
+    explicit_use_reloader = _to_optional_bool(job_config.get('use_reloader'))
+    if explicit_use_reloader is not None:
+        return explicit_use_reloader
+
+    env_debug_value = None
+    has_debug_flag = False
+    commands = _extract_job_commands(job_config)
+    has_codex_entrypoint = False
+    for command in commands:
+        command_text = str(command or '')
+        match = _CODEX_CHAT_DEBUG_ASSIGN_PATTERN.search(command_text)
+        if match:
+            parsed_value = _to_optional_bool(match.group(1))
+            env_debug_value = parsed_value if parsed_value is not None else True
+
+        lowered = command_text.lower()
+        if 'run_codex_chat_server' in lowered:
+            has_codex_entrypoint = True
+            if _DEBUG_FLAG_PATTERN.search(command_text):
+                has_debug_flag = True
+
+    if has_debug_flag:
+        return True
+    if env_debug_value is not None:
+        return env_debug_value
+    if has_codex_entrypoint:
+        return False
+    return None
+
+
+def _read_codex_restart_policy():
+    repo_root = str(REPO_ROOT.resolve())
+    result = {
+        'known': False,
+        'restart_on_exit': None,
+        'use_reloader': None,
+        'workdir': repo_root,
+        'job_name': None,
+        'matched_jobs': 0,
+        'source_path': str(_PROC_MANAGER_JOBS_PATH),
+        'source': 'proc_manager_jobs_json',
+    }
+    if not _PROC_MANAGER_JOBS_PATH.is_file():
+        result['error'] = 'jobs_file_not_found'
+        return result
+
+    try:
+        with _PROC_MANAGER_JOBS_PATH.open('r', encoding='utf-8') as fp:
+            payload = json.load(fp)
+    except Exception:  # noqa: BLE001
+        result['error'] = 'jobs_file_unreadable'
+        return result
+
+    if isinstance(payload, dict):
+        raw_jobs = payload.get('jobs', [])
+    elif isinstance(payload, list):
+        raw_jobs = payload
+    else:
+        result['error'] = 'jobs_payload_invalid'
+        return result
+
+    if not isinstance(raw_jobs, list):
+        result['error'] = 'jobs_payload_invalid'
+        return result
+
+    matches = []
+    for raw_job in raw_jobs:
+        if not isinstance(raw_job, dict):
+            continue
+        workdir = _normalize_path_text(raw_job.get('workdir'))
+        if workdir != repo_root:
+            continue
+        if not _is_codex_chat_job_config(raw_job):
+            continue
+        matches.append(raw_job)
+
+    result['matched_jobs'] = len(matches)
+    if not matches:
+        result['error'] = 'job_not_found'
+        return result
+
+    target_job = matches[0]
+    restart_on_exit = _to_optional_bool(target_job.get('restart_on_exit'))
+    use_reloader = _resolve_codex_use_reloader(target_job)
+    result['restart_on_exit'] = restart_on_exit
+    result['use_reloader'] = use_reloader
+    result['known'] = use_reloader is not None
+    result['job_name'] = str(target_job.get('name') or '').strip() or None
+    if not result['known']:
+        result['error'] = 'use_reloader_missing'
+    return result
 
 
 def _resolve_model_override(plan_mode=False):
@@ -111,6 +280,11 @@ def codex_usage():
         'usage': get_usage_summary(),
         'session_storage': get_session_storage_summary(),
     })
+
+
+@bp.route('/api/codex/runtime/restart-policy')
+def codex_runtime_restart_policy():
+    return jsonify(_read_codex_restart_policy())
 
 
 @bp.route('/api/codex/settings', methods=['PATCH'])

@@ -5788,7 +5788,9 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
         elements.subtitle.textContent = normalizedSubtitle || defaultSubtitle;
     }
     if (elements.content) {
-        elements.content.innerHTML = renderMarkdown(normalizedText);
+        elements.content.innerHTML = renderMarkdown(normalizedText, {
+            showCodeLineNumbers: true
+        });
         hydrateRenderedMarkdown(elements.content);
         elements.content.scrollTop = 0;
     }
@@ -10411,7 +10413,9 @@ function getStreamDuration(stream) {
 
 function renderMessageContent(content) {
     const text = String(content || '');
-    return renderMarkdown(text);
+    return renderMarkdown(text, {
+        showCodeLineNumbers: true
+    });
 }
 
 function shouldCollapseMessage(text) {
@@ -10435,9 +10439,16 @@ function buildMessagePreview(text) {
     return text;
 }
 
-function renderMarkdown(text) {
+function normalizeMarkdownRenderOptions(options = {}) {
+    const source = options && typeof options === 'object' ? options : {};
+    return {
+        showCodeLineNumbers: Boolean(source.showCodeLineNumbers)
+    };
+}
+
+function renderMarkdown(text, options = {}) {
     const normalized = String(text || '').replace(/\r\n/g, '\n');
-    return renderInlineMarkdown(normalized);
+    return renderInlineMarkdown(normalized, options);
 }
 
 function encodeMermaidDiagramSource(value) {
@@ -10881,10 +10892,20 @@ function parseMarkdownFenceStart(line) {
     };
 }
 
-function parseMarkdownFencedCodeBlock(lines, startIndex) {
+function parseMarkdownCodeBlockLineNumbers(lineCount) {
+    const normalizedCount = Math.max(1, Number.isFinite(lineCount) ? Math.round(lineCount) : 1);
+    const numbers = [];
+    for (let index = 1; index <= normalizedCount; index += 1) {
+        numbers.push(String(index));
+    }
+    return numbers.join('\n');
+}
+
+function parseMarkdownFencedCodeBlock(lines, startIndex, options = {}) {
     if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
     const opener = parseMarkdownFenceStart(lines[startIndex]);
     if (!opener) return null;
+    const renderOptions = normalizeMarkdownRenderOptions(options);
 
     let index = startIndex + 1;
     const codeLines = [];
@@ -10922,6 +10943,20 @@ function parseMarkdownFencedCodeBlock(lines, startIndex) {
         ? highlightScriptContent(codeText, opener.language)
         : escapeHtml(codeText);
     const languageClass = opener.language ? ` class="language-${escapeHtml(opener.language)}"` : '';
+    if (renderOptions.showCodeLineNumbers) {
+        const lineCount = Math.max(1, codeLines.length);
+        const digitWidth = Math.max(2, String(lineCount).length);
+        const gutterText = parseMarkdownCodeBlockLineNumbers(lineCount);
+        return {
+            html: [
+                `<pre class="markdown-code-block" style="--markdown-code-line-digit-width:${digitWidth}">`,
+                `<span class="markdown-code-gutter" aria-hidden="true">${gutterText}</span>`,
+                `<code${languageClass}>${codeHtml}</code>`,
+                '</pre>'
+            ].join(''),
+            nextIndex: index
+        };
+    }
     return {
         html: `<pre><code${languageClass}>${codeHtml}</code></pre>`,
         nextIndex: index
@@ -11005,7 +11040,7 @@ function parseMarkdownList(lines, startIndex) {
     };
 }
 
-function parseMarkdownBlockquote(lines, startIndex) {
+function parseMarkdownBlockquote(lines, startIndex, options = {}) {
     if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
     const quoteLines = [];
     let index = startIndex;
@@ -11025,7 +11060,7 @@ function parseMarkdownBlockquote(lines, startIndex) {
         index += 1;
     }
     if (!matched) return null;
-    const innerHtml = renderInlineMarkdown(quoteLines.join('\n'));
+    const innerHtml = renderInlineMarkdown(quoteLines.join('\n'), options);
     return {
         html: `<blockquote>${innerHtml}</blockquote>`,
         nextIndex: index
@@ -11122,7 +11157,8 @@ function isMarkdownBlockBoundary(lines, index) {
     return false;
 }
 
-function renderInlineMarkdown(text) {
+function renderInlineMarkdown(text, options = {}) {
+    const renderOptions = normalizeMarkdownRenderOptions(options);
     const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
     const parts = [];
     let lineIndex = 0;
@@ -11132,7 +11168,7 @@ function renderInlineMarkdown(text) {
         }
         if (lineIndex >= lines.length) break;
 
-        const fenced = parseMarkdownFencedCodeBlock(lines, lineIndex);
+        const fenced = parseMarkdownFencedCodeBlock(lines, lineIndex, renderOptions);
         if (fenced) {
             parts.push(fenced.html);
             lineIndex = fenced.nextIndex;
@@ -11159,7 +11195,7 @@ function renderInlineMarkdown(text) {
             continue;
         }
 
-        const blockquote = parseMarkdownBlockquote(lines, lineIndex);
+        const blockquote = parseMarkdownBlockquote(lines, lineIndex, renderOptions);
         if (blockquote) {
             parts.push(blockquote.html);
             lineIndex = blockquote.nextIndex;

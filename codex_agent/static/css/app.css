@@ -1599,6 +1599,38 @@ body {
     background: transparent;
 }
 
+.message-log-overlay-content pre.markdown-code-block {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.message-log-overlay-content .markdown-code-gutter {
+    display: block;
+    min-width: calc(var(--markdown-code-line-digit-width, 2) * 1ch + 18px);
+    padding: 10px 10px 10px 12px;
+    border-right: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-tertiary);
+    text-align: right;
+    white-space: pre;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.message-log-overlay-content pre.markdown-code-block > code {
+    display: block;
+    min-width: 0;
+    padding: 10px 12px;
+    background: transparent;
+    white-space: pre;
+}
+
 .message-log-overlay-content table {
     width: 100%;
     border-collapse: collapse;
@@ -4104,6 +4136,44 @@ body.is-work-mode-resizing * {
 .message.user .message-bubble pre {
     background: rgba(255, 255, 255, 0.2);
     border-color: rgba(255, 255, 255, 0.2);
+}
+
+.message-bubble pre.markdown-code-block {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.message-bubble .markdown-code-gutter {
+    display: block;
+    min-width: calc(var(--markdown-code-line-digit-width, 2) * 1ch + 18px);
+    padding: 10px 10px 10px 12px;
+    border-right: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-tertiary);
+    text-align: right;
+    white-space: pre;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.message-bubble pre.markdown-code-block > code {
+    display: block;
+    min-width: 0;
+    padding: 10px 12px;
+    background: transparent;
+    white-space: pre;
+}
+
+.message.user .message-bubble pre.markdown-code-block .markdown-code-gutter {
+    border-right-color: rgba(255, 255, 255, 0.24);
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.82);
 }
 
 .btn {

@@ -111,6 +111,8 @@ const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
+const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
+const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
@@ -223,6 +225,7 @@ let workModeFileColumnWidths = {
 };
 let workModeFileStatePersistTimer = null;
 let pendingWorkModeFileScrollRestore = null;
+let pendingWorkModeFileViewerScrollRestore = null;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -1026,6 +1029,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
     const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
     const workModeFileHScroll = document.getElementById('codex-work-mode-file-hscroll');
+    const workModeFileViewerContent = document.getElementById('codex-work-mode-file-viewer-content');
     const workModeFileColumnResizers = Array.from(
         document.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]')
     );
@@ -1171,6 +1175,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileRefreshBtn) {
         workModeFileRefreshBtn.addEventListener('click', async () => {
             const scrollSnapshot = captureWorkModeFileScrollSnapshot();
+            const viewerScrollSnapshot = captureWorkModeFileViewerScrollSnapshot();
             const listed = await refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: workModeFilePath,
@@ -1178,7 +1183,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 restoreScrollSnapshot: scrollSnapshot
             });
             if (!listed) return;
-            await refreshWorkModeFilePreviewSelection();
+            await refreshWorkModeFilePreviewSelection({
+                restoreViewerScrollSnapshot: viewerScrollSnapshot
+            });
         });
     }
     if (workModeFileUpBtn) {
@@ -1232,6 +1239,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileGridScroll && workModeFileHScroll) {
         workModeFileGridScroll.addEventListener('scroll', handleWorkModeFileGridScroll, { passive: true });
         workModeFileHScroll.addEventListener('scroll', handleWorkModeFileHScroll, { passive: true });
+    }
+    if (workModeFileViewerContent) {
+        workModeFileViewerContent.addEventListener('scroll', handleWorkModeFileViewerScroll, { passive: true });
     }
     workModeFileColumnResizers.forEach(resizer => {
         resizer.addEventListener('pointerdown', event => {
@@ -2829,19 +2839,198 @@ function applyWorkModeFileScrollSnapshot(snapshot) {
     return true;
 }
 
+function normalizeWorkModeFileViewerScrollSnapshot(value, { includeContext = false } = {}) {
+    if (!value || typeof value !== 'object') return null;
+    const rawTop = Number(value.top);
+    const rawLeft = Number(value.left);
+    const rawIframeTop = Number(value.iframeTop);
+    const rawIframeLeft = Number(value.iframeLeft);
+    const normalized = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+    };
+    if (Number.isFinite(rawIframeTop) || Number.isFinite(rawIframeLeft)) {
+        normalized.iframeTop = Number.isFinite(rawIframeTop) ? Math.max(0, Math.round(rawIframeTop)) : 0;
+        normalized.iframeLeft = Number.isFinite(rawIframeLeft) ? Math.max(0, Math.round(rawIframeLeft)) : 0;
+    }
+    if (!includeContext) {
+        return normalized;
+    }
+    return {
+        ...normalized,
+        root: normalizeFileBrowserRoot(value.root),
+        path: normalizeFileBrowserRelativePath(value.path),
+        selectedPath: normalizeFileBrowserRelativePath(value.selectedPath)
+    };
+}
+
+function readFileBrowserIframeScrollSnapshot(iframe) {
+    if (!(iframe instanceof HTMLIFrameElement)) return null;
+    try {
+        const frameWindow = iframe.contentWindow;
+        const frameDocument = iframe.contentDocument;
+        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
+            return null;
+        }
+        const scrollingElement = frameDocument.scrollingElement
+            || frameDocument.documentElement
+            || frameDocument.body;
+        const windowTop = Number(frameWindow.scrollY);
+        const windowLeft = Number(frameWindow.scrollX);
+        const pageTop = Number(frameWindow.pageYOffset);
+        const pageLeft = Number(frameWindow.pageXOffset);
+        const elementTop = Number(scrollingElement?.scrollTop);
+        const elementLeft = Number(scrollingElement?.scrollLeft);
+        const rawTop = Number.isFinite(windowTop)
+            ? windowTop
+            : (Number.isFinite(pageTop) ? pageTop : elementTop);
+        const rawLeft = Number.isFinite(windowLeft)
+            ? windowLeft
+            : (Number.isFinite(pageLeft) ? pageLeft : elementLeft);
+        return {
+            top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+            left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeFileBrowserIframeScrollSnapshot(iframe, top, left) {
+    if (!(iframe instanceof HTMLIFrameElement)) return false;
+    try {
+        const frameWindow = iframe.contentWindow;
+        const frameDocument = iframe.contentDocument;
+        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
+            return false;
+        }
+        const nextTop = Number.isFinite(Number(top)) ? Math.max(0, Math.round(Number(top))) : 0;
+        const nextLeft = Number.isFinite(Number(left)) ? Math.max(0, Math.round(Number(left))) : 0;
+        const scrollingElement = frameDocument.scrollingElement
+            || frameDocument.documentElement
+            || frameDocument.body;
+        if (scrollingElement) {
+            if (Math.round(scrollingElement.scrollTop || 0) !== nextTop) {
+                scrollingElement.scrollTop = nextTop;
+            }
+            if (Math.round(scrollingElement.scrollLeft || 0) !== nextLeft) {
+                scrollingElement.scrollLeft = nextLeft;
+            }
+        }
+        if (typeof frameWindow.scrollTo === 'function') {
+            frameWindow.scrollTo(nextLeft, nextTop);
+        }
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function captureFileBrowserViewerScrollSnapshot(container) {
+    if (!(container instanceof HTMLElement)) return null;
+    const snapshot = {
+        top: Math.max(0, Math.round(Number(container.scrollTop || 0))),
+        left: Math.max(0, Math.round(Number(container.scrollLeft || 0)))
+    };
+    const iframe = container.querySelector('.file-browser-html-preview');
+    const iframeSnapshot = readFileBrowserIframeScrollSnapshot(iframe);
+    if (iframeSnapshot) {
+        snapshot.iframeTop = iframeSnapshot.top;
+        snapshot.iframeLeft = iframeSnapshot.left;
+    }
+    return snapshot;
+}
+
+function applyFileBrowserViewerScrollSnapshot(container, snapshot, { renderToken = '' } = {}) {
+    if (!(container instanceof HTMLElement)) return false;
+    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const expectedRenderToken = String(renderToken || container.dataset?.renderToken || '');
+    const matchesRenderToken = () => !expectedRenderToken || container.dataset?.renderToken === expectedRenderToken;
+
+    if (!matchesRenderToken()) return false;
+    if (Math.round(container.scrollTop || 0) !== normalized.top) {
+        container.scrollTop = normalized.top;
+    }
+    if (Math.round(container.scrollLeft || 0) !== normalized.left) {
+        container.scrollLeft = normalized.left;
+    }
+
+    const hasIframeSnapshot = Object.prototype.hasOwnProperty.call(normalized, 'iframeTop')
+        || Object.prototype.hasOwnProperty.call(normalized, 'iframeLeft');
+    if (!hasIframeSnapshot) {
+        return true;
+    }
+
+    const applyIframeSnapshot = () => {
+        if (!matchesRenderToken()) return true;
+        const iframe = container.querySelector('.file-browser-html-preview');
+        if (!(iframe instanceof HTMLIFrameElement)) return false;
+        return writeFileBrowserIframeScrollSnapshot(iframe, normalized.iframeTop, normalized.iframeLeft);
+    };
+
+    if (applyIframeSnapshot()) {
+        return true;
+    }
+
+    let retries = 0;
+    const scheduleRetry = () => {
+        if (!matchesRenderToken()) return;
+        if (applyIframeSnapshot()) return;
+        retries += 1;
+        if (retries >= FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES) {
+            return;
+        }
+        window.setTimeout(scheduleRetry, FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS);
+    };
+
+    const iframe = container.querySelector('.file-browser-html-preview');
+    if (iframe instanceof HTMLIFrameElement) {
+        iframe.addEventListener('load', () => {
+            window.setTimeout(scheduleRetry, 0);
+        }, { once: true });
+    }
+    window.setTimeout(scheduleRetry, 0);
+    return true;
+}
+
+function captureWorkModeFileViewerScrollSnapshot({ includeContext = false } = {}) {
+    const elements = getWorkModeFileElements();
+    const snapshot = captureFileBrowserViewerScrollSnapshot(elements?.viewerContent);
+    if (!snapshot) return null;
+    if (!includeContext) {
+        return snapshot;
+    }
+    return {
+        ...snapshot,
+        root: normalizeFileBrowserRoot(workModeFileRoot),
+        path: normalizeFileBrowserRelativePath(workModeFilePath),
+        selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath)
+    };
+}
+
+function applyWorkModeFileViewerScrollSnapshot(snapshot, { renderToken = '' } = {}) {
+    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const elements = getWorkModeFileElements();
+    return applyFileBrowserViewerScrollSnapshot(elements?.viewerContent, normalized, { renderToken });
+}
+
 function readWorkModeFileViewState() {
     try {
         const raw = window.sessionStorage?.getItem(WORK_MODE_FILE_VIEW_STATE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         const scroll = normalizeWorkModeFileScrollSnapshot(parsed?.scroll, { includeContext: true });
+        const viewerScroll = normalizeWorkModeFileViewerScrollSnapshot(parsed?.viewerScroll, { includeContext: true });
         return {
             root: normalizeFileBrowserRoot(parsed?.root),
             path: normalizeFileBrowserRelativePath(parsed?.path),
             selectedPath: normalizeFileBrowserRelativePath(parsed?.selectedPath),
             mobileView: normalizeWorkModeMobileView(parsed?.mobileView),
             viewerFullscreen: Boolean(parsed?.viewerFullscreen),
-            scroll
+            scroll,
+            viewerScroll
         };
     } catch (error) {
         return null;
@@ -2857,6 +3046,7 @@ function persistWorkModeFileViewState() {
             mobileView: normalizeWorkModeMobileView(workModeMobileView),
             viewerFullscreen: Boolean(workModeFileViewerFullscreen),
             scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
+            viewerScroll: captureWorkModeFileViewerScrollSnapshot({ includeContext: true }),
             savedAt: Date.now()
         };
         window.sessionStorage?.setItem(WORK_MODE_FILE_VIEW_STATE_KEY, JSON.stringify(payload));
@@ -2897,6 +3087,10 @@ function initializeWorkModeFileViewState(isMobile = false) {
         : normalizeWorkModeMobileView(saved.mobileView);
     workModeFileViewerFullscreen = Boolean(saved.viewerFullscreen);
     pendingWorkModeFileScrollRestore = normalizeWorkModeFileScrollSnapshot(saved.scroll, { includeContext: true });
+    pendingWorkModeFileViewerScrollRestore = normalizeWorkModeFileViewerScrollSnapshot(
+        saved.viewerScroll,
+        { includeContext: true }
+    );
 }
 
 function consumePendingWorkModeFileScrollRestore(root = workModeFileRoot, path = workModeFilePath) {
@@ -2910,6 +3104,31 @@ function consumePendingWorkModeFileScrollRestore(root = workModeFileRoot, path =
     }
     pendingWorkModeFileScrollRestore = null;
     return normalizeWorkModeFileScrollSnapshot(pending);
+}
+
+function consumePendingWorkModeFileViewerScrollRestore(
+    root = workModeFileRoot,
+    path = workModeFilePath,
+    selectedPath = workModeFileSelectedPath
+) {
+    const pending = normalizeWorkModeFileViewerScrollSnapshot(
+        pendingWorkModeFileViewerScrollRestore,
+        { includeContext: true }
+    );
+    if (!pending) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const normalizedSelectedPath = normalizeFileBrowserRelativePath(selectedPath);
+    if (
+        pending.root !== normalizedRoot
+        || pending.path !== normalizedPath
+        || pending.selectedPath !== normalizedSelectedPath
+    ) {
+        pendingWorkModeFileViewerScrollRestore = null;
+        return null;
+    }
+    pendingWorkModeFileViewerScrollRestore = null;
+    return normalizeWorkModeFileViewerScrollSnapshot(pending);
 }
 
 function normalizeWorkModeMobileView(value) {
@@ -3122,6 +3341,10 @@ function handleWorkModeFileHScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
+    schedulePersistWorkModeFileViewState();
+}
+
+function handleWorkModeFileViewerScroll() {
     schedulePersistWorkModeFileViewState();
 }
 
@@ -6459,7 +6682,8 @@ async function openFileInWorkModePanel(
         fallbackToDirectory = false,
         showViewerOnSuccess = true,
         line = null,
-        column = null
+        column = null,
+        restoreViewerScrollSnapshot = null
     } = {}
 ) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
@@ -6485,11 +6709,27 @@ async function openFileInWorkModePanel(
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        const viewerScrollSnapshot = !requestedLine
+            ? (
+                normalizeWorkModeFileViewerScrollSnapshot(restoreViewerScrollSnapshot)
+                || consumePendingWorkModeFileViewerScrollRestore(
+                    workModeFileRoot,
+                    workModeFilePath,
+                    workModeFileSelectedPath
+                )
+            )
+            : null;
         await renderFileBrowserViewerIntoElements(elements, result, {
             root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
         });
+        if (viewerScrollSnapshot && elements.viewerContent) {
+            const viewerRenderToken = String(elements.viewerContent.dataset?.renderToken || '');
+            applyWorkModeFileViewerScrollSnapshot(viewerScrollSnapshot, {
+                renderToken: viewerRenderToken
+            });
+        }
         applyWorkModeFileSelectionState();
         if (showViewerOnSuccess && isMobileLayout()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
@@ -6605,13 +6845,14 @@ async function ensureWorkModeFilePanelContent() {
     }
 }
 
-async function refreshWorkModeFilePreviewSelection() {
+async function refreshWorkModeFilePreviewSelection({ restoreViewerScrollSnapshot = null } = {}) {
     const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
     if (!selectedPath) return null;
     return openFileInWorkModePanel(selectedPath, {
         root: workModeFileRoot,
         fallbackToDirectory: true,
-        showViewerOnSuccess: false
+        showViewerOnSuccess: false,
+        restoreViewerScrollSnapshot
     });
 }
 

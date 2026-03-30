@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/.venv"
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
+VENV_DIR="${PARENT_DIR}/.venv"
 
 resolve_host_python() {
     if command -v python3 >/dev/null 2>&1; then
@@ -25,7 +26,7 @@ ensure_venv_python() {
     }
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >echo "[INFO] Venv python missing at /bin/python. Recreating..." >&22
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >&2
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi
@@ -58,7 +59,6 @@ ensure_requirements() {
 PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
 ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
 
-PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${PARENT_DIR}"
 
 original_args=("$@")

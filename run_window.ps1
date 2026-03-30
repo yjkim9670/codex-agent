@@ -6,7 +6,8 @@ Param(
 $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location (Split-Path -Parent $ScriptDir)
+$ParentDir = Split-Path -Parent $ScriptDir
+Set-Location $ParentDir
 
 # Windows route must use cloud DTGPT endpoint only.
 $env:MODEL_DTGPT_API_BASE_URL = "http://cloud.dtgpt.samsungds.net/llm/v1"
@@ -23,7 +24,7 @@ if ($env:TG_PYTHON) {
         throw "Python executable not found: $pythonBin"
     }
 } else {
-    $venvPython = Join-Path $ScriptDir ".venv\\Scripts\\python.exe"
+    $venvPython = Join-Path $ParentDir ".venv\\Scripts\\python.exe"
     if (Test-Path $venvPython) {
         $pythonBin = $venvPython
     } else {
@@ -31,7 +32,7 @@ if ($env:TG_PYTHON) {
         if ($pythonCmd) {
             $pythonBin = $pythonCmd.Source
         } else {
-            throw "Python not found. Configure TG_PYTHON or create .venv."
+            throw "Python not found. Configure TG_PYTHON or create ../.venv."
         }
     }
 }

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 PYTHON_BIN=""
 
 # Linux route must use direct DTGPT endpoint only.
@@ -29,7 +30,7 @@ ensure_venv_python() {
     }
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >echo "[INFO] Venv python missing at /bin/python. Recreating..." >&22
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >&2
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi
@@ -66,12 +67,11 @@ if [[ -n "${TG_PYTHON:-}" ]]; then
         exit 1
     fi
 else
-    VENV_DIR="${SCRIPT_DIR}/.venv"
+    VENV_DIR="${PARENT_DIR}/.venv"
     PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
     ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
 fi
 
-PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${PARENT_DIR}"
 
 original_args=("$@")

@@ -9,8 +9,10 @@ Codex chat server that powers the Configuration > Codex 채팅 UI.
 
 ## Setup
 ```bash
-pip install -r requirements.txt
+source ./activate_venv.sh
 ```
+
+`activate_venv.sh` creates or reuses the shared virtual environment at `../.venv` and installs `requirements.txt`.
 
 ## Run
 ```bash
@@ -28,6 +30,8 @@ Or with the helper script:
 ```bash
 ./run_codex_chat_server.sh --port 3100
 ```
+
+The helper launcher also uses `../.venv`.
 
 ## Run Model Agent
 ```bash
@@ -60,6 +64,8 @@ Run on Windows (PowerShell):
 ```powershell
 ./run_window.ps1
 ```
+
+These launchers use the shared virtual environment at `../.venv` unless `TG_PYTHON` is set.
 
 The launcher defaults to quiet mode (`MODEL_CHAT_QUIET=1`) to suppress verbose Python/werkzeug info logs.
 To keep logs visible, set:

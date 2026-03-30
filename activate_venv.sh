@@ -8,7 +8,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/.venv"
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
+VENV_DIR="${PARENT_DIR}/.venv"
 VENV_PYTHON=""
 
 resolve_host_python() {
@@ -32,13 +33,13 @@ ensure_venv_python() {
     }
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "Venv python missing at ${venv_dir}/bin/python. Recreating..." >echo "Venv python missing at /bin/python. Recreating..." >&22
+        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >&2
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "Failed to create a usable venv at ${venv_dir}" >echo "Failed to create a usable venv at " >&22
+        echo "Failed to create a usable venv at ${venv_dir}" >&2
         return 1
     fi
 

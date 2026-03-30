@@ -47,6 +47,8 @@ const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
 const WORK_MODE_MIN_PREVIEW_WIDTH_PX = 320;
 const WORK_MODE_FILE_SPLIT_KEY = 'codexWorkModeFileSplit';
 const WORK_MODE_FILE_COLUMNS_KEY = 'codexWorkModeFileColumns';
+const WORK_MODE_FILE_VIEW_STATE_KEY = 'codexWorkModeFileViewState';
+const WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS = 140;
 const FILE_BROWSER_SPLIT_KEY = 'codexFileBrowserSplit';
 const FILE_BROWSER_COLUMNS_KEY = 'codexFileBrowserColumns';
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
@@ -219,6 +221,8 @@ let workModeFileColumnWidths = {
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
     modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
 };
+let workModeFileStatePersistTimer = null;
+let pendingWorkModeFileScrollRestore = null;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -1166,10 +1170,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileRefreshBtn) {
         workModeFileRefreshBtn.addEventListener('click', async () => {
+            const scrollSnapshot = captureWorkModeFileScrollSnapshot();
             const listed = await refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: workModeFilePath,
-                force: true
+                force: true,
+                restoreScrollSnapshot: scrollSnapshot
             });
             if (!listed) return;
             await refreshWorkModeFilePreviewSelection();
@@ -1606,6 +1612,8 @@ document.addEventListener('DOMContentLoaded', () => {
         syncWorkModeFileHorizontalScrollMetrics();
     });
     window.addEventListener('resize', handleWindowLayoutResize);
+    window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
+    window.addEventListener('beforeunload', flushPersistWorkModeFileViewState);
 
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(
@@ -2754,6 +2762,156 @@ function getWorkModeFileElements() {
     };
 }
 
+function normalizeWorkModeFileScrollSnapshot(value, { includeContext = false } = {}) {
+    if (!value || typeof value !== 'object') return null;
+    const rawTop = Number(value.top);
+    const rawLeft = Number(value.left);
+    const normalized = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+    };
+    if (!includeContext) {
+        return normalized;
+    }
+    return {
+        ...normalized,
+        root: normalizeFileBrowserRoot(value.root),
+        path: normalizeFileBrowserRelativePath(value.path)
+    };
+}
+
+function captureWorkModeFileScrollSnapshot({ includeContext = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll) return null;
+    const rawTop = Number(elements.gridScroll.scrollTop || 0);
+    const rawGridLeft = Number(elements.gridScroll.scrollLeft || 0);
+    const rawRailLeft = Number(elements.hScroll?.scrollLeft || 0);
+    const snapshot = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawGridLeft) || Number.isFinite(rawRailLeft)
+            ? Math.max(0, Math.round(Math.max(rawGridLeft, rawRailLeft)))
+            : 0
+    };
+    if (!includeContext) {
+        return snapshot;
+    }
+    return {
+        ...snapshot,
+        root: normalizeFileBrowserRoot(workModeFileRoot),
+        path: normalizeFileBrowserRelativePath(workModeFilePath)
+    };
+}
+
+function applyWorkModeFileScrollSnapshot(snapshot) {
+    const normalized = normalizeWorkModeFileScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll) return false;
+    const nextTop = normalized.top;
+    const nextLeft = normalized.left;
+    if (Math.round(elements.gridScroll.scrollTop || 0) !== nextTop) {
+        elements.gridScroll.scrollTop = nextTop;
+    }
+    if (workModeFileHorizontalSyncLock) {
+        return true;
+    }
+    workModeFileHorizontalSyncLock = true;
+    try {
+        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextLeft) {
+            elements.gridScroll.scrollLeft = nextLeft;
+        }
+        if (elements.hScroll && Math.round(elements.hScroll.scrollLeft || 0) !== nextLeft) {
+            elements.hScroll.scrollLeft = nextLeft;
+        }
+    } finally {
+        workModeFileHorizontalSyncLock = false;
+    }
+    return true;
+}
+
+function readWorkModeFileViewState() {
+    try {
+        const raw = window.sessionStorage?.getItem(WORK_MODE_FILE_VIEW_STATE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const scroll = normalizeWorkModeFileScrollSnapshot(parsed?.scroll, { includeContext: true });
+        return {
+            root: normalizeFileBrowserRoot(parsed?.root),
+            path: normalizeFileBrowserRelativePath(parsed?.path),
+            selectedPath: normalizeFileBrowserRelativePath(parsed?.selectedPath),
+            mobileView: normalizeWorkModeMobileView(parsed?.mobileView),
+            viewerFullscreen: Boolean(parsed?.viewerFullscreen),
+            scroll
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function persistWorkModeFileViewState() {
+    try {
+        const payload = {
+            root: normalizeFileBrowserRoot(workModeFileRoot),
+            path: normalizeFileBrowserRelativePath(workModeFilePath),
+            selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath),
+            mobileView: normalizeWorkModeMobileView(workModeMobileView),
+            viewerFullscreen: Boolean(workModeFileViewerFullscreen),
+            scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
+            savedAt: Date.now()
+        };
+        window.sessionStorage?.setItem(WORK_MODE_FILE_VIEW_STATE_KEY, JSON.stringify(payload));
+    } catch (error) {
+        void error;
+    }
+}
+
+function schedulePersistWorkModeFileViewState(delayMs = WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS) {
+    const numericDelay = Number(delayMs);
+    const waitMs = Number.isFinite(numericDelay) ? Math.max(0, Math.round(numericDelay)) : 0;
+    if (workModeFileStatePersistTimer !== null) {
+        window.clearTimeout(workModeFileStatePersistTimer);
+        workModeFileStatePersistTimer = null;
+    }
+    workModeFileStatePersistTimer = window.setTimeout(() => {
+        workModeFileStatePersistTimer = null;
+        persistWorkModeFileViewState();
+    }, waitMs);
+}
+
+function flushPersistWorkModeFileViewState() {
+    if (workModeFileStatePersistTimer !== null) {
+        window.clearTimeout(workModeFileStatePersistTimer);
+        workModeFileStatePersistTimer = null;
+    }
+    persistWorkModeFileViewState();
+}
+
+function initializeWorkModeFileViewState(isMobile = false) {
+    const saved = readWorkModeFileViewState();
+    if (!saved) return;
+    workModeFileRoot = normalizeFileBrowserRoot(saved.root || workModeFileRoot);
+    workModeFilePath = normalizeFileBrowserRelativePath(saved.path || '');
+    workModeFileSelectedPath = normalizeFileBrowserRelativePath(saved.selectedPath || '');
+    workModeMobileView = isMobile
+        ? WORK_MODE_MOBILE_VIEW_CHAT
+        : normalizeWorkModeMobileView(saved.mobileView);
+    workModeFileViewerFullscreen = Boolean(saved.viewerFullscreen);
+    pendingWorkModeFileScrollRestore = normalizeWorkModeFileScrollSnapshot(saved.scroll, { includeContext: true });
+}
+
+function consumePendingWorkModeFileScrollRestore(root = workModeFileRoot, path = workModeFilePath) {
+    const pending = normalizeWorkModeFileScrollSnapshot(pendingWorkModeFileScrollRestore, { includeContext: true });
+    if (!pending) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    if (pending.root !== normalizedRoot || pending.path !== normalizedPath) {
+        pendingWorkModeFileScrollRestore = null;
+        return null;
+    }
+    pendingWorkModeFileScrollRestore = null;
+    return normalizeWorkModeFileScrollSnapshot(pending);
+}
+
 function normalizeWorkModeMobileView(value) {
     if (value === WORK_MODE_MOBILE_VIEW_LIST || value === WORK_MODE_MOBILE_VIEW_VIEWER) {
         return value;
@@ -2805,6 +2963,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         fileElements.fullscreenBtn.classList.toggle('is-hidden', mobile);
     }
     syncWorkModeFileHorizontalScrollMetrics();
+    schedulePersistWorkModeFileViewState();
 }
 
 function setWorkModeFileViewerFullscreen(isFullscreen) {
@@ -2840,6 +2999,7 @@ function setWorkModeFileViewerFullscreen(isFullscreen) {
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     }
     syncWorkModeFileHorizontalScrollMetrics();
+    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileSplitRatio(value) {
@@ -2949,6 +3109,7 @@ function handleWorkModeFileGridScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
+    schedulePersistWorkModeFileViewState();
 }
 
 function handleWorkModeFileHScroll() {
@@ -2961,6 +3122,7 @@ function handleWorkModeFileHScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
+    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileColumnName(column) {
@@ -3169,9 +3331,16 @@ function initializeWorkMode(isMobile) {
     workModeSplitRatio = readWorkModeSplitPreference();
     workModeFileSplitRatio = readWorkModeFileSplitPreference();
     workModeFileColumnWidths = readWorkModeFileColumnsPreference();
+    initializeWorkModeFileViewState(isMobile);
+    setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
     const preferred = readWorkModePreference();
     setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
-    setWorkModeMobileView(isMobile ? WORK_MODE_MOBILE_VIEW_CHAT : WORK_MODE_MOBILE_VIEW_LIST);
+    const initialMobileView = isMobile
+        ? WORK_MODE_MOBILE_VIEW_CHAT
+        : normalizeWorkModeMobileView(workModeMobileView) === WORK_MODE_MOBILE_VIEW_CHAT
+            ? WORK_MODE_MOBILE_VIEW_LIST
+            : normalizeWorkModeMobileView(workModeMobileView);
+    setWorkModeMobileView(initialMobileView);
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
@@ -6144,6 +6313,7 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
         parentEntryPath,
         onOpenDirectory: entryPath => {
             workModeFileSelectedPath = '';
+            schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
             }
@@ -6208,12 +6378,20 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
     }
 }
 
-async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = workModeFilePath, force = false } = {}) {
+async function refreshWorkModeFileDirectory(
+    {
+        root = workModeFileRoot,
+        path = workModeFilePath,
+        force = false,
+        restoreScrollSnapshot = null
+    } = {}
+) {
     void force;
     const elements = getWorkModeFileElements();
     if (!elements) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const requestedScrollRestore = normalizeWorkModeFileScrollSnapshot(restoreScrollSnapshot);
 
     setWorkModeFileDirectoryLoading(true);
     if (elements.meta) {
@@ -6239,6 +6417,16 @@ async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = wo
         if (elements.loading) {
             elements.loading.classList.add('is-hidden');
         }
+        const pendingRestore = requestedScrollRestore
+            || consumePendingWorkModeFileScrollRestore(workModeFileRoot, workModeFilePath);
+        if (pendingRestore) {
+            requestAnimationFrame(() => {
+                syncWorkModeFileHorizontalScrollMetrics();
+                applyWorkModeFileScrollSnapshot(pendingRestore);
+                syncWorkModeFileHorizontalScrollMetrics();
+            });
+        }
+        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         workModeFileCachedEntries = [];
@@ -6306,11 +6494,13 @@ async function openFileInWorkModePanel(
         if (showViewerOnSuccess && isMobileLayout()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
         }
+        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         const payload = getGitErrorPayload(error);
         if (fallbackToDirectory && payload?.error_code === 'not_file') {
             workModeFileSelectedPath = '';
+            schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
             }
@@ -6356,6 +6546,7 @@ function openWorkModeFileTarget(target, options = {}) {
     workModeFileRoot = requestedRoot;
     workModeFilePath = requestedPath;
     workModeFileSelectedPath = requestedFilePath;
+    schedulePersistWorkModeFileViewState();
     if (isMobileLayout()) {
         setWorkModeMobileView(
             requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST

@@ -77,6 +77,7 @@
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
+    --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --font-session-title: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
     --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
         BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
@@ -141,6 +142,7 @@
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
+    --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
 }
 
 * {
@@ -1840,6 +1842,188 @@ body {
     justify-content: flex-end;
     gap: 8px;
     padding: 8px 12px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.usage-history-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    z-index: 2375;
+}
+
+.usage-history-overlay.is-visible {
+    display: flex;
+}
+
+.usage-history-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+}
+
+.usage-history-overlay-card {
+    position: relative;
+    width: min(980px, calc(100vw - 16px));
+    max-width: min(980px, calc(100vw - 16px));
+    height: min(760px, calc(100dvh - 16px));
+    max-height: calc(100dvh - 16px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.usage-history-overlay-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.usage-history-overlay-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.usage-history-overlay-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.usage-history-overlay-subtitle {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.usage-history-overlay-close {
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.usage-history-overlay-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 18px 12px;
+}
+
+.usage-history-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.usage-history-chart-wrap {
+    flex: 1;
+    min-height: 220px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    padding: 8px;
+    overflow: hidden;
+}
+
+.usage-history-chart {
+    width: 100%;
+    height: 100%;
+    min-height: 220px;
+    display: block;
+}
+
+.usage-history-chart .grid-line {
+    stroke: var(--border);
+    stroke-width: 1;
+    opacity: 0.82;
+}
+
+.usage-history-chart .axis-label {
+    fill: var(--text-tertiary);
+    font-size: 11px;
+}
+
+.usage-history-chart .token-bar {
+    fill: rgba(15, 76, 129, 0.24);
+}
+
+.usage-history-chart .five-hour-line {
+    fill: none;
+    stroke: rgba(220, 90, 52, 0.95);
+    stroke-width: 2;
+}
+
+.usage-history-chart .weekly-line {
+    fill: none;
+    stroke: rgba(61, 130, 197, 0.95);
+    stroke-width: 2;
+}
+
+.usage-history-chart .line-point {
+    stroke-width: 1.2;
+}
+
+.usage-history-legend {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: center;
+}
+
+.usage-history-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.usage-history-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    display: inline-block;
+}
+
+.usage-history-legend-swatch.token {
+    background: rgba(15, 76, 129, 0.52);
+}
+
+.usage-history-legend-swatch.five-hour {
+    background: rgba(220, 90, 52, 0.95);
+}
+
+.usage-history-legend-swatch.weekly {
+    background: rgba(61, 130, 197, 0.95);
+}
+
+.usage-history-empty {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-align: center;
+    padding: 8px 0;
+}
+
+.usage-history-overlay-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 18px 14px;
     border-top: 1px solid var(--border);
     background: var(--surface);
 }
@@ -3696,6 +3880,28 @@ body.is-work-mode-resizing * {
     margin-bottom: 4px;
 }
 
+.usage-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.usage-header .usage-label {
+    margin-bottom: 0;
+}
+
+.usage-history-open {
+    background-image: var(--icon-usage-history);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px 15px;
+    min-width: var(--icon-button-size);
+    width: var(--icon-button-size);
+    height: var(--icon-button-size);
+    padding: 0;
+}
+
 .usage-value {
     font-size: 13px;
     font-weight: 600;
@@ -3778,6 +3984,10 @@ body.is-work-mode-resizing * {
     justify-content: flex-start;
 }
 
+.model-row.model-row-combined {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 132px);
+}
+
 .model-row > * {
     min-width: 0;
 }
@@ -3788,6 +3998,12 @@ body.is-work-mode-resizing * {
 
 .model-row.model-row-single {
     grid-template-columns: minmax(0, 1fr);
+}
+
+.model-apply-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6px;
 }
 
 .model-select,
@@ -3836,6 +4052,10 @@ body.is-work-mode-resizing * {
     background-repeat: no-repeat;
     background-position: center;
     background-size: 14px 14px;
+    width: var(--icon-button-size);
+    min-width: var(--icon-button-size);
+    height: var(--icon-button-size);
+    padding: 0;
 }
 
 .model-status {
@@ -4889,6 +5109,17 @@ label.hover-tooltip,
         max-height: calc(100dvh - 12px);
     }
 
+    .usage-history-overlay {
+        padding: 6px;
+    }
+
+    .usage-history-overlay-card {
+        width: min(var(--app-max-width), calc(100vw - 12px));
+        max-width: var(--app-max-width);
+        height: min(780px, calc(100dvh - 12px));
+        max-height: calc(100dvh - 12px);
+    }
+
     .mobile-session-overlay {
         padding: 8px;
     }
@@ -4958,6 +5189,13 @@ label.hover-tooltip,
         padding-right: 16px;
     }
 
+    .usage-history-overlay-header,
+    .usage-history-overlay-body,
+    .usage-history-overlay-footer {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+
     .mobile-session-overlay-header,
     .mobile-session-overlay-body,
     .mobile-session-overlay-footer {
@@ -4970,6 +5208,10 @@ label.hover-tooltip,
     .file-browser-overlay-footer {
         padding-left: 12px;
         padding-right: 12px;
+    }
+
+    .usage-history-chart-wrap {
+        min-height: 190px;
     }
 
     .app-header {
@@ -5129,6 +5371,7 @@ label.hover-tooltip,
 
     .chat-controls-body {
         grid-template-columns: 1fr;
+        grid-auto-rows: auto;
         max-height: min(34vh, 260px);
         min-height: 0;
         align-content: start;
@@ -5151,7 +5394,7 @@ label.hover-tooltip,
         order: 2;
         height: auto;
         min-height: 120px;
-        overflow: hidden;
+        overflow: visible;
     }
 
     .model-row {
@@ -5159,8 +5402,8 @@ label.hover-tooltip,
         align-items: stretch;
     }
 
-    .model-row.model-row-combined.has-apply {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 82px) var(--icon-button-size);
+    .model-row.model-row-combined {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 82px);
         column-gap: 6px;
         align-items: center;
     }
@@ -5185,14 +5428,8 @@ label.hover-tooltip,
         max-width: 82px;
     }
 
-    .model-apply {
-        grid-column: 3 / 4;
-        justify-self: end;
-        align-self: center;
-        width: var(--icon-button-size);
-        min-width: var(--icon-button-size);
-        height: var(--icon-button-size);
-        padding: 0;
+    .model-apply-row {
+        margin-top: 6px;
     }
 
     .sessions,

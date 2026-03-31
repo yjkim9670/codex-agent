@@ -26,6 +26,7 @@ const state = {
         reasoningEffort: null,
         reasoningOptions: [],
         usage: null,
+        usageHistory: null,
         loaded: false
     }
 };
@@ -146,6 +147,8 @@ const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
+const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
+const USAGE_HISTORY_DEFAULT_HOURS = 24 * 7;
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
 const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
@@ -1021,6 +1024,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
+    const usageHistoryOpen = document.getElementById('codex-usage-history-open');
     const gitBranch = document.getElementById('codex-git-branch');
     const gitCommitBtn = document.getElementById('codex-git-commit');
     const gitPushBtn = document.getElementById('codex-git-push');
@@ -1058,6 +1062,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const mobileSessionOverlay = document.getElementById('codex-mobile-session-overlay');
     const mobileSessionOverlayClose = document.getElementById('codex-mobile-session-overlay-close');
     const mobileSessionOverlayCloseFooter = document.getElementById('codex-mobile-session-overlay-close-footer');
+    const usageHistoryOverlay = document.getElementById('codex-usage-history-overlay');
+    const usageHistoryOverlayClose = document.getElementById('codex-usage-history-overlay-close');
+    const usageHistoryOverlayCloseFooter = document.getElementById('codex-usage-history-overlay-close-footer');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
@@ -1368,6 +1375,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (syncOverlayCloseFooter) {
         syncOverlayCloseFooter.addEventListener('click', closeGitSyncOverlay);
     }
+    if (usageHistoryOpen) {
+        usageHistoryOpen.addEventListener('click', () => {
+            void openUsageHistoryOverlay();
+        });
+    }
+    if (usageHistoryOverlay) {
+        usageHistoryOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeUsageHistoryOverlay();
+            }
+        });
+    }
+    if (usageHistoryOverlayClose) {
+        usageHistoryOverlayClose.addEventListener('click', closeUsageHistoryOverlay);
+    }
+    if (usageHistoryOverlayCloseFooter) {
+        usageHistoryOverlayCloseFooter.addEventListener('click', closeUsageHistoryOverlay);
+    }
     if (messageLogOverlay) {
         messageLogOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -1528,6 +1554,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.key !== 'Escape') return;
         if (isMobileSessionOverlayOpen()) {
             closeMobileSessionOverlay();
+            return;
+        }
+        if (isUsageHistoryOverlayOpen()) {
+            closeUsageHistoryOverlay();
             return;
         }
         if (isFileBrowserOverlayOpen()) {
@@ -4671,6 +4701,7 @@ async function loadSettings({ silent = true } = {}) {
                 ? result.reasoning_options
                 : [],
             usage: result?.usage || null,
+            usageHistory: state.settings?.usageHistory || null,
             loaded: true
         };
         if (result?.session_storage) {
@@ -4702,7 +4733,9 @@ async function refreshUsageSummary({ silent = true } = {}) {
     try {
         const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
         const usage = result?.usage ?? null;
+        const usageHistory = result?.usage_history ?? null;
         state.settings.usage = usage;
+        state.settings.usageHistory = usageHistory;
         if (result?.session_storage) {
             state.sessionStorage = result.session_storage;
             updateSessionStorageSummary(state.sessionStorage);
@@ -4717,6 +4750,12 @@ async function refreshUsageSummary({ silent = true } = {}) {
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
+    const historyButton = document.getElementById('codex-usage-history-open');
+    if (historyButton) {
+        const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
+            && state.settings.usageHistory.items.length > 1;
+        historyButton.classList.toggle('is-ready', hasHistory);
+    }
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     const tokenUsage = usage?.token_usage || null;
     const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
@@ -5688,6 +5727,9 @@ function openGitBranchOverlay() {
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
@@ -5708,7 +5750,13 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
+    if (
+        !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -6019,6 +6067,9 @@ function openGitSyncOverlay() {
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
@@ -6042,7 +6093,342 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function getUsageHistoryOverlayElements() {
+    const overlay = document.getElementById('codex-usage-history-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        subtitle: document.getElementById('codex-usage-history-overlay-subtitle'),
+        meta: document.getElementById('codex-usage-history-overlay-meta'),
+        chart: document.getElementById('codex-usage-history-chart'),
+        legend: document.getElementById('codex-usage-history-legend'),
+        empty: document.getElementById('codex-usage-history-empty')
+    };
+}
+
+function isUsageHistoryOverlayOpen() {
+    const overlay = document.getElementById('codex-usage-history-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function createUsageHistorySvgNode(tagName, attrs = {}) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tagName);
+    Object.entries(attrs).forEach(([key, value]) => {
+        if (value === null || value === undefined) return;
+        node.setAttribute(key, String(value));
+    });
+    return node;
+}
+
+function formatUsageHistoryTickLabel(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '--';
+    return date.toLocaleString('ko-KR', {
+        timeZone: KST_TIME_ZONE,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit'
+    });
+}
+
+function renderUsageHistoryLegend(history) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.legend) return;
+    elements.legend.innerHTML = '';
+
+    const relation = history?.relation || {};
+    const fiveHourRatio = Number(relation?.five_hour?.tokens_per_percent);
+    const weeklyRatio = Number(relation?.weekly?.tokens_per_percent);
+    const tokenDeltaTotal = Number(history?.token_delta_total);
+    const resetCount = Number(history?.reset_detected_count);
+
+    const legendItems = [
+        {
+            key: 'token',
+            text: `Token delta ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
+        },
+        {
+            key: 'five-hour',
+            text: Number.isFinite(fiveHourRatio)
+                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok`
+                : '5h ratio --'
+        },
+        {
+            key: 'weekly',
+            text: Number.isFinite(weeklyRatio)
+                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok`
+                : 'Weekly ratio --'
+        }
+    ];
+    if (Number.isFinite(resetCount) && resetCount > 0) {
+        legendItems.push({
+            key: '',
+            text: `Reset 감지 ${formatNumber(resetCount)}회`
+        });
+    }
+
+    legendItems.forEach(item => {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'usage-history-legend-item';
+        if (item.key) {
+            const swatch = document.createElement('span');
+            swatch.className = `usage-history-legend-swatch ${item.key}`;
+            wrapper.appendChild(swatch);
+        }
+        const text = document.createElement('span');
+        text.textContent = item.text;
+        wrapper.appendChild(text);
+        elements.legend.appendChild(wrapper);
+    });
+}
+
+function renderUsageHistoryChart(history) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.chart) return false;
+    const chart = elements.chart;
+    chart.innerHTML = '';
+
+    const items = Array.isArray(history?.items) ? history.items : [];
+    if (items.length < 2) return false;
+
+    const width = 920;
+    const height = 320;
+    const margin = { top: 16, right: 64, bottom: 38, left: 64 };
+    const plotWidth = Math.max(1, width - margin.left - margin.right);
+    const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+    chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
+    const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
+    const weeklyUsed = items.map(item => normalizeUsedPercent(item?.weekly_used_percent));
+    const maxTokenDelta = Math.max(1, ...tokenDeltas);
+    const xStep = items.length > 1 ? plotWidth / (items.length - 1) : 0;
+    const barWidth = Math.max(2, Math.min(14, plotWidth / Math.max(items.length * 1.8, 1)));
+    const xAt = index => margin.left + (xStep * index);
+    const yToken = value => margin.top + plotHeight - ((Math.max(0, value) / maxTokenDelta) * plotHeight);
+    const yPercent = value => {
+        const normalized = Math.max(0, Math.min(100, Number(value) || 0));
+        return margin.top + plotHeight - ((normalized / 100) * plotHeight);
+    };
+
+    [0, 25, 50, 75, 100].forEach(percent => {
+        const y = yPercent(percent);
+        chart.appendChild(createUsageHistorySvgNode('line', {
+            x1: margin.left,
+            y1: y,
+            x2: margin.left + plotWidth,
+            y2: y,
+            class: 'grid-line'
+        }));
+        const leftToken = Math.round((maxTokenDelta * percent) / 100);
+        chart.appendChild(createUsageHistorySvgNode('text', {
+            x: margin.left - 8,
+            y: y + 4,
+            'text-anchor': 'end',
+            class: 'axis-label'
+        })).textContent = formatCompactTokenCount(leftToken);
+        chart.appendChild(createUsageHistorySvgNode('text', {
+            x: margin.left + plotWidth + 8,
+            y: y + 4,
+            'text-anchor': 'start',
+            class: 'axis-label'
+        })).textContent = `${percent}%`;
+    });
+
+    tokenDeltas.forEach((delta, index) => {
+        if (delta <= 0) return;
+        const x = xAt(index);
+        const y = yToken(delta);
+        const barHeight = Math.max(1, (margin.top + plotHeight) - y);
+        chart.appendChild(createUsageHistorySvgNode('rect', {
+            x: x - (barWidth / 2),
+            y,
+            width: barWidth,
+            height: barHeight,
+            rx: 1.5,
+            class: 'token-bar'
+        }));
+    });
+
+    const appendPercentLine = (values, className, pointColor) => {
+        const points = [];
+        values.forEach((value, index) => {
+            if (!Number.isFinite(value)) return;
+            points.push({ x: xAt(index), y: yPercent(value), value });
+        });
+        if (points.length < 2) return;
+        const d = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' ');
+        chart.appendChild(createUsageHistorySvgNode('path', {
+            d,
+            class: className
+        }));
+        points.forEach(point => {
+            chart.appendChild(createUsageHistorySvgNode('circle', {
+                cx: point.x,
+                cy: point.y,
+                r: 2.2,
+                fill: pointColor,
+                class: 'line-point'
+            }));
+        });
+    };
+
+    appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(220, 90, 52, 0.95)');
+    appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)');
+
+    const firstLabel = formatUsageHistoryTickLabel(items[0]?.bucket_start);
+    const middleLabel = formatUsageHistoryTickLabel(items[Math.floor((items.length - 1) / 2)]?.bucket_start);
+    const lastLabel = formatUsageHistoryTickLabel(items[items.length - 1]?.bucket_start);
+    [
+        { x: margin.left, anchor: 'start', text: firstLabel },
+        { x: margin.left + (plotWidth / 2), anchor: 'middle', text: middleLabel },
+        { x: margin.left + plotWidth, anchor: 'end', text: lastLabel }
+    ].forEach(label => {
+        chart.appendChild(createUsageHistorySvgNode('text', {
+            x: label.x,
+            y: margin.top + plotHeight + 24,
+            'text-anchor': label.anchor,
+            class: 'axis-label'
+        })).textContent = label.text;
+    });
+    return true;
+}
+
+function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAULT_HOURS) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements) return;
+
+    const itemCount = Number(history?.count);
+    const updatedAt = formatResetTimestamp(history?.updated_at);
+    const hours = Number(requestedHours);
+    const hoursText = Number.isFinite(hours) && hours > 0 ? Math.round(hours) : USAGE_HISTORY_DEFAULT_HOURS;
+    if (elements.subtitle) {
+        elements.subtitle.textContent = `최근 ${hoursText}시간 단위 추이 (KST)`;
+    }
+
+    if (elements.meta) {
+        const metaParts = [];
+        if (Number.isFinite(itemCount)) {
+            metaParts.push(`Samples ${formatNumber(itemCount)}`);
+        }
+        if (updatedAt) {
+            metaParts.push(`Updated ${updatedAt}`);
+        }
+        const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
+        if (pathText) {
+            metaParts.push(pathText);
+            elements.meta.setAttribute('title', pathText);
+        } else {
+            elements.meta.removeAttribute('title');
+        }
+        elements.meta.textContent = metaParts.join(' · ') || 'Usage 이력을 불러오는 중...';
+    }
+
+    const hasChart = renderUsageHistoryChart(history);
+    if (elements.empty) {
+        elements.empty.classList.toggle('is-hidden', hasChart);
+    }
+    if (!hasChart && elements.meta) {
+        elements.meta.textContent = '그래프를 그릴 수 있는 Usage 이력이 부족합니다. (최소 2개 샘플 필요)';
+    }
+    renderUsageHistoryLegend(history);
+}
+
+async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent = true } = {}) {
+    const normalizedHours = Number.isFinite(Number(hours)) && Number(hours) > 0
+        ? Math.round(Number(hours))
+        : USAGE_HISTORY_DEFAULT_HOURS;
+    const query = new URLSearchParams({ hours: String(normalizedHours) }).toString();
+    try {
+        const result = await fetchJson(`/api/codex/usage/history?${query}`, {
+            cache: 'no-store',
+            timeoutMs: USAGE_HISTORY_REQUEST_TIMEOUT_MS
+        });
+        const usage = result?.usage ?? null;
+        const usageHistory = result?.usage_history ?? null;
+        if (usage) {
+            state.settings.usage = usage;
+            updateUsageSummary(usage);
+        }
+        state.settings.usageHistory = usageHistory;
+        if (isUsageHistoryOverlayOpen()) {
+            renderUsageHistoryOverlay(usageHistory, normalizedHours);
+        }
+    } catch (error) {
+        const message = normalizeError(error, 'Usage 이력 로드에 실패했습니다.');
+        if (!silent) {
+            setStatus(message, true);
+        }
+        const elements = getUsageHistoryOverlayElements();
+        if (elements?.meta) {
+            elements.meta.textContent = message;
+        }
+        if (elements?.chart) {
+            elements.chart.innerHTML = '';
+        }
+        if (elements?.empty) {
+            elements.empty.classList.remove('is-hidden');
+            elements.empty.textContent = 'Usage 이력을 불러오지 못했습니다.';
+        }
+    }
+}
+
+async function openUsageHistoryOverlay() {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements) return;
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    if (elements.meta) {
+        elements.meta.textContent = '사용량 이력을 불러오는 중...';
+    }
+    if (elements.chart) {
+        elements.chart.innerHTML = '';
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+    await refreshUsageHistory({ hours: USAGE_HISTORY_DEFAULT_HOURS, silent: true });
+}
+
+function closeUsageHistoryOverlay() {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -6255,6 +6641,9 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     if (elements.overlay) {
         elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
         elements.overlay.classList.add(
@@ -6292,7 +6681,13 @@ function closeMessageLogOverlay() {
     elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
     delete elements.overlay.dataset.viewMode;
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -8210,6 +8605,9 @@ function openFileBrowserOverlay(options = {}) {
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
 
     const hasRoot = Object.prototype.hasOwnProperty.call(options, 'root');
     const hasFilePath = Object.prototype.hasOwnProperty.call(options, 'filePath');
@@ -8286,7 +8684,13 @@ function closeFileBrowserOverlay() {
     stopFileBrowserColumnResize();
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isMobileSessionOverlayOpen()) {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -9179,6 +9583,9 @@ function openMobileSessionOverlay() {
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     renderSessions();
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
@@ -9198,7 +9605,13 @@ function closeMobileSessionOverlay() {
     if (trigger) {
         trigger.setAttribute('aria-expanded', 'false');
     }
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }

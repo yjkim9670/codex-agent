@@ -24,9 +24,11 @@ from ..services.codex_chat import (
     cleanup_codex_streams,
     delete_session,
     ensure_default_title,
+    ensure_usage_snapshot_background_worker,
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
+    get_usage_history_summary,
     get_session,
     get_settings,
     get_usage_summary,
@@ -34,6 +36,7 @@ from ..services.codex_chat import (
     read_codex_stream,
     list_sessions,
     rename_session,
+    record_usage_snapshot_if_due,
     record_token_usage_for_message,
     start_codex_stream_for_session,
     update_settings,
@@ -265,19 +268,45 @@ def _resolve_reasoning_override(plan_mode=False):
 
 @bp.route('/api/codex/settings')
 def codex_settings():
+    ensure_usage_snapshot_background_worker()
+    snapshot = record_usage_snapshot_if_due()
+    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
+    if not isinstance(usage, dict):
+        usage = get_usage_summary()
     return jsonify({
         'settings': get_settings(),
         'model_options': CODEX_MODEL_OPTIONS,
         'reasoning_options': CODEX_REASONING_OPTIONS,
-        'usage': get_usage_summary(),
+        'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
 
 
 @bp.route('/api/codex/usage')
 def codex_usage():
+    ensure_usage_snapshot_background_worker()
+    snapshot = record_usage_snapshot_if_due()
+    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
+    if not isinstance(usage, dict):
+        usage = get_usage_summary()
     return jsonify({
-        'usage': get_usage_summary(),
+        'usage': usage,
+        'usage_history': get_usage_history_summary(),
+        'session_storage': get_session_storage_summary(),
+    })
+
+
+@bp.route('/api/codex/usage/history')
+def codex_usage_history():
+    ensure_usage_snapshot_background_worker()
+    hours = request.args.get('hours')
+    snapshot = record_usage_snapshot_if_due()
+    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
+    if not isinstance(usage, dict):
+        usage = get_usage_summary()
+    return jsonify({
+        'usage': usage,
+        'usage_history': get_usage_history_summary(hours=hours),
         'session_storage': get_session_storage_summary(),
     })
 
@@ -316,11 +345,15 @@ def codex_settings_update():
         plan_mode_model=plan_mode_model,
         plan_mode_reasoning_effort=plan_mode_reasoning,
     )
+    snapshot = record_usage_snapshot_if_due()
+    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
+    if not isinstance(usage, dict):
+        usage = get_usage_summary()
     return jsonify({
         'settings': settings,
         'model_options': CODEX_MODEL_OPTIONS,
         'reasoning_options': CODEX_REASONING_OPTIONS,
-        'usage': get_usage_summary(),
+        'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
 

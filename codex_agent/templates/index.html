@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=109">
+    <link rel="stylesheet" href="/static/css/app.css?v=111">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -233,12 +233,23 @@
                     </div>
                     <div class="chat-controls-body" id="codex-controls-body">
                         <div class="usage-card">
-                            <div class="usage-label">Usage</div>
+                            <div class="usage-header">
+                                <div class="usage-label">Usage</div>
+                                <button
+                                    class="btn ghost icon-only usage-history-open"
+                                    type="button"
+                                    id="codex-usage-history-open"
+                                    aria-label="Usage 추이 그래프 열기"
+                                    title="Usage 추이 그래프 열기"
+                                >
+                                    <span class="sr-only">Usage 추이 그래프 열기</span>
+                                </button>
+                            </div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
                             <label class="model-label" for="codex-model-input">Model · Reasoning effort</label>
-                            <div class="model-row model-row-combined has-apply">
+                            <div class="model-row model-row-combined">
                                 <div class="model-field model-field-model">
                                     <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
@@ -247,6 +258,8 @@
                                     <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
                                     <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
                                 </div>
+                            </div>
+                            <div class="model-apply-row">
                                 <button
                                     class="btn ghost icon-only model-apply"
                                     type="button"
@@ -412,6 +425,39 @@
             </div>
             <div class="mobile-session-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-mobile-session-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="usage-history-overlay" id="codex-usage-history-overlay" aria-hidden="true">
+        <div class="usage-history-overlay-backdrop" data-action="close"></div>
+        <div class="usage-history-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-usage-history-overlay-title">
+            <div class="usage-history-overlay-header">
+                <div class="usage-history-overlay-heading">
+                    <div class="usage-history-overlay-title" id="codex-usage-history-overlay-title">Usage History</div>
+                    <div class="usage-history-overlay-subtitle" id="codex-usage-history-overlay-subtitle">1시간 단위 사용량 추이</div>
+                </div>
+                <button class="btn ghost icon-only usage-history-overlay-close" type="button" id="codex-usage-history-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="usage-history-overlay-body">
+                <div class="usage-history-meta" id="codex-usage-history-overlay-meta">사용량 이력을 불러오는 중...</div>
+                <div class="usage-history-chart-wrap">
+                    <svg
+                        class="usage-history-chart"
+                        id="codex-usage-history-chart"
+                        viewBox="0 0 920 320"
+                        preserveAspectRatio="none"
+                        role="img"
+                        aria-label="Usage history chart"
+                    ></svg>
+                </div>
+                <div class="usage-history-legend" id="codex-usage-history-legend">Token delta · 5h used% · Weekly used%</div>
+                <div class="usage-history-empty is-hidden" id="codex-usage-history-empty">표시할 Usage 이력이 없습니다.</div>
+            </div>
+            <div class="usage-history-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-usage-history-overlay-close-footer">닫기</button>
             </div>
         </div>
     </div>

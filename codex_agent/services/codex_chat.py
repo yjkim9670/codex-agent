@@ -24,16 +24,18 @@ from ..config import (
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
     CODEX_TOKEN_USAGE_PATH,
+    CODEX_USAGE_HISTORY_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
     CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
     CODEX_STREAM_POLL_INTERVAL_SECONDS,
     CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS,
     CODEX_STREAM_TERMINATE_GRACE_SECONDS,
     CODEX_STREAM_TTL_SECONDS,
+    KST,
     WORKSPACE_DIR,
     normalize_codex_model_name,
 )
-from ..utils.time import normalize_timestamp
+from ..utils.time import normalize_timestamp, parse_timestamp
 
 try:
     import fcntl
@@ -48,6 +50,7 @@ except ImportError:  # pragma: no cover - POSIX fallback
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
+_USAGE_HISTORY_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _AUTH_STATE_LOCK = threading.Lock()
@@ -112,6 +115,12 @@ _TOKEN_PART_KEYS = (
 
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
+_USAGE_HISTORY_VERSION = 1
+_USAGE_HISTORY_BUCKET_HOURS = 1
+_USAGE_HISTORY_MAX_ITEMS = 24 * 180
+_USAGE_SNAPSHOT_POLL_SECONDS = 60
+_USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
+_USAGE_SNAPSHOT_WORKER_STARTED = False
 _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
     re.IGNORECASE
@@ -1224,6 +1233,355 @@ def _read_account_name():
     if isinstance(account_id, str) and account_id.strip():
         return account_id.strip()
     return ''
+
+
+def _usage_history_bucket_start_text(value=None):
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        parsed = datetime.now(KST)
+    bucket_start = parsed.replace(minute=0, second=0, microsecond=0)
+    return normalize_timestamp(bucket_start)
+
+
+def _normalize_optional_timestamp(value):
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        return ''
+    return normalize_timestamp(parsed)
+
+
+def _empty_usage_history_ledger():
+    return {
+        'version': _USAGE_HISTORY_VERSION,
+        'updated_at': normalize_timestamp(None),
+        'bucket_hours': _USAGE_HISTORY_BUCKET_HOURS,
+        'timezone': 'Asia/Seoul',
+        'items': []
+    }
+
+
+def _normalize_usage_history_snapshot(value):
+    if not isinstance(value, dict):
+        return None
+    bucket_start = _usage_history_bucket_start_text(
+        value.get('bucket_start') or value.get('bucket') or value.get('hour')
+    )
+    recorded_at = normalize_timestamp(
+        value.get('recorded_at') or value.get('captured_at') or bucket_start
+    )
+    token_total = _coerce_non_negative_int(value.get('token_total'))
+    token_input = _coerce_non_negative_int(value.get('token_input'))
+    token_cached_input = _coerce_non_negative_int(value.get('token_cached_input'))
+    token_output = _coerce_non_negative_int(value.get('token_output'))
+    token_reasoning_output = _coerce_non_negative_int(value.get('token_reasoning_output'))
+    token_requests = _coerce_non_negative_int(value.get('token_requests'))
+    if token_total is None:
+        token_total = _coerce_non_negative_int(value.get('all_time_total_tokens'))
+    if token_input is None:
+        token_input = _coerce_non_negative_int(value.get('all_time_input_tokens'))
+    if token_cached_input is None:
+        token_cached_input = _coerce_non_negative_int(value.get('all_time_cached_input_tokens'))
+    if token_output is None:
+        token_output = _coerce_non_negative_int(value.get('all_time_output_tokens'))
+    if token_reasoning_output is None:
+        token_reasoning_output = _coerce_non_negative_int(value.get('all_time_reasoning_output_tokens'))
+    if token_requests is None:
+        token_requests = _coerce_non_negative_int(value.get('all_time_requests'))
+    return {
+        'bucket_start': bucket_start,
+        'recorded_at': recorded_at,
+        'token_total': token_total or 0,
+        'token_input': token_input or 0,
+        'token_cached_input': token_cached_input or 0,
+        'token_output': token_output or 0,
+        'token_reasoning_output': token_reasoning_output or 0,
+        'token_requests': token_requests or 0,
+        'five_hour_used_percent': _normalize_used_percent(value.get('five_hour_used_percent')),
+        'weekly_used_percent': _normalize_used_percent(value.get('weekly_used_percent')),
+        'five_hour_resets_at': _normalize_optional_timestamp(value.get('five_hour_resets_at')),
+        'weekly_resets_at': _normalize_optional_timestamp(value.get('weekly_resets_at')),
+    }
+
+
+def _load_usage_history_ledger():
+    if not CODEX_USAGE_HISTORY_PATH.exists():
+        return _empty_usage_history_ledger()
+    try:
+        data = json.loads(CODEX_USAGE_HISTORY_PATH.read_text(encoding='utf-8'))
+    except Exception:
+        return _empty_usage_history_ledger()
+    if not isinstance(data, dict):
+        return _empty_usage_history_ledger()
+
+    ledger = _empty_usage_history_ledger()
+    ledger['version'] = _coerce_non_negative_int(data.get('version')) or _USAGE_HISTORY_VERSION
+    ledger['updated_at'] = normalize_timestamp(data.get('updated_at'))
+    bucket_hours = _coerce_non_negative_int(data.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS
+    ledger['bucket_hours'] = max(1, bucket_hours)
+    timezone_text = str(data.get('timezone') or '').strip()
+    if timezone_text:
+        ledger['timezone'] = timezone_text
+
+    raw_items = data.get('items')
+    if raw_items is None:
+        raw_items = data.get('snapshots')
+    if isinstance(raw_items, list):
+        deduped = {}
+        for entry in raw_items:
+            snapshot = _normalize_usage_history_snapshot(entry)
+            if not snapshot:
+                continue
+            key = snapshot['bucket_start']
+            current = deduped.get(key)
+            if not current or snapshot['recorded_at'] >= current['recorded_at']:
+                deduped[key] = snapshot
+        items = sorted(deduped.values(), key=lambda item: item.get('bucket_start', ''))
+        if len(items) > _USAGE_HISTORY_MAX_ITEMS:
+            items = items[-_USAGE_HISTORY_MAX_ITEMS:]
+        ledger['items'] = items
+    return ledger
+
+
+def _save_usage_history_ledger(ledger):
+    _write_json_atomic(CODEX_USAGE_HISTORY_PATH, ledger)
+
+
+def _build_usage_history_snapshot(usage_summary):
+    usage = usage_summary if isinstance(usage_summary, dict) else {}
+    token_usage = usage.get('token_usage') if isinstance(usage.get('token_usage'), dict) else {}
+    all_time = _normalize_token_usage_ledger_entry(token_usage.get('all_time'))
+    five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
+    weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
+    return _normalize_usage_history_snapshot({
+        'bucket_start': _usage_history_bucket_start_text(None),
+        'recorded_at': normalize_timestamp(None),
+        'token_total': all_time.get('total_tokens', 0),
+        'token_input': all_time.get('input_tokens', 0),
+        'token_cached_input': all_time.get('cached_input_tokens', 0),
+        'token_output': all_time.get('output_tokens', 0),
+        'token_reasoning_output': all_time.get('reasoning_output_tokens', 0),
+        'token_requests': all_time.get('requests', 0),
+        'five_hour_used_percent': five_hour.get('used_percent'),
+        'weekly_used_percent': weekly.get('used_percent'),
+        'five_hour_resets_at': five_hour.get('resets_at'),
+        'weekly_resets_at': weekly.get('resets_at'),
+    })
+
+
+def record_usage_snapshot_if_due(force=False, usage_summary=None):
+    if usage_summary is None:
+        usage_summary = get_usage_summary()
+    snapshot = _build_usage_history_snapshot(usage_summary)
+    if not snapshot:
+        return {
+            'recorded': False,
+            'usage': usage_summary,
+            'snapshot': None
+        }
+
+    requested_force = bool(force)
+    recorded = False
+    with _USAGE_HISTORY_LOCK:
+        ledger = _load_usage_history_ledger()
+        items = list(ledger.get('items') or [])
+        existing_index = -1
+        for idx, item in enumerate(items):
+            if item.get('bucket_start') == snapshot['bucket_start']:
+                existing_index = idx
+                break
+        if existing_index >= 0:
+            if requested_force:
+                if items[existing_index] != snapshot:
+                    items[existing_index] = snapshot
+                    recorded = True
+            else:
+                snapshot = items[existing_index]
+        else:
+            items.append(snapshot)
+            recorded = True
+
+        if recorded:
+            items.sort(key=lambda item: item.get('bucket_start', ''))
+            if len(items) > _USAGE_HISTORY_MAX_ITEMS:
+                items = items[-_USAGE_HISTORY_MAX_ITEMS:]
+            ledger['items'] = items
+            ledger['updated_at'] = normalize_timestamp(None)
+            _save_usage_history_ledger(ledger)
+
+    return {
+        'recorded': recorded,
+        'usage': usage_summary,
+        'snapshot': snapshot
+    }
+
+
+def _build_usage_history_items(items):
+    derived = []
+    previous = None
+    for raw in items:
+        snapshot = _normalize_usage_history_snapshot(raw)
+        if not snapshot:
+            continue
+        token_total = snapshot.get('token_total', 0)
+        five_hour_used = snapshot.get('five_hour_used_percent')
+        weekly_used = snapshot.get('weekly_used_percent')
+        reset_detected = False
+
+        delta_tokens = 0
+        delta_five_hour_used = None
+        delta_weekly_used = None
+        if previous:
+            previous_token_total = int(previous.get('token_total') or 0)
+            delta_tokens = token_total - previous_token_total
+            if delta_tokens < 0:
+                reset_detected = True
+                delta_tokens = token_total
+
+            previous_five_used = previous.get('five_hour_used_percent')
+            previous_weekly_used = previous.get('weekly_used_percent')
+            if (
+                isinstance(previous_five_used, (int, float))
+                and isinstance(five_hour_used, (int, float))
+            ):
+                delta_five_hour_used = round(five_hour_used - previous_five_used, 3)
+            if (
+                isinstance(previous_weekly_used, (int, float))
+                and isinstance(weekly_used, (int, float))
+            ):
+                delta_weekly_used = round(weekly_used - previous_weekly_used, 3)
+
+            previous_five_reset = str(previous.get('five_hour_resets_at') or '').strip()
+            current_five_reset = str(snapshot.get('five_hour_resets_at') or '').strip()
+            if (
+                previous_five_reset
+                and current_five_reset
+                and previous_five_reset != current_five_reset
+                and isinstance(previous_five_used, (int, float))
+                and isinstance(five_hour_used, (int, float))
+                and five_hour_used <= previous_five_used
+            ):
+                reset_detected = True
+
+            previous_weekly_reset = str(previous.get('weekly_resets_at') or '').strip()
+            current_weekly_reset = str(snapshot.get('weekly_resets_at') or '').strip()
+            if (
+                previous_weekly_reset
+                and current_weekly_reset
+                and previous_weekly_reset != current_weekly_reset
+                and isinstance(previous_weekly_used, (int, float))
+                and isinstance(weekly_used, (int, float))
+                and weekly_used <= previous_weekly_used
+            ):
+                reset_detected = True
+
+        tokens_per_five_hour_percent = None
+        tokens_per_weekly_percent = None
+        if delta_tokens > 0 and isinstance(delta_five_hour_used, (int, float)) and delta_five_hour_used > 0:
+            tokens_per_five_hour_percent = round(delta_tokens / delta_five_hour_used, 3)
+        if delta_tokens > 0 and isinstance(delta_weekly_used, (int, float)) and delta_weekly_used > 0:
+            tokens_per_weekly_percent = round(delta_tokens / delta_weekly_used, 3)
+
+        derived.append({
+            **snapshot,
+            'delta_tokens': max(0, int(delta_tokens)),
+            'delta_five_hour_used_percent': delta_five_hour_used,
+            'delta_weekly_used_percent': delta_weekly_used,
+            'reset_detected': reset_detected,
+            'tokens_per_five_hour_percent': tokens_per_five_hour_percent,
+            'tokens_per_weekly_percent': tokens_per_weekly_percent,
+        })
+        previous = snapshot
+    return derived
+
+
+def _aggregate_tokens_per_percent(history_items, delta_key):
+    token_sum = 0
+    percent_sum = 0.0
+    for item in history_items:
+        delta_tokens = _coerce_non_negative_int(item.get('delta_tokens')) or 0
+        delta_percent = _coerce_float(item.get(delta_key))
+        if delta_tokens <= 0 or delta_percent is None or delta_percent <= 0:
+            continue
+        token_sum += delta_tokens
+        percent_sum += delta_percent
+    if token_sum <= 0 or percent_sum <= 0:
+        return {
+            'token_sum': token_sum,
+            'percent_sum': round(percent_sum, 4),
+            'tokens_per_percent': None
+        }
+    return {
+        'token_sum': token_sum,
+        'percent_sum': round(percent_sum, 4),
+        'tokens_per_percent': round(token_sum / percent_sum, 4)
+    }
+
+
+def get_usage_history_summary(hours=168):
+    requested_hours = _coerce_non_negative_int(hours)
+    if requested_hours is None or requested_hours <= 0:
+        requested_hours = 168
+    requested_hours = min(requested_hours, _USAGE_HISTORY_MAX_ITEMS)
+
+    with _USAGE_HISTORY_LOCK:
+        ledger = _load_usage_history_ledger()
+
+    items = list(ledger.get('items') or [])
+    if requested_hours > 0 and len(items) > requested_hours:
+        items = items[-requested_hours:]
+    history_items = _build_usage_history_items(items)
+    first_bucket = history_items[0]['bucket_start'] if history_items else ''
+    last_bucket = history_items[-1]['bucket_start'] if history_items else ''
+    first_recorded = history_items[0]['recorded_at'] if history_items else ''
+    last_recorded = history_items[-1]['recorded_at'] if history_items else ''
+    token_delta_total = sum((_coerce_non_negative_int(item.get('delta_tokens')) or 0) for item in history_items)
+    five_hour_relation = _aggregate_tokens_per_percent(history_items, 'delta_five_hour_used_percent')
+    weekly_relation = _aggregate_tokens_per_percent(history_items, 'delta_weekly_used_percent')
+    reset_count = sum(1 for item in history_items if item.get('reset_detected'))
+
+    return {
+        'path': str(CODEX_USAGE_HISTORY_PATH),
+        'updated_at': ledger.get('updated_at'),
+        'bucket_hours': max(1, _coerce_non_negative_int(ledger.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS),
+        'timezone': str(ledger.get('timezone') or 'Asia/Seoul'),
+        'requested_hours': requested_hours,
+        'count': len(history_items),
+        'first_bucket_start': first_bucket,
+        'last_bucket_start': last_bucket,
+        'first_recorded_at': first_recorded,
+        'last_recorded_at': last_recorded,
+        'token_delta_total': token_delta_total,
+        'reset_detected_count': reset_count,
+        'relation': {
+            'five_hour': five_hour_relation,
+            'weekly': weekly_relation,
+        },
+        'items': history_items
+    }
+
+
+def _usage_snapshot_worker_loop():
+    while True:
+        try:
+            record_usage_snapshot_if_due()
+        except Exception:
+            _LOGGER.exception('usage snapshot worker failed')
+        time.sleep(_USAGE_SNAPSHOT_POLL_SECONDS)
+
+
+def ensure_usage_snapshot_background_worker():
+    global _USAGE_SNAPSHOT_WORKER_STARTED
+    with _USAGE_SNAPSHOT_WORKER_LOCK:
+        if _USAGE_SNAPSHOT_WORKER_STARTED:
+            return False
+        worker = threading.Thread(
+            target=_usage_snapshot_worker_loop,
+            name='codex-usage-snapshot-worker',
+            daemon=True
+        )
+        worker.start()
+        _USAGE_SNAPSHOT_WORKER_STARTED = True
+    return True
 
 
 def get_usage_summary():

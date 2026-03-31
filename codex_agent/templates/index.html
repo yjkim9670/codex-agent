@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=106">
+    <link rel="stylesheet" href="/static/css/app.css?v=109">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -115,7 +115,14 @@
             <section class="chat">
                 <div class="chat-header">
                     <div class="chat-header-main">
-                        <div id="codex-chat-title" class="chat-title">Select a session</div>
+                        <button
+                            id="codex-chat-title"
+                            class="chat-title chat-title-trigger"
+                            type="button"
+                            aria-haspopup="dialog"
+                            aria-controls="codex-mobile-session-overlay"
+                            aria-expanded="false"
+                        >Select a session</button>
                         <div id="codex-chat-meta" class="chat-meta"></div>
                     </div>
                     <div class="chat-header-actions">
@@ -302,6 +309,16 @@
                         <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="codex-work-mode-file-back">목록으로</button>
                         <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
                         <button
+                            class="btn ghost icon-only work-mode-preview-open-new"
+                            type="button"
+                            id="codex-work-mode-file-open-new"
+                            aria-label="새 창에서 HTML 미리보기 열기"
+                            title="새 창에서 HTML 미리보기 열기"
+                            disabled
+                        >
+                            <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
+                        </button>
+                        <button
                             class="btn ghost icon-only work-mode-preview-fullscreen"
                             type="button"
                             id="codex-work-mode-file-fullscreen"
@@ -377,6 +394,26 @@
                 </div>
             </section>
         </main>
+    </div>
+
+    <div class="mobile-session-overlay" id="codex-mobile-session-overlay" aria-hidden="true">
+        <div class="mobile-session-overlay-backdrop" data-action="close"></div>
+        <div class="mobile-session-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-mobile-session-overlay-title">
+            <div class="mobile-session-overlay-header">
+                <div class="mobile-session-overlay-title" id="codex-mobile-session-overlay-title">Sessions</div>
+                <button class="btn ghost icon-only mobile-session-overlay-close" type="button" id="codex-mobile-session-overlay-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="mobile-session-overlay-body">
+                <div id="codex-mobile-session-list" class="session-list mobile-session-list">
+                    <div class="empty-state">No sessions yet.</div>
+                </div>
+            </div>
+            <div class="mobile-session-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-mobile-session-overlay-close-footer">닫기</button>
+            </div>
+        </div>
     </div>
 
     <div class="branch-overlay" id="codex-branch-overlay" aria-hidden="true">
@@ -588,6 +625,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=93"></script>
+    <script src="/static/js/app.js?v=94"></script>
 </body>
 </html>

@@ -218,6 +218,7 @@ let workModeFileResizePointerId = null;
 let workModeFileColumnResizeState = null;
 let workModeFileHorizontalSyncLock = false;
 let workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
+let workModeMobileBrowseView = WORK_MODE_MOBILE_VIEW_LIST;
 let workModeFileColumnWidths = {
     name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
@@ -226,6 +227,12 @@ let workModeFileColumnWidths = {
 let workModeFileStatePersistTimer = null;
 let pendingWorkModeFileScrollRestore = null;
 let pendingWorkModeFileViewerScrollRestore = null;
+let workModeHtmlPreviewState = {
+    root: FILE_BROWSER_ROOT_WORKSPACE,
+    path: '',
+    previewUrl: '',
+    suspended: false
+};
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -991,6 +998,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatSessionNextBtn = document.getElementById('codex-chat-session-next');
     const refreshBtn = document.getElementById('codex-chat-refresh');
     const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
+    const chatTitleTrigger = document.getElementById('codex-chat-title');
     const messages = document.getElementById('codex-chat-messages');
     const scrollToLatestBtn = document.getElementById('codex-chat-scroll-bottom');
     const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
@@ -1024,6 +1032,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
+    const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
@@ -1046,6 +1055,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
     const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
+    const mobileSessionOverlay = document.getElementById('codex-mobile-session-overlay');
+    const mobileSessionOverlayClose = document.getElementById('codex-mobile-session-overlay-close');
+    const mobileSessionOverlayCloseFooter = document.getElementById('codex-mobile-session-overlay-close-footer');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
@@ -1118,6 +1130,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (chatSessionNextBtn) {
         chatSessionNextBtn.addEventListener('click', async () => {
             await moveToAdjacentSession(1);
+        });
+    }
+
+    if (chatTitleTrigger) {
+        chatTitleTrigger.addEventListener('click', event => {
+            if (!isMobileLayout()) return;
+            event.preventDefault();
+            if (isMobileSessionOverlayOpen()) {
+                closeMobileSessionOverlay();
+                return;
+            }
+            openMobileSessionOverlay();
         });
     }
 
@@ -1213,11 +1237,22 @@ document.addEventListener('DOMContentLoaded', () => {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         });
     }
+    if (workModeFileOpenNewBtn) {
+        workModeFileOpenNewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openWorkModeHtmlPreviewInNewWindow();
+        });
+        syncHoverTooltipFromLabel(workModeFileOpenNewBtn);
+    }
     if (workModeMobileBrowserBtn) {
         workModeMobileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
             if (!isWorkModeEnabled() || !isMobileLayout()) return;
-            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+            const hasSelection = Boolean(normalizeFileBrowserRelativePath(workModeFileSelectedPath));
+            const targetView = hasSelection
+                ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
+                : WORK_MODE_MOBILE_VIEW_LIST;
+            setWorkModeMobileView(targetView);
             void ensureWorkModeFilePanelContent();
         });
     }
@@ -1346,6 +1381,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (messageLogOverlayCloseFooter) {
         messageLogOverlayCloseFooter.addEventListener('click', closeMessageLogOverlay);
+    }
+    if (mobileSessionOverlay) {
+        mobileSessionOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeMobileSessionOverlay();
+            }
+        });
+    }
+    if (mobileSessionOverlayClose) {
+        mobileSessionOverlayClose.addEventListener('click', closeMobileSessionOverlay);
+    }
+    if (mobileSessionOverlayCloseFooter) {
+        mobileSessionOverlayCloseFooter.addEventListener('click', closeMobileSessionOverlay);
     }
     if (fileBrowserOverlay) {
         fileBrowserOverlay.addEventListener('click', event => {
@@ -1477,6 +1526,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
+        if (isMobileSessionOverlayOpen()) {
+            closeMobileSessionOverlay();
+            return;
+        }
         if (isFileBrowserOverlayOpen()) {
             closeFileBrowserOverlay();
             return;
@@ -2767,6 +2820,7 @@ function getWorkModeFileElements() {
         upBtn: document.getElementById('codex-work-mode-file-up'),
         backBtn: document.getElementById('codex-work-mode-file-back'),
         chatBtn: document.getElementById('codex-work-mode-chat-back'),
+        openNewBtn: document.getElementById('codex-work-mode-file-open-new'),
         fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen'),
         colResizers: Array.from(preview.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]'))
     };
@@ -3028,6 +3082,7 @@ function readWorkModeFileViewState() {
             path: normalizeFileBrowserRelativePath(parsed?.path),
             selectedPath: normalizeFileBrowserRelativePath(parsed?.selectedPath),
             mobileView: normalizeWorkModeMobileView(parsed?.mobileView),
+            mobileBrowseView: normalizeWorkModeMobileBrowseView(parsed?.mobileBrowseView || parsed?.mobileView),
             viewerFullscreen: Boolean(parsed?.viewerFullscreen),
             scroll,
             viewerScroll
@@ -3044,6 +3099,7 @@ function persistWorkModeFileViewState() {
             path: normalizeFileBrowserRelativePath(workModeFilePath),
             selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath),
             mobileView: normalizeWorkModeMobileView(workModeMobileView),
+            mobileBrowseView: normalizeWorkModeMobileBrowseView(workModeMobileBrowseView),
             viewerFullscreen: Boolean(workModeFileViewerFullscreen),
             scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
             viewerScroll: captureWorkModeFileViewerScrollSnapshot({ includeContext: true }),
@@ -3082,6 +3138,7 @@ function initializeWorkModeFileViewState(isMobile = false) {
     workModeFileRoot = normalizeFileBrowserRoot(saved.root || workModeFileRoot);
     workModeFilePath = normalizeFileBrowserRelativePath(saved.path || '');
     workModeFileSelectedPath = normalizeFileBrowserRelativePath(saved.selectedPath || '');
+    workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(saved.mobileBrowseView || saved.mobileView);
     workModeMobileView = isMobile
         ? WORK_MODE_MOBILE_VIEW_CHAT
         : normalizeWorkModeMobileView(saved.mobileView);
@@ -3138,37 +3195,61 @@ function normalizeWorkModeMobileView(value) {
     return WORK_MODE_MOBILE_VIEW_CHAT;
 }
 
+function normalizeWorkModeMobileBrowseView(value) {
+    return value === WORK_MODE_MOBILE_VIEW_VIEWER
+        ? WORK_MODE_MOBILE_VIEW_VIEWER
+        : WORK_MODE_MOBILE_VIEW_LIST;
+}
+
 function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
-    workModeMobileView = normalizeWorkModeMobileView(view);
+    const previousView = normalizeWorkModeMobileView(workModeMobileView);
+    const nextView = normalizeWorkModeMobileView(view);
+    workModeMobileView = nextView;
     const elements = getWorkModeElements();
     const fileElements = getWorkModeFileElements();
     const mobile = isMobileLayout();
     const enabled = isWorkModeEnabled();
     const applyMobileView = mobile && enabled;
 
+    if (
+        applyMobileView
+        && previousView === WORK_MODE_MOBILE_VIEW_VIEWER
+        && nextView !== WORK_MODE_MOBILE_VIEW_VIEWER
+    ) {
+        const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
+        if (viewerSnapshot) {
+            pendingWorkModeFileViewerScrollRestore = viewerSnapshot;
+        }
+        suspendWorkModeHtmlPreviewForMobileTransition(fileElements);
+    }
+
+    if (applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT) {
+        workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(nextView);
+    }
+
     if (elements?.app) {
         elements.app.classList.toggle(
             'is-work-mode-mobile-chat',
-            applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT
+            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT
         );
         elements.app.classList.toggle(
             'is-work-mode-mobile-list',
-            applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_LIST
+            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_LIST
         );
         elements.app.classList.toggle(
             'is-work-mode-mobile-viewer',
-            applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER
+            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
         );
     }
 
-    const showMobileBrowserButton = applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT;
+    const showMobileBrowserButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
     if (elements?.mobileBrowserBtn) {
         elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
         elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
     }
 
-    const showChatButton = applyMobileView && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
-    const showBackButton = applyMobileView && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER;
+    const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
+    const showBackButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER;
 
     if (fileElements?.chatBtn) {
         fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
@@ -3181,6 +3262,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (fileElements?.fullscreenBtn) {
         fileElements.fullscreenBtn.classList.toggle('is-hidden', mobile);
     }
+    syncWorkModeHtmlPreviewOpenButton();
     syncWorkModeFileHorizontalScrollMetrics();
     schedulePersistWorkModeFileViewState();
 }
@@ -3574,6 +3656,9 @@ function initializeWorkMode(isMobile) {
 
 function handleWorkModeMediaChange(isMobile) {
     const elements = getWorkModeElements();
+    if (!isMobile && isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     if (isMobile && isWorkModeEnabled()) {
         setWorkModeFileViewerFullscreen(false);
     }
@@ -5603,6 +5688,9 @@ function openGitBranchOverlay() {
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
     if (elements.commitMessage) {
@@ -5620,7 +5708,7 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
+    if (!isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -5928,6 +6016,9 @@ function openGitSyncOverlay() {
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
@@ -5951,7 +6042,7 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -6161,6 +6252,9 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     if (elements.overlay) {
         elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
         elements.overlay.classList.add(
@@ -6198,7 +6292,7 @@ function closeMessageLogOverlay() {
     elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
     delete elements.overlay.dataset.viewMode;
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isFileBrowserOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isFileBrowserOverlayOpen() && !isMobileSessionOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -6355,6 +6449,100 @@ function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = ''
     setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
 }
 
+function setWorkModeHtmlPreviewState({
+    root = workModeFileRoot,
+    path = '',
+    previewUrl = '',
+    suspended = false
+} = {}) {
+    workModeHtmlPreviewState = {
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path),
+        previewUrl: String(previewUrl || '').trim(),
+        suspended: Boolean(suspended)
+    };
+    syncWorkModeHtmlPreviewOpenButton();
+}
+
+function clearWorkModeHtmlPreviewState() {
+    setWorkModeHtmlPreviewState({
+        root: workModeFileRoot,
+        path: '',
+        previewUrl: '',
+        suspended: false
+    });
+}
+
+function getWorkModeHtmlPreviewLaunchUrl() {
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
+    if (!selectedPath || !previewPath || selectedPath !== previewPath) return '';
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
+    if (selectedRoot !== previewRoot) return '';
+    const previewUrl = String(workModeHtmlPreviewState?.previewUrl || '').trim();
+    return previewUrl || buildFileBrowserRawFileUrl(previewRoot, previewPath);
+}
+
+function canOpenWorkModeHtmlPreviewInNewWindow() {
+    if (!isWorkModeEnabled()) return false;
+    return Boolean(getWorkModeHtmlPreviewLaunchUrl());
+}
+
+function syncWorkModeHtmlPreviewOpenButton({ loading = false } = {}) {
+    const elements = getWorkModeFileElements();
+    const button = elements?.openNewBtn;
+    if (!button) return;
+    const label = workModeHtmlPreviewState?.suspended
+        ? '새 창에서 HTML 미리보기 다시 열기'
+        : '새 창에서 HTML 미리보기 열기';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    button.disabled = Boolean(loading) || !canOpenWorkModeHtmlPreviewInNewWindow();
+    syncHoverTooltipFromLabel(button, label);
+}
+
+function openWorkModeHtmlPreviewInNewWindow() {
+    const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    if (!previewUrl) {
+        showToast('새 창으로 열 수 있는 HTML 미리보기가 없습니다.', {
+            tone: 'default',
+            durationMs: 2800
+        });
+        return false;
+    }
+    const opened = window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+        showToast('팝업이 차단되어 새 창을 열지 못했습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    return true;
+}
+
+function suspendWorkModeHtmlPreviewForMobileTransition(elements) {
+    if (!elements?.viewerContent) return false;
+    const iframe = elements.viewerContent.querySelector('.file-browser-html-preview');
+    if (!(iframe instanceof HTMLIFrameElement)) return false;
+    const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    if (!previewUrl || !selectedPath) return false;
+    const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
+    if (viewerSnapshot) {
+        pendingWorkModeFileViewerScrollRestore = viewerSnapshot;
+    }
+    setFilePanelViewerPlaceholder(elements, 'HTML 미리보기가 일시중지되었습니다. 목록에서 다시 열면 복원됩니다.');
+    setWorkModeHtmlPreviewState({
+        root: workModeFileRoot,
+        path: selectedPath,
+        previewUrl,
+        suspended: true
+    });
+    return true;
+}
+
 function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
     const elements = getWorkModeFileElements();
     if (!elements) return;
@@ -6390,6 +6578,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     if (elements.fullscreenBtn) {
         elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || isMobileLayout();
     }
+    syncWorkModeHtmlPreviewOpenButton({ loading });
     if (Array.isArray(elements.colResizers)) {
         const disableColumnResize = loading || !isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen;
         elements.colResizers.forEach(handle => {
@@ -6424,6 +6613,7 @@ function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하�
 function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     const elements = getWorkModeFileElements();
     setFilePanelViewerPlaceholder(elements, message);
+    clearWorkModeHtmlPreviewState();
 }
 
 function applyFilePanelSelectionState(listElement, selectedPath) {
@@ -6693,6 +6883,7 @@ async function openFileInWorkModePanel(
     const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getWorkModeFileElements();
     if (!elements) return null;
+    clearWorkModeHtmlPreviewState();
 
     if (elements.viewerMeta) {
         const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
@@ -6765,6 +6956,7 @@ async function openFileInWorkModePanel(
             placeholder.textContent = normalizeError(error, '파일을 열지 못했습니다.');
             elements.viewerContent.appendChild(placeholder);
         }
+        clearWorkModeHtmlPreviewState();
         showToast(normalizeError(error, '작업 모드 파일 열기에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
@@ -6831,8 +7023,10 @@ async function ensureWorkModeFilePanelContent() {
         });
         if (!listed) return;
     }
-    if (isMobileLayout() && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT) {
-        return;
+    if (isMobileLayout()) {
+        if (workModeMobileView !== WORK_MODE_MOBILE_VIEW_VIEWER) {
+            return;
+        }
     }
     if (hasSelection) {
         await openFileInWorkModePanel(workModeFileSelectedPath, {
@@ -7798,6 +7992,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const previewRoot = normalizeFileBrowserRoot(options?.root || result?.root || fileBrowserRoot);
+    const isWorkModeViewer = elements.viewerContent.id === 'codex-work-mode-file-viewer-content';
 
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
@@ -7832,6 +8027,9 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
 
     elements.viewerContent.innerHTML = '';
+    if (isWorkModeViewer) {
+        clearWorkModeHtmlPreviewState();
+    }
     if (isSpreadsheet) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         await renderSpreadsheetPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken);
@@ -7857,6 +8055,14 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
 
     if (isHtml && !requestedLine) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        if (isWorkModeViewer) {
+            setWorkModeHtmlPreviewState({
+                root: previewRoot,
+                path: normalizedPath,
+                previewUrl,
+                suspended: false
+            });
+        }
         const iframe = document.createElement('iframe');
         iframe.className = 'file-browser-html-preview';
         iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
@@ -8001,6 +8207,9 @@ function openFileBrowserOverlay(options = {}) {
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
 
     const hasRoot = Object.prototype.hasOwnProperty.call(options, 'root');
     const hasFilePath = Object.prototype.hasOwnProperty.call(options, 'filePath');
@@ -8077,7 +8286,7 @@ function closeFileBrowserOverlay() {
     stopFileBrowserColumnResize();
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()) {
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isMobileSessionOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -8826,19 +9035,15 @@ async function connectToExistingStream(sessionId, streamId, startedAt = null) {
     return false;
 }
 
-function renderSessions() {
-    const list = document.getElementById('codex-session-list');
-    if (!list) return;
+function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
+    if (!(list instanceof HTMLElement)) return;
     list.innerHTML = '';
-    updateSessionsHeaderSummary();
-    updateChatSessionNavigationButtons();
 
     if (!state.sessions.length) {
         const empty = document.createElement('div');
         empty.className = 'empty-state';
         empty.textContent = 'No sessions yet.';
         list.appendChild(empty);
-        renderRunningJobsMonitor();
         return;
     }
 
@@ -8887,6 +9092,9 @@ function renderSessions() {
         selectBtn.appendChild(title);
         selectBtn.appendChild(meta);
         selectBtn.addEventListener('click', async () => {
+            if (closeOverlayOnSelect) {
+                closeMobileSessionOverlay();
+            }
             await loadSession(session.id);
         });
 
@@ -8918,7 +9126,81 @@ function renderSessions() {
         item.appendChild(actions);
         list.appendChild(item);
     });
+}
+
+function renderSessions() {
+    const primaryList = document.getElementById('codex-session-list');
+    const mobileOverlayList = document.getElementById('codex-mobile-session-list');
+    const targets = [];
+    if (primaryList) {
+        targets.push({ list: primaryList, closeOverlayOnSelect: false });
+    }
+    if (mobileOverlayList) {
+        targets.push({ list: mobileOverlayList, closeOverlayOnSelect: true });
+    }
+    if (targets.length === 0) return;
+    updateSessionsHeaderSummary();
+    updateChatSessionNavigationButtons();
+    targets.forEach(target => {
+        renderSessionsIntoList(target.list, {
+            closeOverlayOnSelect: Boolean(target.closeOverlayOnSelect)
+        });
+    });
     renderRunningJobsMonitor();
+}
+
+function getMobileSessionOverlayElements() {
+    const overlay = document.getElementById('codex-mobile-session-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        list: document.getElementById('codex-mobile-session-list')
+    };
+}
+
+function isMobileSessionOverlayOpen() {
+    const overlay = document.getElementById('codex-mobile-session-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openMobileSessionOverlay() {
+    if (!isMobileLayout()) return;
+    const elements = getMobileSessionOverlayElements();
+    if (!elements) return;
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
+    renderSessions();
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    const trigger = document.getElementById('codex-chat-title');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', 'true');
+    }
+    document.body.classList.add('is-overlay-open');
+}
+
+function closeMobileSessionOverlay() {
+    const elements = getMobileSessionOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    const trigger = document.getElementById('codex-chat-title');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+    if (!isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
 }
 
 function upsertSessionSummary(session) {
@@ -9146,10 +9428,15 @@ function updateHeader(session) {
     if (!title || !meta) return;
     if (!session) {
         title.textContent = 'Select a session';
+        title.setAttribute('title', 'Select a session');
+        title.setAttribute('aria-label', 'Select a session');
         meta.textContent = '';
         return;
     }
-    title.textContent = session.title || 'New session';
+    const sessionTitle = session.title || 'New session';
+    title.textContent = sessionTitle;
+    title.setAttribute('title', sessionTitle);
+    title.setAttribute('aria-label', sessionTitle);
     const updated = formatTimestamp(session.updated_at);
     const count = resolveSessionMessageCount(session);
     const tokenSummary = formatSessionTokenSummary(session);

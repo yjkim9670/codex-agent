@@ -72,10 +72,12 @@
     --icon-sync-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
+    --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
     --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8a2.4 2.4 0 0 1 2.4-2.4h4.1l1.8 2h5.5A2.4 2.4 0 0 1 20 10v7a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><circle cx='14.2' cy='13.8' r='2.2'/><path d='m15.9 15.5 1.9 1.9'/></svg>");
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
+    --font-session-title: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
     --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
         BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
         "Segoe UI", sans-serif;
@@ -134,6 +136,7 @@
     --icon-sync-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
+    --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
     --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8a2.4 2.4 0 0 1 2.4-2.4h4.1l1.8 2h5.5A2.4 2.4 0 0 1 20 10v7a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><circle cx='14.2' cy='13.8' r='2.2'/><path d='m15.9 15.5 1.9 1.9'/></svg>");
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
@@ -1712,6 +1715,135 @@ body {
     background: var(--surface);
 }
 
+.mobile-session-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+    z-index: 2350;
+}
+
+.mobile-session-overlay.is-visible {
+    display: flex;
+}
+
+.mobile-session-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+}
+
+.mobile-session-overlay-card {
+    position: relative;
+    width: min(560px, calc(100vw - 20px));
+    height: min(560px, calc(100dvh - 20px));
+    max-height: calc(100dvh - 20px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.mobile-session-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.mobile-session-overlay-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.mobile-session-overlay-close {
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.mobile-session-overlay-body {
+    flex: 1;
+    min-height: 0;
+    padding: 10px 12px;
+    overflow: hidden;
+}
+
+.mobile-session-list {
+    max-height: 100%;
+    height: 100%;
+    padding-right: 2px;
+    scroll-padding-bottom: 24px;
+}
+
+.mobile-session-list .session-item {
+    border-radius: 10px;
+    padding: 12px;
+    gap: 10px;
+    background: var(--surface-raised);
+}
+
+.mobile-session-list .session-select {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    gap: 6px;
+}
+
+.mobile-session-list .session-title {
+    width: 100%;
+    font-size: 14px;
+    line-height: 1.35;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: keep-all;
+}
+
+.mobile-session-list .session-meta {
+    width: 100%;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.mobile-session-list .session-actions {
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.mobile-session-list .session-action {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.mobile-session-list .empty-state {
+    margin: auto 0;
+    padding: 24px 12px;
+}
+
+.mobile-session-overlay-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
 .is-hidden {
     display: none !important;
 }
@@ -2036,7 +2168,7 @@ body {
 
 .git-action-sync,
 #codex-git-sync {
-    background-image: var(--icon-overlay-open);
+    background-image: var(--icon-repo-sync-open);
     position: relative;
     background-size: 19px 19px;
 }
@@ -2068,7 +2200,7 @@ body {
     content: "";
     position: absolute;
     inset: 0;
-    background-image: var(--icon-overlay-open);
+    background-image: var(--icon-repo-sync-open);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 19px 19px;
@@ -2376,6 +2508,13 @@ body.is-work-mode-resizing .work-mode-divider::before {
 
 .work-mode-preview-refresh {
     background-image: var(--icon-refresh);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.work-mode-preview-open-new {
+    background-image: var(--icon-overlay-open);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
@@ -2912,6 +3051,7 @@ body.is-work-mode-resizing * {
 .session-title {
     font-weight: 700;
     font-size: 13px;
+    font-family: var(--font-session-title);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3301,6 +3441,18 @@ body.is-work-mode-resizing * {
 .chat-title {
     font-size: 14px;
     font-weight: 700;
+    font-family: var(--font-session-title);
+}
+
+.chat-title-trigger {
+    border: 0;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
 }
 
 .chat-meta {
@@ -4289,6 +4441,7 @@ body.is-work-mode-resizing * {
 .sessions-toggle:focus-visible,
 .chat-header-mobile-browser:focus-visible,
 .chat-header-fullscreen:focus-visible,
+.chat-title-trigger:focus-visible,
 .chat-controls-toggle:focus-visible,
 .live-weather-compact-toggle:focus-visible {
     outline: none;
@@ -4627,6 +4780,10 @@ label.hover-tooltip,
         justify-content: flex-end;
     }
 
+    .app.is-work-mode #codex-file-browser-open {
+        display: none;
+    }
+
     .app.is-work-mode .layout {
         gap: 0;
     }
@@ -4732,6 +4889,17 @@ label.hover-tooltip,
         max-height: calc(100dvh - 12px);
     }
 
+    .mobile-session-overlay {
+        padding: 8px;
+    }
+
+    .mobile-session-overlay-card {
+        width: min(var(--app-max-width), calc(100vw - 16px));
+        max-width: var(--app-max-width);
+        height: min(560px, calc(100dvh - 16px));
+        max-height: calc(100dvh - 16px);
+    }
+
     .file-browser-overlay {
         padding: 6px;
     }
@@ -4788,6 +4956,13 @@ label.hover-tooltip,
     .message-log-overlay-footer {
         padding-left: 16px;
         padding-right: 16px;
+    }
+
+    .mobile-session-overlay-header,
+    .mobile-session-overlay-body,
+    .mobile-session-overlay-footer {
+        padding-left: 12px;
+        padding-right: 12px;
     }
 
     .file-browser-overlay-header,
@@ -4899,6 +5074,24 @@ label.hover-tooltip,
 
     .chat-header {
         align-items: center;
+    }
+
+    .chat-title-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+    }
+
+    .chat-title-trigger::after {
+        content: "";
+        width: 12px;
+        height: 12px;
+        background-image: var(--icon-chevron-down);
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 12px 12px;
+        opacity: 0.72;
     }
 
     .sessions-toggle {
@@ -5107,7 +5300,7 @@ label.hover-tooltip,
         display: none;
     }
 
-    .session-list {
+    .sessions .session-list {
         max-height: min(24vh, 210px);
         scroll-padding-bottom: 96px;
     }
@@ -5138,7 +5331,7 @@ label.hover-tooltip,
         scroll-padding-bottom: 132px;
     }
 
-    .app.is-mobile-keyboard-open .session-list {
+    .app.is-mobile-keyboard-open .sessions .session-list {
         max-height: min(24vh, 180px);
         padding-bottom: 0;
         scroll-padding-bottom: calc(env(safe-area-inset-bottom) + 16px);

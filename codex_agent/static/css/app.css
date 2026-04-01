@@ -5403,21 +5403,20 @@ label.hover-tooltip,
         overflow: visible;
     }
 
-    .model-row {
-        grid-template-columns: 1fr;
-        align-items: stretch;
-    }
-
+    .model-row,
     .model-row.model-row-combined {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 82px);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         column-gap: 6px;
         align-items: center;
     }
 
+    .model-row .model-field,
     .model-row.model-row-combined .model-field {
         min-width: 0;
     }
 
+    .model-row .model-select,
+    .model-row .model-input,
     .model-row.model-row-combined .model-select,
     .model-row.model-row-combined .model-input {
         width: 100%;
@@ -5425,13 +5424,16 @@ label.hover-tooltip,
         max-width: 100%;
     }
 
+    .model-field-reasoning,
     .model-row.model-row-combined .model-field-reasoning {
-        max-width: 82px;
+        max-width: 100%;
     }
 
+    .model-field-reasoning .model-select,
+    .model-field-reasoning .model-input,
     .model-row.model-row-combined .model-field-reasoning .model-select,
     .model-row.model-row-combined .model-field-reasoning .model-input {
-        max-width: 82px;
+        max-width: 100%;
     }
 
     .model-footer-row {

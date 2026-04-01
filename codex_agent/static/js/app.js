@@ -6151,26 +6151,38 @@ function renderUsageHistoryLegend(history) {
     const fiveHourRatio = Number(relation?.five_hour?.tokens_per_percent);
     const weeklyRatio = Number(relation?.weekly?.tokens_per_percent);
     const tokenDeltaTotal = Number(history?.token_delta_total);
+    const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
+    const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
+    const relationScope = String(relation?.scope || history?.token_delta_scope || '').trim().toLowerCase() === 'account'
+        ? 'account'
+        : 'workspace';
+    const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
 
     const legendItems = [
         {
             key: 'token',
-            text: `Token delta ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
+            text: `Token delta (${scopeLabel}) ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
         },
         {
             key: 'five-hour',
             text: Number.isFinite(fiveHourRatio)
-                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok`
+                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok (${scopeLabel})`
                 : '5h ratio --'
         },
         {
             key: 'weekly',
             text: Number.isFinite(weeklyRatio)
-                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok`
+                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok (${scopeLabel})`
                 : 'Weekly ratio --'
         }
     ];
+    if (Number.isFinite(workspaceDeltaTotal) || Number.isFinite(accountDeltaTotal)) {
+        legendItems.push({
+            key: '',
+            text: `Workspace Δ ${Number.isFinite(workspaceDeltaTotal) ? formatNumber(workspaceDeltaTotal) : '--'} · Account Δ ${Number.isFinite(accountDeltaTotal) ? formatNumber(accountDeltaTotal) : '--'}`
+        });
+    }
     if (Number.isFinite(resetCount) && resetCount > 0) {
         legendItems.push({
             key: '',
@@ -6325,10 +6337,23 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         if (updatedAt) {
             metaParts.push(`Updated ${updatedAt}`);
         }
+        const relationScope = String(history?.relation?.scope || history?.token_delta_scope || '').trim().toLowerCase();
+        if (relationScope === 'account') {
+            metaParts.push('Relation account scope');
+        } else if (relationScope === 'workspace') {
+            metaParts.push('Relation workspace scope');
+        }
         const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
+        const workspaceTokenPath = typeof history?.scope?.workspace_token_usage_path === 'string'
+            ? history.scope.workspace_token_usage_path.trim()
+            : '';
+        const accountTokenPath = typeof history?.scope?.account_token_usage_path === 'string'
+            ? history.scope.account_token_usage_path.trim()
+            : '';
+        const titleParts = [pathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
         if (pathText) {
             metaParts.push(pathText);
-            elements.meta.setAttribute('title', pathText);
+            elements.meta.setAttribute('title', titleParts.join('\n'));
         } else {
             elements.meta.removeAttribute('title');
         }

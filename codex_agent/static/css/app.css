@@ -4000,10 +4000,13 @@ body.is-work-mode-resizing * {
     grid-template-columns: minmax(0, 1fr);
 }
 
-.model-apply-row {
+.model-footer-row {
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     margin-top: 6px;
+    padding-top: 8px;
 }
 
 .model-select,
@@ -4060,9 +4063,12 @@ body.is-work-mode-resizing * {
 
 .model-status {
     min-height: 14px;
-    margin-top: 6px;
+    margin-top: 0;
     font-size: 11px;
     color: var(--text-tertiary);
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .chat-input {
@@ -5428,8 +5434,9 @@ label.hover-tooltip,
         max-width: 82px;
     }
 
-    .model-apply-row {
+    .model-footer-row {
         margin-top: 6px;
+        padding-top: 6px;
     }
 
     .sessions,

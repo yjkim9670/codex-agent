@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .. import state
 from ..config import (
+    CODEX_ACCOUNT_TOKEN_USAGE_PATH,
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
@@ -121,6 +122,7 @@ _USAGE_HISTORY_MAX_ITEMS = 24 * 180
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
+_WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest()[:12]
 _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
     re.IGNORECASE
@@ -158,6 +160,34 @@ def _write_json_atomic(path, payload):
         encoding='utf-8'
     )
     temp_path.replace(path)
+
+
+def _lock_path_for(path):
+    return path.with_name(f'.{path.name}.lock')
+
+
+@contextmanager
+def _acquire_path_file_lock(path):
+    lock_path = _lock_path_for(path)
+    lock_handle = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_handle = lock_path.open('a+', encoding='utf-8')
+    except OSError:
+        # Some environments can expose a read-only HOME; continue without file lock.
+        lock_handle = None
+    if lock_handle is None:
+        yield
+        return
+    try:
+        _lock_file_handle(lock_handle)
+        yield
+    finally:
+        try:
+            _unlock_file_handle(lock_handle)
+        except Exception:
+            pass
+        lock_handle.close()
 
 
 _TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
@@ -881,11 +911,15 @@ def _normalize_token_usage_ledger_entry(value):
     return normalized
 
 
-def _load_token_usage_ledger():
-    if not CODEX_TOKEN_USAGE_PATH.exists():
+def _load_token_usage_ledger(path=CODEX_TOKEN_USAGE_PATH):
+    try:
+        exists = path.exists()
+    except Exception:
+        return _empty_token_usage_ledger()
+    if not exists:
         return _empty_token_usage_ledger()
     try:
-        data = json.loads(CODEX_TOKEN_USAGE_PATH.read_text(encoding='utf-8'))
+        data = json.loads(path.read_text(encoding='utf-8'))
     except Exception:
         return _empty_token_usage_ledger()
     if not isinstance(data, dict):
@@ -940,17 +974,66 @@ def _load_token_usage_ledger():
     return ledger
 
 
-def _save_token_usage_ledger(ledger):
-    CODEX_TOKEN_USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CODEX_TOKEN_USAGE_PATH.write_text(
-        json.dumps(ledger, ensure_ascii=False, indent=2),
-        encoding='utf-8'
-    )
+def _save_token_usage_ledger(ledger, path=CODEX_TOKEN_USAGE_PATH):
+    _write_json_atomic(path, ledger)
 
 
 def _token_usage_today_key():
     now = normalize_timestamp(None)
     return now.split('T', 1)[0]
+
+
+def _record_token_usage_to_path(
+    ledger_path,
+    event_key,
+    session_key,
+    usage,
+    source='stream',
+    now_iso='',
+    day_key='',
+):
+    normalized_usage = _normalize_token_usage(usage)
+    if not normalized_usage or not _token_usage_has_data(normalized_usage):
+        return False
+
+    try:
+        with _acquire_path_file_lock(ledger_path):
+            ledger = _load_token_usage_ledger(path=ledger_path)
+            events = ledger.setdefault('events', {})
+            if event_key in events:
+                return False
+
+            all_time = _normalize_token_usage_ledger_entry(ledger.get('all_time'))
+            combined_all_time = _add_token_usage(all_time, normalized_usage)
+            combined_all_time['requests'] = all_time.get('requests', 0) + 1
+            ledger['all_time'] = combined_all_time
+
+            by_day = ledger.setdefault('by_day', {})
+            day_entry = _normalize_token_usage_ledger_entry(by_day.get(day_key))
+            combined_day = _add_token_usage(day_entry, normalized_usage)
+            combined_day['requests'] = day_entry.get('requests', 0) + 1
+            by_day[day_key] = combined_day
+
+            by_session = ledger.setdefault('by_session', {})
+            session_entry = _normalize_token_usage_ledger_entry(by_session.get(session_key))
+            combined_session = _add_token_usage(session_entry, normalized_usage)
+            combined_session['requests'] = session_entry.get('requests', 0) + 1
+            combined_session['updated_at'] = now_iso
+            combined_session['source'] = str(source or 'stream')
+            by_session[session_key] = combined_session
+
+            events[event_key] = now_iso
+            if len(events) > _TOKEN_LEDGER_EVENT_LIMIT:
+                ordered_events = sorted(events.items(), key=lambda item: item[1])
+                for stale_key, _ in ordered_events[:-_TOKEN_LEDGER_EVENT_LIMIT]:
+                    events.pop(stale_key, None)
+
+            ledger['updated_at'] = now_iso
+            _save_token_usage_ledger(ledger, path=ledger_path)
+            return True
+    except Exception:
+        _LOGGER.debug('token usage ledger update skipped: %s', ledger_path, exc_info=True)
+        return False
 
 
 def _record_token_usage(event_id, session_id, usage, source='stream'):
@@ -964,50 +1047,42 @@ def _record_token_usage(event_id, session_id, usage, source='stream'):
     session_key = str(session_id or '').strip() or '__unknown__'
     now_iso = normalize_timestamp(None)
     day_key = _token_usage_today_key()
+    account_event_key = f'{_WORKSPACE_SCOPE_ID}:{event_key}'
+    account_session_key = f'{_WORKSPACE_SCOPE_ID}:{session_key}'
 
     with _TOKEN_USAGE_LOCK:
-        ledger = _load_token_usage_ledger()
-        events = ledger.setdefault('events', {})
-        if event_key in events:
-            return False
-
-        all_time = _normalize_token_usage_ledger_entry(ledger.get('all_time'))
-        combined_all_time = _add_token_usage(all_time, normalized_usage)
-        combined_all_time['requests'] = all_time.get('requests', 0) + 1
-        ledger['all_time'] = combined_all_time
-
-        by_day = ledger.setdefault('by_day', {})
-        day_entry = _normalize_token_usage_ledger_entry(by_day.get(day_key))
-        combined_day = _add_token_usage(day_entry, normalized_usage)
-        combined_day['requests'] = day_entry.get('requests', 0) + 1
-        by_day[day_key] = combined_day
-
-        by_session = ledger.setdefault('by_session', {})
-        session_entry = _normalize_token_usage_ledger_entry(by_session.get(session_key))
-        combined_session = _add_token_usage(session_entry, normalized_usage)
-        combined_session['requests'] = session_entry.get('requests', 0) + 1
-        combined_session['updated_at'] = now_iso
-        combined_session['source'] = str(source or 'stream')
-        by_session[session_key] = combined_session
-
-        events[event_key] = now_iso
-        if len(events) > _TOKEN_LEDGER_EVENT_LIMIT:
-            ordered_events = sorted(events.items(), key=lambda item: item[1])
-            for stale_key, _ in ordered_events[:-_TOKEN_LEDGER_EVENT_LIMIT]:
-                events.pop(stale_key, None)
-
-        ledger['updated_at'] = now_iso
-        _save_token_usage_ledger(ledger)
-        return True
+        recorded_workspace = _record_token_usage_to_path(
+            ledger_path=CODEX_TOKEN_USAGE_PATH,
+            event_key=event_key,
+            session_key=session_key,
+            usage=normalized_usage,
+            source=source,
+            now_iso=now_iso,
+            day_key=day_key,
+        )
+        recorded_account = _record_token_usage_to_path(
+            ledger_path=CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+            event_key=account_event_key,
+            session_key=account_session_key,
+            usage=normalized_usage,
+            source=source,
+            now_iso=now_iso,
+            day_key=day_key,
+        )
+    return recorded_workspace or recorded_account
 
 
-def get_token_usage_summary(recent_days=7):
+def get_token_usage_summary(recent_days=7, ledger_path=CODEX_TOKEN_USAGE_PATH):
     day_limit = _coerce_non_negative_int(recent_days)
     if day_limit is None or day_limit <= 0:
         day_limit = 7
 
     with _TOKEN_USAGE_LOCK:
-        ledger = _load_token_usage_ledger()
+        try:
+            with _acquire_path_file_lock(ledger_path):
+                ledger = _load_token_usage_ledger(path=ledger_path)
+        except Exception:
+            ledger = _empty_token_usage_ledger()
 
     today_key = _token_usage_today_key()
     today_entry = _normalize_token_usage_ledger_entry((ledger.get('by_day') or {}).get(today_key))
@@ -1022,7 +1097,7 @@ def get_token_usage_summary(recent_days=7):
     day_items.sort(key=lambda item: item.get('date', ''), reverse=True)
 
     return {
-        'path': str(CODEX_TOKEN_USAGE_PATH),
+        'path': str(ledger_path),
         'updated_at': ledger.get('updated_at'),
         'all_time': all_time,
         'today': {
@@ -1031,6 +1106,13 @@ def get_token_usage_summary(recent_days=7):
         },
         'recent_days': day_items[:day_limit],
     }
+
+
+def get_account_token_usage_summary(recent_days=7):
+    return get_token_usage_summary(
+        recent_days=recent_days,
+        ledger_path=CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+    )
 
 
 def record_token_usage_for_message(session_id, message_id, token_usage, source='message'):
@@ -1269,33 +1351,84 @@ def _normalize_usage_history_snapshot(value):
     recorded_at = normalize_timestamp(
         value.get('recorded_at') or value.get('captured_at') or bucket_start
     )
-    token_total = _coerce_non_negative_int(value.get('token_total'))
-    token_input = _coerce_non_negative_int(value.get('token_input'))
-    token_cached_input = _coerce_non_negative_int(value.get('token_cached_input'))
-    token_output = _coerce_non_negative_int(value.get('token_output'))
-    token_reasoning_output = _coerce_non_negative_int(value.get('token_reasoning_output'))
-    token_requests = _coerce_non_negative_int(value.get('token_requests'))
-    if token_total is None:
-        token_total = _coerce_non_negative_int(value.get('all_time_total_tokens'))
-    if token_input is None:
-        token_input = _coerce_non_negative_int(value.get('all_time_input_tokens'))
-    if token_cached_input is None:
-        token_cached_input = _coerce_non_negative_int(value.get('all_time_cached_input_tokens'))
-    if token_output is None:
-        token_output = _coerce_non_negative_int(value.get('all_time_output_tokens'))
-    if token_reasoning_output is None:
-        token_reasoning_output = _coerce_non_negative_int(value.get('all_time_reasoning_output_tokens'))
-    if token_requests is None:
-        token_requests = _coerce_non_negative_int(value.get('all_time_requests'))
+    workspace_token_total = _coerce_non_negative_int(value.get('token_workspace_total'))
+    workspace_token_input = _coerce_non_negative_int(value.get('token_workspace_input'))
+    workspace_token_cached_input = _coerce_non_negative_int(value.get('token_workspace_cached_input'))
+    workspace_token_output = _coerce_non_negative_int(value.get('token_workspace_output'))
+    workspace_token_reasoning_output = _coerce_non_negative_int(value.get('token_workspace_reasoning_output'))
+    workspace_token_requests = _coerce_non_negative_int(value.get('token_workspace_requests'))
+
+    if workspace_token_total is None:
+        workspace_token_total = _coerce_non_negative_int(value.get('token_total'))
+    if workspace_token_input is None:
+        workspace_token_input = _coerce_non_negative_int(value.get('token_input'))
+    if workspace_token_cached_input is None:
+        workspace_token_cached_input = _coerce_non_negative_int(value.get('token_cached_input'))
+    if workspace_token_output is None:
+        workspace_token_output = _coerce_non_negative_int(value.get('token_output'))
+    if workspace_token_reasoning_output is None:
+        workspace_token_reasoning_output = _coerce_non_negative_int(value.get('token_reasoning_output'))
+    if workspace_token_requests is None:
+        workspace_token_requests = _coerce_non_negative_int(value.get('token_requests'))
+
+    if workspace_token_total is None:
+        workspace_token_total = _coerce_non_negative_int(value.get('all_time_total_tokens'))
+    if workspace_token_input is None:
+        workspace_token_input = _coerce_non_negative_int(value.get('all_time_input_tokens'))
+    if workspace_token_cached_input is None:
+        workspace_token_cached_input = _coerce_non_negative_int(value.get('all_time_cached_input_tokens'))
+    if workspace_token_output is None:
+        workspace_token_output = _coerce_non_negative_int(value.get('all_time_output_tokens'))
+    if workspace_token_reasoning_output is None:
+        workspace_token_reasoning_output = _coerce_non_negative_int(value.get('all_time_reasoning_output_tokens'))
+    if workspace_token_requests is None:
+        workspace_token_requests = _coerce_non_negative_int(value.get('all_time_requests'))
+
+    account_token_total = _coerce_non_negative_int(value.get('token_account_total'))
+    account_token_input = _coerce_non_negative_int(value.get('token_account_input'))
+    account_token_cached_input = _coerce_non_negative_int(value.get('token_account_cached_input'))
+    account_token_output = _coerce_non_negative_int(value.get('token_account_output'))
+    account_token_reasoning_output = _coerce_non_negative_int(value.get('token_account_reasoning_output'))
+    account_token_requests = _coerce_non_negative_int(value.get('token_account_requests'))
+
+    if account_token_total is None:
+        account_token_total = _coerce_non_negative_int(value.get('account_all_time_total_tokens'))
+    if account_token_input is None:
+        account_token_input = _coerce_non_negative_int(value.get('account_all_time_input_tokens'))
+    if account_token_cached_input is None:
+        account_token_cached_input = _coerce_non_negative_int(value.get('account_all_time_cached_input_tokens'))
+    if account_token_output is None:
+        account_token_output = _coerce_non_negative_int(value.get('account_all_time_output_tokens'))
+    if account_token_reasoning_output is None:
+        account_token_reasoning_output = _coerce_non_negative_int(value.get('account_all_time_reasoning_output_tokens'))
+    if account_token_requests is None:
+        account_token_requests = _coerce_non_negative_int(value.get('account_all_time_requests'))
+
+    workspace_scope_id = str(value.get('workspace_scope_id') or '').strip() or _WORKSPACE_SCOPE_ID
+    workspace_path = str(value.get('workspace_path') or '').strip() or str(WORKSPACE_DIR)
     return {
         'bucket_start': bucket_start,
         'recorded_at': recorded_at,
-        'token_total': token_total or 0,
-        'token_input': token_input or 0,
-        'token_cached_input': token_cached_input or 0,
-        'token_output': token_output or 0,
-        'token_reasoning_output': token_reasoning_output or 0,
-        'token_requests': token_requests or 0,
+        'workspace_scope_id': workspace_scope_id,
+        'workspace_path': workspace_path,
+        'token_total': workspace_token_total or 0,
+        'token_input': workspace_token_input or 0,
+        'token_cached_input': workspace_token_cached_input or 0,
+        'token_output': workspace_token_output or 0,
+        'token_reasoning_output': workspace_token_reasoning_output or 0,
+        'token_requests': workspace_token_requests or 0,
+        'token_workspace_total': workspace_token_total or 0,
+        'token_workspace_input': workspace_token_input or 0,
+        'token_workspace_cached_input': workspace_token_cached_input or 0,
+        'token_workspace_output': workspace_token_output or 0,
+        'token_workspace_reasoning_output': workspace_token_reasoning_output or 0,
+        'token_workspace_requests': workspace_token_requests or 0,
+        'token_account_total': account_token_total or 0,
+        'token_account_input': account_token_input or 0,
+        'token_account_cached_input': account_token_cached_input or 0,
+        'token_account_output': account_token_output or 0,
+        'token_account_reasoning_output': account_token_reasoning_output or 0,
+        'token_account_requests': account_token_requests or 0,
         'five_hour_used_percent': _normalize_used_percent(value.get('five_hour_used_percent')),
         'weekly_used_percent': _normalize_used_percent(value.get('weekly_used_percent')),
         'five_hour_resets_at': _normalize_optional_timestamp(value.get('five_hour_resets_at')),
@@ -1303,11 +1436,15 @@ def _normalize_usage_history_snapshot(value):
     }
 
 
-def _load_usage_history_ledger():
-    if not CODEX_USAGE_HISTORY_PATH.exists():
+def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
+    try:
+        exists = path.exists()
+    except Exception:
+        return _empty_usage_history_ledger()
+    if not exists:
         return _empty_usage_history_ledger()
     try:
-        data = json.loads(CODEX_USAGE_HISTORY_PATH.read_text(encoding='utf-8'))
+        data = json.loads(path.read_text(encoding='utf-8'))
     except Exception:
         return _empty_usage_history_ledger()
     if not isinstance(data, dict):
@@ -1342,25 +1479,41 @@ def _load_usage_history_ledger():
     return ledger
 
 
-def _save_usage_history_ledger(ledger):
-    _write_json_atomic(CODEX_USAGE_HISTORY_PATH, ledger)
+def _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH):
+    _write_json_atomic(path, ledger)
 
 
 def _build_usage_history_snapshot(usage_summary):
     usage = usage_summary if isinstance(usage_summary, dict) else {}
     token_usage = usage.get('token_usage') if isinstance(usage.get('token_usage'), dict) else {}
-    all_time = _normalize_token_usage_ledger_entry(token_usage.get('all_time'))
+    account_token_usage = usage.get('account_token_usage') if isinstance(usage.get('account_token_usage'), dict) else {}
+    workspace_all_time = _normalize_token_usage_ledger_entry(token_usage.get('all_time'))
+    account_all_time = _normalize_token_usage_ledger_entry(account_token_usage.get('all_time'))
     five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
     weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
         'recorded_at': normalize_timestamp(None),
-        'token_total': all_time.get('total_tokens', 0),
-        'token_input': all_time.get('input_tokens', 0),
-        'token_cached_input': all_time.get('cached_input_tokens', 0),
-        'token_output': all_time.get('output_tokens', 0),
-        'token_reasoning_output': all_time.get('reasoning_output_tokens', 0),
-        'token_requests': all_time.get('requests', 0),
+        'workspace_scope_id': _WORKSPACE_SCOPE_ID,
+        'workspace_path': str(WORKSPACE_DIR),
+        'token_total': workspace_all_time.get('total_tokens', 0),
+        'token_input': workspace_all_time.get('input_tokens', 0),
+        'token_cached_input': workspace_all_time.get('cached_input_tokens', 0),
+        'token_output': workspace_all_time.get('output_tokens', 0),
+        'token_reasoning_output': workspace_all_time.get('reasoning_output_tokens', 0),
+        'token_requests': workspace_all_time.get('requests', 0),
+        'token_workspace_total': workspace_all_time.get('total_tokens', 0),
+        'token_workspace_input': workspace_all_time.get('input_tokens', 0),
+        'token_workspace_cached_input': workspace_all_time.get('cached_input_tokens', 0),
+        'token_workspace_output': workspace_all_time.get('output_tokens', 0),
+        'token_workspace_reasoning_output': workspace_all_time.get('reasoning_output_tokens', 0),
+        'token_workspace_requests': workspace_all_time.get('requests', 0),
+        'token_account_total': account_all_time.get('total_tokens', 0),
+        'token_account_input': account_all_time.get('input_tokens', 0),
+        'token_account_cached_input': account_all_time.get('cached_input_tokens', 0),
+        'token_account_output': account_all_time.get('output_tokens', 0),
+        'token_account_reasoning_output': account_all_time.get('reasoning_output_tokens', 0),
+        'token_account_requests': account_all_time.get('requests', 0),
         'five_hour_used_percent': five_hour.get('used_percent'),
         'weekly_used_percent': weekly.get('used_percent'),
         'five_hour_resets_at': five_hour.get('resets_at'),
@@ -1382,31 +1535,36 @@ def record_usage_snapshot_if_due(force=False, usage_summary=None):
     requested_force = bool(force)
     recorded = False
     with _USAGE_HISTORY_LOCK:
-        ledger = _load_usage_history_ledger()
-        items = list(ledger.get('items') or [])
-        existing_index = -1
-        for idx, item in enumerate(items):
-            if item.get('bucket_start') == snapshot['bucket_start']:
-                existing_index = idx
-                break
-        if existing_index >= 0:
-            if requested_force:
-                if items[existing_index] != snapshot:
-                    items[existing_index] = snapshot
+        try:
+            with _acquire_path_file_lock(CODEX_USAGE_HISTORY_PATH):
+                ledger = _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH)
+                items = list(ledger.get('items') or [])
+                existing_index = -1
+                for idx, item in enumerate(items):
+                    if item.get('bucket_start') == snapshot['bucket_start']:
+                        existing_index = idx
+                        break
+                if existing_index >= 0:
+                    if requested_force:
+                        if items[existing_index] != snapshot:
+                            items[existing_index] = snapshot
+                            recorded = True
+                    else:
+                        snapshot = items[existing_index]
+                else:
+                    items.append(snapshot)
                     recorded = True
-            else:
-                snapshot = items[existing_index]
-        else:
-            items.append(snapshot)
-            recorded = True
 
-        if recorded:
-            items.sort(key=lambda item: item.get('bucket_start', ''))
-            if len(items) > _USAGE_HISTORY_MAX_ITEMS:
-                items = items[-_USAGE_HISTORY_MAX_ITEMS:]
-            ledger['items'] = items
-            ledger['updated_at'] = normalize_timestamp(None)
-            _save_usage_history_ledger(ledger)
+                if recorded:
+                    items.sort(key=lambda item: item.get('bucket_start', ''))
+                    if len(items) > _USAGE_HISTORY_MAX_ITEMS:
+                        items = items[-_USAGE_HISTORY_MAX_ITEMS:]
+                    ledger['items'] = items
+                    ledger['updated_at'] = normalize_timestamp(None)
+                    _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH)
+        except Exception:
+            _LOGGER.debug('usage history snapshot update skipped', exc_info=True)
+            recorded = False
 
     return {
         'recorded': recorded,
@@ -1422,20 +1580,38 @@ def _build_usage_history_items(items):
         snapshot = _normalize_usage_history_snapshot(raw)
         if not snapshot:
             continue
-        token_total = snapshot.get('token_total', 0)
+        workspace_token_total = _coerce_non_negative_int(
+            snapshot.get('token_workspace_total')
+        )
+        if workspace_token_total is None:
+            workspace_token_total = _coerce_non_negative_int(snapshot.get('token_total'))
+        workspace_token_total = workspace_token_total or 0
+        account_token_total = _coerce_non_negative_int(snapshot.get('token_account_total')) or 0
         five_hour_used = snapshot.get('five_hour_used_percent')
         weekly_used = snapshot.get('weekly_used_percent')
         reset_detected = False
 
-        delta_tokens = 0
+        delta_workspace_tokens = 0
+        delta_account_tokens = 0
         delta_five_hour_used = None
         delta_weekly_used = None
         if previous:
-            previous_token_total = int(previous.get('token_total') or 0)
-            delta_tokens = token_total - previous_token_total
-            if delta_tokens < 0:
+            previous_workspace_total = _coerce_non_negative_int(
+                previous.get('token_workspace_total')
+            )
+            if previous_workspace_total is None:
+                previous_workspace_total = _coerce_non_negative_int(previous.get('token_total'))
+            previous_workspace_total = previous_workspace_total or 0
+            delta_workspace_tokens = workspace_token_total - previous_workspace_total
+            if delta_workspace_tokens < 0:
                 reset_detected = True
-                delta_tokens = token_total
+                delta_workspace_tokens = workspace_token_total
+
+            previous_account_total = _coerce_non_negative_int(previous.get('token_account_total')) or 0
+            delta_account_tokens = account_token_total - previous_account_total
+            if delta_account_tokens < 0:
+                reset_detected = True
+                delta_account_tokens = account_token_total
 
             previous_five_used = previous.get('five_hour_used_percent')
             previous_weekly_used = previous.get('weekly_used_percent')
@@ -1474,31 +1650,74 @@ def _build_usage_history_items(items):
             ):
                 reset_detected = True
 
-        tokens_per_five_hour_percent = None
-        tokens_per_weekly_percent = None
-        if delta_tokens > 0 and isinstance(delta_five_hour_used, (int, float)) and delta_five_hour_used > 0:
-            tokens_per_five_hour_percent = round(delta_tokens / delta_five_hour_used, 3)
-        if delta_tokens > 0 and isinstance(delta_weekly_used, (int, float)) and delta_weekly_used > 0:
-            tokens_per_weekly_percent = round(delta_tokens / delta_weekly_used, 3)
+        workspace_tokens_per_five_hour_percent = None
+        workspace_tokens_per_weekly_percent = None
+        account_tokens_per_five_hour_percent = None
+        account_tokens_per_weekly_percent = None
+        if (
+            delta_workspace_tokens > 0
+            and isinstance(delta_five_hour_used, (int, float))
+            and delta_five_hour_used > 0
+        ):
+            workspace_tokens_per_five_hour_percent = round(
+                delta_workspace_tokens / delta_five_hour_used,
+                3
+            )
+        if (
+            delta_workspace_tokens > 0
+            and isinstance(delta_weekly_used, (int, float))
+            and delta_weekly_used > 0
+        ):
+            workspace_tokens_per_weekly_percent = round(
+                delta_workspace_tokens / delta_weekly_used,
+                3
+            )
+        if (
+            delta_account_tokens > 0
+            and isinstance(delta_five_hour_used, (int, float))
+            and delta_five_hour_used > 0
+        ):
+            account_tokens_per_five_hour_percent = round(
+                delta_account_tokens / delta_five_hour_used,
+                3
+            )
+        if (
+            delta_account_tokens > 0
+            and isinstance(delta_weekly_used, (int, float))
+            and delta_weekly_used > 0
+        ):
+            account_tokens_per_weekly_percent = round(
+                delta_account_tokens / delta_weekly_used,
+                3
+            )
 
         derived.append({
             **snapshot,
-            'delta_tokens': max(0, int(delta_tokens)),
+            'token_total': workspace_token_total,
+            'token_workspace_total': workspace_token_total,
+            'token_account_total': account_token_total,
+            'delta_tokens': max(0, int(delta_workspace_tokens)),
+            'delta_workspace_tokens': max(0, int(delta_workspace_tokens)),
+            'delta_account_tokens': max(0, int(delta_account_tokens)),
             'delta_five_hour_used_percent': delta_five_hour_used,
             'delta_weekly_used_percent': delta_weekly_used,
             'reset_detected': reset_detected,
-            'tokens_per_five_hour_percent': tokens_per_five_hour_percent,
-            'tokens_per_weekly_percent': tokens_per_weekly_percent,
+            'tokens_per_five_hour_percent': workspace_tokens_per_five_hour_percent,
+            'tokens_per_weekly_percent': workspace_tokens_per_weekly_percent,
+            'tokens_per_five_hour_percent_workspace': workspace_tokens_per_five_hour_percent,
+            'tokens_per_weekly_percent_workspace': workspace_tokens_per_weekly_percent,
+            'tokens_per_five_hour_percent_account': account_tokens_per_five_hour_percent,
+            'tokens_per_weekly_percent_account': account_tokens_per_weekly_percent,
         })
         previous = snapshot
     return derived
 
 
-def _aggregate_tokens_per_percent(history_items, delta_key):
+def _aggregate_tokens_per_percent(history_items, delta_key, token_delta_key='delta_tokens'):
     token_sum = 0
     percent_sum = 0.0
     for item in history_items:
-        delta_tokens = _coerce_non_negative_int(item.get('delta_tokens')) or 0
+        delta_tokens = _coerce_non_negative_int(item.get(token_delta_key)) or 0
         delta_percent = _coerce_float(item.get(delta_key))
         if delta_tokens <= 0 or delta_percent is None or delta_percent <= 0:
             continue
@@ -1524,7 +1743,11 @@ def get_usage_history_summary(hours=168):
     requested_hours = min(requested_hours, _USAGE_HISTORY_MAX_ITEMS)
 
     with _USAGE_HISTORY_LOCK:
-        ledger = _load_usage_history_ledger()
+        try:
+            with _acquire_path_file_lock(CODEX_USAGE_HISTORY_PATH):
+                ledger = _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH)
+        except Exception:
+            ledger = _empty_usage_history_ledger()
 
     items = list(ledger.get('items') or [])
     if requested_hours > 0 and len(items) > requested_hours:
@@ -1534,9 +1757,65 @@ def get_usage_history_summary(hours=168):
     last_bucket = history_items[-1]['bucket_start'] if history_items else ''
     first_recorded = history_items[0]['recorded_at'] if history_items else ''
     last_recorded = history_items[-1]['recorded_at'] if history_items else ''
-    token_delta_total = sum((_coerce_non_negative_int(item.get('delta_tokens')) or 0) for item in history_items)
-    five_hour_relation = _aggregate_tokens_per_percent(history_items, 'delta_five_hour_used_percent')
-    weekly_relation = _aggregate_tokens_per_percent(history_items, 'delta_weekly_used_percent')
+    workspace_token_delta_total = sum(
+        (_coerce_non_negative_int(item.get('delta_workspace_tokens')) or 0)
+        for item in history_items
+    )
+    account_token_delta_total = sum(
+        (_coerce_non_negative_int(item.get('delta_account_tokens')) or 0)
+        for item in history_items
+    )
+    relation_scope = 'account' if account_token_delta_total > 0 else 'workspace'
+    token_delta_total = account_token_delta_total if relation_scope == 'account' else workspace_token_delta_total
+    token_delta_key = 'delta_account_tokens' if relation_scope == 'account' else 'delta_workspace_tokens'
+
+    if relation_scope == 'account':
+        history_items = [
+            {
+                **item,
+                'delta_tokens': _coerce_non_negative_int(item.get('delta_account_tokens')) or 0,
+                'tokens_per_five_hour_percent': item.get('tokens_per_five_hour_percent_account'),
+                'tokens_per_weekly_percent': item.get('tokens_per_weekly_percent_account'),
+            }
+            for item in history_items
+        ]
+    else:
+        history_items = [
+            {
+                **item,
+                'delta_tokens': _coerce_non_negative_int(item.get('delta_workspace_tokens')) or 0,
+                'tokens_per_five_hour_percent': item.get('tokens_per_five_hour_percent_workspace'),
+                'tokens_per_weekly_percent': item.get('tokens_per_weekly_percent_workspace'),
+            }
+            for item in history_items
+        ]
+
+    workspace_five_hour_relation = _aggregate_tokens_per_percent(
+        history_items,
+        'delta_five_hour_used_percent',
+        token_delta_key='delta_workspace_tokens',
+    )
+    workspace_weekly_relation = _aggregate_tokens_per_percent(
+        history_items,
+        'delta_weekly_used_percent',
+        token_delta_key='delta_workspace_tokens',
+    )
+    account_five_hour_relation = _aggregate_tokens_per_percent(
+        history_items,
+        'delta_five_hour_used_percent',
+        token_delta_key='delta_account_tokens',
+    )
+    account_weekly_relation = _aggregate_tokens_per_percent(
+        history_items,
+        'delta_weekly_used_percent',
+        token_delta_key='delta_account_tokens',
+    )
+    five_hour_relation = (
+        account_five_hour_relation if relation_scope == 'account' else workspace_five_hour_relation
+    )
+    weekly_relation = (
+        account_weekly_relation if relation_scope == 'account' else workspace_weekly_relation
+    )
     reset_count = sum(1 for item in history_items if item.get('reset_detected'))
 
     return {
@@ -1550,11 +1829,32 @@ def get_usage_history_summary(hours=168):
         'last_bucket_start': last_bucket,
         'first_recorded_at': first_recorded,
         'last_recorded_at': last_recorded,
+        'token_delta_scope': relation_scope,
         'token_delta_total': token_delta_total,
+        'token_delta_total_workspace': workspace_token_delta_total,
+        'token_delta_total_account': account_token_delta_total,
         'reset_detected_count': reset_count,
         'relation': {
+            'scope': relation_scope,
             'five_hour': five_hour_relation,
             'weekly': weekly_relation,
+            'workspace': {
+                'five_hour': workspace_five_hour_relation,
+                'weekly': workspace_weekly_relation,
+            },
+            'account': {
+                'five_hour': account_five_hour_relation,
+                'weekly': account_weekly_relation,
+            },
+        },
+        'scope': {
+            'workspace_id': _WORKSPACE_SCOPE_ID,
+            'workspace_path': str(WORKSPACE_DIR),
+            'workspace_token_usage_path': str(CODEX_TOKEN_USAGE_PATH),
+            'account_token_usage_path': str(CODEX_ACCOUNT_TOKEN_USAGE_PATH),
+            'limits_source_path': str(CODEX_SESSIONS_PATH),
+            'relation_scope': relation_scope,
+            'token_delta_key': token_delta_key,
         },
         'items': history_items
     }
@@ -1587,12 +1887,14 @@ def ensure_usage_snapshot_background_worker():
 def get_usage_summary():
     account_name = _read_account_name()
     token_usage = get_token_usage_summary()
+    account_token_usage = get_account_token_usage_summary()
     if not CODEX_SESSIONS_PATH.exists():
         return {
             'five_hour': None,
             'weekly': None,
             'account_name': account_name,
-            'token_usage': token_usage
+            'token_usage': token_usage,
+            'account_token_usage': account_token_usage,
         }
     try:
         files = sorted(
@@ -1605,7 +1907,8 @@ def get_usage_summary():
             'five_hour': None,
             'weekly': None,
             'account_name': account_name,
-            'token_usage': token_usage
+            'token_usage': token_usage,
+            'account_token_usage': account_token_usage,
         }
     best_limits = None
     best_timestamp = None
@@ -1625,12 +1928,14 @@ def get_usage_summary():
     if best_limits and (best_limits.get('five_hour') or best_limits.get('weekly')):
         best_limits['account_name'] = account_name
         best_limits['token_usage'] = token_usage
+        best_limits['account_token_usage'] = account_token_usage
         return best_limits
     return {
         'five_hour': None,
         'weekly': None,
         'account_name': account_name,
-        'token_usage': token_usage
+        'token_usage': token_usage,
+        'account_token_usage': account_token_usage,
     }
 
 

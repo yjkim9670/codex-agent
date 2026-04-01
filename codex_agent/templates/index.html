@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=111">
+    <link rel="stylesheet" href="/static/css/app.css?v=113">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -259,17 +259,6 @@
                                     <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
                                 </div>
                             </div>
-                            <div class="model-apply-row">
-                                <button
-                                    class="btn ghost icon-only model-apply"
-                                    type="button"
-                                    id="codex-model-apply"
-                                    aria-label="Apply model and reasoning settings"
-                                    title="Apply model and reasoning settings"
-                                >
-                                    <span class="sr-only">Apply settings</span>
-                                </button>
-                            </div>
                             <label class="model-sub-label" for="codex-plan-mode-model-input">Plan mode model · Reasoning effort</label>
                             <div class="model-row">
                                 <div class="model-field model-field-plan-model">
@@ -281,7 +270,18 @@
                                     <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
-                            <div class="model-status" id="codex-model-status">Refresh to load</div>
+                            <div class="model-footer-row">
+                                <div class="model-status" id="codex-model-status">Refresh to load</div>
+                                <button
+                                    class="btn ghost icon-only model-apply"
+                                    type="button"
+                                    id="codex-model-apply"
+                                    aria-label="Apply model and reasoning settings"
+                                    title="Apply model and reasoning settings"
+                                >
+                                    <span class="sr-only">Apply settings</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -671,6 +671,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=94"></script>
+    <script src="/static/js/app.js?v=95"></script>
 </body>
 </html>

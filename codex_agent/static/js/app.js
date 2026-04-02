@@ -234,7 +234,8 @@ let workModeHtmlPreviewState = {
     root: FILE_BROWSER_ROOT_WORKSPACE,
     path: '',
     previewUrl: '',
-    suspended: false
+    suspended: false,
+    viewerScroll: null
 };
 let remoteStreamStatusCache = {
     streams: [],
@@ -3093,6 +3094,25 @@ function captureWorkModeFileViewerScrollSnapshot({ includeContext = false } = {}
     };
 }
 
+function resolveWorkModeFileViewerScrollSnapshotForPersist() {
+    const liveSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
+    if (!workModeHtmlPreviewState?.suspended) {
+        return liveSnapshot;
+    }
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
+    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
+    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
+        return liveSnapshot;
+    }
+    const suspendedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
+        workModeHtmlPreviewState?.viewerScroll,
+        { includeContext: true }
+    );
+    return suspendedSnapshot || liveSnapshot;
+}
+
 function applyWorkModeFileViewerScrollSnapshot(snapshot, { renderToken = '' } = {}) {
     const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
     if (!normalized) return false;
@@ -3132,7 +3152,7 @@ function persistWorkModeFileViewState() {
             mobileBrowseView: normalizeWorkModeMobileBrowseView(workModeMobileBrowseView),
             viewerFullscreen: Boolean(workModeFileViewerFullscreen),
             scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
-            viewerScroll: captureWorkModeFileViewerScrollSnapshot({ includeContext: true }),
+            viewerScroll: resolveWorkModeFileViewerScrollSnapshotForPersist(),
             savedAt: Date.now()
         };
         window.sessionStorage?.setItem(WORK_MODE_FILE_VIEW_STATE_KEY, JSON.stringify(payload));
@@ -3248,9 +3268,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     ) {
         const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
         if (viewerSnapshot) {
-            pendingWorkModeFileViewerScrollRestore = viewerSnapshot;
+            const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot) || viewerSnapshot;
+            pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
         }
-        suspendWorkModeHtmlPreviewForMobileTransition(fileElements);
+        suspendWorkModeHtmlPreviewForMobileTransition(fileElements, { viewerSnapshot });
     }
 
     if (applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT) {
@@ -6869,17 +6890,42 @@ function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = ''
     setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
 }
 
+function syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot = null) {
+    const normalizedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
+        viewerSnapshot,
+        { includeContext: true }
+    );
+    if (!normalizedSnapshot) return null;
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
+    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
+    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
+        return normalizedSnapshot;
+    }
+    setWorkModeHtmlPreviewState({
+        root: previewRoot,
+        path: previewPath,
+        previewUrl: workModeHtmlPreviewState?.previewUrl || '',
+        suspended: Boolean(workModeHtmlPreviewState?.suspended),
+        viewerScroll: normalizedSnapshot
+    });
+    return normalizedSnapshot;
+}
+
 function setWorkModeHtmlPreviewState({
     root = workModeFileRoot,
     path = '',
     previewUrl = '',
-    suspended = false
+    suspended = false,
+    viewerScroll = null
 } = {}) {
     workModeHtmlPreviewState = {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
         previewUrl: String(previewUrl || '').trim(),
-        suspended: Boolean(suspended)
+        suspended: Boolean(suspended),
+        viewerScroll: normalizeWorkModeFileViewerScrollSnapshot(viewerScroll, { includeContext: true })
     };
     syncWorkModeHtmlPreviewOpenButton();
 }
@@ -6889,7 +6935,8 @@ function clearWorkModeHtmlPreviewState() {
         root: workModeFileRoot,
         path: '',
         previewUrl: '',
-        suspended: false
+        suspended: false,
+        viewerScroll: null
     });
 }
 
@@ -6942,23 +6989,26 @@ function openWorkModeHtmlPreviewInNewWindow() {
     return true;
 }
 
-function suspendWorkModeHtmlPreviewForMobileTransition(elements) {
+function suspendWorkModeHtmlPreviewForMobileTransition(elements, { viewerSnapshot = null } = {}) {
     if (!elements?.viewerContent) return false;
     const iframe = elements.viewerContent.querySelector('.file-browser-html-preview');
     if (!(iframe instanceof HTMLIFrameElement)) return false;
     const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
     const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
     if (!previewUrl || !selectedPath) return false;
-    const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
-    if (viewerSnapshot) {
-        pendingWorkModeFileViewerScrollRestore = viewerSnapshot;
+    const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(
+        viewerSnapshot || captureWorkModeFileViewerScrollSnapshot({ includeContext: true })
+    );
+    if (normalizedViewerSnapshot) {
+        pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
     }
     setFilePanelViewerPlaceholder(elements, 'HTML 미리보기가 일시중지되었습니다. 목록에서 다시 열면 복원됩니다.');
     setWorkModeHtmlPreviewState({
         root: workModeFileRoot,
         path: selectedPath,
         previewUrl,
-        suspended: true
+        suspended: true,
+        viewerScroll: normalizedViewerSnapshot
     });
     return true;
 }

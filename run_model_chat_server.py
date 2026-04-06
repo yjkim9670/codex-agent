@@ -3,6 +3,7 @@
 """Entry point for the Model Chat server."""
 
 import argparse
+import importlib
 import json
 import logging
 import os
@@ -110,18 +111,18 @@ def _resolve_config_env_references(value):
     return _resolve_env_reference(value)
 
 
-def _resolve_config_path(script_path):
+def _resolve_config_path(script_path, default_config_filename=DEFAULT_CONFIG_FILENAME):
     configured = os.environ.get('MODEL_AGENT_CONFIG_PATH', '').strip()
     if configured:
         candidate = Path(configured).expanduser()
         if not candidate.is_absolute():
             candidate = (script_path / candidate).resolve()
         return candidate
-    return script_path / DEFAULT_CONFIG_FILENAME
+    return script_path / default_config_filename
 
 
-def load_runtime_config(script_path):
-    config_path = _resolve_config_path(script_path)
+def load_runtime_config(script_path, default_config_filename=DEFAULT_CONFIG_FILENAME):
+    config_path = _resolve_config_path(script_path, default_config_filename=default_config_filename)
     if not config_path.exists():
         _print_info(f"[INFO] Config file not found. Using defaults: {config_path}")
         return {}, config_path
@@ -185,6 +186,8 @@ def apply_runtime_environment(config, config_path):
         _set_env_from_config('MODEL_WORKSPACE_DIR', workspace_dir)
     else:
         _set_env_default('MODEL_WORKSPACE_DIR', workspace_dir)
+    if runtime_config.get('storage_namespace') is not None:
+        _set_env_from_config('MODEL_AGENT_STORAGE_NAMESPACE', str(runtime_config.get('storage_namespace')).strip())
     _set_env_default('MODEL_CHAT_SECRET_KEY', runtime_config.get('secret_key'))
     _set_env_default('MODEL_DEFAULT_PROVIDER', runtime_config.get('default_provider'))
 
@@ -217,6 +220,10 @@ def apply_runtime_environment(config, config_path):
             'api_base_urls': 'MODEL_DTGPT_API_BASE_URLS',
             'default_model': 'MODEL_DTGPT_DEFAULT_MODEL',
             'model_options': 'MODEL_DTGPT_MODEL_OPTIONS',
+        },
+        'claude': {
+            'default_model': 'MODEL_CLAUDE_DEFAULT_MODEL',
+            'model_options': 'MODEL_CLAUDE_MODEL_OPTIONS',
         },
     }
 
@@ -304,8 +311,8 @@ os.chdir(script_dir)
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-def parse_args(server_defaults):
-    parser = argparse.ArgumentParser(description='Run Model Chat server.')
+def parse_args(server_defaults, description='Run Model Chat server.'):
+    parser = argparse.ArgumentParser(description=description)
     default_port = server_defaults['port']
     default_host = server_defaults['host']
     parser.add_argument(
@@ -325,12 +332,39 @@ def parse_args(server_defaults):
         parser.error('--port must be between 1 and 65535')
     return args
 
-if __name__ == '__main__':
-    runtime_config, config_path = load_runtime_config(script_dir)
+
+def _import_app_factory(import_target):
+    target = str(import_target or '').strip()
+    if not target:
+        raise ImportError('App factory import target is empty.')
+
+    module_name, separator, attribute_name = target.partition(':')
+    if not separator or not module_name or not attribute_name:
+        raise ImportError(
+            f'Invalid app factory target: {target}. Expected module.path:callable_name'
+        )
+
+    module = importlib.import_module(module_name)
+    factory = getattr(module, attribute_name, None)
+    if factory is None or not callable(factory):
+        raise ImportError(f'App factory is not callable: {target}')
+    return factory
+
+
+def main(
+        default_config_filename=DEFAULT_CONFIG_FILENAME,
+        cli_description='Run Model Chat server.',
+        startup_label='Model Chat Server',
+        access_label='Model chat API',
+        app_factory_import='model_agent.model_app:create_model_app'):
+    runtime_config, config_path = load_runtime_config(
+        script_dir,
+        default_config_filename=default_config_filename,
+    )
     apply_runtime_environment(runtime_config, config_path)
     ensure_workspace_directory(script_dir)
     server_defaults = get_server_defaults(runtime_config)
-    args = parse_args(server_defaults)
+    args = parse_args(server_defaults, description=cli_description)
     if QUIET_MODE:
         logging.getLogger('werkzeug').setLevel(logging.ERROR)
         try:
@@ -339,7 +373,7 @@ if __name__ == '__main__':
         except Exception:
             pass
     try:
-        from model_agent.model_app import create_model_app
+        create_app = _import_app_factory(app_factory_import)
     except ImportError as exc:
         _print_error(f"[ERROR] Failed to import model chat modules: {exc}")
         _print_error(f"[ERROR] Current directory: {os.getcwd()}")
@@ -347,10 +381,10 @@ if __name__ == '__main__':
         _print_error(f"[ERROR] Python path: {sys.path[:3]}")
         sys.exit(1)
 
-    app = create_model_app()
+    app = create_app()
     use_reloader = server_defaults['use_reloader']
-    _print_info("[INFO] Starting Model Chat Server...")
-    _print_info(f"[INFO] Access the Model chat API at: http://localhost:{args.port}")
+    _print_info(f"[INFO] Starting {startup_label}...")
+    _print_info(f"[INFO] Access the {access_label} at: http://localhost:{args.port}")
     app.run(
         debug=server_defaults['debug'],
         host=args.host,
@@ -358,3 +392,7 @@ if __name__ == '__main__':
         use_reloader=use_reloader,
         threaded=server_defaults['threaded'],
     )
+
+
+if __name__ == '__main__':
+    main()

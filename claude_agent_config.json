@@ -1,0 +1,36 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3200,
+    "debug": true,
+    "use_reloader": true,
+    "threaded": true
+  },
+  "agent": {
+    "storage_namespace": "claude",
+    "workspace_dir": "./workspace",
+    "workspace_blocked_paths": [],
+    "secret_key": "model-chat-secret-key-change-in-production",
+    "default_provider": "claude",
+    "provider_options": [
+      "claude"
+    ],
+    "providers": {
+      "claude": {
+        "default_model": "sonnet",
+        "model_options": [
+          "sonnet",
+          "opus"
+        ]
+      }
+    },
+    "max_prompt_chars": 4000,
+    "context_max_chars": 12000,
+    "exec_timeout_seconds": 600,
+    "api_timeout_seconds": 600,
+    "stream_ttl_seconds": 900,
+    "max_title_chars": 80,
+    "max_provider_chars": 32,
+    "max_model_chars": 80
+  }
+}

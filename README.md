@@ -5,7 +5,8 @@ Codex chat server that powers the Configuration > Codex 채팅 UI.
 ## Requirements
 - Python 3.10+
 - Codex CLI available on PATH (`codex`)
-- API key for at least one Model Agent provider (`gemini` or `dtgpt`)
+- Claude CLI available on PATH (`claude`) when running Claude Agent
+- API key for at least one Model Agent provider (`gemini` or `dtgpt`) when running Model Agent
 
 ## Setup
 ```bash
@@ -39,6 +40,7 @@ python run_model_chat_server.py
 ```
 
 Model Agent listens on `http://localhost:3100` by default.
+The default Model Agent profile remains the existing `gemini` + `dtgpt` setup.
 
 If a model response includes a unified diff block (for example, fenced with `diff` or `patch`), Model Agent will attempt to apply it to `agent.workspace_dir` automatically via `git apply`.
 Paths configured in `agent.workspace_blocked_paths` are excluded from Patch Apply and git stage/commit actions.
@@ -81,6 +83,22 @@ Default config is Linux-friendly for file edits:
 - `agent.workspace_dir` = `./workspace`
 - `agent.workspace_blocked_paths` = `[]`
 
+## Run Claude Agent
+```bash
+python run_claude_chat_server.py
+```
+
+Claude Agent listens on `http://localhost:3200` by default and reuses the same UI shell with Claude-only defaults.
+Claude Agent is separated from Model Agent storage, so it keeps its own session/settings/usage files under `workspace/claude_*.json`.
+
+Claude Agent reads `./claude_agent_config.json` automatically.
+The default profile is:
+- `agent.storage_namespace` = `claude`
+- `agent.default_provider` = `claude`
+- `agent.provider_options` = `["claude"]`
+- `agent.providers.claude.default_model` = `sonnet`
+- `agent.providers.claude.model_options` = `["sonnet", "opus"]`
+
 ## Generate Model Agent Bundle Script
 If you need a single shell script that recreates `model_agent/`, `run_model_chat_server.py`, `run_model_chat_server.sh`, `run_linux.sh`, `run_window.ps1`, and `model_agent_config.json` using per-file `gzip + base64` payloads:
 
@@ -109,6 +127,17 @@ Update this single file to manage Model Agent runtime values:
 - `agent.workspace_dir`, `agent.workspace_blocked_paths`, `agent.secret_key`, `agent.default_provider`, `agent.provider_options`
 - `agent.providers.gemini.api_key`, `agent.providers.gemini.api_base_url`, `agent.providers.gemini.default_model`, `agent.providers.gemini.model_options`
 - `agent.providers.dtgpt.api_key`, `agent.providers.dtgpt.api_key_env`, `agent.providers.dtgpt.api_key_header`, `agent.providers.dtgpt.api_key_prefix`, `agent.providers.dtgpt.api_base_url`, `agent.providers.dtgpt.api_base_urls`, `agent.providers.dtgpt.default_model`, `agent.providers.dtgpt.model_options`
+- `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`
+- `agent.max_title_chars`, `agent.max_provider_chars`, `agent.max_model_chars`
+
+### Claude Agent JSON Config
+`run_claude_chat_server.py` reads `./claude_agent_config.json` automatically.
+
+Update this file to manage Claude Agent runtime values:
+- `server.host`, `server.port`, `server.debug`, `server.use_reloader`, `server.threaded`
+- `agent.storage_namespace`, `agent.workspace_dir`, `agent.workspace_blocked_paths`, `agent.secret_key`
+- `agent.default_provider`, `agent.provider_options`
+- `agent.providers.claude.default_model`, `agent.providers.claude.model_options`
 - `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`
 - `agent.max_title_chars`, `agent.max_provider_chars`, `agent.max_model_chars`
 

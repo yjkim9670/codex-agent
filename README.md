@@ -91,6 +91,13 @@ python run_claude_chat_server.py
 Claude Agent listens on `http://localhost:3200` by default and reuses the same UI shell with Claude-only defaults.
 Claude Agent is separated from Model Agent storage, so it keeps its own session/settings/usage files under `workspace/claude_*.json`.
 
+Run with the helper launcher:
+```bash
+./run_claude_chat_server.sh
+```
+
+If `3200` is already in use, the launcher increments the port one by one until it finds an available port (`3201`, `3202`, ...).
+
 Claude Agent reads `./claude_agent_config.json` automatically.
 The default profile is:
 - `agent.storage_namespace` = `claude`

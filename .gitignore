@@ -3,6 +3,13 @@ __pycache__/
 .env
 model_agent_env.local.sh
 workspace/
+# runtime agent state snapshots/logs
+workspace/.agent_state/
+workspace/*_chat_sessions.json
+workspace/*_settings.json
+workspace/*_usage_history*.json
+workspace/*_usage_summary.json
+workspace/*_token_usage.json
 .sync_runtime/
 .venv/
 tests/

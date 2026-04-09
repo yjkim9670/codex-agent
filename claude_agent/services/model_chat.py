@@ -328,6 +328,9 @@ def get_model_options(provider=None):
 def _resolve_existing_path(primary_path, legacy_path):
     if primary_path.exists():
         return primary_path
+    workspace_legacy_path = WORKSPACE_DIR / primary_path.name
+    if workspace_legacy_path != primary_path and workspace_legacy_path.exists():
+        return workspace_legacy_path
     if legacy_path.exists():
         return legacy_path
     return primary_path

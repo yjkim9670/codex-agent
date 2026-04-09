@@ -17,14 +17,42 @@ if _workspace_override:
 else:
     WORKSPACE_DIR = REPO_ROOT / 'workspace'
 
-CODEX_CHAT_STORE_PATH = WORKSPACE_DIR / 'codex_chat_sessions.json'
+
+def _normalize_storage_subdir(value, default='.agent_state'):
+    token = str(value or '').strip().replace('\\', '/')
+    while token.startswith('./'):
+        token = token[2:]
+    token = token.strip().strip('/')
+    if not token:
+        return default
+    if token.startswith('/') or token.startswith('../') or '/..' in token:
+        return default
+    return token
+
+
+def _default_storage_subdir():
+    if WORKSPACE_DIR.resolve() == REPO_ROOT.parent.resolve():
+        return f'{REPO_ROOT.name}/workspace/.agent_state'
+    return '.agent_state'
+
+
+CODEX_STORAGE_SUBDIR = _normalize_storage_subdir(
+    os.environ.get('CODEX_STORAGE_SUBDIR'),
+    default=_default_storage_subdir(),
+)
+CODEX_STORAGE_DIR = WORKSPACE_DIR / CODEX_STORAGE_SUBDIR
+LEGACY_CODEX_CHAT_STORE_PATH = WORKSPACE_DIR / 'codex_chat_sessions.json'
+LEGACY_CODEX_SETTINGS_PATH = WORKSPACE_DIR / 'codex_settings.json'
+LEGACY_CODEX_TOKEN_USAGE_PATH = WORKSPACE_DIR / 'codex_token_usage.json'
+LEGACY_CODEX_USAGE_HISTORY_PATH = WORKSPACE_DIR / 'codex_usage_history.json'
+CODEX_CHAT_STORE_PATH = CODEX_STORAGE_DIR / 'codex_chat_sessions.json'
 CODEX_HOME = Path.home() / '.codex'
 CODEX_CONFIG_PATH = CODEX_HOME / 'config.toml'
 CODEX_SESSIONS_PATH = CODEX_HOME / 'sessions'
-CODEX_SETTINGS_PATH = WORKSPACE_DIR / 'codex_settings.json'
-CODEX_TOKEN_USAGE_PATH = WORKSPACE_DIR / 'codex_token_usage.json'
+CODEX_SETTINGS_PATH = CODEX_STORAGE_DIR / 'codex_settings.json'
+CODEX_TOKEN_USAGE_PATH = CODEX_STORAGE_DIR / 'codex_token_usage.json'
 CODEX_ACCOUNT_TOKEN_USAGE_PATH = CODEX_HOME / 'codex_account_token_usage.json'
-CODEX_USAGE_HISTORY_PATH = WORKSPACE_DIR / 'codex_usage_history.json'
+CODEX_USAGE_HISTORY_PATH = CODEX_STORAGE_DIR / 'codex_usage_history.json'
 CODEX_MAX_PROMPT_CHARS = 4000
 CODEX_CONTEXT_MAX_CHARS = 12000
 CODEX_STREAM_TTL_SECONDS = 900

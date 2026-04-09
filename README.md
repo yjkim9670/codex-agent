@@ -81,6 +81,7 @@ Endpoint routing by launcher:
 
 Default config is Linux-friendly for file edits:
 - `agent.workspace_dir` = `./workspace`
+- `agent.storage_subdir` = `.agent_state`
 - `agent.workspace_blocked_paths` = `[]`
 
 ## Run Claude Agent
@@ -89,7 +90,7 @@ python run_claude_chat_server.py
 ```
 
 Claude Agent listens on `http://localhost:3200` by default and reuses the same UI shell with Claude-only defaults.
-Claude Agent is separated from Model Agent storage, so it keeps its own session/settings/usage files under `workspace/claude_*.json`.
+Claude Agent is separated from Model Agent storage, so it keeps its own session/settings/usage files under repo workspace storage (default `<repo>/workspace/.agent_state/claude_*.json` when `agent.workspace_dir=..`).
 
 Run with the helper launcher:
 ```bash
@@ -101,6 +102,7 @@ If `3200` is already in use, the launcher increments the port one by one until i
 Claude Agent reads `./claude_agent_config.json` automatically.
 The default profile is:
 - `agent.storage_namespace` = `claude`
+- `agent.workspace_dir` = `..`
 - `agent.default_provider` = `claude`
 - `agent.provider_options` = `["claude"]`
 - `agent.providers.claude.default_model` = `sonnet`
@@ -131,7 +133,7 @@ bash /tmp/model_agent_bundle.sh /path/to/target/root
 
 Update this single file to manage Model Agent runtime values:
 - `server.host`, `server.port`, `server.debug`, `server.use_reloader`, `server.threaded`
-- `agent.workspace_dir`, `agent.workspace_blocked_paths`, `agent.secret_key`, `agent.default_provider`, `agent.provider_options`
+- `agent.workspace_dir`, `agent.storage_subdir`, `agent.workspace_blocked_paths`, `agent.secret_key`, `agent.default_provider`, `agent.provider_options`
 - `agent.providers.gemini.api_key`, `agent.providers.gemini.api_base_url`, `agent.providers.gemini.default_model`, `agent.providers.gemini.model_options`
 - `agent.providers.dtgpt.api_key`, `agent.providers.dtgpt.api_key_env`, `agent.providers.dtgpt.api_key_header`, `agent.providers.dtgpt.api_key_prefix`, `agent.providers.dtgpt.api_base_url`, `agent.providers.dtgpt.api_base_urls`, `agent.providers.dtgpt.default_model`, `agent.providers.dtgpt.model_options`
 - `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`
@@ -142,7 +144,7 @@ Update this single file to manage Model Agent runtime values:
 
 Update this file to manage Claude Agent runtime values:
 - `server.host`, `server.port`, `server.debug`, `server.use_reloader`, `server.threaded`
-- `agent.storage_namespace`, `agent.workspace_dir`, `agent.workspace_blocked_paths`, `agent.secret_key`
+- `agent.storage_namespace`, `agent.workspace_dir`, `agent.storage_subdir`, `agent.workspace_blocked_paths`, `agent.secret_key`
 - `agent.default_provider`, `agent.provider_options`
 - `agent.providers.claude.default_model`, `agent.providers.claude.model_options`
 - `agent.max_prompt_chars`, `agent.context_max_chars`, `agent.exec_timeout_seconds`, `agent.api_timeout_seconds`, `agent.stream_ttl_seconds`
@@ -203,5 +205,5 @@ Protection rules are read from `sync_protect.list`.
 
 ## Codex Token Monitoring
 - Codex usage now tracks prompt/response tokens separately (`input_tokens`, `output_tokens`) plus `cached_input_tokens`.
-- Aggregated counters are stored at `workspace/codex_token_usage.json`.
+- Aggregated counters are stored at `<repo>/workspace/.agent_state/codex_token_usage.json` (default parent-workspace mode).
 - `GET /api/codex/usage` returns both rate-limit info and `token_usage` summary (`today`, `all_time`, `recent_days`).

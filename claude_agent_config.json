@@ -8,7 +8,7 @@
   },
   "agent": {
     "storage_namespace": "claude",
-    "workspace_dir": "./workspace",
+    "workspace_dir": "..",
     "workspace_blocked_paths": [],
     "secret_key": "model-chat-secret-key-change-in-production",
     "default_provider": "claude",

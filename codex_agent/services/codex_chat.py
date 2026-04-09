@@ -22,6 +22,10 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    LEGACY_CODEX_CHAT_STORE_PATH,
+    LEGACY_CODEX_SETTINGS_PATH,
+    LEGACY_CODEX_TOKEN_USAGE_PATH,
+    LEGACY_CODEX_USAGE_HISTORY_PATH,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
     CODEX_TOKEN_USAGE_PATH,
@@ -171,11 +175,20 @@ def _normalize_session_pending_queue(session):
     return session[_PENDING_QUEUE_KEY]
 
 
+def _resolve_existing_path(primary_path, legacy_path):
+    if primary_path.exists():
+        return primary_path
+    if legacy_path.exists():
+        return legacy_path
+    return primary_path
+
+
 def _load_data():
-    if not CODEX_CHAT_STORE_PATH.exists():
+    source_path = _resolve_existing_path(CODEX_CHAT_STORE_PATH, LEGACY_CODEX_CHAT_STORE_PATH)
+    if not source_path.exists():
         return {'sessions': []}
     try:
-        data = json.loads(CODEX_CHAT_STORE_PATH.read_text(encoding='utf-8'))
+        data = json.loads(source_path.read_text(encoding='utf-8'))
     except json.JSONDecodeError:
         return {'sessions': []}
     if not isinstance(data, dict):
@@ -253,8 +266,9 @@ def _normalize_model_setting(value):
 
 
 def _read_workspace_settings():
+    source_path = _resolve_existing_path(CODEX_SETTINGS_PATH, LEGACY_CODEX_SETTINGS_PATH)
     try:
-        raw = CODEX_SETTINGS_PATH.read_text(encoding='utf-8')
+        raw = source_path.read_text(encoding='utf-8')
     except FileNotFoundError:
         return {}
     except Exception:
@@ -957,14 +971,16 @@ def _normalize_token_usage_ledger_entry(value):
 
 
 def _load_token_usage_ledger(path=CODEX_TOKEN_USAGE_PATH):
+    legacy_path = LEGACY_CODEX_TOKEN_USAGE_PATH if path == CODEX_TOKEN_USAGE_PATH else path
+    source_path = _resolve_existing_path(path, legacy_path)
     try:
-        exists = path.exists()
+        exists = source_path.exists()
     except Exception:
         return _empty_token_usage_ledger()
     if not exists:
         return _empty_token_usage_ledger()
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
+        data = json.loads(source_path.read_text(encoding='utf-8'))
     except Exception:
         return _empty_token_usage_ledger()
     if not isinstance(data, dict):
@@ -1482,14 +1498,16 @@ def _normalize_usage_history_snapshot(value):
 
 
 def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
+    legacy_path = LEGACY_CODEX_USAGE_HISTORY_PATH if path == CODEX_USAGE_HISTORY_PATH else path
+    source_path = _resolve_existing_path(path, legacy_path)
     try:
-        exists = path.exists()
+        exists = source_path.exists()
     except Exception:
         return _empty_usage_history_ledger()
     if not exists:
         return _empty_usage_history_ledger()
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
+        data = json.loads(source_path.read_text(encoding='utf-8'))
     except Exception:
         return _empty_usage_history_ledger()
     if not isinstance(data, dict):

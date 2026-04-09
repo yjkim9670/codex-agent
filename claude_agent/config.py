@@ -16,7 +16,7 @@ _workspace_override = os.environ.get('MODEL_WORKSPACE_DIR')
 if _workspace_override:
     WORKSPACE_DIR = Path(_workspace_override).expanduser().resolve()
 else:
-    WORKSPACE_DIR = REPO_ROOT / 'workspace'
+    WORKSPACE_DIR = REPO_ROOT.parent.resolve()
 
 
 def _read_positive_int_env(name, default, minimum=1):
@@ -62,6 +62,12 @@ def _normalize_relative_prefix(value):
     return token
 
 
+def _default_storage_subdir():
+    if WORKSPACE_DIR.resolve() == REPO_ROOT.parent.resolve():
+        return f'{REPO_ROOT.name}/workspace/.agent_state'
+    return '.agent_state'
+
+
 def _normalize_storage_namespace(value, default='claude'):
     token = str(value or '').strip().lower()
     if not token:
@@ -92,29 +98,33 @@ MODEL_STORAGE_NAMESPACE = _normalize_storage_namespace(
     os.environ.get('MODEL_AGENT_STORAGE_NAMESPACE'),
     default='claude',
 )
-MODEL_CHAT_STORE_PATH = WORKSPACE_DIR / _storage_filename('claude_chat_sessions.json', 'chat_sessions')
-MODEL_SETTINGS_PATH = WORKSPACE_DIR / _storage_filename('claude_settings.json', 'settings')
-MODEL_USAGE_SNAPSHOT_PATH = WORKSPACE_DIR / _storage_filename('claude_usage_summary.json', 'usage_summary')
-MODEL_USAGE_HISTORY_PATH = WORKSPACE_DIR / _storage_filename('claude_usage_history.json', 'usage_history')
+MODEL_STORAGE_SUBDIR = _normalize_relative_prefix(
+    os.environ.get('MODEL_AGENT_STORAGE_SUBDIR'),
+) or _default_storage_subdir()
+MODEL_STORAGE_DIR = WORKSPACE_DIR / MODEL_STORAGE_SUBDIR
+MODEL_CHAT_STORE_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_chat_sessions.json', 'chat_sessions')
+MODEL_SETTINGS_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_settings.json', 'settings')
+MODEL_USAGE_SNAPSHOT_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_usage_summary.json', 'usage_summary')
+MODEL_USAGE_HISTORY_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_usage_history.json', 'usage_history')
 LEGACY_MODEL_CHAT_STORE_PATH = (
     WORKSPACE_DIR / 'model_chat_sessions.json'
     if MODEL_STORAGE_NAMESPACE == 'claude'
-    else MODEL_CHAT_STORE_PATH
+    else WORKSPACE_DIR / _storage_filename('claude_chat_sessions.json', 'chat_sessions')
 )
 LEGACY_MODEL_SETTINGS_PATH = (
     WORKSPACE_DIR / 'model_settings.json'
     if MODEL_STORAGE_NAMESPACE == 'claude'
-    else MODEL_SETTINGS_PATH
+    else WORKSPACE_DIR / _storage_filename('claude_settings.json', 'settings')
 )
 LEGACY_MODEL_USAGE_SNAPSHOT_PATH = (
     WORKSPACE_DIR / 'model_usage_summary.json'
     if MODEL_STORAGE_NAMESPACE == 'claude'
-    else MODEL_USAGE_SNAPSHOT_PATH
+    else WORKSPACE_DIR / _storage_filename('claude_usage_summary.json', 'usage_summary')
 )
 LEGACY_MODEL_USAGE_HISTORY_PATH = (
     WORKSPACE_DIR / 'model_usage_history.json'
     if MODEL_STORAGE_NAMESPACE == 'claude'
-    else MODEL_USAGE_HISTORY_PATH
+    else WORKSPACE_DIR / _storage_filename('claude_usage_history.json', 'usage_history')
 )
 
 MODEL_MAX_PROMPT_CHARS = _read_positive_int_env('MODEL_MAX_PROMPT_CHARS', 4000)

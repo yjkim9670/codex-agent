@@ -8,6 +8,7 @@
   },
   "agent": {
     "workspace_dir": "./workspace",
+    "storage_subdir": ".agent_state",
     "workspace_blocked_paths": [],
     "secret_key": "model-chat-secret-key-change-in-production",
     "default_provider": "dtgpt",

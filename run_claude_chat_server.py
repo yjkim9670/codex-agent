@@ -40,9 +40,9 @@ def _print_error(message):
 def ensure_workspace_directory(script_path):
     if os.environ.get('MODEL_WORKSPACE_DIR'):
         return
-    default_workspace = (script_path / 'workspace').resolve()
-    os.environ['MODEL_WORKSPACE_DIR'] = str(default_workspace)
-    _print_info(f"[INFO] Default workspace enabled: {default_workspace}")
+    parent_dir = script_path.parent.resolve()
+    os.environ['MODEL_WORKSPACE_DIR'] = str(parent_dir)
+    _print_info(f"[INFO] Parent workspace enabled by default: {parent_dir}")
 
 
 def _coerce_port(value, fallback):
@@ -188,6 +188,8 @@ def apply_runtime_environment(config, config_path):
         _set_env_default('MODEL_WORKSPACE_DIR', workspace_dir)
     if runtime_config.get('storage_namespace') is not None:
         _set_env_from_config('MODEL_AGENT_STORAGE_NAMESPACE', str(runtime_config.get('storage_namespace')).strip())
+    if runtime_config.get('storage_subdir') is not None:
+        _set_env_from_config('MODEL_AGENT_STORAGE_SUBDIR', str(runtime_config.get('storage_subdir')).strip())
     _set_env_default('MODEL_CHAT_SECRET_KEY', runtime_config.get('secret_key'))
     _set_env_default('MODEL_DEFAULT_PROVIDER', runtime_config.get('default_provider'))
 

@@ -39,6 +39,7 @@ from ..services.codex_chat import (
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
     start_codex_stream_for_session,
+    enqueue_codex_stream_for_session,
     update_settings,
     stop_codex_stream,
 )
@@ -512,6 +513,16 @@ def codex_session_message_stream(session_id):
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
 
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify(
+            {
+                'error': '이미 실행 중인 응답이 있습니다. 완료 후 다시 시도해 주세요.',
+                'active_stream_id': active_stream_id,
+                'already_running': True,
+            }
+        ), 409
+
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
     if plan_mode:
@@ -526,6 +537,14 @@ def codex_session_message_stream(session_id):
         reasoning_override=reasoning_override,
     )
     if not start_result.get('ok'):
+        if start_result.get('already_running'):
+            return jsonify(
+                {
+                    'error': '이미 실행 중인 응답이 있습니다. 기존 응답을 모니터링합니다.',
+                    'active_stream_id': start_result.get('active_stream_id'),
+                    'already_running': True,
+                }
+            ), 409
         return jsonify({'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}), 500
 
     return jsonify({
@@ -533,6 +552,43 @@ def codex_session_message_stream(session_id):
         'started_at': start_result.get('started_at'),
         'user_message': start_result.get('user_message')
     })
+
+
+@bp.route('/api/codex/sessions/<session_id>/message/queue', methods=['POST'])
+def codex_session_message_queue(session_id):
+    payload = request.get_json(silent=True) or {}
+    prompt = (payload.get('prompt') or '').strip()
+    plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+
+    if not prompt:
+        return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
+    if len(prompt) > CODEX_MAX_PROMPT_CHARS:
+        return jsonify({'error': '프롬프트가 너무 깁니다.'}), 400
+
+    session = get_session(session_id)
+    if not session:
+        return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
+
+    result = enqueue_codex_stream_for_session(
+        session_id,
+        prompt,
+        plan_mode=plan_mode,
+    )
+    if not result.get('ok'):
+        return jsonify({'error': result.get('error') or '큐 등록에 실패했습니다.'}), 500
+
+    response = {
+        'queued': bool(result.get('queued', not result.get('started'))),
+        'started': bool(result.get('started')),
+        'queue_count': int(result.get('queue_count') or 0),
+    }
+    if result.get('active_stream_id'):
+        response['active_stream_id'] = result.get('active_stream_id')
+    if result.get('stream_id'):
+        response['stream_id'] = result.get('stream_id')
+        response['started_at'] = result.get('started_at')
+        response['user_message'] = result.get('user_message')
+    return jsonify(response)
 
 
 @bp.route('/api/codex/streams/<stream_id>')

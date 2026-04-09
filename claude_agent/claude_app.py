@@ -9,11 +9,13 @@ def apply_claude_agent_defaults():
     os.environ.setdefault('MODEL_AGENT_UI_DESCRIPTION', 'Manage Claude Agent sessions.')
     os.environ.setdefault('MODEL_AGENT_HEALTH_SERVICE', 'claude-agent')
     os.environ.setdefault('MODEL_AGENT_STORAGE_NAMESPACE', 'claude')
+    os.environ.setdefault('MODEL_DEFAULT_PROVIDER', 'claude')
+    os.environ.setdefault('MODEL_PROVIDER_OPTIONS', 'claude')
 
 
 def create_claude_app():
     apply_claude_agent_defaults()
 
-    from model_agent.model_app import create_model_app
+    from claude_agent.model_app import create_claude_app as _create_claude_app
 
-    return create_model_app()
+    return _create_claude_app()

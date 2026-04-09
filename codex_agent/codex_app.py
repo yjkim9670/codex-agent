@@ -6,7 +6,10 @@ from flask import Flask, jsonify, render_template, request
 
 from .blueprints import codex_chat
 from .config import CODEX_MODEL_OPTIONS, CODEX_REASONING_OPTIONS, SECRET_KEY, WORKSPACE_DIR
-from .services.codex_chat import ensure_usage_snapshot_background_worker
+from .services.codex_chat import (
+    ensure_pending_queue_background_worker,
+    ensure_usage_snapshot_background_worker,
+)
 from .services.git_ops import get_current_branch_name
 
 
@@ -24,6 +27,7 @@ def create_codex_app():
 
     app.register_blueprint(codex_chat.bp)
     ensure_usage_snapshot_background_worker()
+    ensure_pending_queue_background_worker()
 
     @app.route('/')
     def codex_root():

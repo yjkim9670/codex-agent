@@ -9,7 +9,6 @@ const state = {
     remoteAttachInFlightSessions: new Set(),
     remoteStreams: [],
     liveClockTimer: null,
-    jobMonitorTimerId: null,
     responseTimerId: null,
     responseTimerSessionId: null,
     autoScrollEnabled: true,
@@ -22,18 +21,21 @@ const state = {
         modelOptions: [],
         planModeModel: null,
         planModeReasoningEffort: null,
-        planModeState: 'off',
         reasoningEffort: null,
         reasoningOptions: [],
+        planModeEnabled: false,
         usage: null,
         usageHistory: null,
         loaded: false
     }
 };
 
-const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
-const ACTIVE_STREAM_KEY = 'codexActiveStream';
-const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
+const APP_DATASET = document.body?.dataset || {};
+const APP_NAME = APP_DATASET.appName || 'Claude Agent';
+const APP_DESCRIPTION = APP_DATASET.appDescription || `Manage ${APP_NAME} sessions.`;
+const SESSION_COLLAPSE_KEY = 'geminiSessionsCollapsed';
+const ACTIVE_STREAM_KEY = 'geminiActiveStream';
+const CONTROLS_COLLAPSE_KEY = 'geminiControlsCollapsed';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
@@ -41,17 +43,15 @@ const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const WORK_MODE_CLASS = 'is-work-mode';
-const WORK_MODE_KEY = 'codexWorkModeEnabled';
-const WORK_MODE_SPLIT_KEY = 'codexWorkModeSplit';
+const WORK_MODE_KEY = 'geminiWorkModeEnabled';
+const WORK_MODE_SPLIT_KEY = 'geminiWorkModeSplit';
 const WORK_MODE_DEFAULT_SPLIT = 0.58;
 const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
 const WORK_MODE_MIN_PREVIEW_WIDTH_PX = 320;
-const WORK_MODE_FILE_SPLIT_KEY = 'codexWorkModeFileSplit';
-const WORK_MODE_FILE_COLUMNS_KEY = 'codexWorkModeFileColumns';
-const WORK_MODE_FILE_VIEW_STATE_KEY = 'codexWorkModeFileViewState';
-const WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS = 140;
-const FILE_BROWSER_SPLIT_KEY = 'codexFileBrowserSplit';
-const FILE_BROWSER_COLUMNS_KEY = 'codexFileBrowserColumns';
+const WORK_MODE_FILE_SPLIT_KEY = 'geminiWorkModeFileSplit';
+const WORK_MODE_FILE_COLUMNS_KEY = 'geminiWorkModeFileColumns';
+const FILE_BROWSER_SPLIT_KEY = 'geminiFileBrowserSplit';
+const FILE_BROWSER_COLUMNS_KEY = 'geminiFileBrowserColumns';
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
 const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
@@ -65,7 +65,7 @@ const WORK_MODE_FILE_COLUMN_LIMITS = Object.freeze({
     size: Object.freeze({ min: 72, max: 220 }),
     modified: Object.freeze({ min: 110, max: 280 })
 });
-const THEME_KEY = 'codexTheme';
+const THEME_KEY = 'geminiTheme';
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
@@ -76,10 +76,10 @@ const XLSX_VENDOR_SRC = '/static/vendor/xlsx-0.18.5.full.min.js';
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
-const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
+const WEATHER_COMPACT_KEY = 'geminiWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
-const TOAST_LAYER_ID = 'codex-toast-layer';
-const HOVER_TOOLTIP_LAYER_ID = 'codex-hover-tooltip-layer';
+const TOAST_LAYER_ID = 'claude-toast-layer';
+const HOVER_TOOLTIP_LAYER_ID = 'claude-hover-tooltip-layer';
 const HOVER_TOOLTIP_OFFSET_PX = 8;
 const HOVER_TOOLTIP_VIEWPORT_MARGIN_PX = 10;
 const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
@@ -90,7 +90,10 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     label: DEFAULT_WEATHER_LOCATION_LABEL,
     isDefault: true
 });
-const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
+const CHAT_INPUT_DEFAULT_PLACEHOLDER = (
+    APP_DATASET.chatInputPlaceholder
+    || `Type a prompt for ${APP_NAME}. (Shift+Enter for newline)`
+);
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
@@ -103,17 +106,20 @@ const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
 const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
 const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
-const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
+const GIT_SYNC_TARGET_MODEL_AGENT = 'claude_agent';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
 const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
+const FILE_BROWSER_ROOT_SERVER = 'server';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
+const FILE_BROWSER_ROOT_OPTIONS = new Set([
+    FILE_BROWSER_ROOT_SERVER,
+    FILE_BROWSER_ROOT_WORKSPACE
+]);
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
-const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
-const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
-const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
+const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/claude/files/raw';
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
@@ -128,11 +134,13 @@ const FILE_BROWSER_SPREADSHEET_EXTENSIONS = new Set([
 ]);
 const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
-const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
-const WORK_MODE_MOBILE_VIEW_LIST = 'list';
-const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
-    [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
+    [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace',
+    [FILE_BROWSER_ROOT_SERVER]: 'Server'
+});
+const FILE_BROWSER_ROOT_PATH_PREFIXES = Object.freeze({
+    [FILE_BROWSER_ROOT_WORKSPACE]: '$workspace',
+    [FILE_BROWSER_ROOT_SERVER]: '$server'
 });
 const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
     '/home/',
@@ -151,19 +159,14 @@ const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_DEFAULT_HOURS = 24 * 7;
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
-const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
 const GIT_SYNC_TARGET_ORDER = Object.freeze([
     GIT_SYNC_TARGET_WORKSPACE,
-    GIT_SYNC_TARGET_CODEX_AGENT
+    GIT_SYNC_TARGET_MODEL_AGENT
 ]);
 const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
-    [GIT_SYNC_TARGET_CODEX_AGENT]: 'codex_agent Repo'
+    [GIT_SYNC_TARGET_MODEL_AGENT]: 'claude_agent Repo'
 });
-const PLAN_MODE_STATE_OFF = 'off';
-const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
-const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
-const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
@@ -184,11 +187,11 @@ let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: null,
-    [GIT_SYNC_TARGET_CODEX_AGENT]: null
+    [GIT_SYNC_TARGET_MODEL_AGENT]: null
 };
 let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
-    [GIT_SYNC_TARGET_CODEX_AGENT]: false
+    [GIT_SYNC_TARGET_MODEL_AGENT]: false
 };
 let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
 let fileBrowserPath = '';
@@ -220,22 +223,10 @@ let workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let workModeFileResizePointerId = null;
 let workModeFileColumnResizeState = null;
 let workModeFileHorizontalSyncLock = false;
-let workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
-let workModeMobileBrowseView = WORK_MODE_MOBILE_VIEW_LIST;
 let workModeFileColumnWidths = {
     name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
     modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
-};
-let workModeFileStatePersistTimer = null;
-let pendingWorkModeFileScrollRestore = null;
-let pendingWorkModeFileViewerScrollRestore = null;
-let workModeHtmlPreviewState = {
-    root: FILE_BROWSER_ROOT_WORKSPACE,
-    path: '',
-    previewUrl: '',
-    suspended: false,
-    viewerScroll: null
 };
 let remoteStreamStatusCache = {
     streams: [],
@@ -258,38 +249,11 @@ let liveWeatherCompactHasWeather = false;
 let mermaidRenderSerial = 0;
 let mermaidLoadPromise = null;
 let xlsxLoadPromise = null;
-let lastAppliedMobileViewportHeight = null;
-let sessionsRenderFrameId = 0;
-
-function runAfterAnimationFrame(callback) {
-    if (typeof callback !== 'function') return 0;
-    if (typeof window.requestAnimationFrame === 'function') {
-        return window.requestAnimationFrame(() => {
-            callback();
-        });
-    }
-    return window.setTimeout(() => {
-        callback();
-    }, 16);
-}
-
-function createRafThrottledHandler(callback) {
-    if (typeof callback !== 'function') {
-        return () => {};
-    }
-    let frameId = 0;
-    let queuedArgs = null;
-    return (...args) => {
-        queuedArgs = args;
-        if (frameId) return;
-        frameId = runAfterAnimationFrame(() => {
-            frameId = 0;
-            const latestArgs = queuedArgs;
-            queuedArgs = null;
-            callback(...(latestArgs || []));
-        });
-    };
-}
+let workModeHtmlPreviewState = {
+    root: FILE_BROWSER_ROOT_WORKSPACE,
+    path: '',
+    previewUrl: ''
+};
 
 function loadVendorScript(src) {
     const source = String(src || '').trim();
@@ -344,14 +308,6 @@ function ensureXlsxApiLoaded() {
             });
     }
     return xlsxLoadPromise;
-}
-
-function scheduleSessionsRender() {
-    if (sessionsRenderFrameId) return;
-    sessionsRenderFrameId = runAfterAnimationFrame(() => {
-        sessionsRenderFrameId = 0;
-        renderSessions();
-    });
 }
 
 function ensureSessionState(sessionId) {
@@ -447,25 +403,6 @@ async function flushQueuedPrompts(sessionId) {
     }
 }
 
-function flushReadyQueuedPrompts(sessionIds = null) {
-    const targets = new Set();
-    if (Array.isArray(sessionIds) && sessionIds.length > 0) {
-        sessionIds.forEach(sessionId => {
-            if (sessionId) targets.add(String(sessionId));
-        });
-    } else {
-        Object.keys(state.sessionStates || {}).forEach(sessionId => {
-            if (sessionId) targets.add(String(sessionId));
-        });
-    }
-    targets.forEach(sessionId => {
-        if (!sessionId) return;
-        if (getQueuedPromptCount(sessionId) <= 0) return;
-        if (isSessionBusy(sessionId)) return;
-        void flushQueuedPrompts(sessionId);
-    });
-}
-
 function setSessionStatus(sessionId, message, isError = false) {
     const sessionState = ensureSessionState(sessionId);
     if (!sessionState) return;
@@ -524,7 +461,7 @@ function getKnownResponseStartedAt(sessionId) {
 
 function isResponseStatusMessage(message) {
     if (typeof message !== 'string') return false;
-    return message.startsWith('Waiting for Codex') || message.startsWith('Receiving response');
+    return message.startsWith('Waiting for Model') || message.startsWith('Receiving response');
 }
 
 function buildActiveStreamStatus(processRunning) {
@@ -586,7 +523,7 @@ function buildStreamListMeta(stream) {
 }
 
 function updateStatusDisplay() {
-    const status = document.getElementById('codex-chat-status');
+    const status = document.getElementById('claude-chat-status');
     if (!status) return;
     const sessionId = state.activeSessionId;
     const sessionState = sessionId ? getSessionState(sessionId) : null;
@@ -659,8 +596,8 @@ function syncActiveSessionStatus() {
 }
 
 function syncActiveSessionControls() {
-    const input = document.getElementById('codex-chat-input');
-    const sendBtn = document.getElementById('codex-chat-send');
+    const input = document.getElementById('claude-chat-input');
+    const sendBtn = document.getElementById('claude-chat-send');
     const sessionId = state.activeSessionId;
     const sessionState = sessionId ? getSessionState(sessionId) : null;
     const localBusy = sessionId
@@ -680,7 +617,7 @@ function syncActiveSessionControls() {
             ? 'Another client is responding for this session...'
             : localBusy
                 ? `Response in progress... queue ready${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
-            : CHAT_INPUT_DEFAULT_PLACEHOLDER;
+                : CHAT_INPUT_DEFAULT_PLACEHOLDER;
     }
     if (sendBtn) {
         sendBtn.disabled = remoteBusy && !localBusy;
@@ -698,163 +635,6 @@ function syncActiveSessionControls() {
             srLabel.textContent = label;
         }
     }
-    renderRunningJobsMonitor();
-}
-
-function resolveRunningJobSessionTitle(sessionId) {
-    const targetId = String(sessionId || '').trim();
-    if (!targetId) return 'Session';
-    const summary = state.sessions.find(session => session?.id === targetId);
-    const title = String(summary?.title || '').trim();
-    if (title) return title;
-    if (targetId === state.activeSessionId) {
-        const headerTitle = String(document.getElementById('codex-chat-title')?.textContent || '').trim();
-        if (headerTitle && headerTitle !== 'Select a session') {
-            return headerTitle;
-        }
-    }
-    return `Session ${targetId.slice(0, 8)}`;
-}
-
-function resolveRemoteRuntimeMs(remoteStream, nowMs) {
-    if (!remoteStream) return null;
-    const runtimeMs = Number(remoteStream.runtime_ms ?? remoteStream.runtimeMs);
-    if (Number.isFinite(runtimeMs) && runtimeMs >= 0) {
-        return Math.max(0, Math.round(runtimeMs));
-    }
-    const startedAt = normalizeStartedAt(
-        remoteStream.started_at
-        ?? remoteStream.startedAt
-        ?? remoteStream.created_at
-        ?? remoteStream.createdAt
-    );
-    if (!startedAt) return null;
-    return Math.max(0, nowMs - startedAt);
-}
-
-function collectRunningJobs() {
-    const sessionIds = new Set();
-    state.sessions.forEach(session => {
-        if (session?.id) sessionIds.add(session.id);
-    });
-    Object.keys(state.sessionStates || {}).forEach(sessionId => {
-        if (sessionId) sessionIds.add(sessionId);
-    });
-    Object.values(state.streams || {}).forEach(stream => {
-        if (stream?.sessionId) sessionIds.add(stream.sessionId);
-    });
-    (state.remoteStreams || []).forEach(stream => {
-        const sessionId = stream?.session_id || stream?.sessionId;
-        if (sessionId) sessionIds.add(sessionId);
-    });
-
-    const nowMs = Date.now();
-    const jobs = [];
-    sessionIds.forEach(sessionId => {
-        const sessionState = getSessionState(sessionId);
-        const localStream = getSessionStream(sessionId);
-        const remoteStream = getRemoteStreamState(sessionId);
-        const hasRemoteStream = Boolean(state.remoteStreamSessions?.has(sessionId) || remoteStream);
-        if (!localStream && !sessionState?.pendingSend && !hasRemoteStream) return;
-
-        let phase = '';
-        let elapsedMs = null;
-        let order = 3;
-
-        if (localStream) {
-            phase = localStream.processRunning === false ? 'CLI finalizing' : 'CLI running';
-            elapsedMs = Number.isFinite(localStream.runtimeMs)
-                ? Math.max(0, Math.round(localStream.runtimeMs))
-                : Math.max(0, nowMs - (normalizeStartedAt(localStream.startedAt) || nowMs));
-            order = 0;
-        } else if (sessionState?.pendingSend) {
-            phase = 'Submitting';
-            const pendingStartedAt = normalizeStartedAt(sessionState.pendingSend.startedAt);
-            elapsedMs = pendingStartedAt ? Math.max(0, nowMs - pendingStartedAt) : null;
-            order = 1;
-        } else if (hasRemoteStream) {
-            const processRunning = remoteStream?.process_running;
-            if (processRunning === true) {
-                phase = 'Remote CLI running';
-            } else if (processRunning === false) {
-                phase = 'Remote finalizing';
-            } else {
-                phase = 'Remote streaming';
-            }
-            elapsedMs = resolveRemoteRuntimeMs(remoteStream, nowMs);
-            order = 2;
-        }
-
-        jobs.push({
-            sessionId,
-            title: resolveRunningJobSessionTitle(sessionId),
-            phase,
-            elapsedMs,
-            order,
-            active: sessionId === state.activeSessionId
-        });
-    });
-
-    jobs.sort((left, right) => {
-        const activeDiff = Number(right.active) - Number(left.active);
-        if (activeDiff !== 0) return activeDiff;
-        const orderDiff = (left.order || 0) - (right.order || 0);
-        if (orderDiff !== 0) return orderDiff;
-        const elapsedLeft = Number.isFinite(left.elapsedMs) ? left.elapsedMs : -1;
-        const elapsedRight = Number.isFinite(right.elapsedMs) ? right.elapsedMs : -1;
-        return elapsedRight - elapsedLeft;
-    });
-    return jobs;
-}
-
-function renderRunningJobsMonitor() {
-    const monitor = document.getElementById('codex-chat-job-monitor');
-    const summary = document.getElementById('codex-chat-job-monitor-summary');
-    const list = document.getElementById('codex-chat-job-monitor-list');
-    if (!monitor || !summary || !list) return;
-
-    const jobs = collectRunningJobs();
-    if (jobs.length === 0) {
-        monitor.classList.add('is-idle');
-        summary.textContent = '실행 중인 job 없음';
-        list.innerHTML = '';
-        return;
-    }
-
-    monitor.classList.remove('is-idle');
-    summary.textContent = jobs.length === 1
-        ? '실행 중인 job 1개'
-        : `실행 중인 job ${jobs.length}개`;
-    list.innerHTML = '';
-
-    const maxVisible = 4;
-    jobs.slice(0, maxVisible).forEach(job => {
-        const item = document.createElement('li');
-        item.className = 'chat-job-monitor-item';
-        if (job.active) {
-            item.classList.add('is-active');
-        }
-        const elapsedText = Number.isFinite(job.elapsedMs) ? formatElapsedTime(job.elapsedMs) : '';
-        item.textContent = elapsedText
-            ? `${job.title} · ${job.phase} · ${elapsedText}`
-            : `${job.title} · ${job.phase}`;
-        list.appendChild(item);
-    });
-
-    if (jobs.length > maxVisible) {
-        const moreItem = document.createElement('li');
-        moreItem.className = 'chat-job-monitor-item is-more';
-        moreItem.textContent = `외 ${jobs.length - maxVisible}개`;
-        list.appendChild(moreItem);
-    }
-}
-
-function startRunningJobsMonitorTicker() {
-    renderRunningJobsMonitor();
-    if (state.jobMonitorTimerId) {
-        window.clearInterval(state.jobMonitorTimerId);
-    }
-    state.jobMonitorTimerId = window.setInterval(renderRunningJobsMonitor, 1000);
 }
 
 function appendMessageToDOMIfActive(sessionId, message, roleOverride = null) {
@@ -883,12 +663,6 @@ function attachSessionStreamEntry(sessionId) {
     if (!assistantEntry) return;
     stream.entry = assistantEntry;
     setMessageStreaming(assistantEntry.wrapper, true);
-    if (stream.tokenUsage) {
-        setMessageTokenUsage(
-            assistantEntry.footer,
-            { role: 'assistant', token_usage: stream.tokenUsage, content: stream.output || '' }
-        );
-    }
     updateStreamEntry(stream);
 }
 
@@ -898,7 +672,6 @@ function createStreamState({
     entry = null,
     output = '',
     error = '',
-    tokenUsage = null,
     outputOffset = 0,
     errorOffset = 0,
     startedAt = null
@@ -912,7 +685,6 @@ function createStreamState({
         errorOffset,
         output,
         error,
-        tokenUsage,
         entry,
         startedAt: normalizedStartedAt,
         processRunning: null,
@@ -994,96 +766,92 @@ function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModel
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const form = document.getElementById('codex-chat-form');
-    const input = document.getElementById('codex-chat-input');
-    const newSessionBtn = document.getElementById('codex-chat-new-session');
-    const newSessionInlineBtn = document.getElementById('codex-chat-new-session-inline');
-    const chatSessionPrevBtn = document.getElementById('codex-chat-session-prev');
-    const chatSessionNextBtn = document.getElementById('codex-chat-session-next');
-    const refreshBtn = document.getElementById('codex-chat-refresh');
-    const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
-    const chatTitleTrigger = document.getElementById('codex-chat-title');
-    const messages = document.getElementById('codex-chat-messages');
-    const scrollToLatestBtn = document.getElementById('codex-chat-scroll-bottom');
-    const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
-    const streamMonitorToggle = document.getElementById('codex-stream-monitor-toggle');
-    const streamMonitor = document.getElementById('codex-stream-monitor');
+    const form = document.getElementById('claude-chat-form');
+    const input = document.getElementById('claude-chat-input');
+    const newSessionBtn = document.getElementById('claude-chat-new-session');
+    const newSessionInlineBtn = document.getElementById('claude-chat-new-session-inline');
+    const chatSessionPrevBtn = document.getElementById('claude-chat-session-prev');
+    const chatSessionNextBtn = document.getElementById('claude-chat-session-next');
+    const refreshBtn = document.getElementById('claude-chat-refresh');
+    const chatFullscreenBtn = document.getElementById('claude-chat-fullscreen');
+    const chatTitleTrigger = document.getElementById('claude-chat-title');
+    const messages = document.getElementById('claude-chat-messages');
+    const scrollToLatestBtn = document.getElementById('claude-chat-scroll-bottom');
+    const streamMonitorCloseBtn = document.getElementById('claude-stream-monitor-close');
+    const streamMonitorToggle = document.getElementById('claude-stream-monitor-toggle');
+    const streamMonitor = document.getElementById('claude-stream-monitor');
     const sessionsPanel = document.querySelector('.sessions');
-    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    const sessionsToggle = document.getElementById('claude-sessions-toggle');
     const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
-    const themeToggle = document.getElementById('codex-theme-toggle');
+    const themeToggle = document.getElementById('claude-theme-toggle');
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
-    const modelSelect = document.getElementById('codex-model-select');
-    const modelInput = document.getElementById('codex-model-input');
-    const modelApply = document.getElementById('codex-model-apply');
-    const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
-    const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
-    const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
-    const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
-    const planModeToggle = document.getElementById('codex-plan-mode-toggle');
-    const reasoningSelect = document.getElementById('codex-reasoning-select');
-    const reasoningInput = document.getElementById('codex-reasoning-input');
-    const controlsToggle = document.getElementById('codex-controls-toggle');
-    const controls = document.getElementById('codex-controls');
-    const usageHistoryOpen = document.getElementById('codex-usage-history-open');
-    const gitBranch = document.getElementById('codex-git-branch');
-    const gitCommitBtn = document.getElementById('codex-git-commit');
-    const gitPushBtn = document.getElementById('codex-git-push');
-    const gitSyncBtn = document.getElementById('codex-git-sync');
-    const fileBrowserBtn = document.getElementById('codex-file-browser-open');
-    const workModeToggleBtn = document.getElementById('codex-work-mode-toggle');
-    const workModeDivider = document.getElementById('codex-work-mode-divider');
-    const workModeFileRefreshBtn = document.getElementById('codex-work-mode-file-refresh');
-    const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
-    const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
-    const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
-    const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
-    const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
-    const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
-    const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
-    const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
-    const workModeFileHScroll = document.getElementById('codex-work-mode-file-hscroll');
-    const workModeFileViewerContent = document.getElementById('codex-work-mode-file-viewer-content');
+    const modelSelect = document.getElementById('claude-model-select');
+    const modelInput = document.getElementById('claude-model-input');
+    const modelApply = document.getElementById('claude-model-apply');
+    const planModeModelSelect = document.getElementById('claude-plan-mode-model-select');
+    const planModeModelInput = document.getElementById('claude-plan-mode-model-input');
+    const planModeReasoningSelect = document.getElementById('claude-plan-mode-reasoning-select');
+    const planModeReasoningInput = document.getElementById('claude-plan-mode-reasoning-input');
+    const reasoningSelect = document.getElementById('claude-reasoning-select');
+    const reasoningInput = document.getElementById('claude-reasoning-input');
+    const planModeToggle = document.getElementById('claude-plan-mode-toggle');
+    const controlsToggle = document.getElementById('claude-controls-toggle');
+    const controls = document.getElementById('claude-controls');
+    const usageHistoryOpen = document.getElementById('claude-usage-history-open');
+    const gitBranch = document.getElementById('claude-git-branch');
+    const gitCommitBtn = document.getElementById('claude-git-commit');
+    const gitPushBtn = document.getElementById('claude-git-push');
+    const gitSyncBtn = document.getElementById('claude-git-sync');
+    const fileBrowserBtn = document.getElementById('claude-file-browser-open');
+    const workModeToggleBtn = document.getElementById('claude-work-mode-toggle');
+    const workModeDivider = document.getElementById('claude-work-mode-divider');
+    const workModeFileRefreshBtn = document.getElementById('claude-work-mode-file-refresh');
+    const workModeFileUpBtn = document.getElementById('claude-work-mode-file-up');
+    const workModeFileOpenNewBtn = document.getElementById('claude-work-mode-file-open-new');
+    const workModeFileFullscreenBtn = document.getElementById('claude-work-mode-file-fullscreen');
+    const workModeFileDivider = document.getElementById('claude-work-mode-file-divider');
+    const workModeFileGridScroll = document.getElementById('claude-work-mode-file-grid-scroll');
+    const workModeFileHScroll = document.getElementById('claude-work-mode-file-hscroll');
     const workModeFileColumnResizers = Array.from(
-        document.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]')
+        document.querySelectorAll('#claude-work-mode-file-columns [data-resize-col]')
     );
-    const branchOverlayCommitBtn = document.getElementById('codex-branch-overlay-commit');
-    const branchOverlayPushBtn = document.getElementById('codex-branch-overlay-push');
-    const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
-    const branchOverlayStageNoneBtn = document.getElementById('codex-branch-overlay-stage-none');
-    const branchOverlayCommitMessageInput = document.getElementById('codex-branch-overlay-commit-message');
-    const syncOverlayFetchBtn = document.getElementById('codex-sync-overlay-fetch');
-    const syncOverlaySyncBtn = document.getElementById('codex-sync-overlay-sync');
-    const syncOverlayCommitBtn = document.getElementById('codex-sync-overlay-commit');
-    const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
-    const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
-    const messageLogOverlay = document.getElementById('codex-message-log-overlay');
-    const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
-    const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
-    const mobileSessionOverlay = document.getElementById('codex-mobile-session-overlay');
-    const mobileSessionOverlayClose = document.getElementById('codex-mobile-session-overlay-close');
-    const mobileSessionOverlayCloseFooter = document.getElementById('codex-mobile-session-overlay-close-footer');
-    const usageHistoryOverlay = document.getElementById('codex-usage-history-overlay');
-    const usageHistoryOverlayClose = document.getElementById('codex-usage-history-overlay-close');
-    const usageHistoryOverlayCloseFooter = document.getElementById('codex-usage-history-overlay-close-footer');
-    const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
-    const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
-    const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
-    const fileBrowserRefreshBtn = document.getElementById('codex-file-browser-refresh');
-    const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
-    const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
-    const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
-    const fileBrowserDivider = document.getElementById('codex-file-browser-divider');
-    const fileBrowserGridScroll = document.getElementById('codex-file-browser-grid-scroll');
-    const fileBrowserHScroll = document.getElementById('codex-file-browser-hscroll');
+    const branchOverlayCommitBtn = document.getElementById('claude-branch-overlay-commit');
+    const branchOverlayPushBtn = document.getElementById('claude-branch-overlay-push');
+    const branchOverlayStageAllBtn = document.getElementById('claude-branch-overlay-stage-all');
+    const branchOverlayStageNoneBtn = document.getElementById('claude-branch-overlay-stage-none');
+    const branchOverlayCommitMessageInput = document.getElementById('claude-branch-overlay-commit-message');
+    const syncOverlayFetchBtn = document.getElementById('claude-sync-overlay-fetch');
+    const syncOverlaySyncBtn = document.getElementById('claude-sync-overlay-sync');
+    const syncOverlayCommitBtn = document.getElementById('claude-sync-overlay-commit');
+    const syncOverlayPushBtn = document.getElementById('claude-sync-overlay-push');
+    const syncOverlayRefreshBtn = document.getElementById('claude-sync-overlay-refresh');
+    const messageLogOverlay = document.getElementById('claude-message-log-overlay');
+    const messageLogOverlayClose = document.getElementById('claude-message-log-overlay-close');
+    const messageLogOverlayCloseFooter = document.getElementById('claude-message-log-overlay-close-footer');
+    const mobileSessionOverlay = document.getElementById('claude-mobile-session-overlay');
+    const mobileSessionOverlayClose = document.getElementById('claude-mobile-session-overlay-close');
+    const mobileSessionOverlayCloseFooter = document.getElementById('claude-mobile-session-overlay-close-footer');
+    const usageHistoryOverlay = document.getElementById('claude-usage-history-overlay');
+    const usageHistoryOverlayClose = document.getElementById('claude-usage-history-overlay-close');
+    const usageHistoryOverlayCloseFooter = document.getElementById('claude-usage-history-overlay-close-footer');
+    const fileBrowserOverlay = document.getElementById('claude-file-browser-overlay');
+    const fileBrowserOverlayClose = document.getElementById('claude-file-browser-overlay-close');
+    const fileBrowserOverlayCloseFooter = document.getElementById('claude-file-browser-overlay-close-footer');
+    const fileBrowserRefreshBtn = document.getElementById('claude-file-browser-refresh');
+    const fileBrowserBackBtn = document.getElementById('claude-file-browser-back');
+    const fileBrowserUpBtn = document.getElementById('claude-file-browser-up');
+    const fileBrowserFullscreenBtn = document.getElementById('claude-file-browser-fullscreen');
+    const fileBrowserDivider = document.getElementById('claude-file-browser-divider');
+    const fileBrowserGridScroll = document.getElementById('claude-file-browser-grid-scroll');
+    const fileBrowserHScroll = document.getElementById('claude-file-browser-hscroll');
     const fileBrowserColumnResizers = Array.from(
-        document.querySelectorAll('#codex-file-browser-columns [data-resize-col]')
+        document.querySelectorAll('#claude-file-browser-columns [data-resize-col]')
     );
-    const fileBrowserShowHiddenToggle = document.getElementById('codex-file-browser-show-hidden');
-    const fileBrowserShowPycacheToggle = document.getElementById('codex-file-browser-show-pycache');
-    const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
+    const fileBrowserShowHiddenToggle = document.getElementById('claude-file-browser-show-hidden');
+    const fileBrowserShowPycacheToggle = document.getElementById('claude-file-browser-show-pycache');
+    const headerDetailsTrigger = document.getElementById('claude-header-details-trigger');
     const syncOverlayTargetButtons = Array.from(
-        document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
+        document.querySelectorAll('#claude-sync-overlay .sync-overlay-target[data-repo-target]')
     );
 
     // Reset git highlights until fresh git status arrives.
@@ -1156,7 +924,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (headerDetailsTrigger) {
         headerDetailsTrigger.addEventListener('click', event => {
             event.preventDefault();
-            void showHeaderDetailsToast();
+            showHeaderDetailsToast();
         });
     }
 
@@ -1181,11 +949,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserBtn) {
         fileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
-            if (isFileBrowserOverlayOpen()) {
-                closeFileBrowserOverlay();
+            if (isWorkModeEnabled()) {
+                void refreshWorkModeFileDirectory({
+                    root: workModeFileRoot,
+                    path: workModeFilePath,
+                    force: true
+                });
                 return;
             }
-            openFileBrowserOverlay();
+            openFileBrowserOverlay({
+                root: fileBrowserRoot,
+                path: fileBrowserPath
+            });
         });
     }
     if (workModeToggleBtn) {
@@ -1206,26 +981,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileRefreshBtn) {
         workModeFileRefreshBtn.addEventListener('click', async () => {
-            const scrollSnapshot = captureWorkModeFileScrollSnapshot();
-            const viewerScrollSnapshot = captureWorkModeFileViewerScrollSnapshot();
             const listed = await refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: workModeFilePath,
-                force: true,
-                restoreScrollSnapshot: scrollSnapshot
+                force: true
             });
             if (!listed) return;
-            await refreshWorkModeFilePreviewSelection({
-                restoreViewerScrollSnapshot: viewerScrollSnapshot
-            });
+            await refreshWorkModeFilePreviewSelection();
         });
     }
     if (workModeFileUpBtn) {
         workModeFileUpBtn.addEventListener('click', () => {
             if (!workModeFilePath) return;
-            if (isMobileLayout()) {
-                setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            }
             void refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: getFileBrowserParentPath(workModeFilePath),
@@ -1233,37 +1000,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
-    if (workModeFileBackBtn) {
-        workModeFileBackBtn.addEventListener('click', event => {
-            event.preventDefault();
-            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-        });
-    }
-    if (workModeChatBackBtn) {
-        workModeChatBackBtn.addEventListener('click', event => {
-            event.preventDefault();
-            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
-        });
-    }
     if (workModeFileOpenNewBtn) {
         workModeFileOpenNewBtn.addEventListener('click', event => {
             event.preventDefault();
             openWorkModeHtmlPreviewInNewWindow();
         });
-        syncHoverTooltipFromLabel(workModeFileOpenNewBtn);
     }
-    if (workModeMobileBrowserBtn) {
-        workModeMobileBrowserBtn.addEventListener('click', event => {
-            event.preventDefault();
-            if (!isWorkModeEnabled() || !isMobileLayout()) return;
-            const hasSelection = Boolean(normalizeFileBrowserRelativePath(workModeFileSelectedPath));
-            const targetView = hasSelection
-                ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
-                : WORK_MODE_MOBILE_VIEW_LIST;
-            setWorkModeMobileView(targetView);
-            void ensureWorkModeFilePanelContent();
-        });
-    }
+    syncWorkModeHtmlPreviewOpenButton();
     if (workModeFileFullscreenBtn) {
         workModeFileFullscreenBtn.addEventListener('click', event => {
             event.preventDefault();
@@ -1283,12 +1026,21 @@ document.addEventListener('DOMContentLoaded', () => {
         workModeFileGridScroll.addEventListener('scroll', handleWorkModeFileGridScroll, { passive: true });
         workModeFileHScroll.addEventListener('scroll', handleWorkModeFileHScroll, { passive: true });
     }
-    if (workModeFileViewerContent) {
-        workModeFileViewerContent.addEventListener('scroll', handleWorkModeFileViewerScroll, { passive: true });
-    }
     workModeFileColumnResizers.forEach(resizer => {
         resizer.addEventListener('pointerdown', event => {
             startWorkModeFileColumnResize(event, resizer.dataset?.resizeCol || '');
+        });
+    });
+    document.querySelectorAll('.work-mode-root-target[data-root-target]').forEach(button => {
+        button.addEventListener('click', () => {
+            const nextRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
+            if (!nextRoot || nextRoot === workModeFileRoot) return;
+            workModeFileRoot = nextRoot;
+            workModeFilePath = '';
+            workModeFileSelectedPath = '';
+            clearWorkModeFileViewer();
+            updateWorkModeFileRootButtons();
+            void refreshWorkModeFileDirectory({ root: nextRoot, path: '', force: true });
         });
     });
     if (branchOverlayCommitBtn) {
@@ -1336,10 +1088,10 @@ document.addEventListener('DOMContentLoaded', () => {
         startGitBranchPolling();
     }
 
-    const branchOverlay = document.getElementById('codex-branch-overlay');
-    const branchOverlayClose = document.getElementById('codex-branch-overlay-close');
-    const branchOverlayCloseFooter = document.getElementById('codex-branch-overlay-close-footer');
-    const branchOverlayRefresh = document.getElementById('codex-branch-overlay-refresh');
+    const branchOverlay = document.getElementById('claude-branch-overlay');
+    const branchOverlayClose = document.getElementById('claude-branch-overlay-close');
+    const branchOverlayCloseFooter = document.getElementById('claude-branch-overlay-close-footer');
+    const branchOverlayRefresh = document.getElementById('claude-branch-overlay-refresh');
     if (branchOverlay) {
         branchOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -1359,9 +1111,9 @@ document.addEventListener('DOMContentLoaded', () => {
             void refreshGitBranchStatus({ force: true, updateOverlay: true });
         });
     }
-    const syncOverlay = document.getElementById('codex-sync-overlay');
-    const syncOverlayClose = document.getElementById('codex-sync-overlay-close');
-    const syncOverlayCloseFooter = document.getElementById('codex-sync-overlay-close-footer');
+    const syncOverlay = document.getElementById('claude-sync-overlay');
+    const syncOverlayClose = document.getElementById('claude-sync-overlay-close');
+    const syncOverlayCloseFooter = document.getElementById('claude-sync-overlay-close-footer');
     if (syncOverlay) {
         syncOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -1375,25 +1127,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (syncOverlayCloseFooter) {
         syncOverlayCloseFooter.addEventListener('click', closeGitSyncOverlay);
-    }
-    if (usageHistoryOpen) {
-        usageHistoryOpen.addEventListener('click', () => {
-            void openUsageHistoryOverlay();
-        });
-    }
-    if (usageHistoryOverlay) {
-        usageHistoryOverlay.addEventListener('click', event => {
-            const target = event.target;
-            if (target && target.dataset?.action === 'close') {
-                closeUsageHistoryOverlay();
-            }
-        });
-    }
-    if (usageHistoryOverlayClose) {
-        usageHistoryOverlayClose.addEventListener('click', closeUsageHistoryOverlay);
-    }
-    if (usageHistoryOverlayCloseFooter) {
-        usageHistoryOverlayCloseFooter.addEventListener('click', closeUsageHistoryOverlay);
     }
     if (messageLogOverlay) {
         messageLogOverlay.addEventListener('click', event => {
@@ -1422,6 +1155,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (mobileSessionOverlayCloseFooter) {
         mobileSessionOverlayCloseFooter.addEventListener('click', closeMobileSessionOverlay);
+    }
+    if (usageHistoryOverlay) {
+        usageHistoryOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeUsageHistoryOverlay();
+            }
+        });
+    }
+    if (usageHistoryOverlayClose) {
+        usageHistoryOverlayClose.addEventListener('click', closeUsageHistoryOverlay);
+    }
+    if (usageHistoryOverlayCloseFooter) {
+        usageHistoryOverlayCloseFooter.addEventListener('click', closeUsageHistoryOverlay);
     }
     if (fileBrowserOverlay) {
         fileBrowserOverlay.addEventListener('click', event => {
@@ -1553,16 +1300,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
-        if (isMobileSessionOverlayOpen()) {
-            closeMobileSessionOverlay();
+        if (isFileBrowserOverlayOpen()) {
+            closeFileBrowserOverlay();
             return;
         }
         if (isUsageHistoryOverlayOpen()) {
             closeUsageHistoryOverlay();
             return;
         }
-        if (isFileBrowserOverlayOpen()) {
-            closeFileBrowserOverlay();
+        if (isMobileSessionOverlayOpen()) {
+            closeMobileSessionOverlay();
             return;
         }
         if (isMessageLogOverlayOpen()) {
@@ -1666,14 +1413,23 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (usageHistoryOpen) {
+        usageHistoryOpen.addEventListener('click', event => {
+            event.preventDefault();
+            void openUsageHistoryOverlay();
+        });
+    }
+
     primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect);
 
     syncSessionsLayout(mobileMedia.matches);
     syncControlsLayout();
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+    updateFileBrowserRootButtons();
     initializeWorkMode(mobileMedia.matches);
     setWorkModeFileViewerFullscreen(false);
+    updateWorkModeFileRootButtons();
     if (isWorkModeEnabled()) {
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     }
@@ -1694,7 +1450,7 @@ document.addEventListener('DOMContentLoaded', () => {
             handleWorkModeMediaChange(event.matches);
         });
     }
-    const handleWindowLayoutResize = createRafThrottledHandler(() => {
+    window.addEventListener('resize', () => {
         if (isWorkModeEnabled()) {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
@@ -1705,9 +1461,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         syncWorkModeFileHorizontalScrollMetrics();
     });
-    window.addEventListener('resize', handleWindowLayoutResize);
-    window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
-    window.addEventListener('beforeunload', flushPersistWorkModeFileViewState);
 
     setupMobileViewportBehavior(mobileMedia, input);
     setupMobileSettingsInputBehavior(
@@ -1715,13 +1468,13 @@ document.addEventListener('DOMContentLoaded', () => {
         [
             modelInput,
             planModeModelInput,
-            planModeReasoningInput,
             reasoningInput,
+            planModeReasoningInput,
             modelSelect,
             planModeModelSelect,
+            reasoningSelect,
             planModeReasoningSelect,
-            reasoningSelect
-        ],
+        ]
     );
 
     if (messages) {
@@ -1814,14 +1567,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeToggle) {
         planModeToggle.addEventListener('click', () => {
-            setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
+            setPlanModeToggleState(!isPlanModeEnabled());
         });
     }
-    setPlanModeToggleState(state.settings.planModeState);
+    setPlanModeToggleState(state.settings.planModeEnabled);
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
-    startRunningJobsMonitorTicker();
     initializeTheme(themeToggle, themeMedia);
     initializeLiveWeatherPanel(mobileMedia);
     if (streamMonitor) {
@@ -1844,14 +1596,14 @@ async function initializeApp() {
 }
 
 function initializeLiveWeatherPanel(mobileMedia) {
-    const panel = document.getElementById('codex-live-weather-panel');
-    const toggle = document.getElementById('codex-live-weather-toggle');
+    const panel = document.getElementById('claude-live-weather-panel');
+    const toggle = document.getElementById('claude-live-weather-toggle');
     if (!panel || !toggle) return;
 
     initializeHoverTooltipInteractions();
     syncLiveWeatherLayout(Boolean(mobileMedia?.matches));
-    const serverDirectory = document.getElementById('codex-server-directory');
-    const serverDirectoryPath = document.getElementById('codex-server-directory-path');
+    const serverDirectory = document.getElementById('claude-server-directory');
+    const serverDirectoryPath = document.getElementById('claude-server-directory-path');
     setHoverTooltip(serverDirectory, serverDirectory?.textContent || '');
     setHoverTooltip(serverDirectoryPath, serverDirectoryPath?.textContent || '');
     updateLiveDatetime();
@@ -1880,8 +1632,8 @@ function readLiveWeatherCompactPreference(defaultCompact) {
 }
 
 function setLiveWeatherCompact(compact, { persist = true } = {}) {
-    const panel = document.getElementById('codex-live-weather-panel');
-    const toggle = document.getElementById('codex-live-weather-toggle');
+    const panel = document.getElementById('claude-live-weather-panel');
+    const toggle = document.getElementById('claude-live-weather-toggle');
     if (!panel || !toggle) return;
     const isCompact = Boolean(compact);
     const toggleLabel = isCompact ? 'Expand weather panel' : 'Collapse weather panel';
@@ -1931,8 +1683,8 @@ function updateLiveWeatherCompactSummary({
 }
 
 function updateLiveWeatherPanelTitle() {
-    const panel = document.getElementById('codex-live-weather-panel');
-    const title = document.getElementById('codex-live-weather-title');
+    const panel = document.getElementById('claude-live-weather-panel');
+    const title = document.getElementById('claude-live-weather-title');
     if (!panel || !title) return;
     const isCompact = panel.classList.contains('is-compact');
     if (!isCompact) {
@@ -2096,7 +1848,7 @@ function getKstNowParts(date = new Date()) {
 }
 
 function updateLiveDatetime() {
-    const datetime = document.getElementById('codex-live-datetime');
+    const datetime = document.getElementById('claude-live-datetime');
     if (!datetime) return;
     const parts = getKstNowParts();
     if (!parts) {
@@ -2396,7 +2148,7 @@ function setTextWithTooltip(element, text) {
 }
 
 function syncWeatherCurrentRowTooltip(currentElement = null) {
-    const valueElement = currentElement || document.getElementById('codex-weather-current');
+    const valueElement = currentElement || document.getElementById('claude-weather-current');
     if (!valueElement) return;
     const row = valueElement.closest('.live-weather-current');
     if (!row) return;
@@ -2409,7 +2161,7 @@ function getThemeToggleTooltipText(isDarkThemeEnabled) {
 }
 
 function updateThemeSwitchTooltip(themeToggle = null) {
-    const toggle = themeToggle || document.getElementById('codex-theme-toggle');
+    const toggle = themeToggle || document.getElementById('claude-theme-toggle');
     if (!toggle) return;
     const tooltip = getThemeToggleTooltipText(Boolean(toggle.checked));
     toggle.setAttribute('aria-label', tooltip);
@@ -2450,10 +2202,10 @@ function normalizeGitDivergenceCount(value) {
 }
 
 async function loadLiveWeatherData({ silent = false } = {}) {
-    const locationElement = document.getElementById('codex-weather-location');
-    const currentElement = document.getElementById('codex-weather-current');
-    const todayElement = document.getElementById('codex-weather-today');
-    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    const locationElement = document.getElementById('claude-weather-location');
+    const currentElement = document.getElementById('claude-weather-current');
+    const todayElement = document.getElementById('claude-weather-today');
+    const tomorrowElement = document.getElementById('claude-weather-tomorrow');
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
 
     if (!silent) {
@@ -2514,32 +2266,11 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
     }, visibleMs);
 }
 
-async function fetchCodexRestartPolicy() {
-    try {
-        const result = await fetchJson('/api/codex/runtime/restart-policy', {
-            cache: 'no-store',
-            timeoutMs: HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS
-        });
-        return result && typeof result === 'object' ? result : {};
-    } catch (error) {
-        return {
-            known: false,
-            use_reloader: null,
-            error: normalizeError(error, 'use_reloader 설정을 확인하지 못했습니다.')
-        };
-    }
-}
-
-async function showHeaderDetailsToast() {
-    const descriptionElement = document.getElementById('codex-header-description');
-    const storageElement = document.getElementById('codex-session-storage');
-    const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Agent sessions.').trim();
+function showHeaderDetailsToast() {
+    const descriptionElement = document.getElementById('claude-header-description');
+    const storageElement = document.getElementById('claude-session-storage');
+    const descriptionText = String(descriptionElement?.textContent || APP_DESCRIPTION).trim();
     const storageText = String(storageElement?.textContent || '').trim();
-    const restartPolicy = await fetchCodexRestartPolicy();
-    const useReloader = restartPolicy?.use_reloader;
-    const restartText = typeof useReloader === 'boolean'
-        ? `코드 변경 감지 재시작(use_reloader): ${useReloader ? 'true' : 'false'}`
-        : '코드 변경 감지 재시작(use_reloader): 확인 불가';
     const parts = [];
     if (descriptionText) {
         parts.push(descriptionText);
@@ -2547,7 +2278,6 @@ async function showHeaderDetailsToast() {
     if (storageText) {
         parts.push(storageText);
     }
-    parts.push(restartText);
     const message = parts.length > 0 ? parts.join(' · ') : '세부 정보가 없습니다.';
     showToast(message, { tone: 'default', durationMs: 4600 });
 }
@@ -2603,10 +2333,10 @@ async function fetchWeatherForecast(latitude, longitude) {
 }
 
 function renderWeatherSummary({ locationName, weather }) {
-    const locationElement = document.getElementById('codex-weather-location');
-    const currentElement = document.getElementById('codex-weather-current');
-    const todayElement = document.getElementById('codex-weather-today');
-    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    const locationElement = document.getElementById('claude-weather-location');
+    const currentElement = document.getElementById('claude-weather-current');
+    const todayElement = document.getElementById('claude-weather-today');
+    const tomorrowElement = document.getElementById('claude-weather-tomorrow');
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
 
     const current = weather?.current || {};
@@ -2644,10 +2374,10 @@ function renderWeatherSummary({ locationName, weather }) {
 }
 
 function renderWeatherError(locationText, detailText) {
-    const locationElement = document.getElementById('codex-weather-location');
-    const currentElement = document.getElementById('codex-weather-current');
-    const todayElement = document.getElementById('codex-weather-today');
-    const tomorrowElement = document.getElementById('codex-weather-tomorrow');
+    const locationElement = document.getElementById('claude-weather-location');
+    const currentElement = document.getElementById('claude-weather-current');
+    const todayElement = document.getElementById('claude-weather-today');
+    const tomorrowElement = document.getElementById('claude-weather-tomorrow');
     if (!locationElement || !currentElement || !todayElement || !tomorrowElement) return;
     setTextWithTooltip(locationElement, locationText);
     setTextWithTooltip(currentElement, detailText);
@@ -2730,7 +2460,7 @@ function updateSessionsToggleButton(toggle, collapsed) {
 function syncSidebarStackLayout() {
     const stack = document.querySelector('.sidebar-stack');
     if (!stack) return;
-    const weatherPanel = document.getElementById('codex-live-weather-panel');
+    const weatherPanel = document.getElementById('claude-live-weather-panel');
     const sessionsPanel = document.querySelector('.sessions');
     const weatherCompact = Boolean(weatherPanel?.classList.contains('is-compact'));
     const sessionsCollapsed = Boolean(sessionsPanel?.classList.contains('is-collapsed'));
@@ -2740,7 +2470,7 @@ function syncSidebarStackLayout() {
 
 function setSessionsCollapsed(collapsed, { persist = true } = {}) {
     const sessionsPanel = document.querySelector('.sessions');
-    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    const sessionsToggle = document.getElementById('claude-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
     sessionsPanel.classList.toggle('is-collapsed', collapsed);
     sessionsToggle.setAttribute('aria-expanded', String(!collapsed));
@@ -2790,8 +2520,8 @@ async function moveToAdjacentSession(step) {
 }
 
 function updateChatSessionNavigationButtons() {
-    const prevButton = document.getElementById('codex-chat-session-prev');
-    const nextButton = document.getElementById('codex-chat-session-next');
+    const prevButton = document.getElementById('claude-chat-session-prev');
+    const nextButton = document.getElementById('claude-chat-session-next');
     if (!prevButton && !nextButton) return;
 
     const activeIndex = getActiveSessionIndex();
@@ -2808,7 +2538,7 @@ function updateChatSessionNavigationButtons() {
 
 function setChatFullscreen(enabled) {
     const app = document.querySelector('.app');
-    const button = document.getElementById('codex-chat-fullscreen');
+    const button = document.getElementById('claude-chat-fullscreen');
     if (!app || !button) return;
     const isEnabled = Boolean(enabled);
     app.classList.toggle(CHAT_FULLSCREEN_CLASS, isEnabled);
@@ -2819,503 +2549,42 @@ function getWorkModeElements() {
     return {
         app: document.querySelector('.app'),
         layout: document.querySelector('.layout'),
-        toggle: document.getElementById('codex-work-mode-toggle'),
-        divider: document.getElementById('codex-work-mode-divider'),
-        mobileBrowserBtn: document.getElementById('codex-work-mode-mobile-browser'),
-        preview: document.getElementById('codex-work-mode-preview')
+        toggle: document.getElementById('claude-work-mode-toggle'),
+        divider: document.getElementById('claude-work-mode-divider'),
+        preview: document.getElementById('claude-work-mode-preview')
     };
 }
 
 function getWorkModeFileElements() {
-    const preview = document.getElementById('codex-work-mode-preview');
+    const preview = document.getElementById('claude-work-mode-preview');
     if (!preview) return null;
     return {
         preview,
-        layout: document.getElementById('codex-work-mode-file-layout'),
-        gridScroll: document.getElementById('codex-work-mode-file-grid-scroll'),
-        hScroll: document.getElementById('codex-work-mode-file-hscroll'),
-        hScrollTrack: document.getElementById('codex-work-mode-file-hscroll-track'),
-        table: document.getElementById('codex-work-mode-file-table'),
-        columns: document.getElementById('codex-work-mode-file-columns'),
-        divider: document.getElementById('codex-work-mode-file-divider'),
-        path: document.getElementById('codex-work-mode-file-path'),
-        meta: document.getElementById('codex-work-mode-file-meta'),
-        loading: document.getElementById('codex-work-mode-file-loading'),
-        empty: document.getElementById('codex-work-mode-file-empty'),
-        list: document.getElementById('codex-work-mode-file-list'),
+        layout: document.getElementById('claude-work-mode-file-layout'),
+        gridScroll: document.getElementById('claude-work-mode-file-grid-scroll'),
+        hScroll: document.getElementById('claude-work-mode-file-hscroll'),
+        hScrollTrack: document.getElementById('claude-work-mode-file-hscroll-track'),
+        table: document.getElementById('claude-work-mode-file-table'),
+        columns: document.getElementById('claude-work-mode-file-columns'),
+        divider: document.getElementById('claude-work-mode-file-divider'),
+        path: document.getElementById('claude-work-mode-file-path'),
+        meta: document.getElementById('claude-work-mode-file-meta'),
+        loading: document.getElementById('claude-work-mode-file-loading'),
+        empty: document.getElementById('claude-work-mode-file-empty'),
+        list: document.getElementById('claude-work-mode-file-list'),
         listPanel: preview.querySelector('.work-mode-file-list-panel'),
         viewerPanel: preview.querySelector('.file-browser-viewer-panel'),
-        viewerMeta: document.getElementById('codex-work-mode-file-viewer-meta'),
-        viewerContent: document.getElementById('codex-work-mode-file-viewer-content'),
-        refreshBtn: document.getElementById('codex-work-mode-file-refresh'),
-        upBtn: document.getElementById('codex-work-mode-file-up'),
-        backBtn: document.getElementById('codex-work-mode-file-back'),
-        chatBtn: document.getElementById('codex-work-mode-chat-back'),
-        openNewBtn: document.getElementById('codex-work-mode-file-open-new'),
-        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen'),
-        colResizers: Array.from(preview.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]'))
+        viewerMeta: document.getElementById('claude-work-mode-file-viewer-meta'),
+        viewerContent: document.getElementById('claude-work-mode-file-viewer-content'),
+        openNewBtn: document.getElementById('claude-work-mode-file-open-new'),
+        refreshBtn: document.getElementById('claude-work-mode-file-refresh'),
+        upBtn: document.getElementById('claude-work-mode-file-up'),
+        fullscreenBtn: document.getElementById('claude-work-mode-file-fullscreen'),
+        colResizers: Array.from(preview.querySelectorAll('#claude-work-mode-file-columns [data-resize-col]')),
+        rootButtons: Array.from(
+            preview.querySelectorAll('.work-mode-root-target[data-root-target]')
+        )
     };
-}
-
-function normalizeWorkModeFileScrollSnapshot(value, { includeContext = false } = {}) {
-    if (!value || typeof value !== 'object') return null;
-    const rawTop = Number(value.top);
-    const rawLeft = Number(value.left);
-    const normalized = {
-        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
-        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
-    };
-    if (!includeContext) {
-        return normalized;
-    }
-    return {
-        ...normalized,
-        root: normalizeFileBrowserRoot(value.root),
-        path: normalizeFileBrowserRelativePath(value.path)
-    };
-}
-
-function captureWorkModeFileScrollSnapshot({ includeContext = false } = {}) {
-    const elements = getWorkModeFileElements();
-    if (!elements?.gridScroll) return null;
-    const rawTop = Number(elements.gridScroll.scrollTop || 0);
-    const rawGridLeft = Number(elements.gridScroll.scrollLeft || 0);
-    const rawRailLeft = Number(elements.hScroll?.scrollLeft || 0);
-    const snapshot = {
-        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
-        left: Number.isFinite(rawGridLeft) || Number.isFinite(rawRailLeft)
-            ? Math.max(0, Math.round(Math.max(rawGridLeft, rawRailLeft)))
-            : 0
-    };
-    if (!includeContext) {
-        return snapshot;
-    }
-    return {
-        ...snapshot,
-        root: normalizeFileBrowserRoot(workModeFileRoot),
-        path: normalizeFileBrowserRelativePath(workModeFilePath)
-    };
-}
-
-function applyWorkModeFileScrollSnapshot(snapshot) {
-    const normalized = normalizeWorkModeFileScrollSnapshot(snapshot);
-    if (!normalized) return false;
-    const elements = getWorkModeFileElements();
-    if (!elements?.gridScroll) return false;
-    const nextTop = normalized.top;
-    const nextLeft = normalized.left;
-    if (Math.round(elements.gridScroll.scrollTop || 0) !== nextTop) {
-        elements.gridScroll.scrollTop = nextTop;
-    }
-    if (workModeFileHorizontalSyncLock) {
-        return true;
-    }
-    workModeFileHorizontalSyncLock = true;
-    try {
-        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextLeft) {
-            elements.gridScroll.scrollLeft = nextLeft;
-        }
-        if (elements.hScroll && Math.round(elements.hScroll.scrollLeft || 0) !== nextLeft) {
-            elements.hScroll.scrollLeft = nextLeft;
-        }
-    } finally {
-        workModeFileHorizontalSyncLock = false;
-    }
-    return true;
-}
-
-function normalizeWorkModeFileViewerScrollSnapshot(value, { includeContext = false } = {}) {
-    if (!value || typeof value !== 'object') return null;
-    const rawTop = Number(value.top);
-    const rawLeft = Number(value.left);
-    const rawIframeTop = Number(value.iframeTop);
-    const rawIframeLeft = Number(value.iframeLeft);
-    const normalized = {
-        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
-        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
-    };
-    if (Number.isFinite(rawIframeTop) || Number.isFinite(rawIframeLeft)) {
-        normalized.iframeTop = Number.isFinite(rawIframeTop) ? Math.max(0, Math.round(rawIframeTop)) : 0;
-        normalized.iframeLeft = Number.isFinite(rawIframeLeft) ? Math.max(0, Math.round(rawIframeLeft)) : 0;
-    }
-    if (!includeContext) {
-        return normalized;
-    }
-    return {
-        ...normalized,
-        root: normalizeFileBrowserRoot(value.root),
-        path: normalizeFileBrowserRelativePath(value.path),
-        selectedPath: normalizeFileBrowserRelativePath(value.selectedPath)
-    };
-}
-
-function readFileBrowserIframeScrollSnapshot(iframe) {
-    if (!(iframe instanceof HTMLIFrameElement)) return null;
-    try {
-        const frameWindow = iframe.contentWindow;
-        const frameDocument = iframe.contentDocument;
-        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
-            return null;
-        }
-        const scrollingElement = frameDocument.scrollingElement
-            || frameDocument.documentElement
-            || frameDocument.body;
-        const windowTop = Number(frameWindow.scrollY);
-        const windowLeft = Number(frameWindow.scrollX);
-        const pageTop = Number(frameWindow.pageYOffset);
-        const pageLeft = Number(frameWindow.pageXOffset);
-        const elementTop = Number(scrollingElement?.scrollTop);
-        const elementLeft = Number(scrollingElement?.scrollLeft);
-        const rawTop = Number.isFinite(windowTop)
-            ? windowTop
-            : (Number.isFinite(pageTop) ? pageTop : elementTop);
-        const rawLeft = Number.isFinite(windowLeft)
-            ? windowLeft
-            : (Number.isFinite(pageLeft) ? pageLeft : elementLeft);
-        return {
-            top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
-            left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
-        };
-    } catch (error) {
-        return null;
-    }
-}
-
-function writeFileBrowserIframeScrollSnapshot(iframe, top, left) {
-    if (!(iframe instanceof HTMLIFrameElement)) return false;
-    try {
-        const frameWindow = iframe.contentWindow;
-        const frameDocument = iframe.contentDocument;
-        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
-            return false;
-        }
-        const nextTop = Number.isFinite(Number(top)) ? Math.max(0, Math.round(Number(top))) : 0;
-        const nextLeft = Number.isFinite(Number(left)) ? Math.max(0, Math.round(Number(left))) : 0;
-        const scrollingElement = frameDocument.scrollingElement
-            || frameDocument.documentElement
-            || frameDocument.body;
-        if (scrollingElement) {
-            if (Math.round(scrollingElement.scrollTop || 0) !== nextTop) {
-                scrollingElement.scrollTop = nextTop;
-            }
-            if (Math.round(scrollingElement.scrollLeft || 0) !== nextLeft) {
-                scrollingElement.scrollLeft = nextLeft;
-            }
-        }
-        if (typeof frameWindow.scrollTo === 'function') {
-            frameWindow.scrollTo(nextLeft, nextTop);
-        }
-        return true;
-    } catch (error) {
-        return false;
-    }
-}
-
-function captureFileBrowserViewerScrollSnapshot(container) {
-    if (!(container instanceof HTMLElement)) return null;
-    const snapshot = {
-        top: Math.max(0, Math.round(Number(container.scrollTop || 0))),
-        left: Math.max(0, Math.round(Number(container.scrollLeft || 0)))
-    };
-    const iframe = container.querySelector('.file-browser-html-preview');
-    const iframeSnapshot = readFileBrowserIframeScrollSnapshot(iframe);
-    if (iframeSnapshot) {
-        snapshot.iframeTop = iframeSnapshot.top;
-        snapshot.iframeLeft = iframeSnapshot.left;
-    }
-    return snapshot;
-}
-
-function applyFileBrowserViewerScrollSnapshot(container, snapshot, { renderToken = '' } = {}) {
-    if (!(container instanceof HTMLElement)) return false;
-    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
-    if (!normalized) return false;
-    const expectedRenderToken = String(renderToken || container.dataset?.renderToken || '');
-    const matchesRenderToken = () => !expectedRenderToken || container.dataset?.renderToken === expectedRenderToken;
-
-    if (!matchesRenderToken()) return false;
-    if (Math.round(container.scrollTop || 0) !== normalized.top) {
-        container.scrollTop = normalized.top;
-    }
-    if (Math.round(container.scrollLeft || 0) !== normalized.left) {
-        container.scrollLeft = normalized.left;
-    }
-
-    const hasIframeSnapshot = Object.prototype.hasOwnProperty.call(normalized, 'iframeTop')
-        || Object.prototype.hasOwnProperty.call(normalized, 'iframeLeft');
-    if (!hasIframeSnapshot) {
-        return true;
-    }
-
-    const applyIframeSnapshot = () => {
-        if (!matchesRenderToken()) return true;
-        const iframe = container.querySelector('.file-browser-html-preview');
-        if (!(iframe instanceof HTMLIFrameElement)) return false;
-        return writeFileBrowserIframeScrollSnapshot(iframe, normalized.iframeTop, normalized.iframeLeft);
-    };
-
-    if (applyIframeSnapshot()) {
-        return true;
-    }
-
-    let retries = 0;
-    const scheduleRetry = () => {
-        if (!matchesRenderToken()) return;
-        if (applyIframeSnapshot()) return;
-        retries += 1;
-        if (retries >= FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES) {
-            return;
-        }
-        window.setTimeout(scheduleRetry, FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS);
-    };
-
-    const iframe = container.querySelector('.file-browser-html-preview');
-    if (iframe instanceof HTMLIFrameElement) {
-        iframe.addEventListener('load', () => {
-            window.setTimeout(scheduleRetry, 0);
-        }, { once: true });
-    }
-    window.setTimeout(scheduleRetry, 0);
-    return true;
-}
-
-function captureWorkModeFileViewerScrollSnapshot({ includeContext = false } = {}) {
-    const elements = getWorkModeFileElements();
-    const snapshot = captureFileBrowserViewerScrollSnapshot(elements?.viewerContent);
-    if (!snapshot) return null;
-    if (!includeContext) {
-        return snapshot;
-    }
-    return {
-        ...snapshot,
-        root: normalizeFileBrowserRoot(workModeFileRoot),
-        path: normalizeFileBrowserRelativePath(workModeFilePath),
-        selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath)
-    };
-}
-
-function resolveWorkModeFileViewerScrollSnapshotForPersist() {
-    const liveSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
-    if (!workModeHtmlPreviewState?.suspended) {
-        return liveSnapshot;
-    }
-    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
-    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
-    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
-    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
-    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
-        return liveSnapshot;
-    }
-    const suspendedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
-        workModeHtmlPreviewState?.viewerScroll,
-        { includeContext: true }
-    );
-    return suspendedSnapshot || liveSnapshot;
-}
-
-function applyWorkModeFileViewerScrollSnapshot(snapshot, { renderToken = '' } = {}) {
-    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
-    if (!normalized) return false;
-    const elements = getWorkModeFileElements();
-    return applyFileBrowserViewerScrollSnapshot(elements?.viewerContent, normalized, { renderToken });
-}
-
-function readWorkModeFileViewState() {
-    try {
-        const raw = window.sessionStorage?.getItem(WORK_MODE_FILE_VIEW_STATE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        const scroll = normalizeWorkModeFileScrollSnapshot(parsed?.scroll, { includeContext: true });
-        const viewerScroll = normalizeWorkModeFileViewerScrollSnapshot(parsed?.viewerScroll, { includeContext: true });
-        return {
-            root: normalizeFileBrowserRoot(parsed?.root),
-            path: normalizeFileBrowserRelativePath(parsed?.path),
-            selectedPath: normalizeFileBrowserRelativePath(parsed?.selectedPath),
-            mobileView: normalizeWorkModeMobileView(parsed?.mobileView),
-            mobileBrowseView: normalizeWorkModeMobileBrowseView(parsed?.mobileBrowseView || parsed?.mobileView),
-            viewerFullscreen: Boolean(parsed?.viewerFullscreen),
-            scroll,
-            viewerScroll
-        };
-    } catch (error) {
-        return null;
-    }
-}
-
-function persistWorkModeFileViewState() {
-    try {
-        const payload = {
-            root: normalizeFileBrowserRoot(workModeFileRoot),
-            path: normalizeFileBrowserRelativePath(workModeFilePath),
-            selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath),
-            mobileView: normalizeWorkModeMobileView(workModeMobileView),
-            mobileBrowseView: normalizeWorkModeMobileBrowseView(workModeMobileBrowseView),
-            viewerFullscreen: Boolean(workModeFileViewerFullscreen),
-            scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
-            viewerScroll: resolveWorkModeFileViewerScrollSnapshotForPersist(),
-            savedAt: Date.now()
-        };
-        window.sessionStorage?.setItem(WORK_MODE_FILE_VIEW_STATE_KEY, JSON.stringify(payload));
-    } catch (error) {
-        void error;
-    }
-}
-
-function schedulePersistWorkModeFileViewState(delayMs = WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS) {
-    const numericDelay = Number(delayMs);
-    const waitMs = Number.isFinite(numericDelay) ? Math.max(0, Math.round(numericDelay)) : 0;
-    if (workModeFileStatePersistTimer !== null) {
-        window.clearTimeout(workModeFileStatePersistTimer);
-        workModeFileStatePersistTimer = null;
-    }
-    workModeFileStatePersistTimer = window.setTimeout(() => {
-        workModeFileStatePersistTimer = null;
-        persistWorkModeFileViewState();
-    }, waitMs);
-}
-
-function flushPersistWorkModeFileViewState() {
-    if (workModeFileStatePersistTimer !== null) {
-        window.clearTimeout(workModeFileStatePersistTimer);
-        workModeFileStatePersistTimer = null;
-    }
-    persistWorkModeFileViewState();
-}
-
-function initializeWorkModeFileViewState(isMobile = false) {
-    const saved = readWorkModeFileViewState();
-    if (!saved) return;
-    workModeFileRoot = normalizeFileBrowserRoot(saved.root || workModeFileRoot);
-    workModeFilePath = normalizeFileBrowserRelativePath(saved.path || '');
-    workModeFileSelectedPath = normalizeFileBrowserRelativePath(saved.selectedPath || '');
-    workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(saved.mobileBrowseView || saved.mobileView);
-    workModeMobileView = isMobile
-        ? WORK_MODE_MOBILE_VIEW_CHAT
-        : normalizeWorkModeMobileView(saved.mobileView);
-    workModeFileViewerFullscreen = Boolean(saved.viewerFullscreen);
-    pendingWorkModeFileScrollRestore = normalizeWorkModeFileScrollSnapshot(saved.scroll, { includeContext: true });
-    pendingWorkModeFileViewerScrollRestore = normalizeWorkModeFileViewerScrollSnapshot(
-        saved.viewerScroll,
-        { includeContext: true }
-    );
-}
-
-function consumePendingWorkModeFileScrollRestore(root = workModeFileRoot, path = workModeFilePath) {
-    const pending = normalizeWorkModeFileScrollSnapshot(pendingWorkModeFileScrollRestore, { includeContext: true });
-    if (!pending) return null;
-    const normalizedRoot = normalizeFileBrowserRoot(root);
-    const normalizedPath = normalizeFileBrowserRelativePath(path);
-    if (pending.root !== normalizedRoot || pending.path !== normalizedPath) {
-        pendingWorkModeFileScrollRestore = null;
-        return null;
-    }
-    pendingWorkModeFileScrollRestore = null;
-    return normalizeWorkModeFileScrollSnapshot(pending);
-}
-
-function consumePendingWorkModeFileViewerScrollRestore(
-    root = workModeFileRoot,
-    path = workModeFilePath,
-    selectedPath = workModeFileSelectedPath
-) {
-    const pending = normalizeWorkModeFileViewerScrollSnapshot(
-        pendingWorkModeFileViewerScrollRestore,
-        { includeContext: true }
-    );
-    if (!pending) return null;
-    const normalizedRoot = normalizeFileBrowserRoot(root);
-    const normalizedPath = normalizeFileBrowserRelativePath(path);
-    const normalizedSelectedPath = normalizeFileBrowserRelativePath(selectedPath);
-    if (
-        pending.root !== normalizedRoot
-        || pending.path !== normalizedPath
-        || pending.selectedPath !== normalizedSelectedPath
-    ) {
-        pendingWorkModeFileViewerScrollRestore = null;
-        return null;
-    }
-    pendingWorkModeFileViewerScrollRestore = null;
-    return normalizeWorkModeFileViewerScrollSnapshot(pending);
-}
-
-function normalizeWorkModeMobileView(value) {
-    if (value === WORK_MODE_MOBILE_VIEW_LIST || value === WORK_MODE_MOBILE_VIEW_VIEWER) {
-        return value;
-    }
-    return WORK_MODE_MOBILE_VIEW_CHAT;
-}
-
-function normalizeWorkModeMobileBrowseView(value) {
-    return value === WORK_MODE_MOBILE_VIEW_VIEWER
-        ? WORK_MODE_MOBILE_VIEW_VIEWER
-        : WORK_MODE_MOBILE_VIEW_LIST;
-}
-
-function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
-    const previousView = normalizeWorkModeMobileView(workModeMobileView);
-    const nextView = normalizeWorkModeMobileView(view);
-    workModeMobileView = nextView;
-    const elements = getWorkModeElements();
-    const fileElements = getWorkModeFileElements();
-    const mobile = isMobileLayout();
-    const enabled = isWorkModeEnabled();
-    const applyMobileView = mobile && enabled;
-
-    if (
-        applyMobileView
-        && previousView === WORK_MODE_MOBILE_VIEW_VIEWER
-        && nextView !== WORK_MODE_MOBILE_VIEW_VIEWER
-    ) {
-        const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
-        if (viewerSnapshot) {
-            const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot) || viewerSnapshot;
-            pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
-        }
-        suspendWorkModeHtmlPreviewForMobileTransition(fileElements, { viewerSnapshot });
-    }
-
-    if (applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT) {
-        workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(nextView);
-    }
-
-    if (elements?.app) {
-        elements.app.classList.toggle(
-            'is-work-mode-mobile-chat',
-            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT
-        );
-        elements.app.classList.toggle(
-            'is-work-mode-mobile-list',
-            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_LIST
-        );
-        elements.app.classList.toggle(
-            'is-work-mode-mobile-viewer',
-            applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
-        );
-    }
-
-    const showMobileBrowserButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
-    if (elements?.mobileBrowserBtn) {
-        elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
-        elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
-    }
-
-    const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
-    const showBackButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER;
-
-    if (fileElements?.chatBtn) {
-        fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
-        fileElements.chatBtn.disabled = !showChatButton;
-    }
-    if (fileElements?.backBtn) {
-        fileElements.backBtn.classList.toggle('is-hidden', !showBackButton);
-        fileElements.backBtn.disabled = !showBackButton;
-    }
-    if (fileElements?.fullscreenBtn) {
-        fileElements.fullscreenBtn.classList.toggle('is-hidden', mobile);
-    }
-    syncWorkModeHtmlPreviewOpenButton();
-    syncWorkModeFileHorizontalScrollMetrics();
-    schedulePersistWorkModeFileViewState();
 }
 
 function setWorkModeFileViewerFullscreen(isFullscreen) {
@@ -3351,7 +2620,6 @@ function setWorkModeFileViewerFullscreen(isFullscreen) {
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     }
     syncWorkModeFileHorizontalScrollMetrics();
-    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileSplitRatio(value) {
@@ -3461,7 +2729,6 @@ function handleWorkModeFileGridScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
-    schedulePersistWorkModeFileViewState();
 }
 
 function handleWorkModeFileHScroll() {
@@ -3474,11 +2741,6 @@ function handleWorkModeFileHScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
-    schedulePersistWorkModeFileViewState();
-}
-
-function handleWorkModeFileViewerScroll() {
-    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileColumnName(column) {
@@ -3630,10 +2892,18 @@ function applyWorkModeSplitRatio(ratio = workModeSplitRatio, { persist = false }
 function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } = {}) {
     const elements = getWorkModeElements();
     if (!elements.app) return false;
-    void notifyOnMobile;
     const wantsEnabled = Boolean(enabled);
     const mobile = isMobileLayout();
-    const wasEnabled = elements.app.classList.contains(WORK_MODE_CLASS);
+    if (wantsEnabled && mobile) {
+        if (notifyOnMobile) {
+            showToast('작업 모드는 데스크톱 화면에서만 사용할 수 있습니다.', {
+                tone: 'default',
+                durationMs: 3200
+            });
+        }
+        updateWorkModeToggleButton(elements.toggle, false, { disabled: true });
+        return false;
+    }
 
     if (wantsEnabled) {
         if (elements.app.classList.contains(CHAT_FULLSCREEN_CLASS)) {
@@ -3657,24 +2927,20 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
     if (elements.divider) {
         elements.divider.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
     }
-    updateWorkModeToggleButton(elements.toggle, wantsEnabled, { disabled: false });
+    updateWorkModeToggleButton(elements.toggle, wantsEnabled, { disabled: mobile });
+    updateWorkModeFileRootButtons();
 
     if (wantsEnabled) {
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
         applyWorkModeFileColumnWidths({ persist: false });
         setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
-        if (mobile && !wasEnabled) {
-            workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
-        }
-        setWorkModeMobileView(workModeMobileView);
         requestAnimationFrame(() => {
             syncWorkModeFileHorizontalScrollMetrics();
         });
         void ensureWorkModeFilePanelContent();
     } else {
         setWorkModeFileViewerFullscreen(false);
-        setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
     }
 
     if (persist) {
@@ -3687,16 +2953,8 @@ function initializeWorkMode(isMobile) {
     workModeSplitRatio = readWorkModeSplitPreference();
     workModeFileSplitRatio = readWorkModeFileSplitPreference();
     workModeFileColumnWidths = readWorkModeFileColumnsPreference();
-    initializeWorkModeFileViewState(isMobile);
-    setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
     const preferred = readWorkModePreference();
-    setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
-    const initialMobileView = isMobile
-        ? WORK_MODE_MOBILE_VIEW_CHAT
-        : normalizeWorkModeMobileView(workModeMobileView) === WORK_MODE_MOBILE_VIEW_CHAT
-            ? WORK_MODE_MOBILE_VIEW_LIST
-            : normalizeWorkModeMobileView(workModeMobileView);
-    setWorkModeMobileView(initialMobileView);
+    setWorkModeEnabled(!isMobile && preferred, { persist: false, notifyOnMobile: false });
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
@@ -3707,17 +2965,16 @@ function initializeWorkMode(isMobile) {
 
 function handleWorkModeMediaChange(isMobile) {
     const elements = getWorkModeElements();
-    if (!isMobile && isMobileSessionOverlayOpen()) {
-        closeMobileSessionOverlay();
-    }
-    if (isMobile && isWorkModeEnabled()) {
+    if (isMobile) {
+        setWorkModeEnabled(false, { persist: false, notifyOnMobile: false });
         setWorkModeFileViewerFullscreen(false);
+        updateWorkModeToggleButton(elements.toggle, false, { disabled: true });
+        return;
     }
     updateWorkModeToggleButton(elements.toggle, isWorkModeEnabled(), { disabled: false });
     if (readWorkModePreference() && !isWorkModeEnabled()) {
         setWorkModeEnabled(true, { persist: false, notifyOnMobile: false });
     }
-    setWorkModeMobileView(workModeMobileView);
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
@@ -3870,7 +3127,7 @@ function startWorkModeFileColumnResize(event, column) {
 
 function syncSessionsLayout(isMobile) {
     const sessionsPanel = document.querySelector('.sessions');
-    const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    const sessionsToggle = document.getElementById('claude-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
     if (!isMobile) {
         setSessionsCollapsed(false, { persist: false });
@@ -3890,34 +3147,6 @@ function syncSessionsLayout(isMobile) {
 
 function isMobileLayout() {
     return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
-}
-
-function mediaQueryMatches(query) {
-    if (!query || typeof window.matchMedia !== 'function') return false;
-    try {
-        return window.matchMedia(query).matches;
-    } catch (error) {
-        void error;
-    }
-    return false;
-}
-
-function isLikelyVirtualKeyboardEnvironment() {
-    const userAgentData = navigator.userAgentData;
-    if (userAgentData && typeof userAgentData.mobile === 'boolean' && userAgentData.mobile) {
-        return true;
-    }
-    const userAgent = String(navigator.userAgent || '');
-    if (/\b(Android|iPhone|iPad|iPod|Mobile)\b/i.test(userAgent)) {
-        return true;
-    }
-    const hasFinePointer = mediaQueryMatches('(any-pointer: fine)');
-    const hasCoarsePointer = mediaQueryMatches('(any-pointer: coarse)');
-    if (hasCoarsePointer && !hasFinePointer) {
-        return true;
-    }
-    const touchPoints = Number(navigator.maxTouchPoints || 0);
-    return touchPoints > 0 && !hasFinePointer;
 }
 
 function isEditableElement(element) {
@@ -3942,7 +3171,7 @@ function isMobileKeyboardOpen(isMobile = isMobileLayout()) {
             return true;
         }
     }
-    return hasEditableFocus && isLikelyVirtualKeyboardEnvironment();
+    return hasEditableFocus;
 }
 
 function setMobileKeyboardOpen(open) {
@@ -3975,10 +3204,6 @@ function applyMobileViewportHeight() {
         : fallbackHeight;
     if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
     const clamped = Math.max(320, Math.round(nextHeight));
-    if (lastAppliedMobileViewportHeight === clamped) {
-        return;
-    }
-    lastAppliedMobileViewportHeight = clamped;
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
@@ -3996,49 +3221,39 @@ function normalizeMobileDocumentScroll(isMobile = isMobileLayout()) {
 }
 
 function setupMobileViewportBehavior(mobileMedia, input) {
-    const syncViewportState = ({ normalizeScroll = false } = {}) => {
+    applyMobileViewportHeight();
+    syncMobileKeyboardState(mobileMedia.matches);
+    normalizeMobileDocumentScroll(mobileMedia.matches);
+
+    const handleViewportChange = () => {
         applyMobileViewportHeight();
-        const isMobile = mobileMedia.matches;
-        syncMobileKeyboardState(isMobile);
-        if (normalizeScroll) {
-            normalizeMobileDocumentScroll(isMobile);
-        }
-    };
-    syncViewportState({ normalizeScroll: true });
-
-    const handleViewportChange = createRafThrottledHandler(() => {
-        syncViewportState();
-    });
-
-    const handleLayoutModeChange = event => {
-        syncViewportState({ normalizeScroll: Boolean(event?.matches) });
+        syncMobileKeyboardState(mobileMedia.matches);
+        normalizeMobileDocumentScroll(mobileMedia.matches);
     };
 
     if (typeof mobileMedia.addEventListener === 'function') {
-        mobileMedia.addEventListener('change', handleLayoutModeChange);
+        mobileMedia.addEventListener('change', handleViewportChange);
     } else if (typeof mobileMedia.addListener === 'function') {
-        mobileMedia.addListener(handleLayoutModeChange);
+        mobileMedia.addListener(handleViewportChange);
     }
 
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleViewportChange, { passive: true });
-        window.visualViewport.addEventListener('scroll', handleViewportChange, { passive: true });
+        window.visualViewport.addEventListener('resize', handleViewportChange);
+        window.visualViewport.addEventListener('scroll', handleViewportChange);
     }
     window.addEventListener('resize', handleViewportChange);
 
     if (!input) return;
     input.addEventListener('focus', () => {
         if (!mobileMedia.matches) return;
-        syncViewportState({ normalizeScroll: true });
-        window.setTimeout(() => {
-            syncViewportState({ normalizeScroll: true });
-        }, 80);
+        syncMobileKeyboardState(true);
+        normalizeMobileDocumentScroll(true);
+        window.setTimeout(handleViewportChange, 80);
     });
     input.addEventListener('blur', () => {
         if (!mobileMedia.matches) return;
-        window.setTimeout(() => {
-            syncViewportState({ normalizeScroll: true });
-        }, 120);
+        normalizeMobileDocumentScroll(true);
+        window.setTimeout(handleViewportChange, 120);
     });
 }
 
@@ -4050,7 +3265,7 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
 
     const keepFieldVisible = (field, behavior = 'auto') => {
         if (!field) return;
-        const controlsBody = document.getElementById('codex-controls-body');
+        const controlsBody = document.getElementById('claude-controls-body');
         if (controlsBody && controlsBody.contains(field)) {
             const bodyRect = controlsBody.getBoundingClientRect();
             const fieldRect = field.getBoundingClientRect();
@@ -4080,23 +3295,17 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         keepFieldVisible(focusedField, behavior);
     };
 
-    let focusVisibilityScheduled = false;
-    let focusVisibilityTimeoutId = null;
     const scheduleFocusedFieldVisibility = () => {
         if (!mobileMedia.matches) return;
-        if (focusVisibilityTimeoutId) {
-            window.clearTimeout(focusVisibilityTimeoutId);
-        }
-        focusVisibilityTimeoutId = window.setTimeout(() => {
-            focusVisibilityTimeoutId = null;
-            keepFocusedFieldVisible('auto');
-        }, 140);
-        if (focusVisibilityScheduled) return;
-        focusVisibilityScheduled = true;
-        runAfterAnimationFrame(() => {
-            focusVisibilityScheduled = false;
+        window.requestAnimationFrame(() => {
             keepFocusedFieldVisible('auto');
         });
+        window.setTimeout(() => {
+            keepFocusedFieldVisible('auto');
+        }, 120);
+        window.setTimeout(() => {
+            keepFocusedFieldVisible('auto');
+        }, 280);
     };
 
     const applyMobileFocusState = focused => {
@@ -4117,14 +3326,14 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         setMobileKeyboardOpen(false);
     };
 
-    const handleMobileViewportChange = createRafThrottledHandler(() => {
+    const handleMobileViewportChange = () => {
         if (!mobileMedia.matches) {
             setMobileKeyboardOpen(false);
             return;
         }
         syncMobileKeyboardState(true);
         scheduleFocusedFieldVisibility();
-    });
+    };
 
     if (typeof mobileMedia.addEventListener === 'function') {
         mobileMedia.addEventListener('change', handleLayoutModeChange);
@@ -4132,8 +3341,8 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         mobileMedia.addListener(handleLayoutModeChange);
     }
     if (window.visualViewport) {
-        window.visualViewport.addEventListener('resize', handleMobileViewportChange, { passive: true });
-        window.visualViewport.addEventListener('scroll', handleMobileViewportChange, { passive: true });
+        window.visualViewport.addEventListener('resize', handleMobileViewportChange);
+        window.visualViewport.addEventListener('scroll', handleMobileViewportChange);
     }
     window.addEventListener('resize', handleMobileViewportChange);
 
@@ -4158,8 +3367,8 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
 }
 
 function setControlsCollapsed(collapsed, { persist = true } = {}) {
-    const controls = document.getElementById('codex-controls');
-    const toggle = document.getElementById('codex-controls-toggle');
+    const controls = document.getElementById('claude-controls');
+    const toggle = document.getElementById('claude-controls-toggle');
     if (!controls || !toggle) return;
     controls.classList.toggle('is-collapsed', collapsed);
     toggle.setAttribute('aria-expanded', String(!collapsed));
@@ -4211,7 +3420,7 @@ function applyTheme(theme, { persist = true } = {}) {
     if (!root) return;
     const normalized = theme === 'dark' ? 'dark' : 'light';
     root.dataset.theme = normalized;
-    const toggle = document.getElementById('codex-theme-toggle');
+    const toggle = document.getElementById('claude-theme-toggle');
     if (toggle) {
         toggle.checked = normalized === 'dark';
         updateThemeSwitchTooltip(toggle);
@@ -4223,9 +3432,6 @@ function applyTheme(theme, { persist = true } = {}) {
             void error;
         }
     }
-    requestAnimationFrame(() => {
-        void hydrateMermaidDiagrams(document.body);
-    });
 }
 
 function getStoredTheme() {
@@ -4314,24 +3520,24 @@ function formatStreamTimestamp(value) {
 }
 
 function getStreamMonitorElements() {
-    const container = document.getElementById('codex-stream-monitor');
+    const container = document.getElementById('claude-stream-monitor');
     if (!container) return null;
     return {
         container,
-        list: document.getElementById('codex-stream-monitor-list'),
-        empty: document.getElementById('codex-stream-monitor-empty'),
-        output: document.getElementById('codex-stream-monitor-output'),
-        outputTitle: document.getElementById('codex-stream-monitor-title'),
-        outputStatus: document.getElementById('codex-stream-monitor-status'),
-        outputContent: document.getElementById('codex-stream-monitor-content')
+        list: document.getElementById('claude-stream-monitor-list'),
+        empty: document.getElementById('claude-stream-monitor-empty'),
+        output: document.getElementById('claude-stream-monitor-output'),
+        outputTitle: document.getElementById('claude-stream-monitor-title'),
+        outputStatus: document.getElementById('claude-stream-monitor-status'),
+        outputContent: document.getElementById('claude-stream-monitor-content')
     };
 }
 
 function setStreamMonitorCollapsed(collapsed) {
-    const monitor = document.getElementById('codex-stream-monitor');
+    const monitor = document.getElementById('claude-stream-monitor');
     if (!monitor) return;
     monitor.classList.toggle('is-collapsed', Boolean(collapsed));
-    const toggle = document.getElementById('codex-stream-monitor-toggle');
+    const toggle = document.getElementById('claude-stream-monitor-toggle');
     if (toggle) {
         toggle.setAttribute('aria-expanded', String(!collapsed));
     }
@@ -4429,11 +3635,10 @@ function updateRemoteStreamSessions(streams) {
     state.remoteStreamSessions = nextSet;
     state.remoteStreams = Array.isArray(streams) ? streams : [];
     if (changed) {
-        scheduleSessionsRender();
+        renderSessions();
         syncActiveSessionControls();
         syncRemoteActiveSessionStatus();
     }
-    flushReadyQueuedPrompts();
 }
 
 function syncRemoteActiveSessionStatus() {
@@ -4503,7 +3708,7 @@ async function fetchRemoteStreams(force = false) {
     }
     remoteStreamStatusInFlight = true;
     try {
-        const result = await fetchJson('/api/codex/streams');
+        const result = await fetchJson('/api/claude/streams');
         const streams = Array.isArray(result?.streams) ? result.streams : [];
         remoteStreamStatusCache = {
             streams,
@@ -4596,7 +3801,7 @@ async function pollStreamMonitor() {
     current.polling = true;
     try {
         const result = await fetchJson(
-            `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
+            `/api/claude/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
         );
         if (!streamMonitorState || streamMonitorState.id !== current.id) return;
         if (typeof result?.process_running === 'boolean') {
@@ -4608,13 +3813,6 @@ async function pollStreamMonitor() {
         }
         if (Number.isFinite(result?.idle_ms)) {
             current.idleMs = result.idle_ms;
-        }
-        if (result?.token_usage && typeof result.token_usage === 'object') {
-            current.tokenUsage = result.token_usage;
-            setMessageTokenUsage(
-                current.entry?.footer,
-                { role: 'assistant', token_usage: current.tokenUsage, content: current.output || '' }
-            );
         }
         if (result?.output) {
             current.output += result.output;
@@ -4661,13 +3859,13 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
         }
         state.loading = false;
         sessionLoadLockStartedAt = 0;
-        console.warn('[codex-ui] recovered stale session loading lock before reloading sessions');
+        console.warn('[claude-ui] recovered stale session loading lock before reloading sessions');
     }
     state.loading = true;
     sessionLoadLockStartedAt = Date.now();
     setStatus('Loading sessions...');
     try {
-        const result = await fetchJson('/api/codex/sessions', {
+        const result = await fetchJson('/api/claude/sessions', {
             timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
         });
         state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
@@ -4707,22 +3905,21 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
 }
 
 async function loadSettings({ silent = true } = {}) {
-    const refreshBtn = document.getElementById('codex-controls-refresh');
+    const refreshBtn = document.getElementById('claude-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/codex/settings');
+        const result = await fetchJson('/api/claude/settings');
         state.settings = {
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
-            planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: Array.isArray(result?.reasoning_options)
                 ? result.reasoning_options
                 : [],
+            planModeEnabled: Boolean(state.settings?.planModeEnabled),
             usage: result?.usage || null,
-            usageHistory: state.settings?.usageHistory || null,
             loaded: true
         };
         if (result?.session_storage) {
@@ -4752,11 +3949,9 @@ async function loadSettings({ silent = true } = {}) {
 
 async function refreshUsageSummary({ silent = true } = {}) {
     try {
-        const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
+        const result = await fetchJson('/api/claude/usage', { cache: 'no-store' });
         const usage = result?.usage ?? null;
-        const usageHistory = result?.usage_history ?? null;
         state.settings.usage = usage;
-        state.settings.usageHistory = usageHistory;
         if (result?.session_storage) {
             state.sessionStorage = result.session_storage;
             updateSessionStorageSummary(state.sessionStorage);
@@ -4769,32 +3964,15 @@ async function refreshUsageSummary({ silent = true } = {}) {
 }
 
 function updateUsageSummary(usage) {
-    const element = document.getElementById('codex-usage-summary');
+    const element = document.getElementById('claude-usage-summary');
     if (!element) return;
-    const historyButton = document.getElementById('codex-usage-history-open');
-    if (historyButton) {
-        const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
-            && state.settings.usageHistory.items.length > 1;
-        historyButton.classList.toggle('is-ready', hasHistory);
-    }
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
-    const tokenUsage = usage?.token_usage || null;
-    const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
     element.innerHTML = '';
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
     const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
-    if (hasTokenUsage) {
-        const tokenEntries = [
-            buildTokenUsageEntry(tokenUsage?.today, 'Today'),
-            buildTokenUsageEntry(tokenUsage?.all_time, 'All')
-        ].filter(Boolean);
-        tokenEntries.forEach(entry => {
-            element.appendChild(entry);
-        });
-    }
-    if (!hasUsage && !hasTokenUsage) {
+    if (!hasUsage) {
         const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         if (!accountName) {
             element.textContent = fallbackText;
@@ -4816,8 +3994,8 @@ function updateUsageSummary(usage) {
 }
 
 function updateModelControls(model, options) {
-    const select = document.getElementById('codex-model-select');
-    const input = document.getElementById('codex-model-input');
+    const select = document.getElementById('claude-model-select');
+    const input = document.getElementById('claude-model-input');
     const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
@@ -4856,8 +4034,8 @@ function updateModelControls(model, options) {
 }
 
 function updatePlanModeModelControls(planModeModel, options) {
-    const select = document.getElementById('codex-plan-mode-model-select');
-    const input = document.getElementById('codex-plan-mode-model-input');
+    const select = document.getElementById('claude-plan-mode-model-select');
+    const input = document.getElementById('claude-plan-mode-model-input');
     const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
@@ -4896,8 +4074,8 @@ function updatePlanModeModelControls(planModeModel, options) {
 }
 
 function updateReasoningControls(reasoning, options) {
-    const select = document.getElementById('codex-reasoning-select');
-    const input = document.getElementById('codex-reasoning-input');
+    const select = document.getElementById('claude-reasoning-select');
+    const input = document.getElementById('claude-reasoning-input');
     const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
@@ -4906,7 +4084,7 @@ function updateReasoningControls(reasoning, options) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = 'Select effort';
+            placeholder.textContent = 'Select provider';
             select.appendChild(placeholder);
             options.forEach(item => {
                 const option = document.createElement('option');
@@ -4925,7 +4103,7 @@ function updateReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Default effort';
+        input.placeholder = reasoning ? reasoning : 'Provider';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -4935,8 +4113,8 @@ function updateReasoningControls(reasoning, options) {
 }
 
 function updatePlanModeReasoningControls(reasoning, options) {
-    const select = document.getElementById('codex-plan-mode-reasoning-select');
-    const input = document.getElementById('codex-plan-mode-reasoning-input');
+    const select = document.getElementById('claude-plan-mode-reasoning-select');
+    const input = document.getElementById('claude-plan-mode-reasoning-input');
     const field = select ? select.closest('.model-field') : null;
     const hasOptions = Array.isArray(options) && options.length > 0;
     if (select) {
@@ -4964,7 +4142,7 @@ function updatePlanModeReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Use default effort';
+        input.placeholder = reasoning ? reasoning : 'Use default provider';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -4974,8 +4152,8 @@ function updatePlanModeReasoningControls(reasoning, options) {
 }
 
 function setSettingsStatus(model, reasoning, overrideText = null) {
-    const status = document.getElementById('codex-model-status');
-    const summary = document.getElementById('codex-controls-summary');
+    const status = document.getElementById('claude-model-status');
+    const summary = document.getElementById('claude-controls-summary');
     if (!status) return;
     if (overrideText) {
         status.textContent = overrideText;
@@ -4999,38 +4177,25 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     const planModeReasoningText = state.settings.planModeReasoningEffort
         ? state.settings.planModeReasoningEffort
         : 'default';
-    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
-    const compactToken = value => (value === 'default' ? 'def' : value);
-    const compactSummaryParts = [
-        `Model:${compactToken(modelText)}`,
-        `R:${compactToken(reasoningText)}`
-    ];
-    if (planModeModelText !== modelText || state.settings.planModeModel) {
-        compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
-    }
-    if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
-        compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
-    }
-    const compactSummary = compactSummaryParts.join(' · ');
-
-    status.textContent = fullText;
+    const text = `Model: ${modelText} · Plan model: ${planModeModelText} · Provider: ${reasoningText} · Plan provider: ${planModeReasoningText}`;
+    status.textContent = text;
     if (summary) {
-        summary.textContent = compactSummary;
-        summary.title = fullText;
+        summary.textContent = text;
+        summary.title = text;
     }
 }
 
 async function updateSettings() {
-    const input = document.getElementById('codex-model-input');
-    const status = document.getElementById('codex-model-status');
-    const refreshBtn = document.getElementById('codex-controls-refresh');
-    const modelSelect = document.getElementById('codex-model-select');
-    const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
-    const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
-    const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
-    const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
-    const reasoningInput = document.getElementById('codex-reasoning-input');
-    const reasoningSelect = document.getElementById('codex-reasoning-select');
+    const input = document.getElementById('claude-model-input');
+    const status = document.getElementById('claude-model-status');
+    const refreshBtn = document.getElementById('claude-controls-refresh');
+    const modelSelect = document.getElementById('claude-model-select');
+    const planModeModelInput = document.getElementById('claude-plan-mode-model-input');
+    const planModeModelSelect = document.getElementById('claude-plan-mode-model-select');
+    const planModeReasoningInput = document.getElementById('claude-plan-mode-reasoning-input');
+    const planModeReasoningSelect = document.getElementById('claude-plan-mode-reasoning-select');
+    const reasoningInput = document.getElementById('claude-reasoning-input');
+    const reasoningSelect = document.getElementById('claude-reasoning-select');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
         ? modelSelect.value.trim()
         : (input ? input.value.trim() : '');
@@ -5046,7 +4211,7 @@ async function updateSettings() {
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/codex/settings', {
+        const result = await fetchJson('/api/claude/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort })
@@ -5253,7 +4418,7 @@ function normalizeGitActionError(error, fallback) {
 async function requestGitCancel(repoTarget) {
     const target = normalizeGitSyncRepoTarget(repoTarget);
     try {
-        const result = await fetchJson('/api/codex/git/cancel', {
+        const result = await fetchJson('/api/claude/git/cancel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_CANCEL_REQUEST_TIMEOUT_MS,
@@ -5349,17 +4514,17 @@ function isRecoverableActionButtonBusy(button) {
 
 function getRecoverableGitActionButtons() {
     const selectors = [
-        '#codex-git-commit',
-        '#codex-git-push',
-        '#codex-git-sync',
-        '#codex-file-browser-open',
-        '#codex-branch-overlay-commit',
-        '#codex-branch-overlay-push',
-        '#codex-sync-overlay-fetch',
-        '#codex-sync-overlay-sync',
-        '#codex-sync-overlay-commit',
-        '#codex-sync-overlay-push',
-        '#codex-sync-overlay-refresh'
+        '#claude-git-commit',
+        '#claude-git-push',
+        '#claude-git-sync',
+        '#claude-file-browser-open',
+        '#claude-branch-overlay-commit',
+        '#claude-branch-overlay-push',
+        '#claude-sync-overlay-fetch',
+        '#claude-sync-overlay-sync',
+        '#claude-sync-overlay-commit',
+        '#claude-sync-overlay-push',
+        '#claude-sync-overlay-refresh'
     ];
     const seen = new Set();
     const buttons = [];
@@ -5385,9 +4550,9 @@ function recoverGitActionButtons() {
 
 function isTransientBusySessionStatus(message) {
     if (typeof message !== 'string') return false;
-    return message.startsWith('Waiting for Codex')
+    return message.startsWith('Waiting for Model')
         || message.startsWith('Receiving response')
-        || message.startsWith('Reconnecting to Codex')
+        || message.startsWith('Reconnecting to Model')
         || message.startsWith('Connection lost. Retrying')
         || message.startsWith('Stream completed. Reloading')
         || message.startsWith('Stopping');
@@ -5471,7 +4636,7 @@ function recoverClientUiState({ clearSessionLoadingLock = false, source = 'manua
     syncActiveSessionStatus();
 
     if (recovered.length > 0) {
-        console.info(`[codex-ui] recovered stale state (${source}): ${recovered.join(', ')}`);
+        console.info(`[claude-ui] recovered stale state (${source}): ${recovered.join(', ')}`);
     }
     return recovered;
 }
@@ -5506,7 +4671,6 @@ function getGitChangedFilesCountFromStatus(status) {
 function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
     document.querySelectorAll('.git-action-commit').forEach(button => {
-        if (button.id === 'codex-sync-overlay-commit') return;
         button.classList.toggle('is-ready', hasChanges);
     });
 }
@@ -5520,7 +4684,6 @@ function updateGitPushButtonState(status) {
     const aheadCount = getGitAheadCountFromStatus(status);
     const hasPendingPush = Number.isFinite(aheadCount) && aheadCount > 0;
     document.querySelectorAll('.git-action-push').forEach(button => {
-        if (button.id === 'codex-sync-overlay-push') return;
         button.classList.toggle('is-ready', hasPendingPush);
     });
 }
@@ -5537,21 +4700,21 @@ function applyGitBranchStatusToElement(element, status) {
 }
 
 function getGitBranchOverlayElements() {
-    const overlay = document.getElementById('codex-branch-overlay');
+    const overlay = document.getElementById('claude-branch-overlay');
     if (!overlay) return null;
     return {
         overlay,
-        subtitle: document.getElementById('codex-branch-overlay-subtitle'),
-        meta: document.getElementById('codex-branch-overlay-meta'),
-        selection: document.getElementById('codex-branch-overlay-selection'),
-        stageAllBtn: document.getElementById('codex-branch-overlay-stage-all'),
-        stageNoneBtn: document.getElementById('codex-branch-overlay-stage-none'),
-        commitMessage: document.getElementById('codex-branch-overlay-commit-message'),
-        commitBtn: document.getElementById('codex-branch-overlay-commit'),
-        pushBtn: document.getElementById('codex-branch-overlay-push'),
-        loading: document.getElementById('codex-branch-overlay-loading'),
-        empty: document.getElementById('codex-branch-overlay-empty'),
-        list: document.getElementById('codex-branch-overlay-list')
+        subtitle: document.getElementById('claude-branch-overlay-subtitle'),
+        meta: document.getElementById('claude-branch-overlay-meta'),
+        selection: document.getElementById('claude-branch-overlay-selection'),
+        stageAllBtn: document.getElementById('claude-branch-overlay-stage-all'),
+        stageNoneBtn: document.getElementById('claude-branch-overlay-stage-none'),
+        commitMessage: document.getElementById('claude-branch-overlay-commit-message'),
+        commitBtn: document.getElementById('claude-branch-overlay-commit'),
+        pushBtn: document.getElementById('claude-branch-overlay-push'),
+        loading: document.getElementById('claude-branch-overlay-loading'),
+        empty: document.getElementById('claude-branch-overlay-empty'),
+        list: document.getElementById('claude-branch-overlay-list')
     };
 }
 
@@ -5673,7 +4836,7 @@ function setGitOverlaySelectionState(selectAll) {
 function renderGitBranchOverlay(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
-    const branchElement = document.getElementById('codex-git-branch');
+    const branchElement = document.getElementById('claude-git-branch');
     const branchName = (status?.branch || getGitBranchFullName(branchElement) || '').trim();
     if (elements.subtitle) {
         elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
@@ -5732,8 +4895,19 @@ function renderGitBranchOverlay(status) {
 }
 
 function isGitBranchOverlayOpen() {
-    const overlay = document.getElementById('codex-branch-overlay');
+    const overlay = document.getElementById('claude-branch-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function isAnyOverlayOpen() {
+    return (
+        isGitBranchOverlayOpen()
+        || isGitSyncOverlayOpen()
+        || isMessageLogOverlayOpen()
+        || isFileBrowserOverlayOpen()
+        || isMobileSessionOverlayOpen()
+        || isUsageHistoryOverlayOpen()
+    );
 }
 
 function openGitBranchOverlay() {
@@ -5742,17 +4916,17 @@ function openGitBranchOverlay() {
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
-    }
-    if (isUsageHistoryOverlayOpen()) {
-        closeUsageHistoryOverlay();
-    }
-    if (isMobileSessionOverlayOpen()) {
-        closeMobileSessionOverlay();
     }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
@@ -5771,13 +4945,7 @@ function closeGitBranchOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (
-        !isGitSyncOverlayOpen()
-        && !isMessageLogOverlayOpen()
-        && !isFileBrowserOverlayOpen()
-        && !isMobileSessionOverlayOpen()
-        && !isUsageHistoryOverlayOpen()
-    ) {
+    if (!isAnyOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -5807,7 +4975,6 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainRef: 'origin/main',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
-        changedCount: null,
         aheadCount: null,
         behindCount: null,
         fetchedAt: 0,
@@ -5840,51 +5007,22 @@ function setGitSyncHistoryCache(repoTarget, partial = {}) {
 }
 
 function getGitSyncOverlayElements() {
-    const overlay = document.getElementById('codex-sync-overlay');
+    const overlay = document.getElementById('claude-sync-overlay');
     if (!overlay) return null;
     return {
         overlay,
-        subtitle: document.getElementById('codex-sync-overlay-subtitle'),
-        meta: document.getElementById('codex-sync-overlay-meta'),
+        subtitle: document.getElementById('claude-sync-overlay-subtitle'),
+        meta: document.getElementById('claude-sync-overlay-meta'),
         targetButtons: Array.from(overlay.querySelectorAll('.sync-overlay-target[data-repo-target]')),
-        fetchBtn: document.getElementById('codex-sync-overlay-fetch'),
-        syncBtn: document.getElementById('codex-sync-overlay-sync'),
-        commitBtn: document.getElementById('codex-sync-overlay-commit'),
-        pushBtn: document.getElementById('codex-sync-overlay-push'),
-        refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
-        loading: document.getElementById('codex-sync-overlay-loading'),
-        empty: document.getElementById('codex-sync-overlay-empty'),
-        list: document.getElementById('codex-sync-overlay-list')
+        fetchBtn: document.getElementById('claude-sync-overlay-fetch'),
+        syncBtn: document.getElementById('claude-sync-overlay-sync'),
+        commitBtn: document.getElementById('claude-sync-overlay-commit'),
+        pushBtn: document.getElementById('claude-sync-overlay-push'),
+        refreshBtn: document.getElementById('claude-sync-overlay-refresh'),
+        loading: document.getElementById('claude-sync-overlay-loading'),
+        empty: document.getElementById('claude-sync-overlay-empty'),
+        list: document.getElementById('claude-sync-overlay-list')
     };
-}
-
-function updateGitSyncOverlayActionButtonState(status) {
-    const elements = getGitSyncOverlayElements();
-    if (!elements) return;
-    const repoMissing = Boolean(status?.repoMissing);
-    const changedCount = normalizeGitChangedFilesCount(status?.changedCount);
-    const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
-    const behindCount = normalizeGitDivergenceCount(status?.behindCount);
-    const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
-    const hasPendingPush = !repoMissing && Number.isFinite(aheadCount) && aheadCount > 0;
-    const hasPendingSync = !repoMissing && Number.isFinite(behindCount) && behindCount > 0;
-
-    if (elements.commitBtn) {
-        elements.commitBtn.classList.toggle('is-ready', hasChanges);
-    }
-    if (elements.pushBtn) {
-        elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
-    }
-    if (elements.syncBtn) {
-        elements.syncBtn.classList.toggle('is-ready', hasPendingSync);
-    }
-}
-
-function syncGitSyncOverlayActionButtonsFromCache() {
-    if (!isGitSyncOverlayOpen()) return;
-    const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
-    const cached = getGitSyncHistoryCache(target);
-    updateGitSyncOverlayActionButtonState(cached);
 }
 
 function setGitSyncOverlayLoading(isLoading) {
@@ -5941,7 +5079,6 @@ function setGitSyncOverlayRepoTarget(repoTarget) {
         elements.fetchBtn.textContent = 'origin/main fetch';
         syncHoverTooltipFromLabel(elements.fetchBtn, 'origin/main fetch');
     }
-    updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(target));
 }
 
 function normalizeGitHistoryEntries(value) {
@@ -6003,7 +5140,6 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
-    const changedCount = normalizeGitChangedFilesCount(history?.changedCount);
     const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
     const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
     const compareText = !repoMissing && aheadCount != null && behindCount != null
@@ -6060,16 +5196,10 @@ function renderGitSyncOverlay(history) {
         elements.empty.textContent = fallbackMessage;
         elements.empty.classList.toggle('is-hidden', remoteHistory.length !== 0);
     }
-    updateGitSyncOverlayActionButtonState({
-        repoMissing,
-        changedCount,
-        aheadCount,
-        behindCount
-    });
 }
 
 function isGitSyncOverlayOpen() {
-    const overlay = document.getElementById('codex-sync-overlay');
+    const overlay = document.getElementById('claude-sync-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
@@ -6079,17 +5209,17 @@ function openGitSyncOverlay() {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
-    if (isFileBrowserOverlayOpen()) {
-        closeFileBrowserOverlay();
-    }
-    if (isMessageLogOverlayOpen()) {
-        closeMessageLogOverlay();
-    }
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
     if (isUsageHistoryOverlayOpen()) {
         closeUsageHistoryOverlay();
+    }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
     }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
@@ -6114,32 +5244,26 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (
-        !isGitBranchOverlayOpen()
-        && !isMessageLogOverlayOpen()
-        && !isFileBrowserOverlayOpen()
-        && !isMobileSessionOverlayOpen()
-        && !isUsageHistoryOverlayOpen()
-    ) {
+    if (!isAnyOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
 
 function getUsageHistoryOverlayElements() {
-    const overlay = document.getElementById('codex-usage-history-overlay');
+    const overlay = document.getElementById('claude-usage-history-overlay');
     if (!overlay) return null;
     return {
         overlay,
-        subtitle: document.getElementById('codex-usage-history-overlay-subtitle'),
-        meta: document.getElementById('codex-usage-history-overlay-meta'),
-        chart: document.getElementById('codex-usage-history-chart'),
-        legend: document.getElementById('codex-usage-history-legend'),
-        empty: document.getElementById('codex-usage-history-empty')
+        subtitle: document.getElementById('claude-usage-history-overlay-subtitle'),
+        meta: document.getElementById('claude-usage-history-overlay-meta'),
+        chart: document.getElementById('claude-usage-history-chart'),
+        legend: document.getElementById('claude-usage-history-legend'),
+        empty: document.getElementById('claude-usage-history-empty')
     };
 }
 
 function isUsageHistoryOverlayOpen() {
-    const overlay = document.getElementById('codex-usage-history-overlay');
+    const overlay = document.getElementById('claude-usage-history-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
@@ -6172,38 +5296,26 @@ function renderUsageHistoryLegend(history) {
     const fiveHourRatio = Number(relation?.five_hour?.tokens_per_percent);
     const weeklyRatio = Number(relation?.weekly?.tokens_per_percent);
     const tokenDeltaTotal = Number(history?.token_delta_total);
-    const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
-    const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
-    const relationScope = String(relation?.scope || history?.token_delta_scope || '').trim().toLowerCase() === 'account'
-        ? 'account'
-        : 'workspace';
-    const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
 
     const legendItems = [
         {
             key: 'token',
-            text: `Token delta (${scopeLabel}) ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
+            text: `Token delta ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
         },
         {
             key: 'five-hour',
             text: Number.isFinite(fiveHourRatio)
-                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok (${scopeLabel})`
+                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok`
                 : '5h ratio --'
         },
         {
             key: 'weekly',
             text: Number.isFinite(weeklyRatio)
-                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok (${scopeLabel})`
+                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok`
                 : 'Weekly ratio --'
         }
     ];
-    if (Number.isFinite(workspaceDeltaTotal) || Number.isFinite(accountDeltaTotal)) {
-        legendItems.push({
-            key: '',
-            text: `Workspace Δ ${Number.isFinite(workspaceDeltaTotal) ? formatNumber(workspaceDeltaTotal) : '--'} · Account Δ ${Number.isFinite(accountDeltaTotal) ? formatNumber(accountDeltaTotal) : '--'}`
-        });
-    }
     if (Number.isFinite(resetCount) && resetCount > 0) {
         legendItems.push({
             key: '',
@@ -6298,7 +5410,7 @@ function renderUsageHistoryChart(history) {
         const points = [];
         values.forEach((value, index) => {
             if (!Number.isFinite(value)) return;
-            points.push({ x: xAt(index), y: yPercent(value), value });
+            points.push({ x: xAt(index), y: yPercent(value) });
         });
         if (points.length < 2) return;
         const d = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' ');
@@ -6358,23 +5470,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         if (updatedAt) {
             metaParts.push(`Updated ${updatedAt}`);
         }
-        const relationScope = String(history?.relation?.scope || history?.token_delta_scope || '').trim().toLowerCase();
-        if (relationScope === 'account') {
-            metaParts.push('Relation account scope');
-        } else if (relationScope === 'workspace') {
-            metaParts.push('Relation workspace scope');
-        }
         const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
-        const workspaceTokenPath = typeof history?.scope?.workspace_token_usage_path === 'string'
-            ? history.scope.workspace_token_usage_path.trim()
-            : '';
-        const accountTokenPath = typeof history?.scope?.account_token_usage_path === 'string'
-            ? history.scope.account_token_usage_path.trim()
-            : '';
-        const titleParts = [pathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
         if (pathText) {
             metaParts.push(pathText);
-            elements.meta.setAttribute('title', titleParts.join('\n'));
+            elements.meta.setAttribute('title', pathText);
         } else {
             elements.meta.removeAttribute('title');
         }
@@ -6397,7 +5496,7 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         : USAGE_HISTORY_DEFAULT_HOURS;
     const query = new URLSearchParams({ hours: String(normalizedHours) }).toString();
     try {
-        const result = await fetchJson(`/api/codex/usage/history?${query}`, {
+        const result = await fetchJson(`/api/claude/usage/history?${query}`, {
             cache: 'no-store',
             timeoutMs: USAGE_HISTORY_REQUEST_TIMEOUT_MS
         });
@@ -6468,30 +5567,81 @@ function closeUsageHistoryOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (
-        !isGitBranchOverlayOpen()
-        && !isGitSyncOverlayOpen()
-        && !isMessageLogOverlayOpen()
-        && !isFileBrowserOverlayOpen()
-        && !isMobileSessionOverlayOpen()
-    ) {
+    if (!isAnyOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function getMobileSessionOverlayElements() {
+    const overlay = document.getElementById('claude-mobile-session-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        list: document.getElementById('claude-mobile-session-list')
+    };
+}
+
+function isMobileSessionOverlayOpen() {
+    const overlay = document.getElementById('claude-mobile-session-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openMobileSessionOverlay() {
+    if (!isMobileLayout()) return;
+    const elements = getMobileSessionOverlayElements();
+    if (!elements) return;
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
+    renderSessions();
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    const trigger = document.getElementById('claude-chat-title');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', 'true');
+    }
+    document.body.classList.add('is-overlay-open');
+}
+
+function closeMobileSessionOverlay() {
+    const elements = getMobileSessionOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    const trigger = document.getElementById('claude-chat-title');
+    if (trigger) {
+        trigger.setAttribute('aria-expanded', 'false');
+    }
+    if (!isAnyOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
 
 function getMessageLogOverlayElements() {
-    const overlay = document.getElementById('codex-message-log-overlay');
+    const overlay = document.getElementById('claude-message-log-overlay');
     if (!overlay) return null;
     return {
         overlay,
-        title: document.getElementById('codex-message-log-overlay-title'),
-        subtitle: document.getElementById('codex-message-log-overlay-subtitle'),
-        content: document.getElementById('codex-message-log-overlay-content')
+        title: document.getElementById('claude-message-log-overlay-title'),
+        subtitle: document.getElementById('claude-message-log-overlay-subtitle'),
+        content: document.getElementById('claude-message-log-overlay-content')
     };
 }
 
 function isMessageLogOverlayOpen() {
-    const overlay = document.getElementById('codex-message-log-overlay');
+    const overlay = document.getElementById('claude-message-log-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
@@ -6727,19 +5877,16 @@ function closeMessageLogOverlay() {
     elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
     delete elements.overlay.dataset.viewMode;
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (
-        !isGitBranchOverlayOpen()
-        && !isGitSyncOverlayOpen()
-        && !isFileBrowserOverlayOpen()
-        && !isMobileSessionOverlayOpen()
-        && !isUsageHistoryOverlayOpen()
-    ) {
+    if (!isAnyOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
 
 function normalizeFileBrowserRoot(value) {
-    void value;
+    const normalized = String(value || '').trim().toLowerCase();
+    if (FILE_BROWSER_ROOT_OPTIONS.has(normalized)) {
+        return normalized;
+    }
     return FILE_BROWSER_ROOT_WORKSPACE;
 }
 
@@ -6783,11 +5930,19 @@ function getFileBrowserAbsoluteRoots() {
     }
     const roots = [];
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
+    const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
     if (workspacePath) {
         roots.push({
             root: FILE_BROWSER_ROOT_WORKSPACE,
             path: workspacePath,
-            display: '$workspace'
+            display: FILE_BROWSER_ROOT_PATH_PREFIXES[FILE_BROWSER_ROOT_WORKSPACE]
+        });
+    }
+    if (serverPath && serverPath !== workspacePath) {
+        roots.push({
+            root: FILE_BROWSER_ROOT_SERVER,
+            path: serverPath,
+            display: FILE_BROWSER_ROOT_PATH_PREFIXES[FILE_BROWSER_ROOT_SERVER]
         });
     }
     roots.sort((a, b) => b.path.length - a.path.length);
@@ -6813,34 +5968,34 @@ function resolveFileBrowserTargetFromAbsolutePath(value) {
 }
 
 function getFileBrowserElements() {
-    const overlay = document.getElementById('codex-file-browser-overlay');
+    const overlay = document.getElementById('claude-file-browser-overlay');
     if (!overlay) return null;
     return {
         overlay,
-        subtitle: document.getElementById('codex-file-browser-overlay-subtitle'),
-        layout: document.getElementById('codex-file-browser-layout'),
-        gridScroll: document.getElementById('codex-file-browser-grid-scroll'),
-        hScroll: document.getElementById('codex-file-browser-hscroll'),
-        hScrollTrack: document.getElementById('codex-file-browser-hscroll-track'),
-        table: document.getElementById('codex-file-browser-table'),
-        columns: document.getElementById('codex-file-browser-columns'),
-        divider: document.getElementById('codex-file-browser-divider'),
-        path: document.getElementById('codex-file-browser-path'),
-        meta: document.getElementById('codex-file-browser-meta'),
-        loading: document.getElementById('codex-file-browser-loading'),
-        empty: document.getElementById('codex-file-browser-empty'),
-        list: document.getElementById('codex-file-browser-list'),
+        subtitle: document.getElementById('claude-file-browser-overlay-subtitle'),
+        layout: document.getElementById('claude-file-browser-layout'),
+        gridScroll: document.getElementById('claude-file-browser-grid-scroll'),
+        hScroll: document.getElementById('claude-file-browser-hscroll'),
+        hScrollTrack: document.getElementById('claude-file-browser-hscroll-track'),
+        table: document.getElementById('claude-file-browser-table'),
+        columns: document.getElementById('claude-file-browser-columns'),
+        divider: document.getElementById('claude-file-browser-divider'),
+        path: document.getElementById('claude-file-browser-path'),
+        meta: document.getElementById('claude-file-browser-meta'),
+        loading: document.getElementById('claude-file-browser-loading'),
+        empty: document.getElementById('claude-file-browser-empty'),
+        list: document.getElementById('claude-file-browser-list'),
         listPanel: overlay.querySelector('.file-browser-list-panel'),
         viewerPanel: overlay.querySelector('.file-browser-viewer-panel'),
-        viewerMeta: document.getElementById('codex-file-browser-viewer-meta'),
-        viewerContent: document.getElementById('codex-file-browser-viewer-content'),
-        backBtn: document.getElementById('codex-file-browser-back'),
-        upBtn: document.getElementById('codex-file-browser-up'),
-        refreshBtn: document.getElementById('codex-file-browser-refresh'),
-        fullscreenBtn: document.getElementById('codex-file-browser-fullscreen'),
-        colResizers: Array.from(overlay.querySelectorAll('#codex-file-browser-columns [data-resize-col]')),
-        showHiddenToggle: document.getElementById('codex-file-browser-show-hidden'),
-        showPycacheToggle: document.getElementById('codex-file-browser-show-pycache'),
+        viewerMeta: document.getElementById('claude-file-browser-viewer-meta'),
+        viewerContent: document.getElementById('claude-file-browser-viewer-content'),
+        backBtn: document.getElementById('claude-file-browser-back'),
+        upBtn: document.getElementById('claude-file-browser-up'),
+        refreshBtn: document.getElementById('claude-file-browser-refresh'),
+        fullscreenBtn: document.getElementById('claude-file-browser-fullscreen'),
+        colResizers: Array.from(overlay.querySelectorAll('#claude-file-browser-columns [data-resize-col]')),
+        showHiddenToggle: document.getElementById('claude-file-browser-show-hidden'),
+        showPycacheToggle: document.getElementById('claude-file-browser-show-pycache'),
         rootButtons: Array.from(
             overlay.querySelectorAll('.file-browser-root-target[data-root-target]')
         )
@@ -6848,7 +6003,7 @@ function getFileBrowserElements() {
 }
 
 function isFileBrowserOverlayOpen() {
-    const overlay = document.getElementById('codex-file-browser-overlay');
+    const overlay = document.getElementById('claude-file-browser-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
@@ -6864,10 +6019,23 @@ function updateFileBrowserRootButtons() {
     });
 }
 
-function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '') {
+function updateWorkModeFileRootButtons() {
+    const elements = getWorkModeFileElements();
+    if (!elements || !Array.isArray(elements.rootButtons)) return;
+    elements.rootButtons.forEach(button => {
+        const buttonRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
+        const isActive = buttonRoot === workModeFileRoot;
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('secondary', isActive);
+        button.classList.toggle('ghost', !isActive);
+    });
+}
+
+function setFilePanelPathLabel(pathElement, root = FILE_BROWSER_ROOT_WORKSPACE, relativePath = '', absoluteRootPath = '') {
     if (!pathElement) return;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const displayPrefix = '$workspace';
+    const displayPrefix = FILE_BROWSER_ROOT_PATH_PREFIXES[normalizedRoot] || `$${normalizedRoot}`;
     const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
     pathElement.textContent = display;
 
@@ -6879,53 +6047,24 @@ function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath 
 }
 
 function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
-    void root;
     const elements = getFileBrowserElements();
-    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
+    setFilePanelPathLabel(elements?.path, root, relativePath, absoluteRootPath);
 }
 
 function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = '') {
-    void root;
     const elements = getWorkModeFileElements();
-    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
-}
-
-function syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot = null) {
-    const normalizedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
-        viewerSnapshot,
-        { includeContext: true }
-    );
-    if (!normalizedSnapshot) return null;
-    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
-    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
-    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
-    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
-    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
-        return normalizedSnapshot;
-    }
-    setWorkModeHtmlPreviewState({
-        root: previewRoot,
-        path: previewPath,
-        previewUrl: workModeHtmlPreviewState?.previewUrl || '',
-        suspended: Boolean(workModeHtmlPreviewState?.suspended),
-        viewerScroll: normalizedSnapshot
-    });
-    return normalizedSnapshot;
+    setFilePanelPathLabel(elements?.path, root, relativePath, absoluteRootPath);
 }
 
 function setWorkModeHtmlPreviewState({
     root = workModeFileRoot,
     path = '',
-    previewUrl = '',
-    suspended = false,
-    viewerScroll = null
+    previewUrl = ''
 } = {}) {
     workModeHtmlPreviewState = {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
-        previewUrl: String(previewUrl || '').trim(),
-        suspended: Boolean(suspended),
-        viewerScroll: normalizeWorkModeFileViewerScrollSnapshot(viewerScroll, { includeContext: true })
+        previewUrl: String(previewUrl || '').trim()
     };
     syncWorkModeHtmlPreviewOpenButton();
 }
@@ -6934,9 +6073,7 @@ function clearWorkModeHtmlPreviewState() {
     setWorkModeHtmlPreviewState({
         root: workModeFileRoot,
         path: '',
-        previewUrl: '',
-        suspended: false,
-        viewerScroll: null
+        previewUrl: ''
     });
 }
 
@@ -6960,9 +6097,7 @@ function syncWorkModeHtmlPreviewOpenButton({ loading = false } = {}) {
     const elements = getWorkModeFileElements();
     const button = elements?.openNewBtn;
     if (!button) return;
-    const label = workModeHtmlPreviewState?.suspended
-        ? '새 창에서 HTML 미리보기 다시 열기'
-        : '새 창에서 HTML 미리보기 열기';
+    const label = '새 창에서 HTML 미리보기 열기';
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
     button.disabled = Boolean(loading) || !canOpenWorkModeHtmlPreviewInNewWindow();
@@ -6989,30 +6124,6 @@ function openWorkModeHtmlPreviewInNewWindow() {
     return true;
 }
 
-function suspendWorkModeHtmlPreviewForMobileTransition(elements, { viewerSnapshot = null } = {}) {
-    if (!elements?.viewerContent) return false;
-    const iframe = elements.viewerContent.querySelector('.file-browser-html-preview');
-    if (!(iframe instanceof HTMLIFrameElement)) return false;
-    const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
-    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
-    if (!previewUrl || !selectedPath) return false;
-    const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(
-        viewerSnapshot || captureWorkModeFileViewerScrollSnapshot({ includeContext: true })
-    );
-    if (normalizedViewerSnapshot) {
-        pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
-    }
-    setFilePanelViewerPlaceholder(elements, 'HTML 미리보기가 일시중지되었습니다. 목록에서 다시 열면 복원됩니다.');
-    setWorkModeHtmlPreviewState({
-        root: workModeFileRoot,
-        path: selectedPath,
-        previewUrl,
-        suspended: true,
-        viewerScroll: normalizedViewerSnapshot
-    });
-    return true;
-}
-
 function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
     const elements = getWorkModeFileElements();
     if (!elements) return;
@@ -7033,18 +6144,6 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     if (elements.upBtn) {
         elements.upBtn.disabled = loading || !workModeFilePath;
     }
-    if (elements.backBtn) {
-        const canGoBack = isWorkModeEnabled()
-            && isMobileLayout()
-            && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER;
-        elements.backBtn.disabled = loading || !canGoBack;
-    }
-    if (elements.chatBtn) {
-        const canMoveToChat = isWorkModeEnabled()
-            && isMobileLayout()
-            && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
-        elements.chatBtn.disabled = loading || !canMoveToChat;
-    }
     if (elements.fullscreenBtn) {
         elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || isMobileLayout();
     }
@@ -7056,10 +6155,12 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
         });
     }
     if (elements.divider) {
-        elements.divider.classList.toggle(
-            'is-disabled',
-            loading || workModeFileViewerFullscreen || isMobileLayout() || !isWorkModeEnabled()
-        );
+        elements.divider.classList.toggle('is-disabled', loading || workModeFileViewerFullscreen);
+    }
+    if (Array.isArray(elements.rootButtons)) {
+        elements.rootButtons.forEach(button => {
+            button.disabled = loading;
+        });
     }
     requestAnimationFrame(() => {
         syncWorkModeFileHorizontalScrollMetrics();
@@ -7196,10 +6297,6 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
         parentEntryPath,
         onOpenDirectory: entryPath => {
             workModeFileSelectedPath = '';
-            schedulePersistWorkModeFileViewState();
-            if (isMobileLayout()) {
-                setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            }
             clearWorkModeFileViewer('파일을 선택하세요.');
             void refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
@@ -7261,20 +6358,12 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
     }
 }
 
-async function refreshWorkModeFileDirectory(
-    {
-        root = workModeFileRoot,
-        path = workModeFilePath,
-        force = false,
-        restoreScrollSnapshot = null
-    } = {}
-) {
+async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = workModeFilePath, force = false } = {}) {
     void force;
     const elements = getWorkModeFileElements();
     if (!elements) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(path);
-    const requestedScrollRestore = normalizeWorkModeFileScrollSnapshot(restoreScrollSnapshot);
 
     setWorkModeFileDirectoryLoading(true);
     if (elements.meta) {
@@ -7285,6 +6374,7 @@ async function refreshWorkModeFileDirectory(
         const result = await fetchFileBrowserDirectory(normalizedRoot, normalizedPath);
         workModeFileRoot = normalizeFileBrowserRoot(result?.root || normalizedRoot);
         workModeFilePath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        updateWorkModeFileRootButtons();
         setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath, result?.root_path || '');
 
         const entries = Array.isArray(result?.entries) ? result.entries : [];
@@ -7300,16 +6390,6 @@ async function refreshWorkModeFileDirectory(
         if (elements.loading) {
             elements.loading.classList.add('is-hidden');
         }
-        const pendingRestore = requestedScrollRestore
-            || consumePendingWorkModeFileScrollRestore(workModeFileRoot, workModeFilePath);
-        if (pendingRestore) {
-            requestAnimationFrame(() => {
-                syncWorkModeFileHorizontalScrollMetrics();
-                applyWorkModeFileScrollSnapshot(pendingRestore);
-                syncWorkModeFileHorizontalScrollMetrics();
-            });
-        }
-        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         workModeFileCachedEntries = [];
@@ -7340,10 +6420,8 @@ async function openFileInWorkModePanel(
     {
         root = workModeFileRoot,
         fallbackToDirectory = false,
-        showViewerOnSuccess = true,
         line = null,
-        column = null,
-        restoreViewerScrollSnapshot = null
+        column = null
     } = {}
 ) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
@@ -7353,7 +6431,6 @@ async function openFileInWorkModePanel(
     const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getWorkModeFileElements();
     if (!elements) return null;
-    clearWorkModeHtmlPreviewState();
 
     if (elements.viewerMeta) {
         const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
@@ -7370,41 +6447,17 @@ async function openFileInWorkModePanel(
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
-        const viewerScrollSnapshot = !requestedLine
-            ? (
-                normalizeWorkModeFileViewerScrollSnapshot(restoreViewerScrollSnapshot)
-                || consumePendingWorkModeFileViewerScrollRestore(
-                    workModeFileRoot,
-                    workModeFilePath,
-                    workModeFileSelectedPath
-                )
-            )
-            : null;
         await renderFileBrowserViewerIntoElements(elements, result, {
             root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
         });
-        if (viewerScrollSnapshot && elements.viewerContent) {
-            const viewerRenderToken = String(elements.viewerContent.dataset?.renderToken || '');
-            applyWorkModeFileViewerScrollSnapshot(viewerScrollSnapshot, {
-                renderToken: viewerRenderToken
-            });
-        }
         applyWorkModeFileSelectionState();
-        if (showViewerOnSuccess && isMobileLayout()) {
-            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
-        }
-        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         const payload = getGitErrorPayload(error);
         if (fallbackToDirectory && payload?.error_code === 'not_file') {
             workModeFileSelectedPath = '';
-            schedulePersistWorkModeFileViewState();
-            if (isMobileLayout()) {
-                setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            }
             clearWorkModeFileViewer('폴더가 선택되었습니다. 목록에서 파일을 선택하세요.');
             await refreshWorkModeFileDirectory({
                 root: normalizedRoot,
@@ -7426,7 +6479,6 @@ async function openFileInWorkModePanel(
             placeholder.textContent = normalizeError(error, '파일을 열지 못했습니다.');
             elements.viewerContent.appendChild(placeholder);
         }
-        clearWorkModeHtmlPreviewState();
         showToast(normalizeError(error, '작업 모드 파일 열기에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
@@ -7448,12 +6500,7 @@ function openWorkModeFileTarget(target, options = {}) {
     workModeFileRoot = requestedRoot;
     workModeFilePath = requestedPath;
     workModeFileSelectedPath = requestedFilePath;
-    schedulePersistWorkModeFileViewState();
-    if (isMobileLayout()) {
-        setWorkModeMobileView(
-            requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST
-        );
-    }
+    updateWorkModeFileRootButtons();
     setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
     if (requestedFilePath) {
         const lineSuffix = requestedLine
@@ -7493,30 +6540,22 @@ async function ensureWorkModeFilePanelContent() {
         });
         if (!listed) return;
     }
-    if (isMobileLayout()) {
-        if (workModeMobileView !== WORK_MODE_MOBILE_VIEW_VIEWER) {
-            return;
-        }
-    }
     if (hasSelection) {
         await openFileInWorkModePanel(workModeFileSelectedPath, {
             root: workModeFileRoot,
-            fallbackToDirectory: true,
-            showViewerOnSuccess: false
+            fallbackToDirectory: true
         });
     } else if (!hasEntries) {
         clearWorkModeFileViewer('파일을 선택하세요.');
     }
 }
 
-async function refreshWorkModeFilePreviewSelection({ restoreViewerScrollSnapshot = null } = {}) {
+async function refreshWorkModeFilePreviewSelection() {
     const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
     if (!selectedPath) return null;
     return openFileInWorkModePanel(selectedPath, {
         root: workModeFileRoot,
-        fallbackToDirectory: true,
-        showViewerOnSuccess: false,
-        restoreViewerScrollSnapshot
+        fallbackToDirectory: true
     });
 }
 
@@ -8037,7 +7076,7 @@ function renderFileBrowserList(entries, { includeParentEntry = false, parentEntr
 }
 
 async function fetchFileBrowserDirectory(root, path = '') {
-    return fetchJson('/api/codex/files/list', {
+    return fetchJson('/api/claude/files/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         timeoutMs: FILE_BROWSER_REQUEST_TIMEOUT_MS,
@@ -8049,7 +7088,7 @@ async function fetchFileBrowserDirectory(root, path = '') {
 }
 
 async function fetchFileBrowserFile(root, path) {
-    return fetchJson('/api/codex/files/read', {
+    return fetchJson('/api/claude/files/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS,
@@ -8462,7 +7501,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const previewRoot = normalizeFileBrowserRoot(options?.root || result?.root || fileBrowserRoot);
-    const isWorkModeViewer = elements.viewerContent.id === 'codex-work-mode-file-viewer-content';
+    const isWorkModeViewer = elements.viewerContent.id === 'claude-work-mode-file-viewer-content';
 
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
@@ -8505,7 +7544,6 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         await renderSpreadsheetPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken);
         return;
     }
-
     if (isBinary) {
         const placeholder = document.createElement('div');
         placeholder.className = 'file-browser-placeholder';
@@ -8529,8 +7567,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
             setWorkModeHtmlPreviewState({
                 root: previewRoot,
                 path: normalizedPath,
-                previewUrl,
-                suspended: false
+                previewUrl
             });
         }
         const iframe = document.createElement('iframe');
@@ -8674,34 +7711,23 @@ function openFileBrowserOverlay(options = {}) {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
-    if (isMessageLogOverlayOpen()) {
-        closeMessageLogOverlay();
-    }
     if (isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
     if (isUsageHistoryOverlayOpen()) {
         closeUsageHistoryOverlay();
     }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
 
-    const hasRoot = Object.prototype.hasOwnProperty.call(options, 'root');
-    const hasFilePath = Object.prototype.hasOwnProperty.call(options, 'filePath');
-    const hasPath = Object.prototype.hasOwnProperty.call(options, 'path');
-    const hasLine = Object.prototype.hasOwnProperty.call(options, 'line');
-    const hasColumn = Object.prototype.hasOwnProperty.call(options, 'column');
-
-    const requestedRoot = normalizeFileBrowserRoot(
-        hasRoot ? options?.root : fileBrowserRoot
+    const requestedRoot = normalizeFileBrowserRoot(options?.root || fileBrowserRoot);
+    const requestedFilePath = normalizeFileBrowserRelativePath(options?.filePath || '');
+    const requestedLine = normalizeSourceLineNumber(options?.line);
+    const requestedColumn = normalizeSourceColumnNumber(options?.column);
+    const requestedPath = normalizeFileBrowserRelativePath(
+        options?.path || getFileBrowserParentPath(requestedFilePath)
     );
-    const requestedFilePath = normalizeFileBrowserRelativePath(
-        hasFilePath ? options?.filePath : (hasPath ? '' : fileBrowserSelectedPath)
-    );
-    const requestedLine = normalizeSourceLineNumber(hasLine ? options?.line : null);
-    const requestedColumn = normalizeSourceColumnNumber(hasColumn ? options?.column : null);
-    const requestedPathSource = hasPath
-        ? options?.path
-        : (hasFilePath ? getFileBrowserParentPath(requestedFilePath) : fileBrowserPath);
-    const requestedPath = normalizeFileBrowserRelativePath(requestedPathSource);
 
     fileBrowserRoot = requestedRoot;
     fileBrowserPath = requestedPath;
@@ -8711,10 +7737,9 @@ function openFileBrowserOverlay(options = {}) {
     updateFileBrowserFilterToggleState();
     applyFileBrowserColumnWidths({ persist: false });
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-    const initialMobileView = (hasPath || hasFilePath)
-        ? (requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST)
-        : fileBrowserMobileView;
-    setFileBrowserMobileView(initialMobileView);
+    setFileBrowserMobileView(
+        requestedFilePath ? FILE_BROWSER_MOBILE_VIEW_VIEWER : FILE_BROWSER_MOBILE_VIEW_LIST
+    );
     setFileBrowserPathLabel(fileBrowserRoot, fileBrowserPath);
     if (requestedFilePath) {
         const lineSuffix = requestedLine
@@ -8757,15 +7782,10 @@ function closeFileBrowserOverlay() {
     if (!elements) return;
     stopFileBrowserResize();
     stopFileBrowserColumnResize();
+    setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (
-        !isGitBranchOverlayOpen()
-        && !isGitSyncOverlayOpen()
-        && !isMessageLogOverlayOpen()
-        && !isMobileSessionOverlayOpen()
-        && !isUsageHistoryOverlayOpen()
-    ) {
+    if (!isAnyOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -8816,7 +7836,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     }
     gitSyncHistoryInFlightByTarget[target] = true;
     try {
-        const result = await fetchJson('/api/codex/git/history', {
+        const result = await fetchJson('/api/claude/git/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_HISTORY_REQUEST_TIMEOUT_MS,
@@ -8875,18 +7895,9 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
     const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
     try {
-        const [history, status] = await Promise.all([
-            fetchGitSyncHistory(force, target),
-            fetchGitStatusForRepoTarget(target, force).catch(() => null)
-        ]);
-        const changedCount = status ? getGitChangedFilesCountFromStatus(status) : null;
-        const merged = setGitSyncHistoryCache(target, {
-            changedCount: Number.isFinite(changedCount) ? changedCount : null,
-            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
-            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount
-        });
-        renderGitSyncOverlay(merged);
-        return merged;
+        const history = await fetchGitSyncHistory(force, target);
+        renderGitSyncOverlay(history);
+        return history;
     } catch (error) {
         renderGitSyncOverlay(getGitSyncHistoryCache(target));
         if (!silent) {
@@ -8912,7 +7923,7 @@ async function fetchGitStatus(force = false) {
     }
     gitBranchStatusInFlight = true;
     try {
-        const result = await fetchJson('/api/codex/git/status', {
+        const result = await fetchJson('/api/claude/git/status', {
             method: 'POST',
             timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
         });
@@ -8957,20 +7968,12 @@ async function fetchGitChangedFilesCount(force = false) {
 
 async function refreshGitBranchStatus({ force = false, updateOverlay = false } = {}) {
     const status = await fetchGitStatus(force);
-    const branchElement = document.getElementById('codex-git-branch');
+    const branchElement = document.getElementById('claude-git-branch');
     if (branchElement) {
         applyGitBranchStatusToElement(branchElement, status);
     }
     updateGitCommitButtonState(status);
     updateGitPushButtonState(status);
-    if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
-        setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
-            changedCount: getGitChangedFilesCountFromStatus(status),
-            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
-            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null
-        });
-    }
-    syncGitSyncOverlayActionButtonsFromCache();
     if (updateOverlay && isGitBranchOverlayOpen()) {
         renderGitBranchOverlay(status);
     }
@@ -8979,7 +7982,7 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
 }
 
 function startGitBranchPolling() {
-    const branchElement = document.getElementById('codex-git-branch');
+    const branchElement = document.getElementById('claude-git-branch');
     if (!branchElement || gitBranchPollTimer) return;
     const tick = async (force = false) => {
         await refreshGitBranchStatus({ force, updateOverlay: true });
@@ -9010,9 +8013,9 @@ async function showGitBranchInfoToast(element) {
 function getGitPushButtons(preferredButton = null) {
     const candidates = [
         preferredButton,
-        document.getElementById('codex-git-push'),
-        document.getElementById('codex-branch-overlay-push'),
-        document.getElementById('codex-sync-overlay-push')
+        document.getElementById('claude-git-push'),
+        document.getElementById('claude-branch-overlay-push'),
+        document.getElementById('claude-sync-overlay-push')
     ];
     const seen = new Set();
     return candidates.filter(button => {
@@ -9039,7 +8042,7 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     if (target === GIT_SYNC_TARGET_WORKSPACE) {
         return fetchGitStatus(force);
     }
-    const result = await fetchJson('/api/codex/git/status', {
+    const result = await fetchJson('/api/claude/git/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS,
@@ -9049,8 +8052,6 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     });
     const count = normalizeGitChangedFilesCount(result?.changed_files_count);
     const branch = typeof result?.branch === 'string' ? result.branch : '';
-    const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
-    const behindCount = normalizeGitDivergenceCount(result?.behind_count);
     const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
     const changedFiles = detailedFiles.length
         ? detailedFiles
@@ -9058,8 +8059,6 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     return {
         count,
         branch,
-        aheadCount,
-        behindCount,
         changedFiles,
         isStale: false,
         fetchedAt: Date.now()
@@ -9068,7 +8067,7 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
 
 async function handleGitCommit(button) {
     if (gitMutationInFlight) {
-        console.warn('[codex-ui] git commit blocked: git mutation is already in flight');
+        console.warn('[claude-ui] git commit blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -9090,7 +8089,7 @@ async function handleGitCommit(button) {
         setGitButtonBusy(commitButton, true, 'Committing...');
     }
     try {
-        await fetchJson('/api/codex/git/stage', {
+        await fetchJson('/api/claude/git/stage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
@@ -9099,7 +8098,7 @@ async function handleGitCommit(button) {
                 replace: true
             })
         });
-        const result = await fetchJson('/api/codex/git/commit', {
+        const result = await fetchJson('/api/claude/git/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
@@ -9137,7 +8136,7 @@ async function handleGitCommit(button) {
 
 async function handleGitQuickCommit(button, options = {}) {
     if (gitMutationInFlight) {
-        console.warn('[codex-ui] git quick commit blocked: git mutation is already in flight');
+        console.warn('[claude-ui] git quick commit blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -9157,7 +8156,7 @@ async function handleGitQuickCommit(button, options = {}) {
             showToast(`${repoLabel} · 커밋할 변경 파일이 없습니다.`, { tone: 'error', durationMs: 3200 });
             return;
         }
-        await fetchJson('/api/codex/git/stage', {
+        await fetchJson('/api/claude/git/stage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
@@ -9167,7 +8166,7 @@ async function handleGitQuickCommit(button, options = {}) {
                 replace: true
             })
         });
-        const result = await fetchJson('/api/codex/git/commit', {
+        const result = await fetchJson('/api/claude/git/commit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
@@ -9211,7 +8210,7 @@ async function handleGitQuickCommit(button, options = {}) {
 async function handleGitPush(button, options = {}) {
     recoverGitPushButtonsIfIdle();
     if (gitMutationInFlight) {
-        console.warn('[codex-ui] git push blocked: git mutation is already in flight');
+        console.warn('[claude-ui] git push blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -9234,7 +8233,7 @@ async function handleGitPush(button, options = {}) {
         pushButtons.forEach(pushButton => {
             setGitButtonBusy(pushButton, true, 'Pushing...');
         });
-        const result = await fetchJson('/api/codex/git/push', {
+        const result = await fetchJson('/api/claude/git/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_PUSH_REQUEST_TIMEOUT_MS,
@@ -9279,7 +8278,7 @@ async function handleGitPush(button, options = {}) {
 
 async function handleGitSync(button, options = {}) {
     if (gitMutationInFlight) {
-        console.warn('[codex-ui] git sync blocked: git mutation is already in flight');
+        console.warn('[claude-ui] git sync blocked: git mutation is already in flight');
         showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
             tone: 'error',
             durationMs: 3800
@@ -9297,7 +8296,7 @@ async function handleGitSync(button, options = {}) {
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, applyAfterFetch ? 'Syncing...' : 'Fetching...');
     try {
-        const result = await fetchJson('/api/codex/git/sync', {
+        const result = await fetchJson('/api/claude/git/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: requestTimeoutMs,
@@ -9386,12 +8385,12 @@ async function resumeStreamsFromStorage(pendingStreams) {
         if (sessionState) {
             sessionState.sending = true;
         }
-        setSessionStatus(pending.sessionId, 'Reconnecting to Codex...');
+        setSessionStatus(pending.sessionId, 'Reconnecting to Model...');
         if (pending.sessionId === state.activeSessionId) {
             syncActiveSessionControls();
         }
         try {
-            const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
+            const response = await fetch(`/api/claude/streams/${pending.id}?offset=0&error_offset=0`);
             const result = await response.json();
             if (!response.ok) {
                 const err = new Error(result?.error || 'Failed to resume stream.');
@@ -9547,18 +8546,9 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         const meta = document.createElement('div');
         meta.className = 'session-meta';
         const updated = formatTimestamp(session.updated_at);
-        const count = resolveSessionMessageCount(session);
-        const tokenSummary = formatSessionTokenSummary(session);
+        const count = Number.isFinite(session.message_count) ? session.message_count : 0;
         const metaText = document.createElement('span');
-        const metaParts = [];
-        if (updated) {
-            metaParts.push(`Updated ${updated}`);
-        }
-        metaParts.push(`${count} msgs`);
-        if (tokenSummary) {
-            metaParts.push(tokenSummary);
-        }
-        metaText.textContent = metaParts.join(' · ');
+        metaText.textContent = updated ? `Updated ${updated} - ${count} msgs` : `Messages ${count}`;
         meta.appendChild(metaText);
         if (isSessionStreaming(session.id)) {
             const spinner = document.createElement('span');
@@ -9608,8 +8598,8 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
 }
 
 function renderSessions() {
-    const primaryList = document.getElementById('codex-session-list');
-    const mobileOverlayList = document.getElementById('codex-mobile-session-list');
+    const primaryList = document.getElementById('claude-session-list');
+    const mobileOverlayList = document.getElementById('claude-mobile-session-list');
     const targets = [];
     if (primaryList) {
         targets.push({ list: primaryList, closeOverlayOnSelect: false });
@@ -9625,91 +8615,22 @@ function renderSessions() {
             closeOverlayOnSelect: Boolean(target.closeOverlayOnSelect)
         });
     });
-    renderRunningJobsMonitor();
-}
-
-function getMobileSessionOverlayElements() {
-    const overlay = document.getElementById('codex-mobile-session-overlay');
-    if (!overlay) return null;
-    return {
-        overlay,
-        list: document.getElementById('codex-mobile-session-list')
-    };
-}
-
-function isMobileSessionOverlayOpen() {
-    const overlay = document.getElementById('codex-mobile-session-overlay');
-    return overlay ? overlay.classList.contains('is-visible') : false;
-}
-
-function openMobileSessionOverlay() {
-    if (!isMobileLayout()) return;
-    const elements = getMobileSessionOverlayElements();
-    if (!elements) return;
-    if (isGitBranchOverlayOpen()) {
-        closeGitBranchOverlay();
-    }
-    if (isGitSyncOverlayOpen()) {
-        closeGitSyncOverlay();
-    }
-    if (isMessageLogOverlayOpen()) {
-        closeMessageLogOverlay();
-    }
-    if (isFileBrowserOverlayOpen()) {
-        closeFileBrowserOverlay();
-    }
-    if (isUsageHistoryOverlayOpen()) {
-        closeUsageHistoryOverlay();
-    }
-    renderSessions();
-    elements.overlay.classList.add('is-visible');
-    elements.overlay.setAttribute('aria-hidden', 'false');
-    const trigger = document.getElementById('codex-chat-title');
-    if (trigger) {
-        trigger.setAttribute('aria-expanded', 'true');
-    }
-    document.body.classList.add('is-overlay-open');
-}
-
-function closeMobileSessionOverlay() {
-    const elements = getMobileSessionOverlayElements();
-    if (!elements) return;
-    elements.overlay.classList.remove('is-visible');
-    elements.overlay.setAttribute('aria-hidden', 'true');
-    const trigger = document.getElementById('codex-chat-title');
-    if (trigger) {
-        trigger.setAttribute('aria-expanded', 'false');
-    }
-    if (
-        !isGitBranchOverlayOpen()
-        && !isGitSyncOverlayOpen()
-        && !isMessageLogOverlayOpen()
-        && !isFileBrowserOverlayOpen()
-        && !isUsageHistoryOverlayOpen()
-    ) {
-        document.body.classList.remove('is-overlay-open');
-    }
 }
 
 function upsertSessionSummary(session) {
     if (!session || !session.id) return;
     const fallbackMessages = Array.isArray(session.messages) ? session.messages : [];
-    const usage = resolveSessionTokenUsage(session, fallbackMessages);
-    const resolvedCount = Number.isFinite(Number(session.message_count))
-        ? Math.max(0, Math.round(Number(session.message_count)))
-        : fallbackMessages.length;
+    const tokenCount = Number(session.token_count);
+    const resolvedTokenCount = Number.isFinite(tokenCount)
+        ? Math.max(0, Math.round(tokenCount))
+        : estimateSessionTokenCountFromMessages(fallbackMessages);
     const summary = {
         id: session.id,
         title: session.title || 'New session',
         created_at: session.created_at,
         updated_at: session.updated_at,
-        message_count: resolvedCount,
-        token_count: usage.totalTokens,
-        input_token_count: usage.inputTokens,
-        cached_input_token_count: usage.cachedInputTokens,
-        output_token_count: usage.outputTokens,
-        reasoning_output_token_count: usage.reasoningOutputTokens,
-        token_estimated: usage.estimated
+        message_count: fallbackMessages.length,
+        token_count: resolvedTokenCount
     };
     const existingIndex = state.sessions.findIndex(item => item.id === session.id);
     if (existingIndex >= 0) {
@@ -9738,7 +8659,7 @@ function removeSessionSummary(sessionId) {
 async function createSession(selectAfter = true) {
     setStatus('Creating session...');
     try {
-        const result = await fetchJson('/api/codex/sessions', {
+        const result = await fetchJson('/api/claude/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
@@ -9770,16 +8691,13 @@ async function loadSession(sessionId) {
     if (!sessionId) return;
     setStatus('Loading session...');
     try {
-        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+        const result = await fetchJson(`/api/claude/sessions/${sessionId}`, {
             timeoutMs: SESSION_DETAIL_REQUEST_TIMEOUT_MS
         });
         const session = result?.session;
         const previousSessionId = state.activeSessionId;
         state.activeSessionId = session?.id || sessionId;
         ensureSessionState(state.activeSessionId);
-        if (session?.id) {
-            upsertSessionSummary(session);
-        }
         if (previousSessionId && previousSessionId !== state.activeSessionId) {
             detachSessionStreamEntry(previousSessionId);
         }
@@ -9796,7 +8714,7 @@ async function loadSession(sessionId) {
 }
 
 function renderMessages(messages) {
-    const container = document.getElementById('codex-chat-messages');
+    const container = document.getElementById('claude-chat-messages');
     if (!container) return;
     container.innerHTML = '';
 
@@ -9825,23 +8743,19 @@ function renderMessages(messages) {
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
         setMarkdownContent(bubble, message?.content || '', { message });
-        const streamIndicator = createMessageStreamIndicatorElement();
 
         const footer = createMessageFooter();
         const durationMs = Number(message?.duration_ms);
         if (Number.isFinite(durationMs)) {
             setMessageDuration(footer, durationMs);
         }
-        setMessageTimingBreakdown(footer, message);
         setMessageFinalizeReason(footer, message?.finalize_reason);
         setMessageFinalizeComparison(footer, message);
         setMessageDetailLogLink(footer, message);
         setMessagePreviewLink(footer, message?.content || '', message, wrapper);
-        setMessageTokenUsage(footer, message);
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
-        wrapper.appendChild(streamIndicator);
         wrapper.appendChild(footer);
         container.appendChild(wrapper);
     });
@@ -9849,25 +8763,8 @@ function renderMessages(messages) {
     scrollToBottom(true);
 }
 
-function createMessageStreamIndicatorElement() {
-    const indicator = document.createElement('div');
-    indicator.className = 'message-stream-indicator';
-    indicator.setAttribute('aria-hidden', 'true');
-    const bar = document.createElement('span');
-    bar.className = 'message-stream-indicator-bar';
-    const dot = document.createElement('span');
-    dot.className = 'message-stream-indicator-dot';
-    bar.appendChild(dot);
-    const text = document.createElement('span');
-    text.className = 'message-stream-indicator-text';
-    text.textContent = 'Responding...';
-    indicator.appendChild(bar);
-    indicator.appendChild(text);
-    return indicator;
-}
-
 function appendMessageToDOM(message, roleOverride = null) {
-    const container = document.getElementById('codex-chat-messages');
+    const container = document.getElementById('claude-chat-messages');
     if (!container) return null;
     const placeholder = container.querySelector('.chat-placeholder');
     if (placeholder) placeholder.remove();
@@ -9887,23 +8784,19 @@ function appendMessageToDOM(message, roleOverride = null) {
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     setMarkdownContent(bubble, message?.content || '', { message });
-    const streamIndicator = createMessageStreamIndicatorElement();
 
     const footer = createMessageFooter();
     const durationMs = Number(message?.duration_ms);
     if (Number.isFinite(durationMs)) {
         setMessageDuration(footer, durationMs);
     }
-    setMessageTimingBreakdown(footer, message);
     setMessageFinalizeReason(footer, message?.finalize_reason);
     setMessageFinalizeComparison(footer, message);
     setMessageDetailLogLink(footer, message);
     setMessagePreviewLink(footer, message?.content || '', message, wrapper);
-    setMessageTokenUsage(footer, message);
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
-    wrapper.appendChild(streamIndicator);
     wrapper.appendChild(footer);
     container.appendChild(wrapper);
     scrollToBottom();
@@ -9911,83 +8804,72 @@ function appendMessageToDOM(message, roleOverride = null) {
 }
 
 function updateHeader(session) {
-    const title = document.getElementById('codex-chat-title');
-    const meta = document.getElementById('codex-chat-meta');
+    const title = document.getElementById('claude-chat-title');
+    const meta = document.getElementById('claude-chat-meta');
     if (!title || !meta) return;
     if (!session) {
         title.textContent = 'Select a session';
-        title.setAttribute('title', 'Select a session');
-        title.setAttribute('aria-label', 'Select a session');
+        if (title instanceof HTMLButtonElement) {
+            title.setAttribute('aria-expanded', 'false');
+        }
         meta.textContent = '';
         return;
     }
-    const sessionTitle = session.title || 'New session';
-    title.textContent = sessionTitle;
-    title.setAttribute('title', sessionTitle);
-    title.setAttribute('aria-label', sessionTitle);
+    title.textContent = session.title || 'New session';
+    if (title instanceof HTMLButtonElement && !isMobileSessionOverlayOpen()) {
+        title.setAttribute('aria-expanded', 'false');
+    }
     const updated = formatTimestamp(session.updated_at);
-    const count = resolveSessionMessageCount(session);
-    const tokenSummary = formatSessionTokenSummary(session);
-    const parts = [];
-    if (updated) {
-        parts.push(`Updated ${updated}`);
-    }
-    parts.push(`${count} msgs`);
-    if (tokenSummary) {
-        parts.push(tokenSummary);
-    }
-    meta.textContent = parts.join(' · ');
+    meta.textContent = updated ? `Updated ${updated}` : '';
 }
 
-function normalizePlanModeState(value) {
-    if (typeof value === 'string') {
-        const normalized = value.trim().toLowerCase();
-        if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
-            return PLAN_MODE_STATE_PLAN_ONLY;
-        }
-        if (
-            normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
-            || normalized === 'auto'
-            || normalized === '2'
-        ) {
-            return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-        }
-    } else if (value === true) {
-        return PLAN_MODE_STATE_PLAN_ONLY;
-    }
-    return PLAN_MODE_STATE_OFF;
+function isPlanModeEnabled() {
+    return Boolean(state.settings.planModeEnabled);
 }
 
-function getPlanModeState() {
-    return normalizePlanModeState(state.settings.planModeState);
+function setPlanModeToggleState(enabled) {
+    const normalized = Boolean(enabled);
+    state.settings.planModeEnabled = normalized;
+    const button = document.getElementById('claude-plan-mode-toggle');
+    if (!button) return;
+    button.classList.toggle('is-active', normalized);
+    button.setAttribute('aria-pressed', String(normalized));
+    const label = normalized ? 'Plan mode on' : 'Plan mode off';
+    button.textContent = 'Plan';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
 }
 
-function shouldUsePlanModeForRequest(planModeState = getPlanModeState()) {
-    return planModeState !== PLAN_MODE_STATE_OFF;
-}
+function buildPromptLayoutContext() {
+    const workModeEnabled = isWorkModeEnabled();
+    const activeRoot = workModeEnabled ? workModeFileRoot : fileBrowserRoot;
+    const activeDirectoryPath = workModeEnabled ? workModeFilePath : fileBrowserPath;
+    const activeFilePath = workModeEnabled ? workModeFileSelectedPath : fileBrowserSelectedPath;
 
-function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
-    return planModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-}
-
-function getNextPlanModeState(currentState = getPlanModeState()) {
-    if (currentState === PLAN_MODE_STATE_OFF) {
-        return PLAN_MODE_STATE_PLAN_ONLY;
-    }
-    if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
-        return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-    }
-    return PLAN_MODE_STATE_OFF;
+    return {
+        work_mode_enabled: workModeEnabled,
+        file_browser_open: isFileBrowserOverlayOpen(),
+        active_root: normalizeFileBrowserRoot(activeRoot),
+        active_directory_path: normalizeFileBrowserRelativePath(activeDirectoryPath),
+        active_file_path: normalizeFileBrowserRelativePath(activeFilePath),
+        work_mode_root: normalizeFileBrowserRoot(workModeFileRoot),
+        work_mode_directory_path: normalizeFileBrowserRelativePath(workModeFilePath),
+        work_mode_file_path: normalizeFileBrowserRelativePath(workModeFileSelectedPath)
+    };
 }
 
 async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {}) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
     }
-    const response = await fetch(`/api/codex/sessions/${sessionId}/message/queue`, {
+    const response = await fetch(`/api/claude/sessions/${sessionId}/message/queue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, plan_mode: Boolean(planMode) })
+        body: JSON.stringify({
+            prompt,
+            plan_mode: Boolean(planMode),
+            layout_context: buildPromptLayoutContext()
+        })
     });
     const result = await response.json();
     if (!response.ok) {
@@ -10005,83 +8887,20 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {})
         return {
             ok: true,
             reason: 'started',
-            sessionId,
             queueCount
         };
     }
     return {
         ok: true,
         reason: 'queued',
-        sessionId,
         queueCount,
         activeStreamId: result?.active_stream_id || null
     };
 }
 
-async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState()) {
-    const normalizedPrompt = String(prompt || '').trim();
-    if (!sessionId || !normalizedPrompt) {
-        return {
-            addedCount: 0,
-            totalQueued: 0,
-            lastResult: null
-        };
-    }
-    const normalizedPlanModeState = normalizePlanModeState(planModeState);
-    const queueItems = [];
-    if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
-        queueItems.push({ prompt: normalizedPrompt, planMode: true });
-        queueItems.push({ prompt: PLAN_MODE_AUTO_EXECUTE_PROMPT, planMode: false });
-    } else {
-        queueItems.push({
-            prompt: normalizedPrompt,
-            planMode: normalizedPlanModeState === PLAN_MODE_STATE_PLAN_ONLY
-        });
-    }
-
-    let lastResult = null;
-    let totalQueued = 0;
-    for (const item of queueItems) {
-        lastResult = await queuePromptOnServer(sessionId, item.prompt, { planMode: item.planMode });
-        const queueCount = Number(lastResult?.queueCount);
-        if (Number.isFinite(queueCount)) {
-            totalQueued = Math.max(0, queueCount);
-        }
-    }
-    return {
-        addedCount: queueItems.length,
-        totalQueued,
-        lastResult
-    };
-}
-
-function setPlanModeToggleState(nextState) {
-    const normalized = normalizePlanModeState(nextState);
-    state.settings.planModeState = normalized;
-    const button = document.getElementById('codex-plan-mode-toggle');
-    if (!button) return;
-    const isActive = normalized !== PLAN_MODE_STATE_OFF;
-    const isPlanAndExecute = normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-    button.classList.toggle('is-active', isActive);
-    button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
-    button.setAttribute('aria-pressed', String(isActive));
-    let label = 'Plan mode off';
-    let buttonText = 'Plan';
-    if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
-        label = 'Plan mode on (planning only)';
-    } else if (isPlanAndExecute) {
-        label = 'Plan then execute mode on';
-        buttonText = 'Plan+';
-    }
-    button.dataset.planModeState = normalized;
-    button.textContent = buttonText;
-    button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
-}
-
 async function handleSubmit(event) {
     if (event) event.preventDefault();
-    const input = document.getElementById('codex-chat-input');
+    const input = document.getElementById('claude-chat-input');
     if (!input) return;
     const draftPrompt = input.value;
     const prompt = draftPrompt.trim();
@@ -10092,9 +8911,11 @@ async function handleSubmit(event) {
         if (prompt) {
             input.value = '';
             try {
-                const queueResult = await queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState());
-                const queuedCount = Number(queueResult?.totalQueued) || 0;
-                if (queueResult?.lastResult?.reason === 'queued') {
+                const queueResult = await queuePromptOnServer(activeSessionId, prompt, {
+                    planMode: isPlanModeEnabled()
+                });
+                if (queueResult?.reason === 'queued') {
+                    const queuedCount = Number(queueResult?.queueCount) || 0;
                     setSessionStatus(activeSessionId, `Queued ${queuedCount} prompt${queuedCount === 1 ? '' : 's'}...`);
                     showToast(`Queued (${queuedCount})`, {
                         tone: 'success',
@@ -10104,7 +8925,7 @@ async function handleSubmit(event) {
             } catch (error) {
                 setSessionStatus(activeSessionId, normalizeError(error, 'Failed to queue message.'), true);
                 if (state.activeSessionId === activeSessionId) {
-                    const latestInput = document.getElementById('codex-chat-input');
+                    const latestInput = document.getElementById('claude-chat-input');
                     if (latestInput && latestInput.value === '') {
                         latestInput.value = draftPrompt;
                         latestInput.focus();
@@ -10129,24 +8950,12 @@ async function handleSubmit(event) {
     }
     if (!prompt) return;
     input.value = '';
-    const planModeState = getPlanModeState();
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
-        planMode: shouldUsePlanModeForRequest(planModeState)
+        planMode: isPlanModeEnabled()
     });
-    if (
-        sendResult?.ok
-        && shouldAutoExecuteAfterPlan(planModeState)
-        && (sendResult?.reason === 'started' || sendResult?.reason === 'queued')
-    ) {
-        const targetSessionId = sendResult.sessionId || state.activeSessionId || activeSessionId;
-        if (targetSessionId) {
-            await queuePromptWithPlanMode(targetSessionId, PLAN_MODE_AUTO_EXECUTE_PROMPT, PLAN_MODE_STATE_OFF);
-            syncActiveSessionControls();
-        }
-    }
     if (sendResult?.ok) return;
-    const latestInput = document.getElementById('codex-chat-input');
+    const latestInput = document.getElementById('claude-chat-input');
     if (!latestInput) return;
     if (state.activeSessionId !== activeSessionId) return;
     if (latestInput.value !== '') return;
@@ -10227,18 +9036,18 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
 
     if (!sessionId) {
         setStatus('Failed to create a session.', true);
-        return { ok: false, reason: 'session_create_failed', sessionId: null };
+        return { ok: false, reason: 'session_create_failed' };
     }
 
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.sending) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
-        return { ok: false, reason: 'already_sending', sessionId };
+        return { ok: false, reason: 'already_sending' };
     }
     if (sessionState) {
         sessionState.sending = true;
     }
-    setSessionStatus(sessionId, 'Waiting for Codex...');
+    setSessionStatus(sessionId, 'Waiting for Model...');
     if (sessionId === state.activeSessionId) {
         syncActiveSessionControls();
     }
@@ -10246,10 +9055,14 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
     const startedAt = Date.now();
     try {
         const controller = beginPendingSend(sessionId);
-        const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
+        const response = await fetch(`/api/claude/sessions/${sessionId}/message/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, plan_mode: Boolean(planMode) }),
+            body: JSON.stringify({
+                prompt,
+                plan_mode: Boolean(planMode),
+                layout_context: buildPromptLayoutContext()
+            }),
             signal: controller.signal
         });
         clearPendingSend(sessionId, controller);
@@ -10261,7 +9074,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             throw err;
         }
         processStartedStreamResponse(sessionId, prompt, result, startedAt);
-        return { ok: true, reason: 'started', sessionId };
+        return { ok: true, reason: 'started' };
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -10274,7 +9087,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'canceled', sessionId };
+            return { ok: false, reason: 'canceled' };
         }
         if (error?.status === 409 && error?.payload?.already_running) {
             try {
@@ -10293,12 +9106,12 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return { ok: true, reason: 'queued', sessionId, queueCount: queuedCount };
+                    return { ok: true, reason: 'queued', queueCount: queuedCount };
                 }
                 if (sessionId === state.activeSessionId) {
                     syncActiveSessionControls();
                 }
-                return { ok: true, reason: queueResult?.reason || 'started', sessionId };
+                return { ok: true, reason: queueResult?.reason || 'started' };
             } catch (queueError) {
                 // Fall back to remote attach behavior when queue endpoint fails.
             }
@@ -10319,7 +9132,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return { ok: true, reason: 'attached_existing_stream', sessionId };
+                    return { ok: true, reason: 'attached_existing_stream' };
                 }
             }
             if (sessionState) {
@@ -10331,7 +9144,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'already_running', sessionId };
+            return { ok: false, reason: 'already_running' };
         }
         if (sessionState) {
             sessionState.sending = false;
@@ -10342,7 +9155,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             syncActiveSessionControls();
         }
         void flushQueuedPrompts(sessionId);
-        return { ok: false, reason: 'send_failed', sessionId };
+        return { ok: false, reason: 'send_failed' };
     }
 }
 
@@ -10372,7 +9185,7 @@ function beginStreamPolling(streamId) {
     if (!stream) return;
     stream.failureCount = 0;
     stream.pollDelay = STREAM_POLL_BASE_MS;
-    scheduleSessionsRender();
+    renderSessions();
     scheduleStreamPoll(streamId, 0);
 }
 
@@ -10392,7 +9205,7 @@ async function stopStream(sessionId) {
     if (!stream) return;
     setSessionStatus(sessionId, 'Stopping...');
     try {
-        const response = await fetch(`/api/codex/streams/${stream.id}/stop`, { method: 'POST' });
+        const response = await fetch(`/api/claude/streams/${stream.id}/stop`, { method: 'POST' });
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result?.error || 'Failed to stop stream.');
@@ -10408,13 +9221,8 @@ async function stopStream(sessionId) {
             const messageText = combined ? `${combined}\n\n[Stopped by user]` : '[Stopped by user]';
             setMarkdownContent(bubble, messageText);
         }
-        setMessageTokenUsage(
-            stream.entry?.footer,
-            { role: 'error', token_usage: stream.tokenUsage, content: stream.output || stream.error || '' }
-        );
         const durationMs = getStreamDuration(stream);
         setMessageDuration(stream.entry?.footer, durationMs);
-        setMessageTimingBreakdown(stream.entry?.footer, result?.saved_message || null);
         setMessageStreaming(stream.entry?.wrapper, false);
         clearPersistedStream(stream.id);
         clearStreamState(stream.id);
@@ -10441,7 +9249,7 @@ async function pollStream(streamId) {
     stream.polling = true;
 
     try {
-        const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
+        const result = await fetchJson(`/api/claude/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
         const current = state.streams[streamId];
         if (!current) {
             return;
@@ -10515,16 +9323,7 @@ function updateStreamEntry(stream) {
     const bubble = stream?.entry?.bubble;
     if (!bubble) return;
     const combined = stream.output + (stream.error ? `\n${stream.error}` : '');
-    setMarkdownContent(bubble, combined, {
-        streaming: true,
-        skipPreviewUpdate: true
-    });
-    if (stream?.entry?.footer) {
-        setMessageTokenUsage(
-            stream.entry.footer,
-            { role: 'assistant', token_usage: stream.tokenUsage, content: combined }
-        );
-    }
+    setMarkdownContent(bubble, combined);
     if (stream?.entry?.wrapper?.classList.contains('is-streaming')) {
         bubble.scrollTop = bubble.scrollHeight;
     }
@@ -10545,9 +9344,6 @@ async function finishStream(streamId, result) {
     const savedMessage = result?.saved_message || null;
     if (savedMessage && typeof savedMessage.content === 'string' && bubble) {
         setMarkdownContent(bubble, savedMessage.content, { message: savedMessage });
-    } else if (bubble) {
-        const finalContent = stream.output + (stream.error ? `\n${stream.error}` : '');
-        setMarkdownContent(bubble, finalContent);
     }
     if (savedMessage && wrapper) {
         wrapper.classList.remove('assistant', 'error');
@@ -10564,10 +9360,6 @@ async function finishStream(streamId, result) {
     if (Number.isFinite(savedDurationMs)) {
         setMessageDuration(stream.entry?.footer, savedDurationMs);
     }
-    setMessageTimingBreakdown(
-        stream.entry?.footer,
-        savedMessage || result || null
-    );
     setMessageFinalizeReason(
         stream.entry?.footer,
         savedMessage?.finalize_reason || result?.finalize_reason
@@ -10580,16 +9372,12 @@ async function finishStream(streamId, result) {
         stream.entry?.footer,
         savedMessage || result || null
     );
-    setMessageTokenUsage(
-        stream.entry?.footer,
-        savedMessage || { role: 'assistant', token_usage: result?.token_usage || stream.tokenUsage, content: stream.output || '' }
-    );
     if (exitCode !== 0) {
         if (wrapper) {
             wrapper.classList.remove('assistant');
             wrapper.classList.add('error');
         }
-        const errorText = savedMessage?.content || stream.error || stream.output || 'Codex execution failed.';
+        const errorText = savedMessage?.content || stream.error || stream.output || 'Model execution failed.';
         if (bubble) setMarkdownContent(bubble, errorText, { message: savedMessage || null });
     }
     clearStreamState(stream.id);
@@ -10612,7 +9400,7 @@ async function finishStream(streamId, result) {
 async function renameSession(session) {
     if (!session?.id) return;
     if (isSessionBusy(session.id)) {
-        console.warn(`[codex-ui] rename blocked: session ${session.id} is busy`);
+        console.warn(`[claude-ui] rename blocked: session ${session.id} is busy`);
         const message = 'Cannot rename a session while it is running.';
         setStatus(message, true);
         showToast(message, { tone: 'error', durationMs: 3200 });
@@ -10628,7 +9416,7 @@ async function renameSession(session) {
     }
     setStatus('Renaming session...');
     try {
-        const result = await fetchJson(`/api/codex/sessions/${session.id}`, {
+        const result = await fetchJson(`/api/claude/sessions/${session.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
@@ -10649,7 +9437,7 @@ async function renameSession(session) {
 async function deleteSession(sessionId) {
     if (!sessionId) return;
     if (isSessionBusy(sessionId)) {
-        console.warn(`[codex-ui] delete blocked: session ${sessionId} is busy`);
+        console.warn(`[claude-ui] delete blocked: session ${sessionId} is busy`);
         const message = 'Cannot delete a session while it is running.';
         setStatus(message, true);
         showToast(message, { tone: 'error', durationMs: 3200 });
@@ -10659,7 +9447,7 @@ async function deleteSession(sessionId) {
     if (!confirmed) return;
     setStatus('Deleting session...');
     try {
-        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+        const result = await fetchJson(`/api/claude/sessions/${sessionId}`, {
             method: 'DELETE',
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS
         });
@@ -10714,14 +9502,14 @@ function setMessageMetaLabel(meta, role, timestampValue) {
 
 function getRoleLabel(role) {
     if (role === 'user') return 'You';
-    if (role === 'assistant') return 'Codex';
+    if (role === 'assistant') return 'Model';
     if (role === 'system') return 'System';
     if (role === 'error') return 'Error';
     return 'Message';
 }
 
 function getChatMessagesContainer() {
-    return document.getElementById('codex-chat-messages');
+    return document.getElementById('claude-chat-messages');
 }
 
 function isMessageListNearBottom(container) {
@@ -10735,7 +9523,7 @@ function isMessageListNearBottom(container) {
 }
 
 function setScrollToBottomButtonVisible(isVisible) {
-    const button = document.getElementById('codex-chat-scroll-bottom');
+    const button = document.getElementById('claude-chat-scroll-bottom');
     if (!button) return;
     const visible = Boolean(isVisible);
     button.classList.toggle('is-visible', visible);
@@ -10868,31 +9656,15 @@ function buildMessageDetailText(message) {
 function setMarkdownContent(element, content, options = {}) {
     if (!element) return;
     const messageContent = String(content || '');
-    const renderOptions = options && typeof options === 'object' ? options : {};
-    const messageData = renderOptions.message || null;
-    const streaming = Boolean(renderOptions.streaming);
-    const skipPreviewUpdate = Boolean(renderOptions.skipPreviewUpdate);
-    const renderMode = streaming ? 'streaming' : 'markdown';
-    const previousMode = element.dataset.renderMode || '';
-    const previousContent = element.dataset.messageContent || '';
-    const needsRender = previousMode !== renderMode || previousContent !== messageContent;
-
-    if (needsRender) {
-        if (streaming) {
-            element.textContent = messageContent;
-        } else {
-            element.innerHTML = renderMessageContent(messageContent);
-            hydrateRenderedMarkdown(element);
-        }
-    }
-
-    element.dataset.renderMode = renderMode;
+    const messageData = options && typeof options === 'object' ? options.message || null : null;
+    element.innerHTML = renderMessageContent(messageContent);
+    hydrateRenderedMarkdown(element);
     element.dataset.messageContent = messageContent;
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;
         const footer = wrapper.querySelector('.message-footer');
-        if (footer && !skipPreviewUpdate) {
+        if (footer) {
             setMessagePreviewLink(footer, messageContent, messageData, wrapper);
         }
     }
@@ -10983,205 +9755,10 @@ function showMessageCopyFeedback(button) {
     }, 1500);
 }
 
-function toNonNegativeInt(value) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric) || numeric < 0) return null;
-    return Math.round(numeric);
-}
-
-function resolveMessageTokenUsage(message, { fallbackToEstimate = true } = {}) {
-    const role = String(message?.role || 'assistant').trim().toLowerCase();
-    const usage = (message && typeof message.token_usage === 'object') ? message.token_usage : null;
-
-    let inputTokens = toNonNegativeInt(usage?.input_tokens);
-    let cachedInputTokens = toNonNegativeInt(usage?.cached_input_tokens);
-    let outputTokens = toNonNegativeInt(usage?.output_tokens);
-    let reasoningOutputTokens = toNonNegativeInt(usage?.reasoning_output_tokens);
-    let totalTokens = toNonNegativeInt(usage?.total_tokens);
-
-    if (inputTokens === null) inputTokens = toNonNegativeInt(message?.input_tokens);
-    if (cachedInputTokens === null) cachedInputTokens = toNonNegativeInt(message?.cached_input_tokens);
-    if (outputTokens === null) outputTokens = toNonNegativeInt(message?.output_tokens);
-    if (reasoningOutputTokens === null) reasoningOutputTokens = toNonNegativeInt(message?.reasoning_output_tokens);
-    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.total_tokens);
-    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.token_count);
-
-    if (inputTokens === null) inputTokens = 0;
-    if (cachedInputTokens === null) cachedInputTokens = 0;
-    if (outputTokens === null) outputTokens = 0;
-    if (reasoningOutputTokens === null) reasoningOutputTokens = 0;
-
-    let estimated = false;
-    const hasAnyExplicit = inputTokens > 0
-        || cachedInputTokens > 0
-        || outputTokens > 0
-        || reasoningOutputTokens > 0
-        || (totalTokens !== null && totalTokens > 0);
-
-    if (!hasAnyExplicit && fallbackToEstimate) {
-        const estimatedTokens = estimateTokensFromText(message?.content || '');
-        if (role === 'assistant' || role === 'error') {
-            outputTokens = estimatedTokens;
-        } else {
-            inputTokens = estimatedTokens;
-        }
-        totalTokens = estimatedTokens;
-        estimated = true;
-    }
-
-    if (totalTokens === null) {
-        totalTokens = inputTokens + outputTokens;
-        if (outputTokens === 0 && reasoningOutputTokens > 0) {
-            totalTokens += reasoningOutputTokens;
-        }
-    }
-
-    if (inputTokens === 0 && outputTokens === 0 && totalTokens > 0) {
-        if (role === 'assistant' || role === 'error') {
-            outputTokens = totalTokens;
-        } else {
-            inputTokens = totalTokens;
-        }
-    }
-
-    const hasData = inputTokens > 0
-        || cachedInputTokens > 0
-        || outputTokens > 0
-        || reasoningOutputTokens > 0
-        || totalTokens > 0;
-
-    return {
-        inputTokens,
-        cachedInputTokens,
-        outputTokens,
-        reasoningOutputTokens,
-        totalTokens,
-        estimated,
-        hasData
-    };
-}
-
-function estimateSessionTokenUsageFromMessages(messages) {
-    if (!Array.isArray(messages)) {
-        return {
-            inputTokens: 0,
-            cachedInputTokens: 0,
-            outputTokens: 0,
-            reasoningOutputTokens: 0,
-            totalTokens: 0,
-            estimated: false
-        };
-    }
-
-    const aggregated = {
-        inputTokens: 0,
-        cachedInputTokens: 0,
-        outputTokens: 0,
-        reasoningOutputTokens: 0,
-        totalTokens: 0,
-        estimated: false
-    };
-    messages.forEach(message => {
-        const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
-        aggregated.inputTokens += usage.inputTokens;
-        aggregated.cachedInputTokens += usage.cachedInputTokens;
-        aggregated.outputTokens += usage.outputTokens;
-        aggregated.reasoningOutputTokens += usage.reasoningOutputTokens;
-        aggregated.totalTokens += usage.totalTokens;
-        aggregated.estimated = aggregated.estimated || usage.estimated;
-    });
-    return aggregated;
-}
-
-function resolveSessionTokenUsage(session, fallbackMessages = []) {
-    const sourceMessages = Array.isArray(session?.messages)
-        ? session.messages
-        : (Array.isArray(fallbackMessages) ? fallbackMessages : []);
-
-    const inputTokenCount = toNonNegativeInt(session?.input_token_count);
-    const cachedInputTokenCount = toNonNegativeInt(session?.cached_input_token_count);
-    const outputTokenCount = toNonNegativeInt(session?.output_token_count);
-    const reasoningOutputTokenCount = toNonNegativeInt(session?.reasoning_output_token_count);
-    const totalTokenCount = toNonNegativeInt(session?.token_count);
-
-    const hasSessionTokenData = inputTokenCount !== null
-        || cachedInputTokenCount !== null
-        || outputTokenCount !== null
-        || reasoningOutputTokenCount !== null
-        || totalTokenCount !== null;
-
-    if (hasSessionTokenData) {
-        const inputTokens = inputTokenCount !== null ? inputTokenCount : 0;
-        const cachedInputTokens = cachedInputTokenCount !== null ? cachedInputTokenCount : 0;
-        const outputTokens = outputTokenCount !== null ? outputTokenCount : 0;
-        const reasoningOutputTokens = reasoningOutputTokenCount !== null ? reasoningOutputTokenCount : 0;
-        let totalTokens = totalTokenCount;
-        if (totalTokens === null) {
-            totalTokens = inputTokens + outputTokens;
-            if (outputTokenCount === null && reasoningOutputTokens > 0) {
-                totalTokens += reasoningOutputTokens;
-            }
-        }
-        return {
-            inputTokens,
-            cachedInputTokens,
-            outputTokens,
-            reasoningOutputTokens,
-            totalTokens,
-            estimated: Boolean(session?.token_estimated),
-        };
-    }
-
-    return estimateSessionTokenUsageFromMessages(sourceMessages);
-}
-
-function resolveSessionMessageCount(session) {
-    const explicitCount = Number(session?.message_count);
-    if (Number.isFinite(explicitCount) && explicitCount >= 0) {
-        return Math.round(explicitCount);
-    }
-    if (Array.isArray(session?.messages)) {
-        return session.messages.length;
-    }
-    return 0;
-}
-
-function formatSessionTokenSummary(session) {
-    const usage = resolveSessionTokenUsage(session);
-    if (!usage || usage.totalTokens <= 0) return '';
-    const text = `In ${formatCompactTokenCount(usage.inputTokens)} / Out ${formatCompactTokenCount(usage.outputTokens)}`;
-    return usage.estimated ? `${text} ~` : text;
-}
-
-function formatMessageTokenSummary(message) {
-    const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
-    if (!usage.hasData) return '';
-    const parts = [
-        `Tok In ${formatCompactTokenCount(usage.inputTokens)}`,
-        `Out ${formatCompactTokenCount(usage.outputTokens)}`
-    ];
-    if (usage.cachedInputTokens > 0) {
-        parts.push(`Cached ${formatCompactTokenCount(usage.cachedInputTokens)}`);
-    }
-    if (usage.estimated) {
-        parts.push('~');
-    }
-    return parts.join(' · ');
-}
-
-function setMessageTokenUsage(footer, message) {
-    if (!footer) return;
-    footer.dataset.tokenText = formatMessageTokenSummary(message) || '';
-    syncMessageFooter(footer);
-}
-
 function createMessageFooter() {
     const footer = document.createElement('div');
     footer.className = 'message-footer';
-    footer.dataset.tokenText = '';
     footer.dataset.durationText = '';
-    footer.dataset.cliRuntimeText = '';
-    footer.dataset.queueWaitText = '';
     footer.dataset.finalizeText = '';
     footer.dataset.finalizeTimingText = '';
     footer.dataset.previewText = '';
@@ -11250,26 +9827,14 @@ function getFinalizeReasonLabel(reason) {
 
 function syncMessageFooter(footer) {
     if (!footer) return;
-    const tokenText = footer.dataset.tokenText || '';
     const durationText = footer.dataset.durationText || '';
-    const cliRuntimeText = footer.dataset.cliRuntimeText || '';
-    const queueWaitText = footer.dataset.queueWaitText || '';
     const finalizeText = footer.dataset.finalizeText || '';
     const finalizeTimingText = footer.dataset.finalizeTimingText || '';
     const previewText = normalizeDetailText(footer.dataset.previewText);
     const detailText = normalizeDetailText(footer.dataset.detailText);
     const parts = [];
-    if (tokenText) {
-        parts.push(tokenText);
-    }
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
-    }
-    if (cliRuntimeText) {
-        parts.push(`실행 ${cliRuntimeText}`);
-    }
-    if (queueWaitText) {
-        parts.push(`대기 ${queueWaitText}`);
     }
     if (finalizeTimingText) {
         parts.push(finalizeTimingText);
@@ -11302,19 +9867,6 @@ function setMessageDuration(footer, durationMs) {
     if (!footer) return;
     const formatted = formatDuration(durationMs);
     footer.dataset.durationText = formatted || '';
-    syncMessageFooter(footer);
-}
-
-function setMessageTimingBreakdown(footer, message) {
-    if (!footer) return;
-    const cliRuntimeMs = Number(message?.cli_runtime_ms);
-    const queueWaitMs = Number(message?.queue_wait_ms);
-    footer.dataset.cliRuntimeText = Number.isFinite(cliRuntimeMs) && cliRuntimeMs > 0
-        ? (formatDuration(cliRuntimeMs) || '')
-        : '';
-    footer.dataset.queueWaitText = Number.isFinite(queueWaitMs) && queueWaitMs > 0
-        ? (formatDuration(queueWaitMs) || '')
-        : '';
     syncMessageFooter(footer);
 }
 
@@ -11456,7 +10008,7 @@ function formatStorageBytes(value) {
 }
 
 function updateSessionStorageSummary(storage) {
-    const element = document.getElementById('codex-session-storage');
+    const element = document.getElementById('claude-session-storage');
     if (!element) return;
 
     const totalBytes = Number(storage?.total_bytes);
@@ -11562,8 +10114,23 @@ function estimateTokensFromText(text) {
 }
 
 function estimateSessionTokenCountFromMessages(messages) {
-    const usage = estimateSessionTokenUsageFromMessages(messages);
-    return usage.totalTokens;
+    if (!Array.isArray(messages)) return 0;
+    let total = 0;
+    messages.forEach(message => {
+        if (!message || typeof message !== 'object') return;
+        const totalTokens = Number(message.total_tokens);
+        const explicitTokens = Number(message.token_count);
+        if (Number.isFinite(totalTokens) && totalTokens >= 0) {
+            total += Math.round(totalTokens);
+            return;
+        }
+        if (Number.isFinite(explicitTokens) && explicitTokens >= 0) {
+            total += Math.round(explicitTokens);
+            return;
+        }
+        total += estimateTokensFromText(message.content);
+    });
+    return total;
 }
 
 function formatCompactTokenCount(value) {
@@ -11594,7 +10161,7 @@ function countLiveSessionCount() {
 }
 
 function updateSessionsHeaderSummary() {
-    const titleElement = document.getElementById('codex-sessions-title');
+    const titleElement = document.getElementById('claude-sessions-title');
     const sessionsPanel = document.querySelector('.sessions');
     if (!titleElement || !sessionsPanel) return;
     const isCollapsed = sessionsPanel.classList.contains('is-collapsed');
@@ -11649,57 +10216,6 @@ function buildUsageAccount(name) {
     const wrapper = document.createElement('div');
     wrapper.className = 'usage-account';
     wrapper.textContent = `Account: ${name}`;
-    return wrapper;
-}
-
-function normalizeTokenUsageEntry(entry) {
-    if (!entry || typeof entry !== 'object') return null;
-    const inputTokens = Number(entry.input_tokens);
-    const cachedInputTokens = Number(entry.cached_input_tokens);
-    const outputTokens = Number(entry.output_tokens);
-    const totalTokens = Number(entry.total_tokens);
-    const requests = Number(entry.requests);
-    const hasTokenData = [inputTokens, cachedInputTokens, outputTokens, totalTokens]
-        .some(value => Number.isFinite(value) && value > 0);
-    const hasRequestData = Number.isFinite(requests) && requests > 0;
-    if (!hasTokenData && !hasRequestData) return null;
-    return {
-        inputTokens: Number.isFinite(inputTokens) ? Math.max(0, Math.round(inputTokens)) : 0,
-        cachedInputTokens: Number.isFinite(cachedInputTokens) ? Math.max(0, Math.round(cachedInputTokens)) : 0,
-        outputTokens: Number.isFinite(outputTokens) ? Math.max(0, Math.round(outputTokens)) : 0,
-        totalTokens: Number.isFinite(totalTokens) ? Math.max(0, Math.round(totalTokens)) : 0,
-        requests: Number.isFinite(requests) ? Math.max(0, Math.round(requests)) : 0,
-        date: typeof entry.date === 'string' ? entry.date.trim() : ''
-    };
-}
-
-function buildTokenUsageEntry(entry, label) {
-    const details = normalizeTokenUsageEntry(entry);
-    if (!details) return null;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'usage-entry';
-    const row = document.createElement('div');
-    row.className = 'usage-row';
-    const pill = document.createElement('button');
-    pill.type = 'button';
-    pill.className = 'usage-pill';
-    pill.disabled = true;
-    pill.textContent = label;
-    const value = document.createElement('span');
-    value.className = 'usage-remaining';
-    value.textContent = `In ${formatCompactTokenCount(details.inputTokens)} · Out ${formatCompactTokenCount(details.outputTokens)}`;
-    row.appendChild(pill);
-    row.appendChild(value);
-    wrapper.appendChild(row);
-
-    const reset = document.createElement('div');
-    reset.className = 'usage-reset';
-    const totalText = formatNumber(details.totalTokens);
-    const cachedText = formatNumber(details.cachedInputTokens);
-    const requestText = formatNumber(details.requests);
-    const dateText = details.date ? ` (${details.date})` : '';
-    reset.textContent = `Total ${totalText} · Cached ${cachedText} · Req ${requestText}${dateText}`;
-    wrapper.appendChild(reset);
     return wrapper;
 }
 
@@ -11845,7 +10361,7 @@ async function hydrateMermaidDiagrams(container) {
             continue;
         }
         try {
-            const renderId = `codex-mermaid-${mermaidRenderSerial += 1}`;
+            const renderId = `claude-mermaid-${mermaidRenderSerial += 1}`;
             const renderResult = await mermaidApi.render(renderId, source);
             if (decodeMermaidDiagramSource(node.dataset.mermaidSource || '') !== source) continue;
             node.innerHTML = renderResult?.svg || '';

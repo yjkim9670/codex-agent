@@ -221,10 +221,6 @@ def apply_runtime_environment(config, config_path):
             'default_model': 'MODEL_DTGPT_DEFAULT_MODEL',
             'model_options': 'MODEL_DTGPT_MODEL_OPTIONS',
         },
-        'claude': {
-            'default_model': 'MODEL_CLAUDE_DEFAULT_MODEL',
-            'model_options': 'MODEL_CLAUDE_MODEL_OPTIONS',
-        },
     }
 
     normalized_providers = {}

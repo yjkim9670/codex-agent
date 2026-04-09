@@ -123,10 +123,52 @@ _USAGE_SNAPSHOT_POLL_SECONDS = 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
 _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest()[:12]
+_PENDING_QUEUE_KEY = 'pending_queue'
+_PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
+_PENDING_QUEUE_BOOTSTRAP_STARTED = False
+_PLAN_MODE_PROMPT_SUFFIX = (
+    "## Plan Mode Guardrails\n"
+    "- Plan mode is enabled for this turn.\n"
+    "- Do not modify files.\n"
+    "- Do not run commands that create, edit, move, or delete files.\n"
+    "- Provide analysis and an implementation plan only.\n"
+    "- If changes are needed, describe proposed patches without applying them."
+)
 _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
     re.IGNORECASE
 )
+
+
+def _normalize_pending_queue_entry(entry):
+    if not isinstance(entry, dict):
+        return None
+    prompt = str(entry.get('prompt') or '').strip()
+    if not prompt:
+        return None
+    return {
+        'id': str(entry.get('id') or uuid.uuid4().hex),
+        'prompt': prompt,
+        'plan_mode': bool(entry.get('plan_mode')),
+        'created_at': normalize_timestamp(entry.get('created_at')),
+    }
+
+
+def _normalize_session_pending_queue(session):
+    if not isinstance(session, dict):
+        return []
+    raw_queue = session.get(_PENDING_QUEUE_KEY)
+    if not isinstance(raw_queue, list):
+        session[_PENDING_QUEUE_KEY] = []
+        return session[_PENDING_QUEUE_KEY]
+
+    normalized_queue = []
+    for item in raw_queue:
+        normalized_item = _normalize_pending_queue_entry(item)
+        if normalized_item:
+            normalized_queue.append(normalized_item)
+    session[_PENDING_QUEUE_KEY] = normalized_queue
+    return session[_PENDING_QUEUE_KEY]
 
 
 def _load_data():
@@ -141,6 +183,9 @@ def _load_data():
     sessions = data.get('sessions')
     if not isinstance(sessions, list):
         data['sessions'] = []
+        sessions = data['sessions']
+    for session in sessions:
+        _normalize_session_pending_queue(session)
     return data
 
 
@@ -2002,6 +2047,57 @@ def _find_session(sessions, session_id):
     return None
 
 
+def _count_pending_queue_items(session):
+    queue = _normalize_session_pending_queue(session)
+    return len(queue)
+
+
+def _peek_pending_queue_entry(session_id):
+    with _DATA_LOCK:
+        data = _load_data()
+        session = _find_session(data.get('sessions', []), session_id)
+        if not session:
+            return None, 0
+        queue = _normalize_session_pending_queue(session)
+        if not queue:
+            return None, 0
+        return deepcopy(queue[0]), len(queue)
+
+
+def _remove_pending_queue_entry(session_id, entry_id):
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_id)
+        if not session:
+            return 0
+        queue = _normalize_session_pending_queue(session)
+        removed = False
+        if entry_id:
+            for index, item in enumerate(queue):
+                if item.get('id') == entry_id:
+                    queue.pop(index)
+                    removed = True
+                    break
+        if not removed and queue:
+            queue.pop(0)
+            removed = True
+        if removed:
+            session['updated_at'] = normalize_timestamp(None)
+            data['sessions'] = _sort_sessions(sessions)
+            _save_data(data)
+        return len(queue)
+
+
+def get_pending_queue_count_for_session(session_id):
+    with _DATA_LOCK:
+        data = _load_data()
+        session = _find_session(data.get('sessions', []), session_id)
+        if not session:
+            return 0
+        return _count_pending_queue_items(session)
+
+
 def _has_user_message(session):
     return any(message.get('role') == 'user' for message in session.get('messages', []))
 
@@ -2021,12 +2117,14 @@ def list_sessions():
     summary = []
     for session in sessions:
         usage = _estimate_session_token_usage(session)
+        pending_queue_count = _count_pending_queue_items(session)
         summary.append({
             'id': session.get('id'),
             'title': session.get('title') or 'New session',
             'created_at': session.get('created_at'),
             'updated_at': session.get('updated_at'),
             'message_count': len(session.get('messages', [])),
+            'pending_queue_count': pending_queue_count,
             'token_count': usage.get('total_tokens', 0),
             'input_token_count': usage.get('input_tokens', 0),
             'cached_input_token_count': usage.get('cached_input_tokens', 0),
@@ -2043,11 +2141,14 @@ def get_session(session_id):
     if not session:
         return None
     session_copy = deepcopy(session)
+    pending_queue = _normalize_session_pending_queue(session_copy)
     usage = _estimate_session_token_usage(session_copy)
     messages = session_copy.get('messages', [])
     if not isinstance(messages, list):
         messages = []
         session_copy['messages'] = messages
+    session_copy[_PENDING_QUEUE_KEY] = pending_queue
+    session_copy['pending_queue_count'] = len(pending_queue)
     session_copy['message_count'] = len(messages)
     session_copy['token_count'] = usage.get('total_tokens', 0)
     session_copy['input_token_count'] = usage.get('input_tokens', 0)
@@ -2065,7 +2166,8 @@ def create_session(title=None):
         'title': (title or '').strip() or 'New session',
         'created_at': now,
         'updated_at': now,
-        'messages': []
+        'messages': [],
+        _PENDING_QUEUE_KEY: [],
     }
     with _DATA_LOCK:
         data = _load_data()
@@ -3335,6 +3437,162 @@ def get_active_stream_id_for_session(session_id):
         return _find_active_stream_id_locked(session_id)
 
 
+def _append_plan_mode_guardrails(prompt_text):
+    normalized = str(prompt_text or '').strip()
+    if not normalized:
+        normalized = '(empty)'
+    return f'{normalized}\n\n{_PLAN_MODE_PROMPT_SUFFIX}'
+
+
+def _resolve_codex_overrides_for_plan_mode(plan_mode=False):
+    if not plan_mode:
+        return None, None
+    settings = get_settings()
+    plan_mode_model = str(settings.get('plan_mode_model') or '').strip()
+    if plan_mode_model:
+        model_override = plan_mode_model
+    else:
+        model_override = str(settings.get('model') or '').strip() or None
+
+    plan_mode_reasoning = str(settings.get('plan_mode_reasoning_effort') or '').strip()
+    if plan_mode_reasoning:
+        reasoning_override = plan_mode_reasoning
+    else:
+        reasoning_override = str(settings.get('reasoning_effort') or '').strip() or None
+    return model_override, reasoning_override
+
+
+def _start_codex_stream_for_session_locked(
+        session_id,
+        prompt,
+        prompt_with_context,
+        model_override=None,
+        reasoning_override=None):
+    with state.codex_streams_lock:
+        active_stream_id = _find_active_stream_id_locked(session_id)
+    if active_stream_id:
+        return {
+            'ok': False,
+            'already_running': True,
+            'active_stream_id': active_stream_id,
+        }
+
+    user_message = append_message(session_id, 'user', prompt)
+    if not user_message:
+        return {
+            'ok': False,
+            'error': '메시지를 저장하지 못했습니다.'
+        }
+
+    stream_info = create_codex_stream(
+        session_id,
+        prompt_with_context,
+        model_override=model_override,
+        reasoning_override=reasoning_override,
+    )
+    return {
+        'ok': True,
+        'stream_id': stream_info.get('id'),
+        'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
+        'user_message': user_message
+    }
+
+
+def _build_pending_queue_entry(prompt, plan_mode=False):
+    return {
+        'id': uuid.uuid4().hex,
+        'prompt': str(prompt or '').strip(),
+        'plan_mode': bool(plan_mode),
+        'created_at': normalize_timestamp(None),
+    }
+
+
+def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False):
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_id)
+        if not session:
+            return {'ok': False, 'error': '세션을 찾을 수 없습니다.'}
+        queue = _normalize_session_pending_queue(session)
+        entry = _build_pending_queue_entry(prompt, plan_mode=plan_mode)
+        if not entry.get('prompt'):
+            return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
+        queue.append(entry)
+        session['updated_at'] = normalize_timestamp(None)
+        data['sessions'] = _sort_sessions(sessions)
+        _save_data(data)
+        return {
+            'ok': True,
+            'entry': entry,
+            'queue_count': len(queue),
+        }
+
+
+def _start_next_queued_codex_stream_locked(session_id):
+    with state.codex_streams_lock:
+        active_stream_id = _find_active_stream_id_locked(session_id)
+    if active_stream_id:
+        return {
+            'ok': True,
+            'started': False,
+            'already_running': True,
+            'active_stream_id': active_stream_id,
+            'queue_count': get_pending_queue_count_for_session(session_id),
+        }
+
+    max_drain_attempts = 16
+    for _ in range(max_drain_attempts):
+        pending_entry, _ = _peek_pending_queue_entry(session_id)
+        if not pending_entry:
+            return {
+                'ok': True,
+                'started': False,
+                'queue_count': 0,
+            }
+
+        prompt = str(pending_entry.get('prompt') or '').strip()
+        if not prompt:
+            remaining = _remove_pending_queue_entry(session_id, pending_entry.get('id'))
+            if remaining <= 0:
+                return {'ok': True, 'started': False, 'queue_count': 0}
+            continue
+
+        plan_mode = bool(pending_entry.get('plan_mode'))
+        session = get_session(session_id)
+        if not session:
+            return {
+                'ok': False,
+                'error': '세션을 찾을 수 없습니다.',
+            }
+
+        ensure_default_title(session_id, prompt)
+        prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+        if plan_mode:
+            prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
+        model_override, reasoning_override = _resolve_codex_overrides_for_plan_mode(plan_mode=plan_mode)
+        start_result = _start_codex_stream_for_session_locked(
+            session_id,
+            prompt,
+            prompt_with_context,
+            model_override=model_override,
+            reasoning_override=reasoning_override,
+        )
+        if not start_result.get('ok'):
+            return start_result
+
+        remaining_queue_count = _remove_pending_queue_entry(session_id, pending_entry.get('id'))
+        start_result['started'] = True
+        start_result['queued'] = False
+        start_result['queue_count'] = remaining_queue_count
+        return start_result
+
+    return {
+        'ok': False,
+        'error': '대기열 처리 중 오류가 발생했습니다.',
+    }
+
+
 def start_codex_stream_for_session(
         session_id,
         prompt,
@@ -3343,25 +3601,80 @@ def start_codex_stream_for_session(
         reasoning_override=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
-        user_message = append_message(session_id, 'user', prompt)
-        if not user_message:
-            return {
-                'ok': False,
-                'error': '메시지를 저장하지 못했습니다.'
-            }
-
-        stream_info = create_codex_stream(
+        return _start_codex_stream_for_session_locked(
             session_id,
+            prompt,
             prompt_with_context,
             model_override=model_override,
             reasoning_override=reasoning_override,
         )
+
+
+def enqueue_codex_stream_for_session(session_id, prompt, plan_mode=False):
+    submit_lock = _get_session_submit_lock(session_id)
+    with submit_lock:
+        queued = _enqueue_pending_queue_entry(session_id, prompt, plan_mode=plan_mode)
+        if not queued.get('ok'):
+            return queued
+
+        start_result = _start_next_queued_codex_stream_locked(session_id)
+        if start_result.get('ok') and start_result.get('started'):
+            return start_result
+        queue_count = start_result.get('queue_count')
+        if not isinstance(queue_count, int):
+            queue_count = int(queued.get('queue_count') or 0)
         return {
-            'ok': True,
-            'stream_id': stream_info.get('id'),
-            'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
-            'user_message': user_message
+            'ok': bool(start_result.get('ok', True)),
+            'queued': True,
+            'started': False,
+            'queue_count': max(0, queue_count),
+            'active_stream_id': start_result.get('active_stream_id'),
+            'error': start_result.get('error'),
         }
+
+
+def trigger_next_queued_codex_stream(session_id):
+    if not session_id:
+        return None
+    submit_lock = _get_session_submit_lock(session_id)
+    with submit_lock:
+        return _start_next_queued_codex_stream_locked(session_id)
+
+
+def _resume_pending_codex_queues_worker():
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session_ids = []
+        for session in sessions:
+            if not isinstance(session, dict):
+                continue
+            session_id = str(session.get('id') or '').strip()
+            if not session_id:
+                continue
+            if _count_pending_queue_items(session) > 0:
+                session_ids.append(session_id)
+
+    for session_id in session_ids:
+        try:
+            trigger_next_queued_codex_stream(session_id)
+        except Exception:  # pragma: no cover - best effort bootstrap
+            _LOGGER.exception('Failed to resume pending Codex queue (session_id=%s)', session_id)
+
+
+def ensure_pending_queue_background_worker():
+    global _PENDING_QUEUE_BOOTSTRAP_STARTED
+    with _PENDING_QUEUE_BOOTSTRAP_LOCK:
+        if _PENDING_QUEUE_BOOTSTRAP_STARTED:
+            return
+        _PENDING_QUEUE_BOOTSTRAP_STARTED = True
+
+    thread = threading.Thread(
+        target=_resume_pending_codex_queues_worker,
+        daemon=True,
+    )
+    thread.start()
+    return {'ok': True, 'started': True}
 
 
 def get_codex_stream(stream_id):
@@ -3379,11 +3692,13 @@ def list_codex_streams(include_done=False):
                 if stream.get('done') or stream.get('cancelled'):
                     continue
             usage = _normalize_token_usage(stream.get('token_usage')) or _zero_token_usage()
+            session_id = stream.get('session_id')
             streams.append({
                 'id': stream.get('id'),
-                'session_id': stream.get('session_id'),
+                'session_id': session_id,
                 'done': stream.get('done', False),
                 'cancelled': stream.get('cancelled', False),
+                'pending_queue_count': get_pending_queue_count_for_session(session_id),
                 'output_length': int(stream.get('output_length') or len(stream.get('output') or '')),
                 'error_length': int(stream.get('error_length') or len(stream.get('error') or '')),
                 'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
@@ -3420,6 +3735,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
         output = stream['output']
         error = stream['error']
         usage = _normalize_token_usage(stream.get('token_usage')) or _zero_token_usage()
+        session_id = stream['session_id']
         data = {
             'output': output[output_offset:],
             'error': error[error_offset:],
@@ -3428,7 +3744,8 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
-            'session_id': stream['session_id'],
+            'session_id': session_id,
+            'pending_queue_count': get_pending_queue_count_for_session(session_id),
             'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
             'cli_started_at': _epoch_to_millis(stream.get('cli_started_at')),
             'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
@@ -3528,6 +3845,7 @@ def finalize_codex_stream(stream_id):
             usage=token_usage,
             source='stream_finalize_success'
         )
+        trigger_next_queued_codex_stream(session_id)
         return saved_message
     message_text = _apply_auth_failure_guard(error or final_output or 'Codex 실행에 실패했습니다.')
     saved_message = append_message(
@@ -3543,6 +3861,7 @@ def finalize_codex_stream(stream_id):
         usage=token_usage,
         source='stream_finalize_error'
     )
+    trigger_next_queued_codex_stream(session_id)
     return saved_message
 
 
@@ -3630,6 +3949,7 @@ def stop_codex_stream(stream_id):
             stream['saved_at'] = saved_at
             stream['updated_at'] = saved_at
             stream['process'] = None
+    trigger_next_queued_codex_stream(session_id)
     return {'status': 'stopped', 'saved_message': saved_message}
 
 

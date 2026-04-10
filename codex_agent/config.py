@@ -36,10 +36,22 @@ def _default_storage_subdir():
     return '.agent_state'
 
 
+def _uses_parent_workspace_storage():
+    try:
+        return WORKSPACE_DIR.resolve() == REPO_ROOT.parent.resolve()
+    except Exception:
+        return False
+
+
 CODEX_STORAGE_SUBDIR = _normalize_storage_subdir(
     os.environ.get('CODEX_STORAGE_SUBDIR'),
     default=_default_storage_subdir(),
 )
+# Keep parent-workspace Codex state under the repo-local standard storage path.
+# A bare ".agent_state" at the workspace root is a legacy location that can
+# split chat history across two stores when old environment values leak in.
+if _uses_parent_workspace_storage() and CODEX_STORAGE_SUBDIR == '.agent_state':
+    CODEX_STORAGE_SUBDIR = _default_storage_subdir()
 CODEX_STORAGE_DIR = WORKSPACE_DIR / CODEX_STORAGE_SUBDIR
 LEGACY_CODEX_CHAT_STORE_PATH = WORKSPACE_DIR / 'codex_chat_sessions.json'
 LEGACY_CODEX_SETTINGS_PATH = WORKSPACE_DIR / 'codex_settings.json'

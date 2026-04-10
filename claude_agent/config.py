@@ -68,6 +68,13 @@ def _default_storage_subdir():
     return '.agent_state'
 
 
+def _uses_parent_workspace_storage():
+    try:
+        return WORKSPACE_DIR.resolve() == REPO_ROOT.parent.resolve()
+    except Exception:
+        return False
+
+
 def _normalize_storage_namespace(value, default='claude'):
     token = str(value or '').strip().lower()
     if not token:
@@ -101,6 +108,11 @@ MODEL_STORAGE_NAMESPACE = _normalize_storage_namespace(
 MODEL_STORAGE_SUBDIR = _normalize_relative_prefix(
     os.environ.get('MODEL_AGENT_STORAGE_SUBDIR'),
 ) or _default_storage_subdir()
+# Keep parent-workspace Claude state under the repo-local standard storage path.
+# A bare ".agent_state" at the workspace root is a legacy location that can
+# split chat history across multiple stores when older env values leak in.
+if _uses_parent_workspace_storage() and MODEL_STORAGE_SUBDIR == '.agent_state':
+    MODEL_STORAGE_SUBDIR = _default_storage_subdir()
 MODEL_STORAGE_DIR = WORKSPACE_DIR / MODEL_STORAGE_SUBDIR
 MODEL_CHAT_STORE_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_chat_sessions.json', 'chat_sessions')
 MODEL_SETTINGS_PATH = MODEL_STORAGE_DIR / _storage_filename('claude_settings.json', 'settings')

@@ -37,6 +37,7 @@ from ..config import (
     CODEX_STREAM_TERMINATE_GRACE_SECONDS,
     CODEX_STREAM_TTL_SECONDS,
     KST,
+    REPO_ROOT,
     WORKSPACE_DIR,
     normalize_codex_model_name,
 )
@@ -183,23 +184,295 @@ def _resolve_existing_path(primary_path, legacy_path):
     return primary_path
 
 
-def _load_data():
-    source_path = _resolve_existing_path(CODEX_CHAT_STORE_PATH, LEGACY_CODEX_CHAT_STORE_PATH)
-    if not source_path.exists():
-        return {'sessions': []}
+def _paths_match(path_a, path_b):
     try:
-        data = json.loads(source_path.read_text(encoding='utf-8'))
+        return Path(path_a).resolve() == Path(path_b).resolve()
+    except Exception:
+        return str(path_a) == str(path_b)
+
+
+def _append_unique_path(paths, candidate):
+    if candidate is None:
+        return
+    try:
+        candidate_path = Path(candidate)
+    except Exception:
+        return
+    for existing in paths:
+        if _paths_match(existing, candidate_path):
+            return
+    paths.append(candidate_path)
+
+
+def _uses_parent_workspace_storage_layout():
+    try:
+        return WORKSPACE_DIR.resolve() == REPO_ROOT.parent.resolve()
+    except Exception:
+        return False
+
+
+def _standard_workspace_storage_dir():
+    return WORKSPACE_DIR / REPO_ROOT.name / 'workspace' / '.agent_state'
+
+
+def _iter_codex_state_candidate_paths(primary_path, legacy_path=None):
+    primary = Path(primary_path)
+    candidates = []
+    _append_unique_path(candidates, primary)
+    _append_unique_path(candidates, legacy_path)
+    _append_unique_path(candidates, WORKSPACE_DIR / '.agent_state' / primary.name)
+    if _uses_parent_workspace_storage_layout():
+        _append_unique_path(candidates, _standard_workspace_storage_dir() / primary.name)
+    return candidates
+
+
+def _read_json_object_from_path(path):
+    try:
+        raw = Path(path).read_text(encoding='utf-8')
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    try:
+        payload = json.loads(raw)
     except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _is_blank_merge_value(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) == 0
+    return False
+
+
+def _normalized_time_sort_key(value):
+    normalized = normalize_timestamp(value)
+    return normalized or ''
+
+
+def _message_merge_score(message):
+    if not isinstance(message, dict):
+        return (0, 0)
+    content = str(message.get('content') or '')
+    return (len(content.strip()), len(message))
+
+
+def _message_identity(message):
+    if not isinstance(message, dict):
+        return None
+    message_id = str(message.get('id') or '').strip()
+    if message_id:
+        return ('id', message_id)
+    role = str(message.get('role') or '').strip().lower() or 'assistant'
+    created_at = normalize_timestamp(message.get('created_at'))
+    content = str(message.get('content') or '')
+    return ('fallback', role, created_at, content)
+
+
+def _merge_message_records(existing, incoming):
+    if not isinstance(existing, dict):
+        return deepcopy(incoming) if isinstance(incoming, dict) else None
+    if not isinstance(incoming, dict):
+        return deepcopy(existing)
+
+    existing_time = _normalized_time_sort_key(existing.get('created_at'))
+    incoming_time = _normalized_time_sort_key(incoming.get('created_at'))
+    prefer_incoming = (
+        incoming_time > existing_time
+        or (
+            incoming_time == existing_time
+            and _message_merge_score(incoming) >= _message_merge_score(existing)
+        )
+    )
+    primary = incoming if prefer_incoming else existing
+    secondary = existing if prefer_incoming else incoming
+    merged = deepcopy(primary)
+    for key, value in secondary.items():
+        if key not in merged or _is_blank_merge_value(merged.get(key)):
+            merged[key] = deepcopy(value)
+    if _is_blank_merge_value(merged.get('content')):
+        merged['content'] = str(existing.get('content') or incoming.get('content') or '')
+    return merged
+
+
+def _merge_message_lists(existing_messages, incoming_messages):
+    merged = {}
+    for source_index, messages in enumerate((existing_messages, incoming_messages)):
+        if not isinstance(messages, list):
+            continue
+        for message_index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                continue
+            identity = _message_identity(message)
+            if identity is None:
+                identity = ('anon', source_index, message_index)
+            current = merged.get(identity)
+            merged_record = _merge_message_records(current, message) if current else deepcopy(message)
+            merged[identity] = {
+                'message': merged_record,
+                'sort_key': (
+                    _normalized_time_sort_key((merged_record or {}).get('created_at')),
+                    source_index,
+                    message_index,
+                ),
+            }
+    ordered = sorted(merged.values(), key=lambda item: item.get('sort_key') or ('', 0, 0))
+    return [item.get('message') for item in ordered if isinstance(item.get('message'), dict)]
+
+
+def _pending_queue_entry_identity(entry):
+    normalized = _normalize_pending_queue_entry(entry)
+    if not normalized:
+        return None
+    entry_id = str(normalized.get('id') or '').strip()
+    if entry_id:
+        return ('id', entry_id)
+    return ('fallback', normalized.get('created_at'), normalized.get('prompt'))
+
+
+def _merge_pending_queue_entries(existing_queue, incoming_queue):
+    merged = {}
+    for queue in (existing_queue, incoming_queue):
+        if not isinstance(queue, list):
+            continue
+        for item in queue:
+            normalized = _normalize_pending_queue_entry(item)
+            if not normalized:
+                continue
+            identity = _pending_queue_entry_identity(normalized)
+            if identity is None or identity in merged:
+                continue
+            merged[identity] = normalized
+    items = list(merged.values())
+    items.sort(key=lambda item: item.get('created_at') or '')
+    return items
+
+
+def _is_default_session_title(value):
+    title = str(value or '').strip()
+    return not title or title == 'New session'
+
+
+def _merge_session_title(primary_title, secondary_title):
+    primary = str(primary_title or '').strip()
+    secondary = str(secondary_title or '').strip()
+    if not _is_default_session_title(primary):
+        return primary
+    if not _is_default_session_title(secondary):
+        return secondary
+    return primary or secondary or 'New session'
+
+
+def _merge_session_records(existing, incoming):
+    if not isinstance(existing, dict):
+        return deepcopy(incoming) if isinstance(incoming, dict) else None
+    if not isinstance(incoming, dict):
+        return deepcopy(existing)
+
+    existing_updated = _normalized_time_sort_key(existing.get('updated_at') or existing.get('created_at'))
+    incoming_updated = _normalized_time_sort_key(incoming.get('updated_at') or incoming.get('created_at'))
+    prefer_incoming = incoming_updated >= existing_updated
+    primary = incoming if prefer_incoming else existing
+    secondary = existing if prefer_incoming else incoming
+    merged = deepcopy(primary)
+
+    for key, value in secondary.items():
+        if key in {'messages', _PENDING_QUEUE_KEY, 'created_at', 'updated_at', 'title'}:
+            continue
+        if key not in merged or _is_blank_merge_value(merged.get(key)):
+            merged[key] = deepcopy(value)
+
+    merged['id'] = str(merged.get('id') or secondary.get('id') or '').strip()
+    created_candidates = [
+        _normalized_time_sort_key(existing.get('created_at')),
+        _normalized_time_sort_key(incoming.get('created_at')),
+    ]
+    created_candidates = [value for value in created_candidates if value]
+    updated_candidates = [
+        _normalized_time_sort_key(existing.get('updated_at') or existing.get('created_at')),
+        _normalized_time_sort_key(incoming.get('updated_at') or incoming.get('created_at')),
+    ]
+    updated_candidates = [value for value in updated_candidates if value]
+
+    merged['created_at'] = min(created_candidates) if created_candidates else normalize_timestamp(None)
+    merged['updated_at'] = max(updated_candidates) if updated_candidates else merged['created_at']
+    merged['title'] = _merge_session_title(primary.get('title'), secondary.get('title'))
+    merged['messages'] = _merge_message_lists(existing.get('messages', []), incoming.get('messages', []))
+    merged[_PENDING_QUEUE_KEY] = _merge_pending_queue_entries(
+        existing.get(_PENDING_QUEUE_KEY, []),
+        incoming.get(_PENDING_QUEUE_KEY, []),
+    )
+    return merged
+
+
+def _load_session_store_payload_from_path(path):
+    payload = _read_json_object_from_path(path)
+    if not isinstance(payload, dict):
         return {'sessions': []}
-    if not isinstance(data, dict):
-        return {'sessions': []}
-    sessions = data.get('sessions')
+    sessions = payload.get('sessions')
     if not isinstance(sessions, list):
-        data['sessions'] = []
-        sessions = data['sessions']
+        sessions = []
+    normalized_sessions = []
     for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        session_copy = deepcopy(session)
+        messages = session_copy.get('messages', [])
+        if not isinstance(messages, list):
+            session_copy['messages'] = []
+        _normalize_session_pending_queue(session_copy)
+        normalized_sessions.append(session_copy)
+    return {'sessions': normalized_sessions}
+
+
+def _merge_session_store_payloads(payloads):
+    merged_by_id = {}
+    anonymous_sessions = []
+    for payload in payloads:
+        sessions = payload.get('sessions', []) if isinstance(payload, dict) else []
+        if not isinstance(sessions, list):
+            continue
+        for session in sessions:
+            if not isinstance(session, dict):
+                continue
+            session_id = str(session.get('id') or '').strip()
+            if not session_id:
+                anonymous_sessions.append(deepcopy(session))
+                continue
+            current = merged_by_id.get(session_id)
+            merged_by_id[session_id] = (
+                _merge_session_records(current, session) if current else deepcopy(session)
+            )
+    merged_sessions = list(merged_by_id.values()) + anonymous_sessions
+    for session in merged_sessions:
         _normalize_session_pending_queue(session)
-    return data
+    return {
+        'sessions': _sort_sessions(merged_sessions)
+    }
+
+
+def _load_data():
+    payloads = []
+    for candidate_path in _iter_codex_state_candidate_paths(
+            CODEX_CHAT_STORE_PATH,
+            LEGACY_CODEX_CHAT_STORE_PATH):
+        try:
+            exists = candidate_path.exists()
+        except Exception:
+            exists = False
+        if not exists:
+            continue
+        payloads.append(_load_session_store_payload_from_path(candidate_path))
+    if not payloads:
+        return {'sessions': []}
+    return _merge_session_store_payloads(payloads)
 
 
 def _save_data(data):
@@ -266,18 +539,22 @@ def _normalize_model_setting(value):
 
 
 def _read_workspace_settings():
-    source_path = _resolve_existing_path(CODEX_SETTINGS_PATH, LEGACY_CODEX_SETTINGS_PATH)
-    try:
-        raw = source_path.read_text(encoding='utf-8')
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict):
+    data = {}
+    best_mtime = None
+    for candidate_path in _iter_codex_state_candidate_paths(
+            CODEX_SETTINGS_PATH,
+            LEGACY_CODEX_SETTINGS_PATH):
+        payload = _read_json_object_from_path(candidate_path)
+        if not isinstance(payload, dict) or not payload:
+            continue
+        try:
+            mtime = candidate_path.stat().st_mtime
+        except Exception:
+            mtime = -1
+        if best_mtime is None or mtime >= best_mtime:
+            data = payload
+            best_mtime = mtime
+    if not data:
         return {}
     model = _normalize_model_setting(data.get('model'))
     reasoning = data.get('reasoning_effort')

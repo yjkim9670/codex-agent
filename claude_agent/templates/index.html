@@ -156,6 +156,13 @@
                             ></button>
                         </div>
                         <button
+                            class="chat-header-mobile-browser is-hidden"
+                            type="button"
+                            id="claude-work-mode-mobile-browser"
+                            aria-label="브라우저로 이동"
+                            title="브라우저로 이동"
+                        ></button>
+                        <button
                             class="chat-header-fullscreen"
                             type="button"
                             id="claude-chat-fullscreen"
@@ -310,6 +317,8 @@
                 <div class="work-mode-preview-header">
                     <div class="work-mode-preview-title">Docs Preview</div>
                     <div class="work-mode-preview-actions">
+                        <button class="btn ghost file-browser-back work-mode-preview-chat is-hidden" type="button" id="claude-work-mode-chat-back">채팅으로</button>
+                        <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="claude-work-mode-file-back">목록으로</button>
                         <div class="work-mode-root-tools" role="group" aria-label="작업 모드 루트 선택">
                             <button
                                 class="btn secondary work-mode-root-target is-active"
@@ -329,6 +338,7 @@
                             id="claude-work-mode-file-open-new"
                             aria-label="새 창에서 HTML 미리보기 열기"
                             title="새 창에서 HTML 미리보기 열기"
+                            disabled
                         >
                             <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
                         </button>
@@ -579,7 +589,7 @@
             <div class="file-browser-overlay-header">
                 <div class="file-browser-overlay-heading">
                     <div class="file-browser-overlay-title" id="claude-file-browser-overlay-title">파일 브라우저</div>
-                <div class="file-browser-overlay-subtitle" id="claude-file-browser-overlay-subtitle">Workspace</div>
+                    <div class="file-browser-overlay-subtitle" id="claude-file-browser-overlay-subtitle">Workspace</div>
                 </div>
                 <button class="btn ghost icon-only file-browser-overlay-close" type="button" id="claude-file-browser-overlay-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
@@ -684,6 +694,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=84"></script>
+    <script src="/static/js/app.js?v=85"></script>
 </body>
 </html>

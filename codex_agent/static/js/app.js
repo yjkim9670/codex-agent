@@ -180,6 +180,7 @@ let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
+let gitBranchOverlayCollapsedFolders = new Set();
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -189,6 +190,10 @@ let gitSyncHistoryCacheByTarget = {
 let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
     [GIT_SYNC_TARGET_CODEX_AGENT]: false
+};
+let gitSyncOverlayCollapsedFoldersByTarget = {
+    [GIT_SYNC_TARGET_WORKSPACE]: new Set(),
+    [GIT_SYNC_TARGET_CODEX_AGENT]: new Set()
 };
 let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
 let fileBrowserPath = '';
@@ -5583,17 +5588,334 @@ function setGitBranchOverlayLoading(isLoading) {
 
 function normalizeGitChangedFiles(files) {
     if (!Array.isArray(files)) return [];
-    return files.map(file => {
-        if (!file) return null;
-        if (typeof file === 'string') {
-            const path = file.trim();
-            return path ? { path, status: '' } : null;
+    const normalized = [];
+    const seenPaths = new Set();
+    files.forEach(file => {
+        if (!file) return;
+        const rawPath = typeof file === 'string'
+            ? file.trim()
+            : (typeof file.path === 'string' ? file.path.trim() : '');
+        if (!rawPath) return;
+        const path = rawPath.replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!path || seenPaths.has(path)) return;
+        seenPaths.add(path);
+        const rawStatus = typeof file === 'string'
+            ? ''
+            : (typeof file.status === 'string' ? file.status.trim() : '');
+        normalized.push({
+            path,
+            status: rawStatus.toUpperCase()
+        });
+    });
+    return normalized;
+}
+
+function compareGitPathValues(left, right) {
+    return String(left || '').localeCompare(String(right || ''), undefined, {
+        numeric: true,
+        sensitivity: 'base'
+    });
+}
+
+function createGitChangedFolderNode(name = '', fullPath = '') {
+    return {
+        name,
+        fullPath,
+        folderMap: new Map(),
+        childFolders: [],
+        childFiles: [],
+        fileCount: 0,
+        folderCount: 0,
+        filePaths: [],
+        statusCounts: {}
+    };
+}
+
+function buildGitChangedFileTree(files) {
+    const root = createGitChangedFolderNode('', '');
+    const normalizedFiles = normalizeGitChangedFiles(files);
+    normalizedFiles.forEach(file => {
+        const segments = file.path.split('/').filter(Boolean);
+        if (!segments.length) return;
+        const fileName = segments[segments.length - 1];
+        if (!fileName) return;
+        let cursor = root;
+        let folderPath = '';
+        segments.slice(0, -1).forEach(segment => {
+            folderPath = folderPath ? `${folderPath}/${segment}` : segment;
+            let folderNode = cursor.folderMap.get(segment);
+            if (!folderNode) {
+                folderNode = createGitChangedFolderNode(segment, folderPath);
+                cursor.folderMap.set(segment, folderNode);
+            }
+            cursor = folderNode;
+        });
+        cursor.childFiles.push({
+            name: fileName,
+            path: file.path,
+            status: file.status
+        });
+    });
+
+    const finalizeFolder = folder => {
+        const childFolders = Array.from(folder.folderMap.values())
+            .sort((a, b) => compareGitPathValues(a.name, b.name))
+            .map(child => finalizeFolder(child));
+        const childFiles = folder.childFiles
+            .slice()
+            .sort((a, b) => compareGitPathValues(a.path, b.path));
+
+        const statusCounts = {};
+        const filePaths = [];
+        childFiles.forEach(file => {
+            filePaths.push(file.path);
+            if (!file.status) return;
+            statusCounts[file.status] = (statusCounts[file.status] || 0) + 1;
+        });
+        childFolders.forEach(childFolder => {
+            filePaths.push(...childFolder.filePaths);
+            Object.entries(childFolder.statusCounts || {}).forEach(([status, count]) => {
+                if (!status || !Number.isFinite(count)) return;
+                statusCounts[status] = (statusCounts[status] || 0) + count;
+            });
+        });
+
+        return {
+            name: folder.name,
+            fullPath: folder.fullPath,
+            childFolders,
+            childFiles,
+            fileCount: filePaths.length,
+            folderCount: childFolders.length + childFolders.reduce((sum, child) => sum + child.folderCount, 0),
+            filePaths,
+            statusCounts
+        };
+    };
+
+    return finalizeFolder(root);
+}
+
+function flattenGitChangedFileTree(tree, collapsedFolders = new Set()) {
+    const rows = [];
+    const collapsedSet = collapsedFolders instanceof Set ? collapsedFolders : new Set();
+    const walkFolder = (folder, depth) => {
+        rows.push({
+            type: 'folder',
+            depth,
+            folder
+        });
+        if (collapsedSet.has(folder.fullPath)) {
+            return;
         }
-        const path = typeof file.path === 'string' ? file.path.trim() : '';
-        if (!path) return null;
-        const status = typeof file.status === 'string' ? file.status.trim() : '';
-        return { path, status };
-    }).filter(Boolean);
+        folder.childFolders.forEach(childFolder => {
+            walkFolder(childFolder, depth + 1);
+        });
+        folder.childFiles.forEach(file => {
+            rows.push({
+                type: 'file',
+                depth: depth + 1,
+                file
+            });
+        });
+    };
+    const safeTree = tree && typeof tree === 'object'
+        ? tree
+        : createGitChangedFolderNode('', '');
+    safeTree.childFolders.forEach(folder => {
+        walkFolder(folder, 0);
+    });
+    safeTree.childFiles.forEach(file => {
+        rows.push({
+            type: 'file',
+            depth: 0,
+            file
+        });
+    });
+    return rows;
+}
+
+function getGitFolderSelectionState(folder, selectedFiles) {
+    const allPaths = Array.isArray(folder?.filePaths) ? folder.filePaths : [];
+    const total = allPaths.length;
+    if (total <= 0) {
+        return {
+            total,
+            selected: 0,
+            checked: false,
+            indeterminate: false
+        };
+    }
+    let selected = 0;
+    allPaths.forEach(path => {
+        if (selectedFiles.has(path)) {
+            selected += 1;
+        }
+    });
+    return {
+        total,
+        selected,
+        checked: selected === total,
+        indeterminate: selected > 0 && selected < total
+    };
+}
+
+function getGitFolderStatusEntries(statusCounts) {
+    const statusOrder = ['M', 'A', 'D', 'U', 'R', 'C', 'T'];
+    const entries = Object.entries(statusCounts || {}).filter(([status, count]) => {
+        return Boolean(status) && Number.isFinite(count) && count > 0;
+    });
+    entries.sort((left, right) => {
+        const leftIndex = statusOrder.indexOf(String(left[0] || '').toUpperCase());
+        const rightIndex = statusOrder.indexOf(String(right[0] || '').toUpperCase());
+        if (leftIndex !== rightIndex) {
+            if (leftIndex === -1) return 1;
+            if (rightIndex === -1) return -1;
+            return leftIndex - rightIndex;
+        }
+        return compareGitPathValues(left[0], right[0]);
+    });
+    return entries;
+}
+
+function createGitStatusBadgeNode(status, text = '') {
+    const badge = document.createElement('span');
+    badge.className = `branch-overlay-status ${getGitStatusBadgeClass(status)}`.trim();
+    badge.textContent = text || String(status || '').toUpperCase();
+    return badge;
+}
+
+function renderGitChangedFileTreeList(options = {}) {
+    const listElement = options.listElement;
+    if (!listElement) {
+        return {
+            fileCount: 0,
+            folderCount: 0
+        };
+    }
+    const collapsedFolders = options.collapsedFolders instanceof Set ? options.collapsedFolders : new Set();
+    const selectable = Boolean(options.selectable);
+    const selectedFiles = options.selectedFiles instanceof Set ? options.selectedFiles : new Set();
+    const onFileSelectionChange = typeof options.onFileSelectionChange === 'function'
+        ? options.onFileSelectionChange
+        : null;
+    const onFolderSelectionChange = typeof options.onFolderSelectionChange === 'function'
+        ? options.onFolderSelectionChange
+        : null;
+    const onFolderCollapseToggle = typeof options.onFolderCollapseToggle === 'function'
+        ? options.onFolderCollapseToggle
+        : null;
+
+    const tree = buildGitChangedFileTree(options.files);
+    const rows = flattenGitChangedFileTree(tree, collapsedFolders);
+    listElement.innerHTML = '';
+
+    rows.forEach(row => {
+        const item = document.createElement('li');
+        item.className = 'git-file-tree-item';
+        const rowNode = document.createElement('div');
+        rowNode.className = `git-file-tree-row is-${row.type}`;
+        rowNode.style.setProperty('--git-tree-depth', String(Math.max(0, Number(row.depth) || 0)));
+
+        if (row.type === 'folder') {
+            const folder = row.folder;
+            const folderPath = String(folder?.fullPath || '');
+            const isCollapsed = collapsedFolders.has(folderPath);
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'git-file-tree-toggle';
+            toggle.textContent = isCollapsed ? '>' : 'v';
+            toggle.setAttribute('aria-label', isCollapsed ? '폴더 펼치기' : '폴더 접기');
+            toggle.addEventListener('click', event => {
+                event.preventDefault();
+                if (onFolderCollapseToggle) {
+                    onFolderCollapseToggle(folderPath, !isCollapsed);
+                }
+            });
+            rowNode.appendChild(toggle);
+
+            if (selectable) {
+                const selection = getGitFolderSelectionState(folder, selectedFiles);
+                const folderCheck = document.createElement('input');
+                folderCheck.type = 'checkbox';
+                folderCheck.className = 'branch-overlay-folder-check';
+                folderCheck.checked = selection.checked;
+                folderCheck.indeterminate = selection.indeterminate;
+                folderCheck.disabled = selection.total <= 0;
+                folderCheck.addEventListener('change', () => {
+                    if (onFolderSelectionChange) {
+                        onFolderSelectionChange(folder, folderCheck.checked);
+                    }
+                });
+                rowNode.appendChild(folderCheck);
+            }
+
+            const name = document.createElement('span');
+            name.className = 'git-file-tree-folder-name';
+            name.textContent = folder?.name || folderPath || '(root)';
+            if (folderPath) {
+                name.title = folderPath;
+            }
+            rowNode.appendChild(name);
+
+            const meta = document.createElement('span');
+            meta.className = 'git-file-tree-folder-meta';
+            meta.textContent = `${Number(folder?.fileCount) || 0} files`;
+            rowNode.appendChild(meta);
+
+            const statusWrap = document.createElement('span');
+            statusWrap.className = 'git-file-tree-folder-statuses';
+            getGitFolderStatusEntries(folder?.statusCounts).forEach(([status, count]) => {
+                statusWrap.appendChild(createGitStatusBadgeNode(status, `${status}${count}`));
+            });
+            if (statusWrap.childElementCount > 0) {
+                rowNode.appendChild(statusWrap);
+            }
+        } else {
+            const togglePlaceholder = document.createElement('span');
+            togglePlaceholder.className = 'git-file-tree-toggle-placeholder';
+            rowNode.appendChild(togglePlaceholder);
+
+            const file = row.file;
+            if (selectable) {
+                const check = document.createElement('input');
+                check.type = 'checkbox';
+                check.className = 'branch-overlay-file-check';
+                check.value = file.path;
+                check.checked = selectedFiles.has(file.path);
+                check.addEventListener('change', () => {
+                    if (onFileSelectionChange) {
+                        onFileSelectionChange(file.path, check.checked);
+                    }
+                });
+                rowNode.appendChild(check);
+            }
+            if (file?.status) {
+                rowNode.appendChild(createGitStatusBadgeNode(file.status));
+            }
+            const textWrap = document.createElement('span');
+            textWrap.className = 'git-file-tree-file-text';
+
+            const fileName = document.createElement('span');
+            fileName.className = 'git-file-tree-file-name';
+            fileName.textContent = file?.name || file?.path || '(unknown)';
+            textWrap.appendChild(fileName);
+
+            const filePath = document.createElement('span');
+            filePath.className = 'git-file-tree-file-path';
+            filePath.textContent = file?.path || '';
+            textWrap.appendChild(filePath);
+
+            rowNode.appendChild(textWrap);
+        }
+
+        item.appendChild(rowNode);
+        listElement.appendChild(item);
+    });
+
+    return {
+        fileCount: Number(tree.fileCount) || 0,
+        folderCount: Number(tree.folderCount) || 0
+    };
 }
 
 function getGitStatusBadgeClass(status) {
@@ -5659,13 +5981,9 @@ function setGitOverlaySelectionState(selectAll) {
     }
     gitOverlaySelectedFiles = selected;
     gitOverlaySelectionTouched = true;
-
-    const elements = getGitBranchOverlayElements();
-    if (elements?.list) {
-        elements.list.querySelectorAll('input.branch-overlay-file-check').forEach(checkbox => {
-            const path = checkbox.value || '';
-            checkbox.checked = gitOverlaySelectedFiles.has(path);
-        });
+    if (isGitBranchOverlayOpen()) {
+        renderGitBranchOverlay(gitBranchStatusCache);
+        return;
     }
     updateGitOverlaySelectionSummary(files.length);
 }
@@ -5686,46 +6004,55 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 수를 불러올 수 없습니다.';
     }
     syncGitOverlaySelection(files);
+    let renderedFileCount = files.length;
     if (elements.list) {
-        elements.list.innerHTML = '';
-        files.forEach(file => {
-            const item = document.createElement('li');
-            const check = document.createElement('input');
-            check.type = 'checkbox';
-            check.className = 'branch-overlay-file-check';
-            check.value = file.path;
-            check.checked = gitOverlaySelectedFiles.has(file.path);
-            check.addEventListener('change', () => {
+        const rendered = renderGitChangedFileTreeList({
+            listElement: elements.list,
+            files,
+            collapsedFolders: gitBranchOverlayCollapsedFolders,
+            selectable: true,
+            selectedFiles: gitOverlaySelectedFiles,
+            onFileSelectionChange: (path, checked) => {
                 gitOverlaySelectionTouched = true;
-                if (check.checked) {
-                    gitOverlaySelectedFiles.add(file.path);
+                if (checked) {
+                    gitOverlaySelectedFiles.add(path);
                 } else {
-                    gitOverlaySelectedFiles.delete(file.path);
+                    gitOverlaySelectedFiles.delete(path);
                 }
-                updateGitOverlaySelectionSummary(files.length);
-            });
-            item.appendChild(check);
-            if (file.status) {
-                const badge = document.createElement('span');
-                badge.className = `branch-overlay-status ${getGitStatusBadgeClass(file.status)}`.trim();
-                badge.textContent = file.status.toUpperCase();
-                item.appendChild(badge);
+                renderGitBranchOverlay(gitBranchStatusCache);
+            },
+            onFolderSelectionChange: (folder, checked) => {
+                gitOverlaySelectionTouched = true;
+                const targetPaths = Array.isArray(folder?.filePaths) ? folder.filePaths : [];
+                targetPaths.forEach(path => {
+                    if (checked) {
+                        gitOverlaySelectedFiles.add(path);
+                    } else {
+                        gitOverlaySelectedFiles.delete(path);
+                    }
+                });
+                renderGitBranchOverlay(gitBranchStatusCache);
+            },
+            onFolderCollapseToggle: (folderPath, shouldCollapse) => {
+                if (!folderPath) return;
+                if (shouldCollapse) {
+                    gitBranchOverlayCollapsedFolders.add(folderPath);
+                } else {
+                    gitBranchOverlayCollapsedFolders.delete(folderPath);
+                }
+                renderGitBranchOverlay(gitBranchStatusCache);
             }
-            const path = document.createElement('span');
-            path.className = 'branch-overlay-file-path';
-            path.textContent = file.path;
-            item.appendChild(path);
-            elements.list.appendChild(item);
         });
-        elements.list.classList.toggle('is-hidden', files.length === 0);
+        renderedFileCount = rendered.fileCount;
+        elements.list.classList.toggle('is-hidden', rendered.fileCount === 0);
     }
     if (elements.empty) {
         elements.empty.textContent = Number.isFinite(count)
             ? '변경 파일이 없습니다.'
             : '변경 파일 정보를 불러올 수 없습니다.';
-        elements.empty.classList.toggle('is-hidden', files.length !== 0);
+        elements.empty.classList.toggle('is-hidden', renderedFileCount !== 0);
     }
-    updateGitOverlaySelectionSummary(files.length);
+    updateGitOverlaySelectionSummary(renderedFileCount);
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
@@ -5792,6 +6119,17 @@ function getGitSyncRepoLabel(repoTarget) {
     return GIT_SYNC_TARGET_LABELS[target] || target;
 }
 
+function getGitSyncOverlayCollapsedFolders(repoTarget = gitSyncOverlayRepoTarget) {
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    const current = gitSyncOverlayCollapsedFoldersByTarget[target];
+    if (current instanceof Set) {
+        return current;
+    }
+    const created = new Set();
+    gitSyncOverlayCollapsedFoldersByTarget[target] = created;
+    return created;
+}
+
 function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
     const target = normalizeGitSyncRepoTarget(repoTarget);
     return {
@@ -5808,6 +6146,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainHistory: [],
         remoteMainHistoryError: '',
         changedCount: null,
+        changedFiles: [],
         aheadCount: null,
         behindCount: null,
         fetchedAt: 0,
@@ -5853,6 +6192,8 @@ function getGitSyncOverlayElements() {
         pushBtn: document.getElementById('codex-sync-overlay-push'),
         refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
         loading: document.getElementById('codex-sync-overlay-loading'),
+        filesEmpty: document.getElementById('codex-sync-overlay-files-empty'),
+        filesList: document.getElementById('codex-sync-overlay-files-list'),
         empty: document.getElementById('codex-sync-overlay-empty'),
         list: document.getElementById('codex-sync-overlay-list')
     };
@@ -5862,7 +6203,10 @@ function updateGitSyncOverlayActionButtonState(status) {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
     const repoMissing = Boolean(status?.repoMissing);
-    const changedCount = normalizeGitChangedFilesCount(status?.changedCount);
+    const normalizedChangedCount = normalizeGitChangedFilesCount(status?.changedCount);
+    const changedCount = Number.isFinite(normalizedChangedCount)
+        ? normalizedChangedCount
+        : normalizeGitChangedFiles(status?.changedFiles).length;
     const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
     const behindCount = normalizeGitDivergenceCount(status?.behindCount);
     const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
@@ -6003,7 +6347,11 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
-    const changedCount = normalizeGitChangedFilesCount(history?.changedCount);
+    const changedFiles = normalizeGitChangedFiles(history?.changedFiles);
+    const normalizedChangedCount = normalizeGitChangedFilesCount(history?.changedCount);
+    const changedCount = Number.isFinite(normalizedChangedCount)
+        ? normalizedChangedCount
+        : changedFiles.length;
     const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
     const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
     const compareText = !repoMissing && aheadCount != null && behindCount != null
@@ -6019,10 +6367,41 @@ function renderGitSyncOverlay(history) {
     if (elements.meta) {
         const repoText = `${repoLabel} (${repoRoot || 'None'})`;
         const branchText = currentBranch ? `현재 브랜치: ${currentBranch}` : '현재 브랜치: None';
+        const changedText = Number.isFinite(changedCount)
+            ? `작업 트리 변경: ${changedCount}개`
+            : '작업 트리 변경: 확인 불가';
         const fallbackText = mainBranchFallback && requestedMainBranch && mainBranch && requestedMainBranch !== mainBranch
             ? ` · 요청 ${requestedMainBranch} -> 사용 ${mainBranch}`
             : '';
-        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText}${fallbackText}`;
+        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${fallbackText}`;
+    }
+    let renderedChangedFileCount = changedFiles.length;
+    if (elements.filesList) {
+        const collapsedFolders = getGitSyncOverlayCollapsedFolders(repoTarget);
+        const rendered = renderGitChangedFileTreeList({
+            listElement: elements.filesList,
+            files: changedFiles,
+            collapsedFolders,
+            selectable: false,
+            onFolderCollapseToggle: (folderPath, shouldCollapse) => {
+                if (!folderPath) return;
+                if (shouldCollapse) {
+                    collapsedFolders.add(folderPath);
+                } else {
+                    collapsedFolders.delete(folderPath);
+                }
+                renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+            }
+        });
+        renderedChangedFileCount = rendered.fileCount;
+        elements.filesList.classList.toggle('is-hidden', rendered.fileCount === 0);
+    }
+    if (elements.filesEmpty) {
+        const fallbackFileMessage = repoMissing
+            ? '현재 repository: None'
+            : '커밋 대상 파일이 없습니다.';
+        elements.filesEmpty.textContent = fallbackFileMessage;
+        elements.filesEmpty.classList.toggle('is-hidden', renderedChangedFileCount !== 0);
     }
     if (elements.list) {
         elements.list.innerHTML = '';
@@ -6063,6 +6442,7 @@ function renderGitSyncOverlay(history) {
     updateGitSyncOverlayActionButtonState({
         repoMissing,
         changedCount,
+        changedFiles,
         aheadCount,
         behindCount
     });
@@ -6103,6 +6483,13 @@ function openGitSyncOverlay() {
     if (elements.list) {
         elements.list.classList.add('is-hidden');
         elements.list.innerHTML = '';
+    }
+    if (elements.filesEmpty) {
+        elements.filesEmpty.classList.add('is-hidden');
+    }
+    if (elements.filesList) {
+        elements.filesList.classList.add('is-hidden');
+        elements.filesList.innerHTML = '';
     }
     setGitSyncOverlayRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
@@ -8827,6 +9214,11 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
                 limit: 10
             })
         });
+        const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
+        const changedFiles = detailedFiles.length
+            ? detailedFiles
+            : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+        const changedCount = normalizeGitChangedFilesCount(result?.changed_files_count);
         return setGitSyncHistoryCache(target, {
             repoRoot: typeof result?.repo_root === 'string' ? result.repo_root : '',
             repoMissing: Boolean(result?.repo_missing),
@@ -8842,6 +9234,8 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             remoteMainHistoryError: typeof result?.remote_main_history_error === 'string'
                 ? result.remote_main_history_error
                 : '',
+            changedCount: Number.isFinite(changedCount) ? changedCount : normalizeGitChangedFiles(changedFiles).length,
+            changedFiles,
             aheadCount: Number.isFinite(result?.ahead_count) ? result.ahead_count : null,
             behindCount: Number.isFinite(result?.behind_count) ? result.behind_count : null,
             fetchedAt: Date.now(),
@@ -8857,6 +9251,8 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             currentBranch: '',
             remoteMainHistory: [],
             remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
+            changedCount: isRepoMissing ? 0 : null,
+            changedFiles: [],
             isStale: !isRepoMissing,
             fetchedAt: Date.now()
         });
@@ -8879,9 +9275,16 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
             fetchGitSyncHistory(force, target),
             fetchGitStatusForRepoTarget(target, force).catch(() => null)
         ]);
-        const changedCount = status ? getGitChangedFilesCountFromStatus(status) : null;
+        const statusFiles = normalizeGitChangedFiles(status?.changedFiles);
+        const historyFiles = normalizeGitChangedFiles(history?.changedFiles);
+        const mergedFiles = statusFiles.length ? statusFiles : historyFiles;
+        const statusChangedCount = status ? getGitChangedFilesCountFromStatus(status) : null;
+        const changedCount = Number.isFinite(statusChangedCount)
+            ? statusChangedCount
+            : normalizeGitChangedFilesCount(history?.changedCount);
         const merged = setGitSyncHistoryCache(target, {
-            changedCount: Number.isFinite(changedCount) ? changedCount : null,
+            changedCount: Number.isFinite(changedCount) ? changedCount : mergedFiles.length,
+            changedFiles: mergedFiles,
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
             behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount
         });
@@ -8964,11 +9367,13 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     updateGitCommitButtonState(status);
     updateGitPushButtonState(status);
     if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
-        setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
+        const mergedWorkspaceSync = setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
             changedCount: getGitChangedFilesCountFromStatus(status),
+            changedFiles: normalizeGitChangedFiles(status?.changedFiles),
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
             behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null
         });
+        renderGitSyncOverlay(mergedWorkspaceSync);
     }
     syncGitSyncOverlayActionButtonsFromCache();
     if (updateOverlay && isGitBranchOverlayOpen()) {

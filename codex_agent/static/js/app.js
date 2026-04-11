@@ -58,7 +58,12 @@ const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
 const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
 const WORK_MODE_FILE_COLUMN_DEFAULTS = Object.freeze({
-    name: 320,
+    name: 220,
+    size: 92,
+    modified: 146
+});
+const WORK_MODE_FILE_COLUMN_LEGACY_DEFAULTS = Object.freeze({
+    name: 260,
     size: 92,
     modified: 146
 });
@@ -1164,7 +1169,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (chatTitleTrigger) {
         chatTitleTrigger.addEventListener('click', event => {
-            if (!isPhoneLayout()) return;
+            const canOpenOverlay = isPhoneLayout() || isWorkModeEnabled();
+            if (!canOpenOverlay) return;
             event.preventDefault();
             if (isMobileSessionOverlayOpen()) {
                 closeMobileSessionOverlay();
@@ -3538,6 +3544,13 @@ function normalizeWorkModeFileColumnWidth(column, width) {
     return Math.min(limits.max, Math.max(limits.min, Math.round(numeric)));
 }
 
+function hasLegacyDefaultFileColumnWidths(value) {
+    if (!value || typeof value !== 'object') return false;
+    return Number(value.name) === WORK_MODE_FILE_COLUMN_LEGACY_DEFAULTS.name
+        && Number(value.size) === WORK_MODE_FILE_COLUMN_LEGACY_DEFAULTS.size
+        && Number(value.modified) === WORK_MODE_FILE_COLUMN_LEGACY_DEFAULTS.modified;
+}
+
 function readWorkModeFileColumnsPreference() {
     const fallback = {
         name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
@@ -3548,6 +3561,9 @@ function readWorkModeFileColumnsPreference() {
         const raw = localStorage.getItem(WORK_MODE_FILE_COLUMNS_KEY);
         if (!raw) return fallback;
         const parsed = JSON.parse(raw);
+        if (hasLegacyDefaultFileColumnWidths(parsed)) {
+            return fallback;
+        }
         return {
             name: normalizeWorkModeFileColumnWidth('name', parsed?.name),
             size: normalizeWorkModeFileColumnWidth('size', parsed?.size),
@@ -3691,6 +3707,9 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
     }
 
     elements.app.classList.toggle(WORK_MODE_CLASS, wantsEnabled);
+    if (!wantsEnabled && !isPhoneLayout() && isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     if (elements.preview) {
         elements.preview.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
     }
@@ -8490,6 +8509,9 @@ function readFileBrowserColumnsPreference() {
         const raw = localStorage.getItem(FILE_BROWSER_COLUMNS_KEY);
         if (!raw) return fallback;
         const parsed = JSON.parse(raw);
+        if (hasLegacyDefaultFileColumnWidths(parsed)) {
+            return fallback;
+        }
         return {
             name: normalizeWorkModeFileColumnWidth('name', parsed?.name),
             size: normalizeWorkModeFileColumnWidth('size', parsed?.size),
@@ -10610,7 +10632,8 @@ function isMobileSessionOverlayOpen() {
 }
 
 function openMobileSessionOverlay() {
-    if (!isPhoneLayout()) return;
+    const canOpenOverlay = isPhoneLayout() || isWorkModeEnabled();
+    if (!canOpenOverlay) return;
     const elements = getMobileSessionOverlayElements();
     if (!elements) return;
     if (isGitBranchOverlayOpen()) {
@@ -13093,11 +13116,16 @@ function renderMarkdownLink(label, href) {
     const absolutePath = fileTarget.absolutePath;
     const line = normalizeSourceLineNumber(fileTarget.line);
     const column = normalizeSourceColumnNumber(fileTarget.column);
+    const hasLocationInLabel = /(?:#L\d+(?:C\d+)?|:\d+(?::\d+)?)$/i.test(displayLabel);
+    const visibleLabel = (!hasLocationInLabel && line)
+        ? `${displayLabel}:${line}${column ? `:${column}` : ''}`
+        : displayLabel;
+    const safeVisibleLabel = escapeHtml(visibleLabel);
 
     const shortenedPath = shortenAbsoluteFilesystemPath(absolutePath, getMessageLogPathRoots()) || absolutePath;
     const shortenedPathWithLocation = formatFilesystemPathWithLocation(shortenedPath, line, column);
     const tooltipText = `파일 경로: ${shortenedPathWithLocation}`;
-    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${safeLabel}</a>`;
+    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${safeVisibleLabel}</a>`;
 }
 
 function hydrateMessageLabelLinks(container) {

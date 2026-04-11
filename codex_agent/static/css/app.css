@@ -78,7 +78,9 @@
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
-    --font-session-title: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    --font-session-list-title: "Pretendard", "Inter", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
+    --font-chat-title: "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", "Times New Roman", serif;
+    --font-code-block: "Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "JetBrains Mono", "SF Mono", Menlo, monospace;
     --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
         BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
         "Segoe UI", sans-serif;
@@ -955,7 +957,7 @@ body {
     padding: 14px 16px 16px;
     overflow: hidden;
     --work-mode-file-list-width: 36%;
-    --work-mode-file-col-name-width: 320px;
+    --work-mode-file-col-name-width: 220px;
     --work-mode-file-col-size-width: 92px;
     --work-mode-file-col-modified-width: 146px;
     --work-mode-file-col-gap: 8px;
@@ -1762,7 +1764,7 @@ body {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: var(--code-bg);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
 }
 
@@ -1786,7 +1788,7 @@ body {
     align-items: stretch;
     gap: 0;
     padding: 0;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
     line-height: 1.55;
 }
@@ -1802,6 +1804,7 @@ body {
     white-space: pre;
     user-select: none;
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-code-block);
 }
 
 .message-log-overlay-content pre.markdown-code-block > code {
@@ -2917,7 +2920,7 @@ body.is-work-mode-resizing .work-mode-divider::before {
     flex-direction: column;
     gap: 10px;
     --work-mode-file-list-width: 36%;
-    --work-mode-file-col-name-width: 320px;
+    --work-mode-file-col-name-width: 220px;
     --work-mode-file-col-size-width: 92px;
     --work-mode-file-col-modified-width: 146px;
     --work-mode-file-col-gap: 8px;
@@ -3088,19 +3091,29 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 .work-mode-file-grid-scroll {
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: auto;
     scrollbar-gutter: stable both-edges;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+}
+
+.work-mode-file-grid-scroll::-webkit-scrollbar:horizontal {
+    height: 0;
 }
 
 .work-mode-file-hscroll {
-    flex: 0 0 12px;
-    min-height: 12px;
-    overflow-x: scroll;
+    flex: 0 0 18px;
+    min-height: 18px;
+    overflow-x: auto;
     overflow-y: hidden;
     border-top: 1px solid var(--border);
     background: var(--surface);
     scrollbar-gutter: stable;
     scrollbar-width: auto;
+    padding-bottom: 1px;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
 }
 
 .work-mode-file-hscroll-track {
@@ -3109,7 +3122,7 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 }
 
 .work-mode-file-hscroll::-webkit-scrollbar {
-    height: 10px;
+    height: 12px;
 }
 
 .work-mode-file-hscroll::-webkit-scrollbar-track {
@@ -3137,13 +3150,13 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 .work-mode-file-columns {
     display: grid;
     grid-template-columns:
-        clamp(180px, var(--work-mode-file-col-name-width, 320px), 520px)
+        clamp(180px, var(--work-mode-file-col-name-width, 220px), 520px)
         clamp(72px, var(--work-mode-file-col-size-width, 92px), 220px)
         clamp(110px, var(--work-mode-file-col-modified-width, 146px), 280px);
     gap: var(--work-mode-file-col-gap);
     width: max-content;
     min-width: 100%;
-    padding: 6px 10px;
+    padding: 6px 10px 6px 0;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
 }
@@ -3233,12 +3246,12 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
     border-radius: 0;
     background: transparent;
     color: var(--text-primary);
-    padding: 7px 10px;
+    padding: 7px 10px 7px 0;
     font-size: 12px;
     cursor: pointer;
     display: grid;
     grid-template-columns:
-        clamp(180px, var(--work-mode-file-col-name-width, 320px), 520px)
+        clamp(180px, var(--work-mode-file-col-name-width, 220px), 520px)
         clamp(72px, var(--work-mode-file-col-size-width, 92px), 220px)
         clamp(110px, var(--work-mode-file-col-modified-width, 146px), 280px);
     gap: var(--work-mode-file-col-gap);
@@ -3528,7 +3541,7 @@ body.is-work-mode-resizing * {
 .session-title {
     font-weight: 700;
     font-size: 13px;
-    font-family: var(--font-session-title);
+    font-family: var(--font-session-list-title);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3543,12 +3556,27 @@ body.is-work-mode-resizing * {
 }
 
 .session-spinner {
-    width: 12px;
-    height: 12px;
-    border-radius: 0;
-    border: 2px solid var(--text-tertiary);
-    border-top-color: var(--accent);
-    animation: session-spin 0.8s linear infinite;
+    position: relative;
+    flex: 0 0 auto;
+    width: 22px;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: rgba(120, 141, 165, 0.22);
+    overflow: hidden;
+}
+
+.session-spinner::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-3px, -50%);
+    box-shadow: 0 0 0 1px rgba(15, 76, 129, 0.14);
+    animation: message-stream-indicator-move 1.1s ease-in-out infinite;
 }
 
 @keyframes session-spin {
@@ -3926,7 +3954,7 @@ body.is-work-mode-resizing * {
 .chat-title {
     font-size: 14px;
     font-weight: 700;
-    font-family: var(--font-session-title);
+    font-family: var(--font-chat-title);
 }
 
 .chat-title-trigger {
@@ -4286,7 +4314,7 @@ body.is-work-mode-resizing * {
 }
 
 .model-row.model-row-combined {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 132px);
+    grid-template-columns: minmax(0, 170px) minmax(0, 150px);
 }
 
 .model-row > * {
@@ -4859,6 +4887,7 @@ body.is-work-mode-resizing * {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: var(--code-bg);
+    font-family: var(--font-code-block);
     font-size: 12px;
 }
 
@@ -4883,7 +4912,7 @@ body.is-work-mode-resizing * {
     align-items: stretch;
     gap: 0;
     padding: 0;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
     line-height: 1.55;
 }
@@ -4899,6 +4928,7 @@ body.is-work-mode-resizing * {
     white-space: pre;
     user-select: none;
     font-variant-numeric: tabular-nums;
+    font-family: var(--font-code-block);
 }
 
 .message-bubble pre.markdown-code-block > code {
@@ -6208,5 +6238,110 @@ label.hover-tooltip,
     .app.is-work-mode .work-mode-preview-up {
         min-height: 32px;
         padding: 6px 11px;
+    }
+}
+
+@media (min-width: 841px) {
+    .app.is-work-mode .chat-title-trigger {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+    }
+
+    .app.is-work-mode .chat-title-trigger::after {
+        content: "";
+        width: 12px;
+        height: 12px;
+        flex: 0 0 12px;
+        background-image: var(--icon-chevron-down);
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 12px 12px;
+        opacity: 0.72;
+    }
+
+    .layout {
+        grid-template-columns: clamp(244px, 24vw, 310px) minmax(0, 1fr);
+    }
+
+    .app-header h1 {
+        font-size: 20px;
+    }
+
+    .app-header p {
+        font-size: 13.5px;
+    }
+
+    .app-workspace,
+    .app-header-details-summary,
+    .app-description,
+    .live-weather-label,
+    .live-weather-hint,
+    .session-meta,
+    .session-action,
+    .stream-monitor-title,
+    .stream-monitor-meta,
+    .stream-monitor-status,
+    .stream-monitor-watch,
+    .model-label,
+    .model-sub-label,
+    .model-status,
+    .message-details summary,
+    .message-detail-link {
+        font-size: 12.5px;
+    }
+
+    .app-session-storage,
+    .chat-meta,
+    .controls-summary,
+    .usage-reset,
+    .chat-plan-mode-toggle,
+    .chat-job-monitor-summary,
+    .chat-job-monitor-item,
+    .chat-status,
+    .message-meta,
+    .message-stream-indicator,
+    .message-footer {
+        font-size: 11.5px;
+    }
+
+    .sessions-header,
+    .session-title,
+    .stream-monitor-empty,
+    .stream-monitor-session,
+    .stream-monitor-output-title,
+    .stream-monitor-output-body,
+    .chat-placeholder,
+    .chat-controls-toggle,
+    .controls-title,
+    .model-select,
+    .model-input {
+        font-size: 13.5px;
+    }
+
+    .live-weather-value,
+    .usage-value,
+    .usage-remaining,
+    .message-bubble {
+        font-size: 14.5px;
+    }
+
+    .chat-title,
+    .chat-input textarea {
+        font-size: 15.5px;
+    }
+
+    .work-mode-file-col-heading,
+    .work-mode-file-cell-modified {
+        font-size: 11.5px;
+    }
+
+    .work-mode-file-entry,
+    .work-mode-preview .file-browser-meta,
+    .work-mode-preview .file-browser-viewer-meta,
+    .work-mode-file-table .file-browser-loading,
+    .work-mode-file-table .file-browser-empty {
+        font-size: 12.5px;
     }
 }

@@ -60,7 +60,7 @@
     --tooltip-text: #f7fbff;
     --tooltip-border: rgba(130, 153, 178, 0.42);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
-    --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
+    --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
@@ -73,8 +73,8 @@
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
     --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
-    --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8a2.4 2.4 0 0 1 2.4-2.4h4.1l1.8 2h5.5A2.4 2.4 0 0 1 20 10v7a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><circle cx='14.2' cy='13.8' r='2.2'/><path d='m15.9 15.5 1.9 1.9'/></svg>");
-    --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
+    --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 7.4a2.2 2.2 0 0 1 2.2-2.2h4l1.7 2h6.1a2.2 2.2 0 0 1 2.2 2.2v7.5a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M8.5 12.3h7'/><path d='M8.5 15.2h4.6'/></svg>");
+    --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
@@ -125,7 +125,7 @@
     --tooltip-text: #e8edf3;
     --tooltip-border: rgba(176, 188, 201, 0.28);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
-    --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12a9 9 0 0 1 15.54-6.36'/><path d='M18.54 2.64V7h-4.36'/><path d='M21 12a9 9 0 0 1-15.54 6.36'/><path d='M5.46 21.36V17h4.36'/></svg>");
+    --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
@@ -138,8 +138,8 @@
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
     --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
-    --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8a2.4 2.4 0 0 1 2.4-2.4h4.1l1.8 2h5.5A2.4 2.4 0 0 1 20 10v7a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><circle cx='14.2' cy='13.8' r='2.2'/><path d='m15.9 15.5 1.9 1.9'/></svg>");
-    --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='4.6' width='17' height='14.8' rx='2.2'/><path d='M10.3 4.6v14.8'/><path d='M13.6 9.2h4.1'/><path d='M13.6 13.1h4.8'/><path d='M13.6 16.9h3.4'/></svg>");
+    --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 7.4a2.2 2.2 0 0 1 2.2-2.2h4l1.7 2h6.1a2.2 2.2 0 0 1 2.2 2.2v7.5a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M8.5 12.3h7'/><path d='M8.5 15.2h4.6'/></svg>");
+    --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
@@ -364,6 +364,11 @@ body {
     font-size: 12px;
     color: var(--text-secondary);
     font-weight: 600;
+}
+
+.branch-overlay-last-commit {
+    font-size: 12px;
+    color: var(--text-tertiary);
 }
 
 .branch-overlay-stage-tools {
@@ -709,6 +714,11 @@ body {
     font-weight: 600;
 }
 
+.sync-overlay-last-commit {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
 .sync-overlay-targets {
     display: flex;
     align-items: center;
@@ -812,6 +822,20 @@ body {
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.sync-overlay-list li.sync-overlay-history-item {
+    cursor: pointer;
+}
+
+.sync-overlay-list li.sync-overlay-history-item:hover {
+    border-color: rgba(15, 76, 129, 0.38);
+}
+
+.sync-overlay-list li.sync-overlay-history-item:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
 }
 
 .sync-overlay-item-main {
@@ -2505,7 +2529,7 @@ body {
 #codex-work-mode-toggle {
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 15px 15px;
+    background-size: 16px 16px;
 }
 
 .git-branch {
@@ -2580,17 +2604,27 @@ body {
 .git-action-browse,
 #codex-file-browser-open {
     background-image: var(--icon-browse);
-    background-size: 19px 19px;
+    background-size: 18px 18px;
 }
 
 #codex-work-mode-toggle {
     background-image: var(--icon-work-mode);
-    background-size: 19px 19px;
+    background-size: 18px 18px;
 }
 
+#codex-file-browser-open.is-active,
 #codex-work-mode-toggle.is-active {
     border-color: rgba(15, 76, 129, 0.45);
     background-color: rgba(15, 76, 129, 0.12);
+}
+
+#codex-work-mode-toggle.is-active {
+    box-shadow: inset 0 0 0 1px rgba(15, 76, 129, 0.1);
+}
+
+#codex-file-browser-open.is-active:hover,
+#codex-work-mode-toggle.is-active:hover {
+    background-color: rgba(15, 76, 129, 0.2);
 }
 
 .git-action-sync.is-loading,
@@ -2640,6 +2674,17 @@ body {
 
 [data-theme="dark"] .sync-overlay-sync.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
+}
+
+[data-theme="dark"] #codex-file-browser-open.is-active,
+[data-theme="dark"] #codex-work-mode-toggle.is-active {
+    border-color: rgba(123, 143, 163, 0.56);
+    background-color: rgba(123, 143, 163, 0.24);
+}
+
+[data-theme="dark"] #codex-file-browser-open.is-active:hover,
+[data-theme="dark"] #codex-work-mode-toggle.is-active:hover {
+    background-color: rgba(123, 143, 163, 0.34);
 }
 
 .theme-toggle {
@@ -2895,6 +2940,27 @@ body.is-work-mode-resizing .work-mode-divider::before {
     display: flex;
     align-items: center;
     gap: 8px;
+    justify-content: flex-end;
+    min-width: 0;
+    flex: 1;
+}
+
+.work-mode-preview-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.work-mode-switch-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: var(--icon-button-size);
+}
+
+.work-mode-preview-switch-slot {
+    margin-left: 0;
 }
 
 .work-mode-preview-chat,
@@ -2908,6 +2974,13 @@ body.is-work-mode-resizing .work-mode-divider::before {
     min-height: 30px;
     padding: 6px 10px;
     font-size: 12px;
+}
+
+.work-mode-preview-chat {
+    background-image: var(--icon-chevron-left);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
 }
 
 .work-mode-preview-refresh {
@@ -3554,6 +3627,14 @@ body.is-work-mode-resizing * {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+}
+
+.chat-work-mode-switch-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
 }
 
 .chat-session-nav {
@@ -4321,6 +4402,34 @@ body.is-work-mode-resizing * {
     resize: vertical;
 }
 
+.chat-runtime-strip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.chat-runtime-strip.is-idle {
+    gap: 4px;
+}
+
+.chat-runtime-strip.is-idle .chat-job-monitor {
+    flex: 0 1 auto;
+    padding: 2px 6px;
+    background: var(--surface-muted);
+}
+
+.chat-runtime-strip.is-idle .chat-job-monitor-summary {
+    font-size: 9px;
+    line-height: 1.1;
+}
+
+.chat-runtime-strip.is-idle .chat-status {
+    padding: 2px 7px;
+    font-size: 9px;
+    line-height: 1.1;
+}
+
 .chat-plan-mode-toggle {
     min-width: var(--chat-action-button-width);
     height: 24px;
@@ -4358,39 +4467,61 @@ body.is-work-mode-resizing * {
 }
 
 .chat-job-monitor {
-    margin-top: 8px;
-    padding: 7px 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-top: 0;
+    padding: 4px 7px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    align-items: center;
+    gap: 6px;
 }
 
 .chat-job-monitor.is-idle {
     opacity: 0.9;
 }
 
+.chat-job-monitor.is-idle .chat-job-monitor-list {
+    display: none;
+}
+
 .chat-job-monitor-summary {
-    font-size: 11px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-size: 10px;
+    line-height: 1.2;
     color: var(--text-secondary);
     font-weight: 600;
 }
 
 .chat-job-monitor-list {
+    flex: 1 1 auto;
+    min-width: 0;
     list-style: none;
     margin: 0;
     padding: 0;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 92px;
-    overflow: auto;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.chat-job-monitor-list::-webkit-scrollbar {
+    display: none;
 }
 
 .chat-job-monitor-item {
-    font-size: 11px;
+    flex: 0 0 auto;
+    max-width: clamp(120px, 26vw, 240px);
+    font-size: 10px;
+    line-height: 1.2;
     color: var(--text-tertiary);
     white-space: nowrap;
     overflow: hidden;
@@ -4407,8 +4538,18 @@ body.is-work-mode-resizing * {
 }
 
 .chat-status {
-    font-size: 12px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-muted);
+    font-size: 10px;
+    line-height: 1.2;
     color: var(--text-tertiary);
+    white-space: nowrap;
 }
 
 .chat-status.is-error {
@@ -4991,7 +5132,7 @@ label.hover-tooltip,
     transform: translateY(0);
 }
 
-@media (min-width: 961px) and (max-width: 1400px) {
+@media (min-width: 841px) and (max-width: 1400px) {
     :root {
         --sidebar-collapsed-pad-right: 6px;
         --sidebar-collapsed-pad-left: 6px;
@@ -5119,6 +5260,10 @@ label.hover-tooltip,
         gap: 8px;
     }
 
+    .chat-runtime-strip {
+        gap: 5px;
+    }
+
     .chat-submit-column {
         gap: 4px;
         min-width: var(--chat-action-button-width);
@@ -5127,9 +5272,26 @@ label.hover-tooltip,
     .chat-input textarea {
         padding: 10px 12px;
     }
+
+    .chat-job-monitor {
+        gap: 5px;
+        padding: 4px 6px;
+    }
+
+    .chat-job-monitor-list {
+        gap: 5px;
+    }
+
+    .chat-job-monitor-item {
+        max-width: clamp(108px, 30vw, 200px);
+    }
+
+    .chat-status {
+        padding: 3px 7px;
+    }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 840px) {
     :root {
         --streaming-bubble-height: 420px;
         --icon-button-size: 28px;
@@ -5198,6 +5360,43 @@ label.hover-tooltip,
     .app.is-work-mode .work-mode-preview-chat,
     .app.is-work-mode .work-mode-preview-back {
         display: inline-flex;
+    }
+
+    .app.is-work-mode .work-mode-preview-actions {
+        width: 100%;
+        gap: 6px;
+        justify-content: flex-start;
+    }
+
+    .app.is-work-mode .work-mode-preview-tools {
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot {
+        margin-left: auto;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot .work-mode-preview-chat {
+        width: var(--icon-button-size);
+        min-width: var(--icon-button-size);
+        height: var(--icon-button-size);
+        padding: 0;
+        font-size: 0;
+        line-height: 1;
+        text-indent: -999px;
+        overflow: hidden;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background-color: var(--surface-muted);
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 14px 14px;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot .work-mode-preview-chat:hover {
+        border-color: var(--accent);
+        background-color: var(--surface-raised);
     }
 
     .app.is-work-mode .work-mode-preview-fullscreen {
@@ -5437,11 +5636,11 @@ label.hover-tooltip,
     }
 
     .usage-history-chart-wrap {
-        min-height: 240px;
+        min-height: clamp(280px, 44dvh, 420px);
     }
 
     .usage-history-chart {
-        min-height: 240px;
+        min-height: clamp(280px, 44dvh, 420px);
     }
 
     .usage-history-summary-strip {
@@ -5869,5 +6068,145 @@ label.hover-tooltip,
 
     .message {
         max-width: var(--chat-bubble-max-width);
+    }
+}
+
+@media (max-width: 599px) {
+    .chat-runtime-strip {
+        gap: 4px;
+    }
+
+    .chat-job-monitor {
+        gap: 4px;
+        padding: 3px 6px;
+    }
+
+    .chat-job-monitor-list {
+        gap: 4px;
+    }
+
+    .chat-job-monitor-summary,
+    .chat-job-monitor-item {
+        font-size: 9px;
+    }
+
+    .chat-job-monitor-item {
+        max-width: 132px;
+    }
+
+    .chat-status {
+        padding: 3px 6px;
+        font-size: 9px;
+    }
+
+    .app.is-work-mode .chat-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .app.is-work-mode .chat-header-main {
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .app.is-work-mode .chat-header-actions {
+        justify-self: end;
+        gap: 4px;
+        min-width: max-content;
+    }
+
+    .app.is-work-mode .chat-header-fullscreen {
+        display: none;
+    }
+
+    .app.is-work-mode .chat-work-mode-switch-slot {
+        min-width: var(--icon-button-size);
+        flex: 0 0 var(--icon-button-size);
+    }
+
+    .app.is-work-mode .chat-session-nav {
+        gap: 3px;
+    }
+
+    .app.is-work-mode .chat-session-nav .btn.icon-only {
+        width: var(--icon-button-size);
+        min-width: var(--icon-button-size);
+        height: var(--icon-button-size);
+    }
+}
+
+@media (min-width: 600px) and (max-width: 840px) {
+    :root {
+        --icon-button-size: 30px;
+        --sidebar-collapsed-height: 52px;
+    }
+
+    .app {
+        padding: 12px;
+        border-radius: 18px;
+    }
+
+    .app-header {
+        margin-bottom: 10px;
+        gap: 10px;
+    }
+
+    .header-actions {
+        gap: 8px 10px;
+    }
+
+    .chat {
+        padding: 12px;
+        gap: 8px;
+    }
+
+    .chat-header-actions {
+        gap: 8px;
+    }
+
+    .chat-title-trigger {
+        cursor: default;
+    }
+
+    .chat-title-trigger::after {
+        display: none;
+    }
+
+    .sessions {
+        max-height: min(40vh, 330px);
+    }
+
+    .sessions .session-list {
+        max-height: min(30vh, 240px);
+    }
+
+    .chat-controls-body {
+        max-height: min(36vh, 300px);
+    }
+
+    .app.is-work-mode .chat,
+    .app.is-work-mode .work-mode-preview {
+        border-radius: 12px;
+    }
+
+    .app.is-work-mode .work-mode-preview {
+        padding: 12px;
+        gap: 10px;
+    }
+
+    .app.is-work-mode .work-mode-preview-title {
+        font-size: 13px;
+    }
+
+    .app.is-work-mode .work-mode-preview-tools {
+        gap: 8px;
+    }
+
+    .app.is-work-mode .work-mode-preview-back,
+    .app.is-work-mode .work-mode-preview-up {
+        min-height: 32px;
+        padding: 6px 11px;
     }
 }

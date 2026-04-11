@@ -109,6 +109,8 @@ _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECA
 _TOOL_RUN_BLOCK_PATTERN = re.compile(r'```(?:bash|sh|shell)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _HUNK_HEADER_PATTERN = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
 _PATCH_MAX_CHARS = 400_000
+_CONTEXT_MESSAGE_ROLE_MAX_CHARS = {'assistant': 2500}
+_CONTEXT_MESSAGE_DEFAULT_MAX_CHARS = 600
 _TOOL_RUN_MARKERS = ('@run', '#@run', '# @run')
 _TOOL_RUN_MAX_COMMANDS = 6
 _TOOL_RUN_MAX_OUTPUT_CHARS = 4000
@@ -231,6 +233,18 @@ def _coerce_non_negative_int(value):
     if not math.isfinite(numeric) or numeric < 0:
         return None
     return int(numeric)
+
+
+def _coerce_non_negative_float(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric < 0:
+        return None
+    return numeric
 
 
 def _coerce_float(value):
@@ -1050,10 +1064,30 @@ def _normalize_usage_summary(data):
     if not isinstance(tokens, dict):
         tokens = None
     account_name = str(data.get('account_name') or '').strip() or _provider_account_name(provider)
+
+    # Rate limit data 처리
+    five_hour = data.get('five_hour')
+    if five_hour and isinstance(five_hour, dict):
+        five_hour = {
+            'used_percent': _coerce_non_negative_float(five_hour.get('used_percent')),
+            'resets_at': five_hour.get('resets_at')
+        }
+    else:
+        five_hour = None
+
+    weekly = data.get('weekly')
+    if weekly and isinstance(weekly, dict):
+        weekly = {
+            'used_percent': _coerce_non_negative_float(weekly.get('used_percent')),
+            'resets_at': weekly.get('resets_at')
+        }
+    else:
+        weekly = None
+
     return {
         'provider': provider,
-        'five_hour': None,
-        'weekly': None,
+        'five_hour': five_hour,
+        'weekly': weekly,
         'account_name': account_name,
         'tokens': tokens,
     }
@@ -2749,11 +2783,12 @@ def finalize_assistant_output(content, apply_side_effects=True):
     return text, (metadata or None)
 
 
-def _format_context_message(message, index, max_chars=1400):
+def _format_context_message(message, index):
     role = str((message or {}).get('role') or 'user').strip().lower() or 'user'
     content = _normalize_context_text((message or {}).get('content'))
     if not content:
         content = '(empty)'
+    max_chars = _CONTEXT_MESSAGE_ROLE_MAX_CHARS.get(role, _CONTEXT_MESSAGE_DEFAULT_MAX_CHARS)
     content = _clip_text(content, max_chars)
     return '\n'.join(
         [

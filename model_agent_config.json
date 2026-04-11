@@ -46,7 +46,7 @@
       }
     },
     "max_prompt_chars": 4000,
-    "context_max_chars": 12000,
+    "context_max_chars": 20000,
     "exec_timeout_seconds": 600,
     "api_timeout_seconds": 600,
     "stream_ttl_seconds": 900,

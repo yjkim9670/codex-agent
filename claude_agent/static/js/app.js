@@ -4072,7 +4072,11 @@ function updateUsageSummary(usage) {
         element.appendChild(buildUsageAccount(accountName));
     }
     const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
-    if (!hasUsage) {
+    const tokens = (usage && typeof usage.tokens === 'object' && usage.tokens) ? usage.tokens : null;
+    const hasTokens = Boolean(tokens && (
+        tokens.cumulative_total_tokens > 0 || tokens.cumulative_input_tokens > 0
+    ));
+    if (!hasUsage && !hasTokens) {
         const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
         if (!accountName) {
             element.textContent = fallbackText;
@@ -4084,13 +4088,19 @@ function updateUsageSummary(usage) {
         element.appendChild(fallback);
         return;
     }
-    const entries = [
-        buildUsageEntry(usage?.five_hour, '5h'),
-        buildUsageEntry(usage?.weekly, 'Weekly')
-    ].filter(Boolean);
-    entries.forEach(entry => {
-        element.appendChild(entry);
-    });
+    if (hasTokens) {
+        const tokenEntry = buildTokenUsageEntry(tokens);
+        if (tokenEntry) element.appendChild(tokenEntry);
+    }
+    if (hasUsage) {
+        const entries = [
+            buildUsageEntry(usage?.five_hour, '5h'),
+            buildUsageEntry(usage?.weekly, 'Weekly')
+        ].filter(Boolean);
+        entries.forEach(entry => {
+            element.appendChild(entry);
+        });
+    }
 }
 
 const CLAUDE_MODEL_LABELS = {
@@ -10361,6 +10371,39 @@ function buildUsageAccount(name) {
     const wrapper = document.createElement('div');
     wrapper.className = 'usage-account';
     wrapper.textContent = `Account: ${name}`;
+    return wrapper;
+}
+
+function buildTokenUsageEntry(tokens) {
+    if (!tokens || typeof tokens !== 'object') return null;
+    const cumInput = Number(tokens.cumulative_input_tokens) || 0;
+    const cumOutput = Number(tokens.cumulative_output_tokens) || 0;
+    const cumTotal = Number(tokens.cumulative_total_tokens) || (cumInput + cumOutput);
+    const cumReasoning = Number(tokens.cumulative_reasoning_tokens) || 0;
+    const reqCount = Number(tokens.request_count) || 0;
+    if (cumTotal <= 0 && cumInput <= 0) return null;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-entry';
+    const row = document.createElement('div');
+    row.className = 'usage-row';
+    const pill = document.createElement('button');
+    pill.type = 'button';
+    pill.className = 'usage-pill';
+    pill.disabled = true;
+    pill.textContent = 'Tokens';
+    const value = document.createElement('span');
+    value.className = 'usage-remaining';
+    value.textContent = `In ${formatCompactTokenCount(cumInput)} · Out ${formatCompactTokenCount(cumOutput)}`;
+    row.appendChild(pill);
+    row.appendChild(value);
+    wrapper.appendChild(row);
+    const reset = document.createElement('div');
+    reset.className = 'usage-reset';
+    const parts = [`Total ${formatNumber(cumTotal)}`];
+    if (cumReasoning > 0) parts.push(`Think ${formatCompactTokenCount(cumReasoning)}`);
+    if (reqCount > 0) parts.push(`Req ${formatNumber(reqCount)}`);
+    reset.textContent = parts.join(' · ');
+    wrapper.appendChild(reset);
     return wrapper;
 }
 

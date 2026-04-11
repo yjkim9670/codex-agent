@@ -5,13 +5,13 @@ import os
 import subprocess
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
 
 from ..config import REPO_ROOT, WORKSPACE_DIR
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
+_GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
@@ -443,7 +443,7 @@ def _read_commit_history(repo_root, env, ref_name='HEAD', max_count=20):
     except (TypeError, ValueError):
         count = 20
     count = max(1, min(100, count))
-    pretty = '--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s'
+    pretty = '--pretty=format:%H%x1f%h%x1f%ad%x1f%an%x1f%s%x1f%B%x1e'
     cmd = [
         'git', '-C', str(repo_root), 'log',
         f'--max-count={count}',
@@ -459,16 +459,23 @@ def _read_commit_history(repo_root, env, ref_name='HEAD', max_count=20):
         message = (result.stderr or result.stdout or '').strip() if result else ''
         return [], {'error': message or f'{ref} 이력을 불러오지 못했습니다.'}
     history = []
-    for line in (result.stdout or '').splitlines():
-        parts = line.split('\x1f')
+    raw_output = result.stdout or ''
+    for raw_record in raw_output.split('\x1e'):
+        record = raw_record.strip()
+        if not record:
+            continue
+        parts = record.split('\x1f', 5)
         if len(parts) < 5:
             continue
+        subject = parts[4].strip()
+        full_message = parts[5].strip() if len(parts) >= 6 else ''
         history.append({
             'commit_hash': parts[0].strip(),
             'short_hash': parts[1].strip(),
             'committed_at': parts[2].strip(),
             'author': parts[3].strip(),
-            'subject': parts[4].strip()
+            'subject': subject,
+            'full_message': full_message or subject
         })
     return history, None
 
@@ -576,6 +583,35 @@ def _extract_name_status_details(status_text):
             'status': _normalize_status_marker(status_code)
         })
     return entries
+
+
+def _normalize_changed_file_details(detail_entries, selected_paths=None):
+    selected_set = set(selected_paths) if isinstance(selected_paths, list) and selected_paths else None
+    normalized = []
+    seen_paths = set()
+    for entry in detail_entries if isinstance(detail_entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get('path') or '').strip().replace('\\', '/')
+        if not path:
+            continue
+        while path.startswith('./'):
+            path = path[2:]
+        if not path or _is_history_file(path):
+            continue
+        if selected_set is not None and path not in selected_set:
+            continue
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        status = _normalize_status_marker(str(entry.get('status') or '').strip())
+        normalized.append(
+            {
+                'path': path,
+                'status': status
+            }
+        )
+    return normalized
 
 
 def _is_test_path(path):
@@ -704,6 +740,8 @@ def _parse_numstat_output(numstat_text):
             continue
         if ' -> ' in path:
             path = path.split(' -> ')[-1].strip()
+        if ' => ' in path:
+            path = path.split(' => ')[-1].strip()
         if not path:
             continue
         additions = int(add_raw) if add_raw.isdigit() else 0
@@ -728,53 +766,223 @@ def _parse_numstat_output(numstat_text):
     }
 
 
-def _analyze_staged_changes(repo_root, env, staged_files_detail):
-    detail = staged_files_detail if isinstance(staged_files_detail, list) else []
-    paths = []
-    status_counter = Counter()
-    for entry in detail:
-        if not isinstance(entry, dict):
-            continue
-        path = str(entry.get('path') or '').strip()
-        status = str(entry.get('status') or '').strip()
-        if not path:
-            continue
-        paths.append(path)
-        if status:
-            status_counter[status] += 1
-
-    numstat_result, numstat_error = _run_git_command(
-        ['git', '-C', str(repo_root), 'diff', '--cached', '--numstat'],
-        repo_root,
-        20,
-        env
-    )
-    numstat = {
+def _build_empty_numstat():
+    return {
         'insertions': 0,
         'deletions': 0,
         'binary_files': 0,
         'file_stats': []
     }
-    if not numstat_error and numstat_result and numstat_result.returncode == 0:
-        numstat = _parse_numstat_output(numstat_result.stdout or '')
 
-    top_files = sorted(
-        numstat.get('file_stats') or [],
-        key=lambda item: (-int(item.get('line_changes') or 0), str(item.get('path') or ''))
-    )[:3]
+
+def _build_change_analysis(file_details, numstat=None):
+    detail = _normalize_changed_file_details(file_details)
+    paths = [entry.get('path') for entry in detail if isinstance(entry, dict) and entry.get('path')]
+    status_counter = Counter()
+    for entry in detail:
+        status = str(entry.get('status') or '').strip()
+        if status:
+            status_counter[status] += 1
+
+    base_numstat = numstat if isinstance(numstat, dict) else _build_empty_numstat()
+    file_stat_candidates = []
+    path_set = set(paths)
+    for item in base_numstat.get('file_stats') or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip().replace('\\', '/')
+        if not path or _is_history_file(path):
+            continue
+        if path_set and path not in path_set:
+            continue
+        try:
+            additions = int(item.get('additions') or 0)
+        except (TypeError, ValueError):
+            additions = 0
+        try:
+            deletions = int(item.get('deletions') or 0)
+        except (TypeError, ValueError):
+            deletions = 0
+        line_changes = additions + deletions
+        file_stat_candidates.append(
+            {
+                'path': path,
+                'additions': additions,
+                'deletions': deletions,
+                'line_changes': line_changes
+            }
+        )
+    file_stat_candidates.sort(key=lambda item: (-int(item.get('line_changes') or 0), str(item.get('path') or '')))
+    top_files = file_stat_candidates[:3]
+
+    insertions = 0
+    deletions = 0
+    for item in file_stat_candidates:
+        try:
+            insertions += max(0, int(item.get('additions') or 0))
+        except (TypeError, ValueError):
+            continue
+        try:
+            deletions += max(0, int(item.get('deletions') or 0))
+        except (TypeError, ValueError):
+            continue
+
+    try:
+        binary_files = int(base_numstat.get('binary_files') or 0)
+    except (TypeError, ValueError):
+        binary_files = 0
 
     return {
         'total_files': len(paths),
         'status_counts': dict(status_counter),
-        'insertions': int(numstat.get('insertions') or 0),
-        'deletions': int(numstat.get('deletions') or 0),
-        'binary_files': int(numstat.get('binary_files') or 0),
+        'insertions': insertions,
+        'deletions': deletions,
+        'binary_files': max(0, binary_files),
         'top_scopes': _summarize_top_scopes(paths, max_items=3),
         'top_files': top_files,
         'test_files': sum(1 for path in paths if _is_test_path(path)),
         'doc_files': sum(1 for path in paths if _is_doc_path(path)),
         'config_files': sum(1 for path in paths if _is_config_path(path))
     }
+
+
+def _resolve_diff_base_ref(repo_root, env):
+    head_result, head_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--verify', 'HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if not head_error and head_result and head_result.returncode == 0:
+        head_hash = str(head_result.stdout or '').strip()
+        if head_hash:
+            return 'HEAD'
+    return _GIT_EMPTY_TREE_HASH
+
+
+def _read_worktree_numstat(repo_root, env, selected_paths=None):
+    cmd = ['git', '-C', str(repo_root), 'diff', '--numstat', _resolve_diff_base_ref(repo_root, env), '--']
+    if isinstance(selected_paths, list) and selected_paths:
+        cmd.extend(selected_paths)
+    result, error = _run_git_command(
+        cmd,
+        repo_root,
+        20,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return _build_empty_numstat()
+    return _parse_numstat_output(result.stdout or '')
+
+
+def _read_untracked_file_numstat(repo_root, env, path):
+    file_path = str(path or '').strip()
+    if not file_path:
+        return None
+    cmd = ['git', '-C', str(repo_root), 'diff', '--numstat', '--no-index', '/dev/null', '--', file_path]
+    result, error = _run_git_command(
+        cmd,
+        repo_root,
+        15,
+        env
+    )
+    if error or not result:
+        return None
+    if result.returncode not in (0, 1):
+        return None
+    parsed = _parse_numstat_output(result.stdout or '')
+    file_stats = parsed.get('file_stats') if isinstance(parsed, dict) else []
+    if not isinstance(file_stats, list) or not file_stats:
+        return None
+    first = file_stats[0]
+    if not isinstance(first, dict):
+        return None
+    return {
+        'path': file_path,
+        'additions': int(first.get('additions') or 0),
+        'deletions': int(first.get('deletions') or 0),
+        'line_changes': int(first.get('line_changes') or 0),
+        'binary': bool((first.get('additions') == 0 and first.get('deletions') == 0) and '\t-\t' in (result.stdout or ''))
+    }
+
+
+def _augment_numstat_with_untracked_files(repo_root, env, numstat, file_details):
+    base = numstat if isinstance(numstat, dict) else _build_empty_numstat()
+    next_numstat = {
+        'insertions': int(base.get('insertions') or 0),
+        'deletions': int(base.get('deletions') or 0),
+        'binary_files': int(base.get('binary_files') or 0),
+        'file_stats': []
+    }
+    existing_paths = set()
+    for item in base.get('file_stats') or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip().replace('\\', '/')
+        if not path:
+            continue
+        existing_paths.add(path)
+        next_numstat['file_stats'].append(
+            {
+                'path': path,
+                'additions': int(item.get('additions') or 0),
+                'deletions': int(item.get('deletions') or 0),
+                'line_changes': int(item.get('line_changes') or 0)
+            }
+        )
+
+    for entry in _normalize_changed_file_details(file_details):
+        status = str(entry.get('status') or '').upper()
+        path = str(entry.get('path') or '').strip()
+        if status != 'U' or not path or path in existing_paths:
+            continue
+        stats = _read_untracked_file_numstat(repo_root, env, path)
+        if not stats:
+            continue
+        next_numstat['insertions'] += max(0, int(stats.get('additions') or 0))
+        next_numstat['deletions'] += max(0, int(stats.get('deletions') or 0))
+        if stats.get('binary'):
+            next_numstat['binary_files'] += 1
+        next_numstat['file_stats'].append(
+            {
+                'path': path,
+                'additions': max(0, int(stats.get('additions') or 0)),
+                'deletions': max(0, int(stats.get('deletions') or 0)),
+                'line_changes': max(0, int(stats.get('line_changes') or 0))
+            }
+        )
+        existing_paths.add(path)
+    return next_numstat
+
+
+def _analyze_worktree_changes(repo_root, env, selected_files=None):
+    changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+    filtered_detail = _normalize_changed_file_details(changed_files_detail, selected_files)
+    selected_paths = [entry.get('path') for entry in filtered_detail if entry.get('path')]
+    worktree_numstat = _read_worktree_numstat(repo_root, env, selected_paths)
+    merged_numstat = _augment_numstat_with_untracked_files(
+        repo_root,
+        env,
+        worktree_numstat,
+        filtered_detail
+    )
+    return _build_change_analysis(filtered_detail, numstat=merged_numstat)
+
+
+def _analyze_staged_changes(repo_root, env, staged_files_detail):
+    detail = _normalize_changed_file_details(staged_files_detail)
+    selected_paths = [entry.get('path') for entry in detail if entry.get('path')]
+
+    numstat_result, numstat_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'diff', '--cached', '--numstat', '--', *selected_paths],
+        repo_root,
+        20,
+        env
+    )
+    numstat = _build_empty_numstat()
+    if not numstat_error and numstat_result and numstat_result.returncode == 0:
+        numstat = _parse_numstat_output(numstat_result.stdout or '')
+    return _build_change_analysis(detail, numstat=numstat)
 
 
 def _build_commit_analysis_lines(analysis):
@@ -862,16 +1070,65 @@ def _build_commit_analysis_lines(analysis):
     return lines
 
 
-def _build_commit_message(status_text, max_files=3, analysis=None):
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-    files = [path for path in _extract_changed_files(status_text) if not _is_history_file(path)]
-    if not files:
-        subject = timestamp
-    else:
-        listed = files[:max_files]
-        suffix = f" (+{len(files) - max_files})" if len(files) > max_files else ''
-        subject = f"{timestamp} {', '.join(listed)}{suffix}"
+def _summarize_status_counts_compact(status_counts):
+    if not isinstance(status_counts, dict):
+        return ''
+    labels = [
+        ('M', '수정'),
+        ('A', '추가'),
+        ('D', '삭제'),
+        ('R', '이름변경'),
+        ('C', '복사'),
+        ('T', '타입변경'),
+        ('U', '신규')
+    ]
+    chunks = []
+    for code, label in labels:
+        try:
+            count = int(status_counts.get(code) or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            chunks.append(f'{label} {count}')
+    return ', '.join(chunks[:3])
 
+
+def _build_commit_subject_from_analysis(analysis):
+    if not isinstance(analysis, dict):
+        return '변경사항 반영'
+    try:
+        total_files = int(analysis.get('total_files') or 0)
+    except (TypeError, ValueError):
+        total_files = 0
+    if total_files <= 0:
+        return '변경사항 반영'
+
+    top_scopes = analysis.get('top_scopes') if isinstance(analysis.get('top_scopes'), list) else []
+    primary_scope = ''
+    if top_scopes:
+        first = top_scopes[0]
+        if isinstance(first, dict):
+            primary_scope = str(first.get('scope') or '').strip()
+    if len(primary_scope) > 28:
+        primary_scope = f'{primary_scope[:27]}…'
+
+    status_text = _summarize_status_counts_compact(analysis.get('status_counts') or {})
+    if primary_scope and status_text:
+        subject = f'{primary_scope} {status_text} 반영'
+    elif status_text:
+        subject = f'{status_text} 반영'
+    elif primary_scope:
+        subject = f'{primary_scope} 변경사항 반영'
+    else:
+        subject = f'변경사항 {total_files}건 반영'
+
+    if len(subject) > 72:
+        subject = f'{subject[:71]}…'
+    return subject
+
+
+def _build_commit_message(analysis=None):
+    subject = _build_commit_subject_from_analysis(analysis)
     analysis_lines = _build_commit_analysis_lines(analysis)
     body = ''
     comment = ''
@@ -883,6 +1140,34 @@ def _build_commit_message(status_text, max_files=3, analysis=None):
         'body': body,
         'comment': comment,
         'analysis_lines': analysis_lines
+    }
+
+
+def _build_commit_preview_payload(repo_root, env, selected_files=None):
+    normalized_selected = _normalize_selected_files(selected_files)
+    selected_for_analysis = normalized_selected if normalized_selected else None
+    preview_analysis = _analyze_worktree_changes(repo_root, env, selected_for_analysis)
+    message_payload = _build_commit_message(analysis=preview_analysis)
+    message_subject = str(message_payload.get('subject') or '').strip()
+    message_body = str(message_payload.get('body') or '').strip()
+    message_comment = str(message_payload.get('comment') or '').strip()
+    message_full = message_subject
+    if message_body:
+        message_full = f'{message_subject}\n\n{message_body}'
+    analysis_lines = message_payload.get('analysis_lines')
+    if not isinstance(analysis_lines, list):
+        analysis_lines = []
+    return {
+        'commit_message': message_subject,
+        'commit_message_subject': message_subject,
+        'commit_message_body': message_body,
+        'commit_message_full': message_full,
+        'commit_comment': message_comment,
+        'commit_analysis': preview_analysis,
+        'commit_analysis_lines': analysis_lines,
+        'auto_generated_message': True,
+        'preview_selected_files_count': len(normalized_selected),
+        'preview_selected_files': normalized_selected
     }
 
 
@@ -1082,7 +1367,7 @@ def run_git_action(action, payload=None):
     try:
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
-        if action not in {'status', 'history', 'stage', 'commit', 'push', 'sync', 'cancel', 'submit'}:
+        if action not in {'status', 'preview', 'history', 'stage', 'commit', 'push', 'sync', 'cancel', 'submit'}:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
@@ -1177,6 +1462,28 @@ def run_git_action(action, payload=None):
                     stdout=result.stdout,
                     stderr=result.stderr,
                     extra={'repo_target': repo_target}
+                )
+
+            if action == 'preview':
+                selected_files = _normalize_selected_files(payload.get('files'))
+                preview_payload = _build_commit_preview_payload(
+                    repo_root,
+                    env,
+                    selected_files=selected_files
+                )
+                command_preview = 'git diff --numstat HEAD -- <selected files>' if selected_files else 'git diff --numstat HEAD'
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=command_preview,
+                    exit_code=0,
+                    stdout='',
+                    stderr='',
+                    extra={
+                        **preview_payload,
+                        'repo_target': repo_target
+                    }
                 )
 
             if action == 'sync':
@@ -1420,11 +1727,7 @@ def run_git_action(action, payload=None):
                 commit_message_body = ''
                 commit_comment = '; '.join(commit_analysis_lines[:2]) if commit_analysis_lines else ''
                 if not commit_message_subject:
-                    synthetic_status = '\n'.join(
-                        f"M  {entry['path']}" for entry in staged_files_detail if entry.get('path')
-                    )
                     message_payload = _build_commit_message(
-                        synthetic_status,
                         analysis=commit_analysis
                     )
                     commit_message_subject = str(message_payload.get('subject') or '').strip()

@@ -34,7 +34,9 @@ const state = {
 const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
 const ACTIVE_STREAM_KEY = 'codexActiveStream';
 const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
-const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
+const PHONE_MEDIA_QUERY = '(max-width: 599px)';
+const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
+const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
@@ -96,6 +98,8 @@ const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
 const GIT_STATUS_REQUEST_TIMEOUT_MS = 25000;
 const GIT_HISTORY_REQUEST_TIMEOUT_MS = 90000;
+const GIT_COMMIT_PREVIEW_REQUEST_TIMEOUT_MS = 90000;
+const GIT_COMMIT_PREVIEW_CACHE_MS = 15000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 100000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 620000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
@@ -181,6 +185,7 @@ let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
 let gitBranchOverlayCollapsedFolders = new Set();
+let gitBranchOverlayPreviewKey = '';
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -195,6 +200,12 @@ let gitSyncOverlayCollapsedFoldersByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: new Set(),
     [GIT_SYNC_TARGET_CODEX_AGENT]: new Set()
 };
+let gitSyncOverlayPreviewKeyByTarget = {
+    [GIT_SYNC_TARGET_WORKSPACE]: '',
+    [GIT_SYNC_TARGET_CODEX_AGENT]: ''
+};
+const gitCommitPreviewCacheByKey = new Map();
+const gitCommitPreviewInFlightByKey = new Map();
 let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
 let fileBrowserPath = '';
 let fileBrowserSelectedPath = '';
@@ -816,23 +827,26 @@ function renderRunningJobsMonitor() {
     const monitor = document.getElementById('codex-chat-job-monitor');
     const summary = document.getElementById('codex-chat-job-monitor-summary');
     const list = document.getElementById('codex-chat-job-monitor-list');
+    const runtimeStrip = monitor?.closest('.chat-runtime-strip');
     if (!monitor || !summary || !list) return;
 
     const jobs = collectRunningJobs();
     if (jobs.length === 0) {
         monitor.classList.add('is-idle');
+        runtimeStrip?.classList.add('is-idle');
         summary.textContent = '실행 중인 job 없음';
         list.innerHTML = '';
         return;
     }
 
     monitor.classList.remove('is-idle');
+    runtimeStrip?.classList.remove('is-idle');
     summary.textContent = jobs.length === 1
         ? '실행 중인 job 1개'
         : `실행 중인 job ${jobs.length}개`;
     list.innerHTML = '';
 
-    const maxVisible = 4;
+    const maxVisible = isCompactLayout() ? 2 : 3;
     jobs.slice(0, maxVisible).forEach(job => {
         const item = document.createElement('li');
         item.className = 'chat-job-monitor-item';
@@ -1015,7 +1029,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamMonitor = document.getElementById('codex-stream-monitor');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
-    const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const compactMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('codex-theme-toggle');
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
     const modelSelect = document.getElementById('codex-model-select');
@@ -1105,6 +1120,7 @@ document.addEventListener('DOMContentLoaded', () => {
         workModeToggleBtn,
         refreshBtn
     });
+    syncFileBrowserOpenButtonState(false);
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -1148,7 +1164,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (chatTitleTrigger) {
         chatTitleTrigger.addEventListener('click', event => {
-            if (!isMobileLayout()) return;
+            if (!isPhoneLayout()) return;
             event.preventDefault();
             if (isMobileSessionOverlayOpen()) {
                 closeMobileSessionOverlay();
@@ -1324,6 +1340,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     void handleGitCommit(branchOverlayCommitBtn);
                 }
             }
+        });
+        branchOverlayCommitMessageInput.addEventListener('input', () => {
+            if (!isGitBranchOverlayOpen()) return;
+            updateGitBranchOverlayCommitPreview(gitBranchStatusCache);
         });
     }
 
@@ -1673,31 +1693,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
     primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect);
 
-    syncSessionsLayout(mobileMedia.matches);
+    syncSessionsLayout(compactMedia.matches);
     syncControlsLayout();
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-    initializeWorkMode(mobileMedia.matches);
+    initializeWorkMode(compactMedia.matches);
     setWorkModeFileViewerFullscreen(false);
     if (isWorkModeEnabled()) {
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     }
-    if (typeof mobileMedia.addEventListener === 'function') {
-        mobileMedia.addEventListener('change', event => {
-            syncSessionsLayout(event.matches);
-            syncLiveWeatherLayout(event.matches);
-            setFileBrowserMobileView(fileBrowserMobileView);
-            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-            handleWorkModeMediaChange(event.matches);
-        });
-    } else if (typeof mobileMedia.addListener === 'function') {
-        mobileMedia.addListener(event => {
-            syncSessionsLayout(event.matches);
-            syncLiveWeatherLayout(event.matches);
-            setFileBrowserMobileView(fileBrowserMobileView);
-            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-            handleWorkModeMediaChange(event.matches);
-        });
+    const handleCompactLayoutChange = event => {
+        const isCompact = Boolean(event?.matches);
+        syncSessionsLayout(isCompact);
+        syncLiveWeatherLayout(isCompact);
+        setFileBrowserMobileView(fileBrowserMobileView);
+        setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+        handleWorkModeMediaChange(isCompact);
+    };
+    if (typeof compactMedia.addEventListener === 'function') {
+        compactMedia.addEventListener('change', handleCompactLayoutChange);
+    } else if (typeof compactMedia.addListener === 'function') {
+        compactMedia.addListener(handleCompactLayoutChange);
+    }
+    const handlePhoneLayoutChange = event => {
+        if (Boolean(event?.matches)) return;
+        if (isMobileSessionOverlayOpen()) {
+            closeMobileSessionOverlay();
+        }
+    };
+    if (typeof phoneMedia.addEventListener === 'function') {
+        phoneMedia.addEventListener('change', handlePhoneLayoutChange);
+    } else if (typeof phoneMedia.addListener === 'function') {
+        phoneMedia.addListener(handlePhoneLayoutChange);
     }
     const handleWindowLayoutResize = createRafThrottledHandler(() => {
         if (isWorkModeEnabled()) {
@@ -1714,9 +1741,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
     window.addEventListener('beforeunload', flushPersistWorkModeFileViewState);
 
-    setupMobileViewportBehavior(mobileMedia, input);
+    setupMobileViewportBehavior(phoneMedia, input);
     setupMobileSettingsInputBehavior(
-        mobileMedia,
+        phoneMedia,
         [
             modelInput,
             planModeModelInput,
@@ -1828,7 +1855,7 @@ document.addEventListener('DOMContentLoaded', () => {
     syncActiveSessionStatus();
     startRunningJobsMonitorTicker();
     initializeTheme(themeToggle, themeMedia);
-    initializeLiveWeatherPanel(mobileMedia);
+    initializeLiveWeatherPanel(compactMedia);
     if (streamMonitor) {
         setStreamMonitorCollapsed(streamMonitor.classList.contains('is-collapsed'));
     }
@@ -3302,6 +3329,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (elements?.mobileBrowserBtn) {
         elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
         elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
+        const switchSlot = elements.mobileBrowserBtn.closest('.chat-work-mode-switch-slot');
+        if (switchSlot) {
+            switchSlot.classList.toggle('is-hidden', !showMobileBrowserButton);
+        }
     }
 
     const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
@@ -3310,6 +3341,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (fileElements?.chatBtn) {
         fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
         fileElements.chatBtn.disabled = !showChatButton;
+        const switchSlot = fileElements.chatBtn.closest('.work-mode-preview-switch-slot');
+        if (switchSlot) {
+            switchSlot.classList.toggle('is-hidden', !showChatButton);
+        }
     }
     if (fileElements?.backBtn) {
         fileElements.backBtn.classList.toggle('is-hidden', !showBackButton);
@@ -3873,11 +3908,15 @@ function startWorkModeFileColumnResize(event, column) {
     window.addEventListener('pointercancel', handleWorkModeFileColumnResizePointerUp);
 }
 
-function syncSessionsLayout(isMobile) {
+function syncSessionsLayout(isCompact) {
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
-    if (!isMobile) {
+    if (!isCompact) {
+        setSessionsCollapsed(false, { persist: false });
+        return;
+    }
+    if (isFoldLayout()) {
         setSessionsCollapsed(false, { persist: false });
         return;
     }
@@ -3893,8 +3932,20 @@ function syncSessionsLayout(isMobile) {
     setSessionsCollapsed(collapsed, { persist: false });
 }
 
-function isMobileLayout() {
+function isPhoneLayout() {
+    return window.matchMedia(PHONE_MEDIA_QUERY).matches;
+}
+
+function isFoldLayout() {
+    return window.matchMedia(FOLD_MEDIA_QUERY).matches;
+}
+
+function isCompactLayout() {
     return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function isMobileLayout() {
+    return isCompactLayout();
 }
 
 function mediaQueryMatches(query) {
@@ -3934,7 +3985,7 @@ function isEditableElement(element) {
     return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type);
 }
 
-function isMobileKeyboardOpen(isMobile = isMobileLayout()) {
+function isMobileKeyboardOpen(isMobile = isPhoneLayout()) {
     if (!isMobile) return false;
     const activeElement = document.activeElement;
     const hasEditableFocus = isEditableElement(activeElement);
@@ -3966,7 +4017,7 @@ function setMobileKeyboardOpen(open) {
     }
 }
 
-function syncMobileKeyboardState(isMobile = isMobileLayout()) {
+function syncMobileKeyboardState(isMobile = isPhoneLayout()) {
     setMobileKeyboardOpen(isMobileKeyboardOpen(isMobile));
 }
 
@@ -3987,7 +4038,7 @@ function applyMobileViewportHeight() {
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
-function normalizeMobileDocumentScroll(isMobile = isMobileLayout()) {
+function normalizeMobileDocumentScroll(isMobile = isPhoneLayout()) {
     if (!isMobile) return;
     if (window.scrollX !== 0 || window.scrollY !== 0) {
         window.scrollTo(0, 0);
@@ -5548,6 +5599,7 @@ function getGitBranchOverlayElements() {
         overlay,
         subtitle: document.getElementById('codex-branch-overlay-subtitle'),
         meta: document.getElementById('codex-branch-overlay-meta'),
+        latestCommit: document.getElementById('codex-branch-overlay-last-commit'),
         selection: document.getElementById('codex-branch-overlay-selection'),
         stageAllBtn: document.getElementById('codex-branch-overlay-stage-all'),
         stageNoneBtn: document.getElementById('codex-branch-overlay-stage-none'),
@@ -5571,6 +5623,11 @@ function setGitBranchOverlayLoading(isLoading) {
     }
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
+    }
+    if (elements.latestCommit) {
+        elements.latestCommit.textContent = isLoading
+            ? '커밋 예정 메시지: 계산 중...'
+            : elements.latestCommit.textContent;
     }
     if (elements.commitBtn) {
         elements.commitBtn.disabled = Boolean(isLoading);
@@ -5973,6 +6030,218 @@ function updateGitOverlaySelectionSummary(totalCount = 0) {
     }
 }
 
+function normalizeGitCommitPreviewPaths(paths) {
+    if (!Array.isArray(paths)) return [];
+    const normalized = [];
+    const seen = new Set();
+    paths.forEach(path => {
+        const text = String(path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!text || text.startsWith('/') || text.startsWith('../') || text.includes('/..')) {
+            return;
+        }
+        if (seen.has(text)) return;
+        seen.add(text);
+        normalized.push(text);
+    });
+    normalized.sort(compareGitPathValues);
+    return normalized;
+}
+
+function buildGitCommitPreviewCacheKey(repoTarget, paths) {
+    const target = normalizeGitSyncRepoTarget(repoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const normalizedPaths = normalizeGitCommitPreviewPaths(paths);
+    if (!normalizedPaths.length) {
+        return {
+            key: '',
+            target,
+            paths: []
+        };
+    }
+    return {
+        key: `${target}::${normalizedPaths.join('\n')}`,
+        target,
+        paths: normalizedPaths
+    };
+}
+
+function getGitCommitPreviewCacheEntry(cacheKey, { allowStale = false } = {}) {
+    if (!cacheKey) return null;
+    const cached = gitCommitPreviewCacheByKey.get(cacheKey);
+    if (!cached || typeof cached !== 'object') return null;
+    if (allowStale) return cached;
+    const fetchedAt = Number(cached.fetchedAt);
+    if (!Number.isFinite(fetchedAt)) return null;
+    const age = Date.now() - fetchedAt;
+    if (age < 0 || age > GIT_COMMIT_PREVIEW_CACHE_MS) return null;
+    return cached;
+}
+
+function buildGitCommitPreviewFallbackSubject(pathCount = 0) {
+    const count = Number.isFinite(Number(pathCount)) ? Math.max(0, Number(pathCount)) : 0;
+    if (count <= 0) return '변경사항 반영';
+    return `변경사항 ${count}건 반영`;
+}
+
+function normalizeGitCommitPreviewResult(result, fallbackCount = 0) {
+    const subjectRaw = typeof result?.commit_message_subject === 'string'
+        ? result.commit_message_subject
+        : (typeof result?.commit_message === 'string' ? result.commit_message : '');
+    const subject = subjectRaw.trim();
+    const body = typeof result?.commit_message_body === 'string' ? result.commit_message_body.trim() : '';
+    const comment = typeof result?.commit_comment === 'string' ? result.commit_comment.trim() : '';
+    const analysisLines = Array.isArray(result?.commit_analysis_lines)
+        ? result.commit_analysis_lines.map(line => String(line || '').trim()).filter(Boolean)
+        : [];
+    return {
+        subject: subject || buildGitCommitPreviewFallbackSubject(fallbackCount),
+        body,
+        comment,
+        analysisLines,
+        error: ''
+    };
+}
+
+function formatGitCommitPreviewLabel(previewEntry, fallbackCount = 0) {
+    const subject = typeof previewEntry?.subject === 'string' ? previewEntry.subject.trim() : '';
+    if (subject) {
+        return `커밋 예정 메시지(자동): ${subject}`;
+    }
+    return `커밋 예정 메시지(자동): ${buildGitCommitPreviewFallbackSubject(fallbackCount)}`;
+}
+
+async function ensureGitCommitPreview(repoTarget, paths) {
+    const request = buildGitCommitPreviewCacheKey(repoTarget, paths);
+    if (!request.key) {
+        return {
+            key: '',
+            entry: null
+        };
+    }
+    const cached = getGitCommitPreviewCacheEntry(request.key);
+    if (cached) {
+        return {
+            key: request.key,
+            entry: cached
+        };
+    }
+    const inFlight = gitCommitPreviewInFlightByKey.get(request.key);
+    if (inFlight) {
+        const pendingEntry = await inFlight;
+        return {
+            key: request.key,
+            entry: pendingEntry
+        };
+    }
+
+    let promise = null;
+    promise = (async () => {
+        try {
+            const result = await fetchJson('/api/codex/git/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                timeoutMs: GIT_COMMIT_PREVIEW_REQUEST_TIMEOUT_MS,
+                body: JSON.stringify({
+                    repo_target: request.target,
+                    files: request.paths
+                })
+            });
+            const normalized = normalizeGitCommitPreviewResult(result, request.paths.length);
+            const next = {
+                ...normalized,
+                fetchedAt: Date.now()
+            };
+            gitCommitPreviewCacheByKey.set(request.key, next);
+            return next;
+        } catch (error) {
+            const fallbackSubject = buildGitCommitPreviewFallbackSubject(request.paths.length);
+            const stale = getGitCommitPreviewCacheEntry(request.key, { allowStale: true });
+            const next = {
+                subject: stale?.subject || fallbackSubject,
+                body: stale?.body || '',
+                comment: stale?.comment || '',
+                analysisLines: Array.isArray(stale?.analysisLines) ? stale.analysisLines : [],
+                error: normalizeGitActionError(error, '커밋 예정 메시지 계산에 실패했습니다.'),
+                fetchedAt: Date.now()
+            };
+            gitCommitPreviewCacheByKey.set(request.key, next);
+            return next;
+        } finally {
+            if (gitCommitPreviewInFlightByKey.get(request.key) === promise) {
+                gitCommitPreviewInFlightByKey.delete(request.key);
+            }
+        }
+    })();
+    gitCommitPreviewInFlightByKey.set(request.key, promise);
+
+    const resolved = await promise;
+    return {
+        key: request.key,
+        entry: resolved
+    };
+}
+
+function getGitSelectedFilePathsInOrder(files) {
+    const normalizedFiles = normalizeGitChangedFiles(files);
+    const selectedPaths = [];
+    const seen = new Set();
+    normalizedFiles.forEach(file => {
+        const path = typeof file?.path === 'string' ? file.path.trim() : '';
+        if (!path || seen.has(path) || !gitOverlaySelectedFiles.has(path)) {
+            return;
+        }
+        seen.add(path);
+        selectedPaths.push(path);
+    });
+    gitOverlaySelectedFiles.forEach(path => {
+        const text = String(path || '').trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        selectedPaths.push(text);
+    });
+    return selectedPaths;
+}
+
+function updateGitBranchOverlayCommitPreview(status) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements?.latestCommit) return;
+    const manualMessage = elements.commitMessage?.value?.trim() || '';
+    if (manualMessage) {
+        gitBranchOverlayPreviewKey = '';
+        elements.latestCommit.textContent = `커밋 예정 메시지(수동): ${manualMessage}`;
+        return;
+    }
+    const selectedPaths = getGitSelectedFilePathsInOrder(status?.changedFiles);
+    if (!selectedPaths.length) {
+        gitBranchOverlayPreviewKey = '';
+        elements.latestCommit.textContent = '커밋 예정 메시지: 파일 선택 시 자동 생성됩니다.';
+        return;
+    }
+    const request = buildGitCommitPreviewCacheKey(GIT_SYNC_TARGET_WORKSPACE, selectedPaths);
+    gitBranchOverlayPreviewKey = request.key;
+    const freshEntry = getGitCommitPreviewCacheEntry(request.key);
+    if (freshEntry) {
+        elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshEntry, selectedPaths.length);
+        return;
+    }
+    const staleEntry = getGitCommitPreviewCacheEntry(request.key, { allowStale: true });
+    if (staleEntry) {
+        elements.latestCommit.textContent = formatGitCommitPreviewLabel(staleEntry, selectedPaths.length);
+    } else {
+        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+    }
+    if (gitCommitPreviewInFlightByKey.has(request.key)) {
+        return;
+    }
+    void ensureGitCommitPreview(GIT_SYNC_TARGET_WORKSPACE, selectedPaths).then(({ key, entry }) => {
+        if (!entry) return;
+        if (!isGitBranchOverlayOpen()) return;
+        if (gitBranchOverlayPreviewKey !== key) return;
+        const currentElements = getGitBranchOverlayElements();
+        if (!currentElements?.latestCommit) return;
+        currentElements.latestCommit.textContent = formatGitCommitPreviewLabel(entry, selectedPaths.length);
+    });
+}
+
 function setGitOverlaySelectionState(selectAll) {
     const files = normalizeGitChangedFiles(gitBranchStatusCache.changedFiles);
     const selected = new Set();
@@ -6004,6 +6273,7 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 수를 불러올 수 없습니다.';
     }
     syncGitOverlaySelection(files);
+    updateGitBranchOverlayCommitPreview(status);
     let renderedFileCount = files.length;
     if (elements.list) {
         const rendered = renderGitChangedFileTreeList({
@@ -6083,6 +6353,7 @@ function openGitBranchOverlay() {
     }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
+    gitBranchOverlayPreviewKey = '';
     if (elements.commitMessage) {
         elements.commitMessage.value = '';
     }
@@ -6096,6 +6367,7 @@ function openGitBranchOverlay() {
 function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
+    gitBranchOverlayPreviewKey = '';
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
@@ -6138,6 +6410,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         repoRoot: '',
         repoMissing: false,
         currentBranch: '',
+        currentBranchHistory: [],
         requestedMainBranch: 'main',
         mainBranch: 'main',
         mainBranchFallback: false,
@@ -6185,6 +6458,7 @@ function getGitSyncOverlayElements() {
         overlay,
         subtitle: document.getElementById('codex-sync-overlay-subtitle'),
         meta: document.getElementById('codex-sync-overlay-meta'),
+        latestCommit: document.getElementById('codex-sync-overlay-last-commit'),
         targetButtons: Array.from(overlay.querySelectorAll('.sync-overlay-target[data-repo-target]')),
         fetchBtn: document.getElementById('codex-sync-overlay-fetch'),
         syncBtn: document.getElementById('codex-sync-overlay-sync'),
@@ -6304,9 +6578,29 @@ function normalizeGitHistoryEntries(value) {
             : (typeof entry.committedAt === 'string' ? entry.committedAt.trim() : '');
         const author = typeof entry.author === 'string' ? entry.author.trim() : '';
         const subject = typeof entry.subject === 'string' ? entry.subject.trim() : '';
+        const fullMessageRaw = typeof entry.full_message === 'string'
+            ? entry.full_message
+            : (typeof entry.fullMessage === 'string' ? entry.fullMessage : '');
+        const fullMessage = fullMessageRaw.trim() || subject;
         if (!shortHash && !subject) return null;
-        return { commitHash, shortHash, committedAt, author, subject };
+        return { commitHash, shortHash, committedAt, author, subject, fullMessage };
     }).filter(Boolean);
+}
+
+function formatGitHistoryDetailToastText(entry) {
+    const shortHash = typeof entry?.shortHash === 'string' ? entry.shortHash.trim() : '';
+    const subject = typeof entry?.subject === 'string' ? entry.subject.trim() : '';
+    const fullMessage = typeof entry?.fullMessage === 'string' ? entry.fullMessage.trim() : '';
+    const detailSource = fullMessage || subject;
+    if (!detailSource && !shortHash) {
+        return '상세 커밋 메시지가 없습니다.';
+    }
+    const flattened = detailSource.replace(/\s+/g, ' ').trim();
+    const normalizedDetail = flattened.length > 260 ? `${flattened.slice(0, 259)}…` : flattened;
+    if (shortHash && normalizedDetail) {
+        return `${shortHash} · ${normalizedDetail}`;
+    }
+    return normalizedDetail || shortHash;
 }
 
 function formatGitHistoryTimestamp(value) {
@@ -6375,6 +6669,35 @@ function renderGitSyncOverlay(history) {
             : '';
         elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${fallbackText}`;
     }
+    if (elements.latestCommit) {
+        const changedPaths = changedFiles.map(file => file.path);
+        const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
+        gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
+        if (!changedPaths.length || !previewRequest.key) {
+            elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
+        } else {
+            const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
+            if (freshPreview) {
+                elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
+            } else {
+                const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
+                if (stalePreview) {
+                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                } else {
+                    elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+                }
+                if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
+                    void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
+                        if (!entry || !isGitSyncOverlayOpen()) return;
+                        const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+                        if (activeTarget !== repoTarget) return;
+                        if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
+                        renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+                    });
+                }
+            }
+        }
+    }
     let renderedChangedFileCount = changedFiles.length;
     if (elements.filesList) {
         const collapsedFolders = getGitSyncOverlayCollapsedFolders(repoTarget);
@@ -6407,6 +6730,10 @@ function renderGitSyncOverlay(history) {
         elements.list.innerHTML = '';
         remoteHistory.forEach(entry => {
             const item = document.createElement('li');
+            item.className = 'sync-overlay-history-item';
+            item.tabIndex = 0;
+            item.setAttribute('role', 'button');
+            item.title = '클릭하면 상세 커밋 메시지를 표시합니다.';
             const main = document.createElement('div');
             main.className = 'sync-overlay-item-main';
 
@@ -6430,6 +6757,15 @@ function renderGitSyncOverlay(history) {
 
             item.appendChild(main);
             item.appendChild(meta);
+            const showDetailToast = () => {
+                showToast(formatGitHistoryDetailToastText(entry), { tone: 'default', durationMs: 5600 });
+            };
+            item.addEventListener('click', showDetailToast);
+            item.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                showDetailToast();
+            });
             elements.list.appendChild(item);
         });
         elements.list.classList.toggle('is-hidden', remoteHistory.length === 0);
@@ -6474,8 +6810,12 @@ function openGitSyncOverlay() {
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    gitSyncOverlayPreviewKeyByTarget[normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)] = '';
     if (elements.meta) {
         elements.meta.textContent = '히스토리를 불러오는 중...';
+    }
+    if (elements.latestCommit) {
+        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
     }
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
@@ -6499,6 +6839,8 @@ function openGitSyncOverlay() {
 function closeGitSyncOverlay() {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
+    const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+    gitSyncOverlayPreviewKeyByTarget[activeTarget] = '';
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
@@ -6717,8 +7059,20 @@ function renderUsageHistoryChart(history) {
     if (items.length < 2) return { rendered: false, percentScale: 100 };
 
     const mobileLayout = isMobileLayout();
-    const width = 920;
-    const height = mobileLayout ? 430 : 320;
+    const chartContainer = chart.parentElement;
+    const viewportWidth = Number(chart.clientWidth)
+        || Number(chartContainer?.clientWidth)
+        || 360;
+    const viewportHeight = Number(chart.clientHeight)
+        || Number(chartContainer?.clientHeight)
+        || (mobileLayout ? 380 : 320);
+    const width = mobileLayout ? 760 : 920;
+    const viewportRatio = viewportWidth > 0
+        ? viewportHeight / viewportWidth
+        : (mobileLayout ? (430 / 920) : (320 / 920));
+    const height = mobileLayout
+        ? clampToRange(Math.round(width * viewportRatio), 720, 980)
+        : 320;
     const margin = mobileLayout
         ? { top: 16, right: 62, bottom: 36, left: 64 }
         : { top: 16, right: 64, bottom: 38, left: 64 };
@@ -7428,6 +7782,18 @@ function getFileBrowserElements() {
 function isFileBrowserOverlayOpen() {
     const overlay = document.getElementById('codex-file-browser-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function syncFileBrowserOpenButtonState(isOpen = isFileBrowserOverlayOpen()) {
+    const button = document.getElementById('codex-file-browser-open');
+    if (!button) return;
+    const opened = Boolean(isOpen);
+    button.classList.toggle('is-active', opened);
+    button.setAttribute('aria-pressed', opened ? 'true' : 'false');
+    const label = opened ? 'Close file browser' : 'Open file browser';
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    syncHoverTooltipFromLabel(button, label);
 }
 
 function updateFileBrowserRootButtons() {
@@ -9306,6 +9672,7 @@ function openFileBrowserOverlay(options = {}) {
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    syncFileBrowserOpenButtonState(true);
     requestAnimationFrame(() => {
         applyFileBrowserColumnWidths({ persist: false });
         applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
@@ -9337,6 +9704,7 @@ function closeFileBrowserOverlay() {
     stopFileBrowserColumnResize();
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
+    syncFileBrowserOpenButtonState(false);
     if (
         !isGitBranchOverlayOpen()
         && !isGitSyncOverlayOpen()
@@ -9414,6 +9782,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             repoRoot: typeof result?.repo_root === 'string' ? result.repo_root : '',
             repoMissing: Boolean(result?.repo_missing),
             currentBranch: typeof result?.current_branch === 'string' ? result.current_branch : '',
+            currentBranchHistory: Array.isArray(result?.current_branch_history) ? result.current_branch_history : [],
             requestedMainBranch: typeof result?.requested_main_branch === 'string'
                 ? result.requested_main_branch
                 : 'main',
@@ -9440,6 +9809,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             repoRoot: '',
             repoMissing: isRepoMissing,
             currentBranch: '',
+            currentBranchHistory: [],
             remoteMainHistory: [],
             remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
             changedCount: isRepoMissing ? 0 : null,
@@ -9550,6 +9920,7 @@ async function fetchGitChangedFilesCount(force = false) {
 }
 
 async function refreshGitBranchStatus({ force = false, updateOverlay = false } = {}) {
+    const shouldRenderBranchOverlay = Boolean(updateOverlay && isGitBranchOverlayOpen());
     const status = await fetchGitStatus(force);
     const branchElement = document.getElementById('codex-git-branch');
     if (branchElement) {
@@ -9567,11 +9938,11 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
         renderGitSyncOverlay(mergedWorkspaceSync);
     }
     syncGitSyncOverlayActionButtonsFromCache();
-    if (updateOverlay && isGitBranchOverlayOpen()) {
-        renderGitBranchOverlay(status);
+    if (shouldRenderBranchOverlay) {
+        renderGitBranchOverlay(gitBranchStatusCache);
     }
     recoverGitPushButtonsIfIdle();
-    return status;
+    return gitBranchStatusCache;
 }
 
 function startGitBranchPolling() {
@@ -10239,7 +10610,7 @@ function isMobileSessionOverlayOpen() {
 }
 
 function openMobileSessionOverlay() {
-    if (!isMobileLayout()) return;
+    if (!isPhoneLayout()) return;
     const elements = getMobileSessionOverlayElements();
     if (!elements) return;
     if (isGitBranchOverlayOpen()) {

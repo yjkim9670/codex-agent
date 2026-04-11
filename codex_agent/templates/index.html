@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=114">
+    <link rel="stylesheet" href="/static/css/app.css?v=120">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -150,13 +150,6 @@
                             ></button>
                         </div>
                         <button
-                            class="chat-header-mobile-browser is-hidden"
-                            type="button"
-                            id="codex-work-mode-mobile-browser"
-                            aria-label="브라우저로 이동"
-                            title="브라우저로 이동"
-                        ></button>
-                        <button
                             class="chat-header-fullscreen"
                             type="button"
                             id="codex-chat-fullscreen"
@@ -164,6 +157,15 @@
                             aria-label="Expand chat to fullscreen"
                             title="Expand chat to fullscreen"
                         ></button>
+                        <div class="work-mode-switch-slot chat-work-mode-switch-slot is-hidden">
+                            <button
+                                class="chat-header-mobile-browser is-hidden"
+                                type="button"
+                                id="codex-work-mode-mobile-browser"
+                                aria-label="브라우저로 이동"
+                                title="브라우저로 이동"
+                            ></button>
+                        </div>
                     </div>
                 </div>
 
@@ -297,12 +299,14 @@
                     </div>
                 </form>
 
-                <div id="codex-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
-                    <div id="codex-chat-job-monitor-summary" class="chat-job-monitor-summary">실행 중인 job 없음</div>
-                    <ul id="codex-chat-job-monitor-list" class="chat-job-monitor-list"></ul>
-                </div>
+                <div class="chat-runtime-strip">
+                    <div id="codex-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
+                        <div id="codex-chat-job-monitor-summary" class="chat-job-monitor-summary">실행 중인 job 없음</div>
+                        <ul id="codex-chat-job-monitor-list" class="chat-job-monitor-list"></ul>
+                    </div>
 
-                <div id="codex-chat-status" class="chat-status">Idle</div>
+                    <div id="codex-chat-status" class="chat-status">Idle</div>
+                </div>
             </section>
 
             <div
@@ -318,32 +322,44 @@
                 <div class="work-mode-preview-header">
                     <div class="work-mode-preview-title">Docs Preview</div>
                     <div class="work-mode-preview-actions">
-                        <button class="btn ghost file-browser-back work-mode-preview-chat is-hidden" type="button" id="codex-work-mode-chat-back">채팅으로</button>
-                        <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="codex-work-mode-file-back">목록으로</button>
-                        <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
-                        <button
-                            class="btn ghost icon-only work-mode-preview-open-new"
-                            type="button"
-                            id="codex-work-mode-file-open-new"
-                            aria-label="새 창에서 HTML 미리보기 열기"
-                            title="새 창에서 HTML 미리보기 열기"
-                            disabled
-                        >
-                            <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
-                        </button>
-                        <button
-                            class="btn ghost icon-only work-mode-preview-fullscreen"
-                            type="button"
-                            id="codex-work-mode-file-fullscreen"
-                            aria-pressed="false"
-                            aria-label="파일 내용 전체화면"
-                            title="파일 내용 전체화면"
-                        >
-                            <span class="sr-only">파일 내용 전체화면</span>
-                        </button>
-                        <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
-                            <span class="sr-only">문서 목록 새로고침</span>
-                        </button>
+                        <div class="work-mode-preview-tools">
+                            <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="codex-work-mode-file-back">목록으로</button>
+                            <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
+                            <button
+                                class="btn ghost icon-only work-mode-preview-open-new"
+                                type="button"
+                                id="codex-work-mode-file-open-new"
+                                aria-label="새 창에서 HTML 미리보기 열기"
+                                title="새 창에서 HTML 미리보기 열기"
+                                disabled
+                            >
+                                <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
+                            </button>
+                            <button
+                                class="btn ghost icon-only work-mode-preview-fullscreen"
+                                type="button"
+                                id="codex-work-mode-file-fullscreen"
+                                aria-pressed="false"
+                                aria-label="파일 내용 전체화면"
+                                title="파일 내용 전체화면"
+                            >
+                                <span class="sr-only">파일 내용 전체화면</span>
+                            </button>
+                            <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
+                                <span class="sr-only">문서 목록 새로고침</span>
+                            </button>
+                        </div>
+                        <div class="work-mode-switch-slot work-mode-preview-switch-slot is-hidden">
+                            <button
+                                class="btn ghost file-browser-back work-mode-preview-chat is-hidden"
+                                type="button"
+                                id="codex-work-mode-chat-back"
+                                aria-label="채팅으로 이동"
+                                title="채팅으로 이동"
+                            >
+                                <span class="sr-only">채팅으로 이동</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
@@ -480,6 +496,7 @@
             </div>
             <div class="branch-overlay-body">
                 <div class="branch-overlay-meta" id="codex-branch-overlay-meta">불러오는 중...</div>
+                <div class="branch-overlay-last-commit" id="codex-branch-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="branch-overlay-stage-tools">
                     <button class="btn secondary branch-overlay-stage-btn" type="button" id="codex-branch-overlay-stage-all">전체 선택</button>
                     <button class="btn ghost branch-overlay-stage-btn" type="button" id="codex-branch-overlay-stage-none">선택 해제</button>
@@ -528,6 +545,7 @@
             </div>
             <div class="sync-overlay-body">
                 <div class="sync-overlay-meta" id="codex-sync-overlay-meta">히스토리를 불러오는 중...</div>
+                <div class="sync-overlay-last-commit" id="codex-sync-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
                     <button class="btn secondary sync-overlay-target is-active" type="button" id="codex-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
                     <button class="btn ghost sync-overlay-target" type="button" id="codex-sync-target-codex-agent" data-repo-target="codex_agent">codex_agent Repo</button>
@@ -679,6 +697,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=95"></script>
+    <script src="/static/js/app.js?v=96"></script>
 </body>
 </html>

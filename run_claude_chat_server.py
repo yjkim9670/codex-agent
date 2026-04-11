@@ -281,16 +281,24 @@ def get_server_defaults(config):
         'threaded': True
     }
     server_config = config.get('server')
-    if not isinstance(server_config, dict):
-        return defaults
+    if isinstance(server_config, dict):
+        host = server_config.get('host')
+        if isinstance(host, str) and host.strip():
+            defaults['host'] = host.strip()
+        defaults['port'] = _coerce_port(server_config.get('port'), defaults['port'])
+        defaults['debug'] = _coerce_bool(server_config.get('debug'), defaults['debug'])
+        defaults['use_reloader'] = _coerce_bool(server_config.get('use_reloader'), defaults['use_reloader'])
+        defaults['threaded'] = _coerce_bool(server_config.get('threaded'), defaults['threaded'])
 
-    host = server_config.get('host')
-    if isinstance(host, str) and host.strip():
-        defaults['host'] = host.strip()
-    defaults['port'] = _coerce_port(server_config.get('port'), defaults['port'])
-    defaults['debug'] = _coerce_bool(server_config.get('debug'), defaults['debug'])
-    defaults['use_reloader'] = _coerce_bool(server_config.get('use_reloader'), defaults['use_reloader'])
-    defaults['threaded'] = _coerce_bool(server_config.get('threaded'), defaults['threaded'])
+    # Proc managers can override runtime server behavior without editing JSON config.
+    env_debug = os.environ.get('MODEL_CHAT_DEBUG')
+    env_use_reloader = os.environ.get('MODEL_CHAT_USE_RELOADER')
+    if env_debug is not None:
+        defaults['debug'] = _coerce_bool(env_debug, defaults['debug'])
+    if env_use_reloader is not None:
+        defaults['use_reloader'] = _coerce_bool(env_use_reloader, defaults['use_reloader'])
+    elif env_debug is not None and not defaults['debug']:
+        defaults['use_reloader'] = False
     return defaults
 
 os.chdir(script_dir)

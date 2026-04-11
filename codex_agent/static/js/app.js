@@ -6519,6 +6519,8 @@ function getUsageHistoryOverlayElements() {
         overlay,
         subtitle: document.getElementById('codex-usage-history-overlay-subtitle'),
         meta: document.getElementById('codex-usage-history-overlay-meta'),
+        scale: document.getElementById('codex-usage-history-scale'),
+        ratios: document.getElementById('codex-usage-history-ratios'),
         chart: document.getElementById('codex-usage-history-chart'),
         legend: document.getElementById('codex-usage-history-legend'),
         empty: document.getElementById('codex-usage-history-empty')
@@ -6550,39 +6552,131 @@ function formatUsageHistoryTickLabel(value) {
     });
 }
 
+function resolveUsageHistoryPercentScale(maxUsedPercent) {
+    const candidates = [5, 10, 25, 50, 75, 100];
+    const peak = Number.isFinite(maxUsedPercent) ? Math.max(0, maxUsedPercent) : 0;
+    const paddedPeak = peak <= 0 ? 1 : peak * 1.12;
+    for (const candidate of candidates) {
+        if (paddedPeak <= candidate) {
+            return candidate;
+        }
+    }
+    return 100;
+}
+
+function buildUsageHistoryPercentTicks(maxPercent) {
+    const top = Math.max(1, Number(maxPercent) || 100);
+    const step = top / 5;
+    return Array.from({ length: 6 }, (_, index) => {
+        const value = step * index;
+        return Math.round(value * 100) / 100;
+    });
+}
+
+function formatUsageHistoryPercentTick(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '--';
+    if (Math.abs(numeric - Math.round(numeric)) < 0.001) {
+        return `${Math.round(numeric)}%`;
+    }
+    return `${numeric.toFixed(1)}%`;
+}
+
+function resolveUsageHistoryRelationScope(history) {
+    const relationScope = String(
+        history?.relation?.scope || history?.token_delta_scope || ''
+    ).trim().toLowerCase();
+    return relationScope === 'account' ? 'account' : 'workspace';
+}
+
+function renderUsageHistoryRatioCards(history) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.ratios) return;
+    elements.ratios.innerHTML = '';
+
+    const relationScope = resolveUsageHistoryRelationScope(history);
+    const relation = history?.relation || {};
+    const ratioItems = [
+        { key: 'five_hour', label: '5h 1% token', entry: relation?.five_hour },
+        { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
+    ];
+    ratioItems.forEach(item => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'usage-history-ratio-card';
+        const ratioValue = Number(item?.entry?.tokens_per_percent);
+        const rawRatioValue = Number(item?.entry?.raw_tokens_per_percent);
+        const sampleCount = Number(item?.entry?.sample_count);
+        const confidence = String(item?.entry?.confidence || '').trim().toLowerCase();
+        const reliable = Boolean(item?.entry?.is_reliable);
+        const displayValue = Number.isFinite(ratioValue)
+            ? `${formatCompactTokenCount(ratioValue)} tok`
+            : (Number.isFinite(rawRatioValue) ? `~${formatCompactTokenCount(rawRatioValue)} tok` : '--');
+        const fallbackValue = Number.isFinite(rawRatioValue)
+            ? `${formatCompactTokenCount(rawRatioValue)} tok`
+            : '--';
+
+        const label = document.createElement('div');
+        label.className = 'usage-history-ratio-label';
+        label.textContent = item.label;
+        wrapper.appendChild(label);
+
+        const value = document.createElement('div');
+        value.className = 'usage-history-ratio-value';
+        value.textContent = displayValue;
+        wrapper.appendChild(value);
+
+        const meta = document.createElement('div');
+        meta.className = 'usage-history-ratio-meta';
+        const metaParts = [`scope ${relationScope}`];
+        if (Number.isFinite(sampleCount)) {
+            metaParts.push(`samples ${Math.max(0, Math.round(sampleCount))}`);
+        }
+        if (confidence && confidence !== 'none') {
+            metaParts.push(`conf ${confidence}`);
+        }
+        if (!reliable && Number.isFinite(rawRatioValue)) {
+            wrapper.classList.add('is-low-confidence');
+            metaParts.push(`est ${fallbackValue}`);
+        }
+        meta.textContent = metaParts.join(' · ');
+        wrapper.appendChild(meta);
+
+        elements.ratios.appendChild(wrapper);
+    });
+}
+
+function renderUsageHistoryScaleBadge(chartMetrics) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.scale) return;
+    if (!chartMetrics || !chartMetrics.rendered) {
+        elements.scale.textContent = 'Scale --';
+        return;
+    }
+    const maxPercent = Number(chartMetrics.percentScale);
+    if (!Number.isFinite(maxPercent) || maxPercent <= 0) {
+        elements.scale.textContent = 'Scale --';
+        return;
+    }
+    const mode = maxPercent < 100 ? 'Auto' : 'Full';
+    elements.scale.textContent = `${mode} scale 0-${Math.round(maxPercent)}%`;
+}
+
 function renderUsageHistoryLegend(history) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.legend) return;
     elements.legend.innerHTML = '';
 
-    const relation = history?.relation || {};
-    const fiveHourRatio = Number(relation?.five_hour?.tokens_per_percent);
-    const weeklyRatio = Number(relation?.weekly?.tokens_per_percent);
     const tokenDeltaTotal = Number(history?.token_delta_total);
     const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
     const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
-    const relationScope = String(relation?.scope || history?.token_delta_scope || '').trim().toLowerCase() === 'account'
-        ? 'account'
-        : 'workspace';
+    const relationScope = resolveUsageHistoryRelationScope(history);
     const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
 
     const legendItems = [
         {
             key: 'token',
             text: `Token delta (${scopeLabel}) ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
-        },
-        {
-            key: 'five-hour',
-            text: Number.isFinite(fiveHourRatio)
-                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok (${scopeLabel})`
-                : '5h ratio --'
-        },
-        {
-            key: 'weekly',
-            text: Number.isFinite(weeklyRatio)
-                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok (${scopeLabel})`
-                : 'Weekly ratio --'
         }
     ];
     if (Number.isFinite(workspaceDeltaTotal) || Number.isFinite(accountDeltaTotal)) {
@@ -6615,62 +6709,133 @@ function renderUsageHistoryLegend(history) {
 
 function renderUsageHistoryChart(history) {
     const elements = getUsageHistoryOverlayElements();
-    if (!elements?.chart) return false;
+    if (!elements?.chart) return { rendered: false, percentScale: 100 };
     const chart = elements.chart;
     chart.innerHTML = '';
 
     const items = Array.isArray(history?.items) ? history.items : [];
-    if (items.length < 2) return false;
+    if (items.length < 2) return { rendered: false, percentScale: 100 };
 
+    const mobileLayout = isMobileLayout();
     const width = 920;
-    const height = 320;
-    const margin = { top: 16, right: 64, bottom: 38, left: 64 };
+    const height = mobileLayout ? 430 : 320;
+    const margin = mobileLayout
+        ? { top: 16, right: 62, bottom: 36, left: 64 }
+        : { top: 16, right: 64, bottom: 38, left: 64 };
     const plotWidth = Math.max(1, width - margin.left - margin.right);
-    const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+    const plotAreaHeight = Math.max(1, height - margin.top - margin.bottom);
     chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
     const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
     const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
     const weeklyUsed = items.map(item => normalizeUsedPercent(item?.weekly_used_percent));
+    const percentValues = [...fiveHourUsed, ...weeklyUsed].filter(value => Number.isFinite(value));
+    const maxUsedPercent = percentValues.length > 0 ? Math.max(...percentValues) : 0;
+    const percentScale = resolveUsageHistoryPercentScale(maxUsedPercent);
+    const percentTicks = buildUsageHistoryPercentTicks(percentScale);
     const maxTokenDelta = Math.max(1, ...tokenDeltas);
+
+    const stackedGap = mobileLayout ? 30 : 0;
+    const tokenPlotHeight = mobileLayout
+        ? Math.max(90, Math.round((plotAreaHeight - stackedGap) * 0.53))
+        : plotAreaHeight;
+    const percentPlotHeight = mobileLayout
+        ? Math.max(70, plotAreaHeight - stackedGap - tokenPlotHeight)
+        : plotAreaHeight;
+    const tokenTop = margin.top;
+    const tokenBottom = tokenTop + tokenPlotHeight;
+    const percentTop = mobileLayout ? tokenBottom + stackedGap : margin.top;
+    const percentBottom = percentTop + percentPlotHeight;
+
     const xStep = items.length > 1 ? plotWidth / (items.length - 1) : 0;
     const barWidth = Math.max(2, Math.min(14, plotWidth / Math.max(items.length * 1.8, 1)));
     const xAt = index => margin.left + (xStep * index);
-    const yToken = value => margin.top + plotHeight - ((Math.max(0, value) / maxTokenDelta) * plotHeight);
+    const yToken = value => tokenBottom - ((Math.max(0, value) / maxTokenDelta) * tokenPlotHeight);
     const yPercent = value => {
-        const normalized = Math.max(0, Math.min(100, Number(value) || 0));
-        return margin.top + plotHeight - ((normalized / 100) * plotHeight);
+        const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
+        return percentBottom - ((normalized / percentScale) * percentPlotHeight);
     };
 
-    [0, 25, 50, 75, 100].forEach(percent => {
-        const y = yPercent(percent);
-        chart.appendChild(createUsageHistorySvgNode('line', {
-            x1: margin.left,
-            y1: y,
-            x2: margin.left + plotWidth,
-            y2: y,
-            class: 'grid-line'
-        }));
-        const leftToken = Math.round((maxTokenDelta * percent) / 100);
+    if (mobileLayout) {
         chart.appendChild(createUsageHistorySvgNode('text', {
-            x: margin.left - 8,
-            y: y + 4,
-            'text-anchor': 'end',
-            class: 'axis-label'
-        })).textContent = formatCompactTokenCount(leftToken);
-        chart.appendChild(createUsageHistorySvgNode('text', {
-            x: margin.left + plotWidth + 8,
-            y: y + 4,
+            x: margin.left,
+            y: tokenTop - 5,
             'text-anchor': 'start',
-            class: 'axis-label'
-        })).textContent = `${percent}%`;
-    });
+            class: 'axis-title'
+        })).textContent = 'Token delta';
+        chart.appendChild(createUsageHistorySvgNode('text', {
+            x: margin.left,
+            y: percentTop - 5,
+            'text-anchor': 'start',
+            class: 'axis-title'
+        })).textContent = `Used % (0-${percentScale}%)`;
+    }
+
+    if (mobileLayout) {
+        [0, 25, 50, 75, 100].forEach(percent => {
+            const y = tokenTop + tokenPlotHeight - ((percent / 100) * tokenPlotHeight);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            const leftToken = Math.round((maxTokenDelta * percent) / 100);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left - 8,
+                y: y + 4,
+                'text-anchor': 'end',
+                class: 'axis-label'
+            })).textContent = formatCompactTokenCount(leftToken);
+        });
+        percentTicks.forEach(percent => {
+            const y = yPercent(percent);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left + plotWidth + 8,
+                y: y + 4,
+                'text-anchor': 'start',
+                class: 'axis-label'
+            })).textContent = formatUsageHistoryPercentTick(percent);
+        });
+    } else {
+        percentTicks.forEach(percent => {
+            const y = yPercent(percent);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            const leftToken = Math.round((maxTokenDelta * percent) / percentScale);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left - 8,
+                y: y + 4,
+                'text-anchor': 'end',
+                class: 'axis-label'
+            })).textContent = formatCompactTokenCount(leftToken);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left + plotWidth + 8,
+                y: y + 4,
+                'text-anchor': 'start',
+                class: 'axis-label'
+            })).textContent = formatUsageHistoryPercentTick(percent);
+        });
+    }
 
     tokenDeltas.forEach((delta, index) => {
         if (delta <= 0) return;
         const x = xAt(index);
         const y = yToken(delta);
-        const barHeight = Math.max(1, (margin.top + plotHeight) - y);
+        const barHeight = Math.max(1, tokenBottom - y);
         chart.appendChild(createUsageHistorySvgNode('rect', {
             x: x - (barWidth / 2),
             y,
@@ -6717,12 +6882,17 @@ function renderUsageHistoryChart(history) {
     ].forEach(label => {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: label.x,
-            y: margin.top + plotHeight + 24,
+            y: percentBottom + 24,
             'text-anchor': label.anchor,
             class: 'axis-label'
         })).textContent = label.text;
     });
-    return true;
+    return {
+        rendered: true,
+        percentScale,
+        maxUsedPercent,
+        mobileLayout
+    };
 }
 
 function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAULT_HOURS) {
@@ -6768,7 +6938,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         elements.meta.textContent = metaParts.join(' · ') || 'Usage 이력을 불러오는 중...';
     }
 
-    const hasChart = renderUsageHistoryChart(history);
+    const chartMetrics = renderUsageHistoryChart(history);
+    const hasChart = Boolean(chartMetrics?.rendered);
+    renderUsageHistoryScaleBadge(chartMetrics);
+    renderUsageHistoryRatioCards(history);
     if (elements.empty) {
         elements.empty.classList.toggle('is-hidden', hasChart);
     }
@@ -6810,6 +6983,15 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         if (elements?.chart) {
             elements.chart.innerHTML = '';
         }
+        if (elements?.scale) {
+            elements.scale.textContent = 'Scale --';
+        }
+        if (elements?.ratios) {
+            elements.ratios.innerHTML = '';
+        }
+        if (elements?.legend) {
+            elements.legend.innerHTML = '';
+        }
         if (elements?.empty) {
             elements.empty.classList.remove('is-hidden');
             elements.empty.textContent = 'Usage 이력을 불러오지 못했습니다.';
@@ -6840,6 +7022,15 @@ async function openUsageHistoryOverlay() {
     document.body.classList.add('is-overlay-open');
     if (elements.meta) {
         elements.meta.textContent = '사용량 이력을 불러오는 중...';
+    }
+    if (elements.scale) {
+        elements.scale.textContent = 'Scale --';
+    }
+    if (elements.ratios) {
+        elements.ratios.innerHTML = '';
+    }
+    if (elements.legend) {
+        elements.legend.innerHTML = '';
     }
     if (elements.chart) {
         elements.chart.innerHTML = '';

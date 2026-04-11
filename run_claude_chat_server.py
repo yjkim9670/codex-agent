@@ -192,10 +192,14 @@ def apply_runtime_environment(config, config_path):
         _set_env_from_config('MODEL_AGENT_STORAGE_SUBDIR', str(runtime_config.get('storage_subdir')).strip())
     _set_env_default('MODEL_CHAT_SECRET_KEY', runtime_config.get('secret_key'))
     _set_env_default('MODEL_DEFAULT_PROVIDER', runtime_config.get('default_provider'))
+    _set_env_default('MODEL_DEFAULT_REASONING_EFFORT', runtime_config.get('default_reasoning_effort'))
 
     provider_options = _coerce_list(runtime_config.get('provider_options'))
     if provider_options:
         _set_env_default('MODEL_PROVIDER_OPTIONS', ','.join(provider_options))
+    reasoning_options = _coerce_list(runtime_config.get('reasoning_options'))
+    if reasoning_options:
+        _set_env_default('MODEL_REASONING_OPTIONS', ','.join(reasoning_options))
     workspace_blocked_paths = _coerce_list(runtime_config.get('workspace_blocked_paths'))
     if 'workspace_blocked_paths' in runtime_config:
         _set_env_from_config('MODEL_WORKSPACE_BLOCKED_PATHS', ','.join(workspace_blocked_paths))
@@ -259,6 +263,7 @@ def apply_runtime_environment(config, config_path):
         'max_title_chars': 'MODEL_MAX_TITLE_CHARS',
         'max_provider_chars': 'MODEL_MAX_PROVIDER_CHARS',
         'max_model_chars': 'MODEL_MAX_MODEL_CHARS',
+        'max_reasoning_chars': 'MODEL_MAX_REASONING_CHARS',
     }
     for key, env_key in numeric_mappings.items():
         value = runtime_config.get(key)

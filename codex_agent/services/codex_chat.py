@@ -124,6 +124,12 @@ _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_MAX_ITEMS = 24 * 180
+_TOKENS_PER_PERCENT_MIN_SAMPLES = 2
+_TOKENS_PER_PERCENT_MIN_PERCENT_SUM = 1.0
+_TOKENS_PER_PERCENT_MEDIUM_SAMPLES = 3
+_TOKENS_PER_PERCENT_MEDIUM_PERCENT_SUM = 2.0
+_TOKENS_PER_PERCENT_HIGH_SAMPLES = 6
+_TOKENS_PER_PERCENT_HIGH_PERCENT_SUM = 4.0
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
@@ -2053,9 +2059,26 @@ def _build_usage_history_items(items):
     return derived
 
 
+def _tokens_per_percent_confidence(sample_count, percent_sum):
+    if sample_count <= 0 or percent_sum <= 0:
+        return 'none'
+    if (
+        sample_count >= _TOKENS_PER_PERCENT_HIGH_SAMPLES
+        and percent_sum >= _TOKENS_PER_PERCENT_HIGH_PERCENT_SUM
+    ):
+        return 'high'
+    if (
+        sample_count >= _TOKENS_PER_PERCENT_MEDIUM_SAMPLES
+        and percent_sum >= _TOKENS_PER_PERCENT_MEDIUM_PERCENT_SUM
+    ):
+        return 'medium'
+    return 'low'
+
+
 def _aggregate_tokens_per_percent(history_items, delta_key, token_delta_key='delta_tokens'):
     token_sum = 0
     percent_sum = 0.0
+    sample_count = 0
     for item in history_items:
         delta_tokens = _coerce_non_negative_int(item.get(token_delta_key)) or 0
         delta_percent = _coerce_float(item.get(delta_key))
@@ -2063,16 +2086,32 @@ def _aggregate_tokens_per_percent(history_items, delta_key, token_delta_key='del
             continue
         token_sum += delta_tokens
         percent_sum += delta_percent
+        sample_count += 1
+    rounded_percent_sum = round(percent_sum, 4)
+    confidence = _tokens_per_percent_confidence(sample_count, percent_sum)
     if token_sum <= 0 or percent_sum <= 0:
         return {
             'token_sum': token_sum,
-            'percent_sum': round(percent_sum, 4),
-            'tokens_per_percent': None
+            'percent_sum': rounded_percent_sum,
+            'sample_count': sample_count,
+            'tokens_per_percent': None,
+            'raw_tokens_per_percent': None,
+            'confidence': confidence,
+            'is_reliable': False,
         }
+    raw_tokens_per_percent = round(token_sum / percent_sum, 4)
+    is_reliable = (
+        sample_count >= _TOKENS_PER_PERCENT_MIN_SAMPLES
+        and percent_sum >= _TOKENS_PER_PERCENT_MIN_PERCENT_SUM
+    )
     return {
         'token_sum': token_sum,
-        'percent_sum': round(percent_sum, 4),
-        'tokens_per_percent': round(token_sum / percent_sum, 4)
+        'percent_sum': rounded_percent_sum,
+        'sample_count': sample_count,
+        'tokens_per_percent': raw_tokens_per_percent if is_reliable else None,
+        'raw_tokens_per_percent': raw_tokens_per_percent,
+        'confidence': confidence,
+        'is_reliable': is_reliable,
     }
 
 

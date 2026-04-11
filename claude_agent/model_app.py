@@ -12,7 +12,7 @@ from .services.model_chat import (
     ensure_pending_queue_background_worker,
     ensure_usage_snapshot_background_worker,
     get_model_options,
-    get_provider_options,
+    get_reasoning_options,
     get_settings,
 )
 
@@ -62,11 +62,9 @@ def create_claude_app():
         current_branch_name = get_current_branch_name()
         current_settings = get_settings()
         current_provider = current_settings.get('provider')
-        provider_options = get_provider_options()
         return render_template(
             'index.html',
-            provider_options=provider_options,
-            reasoning_options=provider_options,
+            reasoning_options=get_reasoning_options(),
             model_options=get_model_options(current_provider),
             server_directory_name=server_directory_name,
             server_directory_path=str(server_directory),

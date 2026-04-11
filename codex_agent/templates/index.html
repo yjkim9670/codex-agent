@@ -443,17 +443,21 @@
             </div>
             <div class="usage-history-overlay-body">
                 <div class="usage-history-meta" id="codex-usage-history-overlay-meta">사용량 이력을 불러오는 중...</div>
+                <div class="usage-history-summary-strip">
+                    <div class="usage-history-scale-badge" id="codex-usage-history-scale">Scale --</div>
+                    <div class="usage-history-ratio-cards" id="codex-usage-history-ratios"></div>
+                </div>
                 <div class="usage-history-chart-wrap">
                     <svg
                         class="usage-history-chart"
                         id="codex-usage-history-chart"
                         viewBox="0 0 920 320"
-                        preserveAspectRatio="none"
+                        preserveAspectRatio="xMidYMid meet"
                         role="img"
                         aria-label="Usage history chart"
                     ></svg>
                 </div>
-                <div class="usage-history-legend" id="codex-usage-history-legend">Token delta · 5h used% · Weekly used%</div>
+                <div class="usage-history-legend" id="codex-usage-history-legend">Token delta</div>
                 <div class="usage-history-empty is-hidden" id="codex-usage-history-empty">표시할 Usage 이력이 없습니다.</div>
             </div>
             <div class="usage-history-overlay-footer">

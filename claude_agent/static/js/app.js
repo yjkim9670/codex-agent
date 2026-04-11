@@ -4093,6 +4093,19 @@ function updateUsageSummary(usage) {
     });
 }
 
+const CLAUDE_MODEL_LABELS = {
+    'claude-opus-4-6': 'Opus 4.6',
+    'claude-sonnet-4-6': 'Sonnet 4.6',
+    'claude-haiku-4-5-20251001': 'Haiku 4.5',
+};
+function claudeModelLabel(id) {
+    const modelId = String(id || '').trim();
+    if (!modelId) return '';
+    const friendly = CLAUDE_MODEL_LABELS[modelId];
+    if (!friendly) return modelId;
+    return `${friendly} (${modelId})`;
+}
+
 function updateModelControls(model, options) {
     const select = document.getElementById('claude-model-select');
     const input = document.getElementById('claude-model-input');
@@ -4109,7 +4122,7 @@ function updateModelControls(model, options) {
             options.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                option.textContent = claudeModelLabel(item);
                 select.appendChild(option);
             });
             if (model) {
@@ -4149,7 +4162,7 @@ function updatePlanModeModelControls(planModeModel, options) {
             options.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                option.textContent = claudeModelLabel(item);
                 select.appendChild(option);
             });
             if (planModeModel) {
@@ -4184,7 +4197,7 @@ function updateReasoningControls(reasoning, options) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = 'Select provider';
+            placeholder.textContent = 'Select effort';
             select.appendChild(placeholder);
             options.forEach(item => {
                 const option = document.createElement('option');
@@ -4203,7 +4216,7 @@ function updateReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Provider';
+        input.placeholder = reasoning ? reasoning : 'Default effort';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -4242,7 +4255,7 @@ function updatePlanModeReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Use default provider';
+        input.placeholder = reasoning ? reasoning : 'Use default effort';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -4277,11 +4290,24 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     const planModeReasoningText = state.settings.planModeReasoningEffort
         ? state.settings.planModeReasoningEffort
         : 'default';
-    const text = `Model: ${modelText} · Plan model: ${planModeModelText} · Provider: ${reasoningText} · Plan provider: ${planModeReasoningText}`;
-    status.textContent = text;
+    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
+    const compactToken = value => (value === 'default' ? 'def' : value);
+    const compactSummaryParts = [
+        `Model:${compactToken(modelText)}`,
+        `R:${compactToken(reasoningText)}`
+    ];
+    if (planModeModelText !== modelText || state.settings.planModeModel) {
+        compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
+    }
+    if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
+        compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
+    }
+    const compactSummary = compactSummaryParts.join(' · ');
+
+    status.textContent = fullText;
     if (summary) {
-        summary.textContent = text;
-        summary.title = text;
+        summary.textContent = compactSummary;
+        summary.title = fullText;
     }
 }
 

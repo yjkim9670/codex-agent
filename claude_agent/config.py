@@ -150,6 +150,7 @@ MODEL_STREAM_TERMINATE_GRACE_SECONDS = _read_positive_float_env('MODEL_STREAM_TE
 MODEL_MAX_TITLE_CHARS = _read_positive_int_env('MODEL_MAX_TITLE_CHARS', 80)
 MODEL_MAX_PROVIDER_CHARS = _read_positive_int_env('MODEL_MAX_PROVIDER_CHARS', 32)
 MODEL_MAX_MODEL_CHARS = _read_positive_int_env('MODEL_MAX_MODEL_CHARS', 80)
+MODEL_MAX_REASONING_CHARS = _read_positive_int_env('MODEL_MAX_REASONING_CHARS', 32)
 
 MODEL_DEFAULT_PROVIDER = os.environ.get('MODEL_DEFAULT_PROVIDER', 'claude').strip().lower() or 'claude'
 _default_provider_options = ['claude']
@@ -158,6 +159,15 @@ if not MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS = list(_default_provider_options)
 if MODEL_DEFAULT_PROVIDER not in MODEL_PROVIDER_OPTIONS:
     MODEL_PROVIDER_OPTIONS.insert(0, MODEL_DEFAULT_PROVIDER)
+
+MODEL_DEFAULT_REASONING_EFFORT = os.environ.get('MODEL_DEFAULT_REASONING_EFFORT', '').strip().lower() or None
+MODEL_REASONING_OPTIONS = [
+    item.strip().lower()
+    for item in os.environ.get('MODEL_REASONING_OPTIONS', 'low,medium,high,max').split(',')
+    if item.strip()
+]
+if MODEL_DEFAULT_REASONING_EFFORT and MODEL_DEFAULT_REASONING_EFFORT not in MODEL_REASONING_OPTIONS:
+    MODEL_REASONING_OPTIONS.insert(0, MODEL_DEFAULT_REASONING_EFFORT)
 
 _workspace_blocked_paths = []
 for item in _read_csv_env('MODEL_WORKSPACE_BLOCKED_PATHS'):
@@ -198,7 +208,7 @@ MODEL_GEMINI_DEFAULT_MODEL = (
     or 'gemini-flash-latest'
 )
 MODEL_DTGPT_DEFAULT_MODEL = os.environ.get('MODEL_DTGPT_DEFAULT_MODEL', 'Kimi-K2.5').strip() or 'Kimi-K2.5'
-MODEL_CLAUDE_DEFAULT_MODEL = os.environ.get('MODEL_CLAUDE_DEFAULT_MODEL', 'sonnet').strip() or 'sonnet'
+MODEL_CLAUDE_DEFAULT_MODEL = os.environ.get('MODEL_CLAUDE_DEFAULT_MODEL', 'claude-sonnet-4-6').strip() or 'claude-sonnet-4-6'
 MODEL_PROVIDER_DEFAULT_MODELS = {
     'gemini': MODEL_GEMINI_DEFAULT_MODEL,
     'dtgpt': MODEL_DTGPT_DEFAULT_MODEL,
@@ -226,10 +236,13 @@ MODEL_DTGPT_MODEL_OPTIONS = _read_csv_env('MODEL_DTGPT_MODEL_OPTIONS')
 if not MODEL_DTGPT_MODEL_OPTIONS:
     MODEL_DTGPT_MODEL_OPTIONS = _default_dtgpt_model_options
 
-_default_claude_model_options = sorted({
-    MODEL_CLAUDE_DEFAULT_MODEL,
-    'opus',
-})
+_default_claude_model_options = [
+    'claude-opus-4-6',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5-20251001',
+]
+if MODEL_CLAUDE_DEFAULT_MODEL not in _default_claude_model_options:
+    _default_claude_model_options.insert(0, MODEL_CLAUDE_DEFAULT_MODEL)
 MODEL_CLAUDE_MODEL_OPTIONS = _read_csv_env('MODEL_CLAUDE_MODEL_OPTIONS')
 if not MODEL_CLAUDE_MODEL_OPTIONS:
     MODEL_CLAUDE_MODEL_OPTIONS = _default_claude_model_options

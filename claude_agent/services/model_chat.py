@@ -29,6 +29,7 @@ from ..config import (
     MODEL_CLAUDE_DEFAULT_MODEL,
     MODEL_CHAT_STORE_PATH,
     MODEL_CONTEXT_MAX_CHARS,
+    MODEL_DEFAULT_REASONING_EFFORT,
     MODEL_DEFAULT_PROVIDER,
     MODEL_DTGPT_API_BASE_URL,
     MODEL_DTGPT_API_BASE_URLS,
@@ -45,6 +46,7 @@ from ..config import (
     MODEL_PROVIDER_DEFAULT_MODELS,
     MODEL_PROVIDER_MODEL_OPTIONS,
     MODEL_PROVIDER_OPTIONS,
+    MODEL_REASONING_OPTIONS,
     MODEL_SETTINGS_PATH,
     MODEL_STREAM_TERMINATE_GRACE_SECONDS,
     MODEL_STREAM_TTL_SECONDS,
@@ -91,6 +93,16 @@ _LAYOUT_ROOT_KEYS = {_LAYOUT_ROOT_SERVER, _LAYOUT_ROOT_WORKSPACE}
 _LAYOUT_MAX_PATH_CHARS = 1024
 _SUPPORTED_PROVIDERS = ('gemini', 'dtgpt', 'claude')
 _OPENAI_COMPATIBLE_PROVIDERS = ('dtgpt',)
+_EFFORT_ALIASES = {
+    'minimum': 'low',
+    'min': 'low',
+    'low': 'low',
+    'medium': 'medium',
+    'med': 'medium',
+    'high': 'high',
+    'maximum': 'max',
+    'max': 'max',
+}
 _RETRYABLE_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _ENV_REFERENCE_PATTERN = re.compile(r'^\$\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}$')
 _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
@@ -316,13 +328,46 @@ def get_model_options(provider=None):
         configured = []
     options = []
     for item in configured:
-        text = str(item or '').strip()
-        if not text or text in options:
+        normalized_model = _normalize_model_name(normalized, item)
+        if not normalized_model or normalized_model in options:
             continue
-        options.append(text)
-    default_model = _default_model_for_provider(normalized)
+        options.append(normalized_model)
+    default_model = _normalize_model_name(normalized, _default_model_for_provider(normalized))
     if default_model not in options:
         options.insert(0, default_model)
+    return options
+
+
+def _normalize_reasoning_effort(value):
+    raw = str(value or '').strip().lower()
+    if not raw:
+        return None
+    if raw in {'auto', 'default', 'none', 'off'}:
+        return None
+    normalized = _EFFORT_ALIASES.get(raw, raw)
+    allowed = {'low', 'medium', 'high', 'max'}
+    for item in MODEL_REASONING_OPTIONS:
+        token = str(item or '').strip().lower()
+        if not token or token in {'auto', 'default', 'none', 'off'}:
+            continue
+        allowed.add(_EFFORT_ALIASES.get(token, token))
+    if normalized not in allowed:
+        return None
+    return normalized
+
+
+def get_reasoning_options():
+    options = []
+    for item in MODEL_REASONING_OPTIONS:
+        normalized = _normalize_reasoning_effort(item)
+        if not normalized or normalized in options:
+            continue
+        options.append(normalized)
+    default_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
+    if default_effort and default_effort not in options:
+        options.insert(0, default_effort)
+    if not options:
+        options = ['low', 'medium', 'high', 'max']
     return options
 
 
@@ -715,11 +760,14 @@ def _save_data(data):
 
 def _default_settings():
     provider = _normalize_provider_name(MODEL_DEFAULT_PROVIDER)
+    reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
     return {
         'provider': provider,
         'model': _default_model_for_provider(provider),
+        'reasoning_effort': reasoning_effort,
         'plan_mode_provider': None,
         'plan_mode_model': None,
+        'plan_mode_reasoning_effort': None,
     }
 
 
@@ -744,11 +792,12 @@ def _read_workspace_settings():
 
     provider = _normalize_provider_name(data.get('provider'))
     model = str(data.get('model') or '').strip() or _default_model_for_provider(provider)
-    plan_mode_provider_raw = str(
-        data.get('plan_mode_provider')
-        or data.get('plan_mode_reasoning_effort')
-        or ''
-    ).strip()
+    reasoning_effort = _normalize_reasoning_effort(
+        data.get('reasoning_effort')
+        if 'reasoning_effort' in data
+        else MODEL_DEFAULT_REASONING_EFFORT
+    )
+    plan_mode_provider_raw = str(data.get('plan_mode_provider') or '').strip()
     plan_mode_provider = (
         _normalize_provider_name(plan_mode_provider_raw)
         if plan_mode_provider_raw
@@ -759,11 +808,14 @@ def _read_workspace_settings():
     if plan_mode_model_raw:
         base_provider = plan_mode_provider or provider
         plan_mode_model = _normalize_model_name(base_provider, plan_mode_model_raw)
+    plan_mode_reasoning_effort = _normalize_reasoning_effort(data.get('plan_mode_reasoning_effort'))
     return {
         'provider': provider,
         'model': model,
+        'reasoning_effort': reasoning_effort,
         'plan_mode_provider': plan_mode_provider,
         'plan_mode_model': plan_mode_model,
+        'plan_mode_reasoning_effort': plan_mode_reasoning_effort,
     }
 
 
@@ -781,11 +833,17 @@ def _write_workspace_settings(settings):
     if plan_mode_model_raw:
         base_provider = plan_mode_provider or provider
         plan_mode_model = _normalize_model_name(base_provider, plan_mode_model_raw)
+    reasoning_effort = _normalize_reasoning_effort(settings.get('reasoning_effort'))
+    if reasoning_effort is None:
+        reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
+    plan_mode_reasoning_effort = _normalize_reasoning_effort(settings.get('plan_mode_reasoning_effort'))
     payload = {
         'provider': provider,
         'model': model,
+        'reasoning_effort': reasoning_effort,
         'plan_mode_provider': plan_mode_provider,
         'plan_mode_model': plan_mode_model,
+        'plan_mode_reasoning_effort': plan_mode_reasoning_effort,
     }
     MODEL_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_SETTINGS_PATH.write_text(
@@ -807,7 +865,9 @@ def _resolve_settings_values(
         provider=None,
         model=None,
         plan_mode_provider=None,
-        plan_mode_model=None):
+        plan_mode_model=None,
+        reasoning_effort=None,
+        plan_mode_reasoning_effort=None):
     current_provider = _normalize_provider_name(current.get('provider'))
     current_raw_model = str(current.get('model') or '').strip()
     current_model = _normalize_model_name(current_provider, current_raw_model)
@@ -823,6 +883,10 @@ def _resolve_settings_values(
     if current_plan_model_raw:
         current_plan_base_provider = current_plan_provider or current_provider
         current_plan_model = _normalize_model_name(current_plan_base_provider, current_plan_model_raw)
+    current_reasoning_effort = _normalize_reasoning_effort(current.get('reasoning_effort'))
+    if current_reasoning_effort is None:
+        current_reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
+    current_plan_mode_reasoning_effort = _normalize_reasoning_effort(current.get('plan_mode_reasoning_effort'))
 
     next_provider = current_provider
     provider_changed = False
@@ -855,15 +919,33 @@ def _resolve_settings_values(
         else:
             next_plan_model = None
 
+    if reasoning_effort is None:
+        next_reasoning_effort = current_reasoning_effort
+    else:
+        next_reasoning_effort = _normalize_reasoning_effort(reasoning_effort)
+
+    if plan_mode_reasoning_effort is None:
+        next_plan_mode_reasoning_effort = current_plan_mode_reasoning_effort
+    else:
+        next_plan_mode_reasoning_effort = _normalize_reasoning_effort(plan_mode_reasoning_effort)
+
     return {
         'provider': next_provider,
         'model': next_model,
+        'reasoning_effort': next_reasoning_effort,
         'plan_mode_provider': next_plan_provider,
         'plan_mode_model': next_plan_model,
+        'plan_mode_reasoning_effort': next_plan_mode_reasoning_effort,
     }
 
 
-def resolve_settings_preview(provider=None, model=None, plan_mode_provider=None, plan_mode_model=None):
+def resolve_settings_preview(
+        provider=None,
+        model=None,
+        plan_mode_provider=None,
+        plan_mode_model=None,
+        reasoning_effort=None,
+        plan_mode_reasoning_effort=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         return _resolve_settings_values(
@@ -872,10 +954,18 @@ def resolve_settings_preview(provider=None, model=None, plan_mode_provider=None,
             model=model,
             plan_mode_provider=plan_mode_provider,
             plan_mode_model=plan_mode_model,
+            reasoning_effort=reasoning_effort,
+            plan_mode_reasoning_effort=plan_mode_reasoning_effort,
         )
 
 
-def update_settings(provider=None, model=None, plan_mode_provider=None, plan_mode_model=None):
+def update_settings(
+        provider=None,
+        model=None,
+        plan_mode_provider=None,
+        plan_mode_model=None,
+        reasoning_effort=None,
+        plan_mode_reasoning_effort=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         payload = _resolve_settings_values(
@@ -884,6 +974,8 @@ def update_settings(provider=None, model=None, plan_mode_provider=None, plan_mod
             model=model,
             plan_mode_provider=plan_mode_provider,
             plan_mode_model=plan_mode_model,
+            reasoning_effort=reasoning_effort,
+            plan_mode_reasoning_effort=plan_mode_reasoning_effort,
         )
         _write_workspace_settings(payload)
         return payload
@@ -894,10 +986,14 @@ def resolve_execution_profile(plan_mode=False):
 
     default_provider = _normalize_provider_name(settings.get('provider'))
     default_model = _normalize_model_name(default_provider, settings.get('model'))
+    default_reasoning_effort = _normalize_reasoning_effort(settings.get('reasoning_effort'))
+    if default_reasoning_effort is None:
+        default_reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
     if not plan_mode:
         return {
             'provider': default_provider,
             'model': default_model,
+            'reasoning_effort': default_reasoning_effort,
         }
 
     plan_provider_raw = str(settings.get('plan_mode_provider') or '').strip()
@@ -915,9 +1011,14 @@ def resolve_execution_profile(plan_mode=False):
     else:
         plan_model = _default_model_for_provider(plan_provider)
 
+    plan_reasoning_effort = _normalize_reasoning_effort(settings.get('plan_mode_reasoning_effort'))
+    if plan_reasoning_effort is None:
+        plan_reasoning_effort = default_reasoning_effort
+
     return {
         'provider': plan_provider,
         'model': plan_model,
+        'reasoning_effort': plan_reasoning_effort,
     }
 
 
@@ -2828,6 +2929,12 @@ def _normalize_model_name(provider, value):
     if normalized_provider == 'claude':
         alias_map = {
             'auto': MODEL_CLAUDE_DEFAULT_MODEL,
+            'opus': 'claude-opus-4-6',
+            'sonnet': 'claude-sonnet-4-6',
+            'haiku': 'claude-haiku-4-5-20251001',
+            'claude-opus': 'claude-opus-4-6',
+            'claude-sonnet': 'claude-sonnet-4-6',
+            'claude-haiku': 'claude-haiku-4-5-20251001',
         }
         return alias_map.get(alias_key, raw)
 
@@ -3269,6 +3376,7 @@ def _empty_claude_cli_capabilities():
         'has_include_partial_messages': False,
         'has_no_session_persistence': False,
         'has_model': False,
+        'has_effort': False,
         'has_permission_mode': False,
         'has_tools': False,
         'has_verbose': False,
@@ -3303,6 +3411,7 @@ def _detect_claude_cli_capabilities():
     capabilities['has_include_partial_messages'] = '--include-partial-messages' in help_text
     capabilities['has_no_session_persistence'] = '--no-session-persistence' in help_text
     capabilities['has_model'] = '--model' in help_text
+    capabilities['has_effort'] = '--effort' in help_text
     capabilities['has_permission_mode'] = '--permission-mode' in help_text
     capabilities['has_tools'] = '--tools' in help_text
     capabilities['has_verbose'] = '--verbose' in help_text
@@ -3511,7 +3620,13 @@ def _stream_json_reader(stream_id, pipe, state_holder, line_handler):
             pass
 
 
-def _build_claude_command(prompt, model=None, stream=False, plan_mode=False, allowed_dirs=None):
+def _build_claude_command(
+        prompt,
+        model=None,
+        effort=None,
+        stream=False,
+        plan_mode=False,
+        allowed_dirs=None):
     capabilities = _get_claude_cli_capabilities()
     cmd = ['claude']
     if capabilities.get('has_print'):
@@ -3533,8 +3648,11 @@ def _build_claude_command(prompt, model=None, stream=False, plan_mode=False, all
         cmd.append('--no-session-persistence')
     if capabilities.get('has_model') and str(model or '').strip():
         cmd.extend(['--model', str(model).strip()])
+    normalized_effort = _normalize_reasoning_effort(effort)
+    if capabilities.get('has_effort') and normalized_effort:
+        cmd.extend(['--effort', normalized_effort])
     if capabilities.get('has_permission_mode'):
-        cmd.extend(['--permission-mode', 'plan' if plan_mode else 'default'])
+        cmd.extend(['--permission-mode', 'plan' if plan_mode else 'bypassPermissions'])
     if capabilities.get('has_add_dir') and isinstance(allowed_dirs, (list, tuple)):
         directories = [str(item).strip() for item in allowed_dirs if str(item).strip()]
         if directories:
@@ -3547,7 +3665,13 @@ def _build_claude_command(prompt, model=None, stream=False, plan_mode=False, all
     return cmd
 
 
-def _execute_claude_prompt(prompt, model=None, plan_mode=False, execution_cwd=None, allowed_dirs=None):
+def _execute_claude_prompt(
+        prompt,
+        model=None,
+        effort=None,
+        plan_mode=False,
+        execution_cwd=None,
+        allowed_dirs=None):
     cwd_path, normalized_allowed_dirs = _resolve_claude_execution_paths(
         execution_cwd=execution_cwd,
         allowed_dirs=allowed_dirs,
@@ -3555,6 +3679,7 @@ def _execute_claude_prompt(prompt, model=None, plan_mode=False, execution_cwd=No
     cmd = _build_claude_command(
         prompt,
         model=model,
+        effort=effort,
         plan_mode=plan_mode,
         allowed_dirs=normalized_allowed_dirs,
     )
@@ -3603,6 +3728,7 @@ def execute_model_prompt(
         prompt,
         provider_override=None,
         model_override=None,
+        reasoning_override=None,
         plan_mode=False,
         execution_cwd=None,
         allowed_dirs=None):
@@ -3621,11 +3747,20 @@ def execute_model_prompt(
             model = _default_model_for_provider(provider)
     else:
         model = _normalize_model_name(provider, model_override)
+    reasoning_effort = _normalize_reasoning_effort(reasoning_override)
+    if reasoning_effort is None:
+        if plan_mode:
+            reasoning_effort = _normalize_reasoning_effort(settings.get('plan_mode_reasoning_effort'))
+        if reasoning_effort is None:
+            reasoning_effort = _normalize_reasoning_effort(settings.get('reasoning_effort'))
+        if reasoning_effort is None:
+            reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
 
     if provider == 'claude':
         return _execute_claude_prompt(
             prompt,
             model=model,
+            effort=reasoning_effort,
             plan_mode=plan_mode,
             execution_cwd=execution_cwd,
             allowed_dirs=allowed_dirs,
@@ -3843,6 +3978,7 @@ def _run_claude_cli_stream(
         stream_id,
         prompt,
         model,
+        effort,
         exec_timeout_seconds,
         started_at,
         plan_mode=False,
@@ -3855,6 +3991,7 @@ def _run_claude_cli_stream(
     cmd = _build_claude_command(
         prompt,
         model=model,
+        effort=effort,
         stream=True,
         plan_mode=plan_mode,
         allowed_dirs=normalized_allowed_dirs,
@@ -4004,6 +4141,7 @@ def _run_model_stream(
         prompt,
         provider,
         model,
+        reasoning_effort=None,
         plan_mode=False,
         execution_cwd=None,
         allowed_dirs=None):
@@ -4028,6 +4166,7 @@ def _run_model_stream(
             stream_id,
             prompt,
             model,
+            reasoning_effort,
             exec_timeout_seconds,
             started_at,
             plan_mode=plan_mode,
@@ -4205,6 +4344,7 @@ def create_model_stream(
         prompt,
         provider,
         model,
+        reasoning_effort=None,
         apply_side_effects=True,
         plan_mode=False,
         execution_cwd=None,
@@ -4216,6 +4356,7 @@ def create_model_stream(
         'session_id': session_id,
         'provider': _normalize_provider_name(provider),
         'model': model,
+        'reasoning_effort': _normalize_reasoning_effort(reasoning_effort),
         'plan_mode': bool(plan_mode),
         'apply_side_effects': bool(apply_side_effects),
         'execution_cwd': str(execution_cwd or ''),
@@ -4247,7 +4388,7 @@ def create_model_stream(
 
     thread = threading.Thread(
         target=_run_model_stream,
-        args=(stream_id, prompt, provider, model, plan_mode, execution_cwd, allowed_dirs),
+        args=(stream_id, prompt, provider, model, reasoning_effort, plan_mode, execution_cwd, allowed_dirs),
         daemon=True,
     )
     thread.start()
@@ -4429,6 +4570,7 @@ def _start_model_stream_for_session_locked(
         prompt_with_context,
         provider_override=None,
         model_override=None,
+        reasoning_override=None,
         apply_side_effects=True,
         plan_mode=False,
         execution_cwd=None,
@@ -4459,12 +4601,21 @@ def _start_model_stream_for_session_locked(
             model = _default_model_for_provider(provider)
     else:
         model = _normalize_model_name(provider, model_override)
+    reasoning_effort = _normalize_reasoning_effort(reasoning_override)
+    if reasoning_effort is None:
+        if plan_mode:
+            reasoning_effort = _normalize_reasoning_effort(settings.get('plan_mode_reasoning_effort'))
+        if reasoning_effort is None:
+            reasoning_effort = _normalize_reasoning_effort(settings.get('reasoning_effort'))
+        if reasoning_effort is None:
+            reasoning_effort = _normalize_reasoning_effort(MODEL_DEFAULT_REASONING_EFFORT)
 
     stream_info = create_model_stream(
         session_id,
         prompt_with_context,
         provider,
         model,
+        reasoning_effort=reasoning_effort,
         apply_side_effects=apply_side_effects,
         plan_mode=plan_mode,
         execution_cwd=execution_cwd,
@@ -4560,6 +4711,7 @@ def _start_next_queued_model_stream_locked(session_id):
             prompt_with_context,
             provider_override=execution_profile.get('provider'),
             model_override=execution_profile.get('model'),
+            reasoning_override=execution_profile.get('reasoning_effort'),
             apply_side_effects=not plan_mode,
             plan_mode=plan_mode,
             execution_cwd=execution_cwd,
@@ -4586,6 +4738,7 @@ def start_model_stream_for_session(
         prompt_with_context,
         provider_override=None,
         model_override=None,
+        reasoning_override=None,
         apply_side_effects=True,
         plan_mode=False,
         execution_cwd=None,
@@ -4598,6 +4751,7 @@ def start_model_stream_for_session(
             prompt_with_context,
             provider_override=provider_override,
             model_override=model_override,
+            reasoning_override=reasoning_override,
             apply_side_effects=apply_side_effects,
             plan_mode=plan_mode,
             execution_cwd=execution_cwd,

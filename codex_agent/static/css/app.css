@@ -2082,6 +2082,67 @@ body {
     color: var(--text-secondary);
 }
 
+.usage-history-summary-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.usage-history-scale-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.usage-history-ratio-cards {
+    flex: 1;
+    min-width: min(100%, 260px);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+    gap: 8px;
+}
+
+.usage-history-ratio-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    min-width: 0;
+}
+
+.usage-history-ratio-label {
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.usage-history-ratio-value {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.usage-history-ratio-meta {
+    font-size: 10px;
+    color: var(--text-tertiary);
+}
+
+.usage-history-ratio-card.is-low-confidence .usage-history-ratio-value {
+    color: var(--text-secondary);
+}
+
 .usage-history-chart-wrap {
     flex: 1;
     min-height: 220px;
@@ -2108,6 +2169,13 @@ body {
 .usage-history-chart .axis-label {
     fill: var(--text-tertiary);
     font-size: 11px;
+}
+
+.usage-history-chart .axis-title {
+    fill: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
 }
 
 .usage-history-chart .token-bar {
@@ -5369,7 +5437,34 @@ label.hover-tooltip,
     }
 
     .usage-history-chart-wrap {
-        min-height: 190px;
+        min-height: 240px;
+    }
+
+    .usage-history-chart {
+        min-height: 240px;
+    }
+
+    .usage-history-summary-strip {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+    }
+
+    .usage-history-ratio-cards {
+        min-width: 0;
+    }
+
+    .usage-history-ratio-card {
+        padding: 7px 9px;
+    }
+
+    .usage-history-ratio-value {
+        font-size: 14px;
+    }
+
+    .usage-history-legend {
+        gap: 6px 8px;
+        font-size: 11px;
     }
 
     .app-header {

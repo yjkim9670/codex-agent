@@ -8,7 +8,7 @@ from flask import Blueprint, Response, jsonify, request
 from ..config import (
     MODEL_MAX_MODEL_CHARS,
     MODEL_MAX_PROMPT_CHARS,
-    MODEL_MAX_PROVIDER_CHARS,
+    MODEL_MAX_REASONING_CHARS,
     MODEL_MAX_TITLE_CHARS,
     WORKSPACE_DIR,
 )
@@ -25,7 +25,7 @@ from ..services.model_chat import (
     finalize_model_stream,
     get_active_stream_id_for_session,
     get_model_options,
-    get_provider_options,
+    get_reasoning_options,
     get_session_storage_summary,
     get_session,
     get_settings,
@@ -217,35 +217,31 @@ def _append_layout_context_prompt(prompt_text, layout_context):
 
 
 def _build_settings_response(
-        provider=None,
         model=None,
-        plan_mode_provider=None,
-        plan_mode_model=None):
+        reasoning_effort=None,
+        plan_mode_model=None,
+        plan_mode_reasoning_effort=None):
     settings = get_settings()
     settings_payload = dict(settings) if isinstance(settings, dict) else {}
-    settings_payload.setdefault('provider', settings_payload.get('provider'))
     settings_payload.setdefault('model', settings_payload.get('model'))
-    settings_payload.setdefault('plan_mode_provider', settings_payload.get('plan_mode_provider'))
     settings_payload.setdefault('plan_mode_model', settings_payload.get('plan_mode_model'))
-    # Compatibility aliases for the codex-style frontend controls.
-    settings_payload['reasoning_effort'] = settings_payload.get('provider')
-    settings_payload['plan_mode_reasoning_effort'] = settings_payload.get('plan_mode_provider')
+    settings_payload.setdefault('reasoning_effort', settings_payload.get('reasoning_effort'))
+    settings_payload.setdefault(
+        'plan_mode_reasoning_effort',
+        settings_payload.get('plan_mode_reasoning_effort'),
+    )
     preview = resolve_settings_preview(
-        provider=provider,
         model=model,
-        plan_mode_provider=plan_mode_provider,
+        reasoning_effort=reasoning_effort,
         plan_mode_model=plan_mode_model,
+        plan_mode_reasoning_effort=plan_mode_reasoning_effort,
     )
     preview_payload = dict(preview) if isinstance(preview, dict) else {}
-    preview_payload['reasoning_effort'] = preview_payload.get('provider')
-    preview_payload['plan_mode_reasoning_effort'] = preview_payload.get('plan_mode_provider')
     preview_provider = preview.get('provider')
-    provider_options = get_provider_options()
     return {
         'settings': settings_payload,
         'preview': preview_payload,
-        'provider_options': provider_options,
-        'reasoning_options': provider_options,
+        'reasoning_options': get_reasoning_options(),
         'model_options': get_model_options(preview_provider),
         'usage': get_usage_summary(),
         'session_storage': get_session_storage_summary(),
@@ -257,13 +253,13 @@ def model_settings():
     record_usage_snapshot_if_due()
     return jsonify(
         _build_settings_response(
-            provider=request.args.get('provider'),
             model=request.args.get('model'),
-            plan_mode_provider=(
-                request.args.get('plan_mode_provider')
-                or request.args.get('plan_mode_reasoning_effort')
-            ),
+            reasoning_effort=request.args.get('reasoning_effort') or request.args.get('provider'),
             plan_mode_model=request.args.get('plan_mode_model'),
+            plan_mode_reasoning_effort=(
+                request.args.get('plan_mode_reasoning_effort')
+                or request.args.get('plan_mode_provider')
+            ),
         )
     )
 
@@ -301,24 +297,24 @@ def model_usage_history():
 @bp.route('/api/claude/settings', methods=['PATCH'])
 def model_settings_update():
     payload = request.get_json(silent=True) or {}
-    provider = payload.get('provider')
-    if provider is None:
-        # Compatibility alias used by codex-style frontend controls.
-        provider = payload.get('reasoning_effort')
+    reasoning_effort = payload.get('reasoning_effort')
+    if reasoning_effort is None:
+        # Compatibility fallback for older provider-based payloads.
+        reasoning_effort = payload.get('provider')
     model = payload.get('model')
-    plan_mode_provider = payload.get('plan_mode_provider')
-    if plan_mode_provider is None:
-        plan_mode_provider = payload.get('plan_mode_reasoning_effort')
+    plan_mode_reasoning_effort = payload.get('plan_mode_reasoning_effort')
+    if plan_mode_reasoning_effort is None:
+        plan_mode_reasoning_effort = payload.get('plan_mode_provider')
     plan_mode_model = payload.get('plan_mode_model')
 
-    if provider is not None:
-        provider = str(provider).strip()
-        if len(provider) > MODEL_MAX_PROVIDER_CHARS:
-            return jsonify({'error': 'provider 값이 너무 깁니다.'}), 400
-    if plan_mode_provider is not None:
-        plan_mode_provider = str(plan_mode_provider).strip()
-        if len(plan_mode_provider) > MODEL_MAX_PROVIDER_CHARS:
-            return jsonify({'error': 'plan_mode_provider 값이 너무 깁니다.'}), 400
+    if reasoning_effort is not None:
+        reasoning_effort = str(reasoning_effort).strip()
+        if len(reasoning_effort) > MODEL_MAX_REASONING_CHARS:
+            return jsonify({'error': 'reasoning_effort 값이 너무 깁니다.'}), 400
+    if plan_mode_reasoning_effort is not None:
+        plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
+        if len(plan_mode_reasoning_effort) > MODEL_MAX_REASONING_CHARS:
+            return jsonify({'error': 'plan_mode_reasoning_effort 값이 너무 깁니다.'}), 400
     if model is not None:
         model = str(model).strip()
         if len(model) > MODEL_MAX_MODEL_CHARS:
@@ -329,10 +325,10 @@ def model_settings_update():
             return jsonify({'error': 'plan_mode_model 값이 너무 깁니다.'}), 400
 
     update_settings(
-        provider=provider,
         model=model,
-        plan_mode_provider=plan_mode_provider,
+        reasoning_effort=reasoning_effort,
         plan_mode_model=plan_mode_model,
+        plan_mode_reasoning_effort=plan_mode_reasoning_effort,
     )
     return jsonify(_build_settings_response())
 
@@ -460,6 +456,7 @@ def model_session_message(session_id):
         prompt_with_context,
         provider_override=execution_profile.get('provider'),
         model_override=execution_profile.get('model'),
+        reasoning_override=execution_profile.get('reasoning_effort'),
         plan_mode=plan_mode,
         execution_cwd=execution_cwd,
         allowed_dirs=allowed_dirs,
@@ -517,6 +514,7 @@ def model_session_message_stream(session_id):
         prompt_with_context,
         provider_override=execution_profile.get('provider'),
         model_override=execution_profile.get('model'),
+        reasoning_override=execution_profile.get('reasoning_effort'),
         apply_side_effects=not plan_mode,
         plan_mode=plan_mode,
         execution_cwd=execution_cwd,

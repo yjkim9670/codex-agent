@@ -254,38 +254,40 @@
                             <div class="usage-value" id="claude-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
-                            <label class="model-label" for="claude-model-input">Model · Provider</label>
-                            <div class="model-row model-row-combined has-apply">
+                            <label class="model-label" for="claude-model-input">Model · Effort</label>
+                            <div class="model-row model-row-combined">
                                 <div class="model-field model-field-model">
                                     <select id="claude-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="claude-model-input" class="model-input" type="text" placeholder="Default model">
                                 </div>
                                 <div class="model-field model-field-reasoning">
-                                    <select id="claude-reasoning-select" class="model-select is-hidden" aria-label="Select provider" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
-                                    <input id="claude-reasoning-input" class="model-input" type="text" placeholder="Provider">
+                                    <select id="claude-reasoning-select" class="model-select is-hidden" aria-label="Select effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="claude-reasoning-input" class="model-input" type="text" placeholder="Default effort">
                                 </div>
-                                <button
-                                    class="btn ghost icon-only model-apply"
-                                    type="button"
-                                    id="claude-model-apply"
-                                    aria-label="Apply model and provider settings"
-                                    title="Apply model and provider settings"
-                                >
-                                    <span class="sr-only">Apply settings</span>
-                                </button>
                             </div>
-                            <label class="model-sub-label" for="claude-plan-mode-model-input">Plan mode model · Provider</label>
+                            <label class="model-sub-label" for="claude-plan-mode-model-input">Plan mode model · Effort</label>
                             <div class="model-row">
                                 <div class="model-field model-field-plan-model">
                                     <select id="claude-plan-mode-model-select" class="model-select is-hidden" aria-label="Select plan mode model" data-options='{{ model_options|default([], true)|tojson }}'></select>
                                     <input id="claude-plan-mode-model-input" class="model-input" type="text" placeholder="Use default model">
                                 </div>
                                 <div class="model-field model-field-reasoning">
-                                    <select id="claude-plan-mode-reasoning-select" class="model-select is-hidden" aria-label="Select plan mode provider" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
-                                    <input id="claude-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default provider">
+                                    <select id="claude-plan-mode-reasoning-select" class="model-select is-hidden" aria-label="Select plan mode effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="claude-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
-                            <div class="model-status" id="claude-model-status">Refresh to load</div>
+                            <div class="model-footer-row">
+                                <div class="model-status" id="claude-model-status">Refresh to load</div>
+                                <button
+                                    class="btn ghost icon-only model-apply"
+                                    type="button"
+                                    id="claude-model-apply"
+                                    aria-label="Apply model and effort settings"
+                                    title="Apply model and effort settings"
+                                >
+                                    <span class="sr-only">Apply settings</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

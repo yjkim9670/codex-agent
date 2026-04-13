@@ -714,7 +714,10 @@ def codex_git_action(action):
             'active_action',
             'active_elapsed_seconds',
             'cancel_requested',
-            'cancelled_action'
+            'cancelled_action',
+            'windows_invalid_files',
+            'windows_invalid_count',
+            'has_windows_path_issues'
         ):
             if key in result:
                 response_payload[key] = result[key]

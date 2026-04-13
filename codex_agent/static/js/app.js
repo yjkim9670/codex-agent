@@ -181,6 +181,9 @@ let gitBranchStatusCache = {
     branch: '',
     aheadCount: null,
     behindCount: null,
+    windowsInvalidFiles: [],
+    windowsInvalidCount: 0,
+    hasWindowsPathIssues: false,
     changedFiles: [],
     isStale: false,
     fetchedAt: 0
@@ -2502,6 +2505,60 @@ function normalizeGitDivergenceCount(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
     return Math.max(0, Math.round(numeric));
+}
+
+function normalizeGitWindowsInvalidFiles(value) {
+    if (!Array.isArray(value)) return [];
+    const normalized = [];
+    const seenPaths = new Set();
+    value.forEach(item => {
+        if (!item || typeof item !== 'object') return;
+        const rawPath = typeof item.path === 'string' ? item.path.trim() : '';
+        const path = rawPath.replace(/^\.\//, '');
+        if (!path || seenPaths.has(path)) return;
+        seenPaths.add(path);
+        const reasons = Array.isArray(item.reasons)
+            ? item.reasons.map(reason => String(reason || '').trim()).filter(Boolean)
+            : [];
+        normalized.push({ path, reasons });
+    });
+    normalized.sort((left, right) => compareGitPathValues(left.path, right.path));
+    return normalized;
+}
+
+function normalizeGitWindowsInvalidCount(value, fallback = 0) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+        return Math.max(0, Math.round(numeric));
+    }
+    const fallbackNumeric = Number(fallback);
+    if (Number.isFinite(fallbackNumeric)) {
+        return Math.max(0, Math.round(fallbackNumeric));
+    }
+    return 0;
+}
+
+function normalizeGitWindowsPathIssueState(value, invalidCount = 0) {
+    return Boolean(value) || normalizeGitWindowsInvalidCount(invalidCount) > 0;
+}
+
+function formatGitWindowsPathIssueSummary(invalidCount = 0) {
+    const count = normalizeGitWindowsInvalidCount(invalidCount);
+    return `Windows 비호환 파일명 ${count}개`;
+}
+
+function buildGitWindowsPathIssueToastMessage(invalidFiles, invalidCount = 0) {
+    const normalizedFiles = normalizeGitWindowsInvalidFiles(invalidFiles);
+    const count = normalizeGitWindowsInvalidCount(
+        invalidCount,
+        normalizedFiles.length
+    );
+    if (!normalizedFiles.length) {
+        return `${formatGitWindowsPathIssueSummary(count)}가 포함되어 커밋할 수 없습니다. 파일명을 수정해주세요.`;
+    }
+    const preview = normalizedFiles.slice(0, 3).map(file => file.path).join(', ');
+    const suffix = normalizedFiles.length > 3 ? ', ...' : '';
+    return `${formatGitWindowsPathIssueSummary(count)}가 포함되어 커밋할 수 없습니다: ${preview}${suffix}`;
 }
 
 async function loadLiveWeatherData({ silent = false } = {}) {
@@ -5686,9 +5743,18 @@ function getGitChangedFilesCountFromStatus(status) {
 
 function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles).length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    const canCommit = hasChanges && !hasWindowsPathIssues;
     document.querySelectorAll('.git-action-commit').forEach(button => {
         if (button.id === 'codex-sync-overlay-commit') return;
-        button.classList.toggle('is-ready', hasChanges);
+        button.classList.toggle('is-ready', canCommit);
     });
 }
 
@@ -6132,15 +6198,34 @@ function syncGitOverlaySelection(files) {
     gitOverlaySelectedFiles = next;
 }
 
-function updateGitOverlaySelectionSummary(totalCount = 0) {
+function updateGitOverlaySelectionSummary(totalCount = 0, options = {}) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
     const selectedCount = gitOverlaySelectedFiles.size;
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        options?.windowsInvalidCount,
+        normalizeGitWindowsInvalidFiles(options?.windowsInvalidFiles).length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        options?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    const windowsIssueText = hasWindowsPathIssues
+        ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+        : '';
     if (elements.selection) {
-        elements.selection.textContent = `선택 ${selectedCount}개 / 전체 ${totalCount}개`;
+        elements.selection.textContent = `선택 ${selectedCount}개 / 전체 ${totalCount}개${windowsIssueText}`;
     }
     if (elements.commitBtn) {
-        elements.commitBtn.disabled = totalCount === 0 || selectedCount === 0;
+        const isBusy = elements.commitBtn.classList.contains('is-loading')
+            || elements.commitBtn.getAttribute('aria-busy') === 'true';
+        const isDisabled = totalCount === 0 || selectedCount === 0 || hasWindowsPathIssues;
+        elements.commitBtn.disabled = isBusy ? true : isDisabled;
+        const label = hasWindowsPathIssues
+            ? `Commit 불가: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : 'Commit staged files';
+        elements.commitBtn.dataset.label = label;
+        syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
     if (elements.stageAllBtn) {
         elements.stageAllBtn.disabled = totalCount === 0;
@@ -6374,7 +6459,11 @@ function setGitOverlaySelectionState(selectAll) {
         renderGitBranchOverlay(gitBranchStatusCache);
         return;
     }
-    updateGitOverlaySelectionSummary(files.length);
+    updateGitOverlaySelectionSummary(files.length, {
+        hasWindowsPathIssues: gitBranchStatusCache.hasWindowsPathIssues,
+        windowsInvalidCount: gitBranchStatusCache.windowsInvalidCount,
+        windowsInvalidFiles: gitBranchStatusCache.windowsInvalidFiles
+    });
 }
 
 function renderGitBranchOverlay(status) {
@@ -6382,18 +6471,38 @@ function renderGitBranchOverlay(status) {
     if (!elements) return;
     const branchElement = document.getElementById('codex-git-branch');
     const branchName = (status?.branch || getGitBranchFullName(branchElement) || '').trim();
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     if (elements.subtitle) {
         elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
     }
     const files = normalizeGitChangedFiles(status?.changedFiles);
     const count = Number.isFinite(status?.count) ? status.count : files.length;
     if (elements.meta) {
-        elements.meta.textContent = Number.isFinite(count)
+        const countText = Number.isFinite(count)
             ? `변경 파일 ${count}개`
             : '변경 파일 수를 불러올 수 없습니다.';
+        const windowsIssueText = hasWindowsPathIssues
+            ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : '';
+        elements.meta.textContent = `${countText}${windowsIssueText}`;
     }
     syncGitOverlaySelection(files);
-    updateGitBranchOverlayCommitPreview(status);
+    if (hasWindowsPathIssues) {
+        gitBranchOverlayPreviewKey = '';
+        if (elements.latestCommit) {
+            elements.latestCommit.textContent = `커밋 차단: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`;
+        }
+    } else {
+        updateGitBranchOverlayCommitPreview(status);
+    }
     let renderedFileCount = files.length;
     if (elements.list) {
         const rendered = renderGitChangedFileTreeList({
@@ -6442,7 +6551,11 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 정보를 불러올 수 없습니다.';
         elements.empty.classList.toggle('is-hidden', renderedFileCount !== 0);
     }
-    updateGitOverlaySelectionSummary(renderedFileCount);
+    updateGitOverlaySelectionSummary(renderedFileCount, {
+        hasWindowsPathIssues,
+        windowsInvalidCount,
+        windowsInvalidFiles
+    });
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
@@ -6538,6 +6651,9 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainRef: 'origin/main',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
+        windowsInvalidFiles: [],
+        windowsInvalidCount: 0,
+        hasWindowsPathIssues: false,
         changedCount: null,
         changedFiles: [],
         aheadCount: null,
@@ -6597,6 +6713,15 @@ function updateGitSyncOverlayActionButtonState(status) {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
     const repoMissing = Boolean(status?.repoMissing);
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     const normalizedChangedCount = normalizeGitChangedFilesCount(status?.changedCount);
     const changedCount = Number.isFinite(normalizedChangedCount)
         ? normalizedChangedCount
@@ -6604,11 +6729,23 @@ function updateGitSyncOverlayActionButtonState(status) {
     const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
     const behindCount = normalizeGitDivergenceCount(status?.behindCount);
     const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
+    const canCommit = hasChanges && !hasWindowsPathIssues;
     const hasPendingPush = !repoMissing && Number.isFinite(aheadCount) && aheadCount > 0;
     const hasPendingSync = !repoMissing && Number.isFinite(behindCount) && behindCount > 0;
 
     if (elements.commitBtn) {
-        elements.commitBtn.classList.toggle('is-ready', hasChanges);
+        elements.commitBtn.classList.toggle('is-ready', canCommit);
+        const isBusy = elements.commitBtn.classList.contains('is-loading')
+            || elements.commitBtn.getAttribute('aria-busy') === 'true';
+        const isLoading = elements.loading && !elements.loading.classList.contains('is-hidden');
+        if (!isBusy && !isLoading) {
+            elements.commitBtn.disabled = !canCommit;
+        }
+        const label = hasWindowsPathIssues
+            ? `Commit 불가: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : 'Commit all changed files';
+        elements.commitBtn.dataset.label = label;
+        syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
     if (elements.pushBtn) {
         elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
@@ -6654,6 +6791,9 @@ function setGitSyncOverlayLoading(isLoading) {
         elements.targetButtons.forEach(button => {
             button.disabled = Boolean(isLoading);
         });
+    }
+    if (!isLoading) {
+        updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(gitSyncOverlayRepoTarget));
     }
 }
 
@@ -6769,6 +6909,15 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(history?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        history?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        history?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     const changedFiles = normalizeGitChangedFiles(history?.changedFiles);
     const normalizedChangedCount = normalizeGitChangedFilesCount(history?.changedCount);
     const changedCount = Number.isFinite(normalizedChangedCount)
@@ -6783,8 +6932,10 @@ function renderGitSyncOverlay(history) {
         elements.subtitle.textContent = `${repoLabel} · ${remoteMainRef} 최근 이력`;
     }
     if (elements.fetchBtn) {
-        elements.fetchBtn.textContent = `${remoteMainRef} fetch`;
-        syncHoverTooltipFromLabel(elements.fetchBtn, `${remoteMainRef} fetch`);
+        const fetchLabel = 'Fetch only';
+        elements.fetchBtn.textContent = fetchLabel;
+        elements.fetchBtn.dataset.label = fetchLabel;
+        syncHoverTooltipFromLabel(elements.fetchBtn, fetchLabel);
     }
     if (elements.meta) {
         const repoText = `${repoLabel} (${repoRoot || 'None'})`;
@@ -6792,36 +6943,44 @@ function renderGitSyncOverlay(history) {
         const changedText = Number.isFinite(changedCount)
             ? `작업 트리 변경: ${changedCount}개`
             : '작업 트리 변경: 확인 불가';
+        const windowsIssueText = hasWindowsPathIssues
+            ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : '';
         const fallbackText = mainBranchFallback && requestedMainBranch && mainBranch && requestedMainBranch !== mainBranch
             ? ` · 요청 ${requestedMainBranch} -> 사용 ${mainBranch}`
             : '';
-        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${fallbackText}`;
+        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${windowsIssueText}${fallbackText}`;
     }
     if (elements.latestCommit) {
-        const changedPaths = changedFiles.map(file => file.path);
-        const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
-        gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
-        if (!changedPaths.length || !previewRequest.key) {
-            elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
+        if (hasWindowsPathIssues) {
+            gitSyncOverlayPreviewKeyByTarget[repoTarget] = '';
+            elements.latestCommit.textContent = `커밋 차단: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`;
         } else {
-            const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
-            if (freshPreview) {
-                elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
+            const changedPaths = changedFiles.map(file => file.path);
+            const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
+            gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
+            if (!changedPaths.length || !previewRequest.key) {
+                elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
             } else {
-                const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
-                if (stalePreview) {
-                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
+                if (freshPreview) {
+                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
                 } else {
-                    elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
-                }
-                if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
-                    void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
-                        if (!entry || !isGitSyncOverlayOpen()) return;
-                        const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
-                        if (activeTarget !== repoTarget) return;
-                        if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
-                        renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
-                    });
+                    const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
+                    if (stalePreview) {
+                        elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                    } else {
+                        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+                    }
+                    if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
+                        void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
+                            if (!entry || !isGitSyncOverlayOpen()) return;
+                            const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+                            if (activeTarget !== repoTarget) return;
+                            if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
+                            renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+                        });
+                    }
                 }
             }
         }
@@ -6908,7 +7067,10 @@ function renderGitSyncOverlay(history) {
         changedCount,
         changedFiles,
         aheadCount,
-        behindCount
+        behindCount,
+        windowsInvalidFiles,
+        windowsInvalidCount,
+        hasWindowsPathIssues
     });
 }
 
@@ -9933,6 +10095,15 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             ? detailedFiles
             : (Array.isArray(result?.changed_files) ? result.changed_files : []);
         const changedCount = normalizeGitChangedFilesCount(result?.changed_files_count);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            result?.windows_invalid_count,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            result?.has_windows_path_issues,
+            windowsInvalidCount
+        );
         return setGitSyncHistoryCache(target, {
             repoRoot: typeof result?.repo_root === 'string' ? result.repo_root : '',
             repoMissing: Boolean(result?.repo_missing),
@@ -9949,6 +10120,9 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             remoteMainHistoryError: typeof result?.remote_main_history_error === 'string'
                 ? result.remote_main_history_error
                 : '',
+            windowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues,
             changedCount: Number.isFinite(changedCount) ? changedCount : normalizeGitChangedFiles(changedFiles).length,
             changedFiles,
             aheadCount: Number.isFinite(result?.ahead_count) ? result.ahead_count : null,
@@ -9967,6 +10141,9 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             currentBranchHistory: [],
             remoteMainHistory: [],
             remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
+            windowsInvalidFiles: [],
+            windowsInvalidCount: 0,
+            hasWindowsPathIssues: false,
             changedCount: isRepoMissing ? 0 : null,
             changedFiles: [],
             isStale: !isRepoMissing,
@@ -9998,11 +10175,31 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
         const changedCount = Number.isFinite(statusChangedCount)
             ? statusChangedCount
             : normalizeGitChangedFilesCount(history?.changedCount);
+        const statusWindowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+        const historyWindowsInvalidFiles = normalizeGitWindowsInvalidFiles(history?.windowsInvalidFiles);
+        const mergedWindowsInvalidFiles = status
+            ? statusWindowsInvalidFiles
+            : historyWindowsInvalidFiles;
+        const windowsInvalidCount = status
+            ? normalizeGitWindowsInvalidCount(
+                status?.windowsInvalidCount,
+                mergedWindowsInvalidFiles.length
+            )
+            : normalizeGitWindowsInvalidCount(
+                history?.windowsInvalidCount,
+                mergedWindowsInvalidFiles.length
+            );
+        const hasWindowsPathIssues = status
+            ? normalizeGitWindowsPathIssueState(status?.hasWindowsPathIssues, windowsInvalidCount)
+            : normalizeGitWindowsPathIssueState(history?.hasWindowsPathIssues, windowsInvalidCount);
         const merged = setGitSyncHistoryCache(target, {
             changedCount: Number.isFinite(changedCount) ? changedCount : mergedFiles.length,
             changedFiles: mergedFiles,
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
-            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount,
+            windowsInvalidFiles: mergedWindowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues
         });
         renderGitSyncOverlay(merged);
         return merged;
@@ -10041,6 +10238,15 @@ async function fetchGitStatus(force = false) {
         const changedFiles = detailedFiles.length
             ? detailedFiles
             : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            result?.windows_invalid_count,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            result?.has_windows_path_issues,
+            windowsInvalidCount
+        );
         const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
         const behindCount = normalizeGitDivergenceCount(result?.behind_count);
         gitBranchStatusCache = {
@@ -10048,6 +10254,9 @@ async function fetchGitStatus(force = false) {
             branch,
             aheadCount,
             behindCount,
+            windowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues,
             changedFiles,
             isStale: false,
             fetchedAt: Date.now()
@@ -10059,6 +10268,9 @@ async function fetchGitStatus(force = false) {
             branch: gitBranchStatusCache.branch || '',
             aheadCount: null,
             behindCount: null,
+            windowsInvalidFiles: [],
+            windowsInvalidCount: 0,
+            hasWindowsPathIssues: false,
             changedFiles: [],
             isStale: true,
             fetchedAt: Date.now()
@@ -10088,7 +10300,16 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
             changedCount: getGitChangedFilesCountFromStatus(status),
             changedFiles: normalizeGitChangedFiles(status?.changedFiles),
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
-            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null,
+            windowsInvalidFiles: normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles),
+            windowsInvalidCount: normalizeGitWindowsInvalidCount(
+                status?.windowsInvalidCount,
+                normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles).length
+            ),
+            hasWindowsPathIssues: normalizeGitWindowsPathIssueState(
+                status?.hasWindowsPathIssues,
+                status?.windowsInvalidCount
+            )
         });
         renderGitSyncOverlay(mergedWorkspaceSync);
     }
@@ -10177,11 +10398,23 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     const changedFiles = detailedFiles.length
         ? detailedFiles
         : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        result?.windows_invalid_count,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        result?.has_windows_path_issues,
+        windowsInvalidCount
+    );
     return {
         count,
         branch,
         aheadCount,
         behindCount,
+        windowsInvalidFiles,
+        windowsInvalidCount,
+        hasWindowsPathIssues,
         changedFiles,
         isStale: false,
         fetchedAt: Date.now()
@@ -10200,6 +10433,22 @@ async function handleGitCommit(button) {
     const selectedFiles = Array.from(gitOverlaySelectedFiles);
     if (!selectedFiles.length) {
         showToast('커밋할 파일을 먼저 선택해주세요.', { tone: 'error', durationMs: 3400 });
+        return;
+    }
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(gitBranchStatusCache?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        gitBranchStatusCache?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        gitBranchStatusCache?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    if (hasWindowsPathIssues) {
+        showToast(buildGitWindowsPathIssueToastMessage(windowsInvalidFiles, windowsInvalidCount), {
+            tone: 'error',
+            durationMs: 5200
+        });
         return;
     }
 
@@ -10274,6 +10523,22 @@ async function handleGitQuickCommit(button, options = {}) {
     setGitButtonBusy(button, true, 'Committing...');
     try {
         const status = await fetchGitStatusForRepoTarget(repoTarget, true);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            status?.windowsInvalidCount,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            status?.hasWindowsPathIssues,
+            windowsInvalidCount
+        );
+        if (hasWindowsPathIssues) {
+            showToast(`${repoLabel} · ${buildGitWindowsPathIssueToastMessage(windowsInvalidFiles, windowsInvalidCount)}`, {
+                tone: 'error',
+                durationMs: 5200
+            });
+            return;
+        }
         const allFiles = normalizeGitChangedFiles(status?.changedFiles).map(file => file.path);
         if (!allFiles.length) {
             showToast(`${repoLabel} · 커밋할 변경 파일이 없습니다.`, { tone: 'error', durationMs: 3200 });
@@ -10417,7 +10682,7 @@ async function handleGitSync(button, options = {}) {
         : GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS;
 
     gitMutationInFlight = true;
-    setGitButtonBusy(button, true, applyAfterFetch ? 'Syncing...' : 'Fetching...');
+    setGitButtonBusy(button, true, applyAfterFetch ? 'Fetch + fast-forward...' : 'Fetching...');
     try {
         const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
@@ -10436,7 +10701,7 @@ async function handleGitSync(button, options = {}) {
             ? result.sync_target.trim()
             : 'origin/main';
         if (applyAfterFetch) {
-            showToast(`${repoLabel} · ${syncTarget} fetch + sync 완료${suffix}`, {
+            showToast(`${repoLabel} · ${syncTarget} fetch + fast-forward 완료${suffix}`, {
                 tone: 'success',
                 durationMs: 3600
             });
@@ -10449,14 +10714,14 @@ async function handleGitSync(button, options = {}) {
         }
     } catch (error) {
         const fallbackMessage = applyAfterFetch
-            ? 'git fetch + sync 작업에 실패했습니다.'
-            : 'git sync 작업에 실패했습니다.';
+            ? 'git fetch + fast-forward 작업에 실패했습니다.'
+            : 'git fetch 작업에 실패했습니다.';
         let message = normalizeGitActionError(error, fallbackMessage);
         const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
         if (cancelNotice) {
             message = `${message} · ${cancelNotice}`;
         }
-        const actionLabel = applyAfterFetch ? 'fetch + sync' : 'fetch';
+        const actionLabel = applyAfterFetch ? 'fetch + fast-forward' : 'fetch';
         showToast(`${repoLabel} · ${actionLabel} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;

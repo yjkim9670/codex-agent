@@ -6676,8 +6676,16 @@ function setGitSyncOverlayRepoTarget(repoTarget) {
         });
     }
     if (elements.fetchBtn) {
-        elements.fetchBtn.textContent = 'origin/main fetch';
-        syncHoverTooltipFromLabel(elements.fetchBtn, 'origin/main fetch');
+        const fetchLabel = 'Fetch only';
+        elements.fetchBtn.textContent = fetchLabel;
+        elements.fetchBtn.dataset.label = fetchLabel;
+        syncHoverTooltipFromLabel(elements.fetchBtn, fetchLabel);
+    }
+    if (elements.syncBtn) {
+        const syncLabel = 'Fetch + fast-forward';
+        elements.syncBtn.textContent = syncLabel;
+        elements.syncBtn.dataset.label = syncLabel;
+        syncHoverTooltipFromLabel(elements.syncBtn, syncLabel);
     }
     updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(target));
 }

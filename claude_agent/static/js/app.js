@@ -101,6 +101,8 @@ const GIT_STATUS_REQUEST_TIMEOUT_MS = 25000;
 const GIT_HISTORY_REQUEST_TIMEOUT_MS = 90000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 100000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 620000;
+const GIT_COMMIT_PREVIEW_REQUEST_TIMEOUT_MS = 90000;
+const GIT_COMMIT_PREVIEW_CACHE_MS = 15000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
 const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
 const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
@@ -159,6 +161,7 @@ const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
+const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
 const USAGE_HISTORY_DEFAULT_HOURS = 24 * 7;
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
@@ -186,6 +189,8 @@ let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
+let gitBranchOverlayCollapsedFolders = new Set();
+let gitBranchOverlayPreviewKey = '';
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -196,6 +201,16 @@ let gitSyncHistoryInFlightByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: false,
     [GIT_SYNC_TARGET_MODEL_AGENT]: false
 };
+let gitSyncOverlayCollapsedFoldersByTarget = {
+    [GIT_SYNC_TARGET_WORKSPACE]: new Set(),
+    [GIT_SYNC_TARGET_MODEL_AGENT]: new Set()
+};
+let gitSyncOverlayPreviewKeyByTarget = {
+    [GIT_SYNC_TARGET_WORKSPACE]: '',
+    [GIT_SYNC_TARGET_MODEL_AGENT]: ''
+};
+const gitCommitPreviewCacheByKey = new Map();
+const gitCommitPreviewInFlightByKey = new Map();
 let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
 let fileBrowserPath = '';
 let fileBrowserSelectedPath = '';
@@ -932,7 +947,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (headerDetailsTrigger) {
         headerDetailsTrigger.addEventListener('click', event => {
             event.preventDefault();
-            showHeaderDetailsToast();
+            void showHeaderDetailsToast();
         });
     }
 
@@ -2301,11 +2316,32 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
     }, visibleMs);
 }
 
-function showHeaderDetailsToast() {
+async function fetchClaudeRestartPolicy() {
+    try {
+        const result = await fetchJson('/api/claude/runtime/restart-policy', {
+            cache: 'no-store',
+            timeoutMs: HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS
+        });
+        return result && typeof result === 'object' ? result : {};
+    } catch (error) {
+        return {
+            known: false,
+            use_reloader: null,
+            error: normalizeError(error, 'use_reloader 설정을 확인하지 못했습니다.')
+        };
+    }
+}
+
+async function showHeaderDetailsToast() {
     const descriptionElement = document.getElementById('claude-header-description');
     const storageElement = document.getElementById('claude-session-storage');
     const descriptionText = String(descriptionElement?.textContent || APP_DESCRIPTION).trim();
     const storageText = String(storageElement?.textContent || '').trim();
+    const restartPolicy = await fetchClaudeRestartPolicy();
+    const useReloader = restartPolicy?.use_reloader;
+    const restartText = typeof useReloader === 'boolean'
+        ? `코드 변경 감지 재시작(use_reloader): ${useReloader ? 'true' : 'false'}`
+        : '코드 변경 감지 재시작(use_reloader): 확인 불가';
     const parts = [];
     if (descriptionText) {
         parts.push(descriptionText);
@@ -2313,6 +2349,7 @@ function showHeaderDetailsToast() {
     if (storageText) {
         parts.push(storageText);
     }
+    parts.push(restartText);
     const message = parts.length > 0 ? parts.join(' · ') : '세부 정보가 없습니다.';
     showToast(message, { tone: 'default', durationMs: 4600 });
 }
@@ -2900,6 +2937,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (elements?.mobileBrowserBtn) {
         elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
         elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
+        const switchSlot = elements.mobileBrowserBtn.closest('.chat-work-mode-switch-slot');
+        if (switchSlot) {
+            switchSlot.classList.toggle('is-hidden', !showMobileBrowserButton);
+        }
     }
 
     const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
@@ -2908,6 +2949,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (fileElements?.chatBtn) {
         fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
         fileElements.chatBtn.disabled = !showChatButton;
+        const switchSlot = fileElements.chatBtn.closest('.work-mode-preview-switch-slot');
+        if (switchSlot) {
+            switchSlot.classList.toggle('is-hidden', !showChatButton);
+        }
     }
     if (fileElements?.backBtn) {
         fileElements.backBtn.classList.toggle('is-hidden', !showBackButton);
@@ -4807,6 +4852,7 @@ function getGitChangedFilesCountFromStatus(status) {
 function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
     document.querySelectorAll('.git-action-commit').forEach(button => {
+        if (button.id === 'claude-sync-overlay-commit') return;
         button.classList.toggle('is-ready', hasChanges);
     });
 }
@@ -4820,6 +4866,7 @@ function updateGitPushButtonState(status) {
     const aheadCount = getGitAheadCountFromStatus(status);
     const hasPendingPush = Number.isFinite(aheadCount) && aheadCount > 0;
     document.querySelectorAll('.git-action-push').forEach(button => {
+        if (button.id === 'claude-sync-overlay-push') return;
         button.classList.toggle('is-ready', hasPendingPush);
     });
 }
@@ -4842,6 +4889,7 @@ function getGitBranchOverlayElements() {
         overlay,
         subtitle: document.getElementById('claude-branch-overlay-subtitle'),
         meta: document.getElementById('claude-branch-overlay-meta'),
+        latestCommit: document.getElementById('claude-branch-overlay-last-commit'),
         selection: document.getElementById('claude-branch-overlay-selection'),
         stageAllBtn: document.getElementById('claude-branch-overlay-stage-all'),
         stageNoneBtn: document.getElementById('claude-branch-overlay-stage-none'),
@@ -4866,6 +4914,11 @@ function setGitBranchOverlayLoading(isLoading) {
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
     }
+    if (elements.latestCommit) {
+        elements.latestCommit.textContent = isLoading
+            ? '커밋 예정 메시지: 계산 중...'
+            : elements.latestCommit.textContent;
+    }
     if (elements.commitBtn) {
         elements.commitBtn.disabled = Boolean(isLoading);
     }
@@ -4882,17 +4935,334 @@ function setGitBranchOverlayLoading(isLoading) {
 
 function normalizeGitChangedFiles(files) {
     if (!Array.isArray(files)) return [];
-    return files.map(file => {
-        if (!file) return null;
-        if (typeof file === 'string') {
-            const path = file.trim();
-            return path ? { path, status: '' } : null;
+    const normalized = [];
+    const seenPaths = new Set();
+    files.forEach(file => {
+        if (!file) return;
+        const rawPath = typeof file === 'string'
+            ? file.trim()
+            : (typeof file.path === 'string' ? file.path.trim() : '');
+        if (!rawPath) return;
+        const path = rawPath.replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!path || seenPaths.has(path)) return;
+        seenPaths.add(path);
+        const rawStatus = typeof file === 'string'
+            ? ''
+            : (typeof file.status === 'string' ? file.status.trim() : '');
+        normalized.push({
+            path,
+            status: rawStatus.toUpperCase()
+        });
+    });
+    return normalized;
+}
+
+function compareGitPathValues(left, right) {
+    return String(left || '').localeCompare(String(right || ''), undefined, {
+        numeric: true,
+        sensitivity: 'base'
+    });
+}
+
+function createGitChangedFolderNode(name = '', fullPath = '') {
+    return {
+        name,
+        fullPath,
+        folderMap: new Map(),
+        childFolders: [],
+        childFiles: [],
+        fileCount: 0,
+        folderCount: 0,
+        filePaths: [],
+        statusCounts: {}
+    };
+}
+
+function buildGitChangedFileTree(files) {
+    const root = createGitChangedFolderNode('', '');
+    const normalizedFiles = normalizeGitChangedFiles(files);
+    normalizedFiles.forEach(file => {
+        const segments = file.path.split('/').filter(Boolean);
+        if (!segments.length) return;
+        const fileName = segments[segments.length - 1];
+        if (!fileName) return;
+        let cursor = root;
+        let folderPath = '';
+        segments.slice(0, -1).forEach(segment => {
+            folderPath = folderPath ? `${folderPath}/${segment}` : segment;
+            let folderNode = cursor.folderMap.get(segment);
+            if (!folderNode) {
+                folderNode = createGitChangedFolderNode(segment, folderPath);
+                cursor.folderMap.set(segment, folderNode);
+            }
+            cursor = folderNode;
+        });
+        cursor.childFiles.push({
+            name: fileName,
+            path: file.path,
+            status: file.status
+        });
+    });
+
+    const finalizeFolder = folder => {
+        const childFolders = Array.from(folder.folderMap.values())
+            .sort((a, b) => compareGitPathValues(a.name, b.name))
+            .map(child => finalizeFolder(child));
+        const childFiles = folder.childFiles
+            .slice()
+            .sort((a, b) => compareGitPathValues(a.path, b.path));
+
+        const statusCounts = {};
+        const filePaths = [];
+        childFiles.forEach(file => {
+            filePaths.push(file.path);
+            if (!file.status) return;
+            statusCounts[file.status] = (statusCounts[file.status] || 0) + 1;
+        });
+        childFolders.forEach(childFolder => {
+            filePaths.push(...childFolder.filePaths);
+            Object.entries(childFolder.statusCounts || {}).forEach(([status, count]) => {
+                if (!status || !Number.isFinite(count)) return;
+                statusCounts[status] = (statusCounts[status] || 0) + count;
+            });
+        });
+
+        return {
+            name: folder.name,
+            fullPath: folder.fullPath,
+            childFolders,
+            childFiles,
+            fileCount: filePaths.length,
+            folderCount: childFolders.length + childFolders.reduce((sum, child) => sum + child.folderCount, 0),
+            filePaths,
+            statusCounts
+        };
+    };
+
+    return finalizeFolder(root);
+}
+
+function flattenGitChangedFileTree(tree, collapsedFolders = new Set()) {
+    const rows = [];
+    const collapsedSet = collapsedFolders instanceof Set ? collapsedFolders : new Set();
+    const walkFolder = (folder, depth) => {
+        rows.push({
+            type: 'folder',
+            depth,
+            folder
+        });
+        if (collapsedSet.has(folder.fullPath)) {
+            return;
         }
-        const path = typeof file.path === 'string' ? file.path.trim() : '';
-        if (!path) return null;
-        const status = typeof file.status === 'string' ? file.status.trim() : '';
-        return { path, status };
-    }).filter(Boolean);
+        folder.childFolders.forEach(childFolder => {
+            walkFolder(childFolder, depth + 1);
+        });
+        folder.childFiles.forEach(file => {
+            rows.push({
+                type: 'file',
+                depth: depth + 1,
+                file
+            });
+        });
+    };
+    const safeTree = tree && typeof tree === 'object'
+        ? tree
+        : createGitChangedFolderNode('', '');
+    safeTree.childFolders.forEach(folder => {
+        walkFolder(folder, 0);
+    });
+    safeTree.childFiles.forEach(file => {
+        rows.push({
+            type: 'file',
+            depth: 0,
+            file
+        });
+    });
+    return rows;
+}
+
+function getGitFolderSelectionState(folder, selectedFiles) {
+    const allPaths = Array.isArray(folder?.filePaths) ? folder.filePaths : [];
+    const total = allPaths.length;
+    if (total <= 0) {
+        return {
+            total,
+            selected: 0,
+            checked: false,
+            indeterminate: false
+        };
+    }
+    let selected = 0;
+    allPaths.forEach(path => {
+        if (selectedFiles.has(path)) {
+            selected += 1;
+        }
+    });
+    return {
+        total,
+        selected,
+        checked: selected === total,
+        indeterminate: selected > 0 && selected < total
+    };
+}
+
+function getGitFolderStatusEntries(statusCounts) {
+    const statusOrder = ['M', 'A', 'D', 'U', 'R', 'C', 'T'];
+    const entries = Object.entries(statusCounts || {}).filter(([status, count]) => {
+        return Boolean(status) && Number.isFinite(count) && count > 0;
+    });
+    entries.sort((left, right) => {
+        const leftIndex = statusOrder.indexOf(String(left[0] || '').toUpperCase());
+        const rightIndex = statusOrder.indexOf(String(right[0] || '').toUpperCase());
+        if (leftIndex !== rightIndex) {
+            if (leftIndex === -1) return 1;
+            if (rightIndex === -1) return -1;
+            return leftIndex - rightIndex;
+        }
+        return compareGitPathValues(left[0], right[0]);
+    });
+    return entries;
+}
+
+function createGitStatusBadgeNode(status, text = '') {
+    const badge = document.createElement('span');
+    badge.className = `branch-overlay-status ${getGitStatusBadgeClass(status)}`.trim();
+    badge.textContent = text || String(status || '').toUpperCase();
+    return badge;
+}
+
+function renderGitChangedFileTreeList(options = {}) {
+    const listElement = options.listElement;
+    if (!listElement) {
+        return {
+            fileCount: 0,
+            folderCount: 0
+        };
+    }
+    const collapsedFolders = options.collapsedFolders instanceof Set ? options.collapsedFolders : new Set();
+    const selectable = Boolean(options.selectable);
+    const selectedFiles = options.selectedFiles instanceof Set ? options.selectedFiles : new Set();
+    const onFileSelectionChange = typeof options.onFileSelectionChange === 'function'
+        ? options.onFileSelectionChange
+        : null;
+    const onFolderSelectionChange = typeof options.onFolderSelectionChange === 'function'
+        ? options.onFolderSelectionChange
+        : null;
+    const onFolderCollapseToggle = typeof options.onFolderCollapseToggle === 'function'
+        ? options.onFolderCollapseToggle
+        : null;
+
+    const tree = buildGitChangedFileTree(options.files);
+    const rows = flattenGitChangedFileTree(tree, collapsedFolders);
+    listElement.innerHTML = '';
+
+    rows.forEach(row => {
+        const item = document.createElement('li');
+        item.className = 'git-file-tree-item';
+        const rowNode = document.createElement('div');
+        rowNode.className = `git-file-tree-row is-${row.type}`;
+        rowNode.style.setProperty('--git-tree-depth', String(Math.max(0, Number(row.depth) || 0)));
+
+        if (row.type === 'folder') {
+            const folder = row.folder;
+            const folderPath = String(folder?.fullPath || '');
+            const isCollapsed = collapsedFolders.has(folderPath);
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'git-file-tree-toggle';
+            toggle.textContent = isCollapsed ? '>' : 'v';
+            toggle.setAttribute('aria-label', isCollapsed ? '폴더 펼치기' : '폴더 접기');
+            toggle.addEventListener('click', event => {
+                event.preventDefault();
+                if (onFolderCollapseToggle) {
+                    onFolderCollapseToggle(folderPath, !isCollapsed);
+                }
+            });
+            rowNode.appendChild(toggle);
+
+            if (selectable) {
+                const selection = getGitFolderSelectionState(folder, selectedFiles);
+                const folderCheck = document.createElement('input');
+                folderCheck.type = 'checkbox';
+                folderCheck.className = 'branch-overlay-folder-check';
+                folderCheck.checked = selection.checked;
+                folderCheck.indeterminate = selection.indeterminate;
+                folderCheck.disabled = selection.total <= 0;
+                folderCheck.addEventListener('change', () => {
+                    if (onFolderSelectionChange) {
+                        onFolderSelectionChange(folder, folderCheck.checked);
+                    }
+                });
+                rowNode.appendChild(folderCheck);
+            }
+
+            const name = document.createElement('span');
+            name.className = 'git-file-tree-folder-name';
+            name.textContent = folder?.name || folderPath || '(root)';
+            if (folderPath) {
+                name.title = folderPath;
+            }
+            rowNode.appendChild(name);
+
+            const meta = document.createElement('span');
+            meta.className = 'git-file-tree-folder-meta';
+            meta.textContent = `${Number(folder?.fileCount) || 0} files`;
+            rowNode.appendChild(meta);
+
+            const statusWrap = document.createElement('span');
+            statusWrap.className = 'git-file-tree-folder-statuses';
+            getGitFolderStatusEntries(folder?.statusCounts).forEach(([status, count]) => {
+                statusWrap.appendChild(createGitStatusBadgeNode(status, `${status}${count}`));
+            });
+            if (statusWrap.childElementCount > 0) {
+                rowNode.appendChild(statusWrap);
+            }
+        } else {
+            const togglePlaceholder = document.createElement('span');
+            togglePlaceholder.className = 'git-file-tree-toggle-placeholder';
+            rowNode.appendChild(togglePlaceholder);
+
+            const file = row.file;
+            if (selectable) {
+                const check = document.createElement('input');
+                check.type = 'checkbox';
+                check.className = 'branch-overlay-file-check';
+                check.value = file.path;
+                check.checked = selectedFiles.has(file.path);
+                check.addEventListener('change', () => {
+                    if (onFileSelectionChange) {
+                        onFileSelectionChange(file.path, check.checked);
+                    }
+                });
+                rowNode.appendChild(check);
+            }
+            if (file?.status) {
+                rowNode.appendChild(createGitStatusBadgeNode(file.status));
+            }
+            const textWrap = document.createElement('span');
+            textWrap.className = 'git-file-tree-file-text';
+
+            const fileName = document.createElement('span');
+            fileName.className = 'git-file-tree-file-name';
+            fileName.textContent = file?.name || file?.path || '(unknown)';
+            textWrap.appendChild(fileName);
+
+            const filePath = document.createElement('span');
+            filePath.className = 'git-file-tree-file-path';
+            filePath.textContent = file?.path || '';
+            textWrap.appendChild(filePath);
+
+            rowNode.appendChild(textWrap);
+        }
+
+        item.appendChild(rowNode);
+        listElement.appendChild(item);
+    });
+
+    return {
+        fileCount: Number(tree.fileCount) || 0,
+        folderCount: Number(tree.folderCount) || 0
+    };
 }
 
 function getGitStatusBadgeClass(status) {
@@ -4950,6 +5320,218 @@ function updateGitOverlaySelectionSummary(totalCount = 0) {
     }
 }
 
+function normalizeGitCommitPreviewPaths(paths) {
+    if (!Array.isArray(paths)) return [];
+    const normalized = [];
+    const seen = new Set();
+    paths.forEach(path => {
+        const text = String(path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+        if (!text || text.startsWith('/') || text.startsWith('../') || text.includes('/..')) {
+            return;
+        }
+        if (seen.has(text)) return;
+        seen.add(text);
+        normalized.push(text);
+    });
+    normalized.sort(compareGitPathValues);
+    return normalized;
+}
+
+function buildGitCommitPreviewCacheKey(repoTarget, paths) {
+    const target = normalizeGitSyncRepoTarget(repoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const normalizedPaths = normalizeGitCommitPreviewPaths(paths);
+    if (!normalizedPaths.length) {
+        return {
+            key: '',
+            target,
+            paths: []
+        };
+    }
+    return {
+        key: `${target}::${normalizedPaths.join('\n')}`,
+        target,
+        paths: normalizedPaths
+    };
+}
+
+function getGitCommitPreviewCacheEntry(cacheKey, { allowStale = false } = {}) {
+    if (!cacheKey) return null;
+    const cached = gitCommitPreviewCacheByKey.get(cacheKey);
+    if (!cached || typeof cached !== 'object') return null;
+    if (allowStale) return cached;
+    const fetchedAt = Number(cached.fetchedAt);
+    if (!Number.isFinite(fetchedAt)) return null;
+    const age = Date.now() - fetchedAt;
+    if (age < 0 || age > GIT_COMMIT_PREVIEW_CACHE_MS) return null;
+    return cached;
+}
+
+function buildGitCommitPreviewFallbackSubject(pathCount = 0) {
+    const count = Number.isFinite(Number(pathCount)) ? Math.max(0, Number(pathCount)) : 0;
+    if (count <= 0) return '변경사항 반영';
+    return `변경사항 ${count}건 반영`;
+}
+
+function normalizeGitCommitPreviewResult(result, fallbackCount = 0) {
+    const subjectRaw = typeof result?.commit_message_subject === 'string'
+        ? result.commit_message_subject
+        : (typeof result?.commit_message === 'string' ? result.commit_message : '');
+    const subject = subjectRaw.trim();
+    const body = typeof result?.commit_message_body === 'string' ? result.commit_message_body.trim() : '';
+    const comment = typeof result?.commit_comment === 'string' ? result.commit_comment.trim() : '';
+    const analysisLines = Array.isArray(result?.commit_analysis_lines)
+        ? result.commit_analysis_lines.map(line => String(line || '').trim()).filter(Boolean)
+        : [];
+    return {
+        subject: subject || buildGitCommitPreviewFallbackSubject(fallbackCount),
+        body,
+        comment,
+        analysisLines,
+        error: ''
+    };
+}
+
+function formatGitCommitPreviewLabel(previewEntry, fallbackCount = 0) {
+    const subject = typeof previewEntry?.subject === 'string' ? previewEntry.subject.trim() : '';
+    if (subject) {
+        return `커밋 예정 메시지(자동): ${subject}`;
+    }
+    return `커밋 예정 메시지(자동): ${buildGitCommitPreviewFallbackSubject(fallbackCount)}`;
+}
+
+async function ensureGitCommitPreview(repoTarget, paths) {
+    const request = buildGitCommitPreviewCacheKey(repoTarget, paths);
+    if (!request.key) {
+        return {
+            key: '',
+            entry: null
+        };
+    }
+    const cached = getGitCommitPreviewCacheEntry(request.key);
+    if (cached) {
+        return {
+            key: request.key,
+            entry: cached
+        };
+    }
+    const inFlight = gitCommitPreviewInFlightByKey.get(request.key);
+    if (inFlight) {
+        const pendingEntry = await inFlight;
+        return {
+            key: request.key,
+            entry: pendingEntry
+        };
+    }
+
+    let promise = null;
+    promise = (async () => {
+        try {
+            const result = await fetchJson('/api/claude/git/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                timeoutMs: GIT_COMMIT_PREVIEW_REQUEST_TIMEOUT_MS,
+                body: JSON.stringify({
+                    repo_target: request.target,
+                    files: request.paths
+                })
+            });
+            const normalized = normalizeGitCommitPreviewResult(result, request.paths.length);
+            const next = {
+                ...normalized,
+                fetchedAt: Date.now()
+            };
+            gitCommitPreviewCacheByKey.set(request.key, next);
+            return next;
+        } catch (error) {
+            const fallbackSubject = buildGitCommitPreviewFallbackSubject(request.paths.length);
+            const stale = getGitCommitPreviewCacheEntry(request.key, { allowStale: true });
+            const next = {
+                subject: stale?.subject || fallbackSubject,
+                body: stale?.body || '',
+                comment: stale?.comment || '',
+                analysisLines: Array.isArray(stale?.analysisLines) ? stale.analysisLines : [],
+                error: normalizeGitActionError(error, '커밋 예정 메시지 계산에 실패했습니다.'),
+                fetchedAt: Date.now()
+            };
+            gitCommitPreviewCacheByKey.set(request.key, next);
+            return next;
+        } finally {
+            if (gitCommitPreviewInFlightByKey.get(request.key) === promise) {
+                gitCommitPreviewInFlightByKey.delete(request.key);
+            }
+        }
+    })();
+    gitCommitPreviewInFlightByKey.set(request.key, promise);
+
+    const resolved = await promise;
+    return {
+        key: request.key,
+        entry: resolved
+    };
+}
+
+function getGitSelectedFilePathsInOrder(files) {
+    const normalizedFiles = normalizeGitChangedFiles(files);
+    const selectedPaths = [];
+    const seen = new Set();
+    normalizedFiles.forEach(file => {
+        const path = typeof file?.path === 'string' ? file.path.trim() : '';
+        if (!path || seen.has(path) || !gitOverlaySelectedFiles.has(path)) {
+            return;
+        }
+        seen.add(path);
+        selectedPaths.push(path);
+    });
+    gitOverlaySelectedFiles.forEach(path => {
+        const text = String(path || '').trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        selectedPaths.push(text);
+    });
+    return selectedPaths;
+}
+
+function updateGitBranchOverlayCommitPreview(status) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements?.latestCommit) return;
+    const manualMessage = elements.commitMessage?.value?.trim() || '';
+    if (manualMessage) {
+        gitBranchOverlayPreviewKey = '';
+        elements.latestCommit.textContent = `커밋 예정 메시지(수동): ${manualMessage}`;
+        return;
+    }
+    const selectedPaths = getGitSelectedFilePathsInOrder(status?.changedFiles);
+    if (!selectedPaths.length) {
+        gitBranchOverlayPreviewKey = '';
+        elements.latestCommit.textContent = '커밋 예정 메시지: 파일 선택 시 자동 생성됩니다.';
+        return;
+    }
+    const request = buildGitCommitPreviewCacheKey(GIT_SYNC_TARGET_WORKSPACE, selectedPaths);
+    gitBranchOverlayPreviewKey = request.key;
+    const freshEntry = getGitCommitPreviewCacheEntry(request.key);
+    if (freshEntry) {
+        elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshEntry, selectedPaths.length);
+        return;
+    }
+    const staleEntry = getGitCommitPreviewCacheEntry(request.key, { allowStale: true });
+    if (staleEntry) {
+        elements.latestCommit.textContent = formatGitCommitPreviewLabel(staleEntry, selectedPaths.length);
+    } else {
+        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+    }
+    if (gitCommitPreviewInFlightByKey.has(request.key)) {
+        return;
+    }
+    void ensureGitCommitPreview(GIT_SYNC_TARGET_WORKSPACE, selectedPaths).then(({ key, entry }) => {
+        if (!entry) return;
+        if (!isGitBranchOverlayOpen()) return;
+        if (gitBranchOverlayPreviewKey !== key) return;
+        const currentElements = getGitBranchOverlayElements();
+        if (!currentElements?.latestCommit) return;
+        currentElements.latestCommit.textContent = formatGitCommitPreviewLabel(entry, selectedPaths.length);
+    });
+}
+
 function setGitOverlaySelectionState(selectAll) {
     const files = normalizeGitChangedFiles(gitBranchStatusCache.changedFiles);
     const selected = new Set();
@@ -4958,13 +5540,9 @@ function setGitOverlaySelectionState(selectAll) {
     }
     gitOverlaySelectedFiles = selected;
     gitOverlaySelectionTouched = true;
-
-    const elements = getGitBranchOverlayElements();
-    if (elements?.list) {
-        elements.list.querySelectorAll('input.branch-overlay-file-check').forEach(checkbox => {
-            const path = checkbox.value || '';
-            checkbox.checked = gitOverlaySelectedFiles.has(path);
-        });
+    if (isGitBranchOverlayOpen()) {
+        renderGitBranchOverlay(gitBranchStatusCache);
+        return;
     }
     updateGitOverlaySelectionSummary(files.length);
 }
@@ -4985,46 +5563,56 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 수를 불러올 수 없습니다.';
     }
     syncGitOverlaySelection(files);
+    updateGitBranchOverlayCommitPreview(status);
+    let renderedFileCount = files.length;
     if (elements.list) {
-        elements.list.innerHTML = '';
-        files.forEach(file => {
-            const item = document.createElement('li');
-            const check = document.createElement('input');
-            check.type = 'checkbox';
-            check.className = 'branch-overlay-file-check';
-            check.value = file.path;
-            check.checked = gitOverlaySelectedFiles.has(file.path);
-            check.addEventListener('change', () => {
+        const rendered = renderGitChangedFileTreeList({
+            listElement: elements.list,
+            files,
+            collapsedFolders: gitBranchOverlayCollapsedFolders,
+            selectable: true,
+            selectedFiles: gitOverlaySelectedFiles,
+            onFileSelectionChange: (path, checked) => {
                 gitOverlaySelectionTouched = true;
-                if (check.checked) {
-                    gitOverlaySelectedFiles.add(file.path);
+                if (checked) {
+                    gitOverlaySelectedFiles.add(path);
                 } else {
-                    gitOverlaySelectedFiles.delete(file.path);
+                    gitOverlaySelectedFiles.delete(path);
                 }
-                updateGitOverlaySelectionSummary(files.length);
-            });
-            item.appendChild(check);
-            if (file.status) {
-                const badge = document.createElement('span');
-                badge.className = `branch-overlay-status ${getGitStatusBadgeClass(file.status)}`.trim();
-                badge.textContent = file.status.toUpperCase();
-                item.appendChild(badge);
+                renderGitBranchOverlay(gitBranchStatusCache);
+            },
+            onFolderSelectionChange: (folder, checked) => {
+                gitOverlaySelectionTouched = true;
+                const targetPaths = Array.isArray(folder?.filePaths) ? folder.filePaths : [];
+                targetPaths.forEach(path => {
+                    if (checked) {
+                        gitOverlaySelectedFiles.add(path);
+                    } else {
+                        gitOverlaySelectedFiles.delete(path);
+                    }
+                });
+                renderGitBranchOverlay(gitBranchStatusCache);
+            },
+            onFolderCollapseToggle: (folderPath, shouldCollapse) => {
+                if (!folderPath) return;
+                if (shouldCollapse) {
+                    gitBranchOverlayCollapsedFolders.add(folderPath);
+                } else {
+                    gitBranchOverlayCollapsedFolders.delete(folderPath);
+                }
+                renderGitBranchOverlay(gitBranchStatusCache);
             }
-            const path = document.createElement('span');
-            path.className = 'branch-overlay-file-path';
-            path.textContent = file.path;
-            item.appendChild(path);
-            elements.list.appendChild(item);
         });
-        elements.list.classList.toggle('is-hidden', files.length === 0);
+        renderedFileCount = rendered.fileCount;
+        elements.list.classList.toggle('is-hidden', rendered.fileCount === 0);
     }
     if (elements.empty) {
         elements.empty.textContent = Number.isFinite(count)
             ? '변경 파일이 없습니다.'
             : '변경 파일 정보를 불러올 수 없습니다.';
-        elements.empty.classList.toggle('is-hidden', files.length !== 0);
+        elements.empty.classList.toggle('is-hidden', renderedFileCount !== 0);
     }
-    updateGitOverlaySelectionSummary(files.length);
+    updateGitOverlaySelectionSummary(renderedFileCount);
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
@@ -5035,28 +5623,11 @@ function isGitBranchOverlayOpen() {
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
-function isAnyOverlayOpen() {
-    return (
-        isGitBranchOverlayOpen()
-        || isGitSyncOverlayOpen()
-        || isMessageLogOverlayOpen()
-        || isFileBrowserOverlayOpen()
-        || isMobileSessionOverlayOpen()
-        || isUsageHistoryOverlayOpen()
-    );
-}
-
 function openGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
-    }
-    if (isMobileSessionOverlayOpen()) {
-        closeMobileSessionOverlay();
-    }
-    if (isUsageHistoryOverlayOpen()) {
-        closeUsageHistoryOverlay();
     }
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
@@ -5064,8 +5635,15 @@ function openGitBranchOverlay() {
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
     }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
+    gitBranchOverlayPreviewKey = '';
     if (elements.commitMessage) {
         elements.commitMessage.value = '';
     }
@@ -5079,9 +5657,16 @@ function openGitBranchOverlay() {
 function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
+    gitBranchOverlayPreviewKey = '';
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isAnyOverlayOpen()) {
+    if (
+        !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }
@@ -5096,6 +5681,17 @@ function getGitSyncRepoLabel(repoTarget) {
     return GIT_SYNC_TARGET_LABELS[target] || target;
 }
 
+function getGitSyncOverlayCollapsedFolders(repoTarget = gitSyncOverlayRepoTarget) {
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    const current = gitSyncOverlayCollapsedFoldersByTarget[target];
+    if (current instanceof Set) {
+        return current;
+    }
+    const created = new Set();
+    gitSyncOverlayCollapsedFoldersByTarget[target] = created;
+    return created;
+}
+
 function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
     const target = normalizeGitSyncRepoTarget(repoTarget);
     return {
@@ -5104,6 +5700,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         repoRoot: '',
         repoMissing: false,
         currentBranch: '',
+        currentBranchHistory: [],
         requestedMainBranch: 'main',
         mainBranch: 'main',
         mainBranchFallback: false,
@@ -5111,6 +5708,8 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainRef: 'origin/main',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
+        changedCount: null,
+        changedFiles: [],
         aheadCount: null,
         behindCount: null,
         fetchedAt: 0,
@@ -5149,6 +5748,7 @@ function getGitSyncOverlayElements() {
         overlay,
         subtitle: document.getElementById('claude-sync-overlay-subtitle'),
         meta: document.getElementById('claude-sync-overlay-meta'),
+        latestCommit: document.getElementById('claude-sync-overlay-last-commit'),
         targetButtons: Array.from(overlay.querySelectorAll('.sync-overlay-target[data-repo-target]')),
         fetchBtn: document.getElementById('claude-sync-overlay-fetch'),
         syncBtn: document.getElementById('claude-sync-overlay-sync'),
@@ -5156,9 +5756,43 @@ function getGitSyncOverlayElements() {
         pushBtn: document.getElementById('claude-sync-overlay-push'),
         refreshBtn: document.getElementById('claude-sync-overlay-refresh'),
         loading: document.getElementById('claude-sync-overlay-loading'),
+        filesEmpty: document.getElementById('claude-sync-overlay-files-empty'),
+        filesList: document.getElementById('claude-sync-overlay-files-list'),
         empty: document.getElementById('claude-sync-overlay-empty'),
         list: document.getElementById('claude-sync-overlay-list')
     };
+}
+
+function updateGitSyncOverlayActionButtonState(status) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements) return;
+    const repoMissing = Boolean(status?.repoMissing);
+    const normalizedChangedCount = normalizeGitChangedFilesCount(status?.changedCount);
+    const changedCount = Number.isFinite(normalizedChangedCount)
+        ? normalizedChangedCount
+        : normalizeGitChangedFiles(status?.changedFiles).length;
+    const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
+    const behindCount = normalizeGitDivergenceCount(status?.behindCount);
+    const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
+    const hasPendingPush = !repoMissing && Number.isFinite(aheadCount) && aheadCount > 0;
+    const hasPendingSync = !repoMissing && Number.isFinite(behindCount) && behindCount > 0;
+
+    if (elements.commitBtn) {
+        elements.commitBtn.classList.toggle('is-ready', hasChanges);
+    }
+    if (elements.pushBtn) {
+        elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
+    }
+    if (elements.syncBtn) {
+        elements.syncBtn.classList.toggle('is-ready', hasPendingSync);
+    }
+}
+
+function syncGitSyncOverlayActionButtonsFromCache() {
+    if (!isGitSyncOverlayOpen()) return;
+    const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+    const cached = getGitSyncHistoryCache(target);
+    updateGitSyncOverlayActionButtonState(cached);
 }
 
 function setGitSyncOverlayLoading(isLoading) {
@@ -5215,6 +5849,7 @@ function setGitSyncOverlayRepoTarget(repoTarget) {
         elements.fetchBtn.textContent = 'origin/main fetch';
         syncHoverTooltipFromLabel(elements.fetchBtn, 'origin/main fetch');
     }
+    updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(target));
 }
 
 function normalizeGitHistoryEntries(value) {
@@ -5233,9 +5868,29 @@ function normalizeGitHistoryEntries(value) {
             : (typeof entry.committedAt === 'string' ? entry.committedAt.trim() : '');
         const author = typeof entry.author === 'string' ? entry.author.trim() : '';
         const subject = typeof entry.subject === 'string' ? entry.subject.trim() : '';
+        const fullMessageRaw = typeof entry.full_message === 'string'
+            ? entry.full_message
+            : (typeof entry.fullMessage === 'string' ? entry.fullMessage : '');
+        const fullMessage = fullMessageRaw.trim() || subject;
         if (!shortHash && !subject) return null;
-        return { commitHash, shortHash, committedAt, author, subject };
+        return { commitHash, shortHash, committedAt, author, subject, fullMessage };
     }).filter(Boolean);
+}
+
+function formatGitHistoryDetailToastText(entry) {
+    const shortHash = typeof entry?.shortHash === 'string' ? entry.shortHash.trim() : '';
+    const subject = typeof entry?.subject === 'string' ? entry.subject.trim() : '';
+    const fullMessage = typeof entry?.fullMessage === 'string' ? entry.fullMessage.trim() : '';
+    const detailSource = fullMessage || subject;
+    if (!detailSource && !shortHash) {
+        return '상세 커밋 메시지가 없습니다.';
+    }
+    const flattened = detailSource.replace(/\s+/g, ' ').trim();
+    const normalizedDetail = flattened.length > 260 ? `${flattened.slice(0, 259)}…` : flattened;
+    if (shortHash && normalizedDetail) {
+        return `${shortHash} · ${normalizedDetail}`;
+    }
+    return normalizedDetail || shortHash;
 }
 
 function formatGitHistoryTimestamp(value) {
@@ -5276,6 +5931,11 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
+    const changedFiles = normalizeGitChangedFiles(history?.changedFiles);
+    const normalizedChangedCount = normalizeGitChangedFilesCount(history?.changedCount);
+    const changedCount = Number.isFinite(normalizedChangedCount)
+        ? normalizedChangedCount
+        : changedFiles.length;
     const aheadCount = Number.isFinite(history?.aheadCount) ? history.aheadCount : null;
     const behindCount = Number.isFinite(history?.behindCount) ? history.behindCount : null;
     const compareText = !repoMissing && aheadCount != null && behindCount != null
@@ -5291,15 +5951,79 @@ function renderGitSyncOverlay(history) {
     if (elements.meta) {
         const repoText = `${repoLabel} (${repoRoot || 'None'})`;
         const branchText = currentBranch ? `현재 브랜치: ${currentBranch}` : '현재 브랜치: None';
+        const changedText = Number.isFinite(changedCount)
+            ? `작업 트리 변경: ${changedCount}개`
+            : '작업 트리 변경: 확인 불가';
         const fallbackText = mainBranchFallback && requestedMainBranch && mainBranch && requestedMainBranch !== mainBranch
             ? ` · 요청 ${requestedMainBranch} -> 사용 ${mainBranch}`
             : '';
-        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText}${fallbackText}`;
+        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${fallbackText}`;
+    }
+    if (elements.latestCommit) {
+        const changedPaths = changedFiles.map(file => file.path);
+        const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
+        gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
+        if (!changedPaths.length || !previewRequest.key) {
+            elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
+        } else {
+            const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
+            if (freshPreview) {
+                elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
+            } else {
+                const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
+                if (stalePreview) {
+                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                } else {
+                    elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+                }
+                if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
+                    void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
+                        if (!entry || !isGitSyncOverlayOpen()) return;
+                        const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+                        if (activeTarget !== repoTarget) return;
+                        if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
+                        renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+                    });
+                }
+            }
+        }
+    }
+    let renderedChangedFileCount = changedFiles.length;
+    if (elements.filesList) {
+        const collapsedFolders = getGitSyncOverlayCollapsedFolders(repoTarget);
+        const rendered = renderGitChangedFileTreeList({
+            listElement: elements.filesList,
+            files: changedFiles,
+            collapsedFolders,
+            selectable: false,
+            onFolderCollapseToggle: (folderPath, shouldCollapse) => {
+                if (!folderPath) return;
+                if (shouldCollapse) {
+                    collapsedFolders.add(folderPath);
+                } else {
+                    collapsedFolders.delete(folderPath);
+                }
+                renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+            }
+        });
+        renderedChangedFileCount = rendered.fileCount;
+        elements.filesList.classList.toggle('is-hidden', rendered.fileCount === 0);
+    }
+    if (elements.filesEmpty) {
+        const fallbackFileMessage = repoMissing
+            ? '현재 repository: None'
+            : '커밋 대상 파일이 없습니다.';
+        elements.filesEmpty.textContent = fallbackFileMessage;
+        elements.filesEmpty.classList.toggle('is-hidden', renderedChangedFileCount !== 0);
     }
     if (elements.list) {
         elements.list.innerHTML = '';
         remoteHistory.forEach(entry => {
             const item = document.createElement('li');
+            item.className = 'sync-overlay-history-item';
+            item.tabIndex = 0;
+            item.setAttribute('role', 'button');
+            item.title = '클릭하면 상세 커밋 메시지를 표시합니다.';
             const main = document.createElement('div');
             main.className = 'sync-overlay-item-main';
 
@@ -5323,6 +6047,15 @@ function renderGitSyncOverlay(history) {
 
             item.appendChild(main);
             item.appendChild(meta);
+            const showDetailToast = () => {
+                showToast(formatGitHistoryDetailToastText(entry), { tone: 'default', durationMs: 5600 });
+            };
+            item.addEventListener('click', showDetailToast);
+            item.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                showDetailToast();
+            });
             elements.list.appendChild(item);
         });
         elements.list.classList.toggle('is-hidden', remoteHistory.length === 0);
@@ -5332,6 +6065,13 @@ function renderGitSyncOverlay(history) {
         elements.empty.textContent = fallbackMessage;
         elements.empty.classList.toggle('is-hidden', remoteHistory.length !== 0);
     }
+    updateGitSyncOverlayActionButtonState({
+        repoMissing,
+        changedCount,
+        changedFiles,
+        aheadCount,
+        behindCount
+    });
 }
 
 function isGitSyncOverlayOpen() {
@@ -5345,23 +6085,27 @@ function openGitSyncOverlay() {
     if (isGitBranchOverlayOpen()) {
         closeGitBranchOverlay();
     }
-    if (isMobileSessionOverlayOpen()) {
-        closeMobileSessionOverlay();
-    }
-    if (isUsageHistoryOverlayOpen()) {
-        closeUsageHistoryOverlay();
-    }
     if (isFileBrowserOverlayOpen()) {
         closeFileBrowserOverlay();
     }
     if (isMessageLogOverlayOpen()) {
         closeMessageLogOverlay();
     }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    gitSyncOverlayPreviewKeyByTarget[normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)] = '';
     if (elements.meta) {
         elements.meta.textContent = '히스토리를 불러오는 중...';
+    }
+    if (elements.latestCommit) {
+        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
     }
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
@@ -5369,6 +6113,13 @@ function openGitSyncOverlay() {
     if (elements.list) {
         elements.list.classList.add('is-hidden');
         elements.list.innerHTML = '';
+    }
+    if (elements.filesEmpty) {
+        elements.filesEmpty.classList.add('is-hidden');
+    }
+    if (elements.filesList) {
+        elements.filesList.classList.add('is-hidden');
+        elements.filesList.innerHTML = '';
     }
     setGitSyncOverlayRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
@@ -5378,9 +6129,17 @@ function openGitSyncOverlay() {
 function closeGitSyncOverlay() {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
+    const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+    gitSyncOverlayPreviewKeyByTarget[activeTarget] = '';
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
-    if (!isAnyOverlayOpen()) {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
         document.body.classList.remove('is-overlay-open');
     }
 }

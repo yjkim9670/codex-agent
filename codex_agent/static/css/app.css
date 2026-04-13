@@ -66,6 +66,7 @@
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
     --icon-chevron-left: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 6 9 12 15 18'/></svg>");
+    --icon-folder-up: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M12 15V10.2'/><path d='m9.9 12.3 2.1-2.1 2.1 2.1'/></svg>");
     --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
@@ -133,6 +134,7 @@
     --icon-chevron-down: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
     --icon-chevron-right: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='9 6 15 12 9 18'/></svg>");
     --icon-chevron-left: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 6 9 12 15 18'/></svg>");
+    --icon-folder-up: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M12 15V10.2'/><path d='m9.9 12.3 2.1-2.1 2.1 2.1'/></svg>");
     --icon-check: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-check-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");
     --icon-sync: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
@@ -619,14 +621,6 @@ body {
     white-space: nowrap;
 }
 
-.git-file-tree-file-path {
-    color: var(--text-tertiary);
-    font-size: 11px;
-    line-height: 1.3;
-    overflow-wrap: anywhere;
-    word-break: break-all;
-}
-
 .holiday-weekday {
     color: var(--danger);
     font-weight: 700;
@@ -800,6 +794,33 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+/* Compact git file-tree rows for branch/sync file lists. */
+.branch-overlay-list.git-file-tree-list,
+.sync-overlay-files-list.git-file-tree-list {
+    gap: 2px;
+    padding: 6px;
+}
+
+.branch-overlay-list.git-file-tree-list li,
+.sync-overlay-files-list.git-file-tree-list li {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+    display: block;
+}
+
+.branch-overlay-list.git-file-tree-list .git-file-tree-row,
+.sync-overlay-files-list.git-file-tree-list .git-file-tree-row {
+    padding: 4px 6px;
+    padding-left: calc(6px + (var(--git-tree-depth, 0) * 14px));
+}
+
+.branch-overlay-list.git-file-tree-list .git-file-tree-file-text,
+.sync-overlay-files-list.git-file-tree-list .git-file-tree-file-text {
+    display: block;
 }
 
 .sync-overlay-list {
@@ -1018,6 +1039,14 @@ body {
     font-size: 12px;
 }
 
+.file-browser-back,
+.work-mode-preview-back {
+    background-image: var(--icon-chevron-left);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
+}
+
 .file-browser-fullscreen {
     min-height: 30px;
     padding: 6px 10px;
@@ -1026,6 +1055,14 @@ body {
 
 .file-browser-refresh {
     background-image: var(--icon-refresh);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.file-browser-up,
+.work-mode-preview-up {
+    background-image: var(--icon-folder-up);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
@@ -3156,7 +3193,7 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
     gap: var(--work-mode-file-col-gap);
     width: max-content;
     min-width: 100%;
-    padding: 6px 10px 6px 0;
+    padding: 6px 10px 6px 8px;
     border-bottom: 1px solid var(--border);
     background: var(--surface);
 }
@@ -3246,7 +3283,7 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
     border-radius: 0;
     background: transparent;
     color: var(--text-primary);
-    padding: 7px 10px 7px 0;
+    padding: 7px 10px 7px 8px;
     font-size: 12px;
     cursor: pointer;
     display: grid;
@@ -5852,11 +5889,12 @@ label.hover-tooltip,
     }
 
     .chat-controls-body {
-        grid-template-columns: 1fr;
-        grid-auto-rows: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
         max-height: min(34vh, 260px);
         min-height: 0;
-        align-content: start;
         overflow-y: auto;
         overflow-x: hidden;
         overscroll-behavior: contain;
@@ -5865,11 +5903,15 @@ label.hover-tooltip,
         scroll-padding-bottom: 96px;
     }
 
+    .chat-controls-body > * {
+        flex: 0 0 auto;
+    }
+
     .model-card {
         order: 1;
         height: auto;
         min-height: 120px;
-        overflow: hidden;
+        overflow: visible;
     }
 
     .usage-card {
@@ -6173,6 +6215,21 @@ label.hover-tooltip,
         --sidebar-collapsed-height: 52px;
     }
 
+    .layout {
+        display: grid;
+        grid-template-columns: clamp(220px, 34vw, 280px) minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+        grid-auto-rows: minmax(0, 1fr);
+        gap: 10px;
+    }
+
+    .sidebar-stack {
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 10px;
+        height: 100%;
+    }
+
     .app {
         padding: 12px;
         border-radius: 18px;
@@ -6205,20 +6262,135 @@ label.hover-tooltip,
     }
 
     .sessions {
-        max-height: min(40vh, 330px);
+        order: 0;
+        max-height: none;
+    }
+
+    .chat {
+        order: 0;
     }
 
     .sessions .session-list {
-        max-height: min(30vh, 240px);
+        max-height: none;
     }
 
     .chat-controls-body {
         max-height: min(36vh, 300px);
     }
 
-    .app.is-work-mode .chat,
+    .usage-card {
+        background: var(--surface-muted);
+    }
+
+    .model-footer-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) var(--icon-button-size);
+        align-items: center;
+        column-gap: 8px;
+    }
+
+    .model-apply {
+        justify-self: end;
+        display: inline-flex;
+        flex: 0 0 var(--icon-button-size);
+        min-width: var(--icon-button-size);
+        visibility: visible;
+        opacity: 1;
+        background-color: var(--surface);
+        border-color: var(--border);
+    }
+
+    .app.is-work-mode .layout {
+        flex-direction: row;
+        gap: 0;
+    }
+
+    .app.is-work-mode .chat {
+        flex: 0 0 var(--work-mode-chat-width, 58%);
+        width: var(--work-mode-chat-width, 58%);
+        min-width: 0;
+        border-top-right-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+
     .app.is-work-mode .work-mode-preview {
-        border-radius: 12px;
+        flex: 1 1 auto;
+        min-width: 0;
+        border-top-left-radius: 0;
+        border-bottom-left-radius: 0;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-preview-fullscreen .chat,
+    .app.is-work-mode.is-work-mode-fold-preview-fullscreen .work-mode-divider {
+        display: none !important;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-preview-fullscreen .work-mode-preview {
+        width: auto;
+        flex: 1 1 auto;
+        border-radius: 10px;
+    }
+
+    .app.is-work-mode .work-mode-divider {
+        display: block !important;
+    }
+
+    .app.is-work-mode .work-mode-file-layout,
+    .file-browser-layout.work-mode-file-layout {
+        grid-template-columns: minmax(220px, var(--work-mode-file-list-width, 36%)) 10px minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
+        gap: 0;
+    }
+
+    .app.is-work-mode .work-mode-file-divider {
+        display: block !important;
+    }
+
+    .app.is-work-mode .work-mode-preview-chat,
+    .app.is-work-mode .work-mode-preview-back {
+        display: none;
+    }
+
+    .app.is-work-mode .work-mode-preview-fullscreen {
+        display: inline-flex;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-list .work-mode-file-layout,
+    .app.is-work-mode.is-work-mode-fold-viewer .work-mode-file-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .app.is-work-mode.is-work-mode-fold-list .work-mode-file-divider,
+    .app.is-work-mode.is-work-mode-fold-viewer .work-mode-file-divider {
+        display: none !important;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-list .work-mode-file-list-panel {
+        display: flex;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-list .file-browser-viewer-panel {
+        display: none;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-viewer .work-mode-file-list-panel {
+        display: none;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-viewer .file-browser-viewer-panel {
+        display: flex;
+    }
+
+    .app.is-work-mode.is-work-mode-fold-viewer .work-mode-preview-back {
+        display: inline-flex;
+    }
+
+    .file-browser-fullscreen {
+        display: inline-flex;
+    }
+
+    .file-browser-back {
+        display: none;
     }
 
     .app.is-work-mode .work-mode-preview {
@@ -6227,17 +6399,131 @@ label.hover-tooltip,
     }
 
     .app.is-work-mode .work-mode-preview-title {
-        font-size: 13px;
+        font-size: 12px;
     }
 
     .app.is-work-mode .work-mode-preview-tools {
         gap: 8px;
     }
 
-    .app.is-work-mode .work-mode-preview-back,
-    .app.is-work-mode .work-mode-preview-up {
+    .app.is-work-mode .work-mode-preview-back:not(.icon-only),
+    .app.is-work-mode .work-mode-preview-up:not(.icon-only) {
         min-height: 32px;
         padding: 6px 11px;
+    }
+
+    .app-header h1 {
+        font-size: 16.5px;
+    }
+
+    .app-header p {
+        font-size: 10.5px;
+    }
+
+    .app-workspace,
+    .app-header-details-summary,
+    .app-description,
+    .live-weather-label,
+    .live-weather-hint,
+    .session-meta,
+    .session-action,
+    .stream-monitor-title,
+    .stream-monitor-meta,
+    .stream-monitor-status,
+    .stream-monitor-watch,
+    .model-label,
+    .model-sub-label,
+    .model-status,
+    .message-details summary,
+    .message-detail-link {
+        font-size: 10px;
+    }
+
+    .app-session-storage,
+    .chat-meta,
+    .controls-summary,
+    .usage-reset,
+    .chat-plan-mode-toggle,
+    .chat-job-monitor-summary,
+    .chat-job-monitor-item,
+    .chat-status,
+    .message-meta,
+    .message-stream-indicator,
+    .message-footer {
+        font-size: 9.5px;
+    }
+
+    .sessions-header,
+    .session-title,
+    .stream-monitor-empty,
+    .stream-monitor-session,
+    .stream-monitor-output-title,
+    .stream-monitor-output-body,
+    .chat-placeholder,
+    .chat-controls-toggle,
+    .controls-title,
+    .model-select,
+    .model-input {
+        font-size: 11px;
+    }
+
+    .live-weather-value,
+    .usage-value,
+    .usage-remaining {
+        font-size: 12px;
+    }
+
+    .chat-title,
+    .chat-input textarea {
+        font-size: 12.5px;
+    }
+
+    .message-bubble {
+        font-size: 10.5px;
+    }
+
+    .message-bubble code,
+    .message-bubble pre,
+    .message-bubble pre.markdown-code-block {
+        font-size: 9.5px;
+    }
+
+    .work-mode-file-col-heading,
+    .work-mode-file-cell-modified {
+        font-size: 9px;
+    }
+
+    .work-mode-file-entry,
+    .file-browser-entry,
+    .file-browser-entry-name,
+    .work-mode-preview .file-browser-meta,
+    .file-browser-meta,
+    .file-browser-viewer-meta,
+    .work-mode-preview .file-browser-viewer-meta,
+    .work-mode-file-table .file-browser-loading,
+    .work-mode-file-table .file-browser-empty,
+    .file-browser-loading,
+    .file-browser-empty,
+    .file-browser-placeholder {
+        font-size: 9.5px;
+    }
+
+    .file-browser-entry-meta {
+        font-size: 9px;
+    }
+
+    .file-browser-source {
+        font-size: 10px;
+    }
+
+    .file-browser-markdown {
+        font-size: 10.5px;
+    }
+
+    .file-browser-markdown code,
+    .file-browser-markdown pre,
+    .file-browser-markdown pre code {
+        font-size: 9.5px;
     }
 }
 

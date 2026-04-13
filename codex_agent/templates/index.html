@@ -323,17 +323,33 @@
                     <div class="work-mode-preview-title">Docs Preview</div>
                     <div class="work-mode-preview-actions">
                         <div class="work-mode-preview-tools">
-                            <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="codex-work-mode-file-back">목록으로</button>
-                            <button class="btn ghost work-mode-preview-up" type="button" id="codex-work-mode-file-up">상위 폴더</button>
+                            <button
+                                class="btn ghost icon-only file-browser-back work-mode-preview-back is-hidden"
+                                type="button"
+                                id="codex-work-mode-file-back"
+                                aria-label="목록으로 이동"
+                                title="목록으로 이동"
+                            >
+                                <span class="sr-only">목록으로 이동</span>
+                            </button>
+                            <button
+                                class="btn ghost icon-only work-mode-preview-up"
+                                type="button"
+                                id="codex-work-mode-file-up"
+                                aria-label="상위 폴더로 이동"
+                                title="상위 폴더로 이동"
+                            >
+                                <span class="sr-only">상위 폴더로 이동</span>
+                            </button>
                             <button
                                 class="btn ghost icon-only work-mode-preview-open-new"
                                 type="button"
                                 id="codex-work-mode-file-open-new"
-                                aria-label="새 창에서 HTML 미리보기 열기"
-                                title="새 창에서 HTML 미리보기 열기"
+                                aria-label="선택 파일 새 창에서 열기"
+                                title="선택 파일 새 창에서 열기"
                                 disabled
                             >
-                                <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
+                                <span class="sr-only">선택 파일 새 창에서 열기</span>
                             </button>
                             <button
                                 class="btn ghost icon-only work-mode-preview-fullscreen"
@@ -623,9 +639,25 @@
                         </label>
                     </div>
                     <div class="file-browser-nav-tools">
-                        <button class="btn ghost file-browser-back is-hidden" type="button" id="codex-file-browser-back">목록으로</button>
+                        <button
+                            class="btn ghost icon-only file-browser-back is-hidden"
+                            type="button"
+                            id="codex-file-browser-back"
+                            aria-label="목록으로 이동"
+                            title="목록으로 이동"
+                        >
+                            <span class="sr-only">목록으로 이동</span>
+                        </button>
                         <button class="btn ghost file-browser-fullscreen" type="button" id="codex-file-browser-fullscreen" aria-pressed="false">내용 전체화면</button>
-                        <button class="btn ghost file-browser-up" type="button" id="codex-file-browser-up">상위 폴더</button>
+                        <button
+                            class="btn ghost icon-only file-browser-up"
+                            type="button"
+                            id="codex-file-browser-up"
+                            aria-label="상위 폴더로 이동"
+                            title="상위 폴더로 이동"
+                        >
+                            <span class="sr-only">상위 폴더로 이동</span>
+                        </button>
                         <button class="btn ghost icon-only file-browser-refresh" type="button" id="codex-file-browser-refresh" aria-label="목록 새로고침" title="목록 새로고침">
                             <span class="sr-only">목록 새로고침</span>
                         </button>

@@ -109,8 +109,21 @@ _PATCH_BLOCK_PATTERN = re.compile(r'```(?:diff|patch)\s*\n(.*?)```', re.IGNORECA
 _TOOL_RUN_BLOCK_PATTERN = re.compile(r'```(?:bash|sh|shell)\s*\n(.*?)```', re.IGNORECASE | re.DOTALL)
 _HUNK_HEADER_PATTERN = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$')
 _PATCH_MAX_CHARS = 400_000
-_CONTEXT_MESSAGE_ROLE_MAX_CHARS = {'assistant': 2500}
-_CONTEXT_MESSAGE_DEFAULT_MAX_CHARS = 600
+_CONTEXT_MESSAGE_ROLE_MAX_CHARS = {
+    'assistant': 1400,
+    'user': 1400,
+    'system': 900,
+    'error': 900,
+}
+_CONTEXT_MESSAGE_DEFAULT_MAX_CHARS = 700
+_CONTEXT_MEMORY_ROLE_MAX_CHARS = {
+    'user': 260,
+    'assistant': 120,
+    'system': 160,
+    'error': 160,
+}
+_CONTEXT_MEMORY_DEFAULT_MAX_CHARS = 140
+_CONTEXT_AUTO_NOTE_LINE_PATTERN = re.compile(r'^\[(?:Patch Apply|Tool Run)\]\s', re.IGNORECASE)
 _TOOL_RUN_MARKERS = ('@run', '#@run', '# @run')
 _TOOL_RUN_MAX_COMMANDS = 6
 _TOOL_RUN_MAX_OUTPUT_CHARS = 4000
@@ -1817,6 +1830,34 @@ def append_message(session_id, role, content, metadata=None, created_at=None):
     return deepcopy(message)
 
 
+def update_message(session_id, message_id, content, role=None, metadata=None, created_at=None):
+    """기존 메시지의 content/role/metadata를 업데이트합니다 (draft 교체 등에 사용)."""
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_id)
+        if not session:
+            return None
+        for msg in session.get('messages', []):
+            if msg.get('id') != message_id:
+                continue
+            msg['content'] = str(content)
+            if role is not None:
+                msg['role'] = role
+            if created_at is not None:
+                msg['created_at'] = normalize_timestamp(created_at)
+            if isinstance(metadata, dict):
+                for key, value in metadata.items():
+                    if key not in ('id', 'role', 'content', 'created_at'):
+                        msg[key] = value
+            msg.pop('is_draft', None)
+            session['updated_at'] = normalize_timestamp(None)
+            data['sessions'] = _sort_sessions(sessions)
+            _save_data(data)
+            return deepcopy(msg)
+        return None
+
+
 def ensure_default_title(session_id, prompt):
     with _DATA_LOCK:
         data = _load_data()
@@ -1869,6 +1910,34 @@ def _normalize_context_text(value):
     if not text.strip():
         return ''
     lines = [line.rstrip() for line in text.split('\n')]
+    return '\n'.join(lines).strip()
+
+
+def _normalize_context_role(value, fallback='user'):
+    role = str(value or '').strip().lower() or fallback
+    if role in _ROLE_LABELS:
+        return role
+    return fallback
+
+
+def _strip_context_auto_notes(value):
+    normalized = _normalize_context_text(value)
+    if not normalized:
+        return ''
+    lines = normalized.split('\n')
+    removed = False
+    while lines:
+        tail = lines[-1].strip()
+        if not tail:
+            lines.pop()
+            continue
+        if _CONTEXT_AUTO_NOTE_LINE_PATTERN.match(tail):
+            removed = True
+            lines.pop()
+            continue
+        break
+    if not removed:
+        return normalized
     return '\n'.join(lines).strip()
 
 
@@ -2784,8 +2853,10 @@ def finalize_assistant_output(content, apply_side_effects=True):
 
 
 def _format_context_message(message, index):
-    role = str((message or {}).get('role') or 'user').strip().lower() or 'user'
+    role = _normalize_context_role((message or {}).get('role'), fallback='user')
     content = _normalize_context_text((message or {}).get('content'))
+    if role == 'assistant':
+        content = _strip_context_auto_notes(content)
     if not content:
         content = '(empty)'
     max_chars = _CONTEXT_MESSAGE_ROLE_MAX_CHARS.get(role, _CONTEXT_MESSAGE_DEFAULT_MAX_CHARS)
@@ -2804,11 +2875,13 @@ def _build_memory_lines(messages, max_chars):
         return []
     lines = []
     for index, message in enumerate(messages, start=1):
-        role = _ROLE_LABELS.get((message or {}).get('role'), 'User')
+        role_key = _normalize_context_role((message or {}).get('role'), fallback='user')
+        role = _ROLE_LABELS.get(role_key, 'User')
         content = _single_line_text((message or {}).get('content'))
         if not content:
             continue
-        lines.append(f"{index}. {role}: {_clip_text(content, 180)}")
+        line_max_chars = _CONTEXT_MEMORY_ROLE_MAX_CHARS.get(role_key, _CONTEXT_MEMORY_DEFAULT_MAX_CHARS)
+        lines.append(f"{index}. {role}: {_clip_text(content, line_max_chars)}")
     if not lines:
         return []
 
@@ -2823,6 +2896,68 @@ def _build_memory_lines(messages, max_chars):
     while trimmed and len('\n'.join(f"- {line}" for line in trimmed)) > max_chars:
         trimmed.pop(0)
     return trimmed
+
+
+def _build_recent_context_entries(messages, max_chars):
+    if max_chars <= 0 or not isinstance(messages, list) or not messages:
+        return []
+
+    groups_reversed = []
+    recent_chars = 0
+    cursor = len(messages) - 1
+
+    while cursor >= 0:
+        group_indexes = [cursor]
+        current = messages[cursor] if isinstance(messages[cursor], dict) else {}
+        if (
+            current.get('role') == 'assistant'
+            and cursor > 0
+            and isinstance(messages[cursor - 1], dict)
+            and messages[cursor - 1].get('role') == 'user'
+        ):
+            group_indexes.insert(0, cursor - 1)
+            cursor -= 2
+        else:
+            cursor -= 1
+
+        group_entries = []
+        group_chars = 0
+        for message_index in group_indexes:
+            message = messages[message_index]
+            block = _format_context_message(message, message_index + 1)
+            size = len(block) + 1
+            group_chars += size
+            group_entries.append(
+                {
+                    'index': message_index + 1,
+                    'role': message.get('role'),
+                    'block': block,
+                    'size': size,
+                }
+            )
+
+        projected = recent_chars + group_chars
+        if groups_reversed and projected > max_chars:
+            break
+
+        groups_reversed.append(group_entries)
+        recent_chars = projected
+
+    entries = []
+    for group in reversed(groups_reversed):
+        entries.extend(group)
+    return entries
+
+
+def _drop_oldest_recent_entry(entries):
+    if not isinstance(entries, list) or not entries:
+        return False
+    for index, entry in enumerate(entries):
+        if (entry or {}).get('role') == 'assistant':
+            entries.pop(index)
+            return True
+    entries.pop(0)
+    return True
 
 
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
@@ -2888,28 +3023,25 @@ def build_model_prompt(messages, prompt):
     for message in messages:
         if not isinstance(message, dict):
             continue
+        role = _normalize_context_role(message.get('role'), fallback='user')
         content = _normalize_context_text(message.get('content'))
+        if role == 'assistant':
+            content = _strip_context_auto_notes(content)
         if not content:
             continue
-        normalized_messages.append({'role': message.get('role'), 'content': content})
+        normalized_messages.append({'role': role, 'content': content})
 
-    recent_budget = max(1200, int(max_chars * 0.62))
-    recent_blocks = []
-    recent_chars = 0
-    total_messages = len(normalized_messages)
-    for reverse_index, message in enumerate(reversed(normalized_messages), start=1):
-        original_index = total_messages - reverse_index + 1
-        block = _format_context_message(message, original_index)
-        projected = recent_chars + len(block) + 1
-        if recent_blocks and projected > recent_budget:
-            break
-        recent_blocks.append(block)
-        recent_chars = projected
-    recent_blocks.reverse()
-
-    summary_count = max(0, total_messages - len(recent_blocks))
-    summary_budget = max(360, int(max_chars * 0.24))
-    memory_lines = _build_memory_lines(normalized_messages[:summary_count], summary_budget)
+    recent_budget = max(1000, int(max_chars * 0.58))
+    recent_entries = _build_recent_context_entries(normalized_messages, recent_budget)
+    recent_blocks = [entry.get('block') for entry in recent_entries if entry.get('block')]
+    recent_indexes = {entry.get('index') for entry in recent_entries if entry.get('index')}
+    omitted_messages = [
+        message
+        for index, message in enumerate(normalized_messages, start=1)
+        if index not in recent_indexes
+    ]
+    summary_budget = max(420, int(max_chars * 0.28))
+    memory_lines = _build_memory_lines(omitted_messages, summary_budget)
 
     structured_prompt = _compose_structured_prompt(memory_lines, recent_blocks, prompt_text)
     if len(structured_prompt) <= max_chars:
@@ -2918,8 +3050,9 @@ def build_model_prompt(messages, prompt):
     while len(structured_prompt) > max_chars and memory_lines:
         memory_lines = memory_lines[1:]
         structured_prompt = _compose_structured_prompt(memory_lines, recent_blocks, prompt_text)
-    while len(structured_prompt) > max_chars and recent_blocks:
-        recent_blocks = recent_blocks[1:]
+    while len(structured_prompt) > max_chars and recent_entries:
+        _drop_oldest_recent_entry(recent_entries)
+        recent_blocks = [entry.get('block') for entry in recent_entries if entry.get('block')]
         structured_prompt = _compose_structured_prompt(memory_lines, recent_blocks, prompt_text)
     if len(structured_prompt) <= max_chars:
         return structured_prompt
@@ -4383,7 +4516,8 @@ def create_model_stream(
         apply_side_effects=True,
         plan_mode=False,
         execution_cwd=None,
-        allowed_dirs=None):
+        allowed_dirs=None,
+        draft_message_id=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     stream = {
@@ -4400,6 +4534,7 @@ def create_model_stream(
             if isinstance(allowed_dirs, (list, tuple, set))
             else []
         ),
+        'draft_message_id': draft_message_id or None,
         'output': '',
         'error': '',
         'done': False,
@@ -4623,6 +4758,11 @@ def _start_model_stream_for_session_locked(
     if not user_message:
         return {'ok': False, 'error': '메시지를 저장하지 못했습니다.'}
 
+    draft_message = append_message(
+        session_id, 'assistant', '[응답 생성 중...]', {'is_draft': True}
+    )
+    draft_message_id = draft_message.get('id') if draft_message else None
+
     settings = get_settings()
     base_provider = _normalize_provider_name(settings.get('provider'))
     if provider_override is None:
@@ -4655,6 +4795,7 @@ def _start_model_stream_for_session_locked(
         plan_mode=plan_mode,
         execution_cwd=execution_cwd,
         allowed_dirs=allowed_dirs,
+        draft_message_id=draft_message_id,
     )
     return {
         'ok': True,
@@ -4965,6 +5106,7 @@ def finalize_model_stream(stream_id):
         session_id = stream.get('session_id')
         exit_code = stream.get('exit_code')
         apply_side_effects = bool(stream.get('apply_side_effects', True))
+        draft_message_id = stream.get('draft_message_id')
     metadata = _build_stream_message_metadata(started_at, completed_at, now, finalize_reason)
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
@@ -4985,23 +5127,43 @@ def finalize_model_stream(stream_id):
         merged_metadata = dict(metadata or {})
         if isinstance(patch_metadata, dict):
             merged_metadata.update(patch_metadata)
-        saved_message = append_message(
-            session_id,
-            'assistant',
-            final_output,
-            merged_metadata or None,
-            created_at=created_at_value,
-        )
+        if draft_message_id:
+            saved_message = update_message(
+                session_id,
+                draft_message_id,
+                final_output,
+                role='assistant',
+                metadata=merged_metadata or None,
+                created_at=created_at_value,
+            )
+        else:
+            saved_message = append_message(
+                session_id,
+                'assistant',
+                final_output,
+                merged_metadata or None,
+                created_at=created_at_value,
+            )
         trigger_next_queued_model_stream(session_id)
         return saved_message
     message_text = error or output or 'Model API 실행에 실패했습니다.'
-    saved_message = append_message(
-        session_id,
-        'error',
-        message_text,
-        metadata or None,
-        created_at=created_at_value,
-    )
+    if draft_message_id:
+        saved_message = update_message(
+            session_id,
+            draft_message_id,
+            message_text,
+            role='error',
+            metadata=metadata or None,
+            created_at=created_at_value,
+        )
+    else:
+        saved_message = append_message(
+            session_id,
+            'error',
+            message_text,
+            metadata or None,
+            created_at=created_at_value,
+        )
     trigger_next_queued_model_stream(session_id)
     return saved_message
 
@@ -5028,6 +5190,7 @@ def stop_model_stream(stream_id):
         error = (stream.get('error') or '').strip()
         started_at = stream.get('started_at') or stream.get('created_at')
         completed_at = stream.get('completed_at')
+        draft_message_id = stream.get('draft_message_id')
 
     grace_seconds = _coerce_positive_seconds(
         MODEL_STREAM_TERMINATE_GRACE_SECONDS,
@@ -5051,13 +5214,23 @@ def stop_model_stream(stream_id):
         saved_at,
         'user_cancelled',
     )
-    saved_message = append_message(
-        session_id,
-        'error',
-        message_text,
-        metadata,
-        created_at=_iso_timestamp_from_epoch(completed_at),
-    )
+    if draft_message_id:
+        saved_message = update_message(
+            session_id,
+            draft_message_id,
+            message_text,
+            role='error',
+            metadata=metadata,
+            created_at=_iso_timestamp_from_epoch(completed_at),
+        )
+    else:
+        saved_message = append_message(
+            session_id,
+            'error',
+            message_text,
+            metadata,
+            created_at=_iso_timestamp_from_epoch(completed_at),
+        )
 
     with state.model_streams_lock:
         stream = state.model_streams.get(stream_id)
@@ -5081,3 +5254,103 @@ def cleanup_model_streams():
                 stale_ids.append(stream_id)
         for stream_id in stale_ids:
             state.model_streams.pop(stream_id, None)
+
+
+def get_claude_monitor_usage(plan='pro', hours_back=96):
+    """Return claude-monitor usage analysis as a plain dict.
+
+    Calls ``claude_monitor.data.analysis.analyze_usage`` directly so that
+    no TUI / terminal is needed.  The result is augmented with plan-limit
+    metadata when a recognised *plan* name is supplied.
+
+    Args:
+        plan: Subscription plan name ('pro', 'max5', 'max20'). Defaults to 'pro'.
+        hours_back: How many hours of history to analyse. Defaults to 96.
+
+    Returns:
+        dict with keys: blocks, metadata, entries_count, total_tokens,
+        total_cost, plan_info (optional).
+    """
+    try:
+        from claude_monitor.data.analysis import analyze_usage
+    except ImportError as exc:
+        return {'error': f'claude-monitor not installed: {exc}'}
+
+    try:
+        hours = int(hours_back) if hours_back is not None else None
+    except (TypeError, ValueError):
+        hours = 96
+
+    try:
+        result = analyze_usage(hours_back=hours, use_cache=True)
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.exception('claude_monitor analyze_usage failed')
+        return {'error': str(exc)}
+
+    # Attach plan limit info if plan is recognised.
+    try:
+        from claude_monitor.core.plans import PLAN_LIMITS, PlanType
+        plan_type = PlanType.from_string(str(plan).lower())
+        limits = PLAN_LIMITS.get(plan_type, {})
+        result['plan_info'] = {
+            'plan': plan_type.value,
+            'display_name': limits.get('display_name', plan_type.value),
+            'token_limit': limits.get('token_limit'),
+            'cost_limit': limits.get('cost_limit'),
+            'message_limit': limits.get('message_limit'),
+        }
+    except Exception:  # noqa: BLE001
+        result['plan_info'] = {'plan': plan, 'error': 'unknown plan'}
+
+    return result
+
+
+def get_monitor_rate_limits(plan='pro'):
+    """Return five_hour and weekly rate-limit dicts derived from claude-monitor.
+
+    Returns a dict ``{'five_hour': {...}, 'weekly': {...}}`` where each entry
+    has ``used_percent`` (0-100 float) and ``resets_at`` (ISO timestamp str),
+    or ``None`` if the data cannot be obtained.
+    """
+    try:
+        monitor = get_claude_monitor_usage(plan=plan, hours_back=168)
+    except Exception:
+        return None
+
+    if monitor.get('error'):
+        return None
+
+    plan_info = monitor.get('plan_info') or {}
+    token_limit = plan_info.get('token_limit')
+    cost_limit = plan_info.get('cost_limit')
+    blocks = monitor.get('blocks') or []
+
+    # 5h: use the active block (or most recent)
+    active_block = next((b for b in reversed(blocks) if b.get('isActive')), None)
+    if active_block is None and blocks:
+        active_block = blocks[-1]
+
+    five_hour = None
+    if active_block and token_limit and token_limit > 0:
+        used_tokens = active_block.get('totalTokens') or 0
+        five_hour = {
+            'used_percent': round((used_tokens / token_limit) * 100, 2),
+            'resets_at': active_block.get('endTime'),
+        }
+
+    # Weekly: sum all block costs against the plan cost_limit
+    weekly = None
+    if cost_limit and cost_limit > 0:
+        total_cost = sum((b.get('costUSD') or 0.0) for b in blocks)
+        from datetime import datetime, timedelta, timezone as _tz
+        now = datetime.now(_tz.utc)
+        days_to_monday = (7 - now.weekday()) % 7 or 7
+        next_monday = (now + timedelta(days=days_to_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        weekly = {
+            'used_percent': round((total_cost / cost_limit) * 100, 2),
+            'resets_at': next_monday.isoformat(),
+        }
+
+    return {'five_hour': five_hour, 'weekly': weekly}

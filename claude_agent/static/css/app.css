@@ -366,6 +366,11 @@ body {
     font-weight: 600;
 }
 
+.branch-overlay-last-commit {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
 .branch-overlay-stage-tools {
     display: flex;
     align-items: center;
@@ -456,6 +461,14 @@ body {
     flex: 0 0 auto;
 }
 
+.branch-overlay-folder-check {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    flex: 0 0 auto;
+}
+
 .branch-overlay-status {
     display: inline-flex;
     align-items: center;
@@ -506,6 +519,110 @@ body {
     color: var(--text-secondary);
     flex: 1;
     min-width: 0;
+}
+
+.git-file-tree-list .git-file-tree-item {
+    display: block;
+    padding: 0;
+}
+
+.git-file-tree-row {
+    --git-tree-depth: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    width: 100%;
+    padding: 6px 8px;
+    padding-left: calc(8px + (var(--git-tree-depth, 0) * 16px));
+}
+
+.git-file-tree-row.is-folder {
+    background: rgba(15, 76, 129, 0.04);
+}
+
+.git-file-tree-toggle {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface-muted);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.git-file-tree-toggle:hover {
+    border-color: rgba(15, 76, 129, 0.35);
+    color: var(--accent);
+}
+
+.git-file-tree-toggle:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.git-file-tree-toggle-placeholder {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.git-file-tree-folder-name {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.git-file-tree-folder-meta {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.git-file-tree-folder-statuses {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.git-file-tree-file-text {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.git-file-tree-file-name {
+    color: var(--text-primary);
+    font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.git-file-tree-file-path {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+    word-break: break-all;
 }
 
 .holiday-weekday {
@@ -597,6 +714,11 @@ body {
     font-weight: 600;
 }
 
+.sync-overlay-last-commit {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
 .sync-overlay-targets {
     display: flex;
     align-items: center;
@@ -638,6 +760,46 @@ body {
     color: var(--text-muted);
 }
 
+.sync-overlay-files-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.sync-overlay-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-tertiary);
+    letter-spacing: 0.02em;
+}
+
+.sync-overlay-files-list {
+    list-style: none;
+    margin: 0;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: auto;
+    max-height: 220px;
+}
+
+.sync-overlay-files-list li {
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 12px;
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    color: var(--text-secondary);
+    word-break: break-all;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .sync-overlay-list {
     list-style: none;
     margin: 0;
@@ -660,6 +822,20 @@ body {
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.sync-overlay-list li.sync-overlay-history-item {
+    cursor: pointer;
+}
+
+.sync-overlay-list li.sync-overlay-history-item:hover {
+    border-color: rgba(15, 76, 129, 0.38);
+}
+
+.sync-overlay-list li.sync-overlay-history-item:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
 }
 
 .sync-overlay-item-main {
@@ -2304,7 +2480,7 @@ body {
 #claude-work-mode-toggle {
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 15px 15px;
+    background-size: 16px 16px;
 }
 
 .git-branch {
@@ -2379,21 +2555,33 @@ body {
 .git-action-browse,
 #codex-file-browser-open {
     background-image: var(--icon-browse);
-    background-size: 19px 19px;
+    background-size: 18px 18px;
 }
 
 .work-mode-toggle,
 #codex-work-mode-toggle,
 #claude-work-mode-toggle {
     background-image: var(--icon-work-mode);
-    background-size: 19px 19px;
+    background-size: 18px 18px;
 }
 
+#claude-file-browser-open.is-active,
 .work-mode-toggle.is-active,
 #codex-work-mode-toggle.is-active,
 #claude-work-mode-toggle.is-active {
     border-color: rgba(15, 76, 129, 0.45);
     background-color: rgba(15, 76, 129, 0.12);
+}
+
+#claude-work-mode-toggle.is-active {
+    box-shadow: inset 0 0 0 1px rgba(15, 76, 129, 0.1);
+}
+
+#claude-file-browser-open.is-active:hover,
+.work-mode-toggle.is-active:hover,
+#codex-work-mode-toggle.is-active:hover,
+#claude-work-mode-toggle.is-active:hover {
+    background-color: rgba(15, 76, 129, 0.2);
 }
 
 .git-action-sync.is-loading,
@@ -2445,6 +2633,17 @@ body {
 
 [data-theme="dark"] .sync-overlay-sync.is-ready:hover {
     background-color: rgba(102, 138, 120, 0.36);
+}
+
+[data-theme="dark"] #claude-file-browser-open.is-active,
+[data-theme="dark"] #claude-work-mode-toggle.is-active {
+    border-color: rgba(123, 143, 163, 0.56);
+    background-color: rgba(123, 143, 163, 0.24);
+}
+
+[data-theme="dark"] #claude-file-browser-open.is-active:hover,
+[data-theme="dark"] #claude-work-mode-toggle.is-active:hover {
+    background-color: rgba(123, 143, 163, 0.34);
 }
 
 .theme-toggle {
@@ -2700,6 +2899,27 @@ body.is-work-mode-resizing .work-mode-divider::before {
     display: flex;
     align-items: center;
     gap: 8px;
+    justify-content: flex-end;
+    min-width: 0;
+    flex: 1;
+}
+
+.work-mode-preview-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.work-mode-switch-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-height: var(--icon-button-size);
+}
+
+.work-mode-preview-switch-slot {
+    margin-left: 0;
 }
 
 .work-mode-root-tools {
@@ -2726,6 +2946,13 @@ body.is-work-mode-resizing .work-mode-divider::before {
     min-height: 30px;
     padding: 6px 10px;
     font-size: 12px;
+}
+
+.work-mode-preview-chat {
+    background-image: var(--icon-chevron-left);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 14px 14px;
 }
 
 .work-mode-preview-refresh {
@@ -3372,6 +3599,14 @@ body.is-work-mode-resizing * {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+}
+
+.chat-work-mode-switch-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    min-width: 0;
 }
 
 .chat-session-nav {
@@ -5026,6 +5261,43 @@ label.hover-tooltip,
         display: inline-flex;
     }
 
+    .app.is-work-mode .work-mode-preview-actions {
+        width: 100%;
+        gap: 6px;
+        justify-content: flex-start;
+    }
+
+    .app.is-work-mode .work-mode-preview-tools {
+        gap: 6px;
+        min-width: 0;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot {
+        margin-left: auto;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot .work-mode-preview-chat {
+        width: var(--icon-button-size);
+        min-width: var(--icon-button-size);
+        height: var(--icon-button-size);
+        padding: 0;
+        font-size: 0;
+        line-height: 1;
+        text-indent: -999px;
+        overflow: hidden;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background-color: var(--surface-muted);
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: 14px 14px;
+    }
+
+    .app.is-work-mode .work-mode-preview-switch-slot .work-mode-preview-chat:hover {
+        border-color: var(--accent);
+        background-color: var(--surface-raised);
+    }
+
     .app.is-work-mode .work-mode-preview-fullscreen {
         display: none;
     }
@@ -5674,5 +5946,44 @@ label.hover-tooltip,
 
     .message {
         max-width: var(--chat-bubble-max-width);
+    }
+}
+
+@media (max-width: 599px) {
+    .app.is-work-mode .chat-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .app.is-work-mode .chat-header-main {
+        min-width: 0;
+        overflow: hidden;
+    }
+
+    .app.is-work-mode .chat-header-actions {
+        justify-self: end;
+        gap: 4px;
+        min-width: max-content;
+    }
+
+    .app.is-work-mode .chat-header-fullscreen {
+        display: none;
+    }
+
+    .app.is-work-mode .chat-work-mode-switch-slot {
+        min-width: var(--icon-button-size);
+        flex: 0 0 var(--icon-button-size);
+    }
+
+    .app.is-work-mode .chat-session-nav {
+        gap: 3px;
+    }
+
+    .app.is-work-mode .chat-session-nav .btn.icon-only {
+        width: var(--icon-button-size);
+        min-width: var(--icon-button-size);
+        height: var(--icon-button-size);
     }
 }

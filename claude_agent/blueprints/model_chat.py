@@ -1,5 +1,7 @@
 """Model chat routes."""
 
+import json
+import re
 import time
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from ..config import (
     MODEL_MAX_PROMPT_CHARS,
     MODEL_MAX_REASONING_CHARS,
     MODEL_MAX_TITLE_CHARS,
+    REPO_ROOT,
     WORKSPACE_DIR,
 )
 from ..services.model_chat import (
@@ -24,6 +27,8 @@ from ..services.model_chat import (
     finalize_assistant_output,
     finalize_model_stream,
     get_active_stream_id_for_session,
+    get_claude_monitor_usage,
+    get_monitor_rate_limits,
     get_model_options,
     get_reasoning_options,
     get_session_storage_summary,
@@ -56,6 +61,7 @@ from ..services.git_ops import run_git_action
 bp = Blueprint('model_chat', __name__)
 
 _PLAN_MODE_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
+_PLAN_MODE_FALSY_VALUES = {'0', 'false', 'no', 'off'}
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
     "- Plan mode is enabled for this turn.\n"
@@ -66,6 +72,17 @@ _PLAN_MODE_PROMPT_SUFFIX = (
 )
 _LAYOUT_ROOT_KEYS = {BROWSER_ROOT_SERVER, BROWSER_ROOT_WORKSPACE}
 _LAYOUT_MAX_PATH_CHARS = 1024
+_PROC_MANAGER_JOBS_PATH = Path.home() / 'proc_manager_jobs.json'
+_MODEL_CHAT_JOB_COMMAND_HINTS = ('run_claude_chat_server.sh', 'run_claude_chat_server.py')
+_MODEL_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
+    r'(?:^|\s)(?:export\s+)?MODEL_CHAT_DEBUG\s*=\s*([^\s;#]+)',
+    re.IGNORECASE,
+)
+_MODEL_CHAT_USE_RELOADER_ASSIGN_PATTERN = re.compile(
+    r'(?:^|\s)(?:export\s+)?MODEL_CHAT_USE_RELOADER\s*=\s*([^\s;#]+)',
+    re.IGNORECASE,
+)
+_DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
 
 
 def _parse_plan_mode(value):
@@ -83,6 +100,172 @@ def _append_plan_mode_guardrails(prompt_text):
     if not normalized:
         normalized = '(empty)'
     return f'{normalized}\n\n{_PLAN_MODE_PROMPT_SUFFIX}'
+
+
+def _normalize_path_text(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    try:
+        return str(Path(text).expanduser().resolve())
+    except Exception:  # noqa: BLE001
+        return ''
+
+
+def _to_optional_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _PLAN_MODE_TRUTHY_VALUES:
+            return True
+        if lowered in _PLAN_MODE_FALSY_VALUES:
+            return False
+    return None
+
+
+def _extract_job_commands(job_config):
+    if not isinstance(job_config, dict):
+        return []
+    raw_commands = job_config.get('commands')
+    if raw_commands is None and 'cmd' in job_config:
+        raw_commands = job_config.get('cmd')
+
+    if isinstance(raw_commands, str):
+        parts = raw_commands.splitlines()
+    elif isinstance(raw_commands, list):
+        parts = []
+        for entry in raw_commands:
+            if isinstance(entry, str):
+                parts.extend(entry.splitlines())
+    else:
+        parts = []
+
+    commands = []
+    for part in parts:
+        text = str(part).strip()
+        if text:
+            commands.append(text)
+    return commands
+
+
+def _is_model_chat_job_config(job_config):
+    commands = _extract_job_commands(job_config)
+    if commands:
+        merged = ' '.join(commands).lower()
+        for hint in _MODEL_CHAT_JOB_COMMAND_HINTS:
+            if hint in merged:
+                return True
+    name = str(job_config.get('name') or '').lower()
+    return 'claude' in name and 'run_claude_chat_server' in name
+
+
+def _resolve_model_chat_use_reloader(job_config):
+    if not isinstance(job_config, dict):
+        return None
+
+    explicit_use_reloader = _to_optional_bool(job_config.get('use_reloader'))
+    if explicit_use_reloader is not None:
+        return explicit_use_reloader
+
+    env_use_reloader_value = None
+    env_debug_value = None
+    has_debug_flag = False
+    commands = _extract_job_commands(job_config)
+    has_model_chat_entrypoint = False
+    for command in commands:
+        command_text = str(command or '')
+
+        use_reloader_match = _MODEL_CHAT_USE_RELOADER_ASSIGN_PATTERN.search(command_text)
+        if use_reloader_match:
+            parsed_value = _to_optional_bool(use_reloader_match.group(1))
+            env_use_reloader_value = parsed_value if parsed_value is not None else True
+
+        debug_match = _MODEL_CHAT_DEBUG_ASSIGN_PATTERN.search(command_text)
+        if debug_match:
+            parsed_value = _to_optional_bool(debug_match.group(1))
+            env_debug_value = parsed_value if parsed_value is not None else True
+
+        lowered = command_text.lower()
+        if 'run_claude_chat_server' in lowered:
+            has_model_chat_entrypoint = True
+            if _DEBUG_FLAG_PATTERN.search(command_text):
+                has_debug_flag = True
+
+    if env_use_reloader_value is not None:
+        return env_use_reloader_value
+    if has_debug_flag:
+        return True
+    if env_debug_value is not None:
+        return env_debug_value
+    if has_model_chat_entrypoint:
+        return False
+    return None
+
+
+def _read_model_restart_policy():
+    repo_root = str(REPO_ROOT.resolve())
+    result = {
+        'known': False,
+        'restart_on_exit': None,
+        'use_reloader': None,
+        'workdir': repo_root,
+        'job_name': None,
+        'matched_jobs': 0,
+        'source_path': str(_PROC_MANAGER_JOBS_PATH),
+        'source': 'proc_manager_jobs_json',
+    }
+    if not _PROC_MANAGER_JOBS_PATH.is_file():
+        result['error'] = 'jobs_file_not_found'
+        return result
+
+    try:
+        with _PROC_MANAGER_JOBS_PATH.open('r', encoding='utf-8') as fp:
+            payload = json.load(fp)
+    except Exception:  # noqa: BLE001
+        result['error'] = 'jobs_file_unreadable'
+        return result
+
+    if isinstance(payload, dict):
+        raw_jobs = payload.get('jobs', [])
+    elif isinstance(payload, list):
+        raw_jobs = payload
+    else:
+        result['error'] = 'jobs_payload_invalid'
+        return result
+
+    if not isinstance(raw_jobs, list):
+        result['error'] = 'jobs_payload_invalid'
+        return result
+
+    matches = []
+    for raw_job in raw_jobs:
+        if not isinstance(raw_job, dict):
+            continue
+        workdir = _normalize_path_text(raw_job.get('workdir'))
+        if workdir != repo_root:
+            continue
+        if not _is_model_chat_job_config(raw_job):
+            continue
+        matches.append(raw_job)
+
+    result['matched_jobs'] = len(matches)
+    if not matches:
+        result['error'] = 'job_not_found'
+        return result
+
+    target_job = matches[0]
+    restart_on_exit = _to_optional_bool(target_job.get('restart_on_exit'))
+    use_reloader = _resolve_model_chat_use_reloader(target_job)
+    result['restart_on_exit'] = restart_on_exit
+    result['use_reloader'] = use_reloader
+    result['known'] = use_reloader is not None
+    result['job_name'] = str(target_job.get('name') or '').strip() or None
+    if not result['known']:
+        result['error'] = 'use_reloader_missing'
+    return result
 
 
 def _normalize_layout_root(value):
@@ -238,12 +421,24 @@ def _build_settings_response(
     )
     preview_payload = dict(preview) if isinstance(preview, dict) else {}
     preview_provider = preview.get('provider')
+    usage = get_usage_summary()
+    if isinstance(usage, dict) and (usage.get('five_hour') is None or usage.get('weekly') is None):
+        try:
+            rate_limits = get_monitor_rate_limits()
+            if rate_limits:
+                usage = dict(usage)
+                if usage.get('five_hour') is None:
+                    usage['five_hour'] = rate_limits.get('five_hour')
+                if usage.get('weekly') is None:
+                    usage['weekly'] = rate_limits.get('weekly')
+        except Exception:
+            pass
     return {
         'settings': settings_payload,
         'preview': preview_payload,
         'reasoning_options': get_reasoning_options(),
         'model_options': get_model_options(preview_provider),
-        'usage': get_usage_summary(),
+        'usage': usage,
         'session_storage': get_session_storage_summary(),
     }
 
@@ -270,6 +465,17 @@ def model_usage():
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
     if not isinstance(usage, dict):
         usage = get_usage_summary()
+    if isinstance(usage, dict) and (usage.get('five_hour') is None or usage.get('weekly') is None):
+        try:
+            rate_limits = get_monitor_rate_limits()
+            if rate_limits:
+                usage = dict(usage)
+                if usage.get('five_hour') is None:
+                    usage['five_hour'] = rate_limits.get('five_hour')
+                if usage.get('weekly') is None:
+                    usage['weekly'] = rate_limits.get('weekly')
+        except Exception:
+            pass
     return jsonify(
         {
             'usage': usage,
@@ -292,6 +498,25 @@ def model_usage_history():
             'session_storage': get_session_storage_summary(),
         }
     )
+
+
+@bp.route('/api/claude/usage/monitor')
+def model_usage_monitor():
+    plan = request.args.get('plan', 'pro')
+    hours_back = request.args.get('hours_back', 96)
+    try:
+        hours_back = int(hours_back)
+    except (TypeError, ValueError):
+        hours_back = 96
+    result = get_claude_monitor_usage(plan=plan, hours_back=hours_back)
+    if result.get('error'):
+        return jsonify(result), 500
+    return jsonify(result)
+
+
+@bp.route('/api/claude/runtime/restart-policy')
+def model_runtime_restart_policy():
+    return jsonify(_read_model_restart_policy())
 
 
 @bp.route('/api/claude/settings', methods=['PATCH'])

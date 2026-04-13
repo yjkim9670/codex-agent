@@ -156,13 +156,6 @@
                             ></button>
                         </div>
                         <button
-                            class="chat-header-mobile-browser is-hidden"
-                            type="button"
-                            id="claude-work-mode-mobile-browser"
-                            aria-label="브라우저로 이동"
-                            title="브라우저로 이동"
-                        ></button>
-                        <button
                             class="chat-header-fullscreen"
                             type="button"
                             id="claude-chat-fullscreen"
@@ -170,6 +163,15 @@
                             aria-label="Expand chat to fullscreen"
                             title="Expand chat to fullscreen"
                         ></button>
+                        <div class="work-mode-switch-slot chat-work-mode-switch-slot is-hidden">
+                            <button
+                                class="chat-header-mobile-browser is-hidden"
+                                type="button"
+                                id="claude-work-mode-mobile-browser"
+                                aria-label="브라우저로 이동"
+                                title="브라우저로 이동"
+                            ></button>
+                        </div>
                     </div>
                 </div>
 
@@ -319,47 +321,59 @@
                 <div class="work-mode-preview-header">
                     <div class="work-mode-preview-title">Docs Preview</div>
                     <div class="work-mode-preview-actions">
-                        <button class="btn ghost file-browser-back work-mode-preview-chat is-hidden" type="button" id="claude-work-mode-chat-back">채팅으로</button>
-                        <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="claude-work-mode-file-back">목록으로</button>
-                        <div class="work-mode-root-tools" role="group" aria-label="작업 모드 루트 선택">
+                        <div class="work-mode-preview-tools">
+                            <button class="btn ghost file-browser-back work-mode-preview-back is-hidden" type="button" id="claude-work-mode-file-back">목록으로</button>
+                            <button class="btn ghost work-mode-preview-up" type="button" id="claude-work-mode-file-up">상위 폴더</button>
                             <button
-                                class="btn secondary work-mode-root-target is-active"
+                                class="btn ghost icon-only work-mode-preview-open-new"
                                 type="button"
-                                data-root-target="workspace"
-                            >Workspace</button>
+                                id="claude-work-mode-file-open-new"
+                                aria-label="새 창에서 HTML 미리보기 열기"
+                                title="새 창에서 HTML 미리보기 열기"
+                                disabled
+                            >
+                                <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
+                            </button>
                             <button
-                                class="btn ghost work-mode-root-target"
+                                class="btn ghost icon-only work-mode-preview-fullscreen"
                                 type="button"
-                                data-root-target="server"
-                            >Server</button>
+                                id="claude-work-mode-file-fullscreen"
+                                aria-pressed="false"
+                                aria-label="파일 내용 전체화면"
+                                title="파일 내용 전체화면"
+                            >
+                                <span class="sr-only">파일 내용 전체화면</span>
+                            </button>
+                            <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="claude-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
+                                <span class="sr-only">문서 목록 새로고침</span>
+                            </button>
                         </div>
-                        <button class="btn ghost work-mode-preview-up" type="button" id="claude-work-mode-file-up">상위 폴더</button>
-                        <button
-                            class="btn ghost icon-only work-mode-preview-open-new"
-                            type="button"
-                            id="claude-work-mode-file-open-new"
-                            aria-label="새 창에서 HTML 미리보기 열기"
-                            title="새 창에서 HTML 미리보기 열기"
-                            disabled
-                        >
-                            <span class="sr-only">새 창에서 HTML 미리보기 열기</span>
-                        </button>
-                        <button
-                            class="btn ghost icon-only work-mode-preview-fullscreen"
-                            type="button"
-                            id="claude-work-mode-file-fullscreen"
-                            aria-pressed="false"
-                            aria-label="파일 내용 전체화면"
-                            title="파일 내용 전체화면"
-                        >
-                            <span class="sr-only">파일 내용 전체화면</span>
-                        </button>
-                        <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="claude-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
-                            <span class="sr-only">문서 목록 새로고침</span>
-                        </button>
+                        <div class="work-mode-switch-slot work-mode-preview-switch-slot is-hidden">
+                            <button
+                                class="btn ghost file-browser-back work-mode-preview-chat is-hidden"
+                                type="button"
+                                id="claude-work-mode-chat-back"
+                                aria-label="채팅으로 이동"
+                                title="채팅으로 이동"
+                            >
+                                <span class="sr-only">채팅으로 이동</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div class="work-mode-preview-path" id="claude-work-mode-file-path">$workspace</div>
+                <div class="work-mode-root-tools" role="group" aria-label="작업 모드 루트 선택">
+                    <button
+                        class="btn secondary work-mode-root-target is-active"
+                        type="button"
+                        data-root-target="workspace"
+                    >Workspace</button>
+                    <button
+                        class="btn ghost work-mode-root-target"
+                        type="button"
+                        data-root-target="server"
+                    >Server</button>
+                </div>
                 <div class="file-browser-layout work-mode-file-layout" id="claude-work-mode-file-layout">
                     <div class="file-browser-list-panel work-mode-file-list-panel">
                         <div class="file-browser-meta" id="claude-work-mode-file-meta">디렉터리 목록을 불러오는 중...</div>
@@ -436,6 +450,7 @@
             </div>
             <div class="branch-overlay-body">
                 <div class="branch-overlay-meta" id="claude-branch-overlay-meta">불러오는 중...</div>
+                <div class="branch-overlay-last-commit" id="claude-branch-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="branch-overlay-stage-tools">
                     <button class="btn secondary branch-overlay-stage-btn" type="button" id="claude-branch-overlay-stage-all">전체 선택</button>
                     <button class="btn ghost branch-overlay-stage-btn" type="button" id="claude-branch-overlay-stage-none">선택 해제</button>
@@ -453,7 +468,7 @@
                 </div>
                 <div class="branch-overlay-loading" id="claude-branch-overlay-loading">변경 파일을 불러오는 중...</div>
                 <div class="branch-overlay-empty is-hidden" id="claude-branch-overlay-empty">변경 파일이 없습니다.</div>
-                <ul class="branch-overlay-list is-hidden" id="claude-branch-overlay-list"></ul>
+                <ul class="branch-overlay-list git-file-tree-list is-hidden" id="claude-branch-overlay-list"></ul>
             </div>
             <div class="branch-overlay-footer">
                 <button class="btn ghost icon-only git-action-commit" type="button" id="claude-branch-overlay-commit" aria-label="Commit staged files" title="Commit staged files">
@@ -484,6 +499,7 @@
             </div>
             <div class="sync-overlay-body">
                 <div class="sync-overlay-meta" id="claude-sync-overlay-meta">히스토리를 불러오는 중...</div>
+                <div class="sync-overlay-last-commit" id="claude-sync-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
                     <button class="btn secondary sync-overlay-target is-active" type="button" id="claude-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
                     <button class="btn ghost sync-overlay-target" type="button" id="claude-sync-target-model-agent" data-repo-target="claude_agent">claude_agent Repo</button>
@@ -502,6 +518,10 @@
                     </button>
                 </div>
                 <div class="sync-overlay-loading" id="claude-sync-overlay-loading">원격 이력을 불러오는 중...</div>
+                <div class="sync-overlay-section-title" id="claude-sync-overlay-files-title">커밋 대상 파일</div>
+                <div class="sync-overlay-files-empty is-hidden" id="claude-sync-overlay-files-empty">커밋 대상 파일이 없습니다.</div>
+                <ul class="sync-overlay-files-list git-file-tree-list is-hidden" id="claude-sync-overlay-files-list"></ul>
+                <div class="sync-overlay-section-title" id="claude-sync-overlay-history-title">원격 이력</div>
                 <div class="sync-overlay-empty is-hidden" id="claude-sync-overlay-empty">표시할 이력이 없습니다.</div>
                 <ul class="sync-overlay-list is-hidden" id="claude-sync-overlay-list"></ul>
             </div>

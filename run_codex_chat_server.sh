@@ -65,6 +65,7 @@ original_args=("$@")
 requested_port=3000
 show_help=0
 declare -a passthrough_args=()
+reserved_ports_raw="${CODEX_RESERVED_PORTS:-8080}"
 
 while (($#)); do
     case "$1" in
@@ -137,8 +138,46 @@ port_in_use() {
     return 1
 }
 
+port_reserved() {
+    local port="$1"
+    local reserved_list="$2"
+    local token
+    local -a reserved_tokens=()
+
+    IFS=',' read -r -a reserved_tokens <<< "${reserved_list}"
+    for token in "${reserved_tokens[@]}"; do
+        token="${token//[[:space:]]/}"
+        [[ -z "${token}" ]] && continue
+        if [[ "${token}" =~ ^[0-9]+$ ]] && (( port == token )); then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+if port_reserved "${requested_port}" "${reserved_ports_raw}"; then
+    echo "Port ${requested_port} is reserved via CODEX_RESERVED_PORTS=${reserved_ports_raw}. Keep 8080 for code-server." >&2
+    exit 1
+fi
+
 final_port="${requested_port}"
-while port_in_use "${final_port}"; do
+while true; do
+    if port_reserved "${final_port}" "${reserved_ports_raw}"; then
+        next_port=$((final_port + 1))
+        if ((next_port > 65535)); then
+            echo "No available port found between ${requested_port} and 65535" >&2
+            exit 1
+        fi
+        echo "[INFO] Port ${final_port} is reserved. Trying ${next_port}..."
+        final_port="${next_port}"
+        continue
+    fi
+
+    if ! port_in_use "${final_port}"; then
+        break
+    fi
+
     next_port=$((final_port + 1))
     if ((next_port > 65535)); then
         echo "No available port found between ${requested_port} and 65535" >&2

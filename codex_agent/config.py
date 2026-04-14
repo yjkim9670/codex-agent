@@ -9,6 +9,39 @@ try:
 except ImportError:
     ZoneInfo = None
 
+_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
+_FALSY_VALUES = {'0', 'false', 'no', 'off'}
+
+
+def _parse_bool_env(name, default=False):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    token = str(raw_value).strip().lower()
+    if not token:
+        return default
+    if token in _TRUTHY_VALUES:
+        return True
+    if token in _FALSY_VALUES:
+        return False
+    return default
+
+
+def _parse_allowed_origins(raw_value):
+    text = str(raw_value or '').strip()
+    if not text:
+        return tuple()
+    normalized_origins = []
+    seen = set()
+    for chunk in text.replace('\n', ',').split(','):
+        origin = chunk.strip()
+        if not origin or origin in seen:
+            continue
+        normalized_origins.append(origin)
+        seen.add(origin)
+    return tuple(normalized_origins)
+
+
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 _workspace_override = os.environ.get('CODEX_WORKSPACE_DIR')
@@ -122,12 +155,16 @@ CODEX_REASONING_OPTIONS = [
     if item.strip()
 ]
 
-CODEX_SKIP_GIT_REPO_CHECK = os.environ.get('CODEX_SKIP_GIT_REPO_CHECK', '').strip().lower() in {
-    '1',
-    'true',
-    'yes',
-    'on'
-}
+CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
+    os.environ.get(
+        'CODEX_ALLOWED_ORIGINS',
+        'http://localhost:4000,http://127.0.0.1:4000',
+    )
+)
+CODEX_API_ONLY_MODE = _parse_bool_env('CODEX_API_ONLY_MODE', default=False)
+CODEX_ENABLE_FILES_API = _parse_bool_env('CODEX_ENABLE_FILES_API', default=True)
+CODEX_ENABLE_GIT_API = _parse_bool_env('CODEX_ENABLE_GIT_API', default=True)
+CODEX_SKIP_GIT_REPO_CHECK = _parse_bool_env('CODEX_SKIP_GIT_REPO_CHECK', default=False)
 
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None

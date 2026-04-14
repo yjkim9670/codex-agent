@@ -9,6 +9,8 @@ const state = {
     remoteAttachInFlightSessions: new Set(),
     remoteStreams: [],
     liveClockTimer: null,
+    jobMonitorTimerId: null,
+    usageRefreshTimerId: null,
     responseTimerId: null,
     responseTimerSessionId: null,
     autoScrollEnabled: true,
@@ -21,9 +23,9 @@ const state = {
         modelOptions: [],
         planModeModel: null,
         planModeReasoningEffort: null,
+        planModeState: 'off',
         reasoningEffort: null,
         reasoningOptions: [],
-        planModeEnabled: false,
         usage: null,
         usageHistory: null,
         loaded: false
@@ -33,9 +35,14 @@ const state = {
 const APP_DATASET = document.body?.dataset || {};
 const APP_NAME = APP_DATASET.appName || 'Claude Agent';
 const APP_DESCRIPTION = APP_DATASET.appDescription || `Manage ${APP_NAME} sessions.`;
-const SESSION_COLLAPSE_KEY = 'geminiSessionsCollapsed';
-const ACTIVE_STREAM_KEY = 'geminiActiveStream';
-const CONTROLS_COLLAPSE_KEY = 'geminiControlsCollapsed';
+const SESSION_COLLAPSE_KEY = 'claudeSessionsCollapsed';
+const ACTIVE_STREAM_KEY = 'claudeActiveStream';
+const CONTROLS_COLLAPSE_KEY = 'claudeControlsCollapsed';
+const LEGACY_SESSION_COLLAPSE_KEYS = Object.freeze(['geminiSessionsCollapsed']);
+const LEGACY_ACTIVE_STREAM_KEYS = Object.freeze(['geminiActiveStream']);
+const LEGACY_CONTROLS_COLLAPSE_KEYS = Object.freeze(['geminiControlsCollapsed']);
+const PHONE_MEDIA_QUERY = '(max-width: 599px)';
+const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 960px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 960px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
@@ -43,15 +50,25 @@ const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const WORK_MODE_CLASS = 'is-work-mode';
-const WORK_MODE_KEY = 'geminiWorkModeEnabled';
-const WORK_MODE_SPLIT_KEY = 'geminiWorkModeSplit';
+const WORK_MODE_PREVIEW_FULLSCREEN_CLASS = 'is-work-mode-fold-preview-fullscreen';
+const WORK_MODE_KEY = 'claudeWorkModeEnabled';
+const WORK_MODE_SPLIT_KEY = 'claudeWorkModeSplit';
 const WORK_MODE_DEFAULT_SPLIT = 0.58;
 const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
 const WORK_MODE_MIN_PREVIEW_WIDTH_PX = 320;
-const WORK_MODE_FILE_SPLIT_KEY = 'geminiWorkModeFileSplit';
-const WORK_MODE_FILE_COLUMNS_KEY = 'geminiWorkModeFileColumns';
-const FILE_BROWSER_SPLIT_KEY = 'geminiFileBrowserSplit';
-const FILE_BROWSER_COLUMNS_KEY = 'geminiFileBrowserColumns';
+const WORK_MODE_FILE_SPLIT_KEY = 'claudeWorkModeFileSplit';
+const WORK_MODE_FILE_COLUMNS_KEY = 'claudeWorkModeFileColumns';
+const WORK_MODE_FILE_VIEW_STATE_KEY = 'claudeWorkModeFileViewState';
+const LEGACY_WORK_MODE_KEYS = Object.freeze(['geminiWorkModeEnabled']);
+const LEGACY_WORK_MODE_SPLIT_KEYS = Object.freeze(['geminiWorkModeSplit']);
+const LEGACY_WORK_MODE_FILE_SPLIT_KEYS = Object.freeze(['geminiWorkModeFileSplit']);
+const LEGACY_WORK_MODE_FILE_COLUMNS_KEYS = Object.freeze(['geminiWorkModeFileColumns']);
+const LEGACY_WORK_MODE_FILE_VIEW_STATE_KEYS = Object.freeze(['geminiWorkModeFileViewState']);
+const WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS = 140;
+const FILE_BROWSER_SPLIT_KEY = 'claudeFileBrowserSplit';
+const FILE_BROWSER_COLUMNS_KEY = 'claudeFileBrowserColumns';
+const LEGACY_FILE_BROWSER_SPLIT_KEYS = Object.freeze(['geminiFileBrowserSplit']);
+const LEGACY_FILE_BROWSER_COLUMNS_KEYS = Object.freeze(['geminiFileBrowserColumns']);
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
 const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
@@ -65,7 +82,8 @@ const WORK_MODE_FILE_COLUMN_LIMITS = Object.freeze({
     size: Object.freeze({ min: 72, max: 220 }),
     modified: Object.freeze({ min: 110, max: 280 })
 });
-const THEME_KEY = 'geminiTheme';
+const THEME_KEY = 'claudeTheme';
+const LEGACY_THEME_KEYS = Object.freeze(['geminiTheme']);
 const THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
 const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
@@ -76,7 +94,8 @@ const XLSX_VENDOR_SRC = '/static/vendor/xlsx-0.18.5.full.min.js';
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
-const WEATHER_COMPACT_KEY = 'geminiWeatherCompact';
+const WEATHER_COMPACT_KEY = 'claudeWeatherCompact';
+const LEGACY_WEATHER_COMPACT_KEYS = Object.freeze(['geminiWeatherCompact']);
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'claude-toast-layer';
 const HOVER_TOOLTIP_LAYER_ID = 'claude-hover-tooltip-layer';
@@ -84,6 +103,7 @@ const HOVER_TOOLTIP_OFFSET_PX = 8;
 const HOVER_TOOLTIP_VIEWPORT_MARGIN_PX = 10;
 const LIVE_WEATHER_PANEL_TITLE = 'Clock & Weather';
 const DEFAULT_WEATHER_LOCATION_LABEL = '화성시 반월동';
+const USAGE_SUMMARY_POLL_MS = 30000;
 const DEFAULT_WEATHER_POSITION = Object.freeze({
     latitude: 37.23018,
     longitude: 127.06497,
@@ -122,6 +142,8 @@ const FILE_BROWSER_ROOT_OPTIONS = new Set([
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/claude/files/raw';
+const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
+const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
@@ -173,6 +195,10 @@ const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
     [GIT_SYNC_TARGET_MODEL_AGENT]: 'claude_agent Repo'
 });
+const PLAN_MODE_STATE_OFF = 'off';
+const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
+const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
+const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
 let hasManualTheme = false;
 let gitBranchStatusCache = {
@@ -180,6 +206,9 @@ let gitBranchStatusCache = {
     branch: '',
     aheadCount: null,
     behindCount: null,
+    windowsInvalidFiles: [],
+    windowsInvalidCount: 0,
+    hasWindowsPathIssues: false,
     changedFiles: [],
     isStale: false,
     fetchedAt: 0
@@ -237,6 +266,7 @@ let workModeFileSelectedPath = '';
 let workModeFileCachedEntries = [];
 let workModeFileCachedTruncated = false;
 let workModeFileViewerFullscreen = false;
+let workModePreviewFullscreen = false;
 let workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let workModeFileResizePointerId = null;
 let workModeFileColumnResizeState = null;
@@ -248,6 +278,9 @@ let workModeFileColumnWidths = {
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
     modified: WORK_MODE_FILE_COLUMN_DEFAULTS.modified
 };
+let workModeFileStatePersistTimer = null;
+let pendingWorkModeFileScrollRestore = null;
+let pendingWorkModeFileViewerScrollRestore = null;
 let remoteStreamStatusCache = {
     streams: [],
     fetchedAt: 0
@@ -272,8 +305,82 @@ let xlsxLoadPromise = null;
 let workModeHtmlPreviewState = {
     root: FILE_BROWSER_ROOT_WORKSPACE,
     path: '',
-    previewUrl: ''
+    previewUrl: '',
+    suspended: false,
+    viewerScroll: null
 };
+
+function migrateStorageKey(storage, primaryKey, legacyKeys = []) {
+    if (!storage || !primaryKey) return;
+    const candidates = Array.isArray(legacyKeys) ? legacyKeys : [];
+    try {
+        const currentValue = storage.getItem(primaryKey);
+        if (currentValue === null) {
+            for (const legacyKey of candidates) {
+                const key = String(legacyKey || '').trim();
+                if (!key || key === primaryKey) continue;
+                const legacyValue = storage.getItem(key);
+                if (legacyValue === null) continue;
+                storage.setItem(primaryKey, legacyValue);
+                break;
+            }
+        }
+        candidates.forEach(legacyKey => {
+            const key = String(legacyKey || '').trim();
+            if (!key || key === primaryKey) return;
+            if (storage.getItem(key) !== null) {
+                storage.removeItem(key);
+            }
+        });
+    } catch (error) {
+        void error;
+    }
+}
+
+function migrateLegacyClientStorageKeys() {
+    migrateStorageKey(window.localStorage, SESSION_COLLAPSE_KEY, LEGACY_SESSION_COLLAPSE_KEYS);
+    migrateStorageKey(window.localStorage, ACTIVE_STREAM_KEY, LEGACY_ACTIVE_STREAM_KEYS);
+    migrateStorageKey(window.localStorage, CONTROLS_COLLAPSE_KEY, LEGACY_CONTROLS_COLLAPSE_KEYS);
+    migrateStorageKey(window.localStorage, WORK_MODE_KEY, LEGACY_WORK_MODE_KEYS);
+    migrateStorageKey(window.localStorage, WORK_MODE_SPLIT_KEY, LEGACY_WORK_MODE_SPLIT_KEYS);
+    migrateStorageKey(window.localStorage, WORK_MODE_FILE_SPLIT_KEY, LEGACY_WORK_MODE_FILE_SPLIT_KEYS);
+    migrateStorageKey(window.localStorage, WORK_MODE_FILE_COLUMNS_KEY, LEGACY_WORK_MODE_FILE_COLUMNS_KEYS);
+    migrateStorageKey(window.localStorage, FILE_BROWSER_SPLIT_KEY, LEGACY_FILE_BROWSER_SPLIT_KEYS);
+    migrateStorageKey(window.localStorage, FILE_BROWSER_COLUMNS_KEY, LEGACY_FILE_BROWSER_COLUMNS_KEYS);
+    migrateStorageKey(window.localStorage, THEME_KEY, LEGACY_THEME_KEYS);
+    migrateStorageKey(window.localStorage, WEATHER_COMPACT_KEY, LEGACY_WEATHER_COMPACT_KEYS);
+    migrateStorageKey(window.sessionStorage, WORK_MODE_FILE_VIEW_STATE_KEY, LEGACY_WORK_MODE_FILE_VIEW_STATE_KEYS);
+}
+
+function runAfterAnimationFrame(callback) {
+    if (typeof callback !== 'function') return 0;
+    if (typeof window.requestAnimationFrame === 'function') {
+        return window.requestAnimationFrame(() => {
+            callback();
+        });
+    }
+    return window.setTimeout(() => {
+        callback();
+    }, 16);
+}
+
+function createRafThrottledHandler(callback) {
+    if (typeof callback !== 'function') {
+        return () => {};
+    }
+    let frameId = 0;
+    let queuedArgs = null;
+    return (...args) => {
+        queuedArgs = args;
+        if (frameId) return;
+        frameId = runAfterAnimationFrame(() => {
+            frameId = 0;
+            const latestArgs = queuedArgs;
+            queuedArgs = null;
+            callback(...(latestArgs || []));
+        });
+    };
+}
 
 function loadVendorScript(src) {
     const source = String(src || '').trim();
@@ -655,6 +762,166 @@ function syncActiveSessionControls() {
             srLabel.textContent = label;
         }
     }
+    renderRunningJobsMonitor();
+}
+
+function resolveRunningJobSessionTitle(sessionId) {
+    const targetId = String(sessionId || '').trim();
+    if (!targetId) return 'Session';
+    const summary = state.sessions.find(session => session?.id === targetId);
+    const title = String(summary?.title || '').trim();
+    if (title) return title;
+    if (targetId === state.activeSessionId) {
+        const headerTitle = String(document.getElementById('claude-chat-title')?.textContent || '').trim();
+        if (headerTitle && headerTitle !== 'Select a session') {
+            return headerTitle;
+        }
+    }
+    return `Session ${targetId.slice(0, 8)}`;
+}
+
+function resolveRemoteRuntimeMs(remoteStream, nowMs) {
+    if (!remoteStream) return null;
+    const runtimeMs = Number(remoteStream.runtime_ms ?? remoteStream.runtimeMs);
+    if (Number.isFinite(runtimeMs) && runtimeMs >= 0) {
+        return Math.max(0, Math.round(runtimeMs));
+    }
+    const startedAt = normalizeStartedAt(
+        remoteStream.started_at
+        ?? remoteStream.startedAt
+        ?? remoteStream.created_at
+        ?? remoteStream.createdAt
+    );
+    if (!startedAt) return null;
+    return Math.max(0, nowMs - startedAt);
+}
+
+function collectRunningJobs() {
+    const sessionIds = new Set();
+    state.sessions.forEach(session => {
+        if (session?.id) sessionIds.add(session.id);
+    });
+    Object.keys(state.sessionStates || {}).forEach(sessionId => {
+        if (sessionId) sessionIds.add(sessionId);
+    });
+    Object.values(state.streams || {}).forEach(stream => {
+        if (stream?.sessionId) sessionIds.add(stream.sessionId);
+    });
+    (state.remoteStreams || []).forEach(stream => {
+        const sessionId = stream?.session_id || stream?.sessionId;
+        if (sessionId) sessionIds.add(sessionId);
+    });
+
+    const nowMs = Date.now();
+    const jobs = [];
+    sessionIds.forEach(sessionId => {
+        const sessionState = getSessionState(sessionId);
+        const localStream = getSessionStream(sessionId);
+        const remoteStream = getRemoteStreamState(sessionId);
+        const hasRemoteStream = Boolean(state.remoteStreamSessions?.has(sessionId) || remoteStream);
+        if (!localStream && !sessionState?.pendingSend && !hasRemoteStream) return;
+
+        let phase = '';
+        let elapsedMs = null;
+        let order = 3;
+
+        if (localStream) {
+            phase = localStream.processRunning === false ? 'CLI finalizing' : 'CLI running';
+            elapsedMs = Number.isFinite(localStream.runtimeMs)
+                ? Math.max(0, Math.round(localStream.runtimeMs))
+                : Math.max(0, nowMs - (normalizeStartedAt(localStream.startedAt) || nowMs));
+            order = 0;
+        } else if (sessionState?.pendingSend) {
+            phase = 'Submitting';
+            const pendingStartedAt = normalizeStartedAt(sessionState.pendingSend.startedAt);
+            elapsedMs = pendingStartedAt ? Math.max(0, nowMs - pendingStartedAt) : null;
+            order = 1;
+        } else if (hasRemoteStream) {
+            const processRunning = remoteStream?.process_running;
+            if (processRunning === true) {
+                phase = 'Remote CLI running';
+            } else if (processRunning === false) {
+                phase = 'Remote finalizing';
+            } else {
+                phase = 'Remote streaming';
+            }
+            elapsedMs = resolveRemoteRuntimeMs(remoteStream, nowMs);
+            order = 2;
+        }
+
+        jobs.push({
+            sessionId,
+            title: resolveRunningJobSessionTitle(sessionId),
+            phase,
+            elapsedMs,
+            order,
+            active: sessionId === state.activeSessionId
+        });
+    });
+
+    jobs.sort((left, right) => {
+        const activeDiff = Number(right.active) - Number(left.active);
+        if (activeDiff !== 0) return activeDiff;
+        const orderDiff = (left.order || 0) - (right.order || 0);
+        if (orderDiff !== 0) return orderDiff;
+        const elapsedLeft = Number.isFinite(left.elapsedMs) ? left.elapsedMs : -1;
+        const elapsedRight = Number.isFinite(right.elapsedMs) ? right.elapsedMs : -1;
+        return elapsedRight - elapsedLeft;
+    });
+    return jobs;
+}
+
+function renderRunningJobsMonitor() {
+    const monitor = document.getElementById('claude-chat-job-monitor');
+    const summary = document.getElementById('claude-chat-job-monitor-summary');
+    const list = document.getElementById('claude-chat-job-monitor-list');
+    const runtimeStrip = monitor?.closest('.chat-runtime-strip');
+    if (!monitor || !summary || !list) return;
+
+    const jobs = collectRunningJobs();
+    if (jobs.length === 0) {
+        monitor.classList.add('is-idle');
+        runtimeStrip?.classList.add('is-idle');
+        summary.textContent = '실행 중인 job 없음';
+        list.innerHTML = '';
+        return;
+    }
+
+    monitor.classList.remove('is-idle');
+    runtimeStrip?.classList.remove('is-idle');
+    summary.textContent = jobs.length === 1
+        ? '실행 중인 job 1개'
+        : `실행 중인 job ${jobs.length}개`;
+    list.innerHTML = '';
+
+    const maxVisible = isMobileLayout() ? 2 : 3;
+    jobs.slice(0, maxVisible).forEach(job => {
+        const item = document.createElement('li');
+        item.className = 'chat-job-monitor-item';
+        if (job.active) {
+            item.classList.add('is-active');
+        }
+        const elapsedText = Number.isFinite(job.elapsedMs) ? formatElapsedTime(job.elapsedMs) : '';
+        item.textContent = elapsedText
+            ? `${job.title} · ${job.phase} · ${elapsedText}`
+            : `${job.title} · ${job.phase}`;
+        list.appendChild(item);
+    });
+
+    if (jobs.length > maxVisible) {
+        const moreItem = document.createElement('li');
+        moreItem.className = 'chat-job-monitor-item is-more';
+        moreItem.textContent = `외 ${jobs.length - maxVisible}개`;
+        list.appendChild(moreItem);
+    }
+}
+
+function startRunningJobsMonitorTicker() {
+    renderRunningJobsMonitor();
+    if (state.jobMonitorTimerId) {
+        window.clearInterval(state.jobMonitorTimerId);
+    }
+    state.jobMonitorTimerId = window.setInterval(renderRunningJobsMonitor, 1000);
 }
 
 function appendMessageToDOMIfActive(sessionId, message, roleOverride = null) {
@@ -802,7 +1069,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamMonitor = document.getElementById('claude-stream-monitor');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('claude-sessions-toggle');
-    const mobileMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const compactMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('claude-theme-toggle');
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
     const modelSelect = document.getElementById('claude-model-select');
@@ -818,6 +1086,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlsToggle = document.getElementById('claude-controls-toggle');
     const controls = document.getElementById('claude-controls');
     const usageHistoryOpen = document.getElementById('claude-usage-history-open');
+    const usageRefreshBtn = document.getElementById('claude-usage-refresh');
     const gitBranch = document.getElementById('claude-git-branch');
     const gitCommitBtn = document.getElementById('claude-git-commit');
     const gitPushBtn = document.getElementById('claude-git-push');
@@ -835,6 +1104,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileDivider = document.getElementById('claude-work-mode-file-divider');
     const workModeFileGridScroll = document.getElementById('claude-work-mode-file-grid-scroll');
     const workModeFileHScroll = document.getElementById('claude-work-mode-file-hscroll');
+    const workModeFileViewerContent = document.getElementById('claude-work-mode-file-viewer-content');
     const workModeFileColumnResizers = Array.from(
         document.querySelectorAll('#claude-work-mode-file-columns [data-resize-col]')
     );
@@ -877,8 +1147,16 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('#claude-sync-overlay .sync-overlay-target[data-repo-target]')
     );
 
+    migrateLegacyClientStorageKeys();
+
     // Reset git highlights until fresh git status arrives.
-    updateGitCommitButtonState({ count: 0, changedFiles: [] });
+    updateGitCommitButtonState({
+        count: 0,
+        changedFiles: [],
+        windowsInvalidFiles: [],
+        windowsInvalidCount: 0,
+        hasWindowsPathIssues: false
+    });
     updateGitPushButtonState({ aheadCount: 0 });
     initializeHoverTooltipInteractions();
     initializeHeaderActionTooltips({
@@ -934,7 +1212,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (chatTitleTrigger) {
         chatTitleTrigger.addEventListener('click', event => {
-            if (!isMobileLayout()) return;
+            const canOpenOverlay = isPhoneLayout() || isWorkModeEnabled();
+            if (!canOpenOverlay) return;
             event.preventDefault();
             if (isMobileSessionOverlayOpen()) {
                 closeMobileSessionOverlay();
@@ -1004,13 +1283,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileRefreshBtn) {
         workModeFileRefreshBtn.addEventListener('click', async () => {
+            const scrollSnapshot = captureWorkModeFileScrollSnapshot();
+            const viewerScrollSnapshot = captureWorkModeFileViewerScrollSnapshot();
             const listed = await refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: workModeFilePath,
-                force: true
+                force: true,
+                restoreScrollSnapshot: scrollSnapshot
             });
             if (!listed) return;
-            await refreshWorkModeFilePreviewSelection();
+            await refreshWorkModeFilePreviewSelection({
+                restoreViewerScrollSnapshot: viewerScrollSnapshot
+            });
         });
     }
     if (workModeFileUpBtn) {
@@ -1018,6 +1302,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!workModeFilePath) return;
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+            } else if (isFoldLayout()) {
+                setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
             void refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
@@ -1029,7 +1315,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileBackBtn) {
         workModeFileBackBtn.addEventListener('click', event => {
             event.preventDefault();
-            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+            if (isMobileLayout()) {
+                setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+                return;
+            }
+            if (isFoldLayout()) {
+                setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
+            }
         });
     }
     if (workModeChatBackBtn) {
@@ -1043,6 +1335,7 @@ document.addEventListener('DOMContentLoaded', () => {
             event.preventDefault();
             openWorkModeHtmlPreviewInNewWindow();
         });
+        syncHoverTooltipFromLabel(workModeFileOpenNewBtn);
     }
     syncWorkModeHtmlPreviewOpenButton();
     if (workModeMobileBrowserBtn) {
@@ -1060,6 +1353,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileFullscreenBtn) {
         workModeFileFullscreenBtn.addEventListener('click', event => {
             event.preventDefault();
+            if (isFoldLayout()) {
+                setWorkModePreviewFullscreen(!workModePreviewFullscreen);
+                return;
+            }
             setWorkModeFileViewerFullscreen(!workModeFileViewerFullscreen);
         });
     }
@@ -1076,21 +1373,36 @@ document.addEventListener('DOMContentLoaded', () => {
         workModeFileGridScroll.addEventListener('scroll', handleWorkModeFileGridScroll, { passive: true });
         workModeFileHScroll.addEventListener('scroll', handleWorkModeFileHScroll, { passive: true });
     }
+    if (workModeFileViewerContent) {
+        workModeFileViewerContent.addEventListener('scroll', handleWorkModeFileViewerScroll, { passive: true });
+    }
     workModeFileColumnResizers.forEach(resizer => {
         resizer.addEventListener('pointerdown', event => {
             startWorkModeFileColumnResize(event, resizer.dataset?.resizeCol || '');
         });
     });
     document.querySelectorAll('.work-mode-root-target[data-root-target]').forEach(button => {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', async () => {
             const nextRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
             if (!nextRoot || nextRoot === workModeFileRoot) return;
+            const scrollSnapshot = captureWorkModeFileScrollSnapshot();
+            const viewerScrollSnapshot = captureWorkModeFileViewerScrollSnapshot();
             workModeFileRoot = nextRoot;
             workModeFilePath = '';
             workModeFileSelectedPath = '';
             clearWorkModeFileViewer();
             updateWorkModeFileRootButtons();
-            void refreshWorkModeFileDirectory({ root: nextRoot, path: '', force: true });
+            schedulePersistWorkModeFileViewState();
+            const listed = await refreshWorkModeFileDirectory({
+                root: nextRoot,
+                path: '',
+                force: true,
+                restoreScrollSnapshot: scrollSnapshot
+            });
+            if (!listed) return;
+            await refreshWorkModeFilePreviewSelection({
+                restoreViewerScrollSnapshot: viewerScrollSnapshot
+            });
         });
     });
     if (branchOverlayCommitBtn) {
@@ -1411,7 +1723,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     loadSessions({ preserveActive: true }),
                     refreshRemoteStreams({ force: true }),
                     loadSettings({ silent: true }),
-                    refreshUsageSummary({ silent: true }),
+                    refreshUsageSummary({ silent: true, force: true }),
                     loadLiveWeatherData({ silent: true })
                 ]);
             } finally {
@@ -1469,38 +1781,57 @@ document.addEventListener('DOMContentLoaded', () => {
             void openUsageHistoryOverlay();
         });
     }
+    if (usageRefreshBtn) {
+        usageRefreshBtn.addEventListener('click', async () => {
+            usageRefreshBtn.classList.add('is-spinning');
+            usageRefreshBtn.disabled = true;
+            await refreshUsageSummary({ silent: false, showSuccessToast: true, force: true });
+            usageRefreshBtn.classList.remove('is-spinning');
+            usageRefreshBtn.disabled = false;
+        });
+    }
 
     primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect);
 
-    syncSessionsLayout(mobileMedia.matches);
+    syncSessionsLayout(compactMedia.matches);
     syncControlsLayout();
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
     updateFileBrowserRootButtons();
-    initializeWorkMode(mobileMedia.matches);
+    initializeWorkMode(phoneMedia.matches);
     setWorkModeFileViewerFullscreen(false);
     updateWorkModeFileRootButtons();
     if (isWorkModeEnabled()) {
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     }
-    if (typeof mobileMedia.addEventListener === 'function') {
-        mobileMedia.addEventListener('change', event => {
-            syncSessionsLayout(event.matches);
-            syncLiveWeatherLayout(event.matches);
-            setFileBrowserMobileView(fileBrowserMobileView);
-            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-            handleWorkModeMediaChange(event.matches);
-        });
-    } else if (typeof mobileMedia.addListener === 'function') {
-        mobileMedia.addListener(event => {
-            syncSessionsLayout(event.matches);
-            syncLiveWeatherLayout(event.matches);
-            setFileBrowserMobileView(fileBrowserMobileView);
-            setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-            handleWorkModeMediaChange(event.matches);
-        });
+    const handleCompactLayoutChange = event => {
+        const isCompact = Boolean(event?.matches);
+        syncSessionsLayout(isCompact);
+        syncLiveWeatherLayout(isCompact);
+        setFileBrowserMobileView(fileBrowserMobileView);
+        setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+        handleWorkModeMediaChange(isPhoneLayout());
+    };
+    if (typeof compactMedia.addEventListener === 'function') {
+        compactMedia.addEventListener('change', handleCompactLayoutChange);
+    } else if (typeof compactMedia.addListener === 'function') {
+        compactMedia.addListener(handleCompactLayoutChange);
     }
-    window.addEventListener('resize', () => {
+    const handlePhoneLayoutChange = event => {
+        const isPhone = Boolean(event?.matches);
+        if (!isPhone && isMobileSessionOverlayOpen()) {
+            closeMobileSessionOverlay();
+        }
+        setFileBrowserMobileView(fileBrowserMobileView);
+        setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+        handleWorkModeMediaChange(isPhone);
+    };
+    if (typeof phoneMedia.addEventListener === 'function') {
+        phoneMedia.addEventListener('change', handlePhoneLayoutChange);
+    } else if (typeof phoneMedia.addListener === 'function') {
+        phoneMedia.addListener(handlePhoneLayoutChange);
+    }
+    const handleWindowLayoutResize = createRafThrottledHandler(() => {
         if (isWorkModeEnabled()) {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
@@ -1511,10 +1842,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         syncWorkModeFileHorizontalScrollMetrics();
     });
+    window.addEventListener('resize', handleWindowLayoutResize);
+    window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
+    window.addEventListener('beforeunload', flushPersistWorkModeFileViewState);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            void refreshUsageSummary({ silent: true, force: true });
+        }
+    });
+    window.addEventListener('focus', () => {
+        void refreshUsageSummary({ silent: true, force: true });
+    });
 
-    setupMobileViewportBehavior(mobileMedia, input);
+    setupMobileViewportBehavior(compactMedia, input);
     setupMobileSettingsInputBehavior(
-        mobileMedia,
+        compactMedia,
         [
             modelInput,
             planModeModelInput,
@@ -1617,15 +1959,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeToggle) {
         planModeToggle.addEventListener('click', () => {
-            setPlanModeToggleState(!isPlanModeEnabled());
+            setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
         });
     }
-    setPlanModeToggleState(state.settings.planModeEnabled);
+    setPlanModeToggleState(state.settings.planModeState);
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
+    startRunningJobsMonitorTicker();
+    startUsageSummaryPolling();
     initializeTheme(themeToggle, themeMedia);
-    initializeLiveWeatherPanel(mobileMedia);
+    initializeLiveWeatherPanel(compactMedia);
     if (streamMonitor) {
         setStreamMonitorCollapsed(streamMonitor.classList.contains('is-collapsed'));
     }
@@ -2251,6 +2595,60 @@ function normalizeGitDivergenceCount(value) {
     return Math.max(0, Math.round(numeric));
 }
 
+function normalizeGitWindowsInvalidFiles(value) {
+    if (!Array.isArray(value)) return [];
+    const normalized = [];
+    const seenPaths = new Set();
+    value.forEach(item => {
+        if (!item || typeof item !== 'object') return;
+        const rawPath = typeof item.path === 'string' ? item.path.trim() : '';
+        const path = rawPath.replace(/^\.\//, '');
+        if (!path || seenPaths.has(path)) return;
+        seenPaths.add(path);
+        const reasons = Array.isArray(item.reasons)
+            ? item.reasons.map(reason => String(reason || '').trim()).filter(Boolean)
+            : [];
+        normalized.push({ path, reasons });
+    });
+    normalized.sort((left, right) => compareGitPathValues(left.path, right.path));
+    return normalized;
+}
+
+function normalizeGitWindowsInvalidCount(value, fallback = 0) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) {
+        return Math.max(0, Math.round(numeric));
+    }
+    const fallbackNumeric = Number(fallback);
+    if (Number.isFinite(fallbackNumeric)) {
+        return Math.max(0, Math.round(fallbackNumeric));
+    }
+    return 0;
+}
+
+function normalizeGitWindowsPathIssueState(value, invalidCount = 0) {
+    return Boolean(value) || normalizeGitWindowsInvalidCount(invalidCount) > 0;
+}
+
+function formatGitWindowsPathIssueSummary(invalidCount = 0) {
+    const count = normalizeGitWindowsInvalidCount(invalidCount);
+    return `Windows 비호환 파일명 ${count}개`;
+}
+
+function buildGitWindowsPathIssueToastMessage(invalidFiles, invalidCount = 0) {
+    const normalizedFiles = normalizeGitWindowsInvalidFiles(invalidFiles);
+    const count = normalizeGitWindowsInvalidCount(
+        invalidCount,
+        normalizedFiles.length
+    );
+    if (!normalizedFiles.length) {
+        return `${formatGitWindowsPathIssueSummary(count)}가 포함되어 커밋할 수 없습니다. 파일명을 수정해주세요.`;
+    }
+    const preview = normalizedFiles.slice(0, 3).map(file => file.path).join(', ');
+    const suffix = normalizedFiles.length > 3 ? ', ...' : '';
+    return `${formatGitWindowsPathIssueSummary(count)}가 포함되어 커밋할 수 없습니다: ${preview}${suffix}`;
+}
+
 async function loadLiveWeatherData({ silent = false } = {}) {
     const locationElement = document.getElementById('claude-weather-location');
     const currentElement = document.getElementById('claude-weather-current');
@@ -2662,10 +3060,433 @@ function getWorkModeFileElements() {
     };
 }
 
+function normalizeWorkModeFileScrollSnapshot(value, { includeContext = false } = {}) {
+    if (!value || typeof value !== 'object') return null;
+    const rawTop = Number(value.top);
+    const rawLeft = Number(value.left);
+    const normalized = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+    };
+    if (!includeContext) {
+        return normalized;
+    }
+    return {
+        ...normalized,
+        root: normalizeFileBrowserRoot(value.root),
+        path: normalizeFileBrowserRelativePath(value.path)
+    };
+}
+
+function captureWorkModeFileScrollSnapshot({ includeContext = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll) return null;
+    const rawTop = Number(elements.gridScroll.scrollTop || 0);
+    const rawGridLeft = Number(elements.gridScroll.scrollLeft || 0);
+    const rawRailLeft = Number(elements.hScroll?.scrollLeft || 0);
+    const snapshot = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawGridLeft) || Number.isFinite(rawRailLeft)
+            ? Math.max(0, Math.round(Math.max(rawGridLeft, rawRailLeft)))
+            : 0
+    };
+    if (!includeContext) {
+        return snapshot;
+    }
+    return {
+        ...snapshot,
+        root: normalizeFileBrowserRoot(workModeFileRoot),
+        path: normalizeFileBrowserRelativePath(workModeFilePath)
+    };
+}
+
+function applyWorkModeFileScrollSnapshot(snapshot) {
+    const normalized = normalizeWorkModeFileScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const elements = getWorkModeFileElements();
+    if (!elements?.gridScroll) return false;
+    const nextTop = normalized.top;
+    const nextLeft = normalized.left;
+    if (Math.round(elements.gridScroll.scrollTop || 0) !== nextTop) {
+        elements.gridScroll.scrollTop = nextTop;
+    }
+    if (workModeFileHorizontalSyncLock) {
+        return true;
+    }
+    workModeFileHorizontalSyncLock = true;
+    try {
+        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextLeft) {
+            elements.gridScroll.scrollLeft = nextLeft;
+        }
+        if (elements.hScroll && Math.round(elements.hScroll.scrollLeft || 0) !== nextLeft) {
+            elements.hScroll.scrollLeft = nextLeft;
+        }
+    } finally {
+        workModeFileHorizontalSyncLock = false;
+    }
+    return true;
+}
+
+function normalizeWorkModeFileViewerScrollSnapshot(value, { includeContext = false } = {}) {
+    if (!value || typeof value !== 'object') return null;
+    const rawTop = Number(value.top);
+    const rawLeft = Number(value.left);
+    const rawIframeTop = Number(value.iframeTop);
+    const rawIframeLeft = Number(value.iframeLeft);
+    const normalized = {
+        top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+        left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+    };
+    if (Number.isFinite(rawIframeTop) || Number.isFinite(rawIframeLeft)) {
+        normalized.iframeTop = Number.isFinite(rawIframeTop) ? Math.max(0, Math.round(rawIframeTop)) : 0;
+        normalized.iframeLeft = Number.isFinite(rawIframeLeft) ? Math.max(0, Math.round(rawIframeLeft)) : 0;
+    }
+    if (!includeContext) {
+        return normalized;
+    }
+    return {
+        ...normalized,
+        root: normalizeFileBrowserRoot(value.root),
+        path: normalizeFileBrowserRelativePath(value.path),
+        selectedPath: normalizeFileBrowserRelativePath(value.selectedPath)
+    };
+}
+
+function readFileBrowserIframeScrollSnapshot(iframe) {
+    if (!(iframe instanceof HTMLIFrameElement)) return null;
+    try {
+        const frameWindow = iframe.contentWindow;
+        const frameDocument = iframe.contentDocument;
+        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
+            return null;
+        }
+        const scrollingElement = frameDocument.scrollingElement
+            || frameDocument.documentElement
+            || frameDocument.body;
+        const windowTop = Number(frameWindow.scrollY);
+        const windowLeft = Number(frameWindow.scrollX);
+        const pageTop = Number(frameWindow.pageYOffset);
+        const pageLeft = Number(frameWindow.pageXOffset);
+        const elementTop = Number(scrollingElement?.scrollTop);
+        const elementLeft = Number(scrollingElement?.scrollLeft);
+        const rawTop = Number.isFinite(windowTop)
+            ? windowTop
+            : (Number.isFinite(pageTop) ? pageTop : elementTop);
+        const rawLeft = Number.isFinite(windowLeft)
+            ? windowLeft
+            : (Number.isFinite(pageLeft) ? pageLeft : elementLeft);
+        return {
+            top: Number.isFinite(rawTop) ? Math.max(0, Math.round(rawTop)) : 0,
+            left: Number.isFinite(rawLeft) ? Math.max(0, Math.round(rawLeft)) : 0
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function writeFileBrowserIframeScrollSnapshot(iframe, top, left) {
+    if (!(iframe instanceof HTMLIFrameElement)) return false;
+    try {
+        const frameWindow = iframe.contentWindow;
+        const frameDocument = iframe.contentDocument;
+        if (!frameWindow || !frameDocument || frameDocument.readyState !== 'complete') {
+            return false;
+        }
+        const nextTop = Number.isFinite(Number(top)) ? Math.max(0, Math.round(Number(top))) : 0;
+        const nextLeft = Number.isFinite(Number(left)) ? Math.max(0, Math.round(Number(left))) : 0;
+        const scrollingElement = frameDocument.scrollingElement
+            || frameDocument.documentElement
+            || frameDocument.body;
+        if (scrollingElement) {
+            if (Math.round(scrollingElement.scrollTop || 0) !== nextTop) {
+                scrollingElement.scrollTop = nextTop;
+            }
+            if (Math.round(scrollingElement.scrollLeft || 0) !== nextLeft) {
+                scrollingElement.scrollLeft = nextLeft;
+            }
+        }
+        if (typeof frameWindow.scrollTo === 'function') {
+            frameWindow.scrollTo(nextLeft, nextTop);
+        }
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function captureFileBrowserViewerScrollSnapshot(container) {
+    if (!(container instanceof HTMLElement)) return null;
+    const snapshot = {
+        top: Math.max(0, Math.round(Number(container.scrollTop || 0))),
+        left: Math.max(0, Math.round(Number(container.scrollLeft || 0)))
+    };
+    const iframe = container.querySelector('.file-browser-html-preview');
+    const iframeSnapshot = readFileBrowserIframeScrollSnapshot(iframe);
+    if (iframeSnapshot) {
+        snapshot.iframeTop = iframeSnapshot.top;
+        snapshot.iframeLeft = iframeSnapshot.left;
+    }
+    return snapshot;
+}
+
+function applyFileBrowserViewerScrollSnapshot(container, snapshot, { renderToken = '' } = {}) {
+    if (!(container instanceof HTMLElement)) return false;
+    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const expectedRenderToken = String(renderToken || container.dataset?.renderToken || '');
+    const matchesRenderToken = () => !expectedRenderToken || container.dataset?.renderToken === expectedRenderToken;
+
+    if (!matchesRenderToken()) return false;
+    if (Math.round(container.scrollTop || 0) !== normalized.top) {
+        container.scrollTop = normalized.top;
+    }
+    if (Math.round(container.scrollLeft || 0) !== normalized.left) {
+        container.scrollLeft = normalized.left;
+    }
+
+    const hasIframeSnapshot = Object.prototype.hasOwnProperty.call(normalized, 'iframeTop')
+        || Object.prototype.hasOwnProperty.call(normalized, 'iframeLeft');
+    if (!hasIframeSnapshot) {
+        return true;
+    }
+
+    const applyIframeSnapshot = () => {
+        if (!matchesRenderToken()) return true;
+        const iframe = container.querySelector('.file-browser-html-preview');
+        if (!(iframe instanceof HTMLIFrameElement)) return false;
+        return writeFileBrowserIframeScrollSnapshot(iframe, normalized.iframeTop, normalized.iframeLeft);
+    };
+
+    if (applyIframeSnapshot()) {
+        return true;
+    }
+
+    let retries = 0;
+    const scheduleRetry = () => {
+        if (!matchesRenderToken()) return;
+        if (applyIframeSnapshot()) return;
+        retries += 1;
+        if (retries >= FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES) {
+            return;
+        }
+        window.setTimeout(scheduleRetry, FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS);
+    };
+
+    const iframe = container.querySelector('.file-browser-html-preview');
+    if (iframe instanceof HTMLIFrameElement) {
+        iframe.addEventListener('load', () => {
+            window.setTimeout(scheduleRetry, 0);
+        }, { once: true });
+    }
+    window.setTimeout(scheduleRetry, 0);
+    return true;
+}
+
+function captureWorkModeFileViewerScrollSnapshot({ includeContext = false } = {}) {
+    const elements = getWorkModeFileElements();
+    const snapshot = captureFileBrowserViewerScrollSnapshot(elements?.viewerContent);
+    if (!snapshot) return null;
+    if (!includeContext) {
+        return snapshot;
+    }
+    return {
+        ...snapshot,
+        root: normalizeFileBrowserRoot(workModeFileRoot),
+        path: normalizeFileBrowserRelativePath(workModeFilePath),
+        selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath)
+    };
+}
+
+function resolveWorkModeFileViewerScrollSnapshotForPersist() {
+    const liveSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
+    if (!workModeHtmlPreviewState?.suspended) {
+        return liveSnapshot;
+    }
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
+    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
+    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
+        return liveSnapshot;
+    }
+    const suspendedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
+        workModeHtmlPreviewState?.viewerScroll,
+        { includeContext: true }
+    );
+    return suspendedSnapshot || liveSnapshot;
+}
+
+function applyWorkModeFileViewerScrollSnapshot(snapshot, { renderToken = '' } = {}) {
+    const normalized = normalizeWorkModeFileViewerScrollSnapshot(snapshot);
+    if (!normalized) return false;
+    const elements = getWorkModeFileElements();
+    return applyFileBrowserViewerScrollSnapshot(elements?.viewerContent, normalized, { renderToken });
+}
+
+function readWorkModeFileViewState() {
+    try {
+        const raw = window.sessionStorage?.getItem(WORK_MODE_FILE_VIEW_STATE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const scroll = normalizeWorkModeFileScrollSnapshot(parsed?.scroll, { includeContext: true });
+        const viewerScroll = normalizeWorkModeFileViewerScrollSnapshot(parsed?.viewerScroll, { includeContext: true });
+        return {
+            root: normalizeFileBrowserRoot(parsed?.root),
+            path: normalizeFileBrowserRelativePath(parsed?.path),
+            selectedPath: normalizeFileBrowserRelativePath(parsed?.selectedPath),
+            mobileView: normalizeWorkModeMobileView(parsed?.mobileView),
+            mobileBrowseView: normalizeWorkModeMobileBrowseView(parsed?.mobileBrowseView || parsed?.mobileView),
+            viewerFullscreen: Boolean(parsed?.viewerFullscreen),
+            scroll,
+            viewerScroll
+        };
+    } catch (error) {
+        return null;
+    }
+}
+
+function persistWorkModeFileViewState() {
+    try {
+        const payload = {
+            root: normalizeFileBrowserRoot(workModeFileRoot),
+            path: normalizeFileBrowserRelativePath(workModeFilePath),
+            selectedPath: normalizeFileBrowserRelativePath(workModeFileSelectedPath),
+            mobileView: normalizeWorkModeMobileView(workModeMobileView),
+            mobileBrowseView: normalizeWorkModeMobileBrowseView(workModeMobileBrowseView),
+            viewerFullscreen: Boolean(workModeFileViewerFullscreen),
+            scroll: captureWorkModeFileScrollSnapshot({ includeContext: true }),
+            viewerScroll: resolveWorkModeFileViewerScrollSnapshotForPersist(),
+            savedAt: Date.now()
+        };
+        window.sessionStorage?.setItem(WORK_MODE_FILE_VIEW_STATE_KEY, JSON.stringify(payload));
+    } catch (error) {
+        void error;
+    }
+}
+
+function schedulePersistWorkModeFileViewState(delayMs = WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS) {
+    const numericDelay = Number(delayMs);
+    const waitMs = Number.isFinite(numericDelay) ? Math.max(0, Math.round(numericDelay)) : 0;
+    if (workModeFileStatePersistTimer !== null) {
+        window.clearTimeout(workModeFileStatePersistTimer);
+        workModeFileStatePersistTimer = null;
+    }
+    workModeFileStatePersistTimer = window.setTimeout(() => {
+        workModeFileStatePersistTimer = null;
+        persistWorkModeFileViewState();
+    }, waitMs);
+}
+
+function flushPersistWorkModeFileViewState() {
+    if (workModeFileStatePersistTimer !== null) {
+        window.clearTimeout(workModeFileStatePersistTimer);
+        workModeFileStatePersistTimer = null;
+    }
+    persistWorkModeFileViewState();
+}
+
+function initializeWorkModeFileViewState(isMobile = false) {
+    const saved = readWorkModeFileViewState();
+    if (!saved) return;
+    workModeFileRoot = normalizeFileBrowserRoot(saved.root || workModeFileRoot);
+    workModeFilePath = normalizeFileBrowserRelativePath(saved.path || '');
+    workModeFileSelectedPath = normalizeFileBrowserRelativePath(saved.selectedPath || '');
+    workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(saved.mobileBrowseView || saved.mobileView);
+    workModeMobileView = isMobile
+        ? WORK_MODE_MOBILE_VIEW_CHAT
+        : normalizeWorkModeMobileView(saved.mobileView);
+    workModeFileViewerFullscreen = Boolean(saved.viewerFullscreen);
+    pendingWorkModeFileScrollRestore = normalizeWorkModeFileScrollSnapshot(saved.scroll, { includeContext: true });
+    pendingWorkModeFileViewerScrollRestore = normalizeWorkModeFileViewerScrollSnapshot(
+        saved.viewerScroll,
+        { includeContext: true }
+    );
+}
+
+function consumePendingWorkModeFileScrollRestore(root = workModeFileRoot, path = workModeFilePath) {
+    const pending = normalizeWorkModeFileScrollSnapshot(pendingWorkModeFileScrollRestore, { includeContext: true });
+    if (!pending) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    if (pending.root !== normalizedRoot || pending.path !== normalizedPath) {
+        pendingWorkModeFileScrollRestore = null;
+        return null;
+    }
+    pendingWorkModeFileScrollRestore = null;
+    return normalizeWorkModeFileScrollSnapshot(pending);
+}
+
+function consumePendingWorkModeFileViewerScrollRestore(
+    root = workModeFileRoot,
+    path = workModeFilePath,
+    selectedPath = workModeFileSelectedPath
+) {
+    const pending = normalizeWorkModeFileViewerScrollSnapshot(
+        pendingWorkModeFileViewerScrollRestore,
+        { includeContext: true }
+    );
+    if (!pending) return null;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const normalizedSelectedPath = normalizeFileBrowserRelativePath(selectedPath);
+    if (
+        pending.root !== normalizedRoot
+        || pending.path !== normalizedPath
+        || pending.selectedPath !== normalizedSelectedPath
+    ) {
+        pendingWorkModeFileViewerScrollRestore = null;
+        return null;
+    }
+    pendingWorkModeFileViewerScrollRestore = null;
+    return normalizeWorkModeFileViewerScrollSnapshot(pending);
+}
+
+function setWorkModeBrowseView(view = WORK_MODE_MOBILE_VIEW_LIST) {
+    workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(view);
+    setWorkModeMobileView(workModeMobileView);
+}
+
+function syncWorkModeFileFullscreenButtonState() {
+    const elements = getWorkModeFileElements();
+    if (!elements?.fullscreenBtn) return;
+    const button = elements.fullscreenBtn;
+    const enabled = isWorkModeEnabled();
+    const mobile = isMobileLayout();
+    const fold = isFoldLayout();
+    const visible = enabled && (!mobile || fold);
+    const foldFullscreenEnabled = Boolean(
+        workModePreviewFullscreen
+        && enabled
+        && fold
+    );
+    const viewerFullscreenEnabled = Boolean(
+        workModeFileViewerFullscreen
+        && enabled
+        && !mobile
+        && !fold
+    );
+    const active = foldFullscreenEnabled || viewerFullscreenEnabled;
+    const nextLabel = fold
+        ? (foldFullscreenEnabled ? 'Docs Preview 축소' : 'Docs Preview 전체화면')
+        : (viewerFullscreenEnabled ? '파일 목록 보기' : '파일 내용 전체화면');
+
+    button.classList.toggle('is-hidden', !visible);
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.setAttribute('aria-label', nextLabel);
+    button.setAttribute('title', nextLabel);
+    syncHoverTooltipFromLabel(button, nextLabel);
+}
+
 function setWorkModeFileViewerFullscreen(isFullscreen) {
     const elements = getWorkModeFileElements();
     workModeFileViewerFullscreen = Boolean(isFullscreen);
-    const fullscreenEnabled = Boolean(workModeFileViewerFullscreen && isWorkModeEnabled() && !isMobileLayout());
+    const fullscreenEnabled = Boolean(
+        workModeFileViewerFullscreen
+        && isWorkModeEnabled()
+        && !isMobileLayout()
+        && !isFoldLayout()
+    );
     if (fullscreenEnabled) {
         stopWorkModeFileResize();
         stopWorkModeFileColumnResize();
@@ -2678,23 +3499,37 @@ function setWorkModeFileViewerFullscreen(isFullscreen) {
         elements.divider.classList.toggle('is-disabled', fullscreenEnabled);
     }
     if (Array.isArray(elements?.colResizers)) {
-        const disableColumnResize = fullscreenEnabled || !isWorkModeEnabled() || isMobileLayout();
+        const disableColumnResize = fullscreenEnabled || !isWorkModeEnabled() || isMobileLayout() || isFoldLayout();
         elements.colResizers.forEach(handle => {
             handle.disabled = disableColumnResize;
         });
     }
-    if (elements?.fullscreenBtn) {
-        elements.fullscreenBtn.classList.toggle('is-active', fullscreenEnabled);
-        elements.fullscreenBtn.setAttribute('aria-pressed', fullscreenEnabled ? 'true' : 'false');
-        const nextLabel = fullscreenEnabled ? '파일 목록 보기' : '파일 내용 전체화면';
-        elements.fullscreenBtn.setAttribute('aria-label', nextLabel);
-        elements.fullscreenBtn.setAttribute('title', nextLabel);
-        syncHoverTooltipFromLabel(elements.fullscreenBtn, nextLabel);
-    }
+    syncWorkModeFileFullscreenButtonState();
     if (!fullscreenEnabled && isWorkModeEnabled()) {
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     }
     syncWorkModeFileHorizontalScrollMetrics();
+    schedulePersistWorkModeFileViewState();
+}
+
+function setWorkModePreviewFullscreen(isFullscreen) {
+    const elements = getWorkModeElements();
+    workModePreviewFullscreen = Boolean(isFullscreen);
+    const fullscreenEnabled = Boolean(
+        workModePreviewFullscreen
+        && isWorkModeEnabled()
+        && isFoldLayout()
+    );
+    if (fullscreenEnabled) {
+        stopWorkModeResize();
+        stopWorkModeFileResize();
+        stopWorkModeFileColumnResize();
+    }
+    if (elements?.app) {
+        elements.app.classList.toggle(WORK_MODE_PREVIEW_FULLSCREEN_CLASS, fullscreenEnabled);
+    }
+    syncWorkModeFileFullscreenButtonState();
+    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileSplitRatio(value) {
@@ -2804,6 +3639,7 @@ function handleWorkModeFileGridScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
+    schedulePersistWorkModeFileViewState();
 }
 
 function handleWorkModeFileHScroll() {
@@ -2816,6 +3652,11 @@ function handleWorkModeFileHScroll() {
     } finally {
         workModeFileHorizontalSyncLock = false;
     }
+    schedulePersistWorkModeFileViewState();
+}
+
+function handleWorkModeFileViewerScroll() {
+    schedulePersistWorkModeFileViewState();
 }
 
 function normalizeWorkModeFileColumnName(column) {
@@ -2908,11 +3749,30 @@ function normalizeWorkModeMobileBrowseView(value) {
 }
 
 function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
+    const previousView = normalizeWorkModeMobileView(workModeMobileView);
     const nextView = normalizeWorkModeMobileView(view);
     workModeMobileView = nextView;
     const elements = getWorkModeElements();
     const fileElements = getWorkModeFileElements();
-    const applyMobileView = isMobileLayout() && isWorkModeEnabled();
+    const mobile = isMobileLayout();
+    const fold = isFoldLayout();
+    const enabled = isWorkModeEnabled();
+    const applyMobileView = mobile && enabled && !fold;
+    const applyFoldBrowseView = fold && enabled;
+    const foldBrowseView = normalizeWorkModeMobileBrowseView(workModeMobileBrowseView);
+
+    if (
+        applyMobileView
+        && previousView === WORK_MODE_MOBILE_VIEW_VIEWER
+        && nextView !== WORK_MODE_MOBILE_VIEW_VIEWER
+    ) {
+        const viewerSnapshot = captureWorkModeFileViewerScrollSnapshot({ includeContext: true });
+        if (viewerSnapshot) {
+            const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot) || viewerSnapshot;
+            pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
+        }
+        suspendWorkModeHtmlPreviewForMobileTransition(fileElements, { viewerSnapshot });
+    }
 
     if (applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT) {
         workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(nextView);
@@ -2931,6 +3791,14 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
             'is-work-mode-mobile-viewer',
             applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
         );
+        elements.app.classList.toggle(
+            'is-work-mode-fold-list',
+            applyFoldBrowseView && foldBrowseView === WORK_MODE_MOBILE_VIEW_LIST
+        );
+        elements.app.classList.toggle(
+            'is-work-mode-fold-viewer',
+            applyFoldBrowseView && foldBrowseView === WORK_MODE_MOBILE_VIEW_VIEWER
+        );
     }
 
     const showMobileBrowserButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
@@ -2944,7 +3812,11 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     }
 
     const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
-    const showBackButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER;
+    const showBackButton = (
+        applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
+    ) || (
+        applyFoldBrowseView && foldBrowseView === WORK_MODE_MOBILE_VIEW_VIEWER
+    );
 
     if (fileElements?.chatBtn) {
         fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
@@ -2958,9 +3830,10 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         fileElements.backBtn.classList.toggle('is-hidden', !showBackButton);
         fileElements.backBtn.disabled = !showBackButton;
     }
-    if (fileElements?.fullscreenBtn) {
-        fileElements.fullscreenBtn.classList.toggle('is-hidden', isMobileLayout());
-    }
+    syncWorkModeFileFullscreenButtonState();
+    syncWorkModeHtmlPreviewOpenButton();
+    syncWorkModeFileHorizontalScrollMetrics();
+    schedulePersistWorkModeFileViewState();
 }
 
 function updateWorkModeToggleButton(button, enabled, { disabled = false } = {}) {
@@ -3070,6 +3943,7 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
         applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
         applyWorkModeFileColumnWidths({ persist: false });
+        setWorkModePreviewFullscreen(workModePreviewFullscreen);
         setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
         if (mobile && !wasEnabled) {
             workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
@@ -3080,6 +3954,7 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         });
         void ensureWorkModeFilePanelContent();
     } else {
+        setWorkModePreviewFullscreen(false);
         setWorkModeFileViewerFullscreen(false);
         setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
     }
@@ -3087,6 +3962,7 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
     if (persist) {
         persistWorkModePreference(wantsEnabled);
     }
+    schedulePersistWorkModeFileViewState();
     return wantsEnabled;
 }
 
@@ -3094,7 +3970,10 @@ function initializeWorkMode(isMobile) {
     workModeSplitRatio = readWorkModeSplitPreference();
     workModeFileSplitRatio = readWorkModeFileSplitPreference();
     workModeFileColumnWidths = readWorkModeFileColumnsPreference();
+    initializeWorkModeFileViewState(isMobile);
     const preferred = readWorkModePreference();
+    setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
+    updateWorkModeFileRootButtons();
     setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
     const initialMobileView = isMobile
         ? WORK_MODE_MOBILE_VIEW_CHAT
@@ -3102,6 +3981,7 @@ function initializeWorkMode(isMobile) {
             ? WORK_MODE_MOBILE_VIEW_LIST
             : normalizeWorkModeMobileView(workModeMobileView);
     setWorkModeMobileView(initialMobileView);
+    setWorkModePreviewFullscreen(workModePreviewFullscreen);
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
@@ -3112,6 +3992,9 @@ function initializeWorkMode(isMobile) {
 
 function handleWorkModeMediaChange(isMobile) {
     const elements = getWorkModeElements();
+    if ((isMobile || isFoldLayout()) && isWorkModeEnabled()) {
+        setWorkModePreviewFullscreen(false);
+    }
     if (isMobile && isWorkModeEnabled()) {
         setWorkModeFileViewerFullscreen(false);
     }
@@ -3119,7 +4002,11 @@ function handleWorkModeMediaChange(isMobile) {
     if (readWorkModePreference() && !isWorkModeEnabled()) {
         setWorkModeEnabled(true, { persist: false, notifyOnMobile: false });
     }
+    if (isMobile) {
+        workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
+    }
     setWorkModeMobileView(workModeMobileView);
+    setWorkModePreviewFullscreen(workModePreviewFullscreen);
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
@@ -3213,7 +4100,7 @@ function handleWorkModeFileResizePointerUp(event) {
 
 function startWorkModeFileResize(event) {
     if (!event || event.button !== 0) return;
-    if (!isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen) return;
+    if (!isWorkModeEnabled() || isMobileLayout() || isFoldLayout() || workModeFileViewerFullscreen) return;
     const elements = getWorkModeFileElements();
     if (elements?.divider?.classList.contains('is-disabled')) return;
     event.preventDefault();
@@ -3256,7 +4143,7 @@ function handleWorkModeFileColumnResizePointerUp(event) {
 function startWorkModeFileColumnResize(event, column) {
     const targetColumn = normalizeWorkModeFileColumnName(column);
     if (!targetColumn || !event || event.button !== 0) return;
-    if (!isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen) return;
+    if (!isWorkModeEnabled() || isMobileLayout() || isFoldLayout() || workModeFileViewerFullscreen) return;
     event.preventDefault();
     workModeFileColumnResizeState = {
         pointerId: event.pointerId,
@@ -3270,11 +4157,15 @@ function startWorkModeFileColumnResize(event, column) {
     window.addEventListener('pointercancel', handleWorkModeFileColumnResizePointerUp);
 }
 
-function syncSessionsLayout(isMobile) {
+function syncSessionsLayout(isCompact) {
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('claude-sessions-toggle');
     if (!sessionsPanel || !sessionsToggle) return;
-    if (!isMobile) {
+    if (!isCompact) {
+        setSessionsCollapsed(false, { persist: false });
+        return;
+    }
+    if (isFoldLayout()) {
         setSessionsCollapsed(false, { persist: false });
         return;
     }
@@ -3290,8 +4181,20 @@ function syncSessionsLayout(isMobile) {
     setSessionsCollapsed(collapsed, { persist: false });
 }
 
-function isMobileLayout() {
+function isPhoneLayout() {
+    return window.matchMedia(PHONE_MEDIA_QUERY).matches;
+}
+
+function isFoldLayout() {
+    return window.matchMedia(FOLD_MEDIA_QUERY).matches;
+}
+
+function isCompactLayout() {
     return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function isMobileLayout() {
+    return isPhoneLayout();
 }
 
 function isEditableElement(element) {
@@ -4053,18 +4956,19 @@ async function loadSettings({ silent = true } = {}) {
     const refreshBtn = document.getElementById('claude-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/claude/settings');
+        const result = await fetchJson('/api/claude/settings', { cache: 'no-store' });
         state.settings = {
             model: result?.settings?.model || null,
             modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
+            planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: Array.isArray(result?.reasoning_options)
                 ? result.reasoning_options
                 : [],
-            planModeEnabled: Boolean(state.settings?.planModeEnabled),
             usage: result?.usage || null,
+            usageHistory: state.settings?.usageHistory || null,
             loaded: true
         };
         if (result?.session_storage) {
@@ -4092,9 +4996,15 @@ async function loadSettings({ silent = true } = {}) {
     }
 }
 
-async function refreshUsageSummary({ silent = true } = {}) {
+async function refreshUsageSummary({ silent = true, showSuccessToast = false, force = false } = {}) {
+    const query = new URLSearchParams();
+    if (force) {
+        query.set('force', '1');
+    }
     try {
-        const result = await fetchJson('/api/claude/usage', { cache: 'no-store' });
+        const result = await fetchJson(`/api/claude/usage${query.size ? `?${query.toString()}` : ''}`, {
+            cache: 'no-store'
+        });
         const usage = result?.usage ?? null;
         state.settings.usage = usage;
         if (result?.session_storage) {
@@ -4102,10 +5012,25 @@ async function refreshUsageSummary({ silent = true } = {}) {
             updateSessionStorageSummary(state.sessionStorage);
         }
         updateUsageSummary(usage);
+        if (showSuccessToast) {
+            showToast('사용량을 갱신했습니다.', { tone: 'default', durationMs: 3000 });
+        }
     } catch (error) {
-        const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
-        setStatus(message, true);
+        if (!silent) {
+            const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
+            setStatus(message, true);
+        }
     }
+}
+
+function startUsageSummaryPolling() {
+    if (state.usageRefreshTimerId) {
+        window.clearInterval(state.usageRefreshTimerId);
+    }
+    state.usageRefreshTimerId = window.setInterval(() => {
+        if (document.hidden) return;
+        void refreshUsageSummary({ silent: true });
+    }, USAGE_SUMMARY_POLL_MS);
 }
 
 function updateUsageSummary(usage) {
@@ -4851,9 +5776,18 @@ function getGitChangedFilesCountFromStatus(status) {
 
 function updateGitCommitButtonState(status) {
     const hasChanges = getGitChangedFilesCountFromStatus(status) > 0;
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles).length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    const canCommit = hasChanges && !hasWindowsPathIssues;
     document.querySelectorAll('.git-action-commit').forEach(button => {
         if (button.id === 'claude-sync-overlay-commit') return;
-        button.classList.toggle('is-ready', hasChanges);
+        button.classList.toggle('is-ready', canCommit);
     });
 }
 
@@ -5302,15 +6236,34 @@ function syncGitOverlaySelection(files) {
     gitOverlaySelectedFiles = next;
 }
 
-function updateGitOverlaySelectionSummary(totalCount = 0) {
+function updateGitOverlaySelectionSummary(totalCount = 0, options = {}) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
     const selectedCount = gitOverlaySelectedFiles.size;
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        options?.windowsInvalidCount,
+        normalizeGitWindowsInvalidFiles(options?.windowsInvalidFiles).length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        options?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    const windowsIssueText = hasWindowsPathIssues
+        ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+        : '';
     if (elements.selection) {
-        elements.selection.textContent = `선택 ${selectedCount}개 / 전체 ${totalCount}개`;
+        elements.selection.textContent = `선택 ${selectedCount}개 / 전체 ${totalCount}개${windowsIssueText}`;
     }
     if (elements.commitBtn) {
-        elements.commitBtn.disabled = totalCount === 0 || selectedCount === 0;
+        const isBusy = elements.commitBtn.classList.contains('is-loading')
+            || elements.commitBtn.getAttribute('aria-busy') === 'true';
+        const isDisabled = totalCount === 0 || selectedCount === 0 || hasWindowsPathIssues;
+        elements.commitBtn.disabled = isBusy ? true : isDisabled;
+        const label = hasWindowsPathIssues
+            ? `Commit 불가: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : 'Commit staged files';
+        elements.commitBtn.dataset.label = label;
+        syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
     if (elements.stageAllBtn) {
         elements.stageAllBtn.disabled = totalCount === 0;
@@ -5544,7 +6497,11 @@ function setGitOverlaySelectionState(selectAll) {
         renderGitBranchOverlay(gitBranchStatusCache);
         return;
     }
-    updateGitOverlaySelectionSummary(files.length);
+    updateGitOverlaySelectionSummary(files.length, {
+        hasWindowsPathIssues: gitBranchStatusCache.hasWindowsPathIssues,
+        windowsInvalidCount: gitBranchStatusCache.windowsInvalidCount,
+        windowsInvalidFiles: gitBranchStatusCache.windowsInvalidFiles
+    });
 }
 
 function renderGitBranchOverlay(status) {
@@ -5552,18 +6509,38 @@ function renderGitBranchOverlay(status) {
     if (!elements) return;
     const branchElement = document.getElementById('claude-git-branch');
     const branchName = (status?.branch || getGitBranchFullName(branchElement) || '').trim();
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     if (elements.subtitle) {
         elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
     }
     const files = normalizeGitChangedFiles(status?.changedFiles);
     const count = Number.isFinite(status?.count) ? status.count : files.length;
     if (elements.meta) {
-        elements.meta.textContent = Number.isFinite(count)
+        const countText = Number.isFinite(count)
             ? `변경 파일 ${count}개`
             : '변경 파일 수를 불러올 수 없습니다.';
+        const windowsIssueText = hasWindowsPathIssues
+            ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : '';
+        elements.meta.textContent = `${countText}${windowsIssueText}`;
     }
     syncGitOverlaySelection(files);
-    updateGitBranchOverlayCommitPreview(status);
+    if (hasWindowsPathIssues) {
+        gitBranchOverlayPreviewKey = '';
+        if (elements.latestCommit) {
+            elements.latestCommit.textContent = `커밋 차단: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`;
+        }
+    } else {
+        updateGitBranchOverlayCommitPreview(status);
+    }
     let renderedFileCount = files.length;
     if (elements.list) {
         const rendered = renderGitChangedFileTreeList({
@@ -5612,7 +6589,11 @@ function renderGitBranchOverlay(status) {
             : '변경 파일 정보를 불러올 수 없습니다.';
         elements.empty.classList.toggle('is-hidden', renderedFileCount !== 0);
     }
-    updateGitOverlaySelectionSummary(renderedFileCount);
+    updateGitOverlaySelectionSummary(renderedFileCount, {
+        hasWindowsPathIssues,
+        windowsInvalidCount,
+        windowsInvalidFiles
+    });
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
@@ -5708,6 +6689,9 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         remoteMainRef: 'origin/main',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
+        windowsInvalidFiles: [],
+        windowsInvalidCount: 0,
+        hasWindowsPathIssues: false,
         changedCount: null,
         changedFiles: [],
         aheadCount: null,
@@ -5767,6 +6751,15 @@ function updateGitSyncOverlayActionButtonState(status) {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
     const repoMissing = Boolean(status?.repoMissing);
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        status?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        status?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     const normalizedChangedCount = normalizeGitChangedFilesCount(status?.changedCount);
     const changedCount = Number.isFinite(normalizedChangedCount)
         ? normalizedChangedCount
@@ -5774,11 +6767,23 @@ function updateGitSyncOverlayActionButtonState(status) {
     const aheadCount = normalizeGitDivergenceCount(status?.aheadCount);
     const behindCount = normalizeGitDivergenceCount(status?.behindCount);
     const hasChanges = !repoMissing && Number.isFinite(changedCount) && changedCount > 0;
+    const canCommit = hasChanges && !hasWindowsPathIssues;
     const hasPendingPush = !repoMissing && Number.isFinite(aheadCount) && aheadCount > 0;
     const hasPendingSync = !repoMissing && Number.isFinite(behindCount) && behindCount > 0;
 
     if (elements.commitBtn) {
-        elements.commitBtn.classList.toggle('is-ready', hasChanges);
+        elements.commitBtn.classList.toggle('is-ready', canCommit);
+        const isBusy = elements.commitBtn.classList.contains('is-loading')
+            || elements.commitBtn.getAttribute('aria-busy') === 'true';
+        const isLoading = elements.loading && !elements.loading.classList.contains('is-hidden');
+        if (!isBusy && !isLoading) {
+            elements.commitBtn.disabled = !canCommit;
+        }
+        const label = hasWindowsPathIssues
+            ? `Commit 불가: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : 'Commit all changed files';
+        elements.commitBtn.dataset.label = label;
+        syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
     if (elements.pushBtn) {
         elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
@@ -5824,6 +6829,9 @@ function setGitSyncOverlayLoading(isLoading) {
         elements.targetButtons.forEach(button => {
             button.disabled = Boolean(isLoading);
         });
+    }
+    if (!isLoading) {
+        updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(gitSyncOverlayRepoTarget));
     }
 }
 
@@ -5931,6 +6939,15 @@ function renderGitSyncOverlay(history) {
     const remoteHistoryError = typeof history?.remoteMainHistoryError === 'string'
         ? history.remoteMainHistoryError.trim()
         : '';
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(history?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        history?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        history?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
     const changedFiles = normalizeGitChangedFiles(history?.changedFiles);
     const normalizedChangedCount = normalizeGitChangedFilesCount(history?.changedCount);
     const changedCount = Number.isFinite(normalizedChangedCount)
@@ -5954,36 +6971,44 @@ function renderGitSyncOverlay(history) {
         const changedText = Number.isFinite(changedCount)
             ? `작업 트리 변경: ${changedCount}개`
             : '작업 트리 변경: 확인 불가';
+        const windowsIssueText = hasWindowsPathIssues
+            ? ` · 오류: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`
+            : '';
         const fallbackText = mainBranchFallback && requestedMainBranch && mainBranch && requestedMainBranch !== mainBranch
             ? ` · 요청 ${requestedMainBranch} -> 사용 ${mainBranch}`
             : '';
-        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${fallbackText}`;
+        elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${windowsIssueText}${fallbackText}`;
     }
     if (elements.latestCommit) {
-        const changedPaths = changedFiles.map(file => file.path);
-        const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
-        gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
-        if (!changedPaths.length || !previewRequest.key) {
-            elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
+        if (hasWindowsPathIssues) {
+            gitSyncOverlayPreviewKeyByTarget[repoTarget] = '';
+            elements.latestCommit.textContent = `커밋 차단: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`;
         } else {
-            const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
-            if (freshPreview) {
-                elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
+            const changedPaths = changedFiles.map(file => file.path);
+            const previewRequest = buildGitCommitPreviewCacheKey(repoTarget, changedPaths);
+            gitSyncOverlayPreviewKeyByTarget[repoTarget] = previewRequest.key;
+            if (!changedPaths.length || !previewRequest.key) {
+                elements.latestCommit.textContent = '커밋 예정 메시지: 커밋 대상 파일이 없습니다.';
             } else {
-                const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
-                if (stalePreview) {
-                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                const freshPreview = getGitCommitPreviewCacheEntry(previewRequest.key);
+                if (freshPreview) {
+                    elements.latestCommit.textContent = formatGitCommitPreviewLabel(freshPreview, changedPaths.length);
                 } else {
-                    elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
-                }
-                if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
-                    void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
-                        if (!entry || !isGitSyncOverlayOpen()) return;
-                        const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
-                        if (activeTarget !== repoTarget) return;
-                        if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
-                        renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
-                    });
+                    const stalePreview = getGitCommitPreviewCacheEntry(previewRequest.key, { allowStale: true });
+                    if (stalePreview) {
+                        elements.latestCommit.textContent = formatGitCommitPreviewLabel(stalePreview, changedPaths.length);
+                    } else {
+                        elements.latestCommit.textContent = '커밋 예정 메시지: 계산 중...';
+                    }
+                    if (!gitCommitPreviewInFlightByKey.has(previewRequest.key)) {
+                        void ensureGitCommitPreview(repoTarget, changedPaths).then(({ key, entry }) => {
+                            if (!entry || !isGitSyncOverlayOpen()) return;
+                            const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+                            if (activeTarget !== repoTarget) return;
+                            if (gitSyncOverlayPreviewKeyByTarget[repoTarget] !== key) return;
+                            renderGitSyncOverlay(getGitSyncHistoryCache(repoTarget));
+                        });
+                    }
                 }
             }
         }
@@ -6070,7 +7095,10 @@ function renderGitSyncOverlay(history) {
         changedCount,
         changedFiles,
         aheadCount,
-        behindCount
+        behindCount,
+        windowsInvalidFiles,
+        windowsInvalidCount,
+        hasWindowsPathIssues
     });
 }
 
@@ -6151,6 +7179,8 @@ function getUsageHistoryOverlayElements() {
         overlay,
         subtitle: document.getElementById('claude-usage-history-overlay-subtitle'),
         meta: document.getElementById('claude-usage-history-overlay-meta'),
+        scale: document.getElementById('claude-usage-history-scale'),
+        ratios: document.getElementById('claude-usage-history-ratios'),
         chart: document.getElementById('claude-usage-history-chart'),
         legend: document.getElementById('claude-usage-history-legend'),
         empty: document.getElementById('claude-usage-history-empty')
@@ -6182,35 +7212,139 @@ function formatUsageHistoryTickLabel(value) {
     });
 }
 
+function resolveUsageHistoryPercentScale(maxUsedPercent) {
+    const candidates = [5, 10, 25, 50, 75, 100];
+    const peak = Number.isFinite(maxUsedPercent) ? Math.max(0, maxUsedPercent) : 0;
+    const paddedPeak = peak <= 0 ? 1 : peak * 1.12;
+    for (const candidate of candidates) {
+        if (paddedPeak <= candidate) {
+            return candidate;
+        }
+    }
+    return 100;
+}
+
+function buildUsageHistoryPercentTicks(maxPercent) {
+    const top = Math.max(1, Number(maxPercent) || 100);
+    const step = top / 5;
+    return Array.from({ length: 6 }, (_, index) => {
+        const value = step * index;
+        return Math.round(value * 100) / 100;
+    });
+}
+
+function formatUsageHistoryPercentTick(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '--';
+    if (Math.abs(numeric - Math.round(numeric)) < 0.001) {
+        return `${Math.round(numeric)}%`;
+    }
+    return `${numeric.toFixed(1)}%`;
+}
+
+function resolveUsageHistoryRelationScope(history) {
+    const relationScope = String(
+        history?.relation?.scope || history?.token_delta_scope || ''
+    ).trim().toLowerCase();
+    return relationScope === 'account' ? 'account' : 'workspace';
+}
+
+function renderUsageHistoryRatioCards(history) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.ratios) return;
+    elements.ratios.innerHTML = '';
+
+    const relationScope = resolveUsageHistoryRelationScope(history);
+    const relation = history?.relation || {};
+    const ratioItems = [
+        { key: 'five_hour', label: '5h 1% token', entry: relation?.five_hour },
+        { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
+    ];
+    ratioItems.forEach(item => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'usage-history-ratio-card';
+        const ratioValue = Number(item?.entry?.tokens_per_percent);
+        const rawRatioValue = Number(item?.entry?.raw_tokens_per_percent);
+        const sampleCount = Number(item?.entry?.sample_count);
+        const confidence = String(item?.entry?.confidence || '').trim().toLowerCase();
+        const reliable = Boolean(item?.entry?.is_reliable);
+        const displayValue = Number.isFinite(ratioValue)
+            ? `${formatCompactTokenCount(ratioValue)} tok`
+            : (Number.isFinite(rawRatioValue) ? `~${formatCompactTokenCount(rawRatioValue)} tok` : '--');
+        const fallbackValue = Number.isFinite(rawRatioValue)
+            ? `${formatCompactTokenCount(rawRatioValue)} tok`
+            : '--';
+
+        const label = document.createElement('div');
+        label.className = 'usage-history-ratio-label';
+        label.textContent = item.label;
+        wrapper.appendChild(label);
+
+        const value = document.createElement('div');
+        value.className = 'usage-history-ratio-value';
+        value.textContent = displayValue;
+        wrapper.appendChild(value);
+
+        const meta = document.createElement('div');
+        meta.className = 'usage-history-ratio-meta';
+        const metaParts = [`scope ${relationScope}`];
+        if (Number.isFinite(sampleCount)) {
+            metaParts.push(`samples ${Math.max(0, Math.round(sampleCount))}`);
+        }
+        if (confidence && confidence !== 'none') {
+            metaParts.push(`conf ${confidence}`);
+        }
+        if (!reliable && Number.isFinite(rawRatioValue)) {
+            wrapper.classList.add('is-low-confidence');
+            metaParts.push(`est ${fallbackValue}`);
+        }
+        meta.textContent = metaParts.join(' · ');
+        wrapper.appendChild(meta);
+
+        elements.ratios.appendChild(wrapper);
+    });
+}
+
+function renderUsageHistoryScaleBadge(chartMetrics) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.scale) return;
+    if (!chartMetrics || !chartMetrics.rendered) {
+        elements.scale.textContent = 'Scale --';
+        return;
+    }
+    const maxPercent = Number(chartMetrics.percentScale);
+    if (!Number.isFinite(maxPercent) || maxPercent <= 0) {
+        elements.scale.textContent = 'Scale --';
+        return;
+    }
+    const mode = maxPercent < 100 ? 'Auto' : 'Full';
+    elements.scale.textContent = `${mode} scale 0-${Math.round(maxPercent)}%`;
+}
+
 function renderUsageHistoryLegend(history) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.legend) return;
     elements.legend.innerHTML = '';
 
-    const relation = history?.relation || {};
-    const fiveHourRatio = Number(relation?.five_hour?.tokens_per_percent);
-    const weeklyRatio = Number(relation?.weekly?.tokens_per_percent);
     const tokenDeltaTotal = Number(history?.token_delta_total);
+    const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
+    const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
+    const relationScope = resolveUsageHistoryRelationScope(history);
+    const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
 
     const legendItems = [
         {
             key: 'token',
-            text: `Token delta ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
-        },
-        {
-            key: 'five-hour',
-            text: Number.isFinite(fiveHourRatio)
-                ? `5h 1%당 ${formatCompactTokenCount(fiveHourRatio)} tok`
-                : '5h ratio --'
-        },
-        {
-            key: 'weekly',
-            text: Number.isFinite(weeklyRatio)
-                ? `Weekly 1%당 ${formatCompactTokenCount(weeklyRatio)} tok`
-                : 'Weekly ratio --'
+            text: `Token delta (${scopeLabel}) ${Number.isFinite(tokenDeltaTotal) ? formatNumber(tokenDeltaTotal) : '0'}`
         }
     ];
+    if (Number.isFinite(workspaceDeltaTotal) || Number.isFinite(accountDeltaTotal)) {
+        legendItems.push({
+            key: '',
+            text: `Workspace Δ ${Number.isFinite(workspaceDeltaTotal) ? formatNumber(workspaceDeltaTotal) : '--'} · Account Δ ${Number.isFinite(accountDeltaTotal) ? formatNumber(accountDeltaTotal) : '--'}`
+        });
+    }
     if (Number.isFinite(resetCount) && resetCount > 0) {
         legendItems.push({
             key: '',
@@ -6235,62 +7369,145 @@ function renderUsageHistoryLegend(history) {
 
 function renderUsageHistoryChart(history) {
     const elements = getUsageHistoryOverlayElements();
-    if (!elements?.chart) return false;
+    if (!elements?.chart) return { rendered: false, percentScale: 100 };
     const chart = elements.chart;
     chart.innerHTML = '';
 
     const items = Array.isArray(history?.items) ? history.items : [];
-    if (items.length < 2) return false;
+    if (items.length < 2) return { rendered: false, percentScale: 100 };
 
-    const width = 920;
-    const height = 320;
-    const margin = { top: 16, right: 64, bottom: 38, left: 64 };
+    const mobileLayout = isMobileLayout();
+    const chartContainer = chart.parentElement;
+    const viewportWidth = Number(chart.clientWidth)
+        || Number(chartContainer?.clientWidth)
+        || 360;
+    const viewportHeight = Number(chart.clientHeight)
+        || Number(chartContainer?.clientHeight)
+        || (mobileLayout ? 380 : 320);
+    const width = mobileLayout ? 760 : 920;
+    const viewportRatio = viewportWidth > 0
+        ? viewportHeight / viewportWidth
+        : (mobileLayout ? (430 / 920) : (320 / 920));
+    const height = mobileLayout
+        ? clampToRange(Math.round(width * viewportRatio), 720, 980)
+        : 320;
+    const margin = mobileLayout
+        ? { top: 16, right: 62, bottom: 36, left: 64 }
+        : { top: 16, right: 64, bottom: 38, left: 64 };
     const plotWidth = Math.max(1, width - margin.left - margin.right);
-    const plotHeight = Math.max(1, height - margin.top - margin.bottom);
+    const plotAreaHeight = Math.max(1, height - margin.top - margin.bottom);
     chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
 
     const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
     const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
     const weeklyUsed = items.map(item => normalizeUsedPercent(item?.weekly_used_percent));
+    const percentValues = [...fiveHourUsed, ...weeklyUsed].filter(value => Number.isFinite(value));
+    const maxUsedPercent = percentValues.length > 0 ? Math.max(...percentValues) : 0;
+    const percentScale = resolveUsageHistoryPercentScale(maxUsedPercent);
+    const percentTicks = buildUsageHistoryPercentTicks(percentScale);
     const maxTokenDelta = Math.max(1, ...tokenDeltas);
+
+    const stackedGap = mobileLayout ? 30 : 0;
+    const tokenPlotHeight = mobileLayout
+        ? Math.max(90, Math.round((plotAreaHeight - stackedGap) * 0.53))
+        : plotAreaHeight;
+    const percentPlotHeight = mobileLayout
+        ? Math.max(70, plotAreaHeight - stackedGap - tokenPlotHeight)
+        : plotAreaHeight;
+    const tokenTop = margin.top;
+    const tokenBottom = tokenTop + tokenPlotHeight;
+    const percentTop = mobileLayout ? tokenBottom + stackedGap : margin.top;
+    const percentBottom = percentTop + percentPlotHeight;
+
     const xStep = items.length > 1 ? plotWidth / (items.length - 1) : 0;
     const barWidth = Math.max(2, Math.min(14, plotWidth / Math.max(items.length * 1.8, 1)));
     const xAt = index => margin.left + (xStep * index);
-    const yToken = value => margin.top + plotHeight - ((Math.max(0, value) / maxTokenDelta) * plotHeight);
+    const yToken = value => tokenBottom - ((Math.max(0, value) / maxTokenDelta) * tokenPlotHeight);
     const yPercent = value => {
-        const normalized = Math.max(0, Math.min(100, Number(value) || 0));
-        return margin.top + plotHeight - ((normalized / 100) * plotHeight);
+        const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
+        return percentBottom - ((normalized / percentScale) * percentPlotHeight);
     };
 
-    [0, 25, 50, 75, 100].forEach(percent => {
-        const y = yPercent(percent);
-        chart.appendChild(createUsageHistorySvgNode('line', {
-            x1: margin.left,
-            y1: y,
-            x2: margin.left + plotWidth,
-            y2: y,
-            class: 'grid-line'
-        }));
-        const leftToken = Math.round((maxTokenDelta * percent) / 100);
+    if (mobileLayout) {
         chart.appendChild(createUsageHistorySvgNode('text', {
-            x: margin.left - 8,
-            y: y + 4,
-            'text-anchor': 'end',
-            class: 'axis-label'
-        })).textContent = formatCompactTokenCount(leftToken);
-        chart.appendChild(createUsageHistorySvgNode('text', {
-            x: margin.left + plotWidth + 8,
-            y: y + 4,
+            x: margin.left,
+            y: tokenTop - 5,
             'text-anchor': 'start',
-            class: 'axis-label'
-        })).textContent = `${percent}%`;
-    });
+            class: 'axis-title'
+        })).textContent = 'Token delta';
+        chart.appendChild(createUsageHistorySvgNode('text', {
+            x: margin.left,
+            y: percentTop - 5,
+            'text-anchor': 'start',
+            class: 'axis-title'
+        })).textContent = `Used % (0-${percentScale}%)`;
+    }
+
+    if (mobileLayout) {
+        [0, 25, 50, 75, 100].forEach(percent => {
+            const y = tokenTop + tokenPlotHeight - ((percent / 100) * tokenPlotHeight);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            const leftToken = Math.round((maxTokenDelta * percent) / 100);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left - 8,
+                y: y + 4,
+                'text-anchor': 'end',
+                class: 'axis-label'
+            })).textContent = formatCompactTokenCount(leftToken);
+        });
+        percentTicks.forEach(percent => {
+            const y = yPercent(percent);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left + plotWidth + 8,
+                y: y + 4,
+                'text-anchor': 'start',
+                class: 'axis-label'
+            })).textContent = formatUsageHistoryPercentTick(percent);
+        });
+    } else {
+        percentTicks.forEach(percent => {
+            const y = yPercent(percent);
+            chart.appendChild(createUsageHistorySvgNode('line', {
+                x1: margin.left,
+                y1: y,
+                x2: margin.left + plotWidth,
+                y2: y,
+                class: 'grid-line'
+            }));
+            const leftToken = Math.round((maxTokenDelta * percent) / percentScale);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left - 8,
+                y: y + 4,
+                'text-anchor': 'end',
+                class: 'axis-label'
+            })).textContent = formatCompactTokenCount(leftToken);
+            chart.appendChild(createUsageHistorySvgNode('text', {
+                x: margin.left + plotWidth + 8,
+                y: y + 4,
+                'text-anchor': 'start',
+                class: 'axis-label'
+            })).textContent = formatUsageHistoryPercentTick(percent);
+        });
+    }
 
     tokenDeltas.forEach((delta, index) => {
         if (delta <= 0) return;
         const x = xAt(index);
         const y = yToken(delta);
-        const barHeight = Math.max(1, (margin.top + plotHeight) - y);
+        const barHeight = Math.max(1, tokenBottom - y);
         chart.appendChild(createUsageHistorySvgNode('rect', {
             x: x - (barWidth / 2),
             y,
@@ -6337,12 +7554,17 @@ function renderUsageHistoryChart(history) {
     ].forEach(label => {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: label.x,
-            y: margin.top + plotHeight + 24,
+            y: percentBottom + 24,
             'text-anchor': label.anchor,
             class: 'axis-label'
         })).textContent = label.text;
     });
-    return true;
+    return {
+        rendered: true,
+        percentScale,
+        maxUsedPercent,
+        mobileLayout
+    };
 }
 
 function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAULT_HOURS) {
@@ -6365,17 +7587,33 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         if (updatedAt) {
             metaParts.push(`Updated ${updatedAt}`);
         }
+        const relationScope = String(history?.relation?.scope || history?.token_delta_scope || '').trim().toLowerCase();
+        if (relationScope === 'account') {
+            metaParts.push('Relation account scope');
+        } else if (relationScope === 'workspace') {
+            metaParts.push('Relation workspace scope');
+        }
         const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
+        const workspaceTokenPath = typeof history?.scope?.workspace_token_usage_path === 'string'
+            ? history.scope.workspace_token_usage_path.trim()
+            : '';
+        const accountTokenPath = typeof history?.scope?.account_token_usage_path === 'string'
+            ? history.scope.account_token_usage_path.trim()
+            : '';
+        const titleParts = [pathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
         if (pathText) {
             metaParts.push(pathText);
-            elements.meta.setAttribute('title', pathText);
+            elements.meta.setAttribute('title', titleParts.join('\n'));
         } else {
             elements.meta.removeAttribute('title');
         }
         elements.meta.textContent = metaParts.join(' · ') || 'Usage 이력을 불러오는 중...';
     }
 
-    const hasChart = renderUsageHistoryChart(history);
+    const chartMetrics = renderUsageHistoryChart(history);
+    const hasChart = Boolean(chartMetrics?.rendered);
+    renderUsageHistoryScaleBadge(chartMetrics);
+    renderUsageHistoryRatioCards(history);
     if (elements.empty) {
         elements.empty.classList.toggle('is-hidden', hasChart);
     }
@@ -6417,6 +7655,15 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         if (elements?.chart) {
             elements.chart.innerHTML = '';
         }
+        if (elements?.scale) {
+            elements.scale.textContent = 'Scale --';
+        }
+        if (elements?.ratios) {
+            elements.ratios.innerHTML = '';
+        }
+        if (elements?.legend) {
+            elements.legend.innerHTML = '';
+        }
         if (elements?.empty) {
             elements.empty.classList.remove('is-hidden');
             elements.empty.textContent = 'Usage 이력을 불러오지 못했습니다.';
@@ -6447,6 +7694,15 @@ async function openUsageHistoryOverlay() {
     document.body.classList.add('is-overlay-open');
     if (elements.meta) {
         elements.meta.textContent = '사용량 이력을 불러오는 중...';
+    }
+    if (elements.scale) {
+        elements.scale.textContent = 'Scale --';
+    }
+    if (elements.ratios) {
+        elements.ratios.innerHTML = '';
+    }
+    if (elements.legend) {
+        elements.legend.innerHTML = '';
     }
     if (elements.chart) {
         elements.chart.innerHTML = '';
@@ -6951,15 +8207,42 @@ function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = ''
     setFilePanelPathLabel(elements?.path, root, relativePath, absoluteRootPath);
 }
 
+function syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot = null) {
+    const normalizedSnapshot = normalizeWorkModeFileViewerScrollSnapshot(
+        viewerSnapshot,
+        { includeContext: true }
+    );
+    if (!normalizedSnapshot) return null;
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    const previewRoot = normalizeFileBrowserRoot(workModeHtmlPreviewState?.root || selectedRoot);
+    const previewPath = normalizeFileBrowserRelativePath(workModeHtmlPreviewState?.path);
+    if (!selectedPath || selectedPath !== previewPath || selectedRoot !== previewRoot) {
+        return normalizedSnapshot;
+    }
+    setWorkModeHtmlPreviewState({
+        root: previewRoot,
+        path: previewPath,
+        previewUrl: workModeHtmlPreviewState?.previewUrl || '',
+        suspended: Boolean(workModeHtmlPreviewState?.suspended),
+        viewerScroll: normalizedSnapshot
+    });
+    return normalizedSnapshot;
+}
+
 function setWorkModeHtmlPreviewState({
     root = workModeFileRoot,
     path = '',
-    previewUrl = ''
+    previewUrl = '',
+    suspended = false,
+    viewerScroll = null
 } = {}) {
     workModeHtmlPreviewState = {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
-        previewUrl: String(previewUrl || '').trim()
+        previewUrl: String(previewUrl || '').trim(),
+        suspended: Boolean(suspended),
+        viewerScroll: normalizeWorkModeFileViewerScrollSnapshot(viewerScroll, { includeContext: true })
     };
     syncWorkModeHtmlPreviewOpenButton();
 }
@@ -6968,7 +8251,9 @@ function clearWorkModeHtmlPreviewState() {
     setWorkModeHtmlPreviewState({
         root: workModeFileRoot,
         path: '',
-        previewUrl: ''
+        previewUrl: '',
+        suspended: false,
+        viewerScroll: null
     });
 }
 
@@ -6983,16 +8268,28 @@ function getWorkModeHtmlPreviewLaunchUrl() {
     return previewUrl || buildFileBrowserRawFileUrl(previewRoot, previewPath);
 }
 
+function getWorkModePreviewLaunchUrl() {
+    const htmlPreviewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    if (htmlPreviewUrl) return htmlPreviewUrl;
+    const selectedRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    if (!selectedPath) return '';
+    return buildFileBrowserRawFileUrl(selectedRoot, selectedPath);
+}
+
 function canOpenWorkModeHtmlPreviewInNewWindow() {
     if (!isWorkModeEnabled()) return false;
-    return Boolean(getWorkModeHtmlPreviewLaunchUrl());
+    return Boolean(getWorkModePreviewLaunchUrl());
 }
 
 function syncWorkModeHtmlPreviewOpenButton({ loading = false } = {}) {
     const elements = getWorkModeFileElements();
     const button = elements?.openNewBtn;
     if (!button) return;
-    const label = '새 창에서 HTML 미리보기 열기';
+    const htmlPreviewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    const label = workModeHtmlPreviewState?.suspended && htmlPreviewUrl
+        ? '새 창에서 HTML 미리보기 다시 열기'
+        : '선택 파일 새 창에서 열기';
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
     button.disabled = Boolean(loading) || !canOpenWorkModeHtmlPreviewInNewWindow();
@@ -7000,9 +8297,9 @@ function syncWorkModeHtmlPreviewOpenButton({ loading = false } = {}) {
 }
 
 function openWorkModeHtmlPreviewInNewWindow() {
-    const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    const previewUrl = getWorkModePreviewLaunchUrl();
     if (!previewUrl) {
-        showToast('새 창으로 열 수 있는 HTML 미리보기가 없습니다.', {
+        showToast('새 창으로 열 수 있는 선택 파일이 없습니다.', {
             tone: 'default',
             durationMs: 2800
         });
@@ -7019,10 +8316,36 @@ function openWorkModeHtmlPreviewInNewWindow() {
     return true;
 }
 
+function suspendWorkModeHtmlPreviewForMobileTransition(elements, { viewerSnapshot = null } = {}) {
+    if (!elements?.viewerContent) return false;
+    const iframe = elements.viewerContent.querySelector('.file-browser-html-preview');
+    if (!(iframe instanceof HTMLIFrameElement)) return false;
+    const previewUrl = getWorkModeHtmlPreviewLaunchUrl();
+    const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
+    if (!previewUrl || !selectedPath) return false;
+    const normalizedViewerSnapshot = syncWorkModeHtmlPreviewViewerScrollSnapshot(
+        viewerSnapshot || captureWorkModeFileViewerScrollSnapshot({ includeContext: true })
+    );
+    if (normalizedViewerSnapshot) {
+        pendingWorkModeFileViewerScrollRestore = normalizedViewerSnapshot;
+    }
+    setFilePanelViewerPlaceholder(elements, 'HTML 미리보기가 일시중지되었습니다. 목록에서 다시 열면 복원됩니다.');
+    setWorkModeHtmlPreviewState({
+        root: workModeFileRoot,
+        path: selectedPath,
+        previewUrl,
+        suspended: true,
+        viewerScroll: normalizedViewerSnapshot
+    });
+    return true;
+}
+
 function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
     const elements = getWorkModeFileElements();
     if (!elements) return;
     const loading = Boolean(isLoading);
+    const mobile = isMobileLayout();
+    const fold = isFoldLayout();
     if (elements.loading) {
         elements.loading.textContent = message;
         elements.loading.classList.toggle('is-hidden', !loading);
@@ -7039,18 +8362,35 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     if (elements.upBtn) {
         elements.upBtn.disabled = loading || !workModeFilePath;
     }
-    if (elements.fullscreenBtn) {
-        elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || isMobileLayout();
+    if (elements.backBtn) {
+        const canGoBack = isWorkModeEnabled() && (
+            (mobile && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER)
+            || (fold && normalizeWorkModeMobileBrowseView(workModeMobileBrowseView) === WORK_MODE_MOBILE_VIEW_VIEWER)
+        );
+        elements.backBtn.disabled = loading || !canGoBack;
     }
+    if (elements.chatBtn) {
+        const canMoveToChat = isWorkModeEnabled()
+            && mobile
+            && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
+        elements.chatBtn.disabled = loading || !canMoveToChat;
+    }
+    if (elements.fullscreenBtn) {
+        elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || mobile;
+    }
+    syncWorkModeFileFullscreenButtonState();
     syncWorkModeHtmlPreviewOpenButton({ loading });
     if (Array.isArray(elements.colResizers)) {
-        const disableColumnResize = loading || !isWorkModeEnabled() || isMobileLayout() || workModeFileViewerFullscreen;
+        const disableColumnResize = loading || !isWorkModeEnabled() || mobile || fold || workModeFileViewerFullscreen;
         elements.colResizers.forEach(handle => {
             handle.disabled = disableColumnResize;
         });
     }
     if (elements.divider) {
-        elements.divider.classList.toggle('is-disabled', loading || workModeFileViewerFullscreen);
+        elements.divider.classList.toggle(
+            'is-disabled',
+            loading || workModeFileViewerFullscreen || mobile || fold || !isWorkModeEnabled()
+        );
     }
     if (Array.isArray(elements.rootButtons)) {
         elements.rootButtons.forEach(button => {
@@ -7256,12 +8596,20 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
     }
 }
 
-async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = workModeFilePath, force = false } = {}) {
+async function refreshWorkModeFileDirectory(
+    {
+        root = workModeFileRoot,
+        path = workModeFilePath,
+        force = false,
+        restoreScrollSnapshot = null
+    } = {}
+) {
     void force;
     const elements = getWorkModeFileElements();
     if (!elements) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const requestedScrollRestore = normalizeWorkModeFileScrollSnapshot(restoreScrollSnapshot);
 
     setWorkModeFileDirectoryLoading(true);
     if (elements.meta) {
@@ -7288,6 +8636,16 @@ async function refreshWorkModeFileDirectory({ root = workModeFileRoot, path = wo
         if (elements.loading) {
             elements.loading.classList.add('is-hidden');
         }
+        const pendingRestore = requestedScrollRestore
+            || consumePendingWorkModeFileScrollRestore(workModeFileRoot, workModeFilePath);
+        if (pendingRestore) {
+            requestAnimationFrame(() => {
+                syncWorkModeFileHorizontalScrollMetrics();
+                applyWorkModeFileScrollSnapshot(pendingRestore);
+                syncWorkModeFileHorizontalScrollMetrics();
+            });
+        }
+        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         workModeFileCachedEntries = [];
@@ -7320,7 +8678,8 @@ async function openFileInWorkModePanel(
         fallbackToDirectory = false,
         showViewerOnSuccess = true,
         line = null,
-        column = null
+        column = null,
+        restoreViewerScrollSnapshot = null
     } = {}
 ) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
@@ -7330,6 +8689,7 @@ async function openFileInWorkModePanel(
     const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getWorkModeFileElements();
     if (!elements) return null;
+    clearWorkModeHtmlPreviewState();
 
     if (elements.viewerMeta) {
         const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
@@ -7346,22 +8706,44 @@ async function openFileInWorkModePanel(
     try {
         const result = await fetchFileBrowserFile(normalizedRoot, normalizedPath);
         workModeFileSelectedPath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        const viewerScrollSnapshot = !requestedLine
+            ? (
+                normalizeWorkModeFileViewerScrollSnapshot(restoreViewerScrollSnapshot)
+                || consumePendingWorkModeFileViewerScrollRestore(
+                    workModeFileRoot,
+                    workModeFilePath,
+                    workModeFileSelectedPath
+                )
+            )
+            : null;
         await renderFileBrowserViewerIntoElements(elements, result, {
             root: normalizedRoot,
             line: requestedLine,
             column: requestedColumn
         });
+        if (viewerScrollSnapshot && elements.viewerContent) {
+            const viewerRenderToken = String(elements.viewerContent.dataset?.renderToken || '');
+            applyWorkModeFileViewerScrollSnapshot(viewerScrollSnapshot, {
+                renderToken: viewerRenderToken
+            });
+        }
         applyWorkModeFileSelectionState();
         if (showViewerOnSuccess && isMobileLayout()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
+        } else if (showViewerOnSuccess && isFoldLayout()) {
+            setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_VIEWER);
         }
+        schedulePersistWorkModeFileViewState();
         return result;
     } catch (error) {
         const payload = getGitErrorPayload(error);
         if (fallbackToDirectory && payload?.error_code === 'not_file') {
             workModeFileSelectedPath = '';
+            schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+            } else if (isFoldLayout()) {
+                setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
             clearWorkModeFileViewer('폴더가 선택되었습니다. 목록에서 파일을 선택하세요.');
             await refreshWorkModeFileDirectory({
@@ -7384,6 +8766,7 @@ async function openFileInWorkModePanel(
             placeholder.textContent = normalizeError(error, '파일을 열지 못했습니다.');
             elements.viewerContent.appendChild(placeholder);
         }
+        clearWorkModeHtmlPreviewState();
         showToast(normalizeError(error, '작업 모드 파일 열기에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
@@ -7406,8 +8789,13 @@ function openWorkModeFileTarget(target, options = {}) {
     workModeFilePath = requestedPath;
     workModeFileSelectedPath = requestedFilePath;
     updateWorkModeFileRootButtons();
+    schedulePersistWorkModeFileViewState();
     if (isMobileLayout()) {
         setWorkModeMobileView(
+            requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST
+        );
+    } else if (isFoldLayout()) {
+        setWorkModeBrowseView(
             requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST
         );
     }
@@ -7450,8 +8838,10 @@ async function ensureWorkModeFilePanelContent() {
         });
         if (!listed) return;
     }
-    if (isMobileLayout() && workModeMobileView !== WORK_MODE_MOBILE_VIEW_VIEWER) {
-        return;
+    if (isMobileLayout()) {
+        if (workModeMobileView !== WORK_MODE_MOBILE_VIEW_VIEWER) {
+            return;
+        }
     }
     if (hasSelection) {
         await openFileInWorkModePanel(workModeFileSelectedPath, {
@@ -7464,12 +8854,14 @@ async function ensureWorkModeFilePanelContent() {
     }
 }
 
-async function refreshWorkModeFilePreviewSelection() {
+async function refreshWorkModeFilePreviewSelection({ restoreViewerScrollSnapshot = null } = {}) {
     const selectedPath = normalizeFileBrowserRelativePath(workModeFileSelectedPath);
     if (!selectedPath) return null;
     return openFileInWorkModePanel(selectedPath, {
         root: workModeFileRoot,
-        fallbackToDirectory: true
+        fallbackToDirectory: true,
+        showViewerOnSuccess: false,
+        restoreViewerScrollSnapshot
     });
 }
 
@@ -8761,10 +10153,25 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
                 limit: 10
             })
         });
+        const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
+        const changedFiles = detailedFiles.length
+            ? detailedFiles
+            : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+        const changedCount = normalizeGitChangedFilesCount(result?.changed_files_count);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            result?.windows_invalid_count,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            result?.has_windows_path_issues,
+            windowsInvalidCount
+        );
         return setGitSyncHistoryCache(target, {
             repoRoot: typeof result?.repo_root === 'string' ? result.repo_root : '',
             repoMissing: Boolean(result?.repo_missing),
             currentBranch: typeof result?.current_branch === 'string' ? result.current_branch : '',
+            currentBranchHistory: Array.isArray(result?.current_branch_history) ? result.current_branch_history : [],
             requestedMainBranch: typeof result?.requested_main_branch === 'string'
                 ? result.requested_main_branch
                 : 'main',
@@ -8776,6 +10183,11 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             remoteMainHistoryError: typeof result?.remote_main_history_error === 'string'
                 ? result.remote_main_history_error
                 : '',
+            windowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues,
+            changedCount: Number.isFinite(changedCount) ? changedCount : normalizeGitChangedFiles(changedFiles).length,
+            changedFiles,
             aheadCount: Number.isFinite(result?.ahead_count) ? result.ahead_count : null,
             behindCount: Number.isFinite(result?.behind_count) ? result.behind_count : null,
             fetchedAt: Date.now(),
@@ -8789,8 +10201,14 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             repoRoot: '',
             repoMissing: isRepoMissing,
             currentBranch: '',
+            currentBranchHistory: [],
             remoteMainHistory: [],
             remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
+            windowsInvalidFiles: [],
+            windowsInvalidCount: 0,
+            hasWindowsPathIssues: false,
+            changedCount: isRepoMissing ? 0 : null,
+            changedFiles: [],
             isStale: !isRepoMissing,
             fetchedAt: Date.now()
         });
@@ -8809,9 +10227,45 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
     const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
     try {
-        const history = await fetchGitSyncHistory(force, target);
-        renderGitSyncOverlay(history);
-        return history;
+        const [history, status] = await Promise.all([
+            fetchGitSyncHistory(force, target),
+            fetchGitStatusForRepoTarget(target, force).catch(() => null)
+        ]);
+        const statusFiles = normalizeGitChangedFiles(status?.changedFiles);
+        const historyFiles = normalizeGitChangedFiles(history?.changedFiles);
+        const mergedFiles = statusFiles.length ? statusFiles : historyFiles;
+        const statusChangedCount = status ? getGitChangedFilesCountFromStatus(status) : null;
+        const changedCount = Number.isFinite(statusChangedCount)
+            ? statusChangedCount
+            : normalizeGitChangedFilesCount(history?.changedCount);
+        const statusWindowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+        const historyWindowsInvalidFiles = normalizeGitWindowsInvalidFiles(history?.windowsInvalidFiles);
+        const mergedWindowsInvalidFiles = status
+            ? statusWindowsInvalidFiles
+            : historyWindowsInvalidFiles;
+        const windowsInvalidCount = status
+            ? normalizeGitWindowsInvalidCount(
+                status?.windowsInvalidCount,
+                mergedWindowsInvalidFiles.length
+            )
+            : normalizeGitWindowsInvalidCount(
+                history?.windowsInvalidCount,
+                mergedWindowsInvalidFiles.length
+            );
+        const hasWindowsPathIssues = status
+            ? normalizeGitWindowsPathIssueState(status?.hasWindowsPathIssues, windowsInvalidCount)
+            : normalizeGitWindowsPathIssueState(history?.hasWindowsPathIssues, windowsInvalidCount);
+        const merged = setGitSyncHistoryCache(target, {
+            changedCount: Number.isFinite(changedCount) ? changedCount : mergedFiles.length,
+            changedFiles: mergedFiles,
+            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : history?.behindCount,
+            windowsInvalidFiles: mergedWindowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues
+        });
+        renderGitSyncOverlay(merged);
+        return merged;
     } catch (error) {
         renderGitSyncOverlay(getGitSyncHistoryCache(target));
         if (!silent) {
@@ -8847,6 +10301,15 @@ async function fetchGitStatus(force = false) {
         const changedFiles = detailedFiles.length
             ? detailedFiles
             : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            result?.windows_invalid_count,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            result?.has_windows_path_issues,
+            windowsInvalidCount
+        );
         const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
         const behindCount = normalizeGitDivergenceCount(result?.behind_count);
         gitBranchStatusCache = {
@@ -8854,6 +10317,9 @@ async function fetchGitStatus(force = false) {
             branch,
             aheadCount,
             behindCount,
+            windowsInvalidFiles,
+            windowsInvalidCount,
+            hasWindowsPathIssues,
             changedFiles,
             isStale: false,
             fetchedAt: Date.now()
@@ -8865,6 +10331,9 @@ async function fetchGitStatus(force = false) {
             branch: gitBranchStatusCache.branch || '',
             aheadCount: null,
             behindCount: null,
+            windowsInvalidFiles: [],
+            windowsInvalidCount: 0,
+            hasWindowsPathIssues: false,
             changedFiles: [],
             isStale: true,
             fetchedAt: Date.now()
@@ -8881,6 +10350,7 @@ async function fetchGitChangedFilesCount(force = false) {
 }
 
 async function refreshGitBranchStatus({ force = false, updateOverlay = false } = {}) {
+    const shouldRenderBranchOverlay = Boolean(updateOverlay && isGitBranchOverlayOpen());
     const status = await fetchGitStatus(force);
     const branchElement = document.getElementById('claude-git-branch');
     if (branchElement) {
@@ -8888,11 +10358,30 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     }
     updateGitCommitButtonState(status);
     updateGitPushButtonState(status);
-    if (updateOverlay && isGitBranchOverlayOpen()) {
-        renderGitBranchOverlay(status);
+    if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
+        const mergedWorkspaceSync = setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
+            changedCount: getGitChangedFilesCountFromStatus(status),
+            changedFiles: normalizeGitChangedFiles(status?.changedFiles),
+            aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
+            behindCount: Number.isFinite(status?.behindCount) ? status.behindCount : null,
+            windowsInvalidFiles: normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles),
+            windowsInvalidCount: normalizeGitWindowsInvalidCount(
+                status?.windowsInvalidCount,
+                normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles).length
+            ),
+            hasWindowsPathIssues: normalizeGitWindowsPathIssueState(
+                status?.hasWindowsPathIssues,
+                status?.windowsInvalidCount
+            )
+        });
+        renderGitSyncOverlay(mergedWorkspaceSync);
+    }
+    syncGitSyncOverlayActionButtonsFromCache();
+    if (shouldRenderBranchOverlay) {
+        renderGitBranchOverlay(gitBranchStatusCache);
     }
     recoverGitPushButtonsIfIdle();
-    return status;
+    return gitBranchStatusCache;
 }
 
 function startGitBranchPolling() {
@@ -8966,13 +10455,29 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     });
     const count = normalizeGitChangedFilesCount(result?.changed_files_count);
     const branch = typeof result?.branch === 'string' ? result.branch : '';
+    const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
+    const behindCount = normalizeGitDivergenceCount(result?.behind_count);
     const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
     const changedFiles = detailedFiles.length
         ? detailedFiles
         : (Array.isArray(result?.changed_files) ? result.changed_files : []);
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(result?.windows_invalid_files);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        result?.windows_invalid_count,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        result?.has_windows_path_issues,
+        windowsInvalidCount
+    );
     return {
         count,
         branch,
+        aheadCount,
+        behindCount,
+        windowsInvalidFiles,
+        windowsInvalidCount,
+        hasWindowsPathIssues,
         changedFiles,
         isStale: false,
         fetchedAt: Date.now()
@@ -8991,6 +10496,22 @@ async function handleGitCommit(button) {
     const selectedFiles = Array.from(gitOverlaySelectedFiles);
     if (!selectedFiles.length) {
         showToast('커밋할 파일을 먼저 선택해주세요.', { tone: 'error', durationMs: 3400 });
+        return;
+    }
+    const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(gitBranchStatusCache?.windowsInvalidFiles);
+    const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+        gitBranchStatusCache?.windowsInvalidCount,
+        windowsInvalidFiles.length
+    );
+    const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+        gitBranchStatusCache?.hasWindowsPathIssues,
+        windowsInvalidCount
+    );
+    if (hasWindowsPathIssues) {
+        showToast(buildGitWindowsPathIssueToastMessage(windowsInvalidFiles, windowsInvalidCount), {
+            tone: 'error',
+            durationMs: 5200
+        });
         return;
     }
 
@@ -9065,6 +10586,22 @@ async function handleGitQuickCommit(button, options = {}) {
     setGitButtonBusy(button, true, 'Committing...');
     try {
         const status = await fetchGitStatusForRepoTarget(repoTarget, true);
+        const windowsInvalidFiles = normalizeGitWindowsInvalidFiles(status?.windowsInvalidFiles);
+        const windowsInvalidCount = normalizeGitWindowsInvalidCount(
+            status?.windowsInvalidCount,
+            windowsInvalidFiles.length
+        );
+        const hasWindowsPathIssues = normalizeGitWindowsPathIssueState(
+            status?.hasWindowsPathIssues,
+            windowsInvalidCount
+        );
+        if (hasWindowsPathIssues) {
+            showToast(`${repoLabel} · ${buildGitWindowsPathIssueToastMessage(windowsInvalidFiles, windowsInvalidCount)}`, {
+                tone: 'error',
+                durationMs: 5200
+            });
+            return;
+        }
         const allFiles = normalizeGitChangedFiles(status?.changedFiles).map(file => file.path);
         if (!allFiles.length) {
             showToast(`${repoLabel} · 커밋할 변경 파일이 없습니다.`, { tone: 'error', durationMs: 3200 });
@@ -9529,6 +11066,7 @@ function renderSessions() {
             closeOverlayOnSelect: Boolean(target.closeOverlayOnSelect)
         });
     });
+    renderRunningJobsMonitor();
 }
 
 function upsertSessionSummary(session) {
@@ -9737,19 +11275,67 @@ function updateHeader(session) {
     meta.textContent = updated ? `Updated ${updated}` : '';
 }
 
-function isPlanModeEnabled() {
-    return Boolean(state.settings.planModeEnabled);
+function normalizePlanModeState(value) {
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
+            return PLAN_MODE_STATE_PLAN_ONLY;
+        }
+        if (
+            normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
+            || normalized === 'auto'
+            || normalized === '2'
+        ) {
+            return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+        }
+    } else if (value === true) {
+        return PLAN_MODE_STATE_PLAN_ONLY;
+    }
+    return PLAN_MODE_STATE_OFF;
 }
 
-function setPlanModeToggleState(enabled) {
-    const normalized = Boolean(enabled);
-    state.settings.planModeEnabled = normalized;
+function getPlanModeState() {
+    return normalizePlanModeState(state.settings.planModeState);
+}
+
+function shouldUsePlanModeForRequest(planModeState = getPlanModeState()) {
+    return planModeState !== PLAN_MODE_STATE_OFF;
+}
+
+function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
+    return planModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+}
+
+function getNextPlanModeState(currentState = getPlanModeState()) {
+    if (currentState === PLAN_MODE_STATE_OFF) {
+        return PLAN_MODE_STATE_PLAN_ONLY;
+    }
+    if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
+        return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+    }
+    return PLAN_MODE_STATE_OFF;
+}
+
+function setPlanModeToggleState(nextState) {
+    const normalized = normalizePlanModeState(nextState);
+    state.settings.planModeState = normalized;
     const button = document.getElementById('claude-plan-mode-toggle');
     if (!button) return;
-    button.classList.toggle('is-active', normalized);
-    button.setAttribute('aria-pressed', String(normalized));
-    const label = normalized ? 'Plan mode on' : 'Plan mode off';
-    button.textContent = 'Plan';
+    const isActive = normalized !== PLAN_MODE_STATE_OFF;
+    const isPlanAndExecute = normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
+    button.classList.toggle('is-active', isActive);
+    button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
+    button.setAttribute('aria-pressed', String(isActive));
+    let label = 'Plan mode off';
+    let buttonText = 'Plan';
+    if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
+        label = 'Plan mode on (planning only)';
+    } else if (isPlanAndExecute) {
+        label = 'Plan then execute mode on';
+        buttonText = 'Plan+';
+    }
+    button.dataset.planModeState = normalized;
+    button.textContent = buttonText;
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
 }
@@ -9801,14 +11387,53 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {})
         return {
             ok: true,
             reason: 'started',
+            sessionId,
             queueCount
         };
     }
     return {
         ok: true,
         reason: 'queued',
+        sessionId,
         queueCount,
         activeStreamId: result?.active_stream_id || null
+    };
+}
+
+async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState()) {
+    const normalizedPrompt = String(prompt || '').trim();
+    if (!sessionId || !normalizedPrompt) {
+        return {
+            addedCount: 0,
+            totalQueued: 0,
+            lastResult: null
+        };
+    }
+    const normalizedPlanModeState = normalizePlanModeState(planModeState);
+    const queueItems = [];
+    if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
+        queueItems.push({ prompt: normalizedPrompt, planMode: true });
+        queueItems.push({ prompt: PLAN_MODE_AUTO_EXECUTE_PROMPT, planMode: false });
+    } else {
+        queueItems.push({
+            prompt: normalizedPrompt,
+            planMode: normalizedPlanModeState === PLAN_MODE_STATE_PLAN_ONLY
+        });
+    }
+
+    let lastResult = null;
+    let totalQueued = 0;
+    for (const item of queueItems) {
+        lastResult = await queuePromptOnServer(sessionId, item.prompt, { planMode: item.planMode });
+        const queueCount = Number(lastResult?.queueCount);
+        if (Number.isFinite(queueCount)) {
+            totalQueued = Math.max(0, queueCount);
+        }
+    }
+    return {
+        addedCount: queueItems.length,
+        totalQueued,
+        lastResult
     };
 }
 
@@ -9825,11 +11450,9 @@ async function handleSubmit(event) {
         if (prompt) {
             input.value = '';
             try {
-                const queueResult = await queuePromptOnServer(activeSessionId, prompt, {
-                    planMode: isPlanModeEnabled()
-                });
-                if (queueResult?.reason === 'queued') {
-                    const queuedCount = Number(queueResult?.queueCount) || 0;
+                const queueResult = await queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState());
+                const queuedCount = Number(queueResult?.totalQueued) || 0;
+                if (queueResult?.lastResult?.reason === 'queued') {
                     setSessionStatus(activeSessionId, `Queued ${queuedCount} prompt${queuedCount === 1 ? '' : 's'}...`);
                     showToast(`Queued (${queuedCount})`, {
                         tone: 'success',
@@ -9864,10 +11487,22 @@ async function handleSubmit(event) {
     }
     if (!prompt) return;
     input.value = '';
+    const planModeState = getPlanModeState();
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
-        planMode: isPlanModeEnabled()
+        planMode: shouldUsePlanModeForRequest(planModeState)
     });
+    if (
+        sendResult?.ok
+        && shouldAutoExecuteAfterPlan(planModeState)
+        && (sendResult?.reason === 'started' || sendResult?.reason === 'queued')
+    ) {
+        const targetSessionId = sendResult.sessionId || state.activeSessionId || activeSessionId;
+        if (targetSessionId) {
+            await queuePromptWithPlanMode(targetSessionId, PLAN_MODE_AUTO_EXECUTE_PROMPT, PLAN_MODE_STATE_OFF);
+            syncActiveSessionControls();
+        }
+    }
     if (sendResult?.ok) return;
     const latestInput = document.getElementById('claude-chat-input');
     if (!latestInput) return;
@@ -9950,13 +11585,13 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
 
     if (!sessionId) {
         setStatus('Failed to create a session.', true);
-        return { ok: false, reason: 'session_create_failed' };
+        return { ok: false, reason: 'session_create_failed', sessionId: null };
     }
 
     const sessionState = ensureSessionState(sessionId);
     if (sessionState?.sending) {
         setSessionStatus(sessionId, 'Session is already sending.', true);
-        return { ok: false, reason: 'already_sending' };
+        return { ok: false, reason: 'already_sending', sessionId };
     }
     if (sessionState) {
         sessionState.sending = true;
@@ -9988,7 +11623,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             throw err;
         }
         processStartedStreamResponse(sessionId, prompt, result, startedAt);
-        return { ok: true, reason: 'started' };
+        return { ok: true, reason: 'started', sessionId };
     } catch (error) {
         clearPendingSend(sessionId);
         if (error?.name === 'AbortError') {
@@ -10001,7 +11636,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'canceled' };
+            return { ok: false, reason: 'canceled', sessionId };
         }
         if (error?.status === 409 && error?.payload?.already_running) {
             try {
@@ -10020,12 +11655,12 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return { ok: true, reason: 'queued', queueCount: queuedCount };
+                    return { ok: true, reason: 'queued', queueCount: queuedCount, sessionId };
                 }
                 if (sessionId === state.activeSessionId) {
                     syncActiveSessionControls();
                 }
-                return { ok: true, reason: queueResult?.reason || 'started' };
+                return { ok: true, reason: queueResult?.reason || 'started', sessionId };
             } catch (queueError) {
                 // Fall back to remote attach behavior when queue endpoint fails.
             }
@@ -10046,7 +11681,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                     if (sessionId === state.activeSessionId) {
                         syncActiveSessionControls();
                     }
-                    return { ok: true, reason: 'attached_existing_stream' };
+                    return { ok: true, reason: 'attached_existing_stream', sessionId };
                 }
             }
             if (sessionState) {
@@ -10058,7 +11693,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 syncActiveSessionControls();
             }
             void flushQueuedPrompts(sessionId);
-            return { ok: false, reason: 'already_running' };
+            return { ok: false, reason: 'already_running', sessionId };
         }
         if (sessionState) {
             sessionState.sending = false;
@@ -10069,7 +11704,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             syncActiveSessionControls();
         }
         void flushQueuedPrompts(sessionId);
-        return { ok: false, reason: 'send_failed' };
+        return { ok: false, reason: 'send_failed', sessionId };
     }
 }
 
@@ -10150,7 +11785,7 @@ async function stopStream(sessionId) {
             syncActiveSessionControls();
         }
         await loadSessions({ preserveActive: true, reloadActive: false });
-        void refreshUsageSummary({ silent: true });
+        void refreshUsageSummary({ silent: true, force: true });
         void flushQueuedPrompts(sessionId);
     } catch (error) {
         setSessionStatus(sessionId, normalizeError(error, 'Failed to stop stream.'), true);
@@ -10307,7 +11942,7 @@ async function finishStream(streamId, result) {
         syncActiveSessionControls();
     }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
-    void refreshUsageSummary({ silent: true });
+    void refreshUsageSummary({ silent: true, force: true });
     void flushQueuedPrompts(sessionId);
 }
 

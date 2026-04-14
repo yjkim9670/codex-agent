@@ -74,6 +74,7 @@ _USAGE_HISTORY_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_MAX_ITEMS = 24 * 30
 _USAGE_SNAPSHOT_POLL_SECONDS = 300
+_USAGE_RATE_LIMIT_REFRESH_SECONDS = 60
 _USAGE_SNAPSHOT_WORKER_STARTED = False
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
@@ -1064,6 +1065,7 @@ def _empty_usage_summary(provider=None):
         'provider': normalized,
         'five_hour': None,
         'weekly': None,
+        'rate_limits_updated_at': None,
         'account_name': _provider_account_name(normalized),
         'tokens': None,
     }
@@ -1097,10 +1099,16 @@ def _normalize_usage_summary(data):
     else:
         weekly = None
 
+    rate_limits_updated_at = None
+    parsed_rate_limits_updated_at = parse_timestamp(data.get('rate_limits_updated_at'))
+    if parsed_rate_limits_updated_at is not None:
+        rate_limits_updated_at = normalize_timestamp(parsed_rate_limits_updated_at)
+
     return {
         'provider': provider,
         'five_hour': five_hour,
         'weekly': weekly,
+        'rate_limits_updated_at': rate_limits_updated_at,
         'account_name': account_name,
         'tokens': tokens,
     }
@@ -1124,6 +1132,75 @@ def _write_usage_summary(summary):
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+
+
+def _usage_rate_limits_refresh_due(summary, max_age_seconds=_USAGE_RATE_LIMIT_REFRESH_SECONDS):
+    normalized_summary = _normalize_usage_summary(summary)
+    if normalized_summary.get('provider') != 'claude':
+        return False
+    if normalized_summary.get('five_hour') is None or normalized_summary.get('weekly') is None:
+        return True
+    if max_age_seconds is None:
+        return False
+    try:
+        max_age = float(max_age_seconds)
+    except (TypeError, ValueError):
+        max_age = float(_USAGE_RATE_LIMIT_REFRESH_SECONDS)
+    if max_age <= 0:
+        return False
+    refreshed_at = parse_timestamp(normalized_summary.get('rate_limits_updated_at'))
+    if refreshed_at is None:
+        return True
+    age_seconds = (datetime.now(KST) - refreshed_at).total_seconds()
+    return age_seconds >= max_age
+
+
+def get_usage_summary_with_rate_limits(plan='pro', force_refresh=False, max_age_seconds=_USAGE_RATE_LIMIT_REFRESH_SECONDS):
+    with _USAGE_LOCK:
+        summary = _read_usage_summary()
+    if summary.get('provider') != 'claude':
+        return summary
+    if not force_refresh and not _usage_rate_limits_refresh_due(summary, max_age_seconds=max_age_seconds):
+        return summary
+    try:
+        rate_limits = get_monitor_rate_limits(plan=plan, use_cache=False)
+    except Exception:
+        _LOGGER.debug('usage rate limit refresh skipped', exc_info=True)
+        return summary
+    if not isinstance(rate_limits, dict):
+        return summary
+
+    with _USAGE_LOCK:
+        current_summary = _read_usage_summary()
+        if current_summary.get('provider') != 'claude':
+            return current_summary
+        if (
+            not force_refresh
+            and not _usage_rate_limits_refresh_due(current_summary, max_age_seconds=max_age_seconds)
+        ):
+            return current_summary
+
+        next_summary = dict(current_summary)
+        updated = False
+        for key in ('five_hour', 'weekly'):
+            value = rate_limits.get(key)
+            if not isinstance(value, dict):
+                continue
+            next_summary[key] = {
+                'used_percent': _coerce_non_negative_float(value.get('used_percent')),
+                'resets_at': value.get('resets_at'),
+            }
+            updated = True
+
+        if not updated:
+            return current_summary
+
+        next_summary['provider'] = 'claude'
+        next_summary['account_name'] = _provider_account_name('claude')
+        next_summary['rate_limits_updated_at'] = normalize_timestamp(None)
+        normalized_summary = _normalize_usage_summary(next_summary)
+        _write_usage_summary(normalized_summary)
+        return normalized_summary
 
 
 def _write_json_atomic(path, payload):
@@ -1457,7 +1534,10 @@ def get_usage_history_summary(hours=168):
 def _usage_snapshot_worker_loop():
     while True:
         try:
-            record_usage_snapshot_if_due()
+            usage_summary = get_usage_summary_with_rate_limits(
+                max_age_seconds=_USAGE_SNAPSHOT_POLL_SECONDS
+            )
+            record_usage_snapshot_if_due(usage_summary=usage_summary)
         except Exception:
             _LOGGER.exception('usage snapshot worker failed')
         time.sleep(_USAGE_SNAPSHOT_POLL_SECONDS)
@@ -5256,7 +5336,7 @@ def cleanup_model_streams():
             state.model_streams.pop(stream_id, None)
 
 
-def get_claude_monitor_usage(plan='pro', hours_back=96):
+def get_claude_monitor_usage(plan='pro', hours_back=96, use_cache=True):
     """Return claude-monitor usage analysis as a plain dict.
 
     Calls ``claude_monitor.data.analysis.analyze_usage`` directly so that
@@ -5282,7 +5362,7 @@ def get_claude_monitor_usage(plan='pro', hours_back=96):
         hours = 96
 
     try:
-        result = analyze_usage(hours_back=hours, use_cache=True)
+        result = analyze_usage(hours_back=hours, use_cache=bool(use_cache))
     except Exception as exc:  # noqa: BLE001
         _LOGGER.exception('claude_monitor analyze_usage failed')
         return {'error': str(exc)}
@@ -5305,7 +5385,7 @@ def get_claude_monitor_usage(plan='pro', hours_back=96):
     return result
 
 
-def get_monitor_rate_limits(plan='pro'):
+def get_monitor_rate_limits(plan='pro', use_cache=False):
     """Return five_hour and weekly rate-limit dicts derived from claude-monitor.
 
     Returns a dict ``{'five_hour': {...}, 'weekly': {...}}`` where each entry
@@ -5313,7 +5393,7 @@ def get_monitor_rate_limits(plan='pro'):
     or ``None`` if the data cannot be obtained.
     """
     try:
-        monitor = get_claude_monitor_usage(plan=plan, hours_back=168)
+        monitor = get_claude_monitor_usage(plan=plan, hours_back=168, use_cache=use_cache)
     except Exception:
         return None
 

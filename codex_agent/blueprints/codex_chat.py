@@ -8,6 +8,9 @@ from pathlib import Path
 from flask import Blueprint, Response, jsonify, request
 
 from ..config import (
+    CODEX_API_ONLY_MODE,
+    CODEX_ENABLE_FILES_API,
+    CODEX_ENABLE_GIT_API,
     CODEX_MAX_MODEL_CHARS,
     CODEX_MAX_PROMPT_CHARS,
     CODEX_MAX_REASONING_CHARS,
@@ -15,6 +18,7 @@ from ..config import (
     CODEX_MODEL_OPTIONS,
     CODEX_REASONING_OPTIONS,
     REPO_ROOT,
+    WORKSPACE_DIR,
 )
 from ..services.codex_chat import (
     append_message,
@@ -49,7 +53,7 @@ from ..services.file_browser import (
     read_file,
     read_file_raw,
 )
-from ..services.git_ops import run_git_action
+from ..services.git_ops import get_current_branch_name, run_git_action
 
 bp = Blueprint('codex_chat', __name__)
 
@@ -265,6 +269,38 @@ def _resolve_reasoning_override(plan_mode=False):
             return plan_mode_reasoning
     default_reasoning = str(settings.get('reasoning_effort') or '').strip()
     return default_reasoning or None
+
+
+def _feature_disabled_response(feature_key):
+    return jsonify({
+        'error': f'{feature_key} API가 서버 정책으로 비활성화되어 있습니다.',
+        'error_code': f'{feature_key}_api_disabled',
+    }), 403
+
+
+def _build_runtime_info():
+    server_directory = Path.cwd().resolve()
+    workspace_directory = WORKSPACE_DIR.resolve()
+    return {
+        'service': 'codex-agent',
+        'mode': 'api-only' if CODEX_API_ONLY_MODE else 'ui+api',
+        'server_directory_name': server_directory.name or str(server_directory),
+        'server_directory_path': str(server_directory),
+        'workspace_directory_name': workspace_directory.name or str(workspace_directory),
+        'workspace_directory_path': str(workspace_directory),
+        'current_branch_name': get_current_branch_name(),
+        'model_options': CODEX_MODEL_OPTIONS,
+        'reasoning_options': CODEX_REASONING_OPTIONS,
+        'feature_flags': {
+            'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
+            'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
+        },
+    }
+
+
+@bp.route('/api/codex/runtime/info')
+def codex_runtime_info():
+    return jsonify(_build_runtime_info())
 
 
 @bp.route('/api/codex/settings')
@@ -640,6 +676,8 @@ def codex_stream_stop(stream_id):
 
 @bp.route('/api/codex/files/list', methods=['POST'])
 def codex_files_list():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
         payload = {}
@@ -655,6 +693,8 @@ def codex_files_list():
 
 @bp.route('/api/codex/files/read', methods=['POST'])
 def codex_files_read():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
         payload = {}
@@ -670,6 +710,8 @@ def codex_files_read():
 
 @bp.route('/api/codex/files/raw/<root_key>/<path:relative_path>')
 def codex_files_raw(root_key, relative_path):
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
     try:
         result = read_file_raw(
             root_key=root_key,
@@ -687,6 +729,8 @@ def codex_files_raw(root_key, relative_path):
 
 @bp.route('/api/codex/git/<action>', methods=['POST', 'GET'])
 def codex_git_action(action):
+    if not CODEX_ENABLE_GIT_API:
+        return _feature_disabled_response('git')
     payload = request.get_json(silent=True) or {}
     if request.method == 'GET':
         if action == 'push':

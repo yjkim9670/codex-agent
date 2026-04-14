@@ -243,15 +243,26 @@
                         <div class="usage-card">
                             <div class="usage-header">
                                 <div class="usage-label">Usage</div>
-                                <button
-                                    class="btn ghost icon-only usage-history-open"
-                                    type="button"
-                                    id="claude-usage-history-open"
-                                    aria-label="Usage 추이 그래프 열기"
-                                    title="Usage 추이 그래프 열기"
-                                >
-                                    <span class="sr-only">Usage 추이 그래프 열기</span>
-                                </button>
+                                <div class="usage-header-btns">
+                                    <button
+                                        class="btn ghost icon-only usage-refresh"
+                                        type="button"
+                                        id="claude-usage-refresh"
+                                        aria-label="사용량 새로고침"
+                                        title="사용량 새로고침"
+                                    >
+                                        <span class="sr-only">사용량 새로고침</span>
+                                    </button>
+                                    <button
+                                        class="btn ghost icon-only usage-history-open"
+                                        type="button"
+                                        id="claude-usage-history-open"
+                                        aria-label="Usage 추이 그래프 열기"
+                                        title="Usage 추이 그래프 열기"
+                                    >
+                                        <span class="sr-only">Usage 추이 그래프 열기</span>
+                                    </button>
+                                </div>
                             </div>
                             <div class="usage-value" id="claude-usage-summary">Refresh to load</div>
                         </div>
@@ -305,7 +316,14 @@
                     </div>
                 </form>
 
-                <div id="claude-chat-status" class="chat-status">Idle</div>
+                <div class="chat-runtime-strip">
+                    <div id="claude-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
+                        <div id="claude-chat-job-monitor-summary" class="chat-job-monitor-summary">실행 중인 job 없음</div>
+                        <ul id="claude-chat-job-monitor-list" class="chat-job-monitor-list"></ul>
+                    </div>
+
+                    <div id="claude-chat-status" class="chat-status">Idle</div>
+                </div>
             </section>
 
             <div
@@ -586,6 +604,10 @@
             </div>
             <div class="usage-history-overlay-body">
                 <div class="usage-history-meta" id="claude-usage-history-overlay-meta">사용량 이력을 불러오는 중...</div>
+                <div class="usage-history-summary-strip">
+                    <div class="usage-history-scale-badge" id="claude-usage-history-scale">Scale --</div>
+                    <div class="usage-history-ratio-cards" id="claude-usage-history-ratios"></div>
+                </div>
                 <div class="usage-history-chart-wrap">
                     <svg
                         class="usage-history-chart"
@@ -593,10 +615,10 @@
                         viewBox="0 0 920 320"
                         role="img"
                         aria-label="Usage history chart"
-                        preserveAspectRatio="none"
+                        preserveAspectRatio="xMidYMid meet"
                     ></svg>
                 </div>
-                <div class="usage-history-legend" id="claude-usage-history-legend">Token delta · 5h used% · Weekly used%</div>
+                <div class="usage-history-legend" id="claude-usage-history-legend">Token delta</div>
                 <div class="usage-history-empty is-hidden" id="claude-usage-history-empty">표시할 Usage 이력이 없습니다.</div>
             </div>
             <div class="usage-history-overlay-footer">

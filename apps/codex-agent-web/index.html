@@ -3,17 +3,17 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=120">
-    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <title>Codex Agent · Workspace</title>
+    <link rel="stylesheet" href="/src/legacy-app.css">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 </head>
-<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
+<body data-workspace-path="" data-server-path="">
     <div class="app">
         <header class="app-header">
             <div class="app-header-main">
                 <h1>Codex Agent</h1>
                 <div class="app-header-subline">
-                    <p class="app-workspace">{{ workspace_directory_name }}</p>
+                    <p class="app-workspace" id="codex-app-workspace-name">Workspace</p>
                     <button class="app-header-details-summary" type="button" id="codex-header-details-trigger">세부 정보</button>
                     <span class="sr-only" id="codex-header-description">Manage Codex Agent sessions.</span>
                     <span class="sr-only" id="codex-session-storage">세션 저장 용량 확인 중...</span>
@@ -27,17 +27,15 @@
                     </label>
                 </div>
                 <div class="git-actions" aria-label="Git actions">
-                    {% if current_branch_name %}
                         <span
                             class="git-branch"
                             id="codex-git-branch"
                             tabindex="0"
                             role="button"
                             aria-label="Show current branch details"
-                            title="{{ current_branch_name }}"
-                            data-branch-full="{{ current_branch_name }}"
-                        >{{ current_branch_name }}</span>
-                    {% endif %}
+                            title="-"
+                            data-branch-full="-"
+                        >-</span>
                     <button class="btn ghost icon-only git-action-commit" type="button" id="codex-git-commit" aria-label="Stage files and commit" title="Stage files and commit"></button>
                     <button class="btn ghost icon-only git-action-push" type="button" id="codex-git-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch"></button>
                     <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Open repository sync panel" title="Open repository sync panel"></button>
@@ -91,8 +89,8 @@
                             </div>
                             <div class="forecast-card">
                                 <div class="forecast-title">Codex 서버 디렉터리</div>
-                                <div class="forecast-value" id="codex-server-directory">{{ server_directory_name }}</div>
-                                <div class="forecast-subvalue" id="codex-server-directory-path">{{ server_directory_path }}</div>
+                                <div class="forecast-value" id="codex-server-directory">Codex Backend</div>
+                                <div class="forecast-subvalue" id="codex-server-directory-path"></div>
                             </div>
                         </div>
                     </div>
@@ -264,22 +262,22 @@
                             <label class="model-label" for="codex-model-input">Model · Reasoning effort</label>
                             <div class="model-row model-row-combined">
                                 <div class="model-field model-field-model">
-                                    <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='[]'></select>
                                     <input id="codex-model-input" class="model-input" type="text" placeholder="Default model">
                                 </div>
                                 <div class="model-field model-field-reasoning">
-                                    <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <select id="codex-reasoning-select" class="model-select is-hidden" aria-label="Select reasoning effort" data-options='[]'></select>
                                     <input id="codex-reasoning-input" class="model-input" type="text" placeholder="Default effort">
                                 </div>
                             </div>
                             <label class="model-sub-label" for="codex-plan-mode-model-input">Plan mode model · Reasoning effort</label>
                             <div class="model-row">
                                 <div class="model-field model-field-plan-model">
-                                    <select id="codex-plan-mode-model-select" class="model-select is-hidden" aria-label="Select plan mode model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <select id="codex-plan-mode-model-select" class="model-select is-hidden" aria-label="Select plan mode model" data-options='[]'></select>
                                     <input id="codex-plan-mode-model-input" class="model-input" type="text" placeholder="Use default model">
                                 </div>
                                 <div class="model-field model-field-reasoning">
-                                    <select id="codex-plan-mode-reasoning-select" class="model-select is-hidden" aria-label="Select plan mode reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <select id="codex-plan-mode-reasoning-select" class="model-select is-hidden" aria-label="Select plan mode reasoning effort" data-options='[]'></select>
                                     <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
@@ -740,6 +738,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=98"></script>
+    <script type="module" src="/src/bootstrap.js"></script>
 </body>
 </html>

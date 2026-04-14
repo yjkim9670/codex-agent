@@ -28,14 +28,13 @@ from ..services.model_chat import (
     finalize_model_stream,
     get_active_stream_id_for_session,
     get_claude_monitor_usage,
-    get_monitor_rate_limits,
     get_model_options,
     get_reasoning_options,
     get_session_storage_summary,
     get_session,
     get_settings,
     get_usage_history_summary,
-    get_usage_summary,
+    get_usage_summary_with_rate_limits,
     list_model_streams,
     list_sessions,
     read_model_stream,
@@ -403,7 +402,8 @@ def _build_settings_response(
         model=None,
         reasoning_effort=None,
         plan_mode_model=None,
-        plan_mode_reasoning_effort=None):
+        plan_mode_reasoning_effort=None,
+        usage_summary=None):
     settings = get_settings()
     settings_payload = dict(settings) if isinstance(settings, dict) else {}
     settings_payload.setdefault('model', settings_payload.get('model'))
@@ -421,18 +421,7 @@ def _build_settings_response(
     )
     preview_payload = dict(preview) if isinstance(preview, dict) else {}
     preview_provider = preview.get('provider')
-    usage = get_usage_summary()
-    if isinstance(usage, dict) and (usage.get('five_hour') is None or usage.get('weekly') is None):
-        try:
-            rate_limits = get_monitor_rate_limits()
-            if rate_limits:
-                usage = dict(usage)
-                if usage.get('five_hour') is None:
-                    usage['five_hour'] = rate_limits.get('five_hour')
-                if usage.get('weekly') is None:
-                    usage['weekly'] = rate_limits.get('weekly')
-        except Exception:
-            pass
+    usage = usage_summary if isinstance(usage_summary, dict) else get_usage_summary_with_rate_limits()
     return {
         'settings': settings_payload,
         'preview': preview_payload,
@@ -445,7 +434,8 @@ def _build_settings_response(
 
 @bp.route('/api/claude/settings')
 def model_settings():
-    record_usage_snapshot_if_due()
+    usage_summary = get_usage_summary_with_rate_limits()
+    record_usage_snapshot_if_due(usage_summary=usage_summary)
     return jsonify(
         _build_settings_response(
             model=request.args.get('model'),
@@ -455,27 +445,16 @@ def model_settings():
                 request.args.get('plan_mode_reasoning_effort')
                 or request.args.get('plan_mode_provider')
             ),
+            usage_summary=usage_summary,
         )
     )
 
 
 @bp.route('/api/claude/usage')
 def model_usage():
-    snapshot = record_usage_snapshot_if_due()
-    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
-    if not isinstance(usage, dict):
-        usage = get_usage_summary()
-    if isinstance(usage, dict) and (usage.get('five_hour') is None or usage.get('weekly') is None):
-        try:
-            rate_limits = get_monitor_rate_limits()
-            if rate_limits:
-                usage = dict(usage)
-                if usage.get('five_hour') is None:
-                    usage['five_hour'] = rate_limits.get('five_hour')
-                if usage.get('weekly') is None:
-                    usage['weekly'] = rate_limits.get('weekly')
-        except Exception:
-            pass
+    force_refresh = _to_optional_bool(request.args.get('force')) is True
+    usage = get_usage_summary_with_rate_limits(force_refresh=force_refresh)
+    record_usage_snapshot_if_due(usage_summary=usage)
     return jsonify(
         {
             'usage': usage,
@@ -487,10 +466,9 @@ def model_usage():
 @bp.route('/api/claude/usage/history')
 def model_usage_history():
     hours = request.args.get('hours')
-    snapshot = record_usage_snapshot_if_due()
-    usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
-    if not isinstance(usage, dict):
-        usage = get_usage_summary()
+    force_refresh = _to_optional_bool(request.args.get('force')) is True
+    usage = get_usage_summary_with_rate_limits(force_refresh=force_refresh)
+    record_usage_snapshot_if_due(usage_summary=usage)
     return jsonify(
         {
             'usage': usage,
@@ -928,6 +906,9 @@ def model_git_action(action):
             'active_elapsed_seconds',
             'cancel_requested',
             'cancelled_action',
+            'windows_invalid_files',
+            'windows_invalid_count',
+            'has_windows_path_issues',
         ):
             if key in result:
                 response_payload[key] = result[key]

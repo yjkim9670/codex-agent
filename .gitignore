@@ -14,3 +14,5 @@ workspace/*_token_usage.json
 .venv/
 tests/
 model_agent/
+deploy/vercel/*.env
+deploy/codex-backend.env

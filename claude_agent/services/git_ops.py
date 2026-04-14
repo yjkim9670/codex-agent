@@ -1,5 +1,6 @@
 """Git command helpers for Claude Agent."""
 
+import ast
 from collections import Counter
 import os
 import subprocess
@@ -17,6 +18,33 @@ _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
 _GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
+_WINDOWS_INVALID_FILENAME_CHAR_ORDER = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+_WINDOWS_INVALID_FILENAME_CHARS = set(_WINDOWS_INVALID_FILENAME_CHAR_ORDER)
+_WINDOWS_RESERVED_DEVICE_NAMES = {
+    'CON',
+    'PRN',
+    'AUX',
+    'NUL',
+    'COM1',
+    'COM2',
+    'COM3',
+    'COM4',
+    'COM5',
+    'COM6',
+    'COM7',
+    'COM8',
+    'COM9',
+    'LPT1',
+    'LPT2',
+    'LPT3',
+    'LPT4',
+    'LPT5',
+    'LPT6',
+    'LPT7',
+    'LPT8',
+    'LPT9'
+}
+_WINDOWS_PATH_ISSUE_ERROR_CODE = 'windows_path_invalid'
 _GIT_REPO_TARGET_WORKSPACE = 'workspace'
 _GIT_REPO_TARGET_MODEL_AGENT = 'claude_agent'
 _GIT_REPO_TARGET_ALIASES = {
@@ -522,6 +550,137 @@ def _is_history_file(path):
     return base == 'history' or base.startswith('history.')
 
 
+def _decode_git_path(path):
+    text = str(path or '')
+    if text.startswith('"') and text.endswith('"'):
+        try:
+            text = ast.literal_eval(text)
+        except Exception:
+            text = text[1:-1]
+    text = text.replace('\\/', '/')
+    return text
+
+
+def _normalize_windows_validation_path(path):
+    normalized = _decode_git_path(path)
+    while normalized.startswith('./'):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _collect_windows_path_issue(path):
+    normalized = _normalize_windows_validation_path(path)
+    if not normalized or _is_history_file(normalized):
+        return None
+
+    segments = [segment for segment in normalized.split('/') if segment]
+    if not segments:
+        return None
+
+    invalid_chars = set()
+    reserved_segments = set()
+    has_control_char = False
+    has_trailing_space_or_dot = False
+
+    for segment in segments:
+        if any(ord(ch) < 32 for ch in segment):
+            has_control_char = True
+        if segment.endswith(' ') or segment.endswith('.'):
+            has_trailing_space_or_dot = True
+        invalid_chars.update(ch for ch in segment if ch in _WINDOWS_INVALID_FILENAME_CHARS)
+        reserved_key = segment.split('.', 1)[0].upper()
+        if reserved_key in _WINDOWS_RESERVED_DEVICE_NAMES:
+            reserved_segments.add(segment)
+
+    if not (invalid_chars or has_control_char or has_trailing_space_or_dot or reserved_segments):
+        return None
+
+    ordered_chars = [ch for ch in _WINDOWS_INVALID_FILENAME_CHAR_ORDER if ch in invalid_chars]
+    reasons = []
+    if ordered_chars:
+        reasons.append(f'Windows 금지 문자 포함: {" ".join(ordered_chars)}')
+    if has_control_char:
+        reasons.append('제어 문자(ASCII 0-31) 포함')
+    if has_trailing_space_or_dot:
+        reasons.append('경로 세그먼트 끝 공백/마침표 포함')
+    if reserved_segments:
+        reserved_joined = ', '.join(sorted(reserved_segments, key=lambda item: item.lower()))
+        reasons.append(f'Windows 예약 이름 포함: {reserved_joined}')
+
+    return {
+        'path': normalized,
+        'reasons': reasons,
+        'invalid_chars': ordered_chars,
+        'reserved_segments': sorted(reserved_segments, key=lambda item: item.lower())
+    }
+
+
+def _collect_windows_path_issues(*detail_groups):
+    invalid_entries = []
+    seen_paths = set()
+    for details in detail_groups:
+        if not isinstance(details, list):
+            continue
+        for entry in details:
+            path = ''
+            if isinstance(entry, dict):
+                path = str(entry.get('path') or '').strip()
+            elif isinstance(entry, str):
+                path = entry.strip()
+            if not path:
+                continue
+            issue = _collect_windows_path_issue(path)
+            if not issue:
+                continue
+            issue_path = str(issue.get('path') or '').strip()
+            if not issue_path or issue_path in seen_paths:
+                continue
+            seen_paths.add(issue_path)
+            invalid_entries.append(issue)
+    invalid_entries.sort(key=lambda item: str(item.get('path') or '').lower())
+    count = len(invalid_entries)
+    return invalid_entries, count, count > 0
+
+
+def _build_windows_path_issue_message(invalid_entries):
+    entries = invalid_entries if isinstance(invalid_entries, list) else []
+    count = len(entries)
+    if count <= 0:
+        return 'Windows에서 인식할 수 없는 파일명이 포함되어 있습니다. 파일명을 수정한 뒤 다시 시도해주세요.'
+    preview_chunks = []
+    for entry in entries[:3]:
+        path = str(entry.get('path') or '').strip()
+        reasons = entry.get('reasons')
+        reason_text = ', '.join(
+            str(reason).strip()
+            for reason in reasons if str(reason).strip()
+        ) if isinstance(reasons, list) else ''
+        if path and reason_text:
+            preview_chunks.append(f'{path} ({reason_text})')
+        elif path:
+            preview_chunks.append(path)
+    suffix = ' ...' if count > 3 else ''
+    if preview_chunks:
+        joined_preview = '; '.join(preview_chunks)
+        return (
+            f'Windows에서 인식할 수 없는 파일명이 있습니다 ({count}개). '
+            f'파일명을 수정한 뒤 다시 시도해주세요: {joined_preview}{suffix}'
+        )
+    return f'Windows에서 인식할 수 없는 파일명이 있습니다 ({count}개). 파일명을 수정한 뒤 다시 시도해주세요.'
+
+
+def _build_windows_path_issue_error(repo_target, invalid_entries):
+    entries = invalid_entries if isinstance(invalid_entries, list) else []
+    return {
+        'error': _build_windows_path_issue_message(entries),
+        'error_code': _WINDOWS_PATH_ISSUE_ERROR_CODE,
+        'repo_target': _normalize_repo_target(repo_target),
+        'windows_invalid_files': entries,
+        'windows_invalid_count': len(entries),
+        'has_windows_path_issues': bool(entries)
+    }
+
+
 def _normalize_status_marker(status_code):
     code = (status_code or '').strip()
     if not code:
@@ -556,6 +715,7 @@ def _extract_changed_file_details(status_text):
             continue
         if ' -> ' in path:
             path = path.split(' -> ')[-1].strip()
+        path = _decode_git_path(path)
         if not path:
             continue
         entries.append({
@@ -663,6 +823,7 @@ def _extract_name_status_details(status_text):
             continue
         if ' -> ' in path:
             path = path.split(' -> ')[-1].strip()
+        path = _decode_git_path(path)
         if not path:
             continue
         entries.append({
@@ -1337,6 +1498,9 @@ def _build_history_unavailable_result(
         'remote_main_history_error': reason,
         'ahead_count': None,
         'behind_count': None,
+        'windows_invalid_files': [],
+        'windows_invalid_count': 0,
+        'has_windows_path_issues': False,
         'repo_missing': True
     }
 
@@ -1409,6 +1573,10 @@ def _build_result(
 ):
     changed_files_detail, changed_files = _read_changed_snapshot(repo_root, env)
     staged_files_detail, staged_files = _read_staged_snapshot(repo_root, env)
+    windows_invalid_files, windows_invalid_count, has_windows_path_issues = _collect_windows_path_issues(
+        changed_files_detail,
+        staged_files_detail
+    )
     branch_name = _read_current_branch(repo_root, env)
     upstream_branch = _read_upstream_branch(repo_root, env)
     ahead_count = None
@@ -1430,6 +1598,9 @@ def _build_result(
         'staged_files_count': len(staged_files),
         'staged_files': staged_files,
         'staged_files_detail': staged_files_detail,
+        'windows_invalid_files': windows_invalid_files,
+        'windows_invalid_count': windows_invalid_count,
+        'has_windows_path_issues': has_windows_path_issues,
         'command': command,
         'repo_root': str(repo_root),
         'duration_ms': max(0, int((time.time() - started_at) * 1000))
@@ -1773,6 +1944,14 @@ def run_git_action(action, payload=None):
                 selected_files = _normalize_selected_files(payload.get('files'), repo_root=repo_root)
                 if not selected_files:
                     return {'error': '스테이징 가능한 파일을 선택해주세요. (접근 제한 경로 제외)'}
+                changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+                staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
+                windows_invalid_files, _, has_windows_path_issues = _collect_windows_path_issues(
+                    changed_files_detail,
+                    staged_files_detail
+                )
+                if has_windows_path_issues:
+                    return _build_windows_path_issue_error(repo_target, windows_invalid_files)
 
                 replace_index = payload.get('replace')
                 if replace_index is None:
@@ -1840,7 +2019,14 @@ def run_git_action(action, payload=None):
                         'error': f'접근 제한 경로가 stage 되어 있어 commit할 수 없습니다: {preview}',
                         'error_code': 'blocked_paths_staged'
                     }
+                changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
                 staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
+                windows_invalid_files, _, has_windows_path_issues = _collect_windows_path_issues(
+                    changed_files_detail,
+                    staged_files_detail
+                )
+                if has_windows_path_issues:
+                    return _build_windows_path_issue_error(repo_target, windows_invalid_files)
                 if not staged_files_detail:
                     return {'error': '스테이징된 변경 사항이 없습니다. 먼저 stage를 실행해주세요.'}
 

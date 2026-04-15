@@ -891,6 +891,33 @@ function appendMessageToDOMIfActive(sessionId, message, roleOverride = null) {
     return appendMessageToDOM(message, roleOverride);
 }
 
+function getMessageEntryFromWrapper(wrapper) {
+    if (!wrapper) return null;
+    const bubble = wrapper.querySelector('.message-bubble');
+    const meta = wrapper.querySelector('.message-meta');
+    const footer = wrapper.querySelector('.message-footer');
+    if (!bubble || !meta || !footer) return null;
+    return { wrapper, bubble, meta, footer };
+}
+
+function findMessageEntryById(messageId) {
+    const targetId = typeof messageId === 'string' ? messageId.trim() : '';
+    if (!targetId) return null;
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return null;
+    const wrappers = container.querySelectorAll('.message');
+    for (const wrapper of wrappers) {
+        if (String(wrapper?.dataset?.messageId || '').trim() !== targetId) {
+            continue;
+        }
+        const entry = getMessageEntryFromWrapper(wrapper);
+        if (entry) {
+            return entry;
+        }
+    }
+    return null;
+}
+
 function detachSessionStreamEntry(sessionId) {
     const stream = getSessionStream(sessionId);
     if (!stream) return;
@@ -904,11 +931,15 @@ function attachSessionStreamEntry(sessionId) {
     const stream = getSessionStream(sessionId);
     if (!stream) return;
     if (stream.entry?.wrapper?.isConnected) return;
-    const assistantEntry = appendMessageToDOM({
-        role: 'assistant',
-        content: '',
-        created_at: new Date().toISOString()
-    }, 'assistant');
+    let assistantEntry = findMessageEntryById(stream.messageId);
+    if (!assistantEntry) {
+        assistantEntry = appendMessageToDOM({
+            id: stream.messageId || '',
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString()
+        }, 'assistant');
+    }
     if (!assistantEntry) return;
     stream.entry = assistantEntry;
     setMessageStreaming(assistantEntry.wrapper, true);
@@ -930,13 +961,15 @@ function createStreamState({
     tokenUsage = null,
     outputOffset = 0,
     errorOffset = 0,
-    startedAt = null
+    startedAt = null,
+    messageId = ''
 }) {
     if (!id || !sessionId) return null;
     const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
     const stream = {
         id,
         sessionId,
+        messageId: typeof messageId === 'string' ? messageId.trim() : '',
         outputOffset,
         errorOffset,
         output,
@@ -4506,12 +4539,14 @@ function getPersistedStreams() {
 function persistActiveStream(stream) {
     if (!stream?.id || !stream?.sessionId) return;
     const startedAt = normalizeStartedAt(stream.startedAt) || Date.now();
+    const messageId = typeof stream?.messageId === 'string' ? stream.messageId.trim() : '';
     try {
         const existing = getPersistedStreams().filter(item => item.id !== stream.id);
         existing.push({
             id: stream.id,
             sessionId: stream.sessionId,
-            startedAt
+            startedAt,
+            messageId
         });
         localStorage.setItem(ACTIVE_STREAM_KEY, JSON.stringify(existing));
     } catch (error) {
@@ -10876,14 +10911,21 @@ async function resumeStreamsFromStorage(pendingStreams) {
             const errorOffset = Number.isFinite(result?.error_length)
                 ? result.error_length
                 : errorText.length;
+            const messageId = typeof result?.assistant_message_id === 'string' && result.assistant_message_id.trim()
+                ? result.assistant_message_id.trim()
+                : (typeof pending?.messageId === 'string' ? pending.messageId.trim() : '');
 
             let assistantEntry = null;
             if (pending.sessionId === state.activeSessionId) {
-                assistantEntry = appendMessageToDOM({
-                    role: 'assistant',
-                    content: '',
-                    created_at: new Date().toISOString()
-                }, 'assistant');
+                assistantEntry = findMessageEntryById(messageId);
+                if (!assistantEntry) {
+                    assistantEntry = appendMessageToDOM({
+                        id: messageId || '',
+                        role: 'assistant',
+                        content: '',
+                        created_at: new Date().toISOString()
+                    }, 'assistant');
+                }
                 if (assistantEntry) {
                     setMessageStreaming(assistantEntry.wrapper, true);
                 }
@@ -10897,6 +10939,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 outputOffset,
                 errorOffset,
                 entry: assistantEntry,
+                messageId,
                 startedAt: normalizeStartedAt(result?.started_at)
                     || normalizeStartedAt(result?.created_at)
                     || normalizeStartedAt(pending.startedAt)
@@ -11274,7 +11317,7 @@ function renderMessages(messages) {
         const roleClass = message?.role || 'assistant';
         wrapper.classList.add(roleClass);
         const timestampValue = getMessageTimestampValue(message);
-        setMessageWrapperIdentity(wrapper, roleClass, timestampValue);
+        setMessageWrapperIdentity(wrapper, roleClass, timestampValue, message?.id);
 
         const metaText = buildMessageMetaText(roleClass, timestampValue, message);
         const meta = buildMessageMeta(metaText, wrapper);
@@ -11334,7 +11377,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     const role = roleOverride || message?.role || 'assistant';
     wrapper.classList.add(role);
     const timestampValue = getMessageTimestampValue(message);
-    setMessageWrapperIdentity(wrapper, role, timestampValue);
+    setMessageWrapperIdentity(wrapper, role, timestampValue, message?.id);
 
     const metaText = buildMessageMetaText(role, timestampValue, message);
     const meta = buildMessageMeta(metaText, wrapper);
@@ -11664,7 +11707,12 @@ function processStartedStreamResponse(
 ) {
     const userMessage = result?.user_message;
     if (userMessage) {
-        appendMessageToDOMIfActive(sessionId, userMessage, 'user');
+        if (sessionId === state.activeSessionId) {
+            const existingUserEntry = findMessageEntryById(userMessage?.id);
+            if (!existingUserEntry) {
+                appendMessageToDOMIfActive(sessionId, userMessage, 'user');
+            }
+        }
     } else {
         appendMessageToDOMIfActive(sessionId, {
             role: 'user',
@@ -11673,13 +11721,24 @@ function processStartedStreamResponse(
         }, 'user');
     }
 
-    const assistantEntry = appendMessageToDOMIfActive(sessionId, {
-        role: 'assistant',
-        content: '',
-        created_at: new Date().toISOString(),
-        response_mode: responseMetadata?.response_mode,
-        response_model: responseMetadata?.response_model
-    }, 'assistant');
+    const assistantMessage = result?.assistant_message;
+    const assistantMessageId = typeof result?.assistant_message_id === 'string' && result.assistant_message_id.trim()
+        ? result.assistant_message_id.trim()
+        : (typeof assistantMessage?.id === 'string' ? assistantMessage.id.trim() : '');
+    let assistantEntry = null;
+    if (sessionId === state.activeSessionId && assistantMessageId) {
+        assistantEntry = findMessageEntryById(assistantMessageId);
+    }
+    if (!assistantEntry) {
+        assistantEntry = appendMessageToDOMIfActive(sessionId, assistantMessage || {
+            id: assistantMessageId || '',
+            role: 'assistant',
+            content: '',
+            created_at: new Date().toISOString(),
+            response_mode: responseMetadata?.response_mode,
+            response_model: responseMetadata?.response_model
+        }, 'assistant');
+    }
 
     const streamId = result?.stream_id;
     if (!streamId) {
@@ -11688,7 +11747,9 @@ function processStartedStreamResponse(
     if (assistantEntry) {
         setMessageStreaming(assistantEntry.wrapper, true);
     }
-    startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAtFallback);
+    startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAtFallback, {
+        messageId: assistantMessageId
+    });
 }
 
 async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMode = false } = {}) {
@@ -11829,11 +11890,16 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
     }
 }
 
-function startStream(streamId, sessionId, assistantEntry, startedAt) {
+function startStream(streamId, sessionId, assistantEntry, startedAt, options = {}) {
+    const optionMessageId = typeof options?.messageId === 'string' ? options.messageId.trim() : '';
+    const entryMessageId = typeof assistantEntry?.wrapper?.dataset?.messageId === 'string'
+        ? assistantEntry.wrapper.dataset.messageId.trim()
+        : '';
     const stream = createStreamState({
         id: streamId,
         sessionId,
         entry: assistantEntry,
+        messageId: optionMessageId || entryMessageId,
         outputOffset: 0,
         errorOffset: 0,
         output: '',
@@ -11941,6 +12007,21 @@ async function pollStream(streamId) {
         }
         if (Number.isFinite(result?.idle_ms)) {
             current.idleMs = result.idle_ms;
+        }
+        const resultMessageId = typeof result?.assistant_message_id === 'string'
+            ? result.assistant_message_id.trim()
+            : '';
+        if (resultMessageId && resultMessageId !== current.messageId) {
+            current.messageId = resultMessageId;
+            persistActiveStream(current);
+            if (current.entry?.wrapper) {
+                setMessageWrapperIdentity(
+                    current.entry.wrapper,
+                    resolveMessageRoleFromWrapper(current.entry.wrapper),
+                    current.entry.wrapper.dataset.messageTimestampValue,
+                    resultMessageId
+                );
+            }
         }
 
         if (result?.output) {
@@ -12191,7 +12272,7 @@ function setMessageMetaLabel(meta, role, timestampValue, message = null) {
     const textElement = meta.querySelector('.message-meta-text');
     if (!textElement) return;
     textElement.textContent = buildMessageMetaText(role, timestampValue, message);
-    setMessageWrapperIdentity(meta.closest('.message'), role, timestampValue);
+    setMessageWrapperIdentity(meta.closest('.message'), role, timestampValue, message?.id);
 }
 
 function getRoleLabel(role) {
@@ -12896,7 +12977,7 @@ function resolveMessageRoleFromWrapper(wrapper) {
     return '';
 }
 
-function setMessageWrapperIdentity(wrapper, role, timestampValue) {
+function setMessageWrapperIdentity(wrapper, role, timestampValue, messageId = undefined) {
     if (!wrapper) return;
     const normalizedRole = typeof role === 'string' ? role.trim() : '';
     const normalizedTimestampValue = timestampValue === undefined || timestampValue === null
@@ -12904,6 +12985,10 @@ function setMessageWrapperIdentity(wrapper, role, timestampValue) {
         : String(timestampValue).trim();
     wrapper.dataset.messageRole = normalizedRole;
     wrapper.dataset.messageTimestampValue = normalizedTimestampValue;
+    if (messageId !== undefined) {
+        const normalizedMessageId = messageId === null ? '' : String(messageId).trim();
+        wrapper.dataset.messageId = normalizedMessageId;
+    }
 }
 
 function buildMessagePreviewTitle(role, timestampValue) {

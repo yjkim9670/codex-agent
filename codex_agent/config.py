@@ -1,5 +1,6 @@
 """Configuration and constants for Codex chat server."""
 
+import json
 import os
 from datetime import timedelta, timezone
 from pathlib import Path
@@ -111,7 +112,8 @@ CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
 CODEX_MODEL_ALIASES = {
-    'gpt-5.3-codex-spark': 'gpt-5.3-codex-mini'
+    # Keep backward compatibility for legacy saved settings.
+    'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
 }
 
 
@@ -134,21 +136,59 @@ def _normalize_model_options(options):
     return normalized_options
 
 
-_default_model_options = sorted(_normalize_model_options([
-    'gpt-5.1-codex-max',
-    'gpt-5.2',
-    'gpt-5.2-codex',
+_default_model_options = _normalize_model_options([
+    'gpt-5.4',
+    'gpt-5.4-mini',
     'gpt-5.3-codex',
-    'gpt-5.3-codex-mini',
-    'gpt-5.4'
-]))
-CODEX_MODEL_OPTIONS = _normalize_model_options(
-    item.strip()
-    for item in os.environ.get('CODEX_MODEL_OPTIONS', '').split(',')
-    if item.strip()
-)
-if not CODEX_MODEL_OPTIONS:
-    CODEX_MODEL_OPTIONS = _default_model_options
+    'gpt-5.3-codex-spark',
+    'gpt-5.2',
+])
+
+
+def _read_model_options_from_env():
+    return _normalize_model_options(
+        item.strip()
+        for item in os.environ.get('CODEX_MODEL_OPTIONS', '').split(',')
+        if item.strip()
+    )
+
+
+def _read_model_options_from_models_cache():
+    models_cache_path = CODEX_HOME / 'models_cache.json'
+    try:
+        payload = json.loads(models_cache_path.read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    raw_models = payload.get('models')
+    if not isinstance(raw_models, list):
+        return []
+    model_options = []
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        visibility = str(entry.get('visibility') or '').strip().lower()
+        if visibility != 'list':
+            continue
+        slug = entry.get('slug') or entry.get('display_name')
+        if not slug:
+            continue
+        model_options.append(slug)
+    return _normalize_model_options(model_options)
+
+
+def get_codex_model_options():
+    env_options = _read_model_options_from_env()
+    if env_options:
+        return env_options
+    cache_options = _read_model_options_from_models_cache()
+    if cache_options:
+        return cache_options
+    return list(_default_model_options)
+
+
+CODEX_MODEL_OPTIONS = get_codex_model_options()
 CODEX_REASONING_OPTIONS = [
     item.strip()
     for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')

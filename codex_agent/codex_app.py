@@ -11,10 +11,10 @@ from .config import (
     CODEX_API_ONLY_MODE,
     CODEX_ENABLE_FILES_API,
     CODEX_ENABLE_GIT_API,
-    CODEX_MODEL_OPTIONS,
     CODEX_REASONING_OPTIONS,
     SECRET_KEY,
     WORKSPACE_DIR,
+    get_codex_model_options,
 )
 from .services.codex_chat import (
     ensure_pending_queue_background_worker,
@@ -84,7 +84,7 @@ def create_codex_app():
             })
         return render_template(
             'index.html',
-            model_options=CODEX_MODEL_OPTIONS,
+            model_options=get_codex_model_options(),
             reasoning_options=CODEX_REASONING_OPTIONS,
             server_directory_name=runtime_context['server_directory_name'],
             server_directory_path=runtime_context['server_directory_path'],

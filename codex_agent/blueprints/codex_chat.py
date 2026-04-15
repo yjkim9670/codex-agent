@@ -15,10 +15,10 @@ from ..config import (
     CODEX_MAX_PROMPT_CHARS,
     CODEX_MAX_REASONING_CHARS,
     CODEX_MAX_TITLE_CHARS,
-    CODEX_MODEL_OPTIONS,
     CODEX_REASONING_OPTIONS,
     REPO_ROOT,
     WORKSPACE_DIR,
+    get_codex_model_options,
 )
 from ..services.codex_chat import (
     append_message,
@@ -292,7 +292,7 @@ def _build_runtime_info():
         'workspace_directory_name': workspace_directory.name or str(workspace_directory),
         'workspace_directory_path': str(workspace_directory),
         'current_branch_name': get_current_branch_name(),
-        'model_options': CODEX_MODEL_OPTIONS,
+        'model_options': get_codex_model_options(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
@@ -315,7 +315,7 @@ def codex_settings():
         usage = get_usage_summary()
     return jsonify({
         'settings': get_settings(),
-        'model_options': CODEX_MODEL_OPTIONS,
+        'model_options': get_codex_model_options(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': usage,
         'session_storage': get_session_storage_summary(),
@@ -391,7 +391,7 @@ def codex_settings_update():
         usage = get_usage_summary()
     return jsonify({
         'settings': settings,
-        'model_options': CODEX_MODEL_OPTIONS,
+        'model_options': get_codex_model_options(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': usage,
         'session_storage': get_session_storage_summary(),
@@ -602,6 +602,8 @@ def codex_session_message_stream(session_id):
         'stream_id': start_result.get('stream_id'),
         'started_at': start_result.get('started_at'),
         'user_message': start_result.get('user_message'),
+        'assistant_message': start_result.get('assistant_message'),
+        'assistant_message_id': start_result.get('assistant_message_id'),
         'response_mode': start_result.get('response_mode'),
         'response_model': start_result.get('response_model'),
     })
@@ -641,6 +643,8 @@ def codex_session_message_queue(session_id):
         response['stream_id'] = result.get('stream_id')
         response['started_at'] = result.get('started_at')
         response['user_message'] = result.get('user_message')
+        response['assistant_message'] = result.get('assistant_message')
+        response['assistant_message_id'] = result.get('assistant_message_id')
         response['response_mode'] = result.get('response_mode')
         response['response_model'] = result.get('response_model')
     return jsonify(response)

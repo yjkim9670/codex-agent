@@ -151,6 +151,8 @@ _AUTH_REFRESH_ERROR_RE = re.compile(
 )
 _RESPONSE_MODE_BASIC = 'basic'
 _RESPONSE_MODE_PLAN = 'plan'
+_STREAM_PROGRESS_SAVE_INTERVAL_SECONDS = 0.75
+_STREAM_PROGRESS_SAVE_MIN_CHARS = 96
 
 
 def _normalize_pending_queue_entry(entry):
@@ -2583,6 +2585,59 @@ def append_message(session_id, role, content, metadata=None, created_at=None):
     return deepcopy(message)
 
 
+def update_message(session_id, message_id, content=None, role=None, metadata=None, created_at=None):
+    session_key = str(session_id or '').strip()
+    message_key = str(message_id or '').strip()
+    if not session_key or not message_key:
+        return None
+
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_key)
+        if not session:
+            return None
+        messages = session.get('messages')
+        if not isinstance(messages, list):
+            return None
+
+        target_message = None
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if str(message.get('id') or '').strip() != message_key:
+                continue
+            target_message = message
+            break
+        if not target_message:
+            return None
+
+        if role is not None:
+            normalized_role = str(role).strip()
+            if normalized_role:
+                target_message['role'] = normalized_role
+        if content is not None:
+            target_message['content'] = str(content)
+        if created_at is not None:
+            target_message['created_at'] = normalize_timestamp(created_at)
+
+        if isinstance(metadata, dict):
+            for key, value in metadata.items():
+                if key in ('id',):
+                    continue
+                if key in ('role', 'content', 'created_at'):
+                    continue
+                if value is None:
+                    target_message.pop(key, None)
+                    continue
+                target_message[key] = value
+
+        session['updated_at'] = normalize_timestamp(None)
+        data['sessions'] = _sort_sessions(sessions)
+        _save_data(data)
+        return deepcopy(target_message)
+
+
 def ensure_default_title(session_id, prompt):
     with _DATA_LOCK:
         data = _load_data()
@@ -3319,6 +3374,93 @@ def _terminate_stream_process(process, grace_seconds):
         return None
 
 
+def _combine_stream_output_and_error(output_text, error_text):
+    output_value = '' if output_text is None else str(output_text)
+    error_value = '' if error_text is None else str(error_text)
+    if output_value and error_value:
+        return f'{output_value}\n{error_value}'
+    return output_value or error_value
+
+
+def _build_partial_stream_message_metadata(stream):
+    response_mode = _normalize_response_mode_label(stream.get('response_mode'))
+    response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
+        model_override=stream.get('model_override')
+    )
+    metadata = {
+        'response_mode': response_mode,
+        'response_model': response_model,
+        'streaming': True,
+    }
+    usage = _normalize_token_usage(stream.get('token_usage'))
+    metadata = _attach_token_usage_metadata(metadata, usage)
+    return metadata if isinstance(metadata, dict) else {
+        'response_mode': response_mode,
+        'response_model': response_model,
+        'streaming': True,
+    }
+
+
+def _persist_stream_progress(stream_id, force=False):
+    save_payload = None
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return None
+        session_id = str(stream.get('session_id') or '').strip()
+        assistant_message_id = str(stream.get('assistant_message_id') or '').strip()
+        if not session_id or not assistant_message_id:
+            return None
+
+        output_text = stream.get('output') or ''
+        error_text = stream.get('error') or ''
+        output_length = len(output_text)
+        error_length = len(error_text)
+        content = _combine_stream_output_and_error(output_text, error_text)
+
+        now = time.time()
+        last_saved_at = stream.get('assistant_progress_saved_at')
+        last_output_length = int(stream.get('assistant_progress_output_length') or 0)
+        last_error_length = int(stream.get('assistant_progress_error_length') or 0)
+        changed_chars = abs(output_length - last_output_length) + abs(error_length - last_error_length)
+
+        time_due = (
+            not isinstance(last_saved_at, (int, float))
+            or now - last_saved_at >= _STREAM_PROGRESS_SAVE_INTERVAL_SECONDS
+        )
+        size_due = changed_chars >= _STREAM_PROGRESS_SAVE_MIN_CHARS
+        if not force and not (time_due or size_due):
+            return None
+
+        save_payload = {
+            'session_id': session_id,
+            'assistant_message_id': assistant_message_id,
+            'content': content,
+            'metadata': _build_partial_stream_message_metadata(stream),
+            'output_length': output_length,
+            'error_length': error_length,
+            'saved_at': now,
+        }
+
+    saved_message = update_message(
+        save_payload.get('session_id'),
+        save_payload.get('assistant_message_id'),
+        content=save_payload.get('content'),
+        metadata=save_payload.get('metadata'),
+    )
+    if not saved_message:
+        return None
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream and str(stream.get('assistant_message_id') or '').strip() == save_payload.get('assistant_message_id'):
+            stream['assistant_progress_saved_at'] = save_payload.get('saved_at')
+            stream['assistant_progress_output_length'] = save_payload.get('output_length')
+            stream['assistant_progress_error_length'] = save_payload.get('error_length')
+            stream['updated_at'] = time.time()
+    return saved_message
+
+
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
@@ -3336,6 +3478,7 @@ def _append_stream_chunk(stream_id, key, chunk):
             stream['output_length'] = len(stream.get('output') or '')
         elif key == 'error':
             stream['error_length'] = len(stream.get('error') or '')
+    _persist_stream_progress(stream_id, force=False)
 
 
 def _snapshot_stream_runtime_locked(stream):
@@ -3717,10 +3860,17 @@ def _run_codex_stream(stream_id, prompt):
                     else:
                         stream['finalize_reason'] = 'process_exit_error'
                 stream['updated_at'] = time.time()
+    _persist_stream_progress(stream_id, force=True)
     finalize_codex_stream(stream_id)
 
 
-def create_codex_stream(session_id, prompt, model_override=None, reasoning_override=None, plan_mode=False):
+def create_codex_stream(
+        session_id,
+        prompt,
+        model_override=None,
+        reasoning_override=None,
+        plan_mode=False,
+        assistant_message_id=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
@@ -3753,6 +3903,10 @@ def create_codex_stream(session_id, prompt, model_override=None, reasoning_overr
         'plan_mode': bool(plan_mode),
         'response_mode': response_mode,
         'response_model': response_model,
+        'assistant_message_id': str(assistant_message_id or '').strip() or None,
+        'assistant_progress_saved_at': None,
+        'assistant_progress_output_length': 0,
+        'assistant_progress_error_length': 0,
         'json_output': True,
         'output_length': 0,
         'error_length': 0,
@@ -3774,6 +3928,7 @@ def create_codex_stream(session_id, prompt, model_override=None, reasoning_overr
         'created_at': int(created_at * 1000),
         'response_mode': response_mode,
         'response_model': response_model,
+        'assistant_message_id': str(assistant_message_id or '').strip() or None,
     }
 
 
@@ -3855,20 +4010,41 @@ def _start_codex_stream_for_session_locked(
             'error': '메시지를 저장하지 못했습니다.'
         }
 
+    response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    response_model = resolve_response_model_name(model_override=model_override)
+    assistant_message = append_message(
+        session_id,
+        'assistant',
+        '',
+        metadata={
+            'response_mode': response_mode,
+            'response_model': response_model,
+            'streaming': True,
+        }
+    )
+    if not assistant_message:
+        return {
+            'ok': False,
+            'error': 'assistant 메시지를 저장하지 못했습니다.'
+        }
+
     stream_info = create_codex_stream(
         session_id,
         prompt_with_context,
         model_override=model_override,
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
+        assistant_message_id=assistant_message.get('id'),
     )
     return {
         'ok': True,
         'stream_id': stream_info.get('id'),
         'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
         'user_message': user_message,
-        'response_mode': stream_info.get('response_mode'),
-        'response_model': stream_info.get('response_model'),
+        'assistant_message': assistant_message,
+        'assistant_message_id': assistant_message.get('id'),
+        'response_mode': response_mode,
+        'response_model': response_model,
     }
 
 
@@ -4088,6 +4264,7 @@ def list_codex_streams(include_done=False):
                 'finalize_reason': stream.get('finalize_reason'),
                 'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
                 'cli_runtime_ms': stream.get('cli_runtime_ms'),
+                'assistant_message_id': stream.get('assistant_message_id'),
                 'token_usage': usage,
                 'input_tokens': usage.get('input_tokens', 0),
                 'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -4133,6 +4310,9 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'finalize_reason': stream.get('finalize_reason'),
             'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
             'cli_runtime_ms': stream.get('cli_runtime_ms'),
+            'assistant_message_id': stream.get('assistant_message_id'),
+            'response_mode': stream.get('response_mode'),
+            'response_model': stream.get('response_model'),
             'token_usage': usage,
             'input_tokens': usage.get('input_tokens', 0),
             'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -4175,6 +4355,7 @@ def finalize_codex_stream(stream_id):
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
+        assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
@@ -4200,6 +4381,7 @@ def finalize_codex_stream(stream_id):
         metadata = {}
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
+    metadata['streaming'] = False
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
         finalize_lag_ms = metadata.get('finalize_lag_ms')
@@ -4215,39 +4397,42 @@ def finalize_codex_stream(stream_id):
     if work_details:
         metadata['work_details'] = work_details
     if exit_code == 0:
-        formatted_output = format_assistant_response_content(
+        message_role = 'assistant'
+        message_content = format_assistant_response_content(
             final_output,
             mode_label=response_mode,
             model_name=response_model,
         )
+        usage_source = 'stream_finalize_success'
+    else:
+        message_role = 'error'
+        message_content = _apply_auth_failure_guard(error or final_output or 'Codex 실행에 실패했습니다.')
+        usage_source = 'stream_finalize_error'
+
+    saved_message = None
+    if assistant_message_id:
+        saved_message = update_message(
+            session_id,
+            assistant_message_id,
+            content=message_content,
+            role=message_role,
+            metadata=metadata,
+            created_at=created_at_value,
+        )
+    if not saved_message:
         saved_message = append_message(
             session_id,
-            'assistant',
-            formatted_output,
+            message_role,
+            message_content,
             metadata,
-            created_at=created_at_value
+            created_at=created_at_value,
         )
-        _record_token_usage(
-            event_id=f'stream:{stream_id}',
-            session_id=session_id,
-            usage=token_usage,
-            source='stream_finalize_success'
-        )
-        trigger_next_queued_codex_stream(session_id)
-        return saved_message
-    message_text = _apply_auth_failure_guard(error or final_output or 'Codex 실행에 실패했습니다.')
-    saved_message = append_message(
-        session_id,
-        'error',
-        message_text,
-        metadata,
-        created_at=created_at_value
-    )
+
     _record_token_usage(
         event_id=f'stream:{stream_id}',
         session_id=session_id,
         usage=token_usage,
-        source='stream_finalize_error'
+        source=usage_source
     )
     trigger_next_queued_codex_stream(session_id)
     return saved_message
@@ -4271,6 +4456,7 @@ def stop_codex_stream(stream_id):
         stream['finalize_reason'] = 'user_cancelled'
         process = stream.get('process')
         session_id = stream.get('session_id')
+        assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
         output = (stream.get('output') or '').strip()
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
@@ -4319,16 +4505,29 @@ def stop_codex_stream(stream_id):
         metadata = {}
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
+    metadata['streaming'] = False
     work_details = _build_work_details(output, output_last_message or output, error)
     if work_details:
         metadata['work_details'] = work_details
-    saved_message = append_message(
-        session_id,
-        'error',
-        message_text,
-        metadata,
-        created_at=_iso_timestamp_from_epoch(completed_at)
-    )
+    created_at_value = _iso_timestamp_from_epoch(completed_at)
+    saved_message = None
+    if assistant_message_id:
+        saved_message = update_message(
+            session_id,
+            assistant_message_id,
+            role='error',
+            content=message_text,
+            metadata=metadata,
+            created_at=created_at_value,
+        )
+    if not saved_message:
+        saved_message = append_message(
+            session_id,
+            'error',
+            message_text,
+            metadata,
+            created_at=created_at_value
+        )
     _record_token_usage(
         event_id=f'stream-stop:{stream_id}',
         session_id=session_id,

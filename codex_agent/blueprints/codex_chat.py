@@ -44,7 +44,10 @@ from ..services.codex_chat import (
     record_token_usage_for_message,
     start_codex_stream_for_session,
     enqueue_codex_stream_for_session,
+    format_assistant_response_content,
     update_settings,
+    resolve_response_mode_label,
+    resolve_response_model_name,
     stop_codex_stream,
 )
 from ..services.file_browser import (
@@ -486,6 +489,8 @@ def codex_session_message(session_id):
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
     model_override = _resolve_model_override(plan_mode=plan_mode)
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
+    response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    response_model = resolve_response_model_name(model_override=model_override)
     user_message = append_message(session_id, 'user', prompt)
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
@@ -498,7 +503,11 @@ def codex_session_message(session_id):
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))
-    metadata = {'duration_ms': duration_ms}
+    metadata = {
+        'duration_ms': duration_ms,
+        'response_mode': response_mode,
+        'response_model': response_model,
+    }
     if isinstance(timing, dict):
         queue_wait_ms = int(timing.get('queue_wait_ms') or 0)
         cli_runtime_ms = int(timing.get('cli_runtime_ms') or 0)
@@ -517,7 +526,12 @@ def codex_session_message(session_id):
     if error:
         assistant_message = append_message(session_id, 'error', error, metadata)
     else:
-        assistant_message = append_message(session_id, 'assistant', output or '', metadata)
+        formatted_output = format_assistant_response_content(
+            output or '',
+            mode_label=response_mode,
+            model_name=response_model,
+        )
+        assistant_message = append_message(session_id, 'assistant', formatted_output, metadata)
     if assistant_message:
         record_token_usage_for_message(
             session_id=session_id,
@@ -571,6 +585,7 @@ def codex_session_message_stream(session_id):
         prompt_with_context,
         model_override=model_override,
         reasoning_override=reasoning_override,
+        plan_mode=plan_mode,
     )
     if not start_result.get('ok'):
         if start_result.get('already_running'):
@@ -586,7 +601,9 @@ def codex_session_message_stream(session_id):
     return jsonify({
         'stream_id': start_result.get('stream_id'),
         'started_at': start_result.get('started_at'),
-        'user_message': start_result.get('user_message')
+        'user_message': start_result.get('user_message'),
+        'response_mode': start_result.get('response_mode'),
+        'response_model': start_result.get('response_model'),
     })
 
 
@@ -624,6 +641,8 @@ def codex_session_message_queue(session_id):
         response['stream_id'] = result.get('stream_id')
         response['started_at'] = result.get('started_at')
         response['user_message'] = result.get('user_message')
+        response['response_mode'] = result.get('response_mode')
+        response['response_model'] = result.get('response_model')
     return jsonify(response)
 
 

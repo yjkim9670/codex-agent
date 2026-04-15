@@ -6661,7 +6661,7 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         mainBranch: 'main',
         mainBranchFallback: false,
         remoteName: 'origin',
-        remoteMainRef: 'origin/main',
+        remoteMainRef: 'origin/(unknown)',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
         windowsInvalidFiles: [],
@@ -6698,6 +6698,35 @@ function setGitSyncHistoryCache(repoTarget, partial = {}) {
     };
     gitSyncHistoryCacheByTarget[target] = next;
     return next;
+}
+
+function normalizeGitSyncBranchName(value, { allowDetached = false } = {}) {
+    const branch = typeof value === 'string' ? value.trim() : '';
+    if (!branch) return '';
+    const lowered = branch.toLowerCase();
+    if (!allowDetached && (lowered === 'head' || lowered.startsWith('detached@'))) {
+        return '';
+    }
+    return branch;
+}
+
+function resolveGitSyncRequestBranch(repoTarget, preferredBranch = '') {
+    const explicitBranch = normalizeGitSyncBranchName(preferredBranch);
+    if (explicitBranch) {
+        return explicitBranch;
+    }
+    const cache = getGitSyncHistoryCache(repoTarget);
+    const cachedBranch = normalizeGitSyncBranchName(cache?.currentBranch);
+    if (cachedBranch) {
+        return cachedBranch;
+    }
+    if (normalizeGitSyncRepoTarget(repoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
+        const workspaceBranch = normalizeGitSyncBranchName(gitBranchStatusCache?.branch);
+        if (workspaceBranch) {
+            return workspaceBranch;
+        }
+    }
+    return '';
 }
 
 function getGitSyncOverlayElements() {
@@ -6910,7 +6939,7 @@ function renderGitSyncOverlay(history) {
     const currentBranch = typeof history?.currentBranch === 'string' ? history.currentBranch.trim() : '';
     const remoteMainRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
         ? history.remoteMainRef.trim()
-        : 'origin/main';
+        : 'origin/(unknown)';
     const requestedMainBranch = typeof history?.requestedMainBranch === 'string'
         ? history.requestedMainBranch.trim()
         : 'main';
@@ -10077,9 +10106,13 @@ function openFileBrowserFromAbsolutePath(absolutePath, options = {}) {
     return true;
 }
 
-async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRepoTarget) {
+async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRepoTarget, options = {}) {
     const target = normalizeGitSyncRepoTarget(repoTarget);
     const cache = getGitSyncHistoryCache(target);
+    const requestedBranch = resolveGitSyncRequestBranch(
+        target,
+        options && typeof options === 'object' ? options.branch : ''
+    ) || 'main';
     const now = Date.now();
     if (!force && cache.fetchedAt) {
         const delta = now - cache.fetchedAt;
@@ -10099,7 +10132,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             body: JSON.stringify({
                 repo_target: target,
                 remote: 'origin',
-                branch: 'main',
+                branch: requestedBranch,
                 limit: 10
             })
         });
@@ -10150,8 +10183,8 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
         const cached = setGitSyncHistoryCache(target, {
             repoRoot: '',
             repoMissing: isRepoMissing,
-            currentBranch: '',
-            currentBranchHistory: [],
+            currentBranch: resolveGitSyncRequestBranch(target),
+            currentBranchHistory: getGitSyncHistoryCache(target).currentBranchHistory || [],
             remoteMainHistory: [],
             remoteMainHistoryError: isRepoMissing ? '현재 repository: None' : message,
             windowsInvalidFiles: [],
@@ -10177,10 +10210,15 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
     const target = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
     try {
-        const [history, status] = await Promise.all([
-            fetchGitSyncHistory(force, target),
-            fetchGitStatusForRepoTarget(target, force).catch(() => null)
-        ]);
+        const status = await fetchGitStatusForRepoTarget(target, force).catch(() => null);
+        const statusBranchRaw = normalizeGitSyncBranchName(status?.branch, { allowDetached: true });
+        const statusBranch = normalizeGitSyncBranchName(status?.branch);
+        if (statusBranchRaw) {
+            setGitSyncHistoryCache(target, { currentBranch: statusBranchRaw });
+        }
+        const history = await fetchGitSyncHistory(force, target, {
+            branch: statusBranch
+        });
         const statusFiles = normalizeGitChangedFiles(status?.changedFiles);
         const historyFiles = normalizeGitChangedFiles(history?.changedFiles);
         const mergedFiles = statusFiles.length ? statusFiles : historyFiles;
@@ -10206,6 +10244,7 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
             ? normalizeGitWindowsPathIssueState(status?.hasWindowsPathIssues, windowsInvalidCount)
             : normalizeGitWindowsPathIssueState(history?.hasWindowsPathIssues, windowsInvalidCount);
         const merged = setGitSyncHistoryCache(target, {
+            currentBranch: statusBranchRaw || normalizeGitSyncBranchName(history?.currentBranch, { allowDetached: true }),
             changedCount: Number.isFinite(changedCount) ? changedCount : mergedFiles.length,
             changedFiles: mergedFiles,
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : history?.aheadCount,
@@ -10693,6 +10732,25 @@ async function handleGitSync(button, options = {}) {
     const requestTimeoutMs = applyAfterFetch
         ? GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS
         : GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS;
+    const syncStatus = await fetchGitStatusForRepoTarget(repoTarget, true).catch(() => null);
+    const statusBranchRaw = normalizeGitSyncBranchName(syncStatus?.branch, { allowDetached: true });
+    if (statusBranchRaw) {
+        setGitSyncHistoryCache(repoTarget, { currentBranch: statusBranchRaw });
+    }
+    let branchName = normalizeGitSyncBranchName(syncStatus?.branch);
+    if (!branchName) {
+        branchName = resolveGitSyncRequestBranch(
+            repoTarget,
+            options && typeof options === 'object' ? options.branch : ''
+        );
+    }
+    if (!branchName && applyAfterFetch) {
+        showToast(`${repoLabel} · 현재 브랜치를 확인할 수 없어 fast-forward를 적용할 수 없습니다.`, {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return;
+    }
 
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, applyAfterFetch ? 'Fetch + fast-forward...' : 'Fetching...');
@@ -10704,7 +10762,7 @@ async function handleGitSync(button, options = {}) {
             body: JSON.stringify({
                 repo_target: repoTarget,
                 remote: 'origin',
-                branch: 'main',
+                branch: branchName || '',
                 apply_after_fetch: applyAfterFetch
             })
         });
@@ -10712,7 +10770,7 @@ async function handleGitSync(button, options = {}) {
         const suffix = summary ? `: ${summary}` : '';
         const syncTarget = typeof result?.sync_target === 'string' && result.sync_target.trim()
             ? result.sync_target.trim()
-            : 'origin/main';
+            : (branchName ? `origin/${branchName}` : 'origin/(unknown)');
         if (applyAfterFetch) {
             showToast(`${repoLabel} · ${syncTarget} fetch + fast-forward 완료${suffix}`, {
                 tone: 'success',
@@ -11218,9 +11276,7 @@ function renderMessages(messages) {
         const timestampValue = getMessageTimestampValue(message);
         setMessageWrapperIdentity(wrapper, roleClass, timestampValue);
 
-        const label = getRoleLabel(message?.role);
-        const timestamp = formatTimestamp(timestampValue);
-        const metaText = timestamp ? `${label} - ${timestamp}` : label;
+        const metaText = buildMessageMetaText(roleClass, timestampValue, message);
         const meta = buildMessageMeta(metaText, wrapper);
 
         const bubble = document.createElement('div');
@@ -11280,9 +11336,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     const timestampValue = getMessageTimestampValue(message);
     setMessageWrapperIdentity(wrapper, role, timestampValue);
 
-    const label = getRoleLabel(role);
-    const timestamp = formatTimestamp(timestampValue);
-    const metaText = timestamp ? `${label} - ${timestamp}` : label;
+    const metaText = buildMessageMetaText(role, timestampValue, message);
     const meta = buildMessageMeta(metaText, wrapper);
 
     const bubble = document.createElement('div');
@@ -11402,7 +11456,17 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {})
         ? Math.max(0, Number(result.queue_count))
         : 0;
     if (result?.started && result?.stream_id) {
-        processStartedStreamResponse(sessionId, prompt, result, Date.now());
+        processStartedStreamResponse(
+            sessionId,
+            prompt,
+            result,
+            Date.now(),
+            resolveRequestResponseMetadata({
+                planMode,
+                responseMode: result?.response_mode,
+                responseModel: result?.response_model
+            })
+        );
         return {
             ok: true,
             reason: 'started',
@@ -11591,7 +11655,13 @@ function cancelPendingSend(sessionId) {
     return true;
 }
 
-function processStartedStreamResponse(sessionId, prompt, result, startedAtFallback = Date.now()) {
+function processStartedStreamResponse(
+    sessionId,
+    prompt,
+    result,
+    startedAtFallback = Date.now(),
+    responseMetadata = {}
+) {
     const userMessage = result?.user_message;
     if (userMessage) {
         appendMessageToDOMIfActive(sessionId, userMessage, 'user');
@@ -11606,7 +11676,9 @@ function processStartedStreamResponse(sessionId, prompt, result, startedAtFallba
     const assistantEntry = appendMessageToDOMIfActive(sessionId, {
         role: 'assistant',
         content: '',
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        response_mode: responseMetadata?.response_mode,
+        response_model: responseMetadata?.response_model
     }, 'assistant');
 
     const streamId = result?.stream_id;
@@ -11661,7 +11733,17 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             err.payload = result;
             throw err;
         }
-        processStartedStreamResponse(sessionId, prompt, result, startedAt);
+        processStartedStreamResponse(
+            sessionId,
+            prompt,
+            result,
+            startedAt,
+            resolveRequestResponseMetadata({
+                planMode,
+                responseMode: result?.response_mode,
+                responseModel: result?.response_model
+            })
+        );
         return { ok: true, reason: 'started', sessionId };
     } catch (error) {
         clearPendingSend(sessionId);
@@ -11958,7 +12040,8 @@ async function finishStream(streamId, result) {
         setMessageMetaLabel(
             stream.entry.meta,
             savedMessage.role || 'assistant',
-            getMessageTimestampValue(savedMessage)
+            getMessageTimestampValue(savedMessage),
+            savedMessage
         );
     }
     const savedDurationMs = Number(savedMessage?.duration_ms);
@@ -12103,13 +12186,11 @@ function getMessageTimestampValue(message) {
     return message.completed_at || message.created_at || '';
 }
 
-function setMessageMetaLabel(meta, role, timestampValue) {
+function setMessageMetaLabel(meta, role, timestampValue, message = null) {
     if (!meta) return;
     const textElement = meta.querySelector('.message-meta-text');
     if (!textElement) return;
-    const label = getRoleLabel(role);
-    const timestamp = formatTimestamp(timestampValue);
-    textElement.textContent = timestamp ? `${label} - ${timestamp}` : label;
+    textElement.textContent = buildMessageMetaText(role, timestampValue, message);
     setMessageWrapperIdentity(meta.closest('.message'), role, timestampValue);
 }
 
@@ -12119,6 +12200,57 @@ function getRoleLabel(role) {
     if (role === 'system') return 'System';
     if (role === 'error') return 'Error';
     return 'Message';
+}
+
+function normalizeResponseModeLabel(value) {
+    const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return normalized === 'plan' ? 'plan' : 'basic';
+}
+
+function resolveResponseModeText(modeLabel) {
+    return normalizeResponseModeLabel(modeLabel) === 'plan' ? 'plan모드' : '기본모드';
+}
+
+function resolveResponseModelForRequest(planMode = false) {
+    const defaultModel = typeof state.settings?.model === 'string'
+        ? state.settings.model.trim()
+        : '';
+    const planModeModel = typeof state.settings?.planModeModel === 'string'
+        ? state.settings.planModeModel.trim()
+        : '';
+    if (planMode) {
+        return planModeModel || defaultModel || 'codex-default';
+    }
+    return defaultModel || 'codex-default';
+}
+
+function resolveRequestResponseMetadata({ planMode = false, responseMode = '', responseModel = '' } = {}) {
+    const normalizedMode = normalizeResponseModeLabel(responseMode || (planMode ? 'plan' : 'basic'));
+    const normalizedModel = typeof responseModel === 'string' ? responseModel.trim() : '';
+    return {
+        response_mode: normalizedMode,
+        response_model: normalizedModel || resolveResponseModelForRequest(normalizedMode === 'plan')
+    };
+}
+
+function buildMessageMetaText(role, timestampValue, message = null) {
+    let label = getRoleLabel(role);
+    if (role === 'assistant' && message && typeof message === 'object') {
+        const hasResponseMetadata = Object.prototype.hasOwnProperty.call(message, 'response_mode')
+            || Object.prototype.hasOwnProperty.call(message, 'response_model');
+        if (hasResponseMetadata) {
+            const modeValue = resolveResponseModeText(message.response_mode);
+            const modelValue = typeof message.response_model === 'string'
+                ? message.response_model.trim()
+                : '';
+            const modeModelLabel = modelValue ? `${modeValue} · ${modelValue}` : modeValue;
+            if (modeModelLabel) {
+                label = `${label} · ${modeModelLabel}`;
+            }
+        }
+    }
+    const timestamp = formatTimestamp(timestampValue);
+    return timestamp ? `${label} - ${timestamp}` : label;
 }
 
 function getChatMessagesContainer() {

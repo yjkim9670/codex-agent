@@ -428,7 +428,7 @@ def _remote_branch_exists(repo_root, env, remote_name, branch_name):
     return bool((result.stdout or '').strip())
 
 
-def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch=''):
+def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch='', allow_fallback=True):
     remote = _normalize_remote_name(repo_root, env, remote_name)
     if not remote:
         return '', '', False
@@ -437,6 +437,8 @@ def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch=''):
     if preferred:
         preferred_exists = _remote_branch_exists(repo_root, env, remote, preferred)
         if preferred_exists is True:
+            return remote, preferred, False
+        if not allow_fallback:
             return remote, preferred, False
 
     local_head_branch = _read_local_remote_head_branch(repo_root, env, remote)
@@ -1371,7 +1373,7 @@ def _to_bool(value):
 
 def _parse_history_request(payload):
     requested_remote = str(payload.get('remote') or '').strip() or 'origin'
-    requested_branch = str(payload.get('branch') or '').strip() or 'main'
+    requested_branch = str(payload.get('branch') or '').strip()
     try:
         limit = int(payload.get('limit') or 20)
     except (TypeError, ValueError):
@@ -1384,13 +1386,13 @@ def _build_history_unavailable_result(
     repo_target,
     started_at,
     requested_remote='origin',
-    requested_branch='main',
+    requested_branch='',
     limit=20,
     error_message=''
 ):
     remote_name = str(requested_remote or '').strip() or 'origin'
-    branch_name = str(requested_branch or '').strip() or 'main'
-    remote_ref = f'{remote_name}/{branch_name}'
+    branch_name = str(requested_branch or '').strip()
+    remote_ref = f'{remote_name}/{branch_name}' if branch_name else f'{remote_name}/(unknown)'
     reason = str(error_message or '').strip() or 'git 저장소를 찾을 수 없습니다.'
     return {
         'ok': True,
@@ -1664,6 +1666,7 @@ def run_git_action(action, payload=None):
             if action == 'sync':
                 requested_remote = str(payload.get('remote') or '').strip()
                 requested_branch = str(payload.get('branch') or '').strip()
+                explicit_branch_requested = bool(requested_branch)
                 sync_apply_requested = _to_bool(
                     payload.get('apply_after_fetch')
                     if 'apply_after_fetch' in payload
@@ -1689,11 +1692,14 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     remote_name,
-                    requested_branch
+                    requested_branch,
+                    allow_fallback=not explicit_branch_requested
                 )
                 remote_name = resolved_remote or remote_name
-                branch_name = resolved_branch or requested_branch
+                branch_name = requested_branch if explicit_branch_requested else (resolved_branch or requested_branch)
                 sync_target = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+                if explicit_branch_requested and sync_target and not _ref_exists(repo_root, env, sync_target):
+                    return {'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. 원격 브랜치 이름을 확인해주세요.'}
 
                 sync_apply_ok = False
                 sync_apply_exit_code = -1
@@ -1707,7 +1713,7 @@ def run_git_action(action, payload=None):
                         return {'error': '동기화 대상 원격 브랜치를 확인할 수 없습니다.'}
                     if not _ref_exists(repo_root, env, sync_target):
                         return {'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. fetch 후 브랜치를 다시 확인해주세요.'}
-                    merge_cmd = ['git', '-C', str(repo_root), 'merge', '--ff-only', sync_target]
+                    merge_cmd = ['git', '-C', str(repo_root), 'merge', '--ff-only', '--autostash', sync_target]
                     merge_result, merge_error = _run_checked(
                         merge_cmd,
                         repo_root,
@@ -1762,17 +1768,18 @@ def run_git_action(action, payload=None):
 
             if action == 'history':
                 requested_remote, requested_branch, limit = _parse_history_request(payload)
-
+                explicit_branch_requested = bool(requested_branch)
                 current_branch = _read_current_branch(repo_root, env) or 'HEAD'
                 resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
                     repo_root,
                     env,
                     requested_remote,
-                    requested_branch
+                    requested_branch,
+                    allow_fallback=not explicit_branch_requested
                 )
                 remote_name = resolved_remote or requested_remote
-                branch_name = resolved_branch or requested_branch
-                remote_ref = f'{remote_name}/{branch_name}'
+                branch_name = requested_branch if explicit_branch_requested else (resolved_branch or requested_branch)
+                remote_ref = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
 
                 current_branch_history, current_error = _read_commit_history(
                     repo_root,
@@ -1785,7 +1792,7 @@ def run_git_action(action, payload=None):
 
                 remote_history = []
                 remote_history_error = ''
-                if _ref_exists(repo_root, env, remote_ref):
+                if remote_ref and _ref_exists(repo_root, env, remote_ref):
                     remote_history, remote_error = _read_commit_history(
                         repo_root,
                         env,
@@ -1796,17 +1803,22 @@ def run_git_action(action, payload=None):
                         remote_history_error = remote_error.get('error') or f'{remote_ref} 이력을 불러오지 못했습니다.'
                         remote_history = []
                 else:
-                    remote_history_error = (
-                        f'{remote_ref} 레퍼런스를 아직 찾을 수 없습니다. 먼저 fetch를 실행해 최신 원격 정보를 가져오세요.'
-                    )
+                    if remote_ref:
+                        remote_history_error = (
+                            f'{remote_ref} 레퍼런스를 아직 찾을 수 없습니다. 먼저 fetch를 실행해 최신 원격 정보를 가져오세요.'
+                        )
+                    else:
+                        remote_history_error = '동기화 대상 원격 브랜치를 확인할 수 없습니다.'
 
-                ahead_count, behind_count = _read_divergence_counts(repo_root, env, 'HEAD', remote_ref)
+                ahead_count, behind_count = (None, None)
+                if remote_ref:
+                    ahead_count, behind_count = _read_divergence_counts(repo_root, env, 'HEAD', remote_ref)
 
                 return _build_result(
                     repo_root,
                     env,
                     started_at,
-                    command=f'git log --max-count={limit} HEAD / {remote_ref}',
+                    command=f"git log --max-count={limit} HEAD / {remote_ref or '(unknown remote branch)'}",
                     exit_code=0,
                     stdout='',
                     stderr='',

@@ -149,6 +149,8 @@ _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
     re.IGNORECASE
 )
+_RESPONSE_MODE_BASIC = 'basic'
+_RESPONSE_MODE_PLAN = 'plan'
 
 
 def _normalize_pending_queue_entry(entry):
@@ -542,6 +544,33 @@ def _read_codex_config_text():
 def _normalize_model_setting(value):
     normalized = normalize_codex_model_name(value)
     return normalized or None
+
+
+def _normalize_response_mode_label(mode_label):
+    value = str(mode_label or '').strip().lower()
+    if value == _RESPONSE_MODE_PLAN:
+        return _RESPONSE_MODE_PLAN
+    return _RESPONSE_MODE_BASIC
+
+
+def resolve_response_mode_label(plan_mode=False):
+    return _RESPONSE_MODE_PLAN if bool(plan_mode) else _RESPONSE_MODE_BASIC
+
+
+def resolve_response_model_name(model_override=None):
+    model_name = ''
+    if model_override is not None:
+        model_name = str(model_override).strip()
+    if not model_name:
+        settings = get_settings()
+        model_name = str(settings.get('model') or '').strip()
+    return model_name or 'codex-default'
+
+
+def format_assistant_response_content(content, mode_label='basic', model_name=''):
+    del mode_label
+    del model_name
+    return str(content or '').strip()
 
 
 def _read_workspace_settings():
@@ -3691,10 +3720,12 @@ def _run_codex_stream(stream_id, prompt):
     finalize_codex_stream(stream_id)
 
 
-def create_codex_stream(session_id, prompt, model_override=None, reasoning_override=None):
+def create_codex_stream(session_id, prompt, model_override=None, reasoning_override=None, plan_mode=False):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
+    response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    response_model = resolve_response_model_name(model_override=model_override)
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -3719,6 +3750,9 @@ def create_codex_stream(session_id, prompt, model_override=None, reasoning_overr
         'cli_runtime_ms': None,
         'model_override': (str(model_override).strip() if model_override is not None else '') or None,
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
+        'plan_mode': bool(plan_mode),
+        'response_mode': response_mode,
+        'response_model': response_model,
         'json_output': True,
         'output_length': 0,
         'error_length': 0,
@@ -3737,7 +3771,9 @@ def create_codex_stream(session_id, prompt, model_override=None, reasoning_overr
     return {
         'id': stream_id,
         'started_at': int(created_at * 1000),
-        'created_at': int(created_at * 1000)
+        'created_at': int(created_at * 1000),
+        'response_mode': response_mode,
+        'response_model': response_model,
     }
 
 
@@ -3801,7 +3837,8 @@ def _start_codex_stream_for_session_locked(
         prompt,
         prompt_with_context,
         model_override=None,
-        reasoning_override=None):
+        reasoning_override=None,
+        plan_mode=False):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -3823,12 +3860,15 @@ def _start_codex_stream_for_session_locked(
         prompt_with_context,
         model_override=model_override,
         reasoning_override=reasoning_override,
+        plan_mode=plan_mode,
     )
     return {
         'ok': True,
         'stream_id': stream_info.get('id'),
         'started_at': stream_info.get('started_at') or stream_info.get('created_at'),
-        'user_message': user_message
+        'user_message': user_message,
+        'response_mode': stream_info.get('response_mode'),
+        'response_model': stream_info.get('response_model'),
     }
 
 
@@ -3911,6 +3951,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             prompt_with_context,
             model_override=model_override,
             reasoning_override=reasoning_override,
+            plan_mode=plan_mode,
         )
         if not start_result.get('ok'):
             return start_result
@@ -3932,7 +3973,8 @@ def start_codex_stream_for_session(
         prompt,
         prompt_with_context,
         model_override=None,
-        reasoning_override=None):
+        reasoning_override=None,
+        plan_mode=False):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -3941,6 +3983,7 @@ def start_codex_stream_for_session(
             prompt_with_context,
             model_override=model_override,
             reasoning_override=reasoning_override,
+            plan_mode=plan_mode,
         )
 
 
@@ -4135,6 +4178,10 @@ def finalize_codex_stream(stream_id):
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
+        response_mode = _normalize_response_mode_label(stream.get('response_mode'))
+        response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
+            model_override=stream.get('model_override')
+        )
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -4149,6 +4196,10 @@ def finalize_codex_stream(stream_id):
         cli_started_at=cli_started_at,
     )
     metadata = _attach_token_usage_metadata(metadata, token_usage)
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata['response_mode'] = response_mode
+    metadata['response_model'] = response_model
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
         finalize_lag_ms = metadata.get('finalize_lag_ms')
@@ -4162,14 +4213,17 @@ def finalize_codex_stream(stream_id):
     final_output = output_last_message or output
     work_details = _build_work_details(output, final_output, error)
     if work_details:
-        if not isinstance(metadata, dict):
-            metadata = {}
         metadata['work_details'] = work_details
     if exit_code == 0:
+        formatted_output = format_assistant_response_content(
+            final_output,
+            mode_label=response_mode,
+            model_name=response_model,
+        )
         saved_message = append_message(
             session_id,
             'assistant',
-            final_output,
+            formatted_output,
             metadata,
             created_at=created_at_value
         )
@@ -4225,6 +4279,10 @@ def stop_codex_stream(stream_id):
         completed_at = stream.get('completed_at')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
+        response_mode = _normalize_response_mode_label(stream.get('response_mode'))
+        response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
+            model_override=stream.get('model_override')
+        )
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -4257,10 +4315,12 @@ def stop_codex_stream(stream_id):
         cli_started_at=cli_started_at,
     )
     metadata = _attach_token_usage_metadata(metadata, token_usage)
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata['response_mode'] = response_mode
+    metadata['response_model'] = response_model
     work_details = _build_work_details(output, output_last_message or output, error)
     if work_details:
-        if not isinstance(metadata, dict):
-            metadata = {}
         metadata['work_details'] = work_details
     saved_message = append_message(
         session_id,

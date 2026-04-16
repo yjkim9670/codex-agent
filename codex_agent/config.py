@@ -204,6 +204,10 @@ CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
 CODEX_API_ONLY_MODE = _parse_bool_env('CODEX_API_ONLY_MODE', default=False)
 CODEX_ENABLE_FILES_API = _parse_bool_env('CODEX_ENABLE_FILES_API', default=True)
 CODEX_ENABLE_GIT_API = _parse_bool_env('CODEX_ENABLE_GIT_API', default=True)
+CODEX_ENABLE_LEGACY_STATE_IMPORT = _parse_bool_env(
+    'CODEX_ENABLE_LEGACY_STATE_IMPORT',
+    default=False,
+)
 CODEX_SKIP_GIT_REPO_CHECK = _parse_bool_env('CODEX_SKIP_GIT_REPO_CHECK', default=False)
 
 KST = timezone(timedelta(hours=9))

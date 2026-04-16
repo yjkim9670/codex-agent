@@ -22,6 +22,7 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    CODEX_ENABLE_LEGACY_STATE_IMPORT,
     LEGACY_CODEX_CHAT_STORE_PATH,
     LEGACY_CODEX_SETTINGS_PATH,
     LEGACY_CODEX_TOKEN_USAGE_PATH,
@@ -229,10 +230,17 @@ def _iter_codex_state_candidate_paths(primary_path, legacy_path=None):
     primary = Path(primary_path)
     candidates = []
     _append_unique_path(candidates, primary)
-    _append_unique_path(candidates, legacy_path)
-    _append_unique_path(candidates, WORKSPACE_DIR / '.agent_state' / primary.name)
-    if _uses_parent_workspace_storage_layout():
-        _append_unique_path(candidates, _standard_workspace_storage_dir() / primary.name)
+    try:
+        primary_exists = primary.exists()
+    except Exception:
+        primary_exists = False
+
+    import_legacy = bool(CODEX_ENABLE_LEGACY_STATE_IMPORT) or not primary_exists
+    if import_legacy:
+        _append_unique_path(candidates, legacy_path)
+        _append_unique_path(candidates, WORKSPACE_DIR / '.agent_state' / primary.name)
+        if _uses_parent_workspace_storage_layout():
+            _append_unique_path(candidates, _standard_workspace_storage_dir() / primary.name)
     return candidates
 
 
@@ -286,11 +294,70 @@ def _message_identity(message):
     return ('fallback', role, created_at, content)
 
 
+def _safe_deepcopy(value):
+    try:
+        return deepcopy(value)
+    except RecursionError:
+        return value
+    except Exception:
+        return value
+
+
+def _looks_like_message_record(value):
+    if not isinstance(value, dict):
+        return False
+    return any(key in value for key in ('id', 'role', 'content', 'created_at'))
+
+
+def _unwrap_nested_message_wrapper(message):
+    if not isinstance(message, dict):
+        return None
+    current = message
+    unwrap_count = 0
+    while isinstance(current, dict):
+        nested = current.get('message')
+        if not isinstance(nested, dict):
+            break
+        # Corrupted records can contain wrapper layers like
+        # {'message': {...}, 'sort_key': ...} repeated many times.
+        if not _looks_like_message_record(nested):
+            break
+        wrapper_like = 'sort_key' in current or _looks_like_message_record(current)
+        if not wrapper_like:
+            break
+        current = nested
+        unwrap_count += 1
+        if unwrap_count >= 2048:
+            break
+    if unwrap_count > 0:
+        _LOGGER.warning('Unwrapped nested message wrapper depth=%s', unwrap_count)
+    return current if isinstance(current, dict) else None
+
+
+def _sanitize_message_record(message):
+    base = _unwrap_nested_message_wrapper(message)
+    if not isinstance(base, dict):
+        return None
+    sanitized = {}
+    for key, value in base.items():
+        if key == 'sort_key':
+            continue
+        if key == 'message' and isinstance(value, dict) and _looks_like_message_record(value):
+            # Drop wrapper residue if one remains after unwrapping.
+            continue
+        sanitized[key] = _safe_deepcopy(value)
+    if _is_blank_merge_value(sanitized.get('content')):
+        sanitized['content'] = str(base.get('content') or '')
+    return sanitized
+
+
 def _merge_message_records(existing, incoming):
+    existing = _sanitize_message_record(existing)
+    incoming = _sanitize_message_record(incoming)
     if not isinstance(existing, dict):
-        return deepcopy(incoming) if isinstance(incoming, dict) else None
+        return _safe_deepcopy(incoming) if isinstance(incoming, dict) else None
     if not isinstance(incoming, dict):
-        return deepcopy(existing)
+        return _safe_deepcopy(existing)
 
     existing_time = _normalized_time_sort_key(existing.get('created_at'))
     incoming_time = _normalized_time_sort_key(incoming.get('created_at'))
@@ -303,10 +370,10 @@ def _merge_message_records(existing, incoming):
     )
     primary = incoming if prefer_incoming else existing
     secondary = existing if prefer_incoming else incoming
-    merged = deepcopy(primary)
+    merged = _safe_deepcopy(primary)
     for key, value in secondary.items():
         if key not in merged or _is_blank_merge_value(merged.get(key)):
-            merged[key] = deepcopy(value)
+            merged[key] = _safe_deepcopy(value)
     if _is_blank_merge_value(merged.get('content')):
         merged['content'] = str(existing.get('content') or incoming.get('content') or '')
     return merged
@@ -318,13 +385,23 @@ def _merge_message_lists(existing_messages, incoming_messages):
         if not isinstance(messages, list):
             continue
         for message_index, message in enumerate(messages):
-            if not isinstance(message, dict):
+            normalized_message = _sanitize_message_record(message)
+            if not isinstance(normalized_message, dict):
                 continue
-            identity = _message_identity(message)
+            identity = _message_identity(normalized_message)
             if identity is None:
                 identity = ('anon', source_index, message_index)
-            current = merged.get(identity)
-            merged_record = _merge_message_records(current, message) if current else deepcopy(message)
+            current_entry = merged.get(identity)
+            current_message = (
+                current_entry.get('message')
+                if isinstance(current_entry, dict)
+                else None
+            )
+            merged_record = (
+                _merge_message_records(current_message, normalized_message)
+                if current_message
+                else _safe_deepcopy(normalized_message)
+            )
             merged[identity] = {
                 'message': merged_record,
                 'sort_key': (
@@ -433,10 +510,25 @@ def _load_session_store_payload_from_path(path):
     for session in sessions:
         if not isinstance(session, dict):
             continue
-        session_copy = deepcopy(session)
-        messages = session_copy.get('messages', [])
-        if not isinstance(messages, list):
+        session_copy = {}
+        for key, value in session.items():
+            if key in {'messages', _PENDING_QUEUE_KEY}:
+                continue
+            session_copy[key] = _safe_deepcopy(value)
+        raw_messages = session.get('messages', [])
+        if isinstance(raw_messages, list):
+            messages = []
+            for message in raw_messages:
+                normalized_message = _sanitize_message_record(message)
+                if normalized_message is not None:
+                    messages.append(normalized_message)
+            session_copy['messages'] = messages
+        else:
             session_copy['messages'] = []
+
+        raw_pending_queue = session.get(_PENDING_QUEUE_KEY, [])
+        if isinstance(raw_pending_queue, list):
+            session_copy[_PENDING_QUEUE_KEY] = _safe_deepcopy(raw_pending_queue)
         _normalize_session_pending_queue(session_copy)
         normalized_sessions.append(session_copy)
     return {'sessions': normalized_sessions}

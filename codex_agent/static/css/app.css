@@ -79,6 +79,12 @@
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
+    --session-response-basic-bg: rgba(15, 76, 129, 0.12);
+    --session-response-basic-border: rgba(15, 76, 129, 0.26);
+    --session-response-basic-text: #0f4c81;
+    --session-response-plan-bg: rgba(202, 90, 31, 0.14);
+    --session-response-plan-border: rgba(202, 90, 31, 0.3);
+    --session-response-plan-text: #9f4616;
     --font-session-list-title: "Pretendard", "Inter", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
     --font-chat-title: "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", "Times New Roman", serif;
     --font-code-block: "Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "JetBrains Mono", "SF Mono", Menlo, monospace;
@@ -147,6 +153,12 @@
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
+    --session-response-basic-bg: rgba(123, 143, 163, 0.18);
+    --session-response-basic-border: rgba(123, 143, 163, 0.34);
+    --session-response-basic-text: #d6e3ee;
+    --session-response-plan-bg: rgba(242, 177, 120, 0.16);
+    --session-response-plan-border: rgba(242, 177, 120, 0.32);
+    --session-response-plan-text: #f3cba8;
 }
 
 * {
@@ -2038,9 +2050,18 @@ body {
     line-height: 1.4;
 }
 
+.mobile-session-list .session-footer {
+    gap: 10px;
+}
+
 .mobile-session-list .session-actions {
     justify-content: flex-end;
     gap: 8px;
+}
+
+.mobile-session-list .session-response-mode {
+    font-size: 12px;
+    min-height: 26px;
 }
 
 .mobile-session-list .session-action {
@@ -3592,6 +3613,10 @@ body.is-work-mode-resizing * {
     color: var(--text-tertiary);
 }
 
+.session-meta-text {
+    min-width: 0;
+}
+
 .session-spinner {
     position: relative;
     flex: 0 0 auto;
@@ -3626,6 +3651,50 @@ body.is-work-mode-resizing * {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.session-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.session-response-mode {
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    padding: 4px 10px;
+    min-height: 24px;
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    cursor: default;
+}
+
+.session-response-mode:disabled {
+    opacity: 1;
+    cursor: default;
+}
+
+.session-response-mode.is-basic {
+    background: var(--session-response-basic-bg);
+    border-color: var(--session-response-basic-border);
+    color: var(--session-response-basic-text);
+}
+
+.session-response-mode.is-plan {
+    background: var(--session-response-plan-bg);
+    border-color: var(--session-response-plan-border);
+    color: var(--session-response-plan-text);
 }
 
 .session-action {

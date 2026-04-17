@@ -2559,6 +2559,22 @@ def _has_user_message(session):
     return any(message.get('role') == 'user' for message in session.get('messages', []))
 
 
+def _resolve_session_last_response_mode(session):
+    if not isinstance(session, dict):
+        return None
+    messages = session.get('messages', [])
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get('role') or '').strip().lower()
+        if role not in ('assistant', 'error'):
+            continue
+        return _normalize_response_mode_label(message.get('response_mode'))
+    return None
+
+
 def generate_session_title(prompt):
     normalized = ' '.join(str(prompt or '').strip().split())
     if not normalized:
@@ -2575,6 +2591,7 @@ def list_sessions():
     for session in sessions:
         usage = _estimate_session_token_usage(session)
         pending_queue_count = _count_pending_queue_items(session)
+        last_response_mode = _resolve_session_last_response_mode(session)
         summary.append({
             'id': session.get('id'),
             'title': session.get('title') or 'New session',
@@ -2582,6 +2599,7 @@ def list_sessions():
             'updated_at': session.get('updated_at'),
             'message_count': len(session.get('messages', [])),
             'pending_queue_count': pending_queue_count,
+            'last_response_mode': last_response_mode,
             'token_count': usage.get('total_tokens', 0),
             'input_token_count': usage.get('input_tokens', 0),
             'cached_input_token_count': usage.get('cached_input_tokens', 0),
@@ -2607,6 +2625,7 @@ def get_session(session_id):
     session_copy[_PENDING_QUEUE_KEY] = pending_queue
     session_copy['pending_queue_count'] = len(pending_queue)
     session_copy['message_count'] = len(messages)
+    session_copy['last_response_mode'] = _resolve_session_last_response_mode(session_copy)
     session_copy['token_count'] = usage.get('total_tokens', 0)
     session_copy['input_token_count'] = usage.get('input_tokens', 0)
     session_copy['cached_input_token_count'] = usage.get('cached_input_tokens', 0)

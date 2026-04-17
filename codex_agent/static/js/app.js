@@ -11051,6 +11051,7 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         const count = resolveSessionMessageCount(session);
         const tokenSummary = formatSessionTokenSummary(session);
         const metaText = document.createElement('span');
+        metaText.className = 'session-meta-text';
         const metaParts = [];
         if (updated) {
             metaParts.push(`Updated ${updated}`);
@@ -11078,6 +11079,13 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
             await loadSession(session.id);
         });
 
+        const footer = document.createElement('div');
+        footer.className = 'session-footer';
+        const responseModeBadge = createSessionResponseModeBadge(session);
+        if (responseModeBadge) {
+            footer.appendChild(responseModeBadge);
+        }
+
         const actions = document.createElement('div');
         actions.className = 'session-actions';
 
@@ -11102,8 +11110,9 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         actions.appendChild(renameBtn);
         actions.appendChild(deleteBtn);
 
+        footer.appendChild(actions);
         item.appendChild(selectBtn);
-        item.appendChild(actions);
+        item.appendChild(footer);
         list.appendChild(item);
     });
 }
@@ -11200,12 +11209,14 @@ function upsertSessionSummary(session) {
     const resolvedCount = Number.isFinite(Number(session.message_count))
         ? Math.max(0, Math.round(Number(session.message_count)))
         : fallbackMessages.length;
+    const lastResponseMode = resolveSessionLastResponseMode(session);
     const summary = {
         id: session.id,
         title: session.title || 'New session',
         created_at: session.created_at,
         updated_at: session.updated_at,
         message_count: resolvedCount,
+        last_response_mode: lastResponseMode || null,
         token_count: usage.totalTokens,
         input_token_count: usage.inputTokens,
         cached_input_token_count: usage.cachedInputTokens,
@@ -12288,8 +12299,43 @@ function normalizeResponseModeLabel(value) {
     return normalized === 'plan' ? 'plan' : 'basic';
 }
 
+function resolveSessionLastResponseMode(session) {
+    const explicitMode = typeof session?.last_response_mode === 'string'
+        ? session.last_response_mode.trim()
+        : '';
+    if (explicitMode) {
+        return normalizeResponseModeLabel(explicitMode);
+    }
+    const messages = Array.isArray(session?.messages) ? session.messages : [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        const role = typeof message?.role === 'string' ? message.role.trim().toLowerCase() : '';
+        if (role !== 'assistant' && role !== 'error') {
+            continue;
+        }
+        return normalizeResponseModeLabel(message?.response_mode || 'basic');
+    }
+    return '';
+}
+
 function resolveResponseModeText(modeLabel) {
     return normalizeResponseModeLabel(modeLabel) === 'plan' ? 'plan모드' : '기본모드';
+}
+
+function createSessionResponseModeBadge(session) {
+    const mode = resolveSessionLastResponseMode(session);
+    if (!mode) {
+        return null;
+    }
+    const badge = document.createElement('button');
+    badge.type = 'button';
+    badge.className = `session-response-mode is-${mode}`;
+    badge.disabled = true;
+    badge.textContent = mode === 'plan' ? 'Plan' : 'Basic';
+    const label = `마지막 응답: ${resolveResponseModeText(mode)}`;
+    badge.setAttribute('aria-label', label);
+    badge.setAttribute('title', label);
+    return badge;
 }
 
 function resolveResponseModelForRequest(planMode = false) {

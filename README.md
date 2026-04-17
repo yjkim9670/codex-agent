@@ -203,109 +203,17 @@ Protection rules are read from `sync_protect.list`.
 - `http://localhost:<port>/` serves the chat UI.
 - `http://localhost:<port>/health` returns JSON status.
 
-## Codex Backend Split (Step 1)
-To run Codex Agent as an API-first backend for a separate Vercel frontend, configure these env vars:
+## Tailscale Code Server Access
+The deployment split artifacts were removed. The remaining remote-access helper is:
 
-- `CODEX_ALLOWED_ORIGINS`
-  - Comma-separated CORS allowlist.
-  - Default: `http://localhost:4000,http://127.0.0.1:4000`
-- `CODEX_API_ONLY_MODE`
-  - If `true`, `/` returns JSON runtime info (no template UI dependency).
-  - Default: `false`
-- `CODEX_ENABLE_FILES_API`
-  - Toggle file browser APIs (`/api/codex/files/*`).
-  - Default: `true`
-- `CODEX_ENABLE_GIT_API`
-  - Toggle git APIs (`/api/codex/git/*`).
-  - Default: `true`
-
-Useful runtime endpoint:
-
-- `GET /api/codex/runtime/info`
-  - Returns server/workspace paths, branch, model/reasoning options, and feature flags.
-
-Example:
-
-```bash
-export CODEX_ALLOWED_ORIGINS="https://your-vercel-app.vercel.app,https://your-preview.vercel.app"
-export CODEX_API_ONLY_MODE=1
-export CODEX_ENABLE_FILES_API=1
-export CODEX_ENABLE_GIT_API=1
-python run_codex_chat_server.py --port 6000
-```
-
-Keep `8080` reserved for `code-server`. Use `6000` for the Vercel-facing backend.
-
-## Codex Frontend App (Steps 2-3)
-Separate frontend app is created at:
-
-- `apps/codex-agent-web`
-
-It is a Vite app that reuses the existing Codex UI assets and:
-
-- rewrites browser `/api/*` requests to `VITE_CODEX_API_BASE_URL`
-- fetches `GET /api/codex/runtime/info` on startup
-- initializes workspace/branch/model/reasoning values from runtime API data
-
-Frontend env example:
-
-```bash
-cp apps/codex-agent-web/.env.example apps/codex-agent-web/.env.local
-```
-
-Set:
-
-- `VITE_CODEX_API_BASE_URL=https://<your-machine>.<tailnet>.ts.net`
-- `VITE_APP_ENV_NAME=private-tailnet`
-
-Run frontend locally:
-
-```bash
-cd apps/codex-agent-web
-npm install
-npm run dev
-```
-
-Build frontend:
-
-```bash
-npm run build
-```
-
-## Codex Local Backend Ops (Step 4)
-Operational artifacts were added under `deploy/`:
-
-- `deploy/codex-backend.env.example`
-- `deploy/scripts/run_codex_backend.sh`
-- `deploy/systemd/codex-agent-backend.service`
-- `deploy/README.md`
-
-Quick start:
-
-```bash
-cp deploy/codex-backend.env.example deploy/codex-backend.env
-./deploy/scripts/run_codex_backend.sh
-```
-
-`systemd --user` setup is documented in `deploy/README.md`.
-
-## Tailscale Network Setup (Step 5)
-Tailscale helper scripts:
-
-- `deploy/tailscale/expose_codex_backend.sh`
 - `deploy/tailscale/expose_code_server.sh`
-- `deploy/tailscale/verify_tailscale_backend.sh`
 
-Expose local backend through tailnet HTTPS:
+Expose `code-server` on the tailnet:
 
 ```bash
-./deploy/tailscale/expose_codex_backend.sh 6000
 ./deploy/tailscale/expose_code_server.sh 8080
-./deploy/tailscale/verify_tailscale_backend.sh https://<machine>.<tailnet>.ts.net
+curl -I https://<machine>.<tailnet>.ts.net:8080/
 ```
-
-When `tailscale serve` is used, `VITE_CODEX_API_BASE_URL` should stay as `https://<machine>.<tailnet>.ts.net` without `:6000`.
-Use `https://<machine>.<tailnet>.ts.net:8080` for `code-server`.
 
 If `serve config denied` appears:
 
@@ -313,48 +221,7 @@ If `serve config denied` appears:
 sudo tailscale set --operator=$USER
 ```
 
-`verify_tailscale_backend.sh` runs smoke tests for health/runtime/session create-delete/stream list.
-For `code-server`, `curl -I https://<machine>.<tailnet>.ts.net:8080/` should return `302` to `./login`.
-You can additionally validate CORS response headers:
-
-```bash
-CHECK_ORIGIN_HEADER=https://codex-agent-web.vercel.app \
-./deploy/tailscale/verify_tailscale_backend.sh https://<machine>.<tailnet>.ts.net
-```
-
-Use Tailscale ACL to restrict reachable users/devices.
-
-## Vercel Deploy (Step 6)
-Step 6 artifacts were added under `deploy/vercel/`:
-
-- `deploy/vercel/codex-agent-web.vercel.env.example`
-- `deploy/vercel/setup_vercel_project.sh`
-- `deploy/vercel/deploy_codex_agent_web.sh`
-- `apps/codex-agent-web/vercel.json`
-
-Run:
-
-```bash
-cp deploy/vercel/codex-agent-web.vercel.env.example deploy/vercel/codex-agent-web.vercel.env
-```
-
-Set values in `deploy/vercel/codex-agent-web.vercel.env`:
-
-- `VERCEL_PROJECT_NAME`
-- `VITE_CODEX_API_BASE_URL`
-- `VITE_APP_ENV_NAME` (optional)
-- `VERCEL_SCOPE` (optional)
-
-Then:
-
-```bash
-./deploy/vercel/setup_vercel_project.sh
-./deploy/vercel/deploy_codex_agent_web.sh preview
-# or
-./deploy/vercel/deploy_codex_agent_web.sh production
-```
-
-Preview deployment injects `VITE_*` values via `--build-env`, so it works without Vercel Git integration.
+Keep `8080` reserved for `code-server`. A successful remote check typically returns `302` with `location: ./login`.
 
 ## Codex Token Monitoring
 - Codex usage now tracks prompt/response tokens separately (`input_tokens`, `output_tokens`) plus `cached_input_tokens`.

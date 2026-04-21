@@ -19,6 +19,7 @@ const state = {
     statusIsError: false,
     settings: {
         model: null,
+        modelCatalog: [],
         modelOptions: [],
         planModeModel: null,
         planModeReasoningEffort: null,
@@ -1027,6 +1028,105 @@ function readOptionsFromData(element) {
     }
 }
 
+function normalizeOptionList(options) {
+    if (!Array.isArray(options)) return [];
+    const normalized = [];
+    const seen = new Set();
+    options.forEach(item => {
+        const token = typeof item === 'string' ? item.trim() : '';
+        if (!token || seen.has(token)) return;
+        normalized.push(token);
+        seen.add(token);
+    });
+    return normalized;
+}
+
+function normalizeModelCatalog(catalog) {
+    if (!Array.isArray(catalog)) return [];
+    const normalized = [];
+    const seen = new Set();
+    catalog.forEach(entry => {
+        const slug = typeof entry?.slug === 'string' ? entry.slug.trim() : '';
+        if (!slug || seen.has(slug)) return;
+        const reasoningOptions = normalizeOptionList(entry?.reasoning_options);
+        let defaultReasoningEffort = typeof entry?.default_reasoning_effort === 'string'
+            ? entry.default_reasoning_effort.trim()
+            : '';
+        if (defaultReasoningEffort && !reasoningOptions.includes(defaultReasoningEffort)) {
+            reasoningOptions.unshift(defaultReasoningEffort);
+        }
+        if (!defaultReasoningEffort && reasoningOptions.length > 0) {
+            defaultReasoningEffort = reasoningOptions[0];
+        }
+        normalized.push({
+            slug,
+            defaultReasoningEffort: defaultReasoningEffort || null,
+            reasoningOptions
+        });
+        seen.add(slug);
+    });
+    return normalized;
+}
+
+function collectCatalogModelOptions(catalog) {
+    return normalizeOptionList(
+        Array.isArray(catalog)
+            ? catalog.map(entry => entry?.slug)
+            : []
+    );
+}
+
+function collectCatalogReasoningOptions(catalog) {
+    return normalizeOptionList(
+        Array.isArray(catalog)
+            ? catalog.flatMap(entry => Array.isArray(entry?.reasoningOptions) ? entry.reasoningOptions : [])
+            : []
+    );
+}
+
+function getModelCatalogEntry(model) {
+    const normalizedModel = typeof model === 'string' ? model.trim() : '';
+    if (!normalizedModel) return null;
+    return Array.isArray(state.settings.modelCatalog)
+        ? state.settings.modelCatalog.find(entry => entry.slug === normalizedModel) || null
+        : null;
+}
+
+function getReasoningProfile(model, reasoning, fallbackOptions = null) {
+    const entry = getModelCatalogEntry(model);
+    const reasoningOptions = entry?.reasoningOptions?.length
+        ? entry.reasoningOptions
+        : normalizeOptionList(fallbackOptions || state.settings.reasoningOptions);
+    const explicitReasoning = typeof reasoning === 'string' ? reasoning.trim() : '';
+    const defaultReasoning = entry?.defaultReasoningEffort || '';
+    const isExplicitSupported = Boolean(explicitReasoning)
+        && (reasoningOptions.length === 0 || reasoningOptions.includes(explicitReasoning));
+    const effectiveReasoning = isExplicitSupported
+        ? explicitReasoning
+        : (defaultReasoning || explicitReasoning || '');
+    return {
+        defaultReasoning,
+        effectiveReasoning,
+        explicitReasoning,
+        isExplicit: isExplicitSupported || (!defaultReasoning && Boolean(explicitReasoning)),
+        reasoningOptions
+    };
+}
+
+function buildReasoningPlaceholder(defaultReasoning, fallbackText) {
+    return defaultReasoning ? `${fallbackText} (${defaultReasoning})` : fallbackText;
+}
+
+function formatReasoningStatus(model, reasoning) {
+    const profile = getReasoningProfile(model, reasoning);
+    if (!profile.effectiveReasoning) {
+        return 'default';
+    }
+    return profile.isExplicit
+        ? profile.effectiveReasoning
+        : `${profile.effectiveReasoning} (default)`;
+}
+
 function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect) {
     const modelOptions = readOptionsFromData(modelSelect);
     const planModeModelOptions = readOptionsFromData(planModeModelSelect);
@@ -1841,9 +1941,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (modelSelect) {
         modelSelect.addEventListener('change', () => {
-            if (modelSelect.value && modelInput) {
-                modelInput.value = modelSelect.value;
+            const selectedModel = modelSelect.value || '';
+            if (modelInput) {
+                modelInput.value = selectedModel;
             }
+            updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions, selectedModel);
         });
     }
 
@@ -1864,9 +1966,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeModelSelect) {
         planModeModelSelect.addEventListener('change', () => {
-            if (planModeModelSelect.value && planModeModelInput) {
-                planModeModelInput.value = planModeModelSelect.value;
+            const selectedModel = planModeModelSelect.value || '';
+            if (planModeModelInput) {
+                planModeModelInput.value = selectedModel;
             }
+            updatePlanModeReasoningControls(
+                state.settings.planModeReasoningEffort,
+                state.settings.reasoningOptions,
+                selectedModel || state.settings.model
+            );
         });
     }
 
@@ -1881,8 +1989,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (reasoningSelect) {
         reasoningSelect.addEventListener('change', () => {
-            if (reasoningSelect.value && reasoningInput) {
-                reasoningInput.value = reasoningSelect.value;
+            if (reasoningInput) {
+                reasoningInput.value = reasoningSelect.value || '';
             }
         });
     }
@@ -4994,16 +5102,22 @@ async function loadSettings({ silent = true } = {}) {
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/codex/settings');
+        const modelCatalog = normalizeModelCatalog(result?.model_catalog);
+        const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
+        const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
+        const modelOptions = catalogModelOptions.length > 0
+            ? catalogModelOptions
+            : normalizeOptionList(result?.model_options);
+        const reasoningOptions = normalizeOptionList(result?.reasoning_options);
         state.settings = {
             model: result?.settings?.model || null,
-            modelOptions: Array.isArray(result?.model_options) ? result.model_options : [],
+            modelCatalog,
+            modelOptions,
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
-            reasoningOptions: Array.isArray(result?.reasoning_options)
-                ? result.reasoning_options
-                : [],
+            reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
             loaded: true
@@ -5105,7 +5219,8 @@ function updateModelControls(model, options) {
     const select = document.getElementById('codex-model-select');
     const input = document.getElementById('codex-model-input');
     const field = select ? select.closest('.model-field') : null;
-    const hasOptions = Array.isArray(options) && options.length > 0;
+    const normalizedOptions = normalizeOptionList(options);
+    const hasOptions = normalizedOptions.length > 0;
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -5114,14 +5229,14 @@ function updateModelControls(model, options) {
             placeholder.value = '';
             placeholder.textContent = 'Select model';
             select.appendChild(placeholder);
-            options.forEach(item => {
+            normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
                 option.textContent = item;
                 select.appendChild(option);
             });
             if (model) {
-                select.value = options.includes(model) ? model : '';
+                select.value = normalizedOptions.includes(model) ? model : '';
             } else {
                 select.value = '';
             }
@@ -5145,7 +5260,8 @@ function updatePlanModeModelControls(planModeModel, options) {
     const select = document.getElementById('codex-plan-mode-model-select');
     const input = document.getElementById('codex-plan-mode-model-input');
     const field = select ? select.closest('.model-field') : null;
-    const hasOptions = Array.isArray(options) && options.length > 0;
+    const normalizedOptions = normalizeOptionList(options);
+    const hasOptions = normalizedOptions.length > 0;
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -5154,14 +5270,14 @@ function updatePlanModeModelControls(planModeModel, options) {
             placeholder.value = '';
             placeholder.textContent = 'Use default';
             select.appendChild(placeholder);
-            options.forEach(item => {
+            normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
                 option.textContent = item;
                 select.appendChild(option);
             });
             if (planModeModel) {
-                select.value = options.includes(planModeModel) ? planModeModel : '';
+                select.value = normalizedOptions.includes(planModeModel) ? planModeModel : '';
             } else {
                 select.value = '';
             }
@@ -5181,27 +5297,31 @@ function updatePlanModeModelControls(planModeModel, options) {
     setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
 }
 
-function updateReasoningControls(reasoning, options) {
+function updateReasoningControls(reasoning, options, model = state.settings.model) {
     const select = document.getElementById('codex-reasoning-select');
     const input = document.getElementById('codex-reasoning-input');
     const field = select ? select.closest('.model-field') : null;
-    const hasOptions = Array.isArray(options) && options.length > 0;
+    const profile = getReasoningProfile(model, reasoning, options);
+    const hasOptions = profile.reasoningOptions.length > 0;
+    const placeholderText = buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = 'Select effort';
+            placeholder.textContent = placeholderText;
             select.appendChild(placeholder);
-            options.forEach(item => {
+            profile.reasoningOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
                 option.textContent = item;
                 select.appendChild(option);
             });
-            if (reasoning) {
-                select.value = options.includes(reasoning) ? reasoning : '';
+            if (profile.explicitReasoning) {
+                select.value = profile.reasoningOptions.includes(profile.explicitReasoning)
+                    ? profile.explicitReasoning
+                    : '';
             } else {
                 select.value = '';
             }
@@ -5211,7 +5331,7 @@ function updateReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Default effort';
+        input.placeholder = reasoning ? reasoning : placeholderText;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -5220,27 +5340,35 @@ function updateReasoningControls(reasoning, options) {
     }
 }
 
-function updatePlanModeReasoningControls(reasoning, options) {
+function updatePlanModeReasoningControls(
+    reasoning,
+    options,
+    model = state.settings.planModeModel || state.settings.model
+) {
     const select = document.getElementById('codex-plan-mode-reasoning-select');
     const input = document.getElementById('codex-plan-mode-reasoning-input');
     const field = select ? select.closest('.model-field') : null;
-    const hasOptions = Array.isArray(options) && options.length > 0;
+    const profile = getReasoningProfile(model, reasoning, options);
+    const hasOptions = profile.reasoningOptions.length > 0;
+    const placeholderText = buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = 'Use default';
+            placeholder.textContent = placeholderText;
             select.appendChild(placeholder);
-            options.forEach(item => {
+            profile.reasoningOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
                 option.textContent = item;
                 select.appendChild(option);
             });
-            if (reasoning) {
-                select.value = options.includes(reasoning) ? reasoning : '';
+            if (profile.explicitReasoning) {
+                select.value = profile.reasoningOptions.includes(profile.explicitReasoning)
+                    ? profile.explicitReasoning
+                    : '';
             } else {
                 select.value = '';
             }
@@ -5250,7 +5378,7 @@ function updatePlanModeReasoningControls(reasoning, options) {
     }
     if (input) {
         input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : 'Use default effort';
+        input.placeholder = reasoning ? reasoning : placeholderText;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -5281,12 +5409,16 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     const modelText = model ? model : 'default';
     const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
-    const reasoningText = reasoning ? reasoning : 'default';
-    const planModeReasoningText = state.settings.planModeReasoningEffort
-        ? state.settings.planModeReasoningEffort
-        : 'default';
+    const reasoningText = formatReasoningStatus(model, reasoning);
+    const planModeReasoningText = formatReasoningStatus(
+        state.settings.planModeModel || model,
+        state.settings.planModeReasoningEffort
+    );
     const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
-    const compactToken = value => (value === 'default' ? 'def' : value);
+    const compactToken = value => {
+        if (value === 'default') return 'def';
+        return value.replace(' (default)', '*');
+    };
     const compactSummaryParts = [
         `Model:${compactToken(modelText)}`,
         `R:${compactToken(reasoningText)}`
@@ -5337,23 +5469,39 @@ async function updateSettings() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort })
         });
+        const modelCatalog = normalizeModelCatalog(result?.model_catalog);
+        const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
+        const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
         state.settings.model = result?.settings?.model || null;
+        state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
-        state.settings.modelOptions = Array.isArray(result?.model_options)
-            ? result.model_options
-            : state.settings.modelOptions;
+        state.settings.modelOptions = catalogModelOptions.length > 0
+            ? catalogModelOptions
+            : (Array.isArray(result?.model_options)
+                ? normalizeOptionList(result.model_options)
+                : state.settings.modelOptions);
         state.settings.reasoningOptions = Array.isArray(result?.reasoning_options)
-            ? result.reasoning_options
-            : state.settings.reasoningOptions;
+            ? normalizeOptionList(result.reasoning_options)
+            : (catalogReasoningOptions.length > 0
+                ? catalogReasoningOptions
+                : state.settings.reasoningOptions);
         state.settings.usage = result?.usage || state.settings.usage;
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        updateReasoningControls(
+            state.settings.reasoningEffort,
+            state.settings.reasoningOptions,
+            state.settings.model
+        );
+        updatePlanModeReasoningControls(
+            state.settings.planModeReasoningEffort,
+            state.settings.reasoningOptions,
+            state.settings.planModeModel || state.settings.model
+        );
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
@@ -5373,30 +5521,37 @@ function createFetchTimeoutController(timeoutMs, baseSignal = null) {
         };
     }
     const controller = new AbortController();
+    let timeoutId = null;
     let timedOut = false;
-    const timer = window.setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-    }, normalized);
-    const onBaseAbort = () => {
-        controller.abort();
+
+    const clear = () => {
+        if (timeoutId !== null) {
+            clearTimeout(timeoutId);
+            timeoutId = null;
+        }
     };
+
+    const abortWithTimeout = () => {
+        timedOut = true;
+        controller.abort(new DOMException('Request timed out', 'TimeoutError'));
+    };
+
     if (baseSignal) {
         if (baseSignal.aborted) {
-            controller.abort();
+            controller.abort(baseSignal.reason);
         } else {
-            baseSignal.addEventListener('abort', onBaseAbort, { once: true });
+            baseSignal.addEventListener('abort', () => {
+                controller.abort(baseSignal.reason);
+            }, { once: true });
         }
     }
+
+    timeoutId = window.setTimeout(abortWithTimeout, normalized);
+
     return {
         signal: controller.signal,
         didTimeout: () => timedOut,
-        clear: () => {
-            clearTimeout(timer);
-            if (baseSignal) {
-                baseSignal.removeEventListener('abort', onBaseAbort);
-            }
-        }
+        clear
     };
 }
 

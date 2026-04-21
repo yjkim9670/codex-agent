@@ -18,6 +18,7 @@ from ..config import (
     CODEX_REASONING_OPTIONS,
     REPO_ROOT,
     WORKSPACE_DIR,
+    get_codex_model_catalog,
     get_codex_model_options,
 )
 from ..services.codex_chat import (
@@ -293,6 +294,7 @@ def _build_runtime_info():
         'workspace_directory_path': str(workspace_directory),
         'current_branch_name': get_current_branch_name(),
         'model_options': get_codex_model_options(),
+        'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
@@ -316,6 +318,7 @@ def codex_settings():
     return jsonify({
         'settings': get_settings(),
         'model_options': get_codex_model_options(),
+        'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': usage,
         'session_storage': get_session_storage_summary(),
@@ -392,6 +395,7 @@ def codex_settings_update():
     return jsonify({
         'settings': settings,
         'model_options': get_codex_model_options(),
+        'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'usage': usage,
         'session_storage': get_session_storage_summary(),

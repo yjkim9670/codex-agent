@@ -106,11 +106,30 @@ CODEX_STREAM_POLL_INTERVAL_SECONDS = float(os.environ.get('CODEX_STREAM_POLL_INT
 CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS = float(os.environ.get('CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', '15'))
 CODEX_STREAM_TERMINATE_GRACE_SECONDS = float(os.environ.get('CODEX_STREAM_TERMINATE_GRACE_SECONDS', '3'))
 CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
-    os.environ.get('CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', '60')
+    os.environ.get('CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', '15')
 )
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
+
+
+def _normalize_reasoning_options(options):
+    normalized_options = []
+    seen = set()
+    for item in options:
+        normalized = str(item or '').strip()
+        if not normalized or normalized in seen:
+            continue
+        normalized_options.append(normalized)
+        seen.add(normalized)
+    return normalized_options
+
+
+_DEFAULT_REASONING_OPTIONS = _normalize_reasoning_options(
+    item.strip()
+    for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
+    if item.strip()
+)
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
     'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
@@ -136,13 +155,84 @@ def _normalize_model_options(options):
     return normalized_options
 
 
-_default_model_options = _normalize_model_options([
-    'gpt-5.4',
-    'gpt-5.4-mini',
-    'gpt-5.3-codex',
-    'gpt-5.3-codex-spark',
-    'gpt-5.2',
+def _build_model_catalog_entry(slug, default_reasoning_effort=None, reasoning_options=None):
+    normalized_slug = normalize_codex_model_name(slug)
+    if not normalized_slug:
+        return None
+    normalized_reasoning_options = _normalize_reasoning_options(
+        reasoning_options or _DEFAULT_REASONING_OPTIONS
+    )
+    normalized_default_reasoning = str(default_reasoning_effort or '').strip()
+    if normalized_default_reasoning and normalized_default_reasoning not in normalized_reasoning_options:
+        normalized_reasoning_options.insert(0, normalized_default_reasoning)
+    if not normalized_default_reasoning and normalized_reasoning_options:
+        normalized_default_reasoning = normalized_reasoning_options[0]
+    return {
+        'slug': normalized_slug,
+        'default_reasoning_effort': normalized_default_reasoning or None,
+        'reasoning_options': normalized_reasoning_options,
+    }
+
+
+def _clone_model_catalog_entry(entry):
+    if not isinstance(entry, dict):
+        return None
+    catalog_entry = _build_model_catalog_entry(
+        entry.get('slug'),
+        default_reasoning_effort=entry.get('default_reasoning_effort'),
+        reasoning_options=entry.get('reasoning_options'),
+    )
+    if not catalog_entry:
+        return None
+    return catalog_entry
+
+
+def _normalize_model_catalog(entries):
+    normalized_catalog = []
+    seen = set()
+    for entry in entries:
+        catalog_entry = _clone_model_catalog_entry(entry)
+        if not catalog_entry:
+            continue
+        slug = catalog_entry['slug']
+        if slug in seen:
+            continue
+        normalized_catalog.append(catalog_entry)
+        seen.add(slug)
+    return normalized_catalog
+
+
+_default_model_catalog = _normalize_model_catalog([
+    {
+        'slug': 'gpt-5.4',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.4-mini',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.3-codex',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.3-codex-spark',
+        'default_reasoning_effort': 'high',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.2',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
 ])
+_default_model_catalog_by_slug = {
+    entry['slug']: entry
+    for entry in _default_model_catalog
+}
 
 
 def _read_model_options_from_env():
@@ -154,6 +244,13 @@ def _read_model_options_from_env():
 
 
 def _read_model_options_from_models_cache():
+    return [
+        entry['slug']
+        for entry in _read_model_catalog_from_models_cache()
+    ]
+
+
+def _read_model_catalog_from_models_cache():
     models_cache_path = CODEX_HOME / 'models_cache.json'
     try:
         payload = json.loads(models_cache_path.read_text(encoding='utf-8'))
@@ -164,7 +261,8 @@ def _read_model_options_from_models_cache():
     raw_models = payload.get('models')
     if not isinstance(raw_models, list):
         return []
-    model_options = []
+    model_catalog = []
+    seen = set()
     for entry in raw_models:
         if not isinstance(entry, dict):
             continue
@@ -174,26 +272,114 @@ def _read_model_options_from_models_cache():
         slug = entry.get('slug') or entry.get('display_name')
         if not slug:
             continue
-        model_options.append(slug)
-    return _normalize_model_options(model_options)
+        catalog_entry = _build_model_catalog_entry(
+            slug,
+            default_reasoning_effort=entry.get('default_reasoning_level'),
+            reasoning_options=[
+                item.get('effort') if isinstance(item, dict) else item
+                for item in entry.get('supported_reasoning_levels') or []
+            ],
+        )
+        if not catalog_entry:
+            continue
+        normalized_slug = catalog_entry['slug']
+        if normalized_slug in seen:
+            continue
+        model_catalog.append(catalog_entry)
+        seen.add(normalized_slug)
+    return model_catalog
+
+
+def _select_model_catalog_entries(model_options, source_catalog):
+    source_map = {
+        entry['slug']: entry
+        for entry in _normalize_model_catalog(source_catalog)
+    }
+    selected_catalog = []
+    seen = set()
+    for item in model_options:
+        slug = normalize_codex_model_name(item)
+        if not slug or slug in seen:
+            continue
+        catalog_entry = _clone_model_catalog_entry(
+            source_map.get(slug)
+            or _default_model_catalog_by_slug.get(slug)
+            or {'slug': slug}
+        )
+        if not catalog_entry:
+            continue
+        selected_catalog.append(catalog_entry)
+        seen.add(slug)
+    return selected_catalog
+
+
+def get_codex_model_catalog():
+    env_options = _read_model_options_from_env()
+    cache_catalog = _read_model_catalog_from_models_cache()
+    if env_options:
+        return _select_model_catalog_entries(
+            env_options,
+            cache_catalog or _default_model_catalog,
+        )
+    if cache_catalog:
+        return _normalize_model_catalog(cache_catalog)
+    return _normalize_model_catalog(_default_model_catalog)
 
 
 def get_codex_model_options():
-    env_options = _read_model_options_from_env()
-    if env_options:
-        return env_options
-    cache_options = _read_model_options_from_models_cache()
-    if cache_options:
-        return cache_options
-    return list(_default_model_options)
+    return [
+        entry['slug']
+        for entry in get_codex_model_catalog()
+    ]
+
+
+def get_codex_model_metadata(model_name):
+    normalized_model_name = normalize_codex_model_name(model_name)
+    if not normalized_model_name:
+        return None
+    for entry in get_codex_model_catalog():
+        if entry['slug'] == normalized_model_name:
+            return entry
+    fallback_entry = _default_model_catalog_by_slug.get(normalized_model_name)
+    return _clone_model_catalog_entry(fallback_entry)
+
+
+def get_codex_default_reasoning_effort(model_name):
+    metadata = get_codex_model_metadata(model_name)
+    if not metadata:
+        return None
+    default_reasoning = str(metadata.get('default_reasoning_effort') or '').strip()
+    return default_reasoning or None
+
+
+def get_codex_reasoning_options(model_name=None):
+    metadata = get_codex_model_metadata(model_name) if model_name else None
+    if metadata and metadata.get('reasoning_options'):
+        return list(metadata['reasoning_options'])
+    if model_name:
+        return list(_DEFAULT_REASONING_OPTIONS)
+    reasoning_options = _normalize_reasoning_options(
+        item
+        for entry in get_codex_model_catalog()
+        for item in entry.get('reasoning_options') or []
+    )
+    if reasoning_options:
+        return reasoning_options
+    return list(_DEFAULT_REASONING_OPTIONS)
+
+
+def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
+    normalized_reasoning = str(reasoning_effort or '').strip()
+    supported_reasoning = get_codex_reasoning_options(model_name=model_name)
+    if normalized_reasoning:
+        if supported_reasoning and normalized_reasoning not in supported_reasoning:
+            return get_codex_default_reasoning_effort(model_name) or normalized_reasoning
+        return normalized_reasoning
+    return get_codex_default_reasoning_effort(model_name)
 
 
 CODEX_MODEL_OPTIONS = get_codex_model_options()
-CODEX_REASONING_OPTIONS = [
-    item.strip()
-    for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
-    if item.strip()
-]
+CODEX_REASONING_OPTIONS = get_codex_reasoning_options()
 
 CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
     os.environ.get(

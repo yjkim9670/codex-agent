@@ -41,6 +41,7 @@ from ..config import (
     REPO_ROOT,
     WORKSPACE_DIR,
     normalize_codex_model_name,
+    resolve_codex_reasoning_effort,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
 
@@ -2982,6 +2983,10 @@ def _build_codex_command(
         (str(reasoning_override).strip() if reasoning_override is not None else '')
         or settings.get('reasoning_effort')
     )
+    reasoning_effort = resolve_codex_reasoning_effort(
+        model_name=model,
+        reasoning_effort=reasoning_effort,
+    )
     if reasoning_effort:
         escaped_reasoning = _escape_toml_string(reasoning_effort)
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
@@ -3055,6 +3060,53 @@ def _extract_usage_from_exec_event(event):
     return None
 
 
+def _extract_output_text_from_message_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        fragments = []
+        for item in content:
+            text = _extract_output_text_from_message_content(item)
+            if text:
+                fragments.append(text)
+        return ''.join(fragments)
+    if not isinstance(content, dict):
+        return ''
+
+    content_type = str(content.get('type') or '').strip().lower()
+    if content_type == 'input_text':
+        return ''
+    if content_type in {'output_text', 'text'}:
+        text = content.get('text')
+        if isinstance(text, str):
+            return text
+
+    nested_content = content.get('content')
+    nested_text = _extract_output_text_from_message_content(nested_content)
+    if nested_text:
+        return nested_text
+
+    text_value = content.get('text')
+    if isinstance(text_value, str):
+        return text_value
+    return ''
+
+
+def _extract_text_from_assistant_message_payload(payload):
+    if not isinstance(payload, dict):
+        return ''
+    role = str(payload.get('role') or '').strip().lower()
+    if role and role != 'assistant':
+        return ''
+    text = _extract_output_text_from_message_content(payload.get('content'))
+    if text:
+        return text.strip()
+    fallback = payload.get('text')
+    if isinstance(fallback, str):
+        return fallback.strip()
+    return ''
+
+
 def _extract_agent_text_from_exec_event(event):
     if not isinstance(event, dict):
         return ''
@@ -3067,12 +3119,30 @@ def _extract_agent_text_from_exec_event(event):
                 text = item.get('text')
                 if isinstance(text, str):
                     return text.strip()
+    elif event_type == 'task_complete':
+        payload = event.get('payload')
+        if isinstance(payload, dict):
+            text = payload.get('last_agent_message')
+            if isinstance(text, str):
+                return text.strip()
 
     payload = event.get('payload')
     if isinstance(payload, dict):
         payload_type = str(payload.get('type') or '').strip().lower()
         if payload_type == 'output_text':
             text = payload.get('text')
+            if isinstance(text, str):
+                return text.strip()
+        if payload_type == 'agent_message':
+            message = payload.get('message')
+            if isinstance(message, str):
+                return message.strip()
+        if payload_type == 'message':
+            text = _extract_text_from_assistant_message_payload(payload)
+            if text:
+                return text
+        if payload_type == 'task_complete':
+            text = payload.get('last_agent_message')
             if isinstance(text, str):
                 return text.strip()
     return ''
@@ -3649,6 +3719,20 @@ def _set_stream_token_usage(stream_id, usage):
         stream['updated_at'] = time.time()
 
 
+def _set_stream_output_last_message(stream_id, text):
+    normalized = str(text or '').strip()
+    if not normalized:
+        return False
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return False
+        previous = str(stream.get('output_last_message') or '').strip()
+        stream['output_last_message'] = normalized
+        stream['updated_at'] = time.time()
+    return normalized != previous
+
+
 def _handle_stream_json_output_line(stream_id, line):
     event = _parse_json_object(line)
     if not event:
@@ -3661,6 +3745,9 @@ def _handle_stream_json_output_line(stream_id, line):
 
     text = _extract_agent_text_from_exec_event(event)
     if text:
+        should_append = _set_stream_output_last_message(stream_id, text)
+        if not should_append:
+            return
         if not text.endswith('\n'):
             text = f'{text}\n'
         _append_stream_chunk(stream_id, 'output', text)
@@ -3839,12 +3926,19 @@ def _run_codex_stream(stream_id, prompt):
                         stream['updated_at'] = now
                         current_output = (stream.get('output') or '').strip()
                         current_error = (stream.get('error') or '').strip()
+                        current_output_last_message = (stream.get('output_last_message') or '').strip()
                     else:
                         current_output = ''
                         current_error = ''
+                        current_output_last_message = ''
 
                 output_text = _read_output_last_message(output_path)
-                has_final_response = bool(output_text.strip()) or bool(current_output) or bool(current_error)
+                has_final_response = (
+                    bool(output_text.strip())
+                    or bool(current_output_last_message)
+                    or bool(current_output)
+                    or bool(current_error)
+                )
 
                 if has_final_response:
                     with state.codex_streams_lock:
@@ -3853,10 +3947,16 @@ def _run_codex_stream(stream_id, prompt):
                             done_now = time.time()
                             if output_text:
                                 stream['output_last_message'] = output_text
-                                if not (stream.get('output') or '').strip():
-                                    stream['output'] = output_text
-                                    stream['output_length'] = len(stream.get('output') or '')
-                                    stream['last_output_at'] = done_now
+                            elif current_output_last_message:
+                                stream['output_last_message'] = current_output_last_message
+                            selected_output_text = (
+                                output_text
+                                or current_output_last_message
+                            )
+                            if selected_output_text and not (stream.get('output') or '').strip():
+                                stream['output'] = selected_output_text
+                                stream['output_length'] = len(stream.get('output') or '')
+                                stream['last_output_at'] = done_now
                             stream['done'] = True
                             stream['updated_at'] = done_now
                             if not stream.get('finalize_reason'):

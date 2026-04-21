@@ -31,6 +31,7 @@
     --chat-bubble-max-width: 80%;
     --chat-action-button-width: 35px;
     --mobile-viewport-height: 100dvh;
+    --mobile-prompt-lift: 0px;
     --app-max-width: 1200px;
     --radius-lg: 13px;
     --radius-md: 9px;
@@ -5962,6 +5963,11 @@ label.hover-tooltip,
         padding-bottom: env(safe-area-inset-bottom);
         z-index: 1;
         align-items: end;
+        transform: translateY(calc(var(--mobile-prompt-lift) * -1));
+    }
+
+    .chat-runtime-strip {
+        transform: translateY(calc(var(--mobile-prompt-lift) * -1));
     }
 
     .chat-submit-column {

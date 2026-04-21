@@ -39,6 +39,7 @@ const PHONE_MEDIA_QUERY = '(max-width: 599px)';
 const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
+const MOBILE_PROMPT_LIFT_VAR = '--mobile-prompt-lift';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
@@ -286,6 +287,7 @@ let mermaidRenderSerial = 0;
 let mermaidLoadPromise = null;
 let xlsxLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
+let lastAppliedMobilePromptLift = null;
 let sessionsRenderFrameId = 0;
 
 function runAfterAnimationFrame(callback) {
@@ -4351,7 +4353,10 @@ function setMobileKeyboardOpen(open) {
 }
 
 function syncMobileKeyboardState(isMobile = isCompactLayout()) {
-    setMobileKeyboardOpen(isMobileKeyboardOpen(isMobile));
+    const isKeyboardOpen = isMobileKeyboardOpen(isMobile);
+    setMobileKeyboardOpen(isKeyboardOpen);
+    applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen });
+    return isKeyboardOpen;
 }
 
 function applyMobileViewportHeight() {
@@ -4369,6 +4374,40 @@ function applyMobileViewportHeight() {
     }
     lastAppliedMobileViewportHeight = clamped;
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
+}
+
+function applyMobilePromptLift({ isMobile = isCompactLayout(), keyboardOpen = false } = {}) {
+    const root = document.documentElement;
+    if (!root) return;
+
+    let nextLift = 0;
+    if (isMobile && keyboardOpen) {
+        const form = document.getElementById('codex-chat-form');
+        const runtimeStrip = document.querySelector('.chat-runtime-strip');
+        const viewport = window.visualViewport;
+        const visualBottom = Number(viewport?.height) + Number(viewport?.offsetTop);
+        const fallbackBottom = Number(window.innerHeight);
+        const viewportBottom = Number.isFinite(visualBottom) && visualBottom > 0
+            ? visualBottom
+            : fallbackBottom;
+        if (Number.isFinite(viewportBottom) && viewportBottom > 0) {
+            const formBottom = Number(form?.getBoundingClientRect?.().bottom);
+            const runtimeStripBottom = Number(runtimeStrip?.getBoundingClientRect?.().bottom);
+            const promptBottom = Math.max(
+                Number.isFinite(formBottom) ? formBottom : 0,
+                Number.isFinite(runtimeStripBottom) ? runtimeStripBottom : 0
+            );
+            if (promptBottom > 0) {
+                nextLift = Math.max(0, Math.ceil(promptBottom + 8 - viewportBottom));
+            }
+        }
+    }
+
+    if (lastAppliedMobilePromptLift === nextLift) {
+        return;
+    }
+    lastAppliedMobilePromptLift = nextLift;
+    root.style.setProperty(MOBILE_PROMPT_LIFT_VAR, `${nextLift}px`);
 }
 
 function normalizeMobileDocumentScroll(isMobile = isCompactLayout()) {
@@ -4429,6 +4468,7 @@ function setupMobileViewportBehavior(mobileMedia, input) {
             syncViewportState({ normalizeScroll: true });
         }, 120);
     });
+    input.addEventListener('input', handleViewportChange);
 }
 
 function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
@@ -4504,11 +4544,13 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
         if (event.matches) return;
         applyMobileFocusState(false);
         setMobileKeyboardOpen(false);
+        applyMobilePromptLift({ isMobile: false, keyboardOpen: false });
     };
 
     const handleMobileViewportChange = createRafThrottledHandler(() => {
         if (!mobileMedia.matches) {
             setMobileKeyboardOpen(false);
+            applyMobilePromptLift({ isMobile: false, keyboardOpen: false });
             return;
         }
         syncMobileKeyboardState(true);

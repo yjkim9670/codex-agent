@@ -2,5 +2,4 @@ workspace
 sync_protect.list
 .venv/
 .env
-model_agent_env.local.sh
 .sync_runtime/

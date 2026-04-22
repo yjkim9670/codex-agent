@@ -166,7 +166,7 @@ const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
-const USAGE_HISTORY_DEFAULT_HOURS = 24 * 7;
+const USAGE_HISTORY_DEFAULT_HOURS = 24 * 14;
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
 const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
@@ -285,6 +285,8 @@ let remoteStreamPollTimer = null;
 let remoteStreamStatusInFlight = false;
 let sessionLoadLockStartedAt = 0;
 let streamMonitorState = null;
+let usageHistoryLastRequestedHours = USAGE_HISTORY_DEFAULT_HOURS;
+let usageHistoryResizeRaf = 0;
 let hoverTooltipInteractionsBound = false;
 let hoverTooltipLayer = null;
 let hoverTooltipAnchor = null;
@@ -2013,6 +2015,9 @@ document.addEventListener('DOMContentLoaded', () => {
             syncFileBrowserHorizontalScrollMetrics();
         }
         syncWorkModeFileHorizontalScrollMetrics();
+        if (isUsageHistoryOverlayOpen()) {
+            scheduleUsageHistoryOverlayRerender();
+        }
     });
     window.addEventListener('resize', handleWindowLayoutResize);
     window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
@@ -7740,6 +7745,7 @@ function getUsageHistoryOverlayElements() {
         meta: document.getElementById('codex-usage-history-overlay-meta'),
         scale: document.getElementById('codex-usage-history-scale'),
         ratios: document.getElementById('codex-usage-history-ratios'),
+        chartWrap: document.getElementById('codex-usage-history-chart-wrap'),
         chart: document.getElementById('codex-usage-history-chart'),
         legend: document.getElementById('codex-usage-history-legend'),
         empty: document.getElementById('codex-usage-history-empty')
@@ -7808,6 +7814,107 @@ function resolveUsageHistoryRelationScope(history) {
     return relationScope === 'account' ? 'account' : 'workspace';
 }
 
+function formatUsageHistoryTokenRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '--';
+    if (numeric >= 100) {
+        return `${formatCompactTokenCount(Math.round(numeric))} tok/h`;
+    }
+    if (numeric >= 10) {
+        return `${numeric.toFixed(1).replace(/\.0$/, '')} tok/h`;
+    }
+    return `${numeric.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')} tok/h`;
+}
+
+function formatUsageHistoryRatePercent(value, unit = '') {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '--';
+    let text = '';
+    if (numeric >= 100) {
+        text = formatNumber(Math.round(numeric));
+    } else if (numeric >= 10) {
+        text = numeric.toFixed(1).replace(/\.0$/, '');
+    } else if (numeric >= 1) {
+        text = numeric.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    } else {
+        text = numeric.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+    }
+    return `${text}%${unit}`;
+}
+
+function resolveUsageHistoryAverageWeeklyPace(history, averageEntry) {
+    const avgTokensPerHour = Number(averageEntry?.avg_tokens_per_hour);
+    if (!Number.isFinite(avgTokensPerHour) || avgTokensPerHour < 0) {
+        return null;
+    }
+
+    const weeklyRelation = history?.relation?.weekly || {};
+    const reliableTokensPerPercent = Number(weeklyRelation?.tokens_per_percent);
+    const estimatedTokensPerPercent = Number(weeklyRelation?.raw_tokens_per_percent);
+    const tokensPerPercent = (
+        Number.isFinite(reliableTokensPerPercent) && reliableTokensPerPercent > 0
+    )
+        ? reliableTokensPerPercent
+        : (
+            Number.isFinite(estimatedTokensPerPercent) && estimatedTokensPerPercent > 0
+                ? estimatedTokensPerPercent
+                : null
+        );
+    if (!Number.isFinite(tokensPerPercent) || tokensPerPercent <= 0) {
+        return null;
+    }
+
+    const percentPerHour = Math.max(0, avgTokensPerHour / tokensPerPercent);
+    return {
+        percentPerHour,
+        projectedWeeklyPercent: percentPerHour * 24 * 7,
+        isReliable: Boolean(
+            weeklyRelation?.is_reliable
+            && Number.isFinite(reliableTokensPerPercent)
+            && reliableTokensPerPercent > 0
+        )
+    };
+}
+
+function appendUsageHistoryMetricCard(container, {
+    label = '',
+    value = '--',
+    subvalue = '',
+    meta = '',
+    lowConfidence = false
+} = {}) {
+    if (!(container instanceof HTMLElement)) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'usage-history-ratio-card';
+    if (lowConfidence) {
+        wrapper.classList.add('is-low-confidence');
+    }
+
+    const labelNode = document.createElement('div');
+    labelNode.className = 'usage-history-ratio-label';
+    labelNode.textContent = label;
+    wrapper.appendChild(labelNode);
+
+    const valueNode = document.createElement('div');
+    valueNode.className = 'usage-history-ratio-value';
+    valueNode.textContent = value;
+    wrapper.appendChild(valueNode);
+
+    if (subvalue) {
+        const subvalueNode = document.createElement('div');
+        subvalueNode.className = 'usage-history-ratio-subvalue';
+        subvalueNode.textContent = subvalue;
+        wrapper.appendChild(subvalueNode);
+    }
+
+    const metaNode = document.createElement('div');
+    metaNode.className = 'usage-history-ratio-meta';
+    metaNode.textContent = meta;
+    wrapper.appendChild(metaNode);
+
+    container.appendChild(wrapper);
+}
+
 function renderUsageHistoryRatioCards(history) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.ratios) return;
@@ -7820,8 +7927,6 @@ function renderUsageHistoryRatioCards(history) {
         { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
     ];
     ratioItems.forEach(item => {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'usage-history-ratio-card';
         const ratioValue = Number(item?.entry?.tokens_per_percent);
         const rawRatioValue = Number(item?.entry?.raw_tokens_per_percent);
         const sampleCount = Number(item?.entry?.sample_count);
@@ -7833,19 +7938,6 @@ function renderUsageHistoryRatioCards(history) {
         const fallbackValue = Number.isFinite(rawRatioValue)
             ? `${formatCompactTokenCount(rawRatioValue)} tok`
             : '--';
-
-        const label = document.createElement('div');
-        label.className = 'usage-history-ratio-label';
-        label.textContent = item.label;
-        wrapper.appendChild(label);
-
-        const value = document.createElement('div');
-        value.className = 'usage-history-ratio-value';
-        value.textContent = displayValue;
-        wrapper.appendChild(value);
-
-        const meta = document.createElement('div');
-        meta.className = 'usage-history-ratio-meta';
         const metaParts = [`scope ${relationScope}`];
         if (Number.isFinite(sampleCount)) {
             metaParts.push(`samples ${Math.max(0, Math.round(sampleCount))}`);
@@ -7854,13 +7946,56 @@ function renderUsageHistoryRatioCards(history) {
             metaParts.push(`conf ${confidence}`);
         }
         if (!reliable && Number.isFinite(rawRatioValue)) {
-            wrapper.classList.add('is-low-confidence');
             metaParts.push(`est ${fallbackValue}`);
         }
-        meta.textContent = metaParts.join(' · ');
-        wrapper.appendChild(meta);
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: item.label,
+            value: displayValue,
+            meta: metaParts.join(' · '),
+            lowConfidence: !reliable && Number.isFinite(rawRatioValue)
+        });
+    });
 
-        elements.ratios.appendChild(wrapper);
+    const averageItems = [
+        {
+            label: '24h avg/hour',
+            entry: history?.averages?.daily || history?.relation?.averages?.daily || null
+        },
+        {
+            label: '7d avg/hour',
+            entry: history?.averages?.weekly || history?.relation?.averages?.weekly || null
+        }
+    ];
+    averageItems.forEach(item => {
+        const avgTokensPerHour = Number(item?.entry?.avg_tokens_per_hour);
+        const tokenTotal = Number(item?.entry?.token_total);
+        const sampleCount = Number(item?.entry?.sample_count);
+        const expectedSamples = Number(item?.entry?.expected_samples);
+        const coverageRatio = Number(item?.entry?.coverage_ratio);
+        const scope = String(item?.entry?.scope || relationScope || '').trim() || relationScope;
+        const weeklyPace = resolveUsageHistoryAverageWeeklyPace(history, item?.entry);
+        const metaParts = [`scope ${scope}`];
+        if (weeklyPace) {
+            metaParts.push(`wk rate ${formatUsageHistoryRatePercent(weeklyPace.percentPerHour, '/h')}`);
+        }
+        if (Number.isFinite(tokenTotal)) {
+            metaParts.push(`total ${formatCompactTokenCount(Math.max(0, Math.round(tokenTotal)))} tok`);
+        }
+        if (Number.isFinite(sampleCount) && Number.isFinite(expectedSamples) && expectedSamples > 0) {
+            metaParts.push(`samples ${Math.max(0, Math.round(sampleCount))}/${Math.max(1, Math.round(expectedSamples))}`);
+        }
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: item.label,
+            value: formatUsageHistoryTokenRate(avgTokensPerHour),
+            subvalue: weeklyPace
+                ? `Weekly pace ${formatUsageHistoryRatePercent(weeklyPace.projectedWeeklyPercent)}`
+                : '',
+            meta: metaParts.join(' · '),
+            lowConfidence: (
+                (Number.isFinite(coverageRatio) && coverageRatio < 0.6)
+                || Boolean(weeklyPace && !weeklyPace.isReliable)
+            )
+        });
     });
 }
 
@@ -7926,36 +8061,101 @@ function renderUsageHistoryLegend(history) {
     });
 }
 
+function resolveUsageHistoryChartDisplayHeight(containerWidth, mobileLayout) {
+    const normalizedWidth = Math.max(280, Number(containerWidth) || 0);
+    if (mobileLayout) {
+        return clampToRange(Math.round(normalizedWidth * 0.92), 300, 520);
+    }
+    return clampToRange(Math.round(normalizedWidth * 0.42), 260, 420);
+}
+
+function resetUsageHistoryChartPresentation(chartWrap, chart) {
+    if (chartWrap instanceof HTMLElement) {
+        chartWrap.style.removeProperty('--usage-history-chart-height');
+    }
+    if (chart instanceof SVGElement) {
+        chart.style.removeProperty('--usage-history-chart-axis-font-size');
+        chart.style.removeProperty('--usage-history-chart-title-font-size');
+    }
+}
+
+function applyUsageHistoryChartTypography(chart, containerWidth, displayHeight, mobileLayout) {
+    const normalizedWidth = Math.max(280, Number(containerWidth) || 0);
+    const normalizedHeight = Math.max(220, Number(displayHeight) || 0);
+    const widthBase = mobileLayout ? 380 : 760;
+    const heightBase = mobileLayout ? 340 : 320;
+    const fontScale = clampToRange(
+        Math.min(normalizedWidth / widthBase, normalizedHeight / heightBase),
+        0.86,
+        1.18
+    );
+    const axisFontSize = Math.round((11 * fontScale) * 100) / 100;
+    const titleFontSize = Math.round((10 * fontScale) * 100) / 100;
+    if (chart instanceof SVGElement) {
+        chart.style.setProperty('--usage-history-chart-axis-font-size', `${axisFontSize}px`);
+        chart.style.setProperty('--usage-history-chart-title-font-size', `${titleFontSize}px`);
+    }
+    return {
+        axisFontSize,
+        titleFontSize,
+        axisLabelOffset: Math.max(3.5, Math.round(axisFontSize * 0.36 * 100) / 100),
+        axisSideGap: Math.max(8, Math.round(axisFontSize * 0.72)),
+        titleGap: Math.max(5, Math.round(titleFontSize * 0.74)),
+        bottomLabelGap: Math.max(20, Math.round(axisFontSize * 2.05))
+    };
+}
+
+function buildUsageHistorySubtitle(hours) {
+    const normalizedHours = Number.isFinite(Number(hours)) && Number(hours) > 0
+        ? Math.round(Number(hours))
+        : USAGE_HISTORY_DEFAULT_HOURS;
+    if (normalizedHours >= 24 && normalizedHours % 24 === 0) {
+        const days = Math.max(1, Math.round(normalizedHours / 24));
+        return `최근 ${days}일 · 1시간 단위 사용량 추이 (KST)`;
+    }
+    return `최근 ${normalizedHours}시간 · 1시간 단위 사용량 추이 (KST)`;
+}
+
 function renderUsageHistoryChart(history) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.chart) return { rendered: false, percentScale: 100 };
     const chart = elements.chart;
+    const chartWrap = elements.chartWrap || chart.parentElement;
     chart.innerHTML = '';
 
     const items = Array.isArray(history?.items) ? history.items : [];
-    if (items.length < 2) return { rendered: false, percentScale: 100 };
+    if (items.length < 2) {
+        resetUsageHistoryChartPresentation(chartWrap, chart);
+        return { rendered: false, percentScale: 100 };
+    }
 
     const mobileLayout = isMobileLayout();
-    const chartContainer = chart.parentElement;
-    const viewportWidth = Number(chart.clientWidth)
-        || Number(chartContainer?.clientWidth)
+    const containerWidth = Number(chartWrap?.clientWidth)
+        || Number(chart.clientWidth)
         || 360;
-    const viewportHeight = Number(chart.clientHeight)
-        || Number(chartContainer?.clientHeight)
-        || (mobileLayout ? 380 : 320);
-    const width = mobileLayout ? 760 : 920;
-    const viewportRatio = viewportWidth > 0
-        ? viewportHeight / viewportWidth
-        : (mobileLayout ? (430 / 920) : (320 / 920));
-    const height = mobileLayout
-        ? clampToRange(Math.round(width * viewportRatio), 720, 980)
-        : 320;
+    const displayHeight = resolveUsageHistoryChartDisplayHeight(containerWidth, mobileLayout);
+    if (chartWrap instanceof HTMLElement) {
+        chartWrap.style.setProperty('--usage-history-chart-height', `${displayHeight}px`);
+    }
+    const typography = applyUsageHistoryChartTypography(chart, containerWidth, displayHeight, mobileLayout);
+    const width = mobileLayout ? 920 : 1000;
+    const aspectRatio = containerWidth > 0
+        ? displayHeight / containerWidth
+        : (mobileLayout ? 0.92 : 0.42);
+    const height = clampToRange(
+        Math.round(width * aspectRatio),
+        mobileLayout ? 720 : 340,
+        mobileLayout ? 980 : 520
+    );
+    const leftMargin = clampToRange(Math.round(typography.axisFontSize * 5.8), 58, mobileLayout ? 68 : 72);
+    const rightMargin = clampToRange(Math.round(typography.axisFontSize * 5.5), 56, mobileLayout ? 66 : 72);
     const margin = mobileLayout
-        ? { top: 16, right: 62, bottom: 36, left: 64 }
-        : { top: 16, right: 64, bottom: 38, left: 64 };
+        ? { top: 16, right: rightMargin, bottom: Math.max(36, Math.round(typography.axisFontSize * 3.1)), left: leftMargin }
+        : { top: 16, right: rightMargin, bottom: Math.max(38, Math.round(typography.axisFontSize * 3.25)), left: leftMargin };
     const plotWidth = Math.max(1, width - margin.left - margin.right);
     const plotAreaHeight = Math.max(1, height - margin.top - margin.bottom);
     chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    chart.setAttribute('preserveAspectRatio', 'none');
 
     const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
     const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
@@ -7990,13 +8190,13 @@ function renderUsageHistoryChart(history) {
     if (mobileLayout) {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: margin.left,
-            y: tokenTop - 5,
+            y: tokenTop - typography.titleGap,
             'text-anchor': 'start',
             class: 'axis-title'
         })).textContent = 'Token delta';
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: margin.left,
-            y: percentTop - 5,
+            y: percentTop - typography.titleGap,
             'text-anchor': 'start',
             class: 'axis-title'
         })).textContent = `Used % (0-${percentScale}%)`;
@@ -8014,8 +8214,8 @@ function renderUsageHistoryChart(history) {
             }));
             const leftToken = Math.round((maxTokenDelta * percent) / 100);
             chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left - 8,
-                y: y + 4,
+                x: margin.left - typography.axisSideGap,
+                y: y + typography.axisLabelOffset,
                 'text-anchor': 'end',
                 class: 'axis-label'
             })).textContent = formatCompactTokenCount(leftToken);
@@ -8030,8 +8230,8 @@ function renderUsageHistoryChart(history) {
                 class: 'grid-line'
             }));
             chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left + plotWidth + 8,
-                y: y + 4,
+                x: margin.left + plotWidth + typography.axisSideGap,
+                y: y + typography.axisLabelOffset,
                 'text-anchor': 'start',
                 class: 'axis-label'
             })).textContent = formatUsageHistoryPercentTick(percent);
@@ -8048,14 +8248,14 @@ function renderUsageHistoryChart(history) {
             }));
             const leftToken = Math.round((maxTokenDelta * percent) / percentScale);
             chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left - 8,
-                y: y + 4,
+                x: margin.left - typography.axisSideGap,
+                y: y + typography.axisLabelOffset,
                 'text-anchor': 'end',
                 class: 'axis-label'
             })).textContent = formatCompactTokenCount(leftToken);
             chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left + plotWidth + 8,
-                y: y + 4,
+                x: margin.left + plotWidth + typography.axisSideGap,
+                y: y + typography.axisLabelOffset,
                 'text-anchor': 'start',
                 class: 'axis-label'
             })).textContent = formatUsageHistoryPercentTick(percent);
@@ -8113,7 +8313,7 @@ function renderUsageHistoryChart(history) {
     ].forEach(label => {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: label.x,
-            y: percentBottom + 24,
+            y: percentBottom + typography.bottomLabelGap,
             'text-anchor': label.anchor,
             class: 'axis-label'
         })).textContent = label.text;
@@ -8122,20 +8322,37 @@ function renderUsageHistoryChart(history) {
         rendered: true,
         percentScale,
         maxUsedPercent,
-        mobileLayout
+        mobileLayout,
+        displayHeight
     };
+}
+
+function scheduleUsageHistoryOverlayRerender() {
+    if (usageHistoryResizeRaf) return;
+    const rerender = () => {
+        usageHistoryResizeRaf = 0;
+        if (!isUsageHistoryOverlayOpen()) return;
+        renderUsageHistoryOverlay(state.settings?.usageHistory || null, usageHistoryLastRequestedHours);
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+        usageHistoryResizeRaf = window.requestAnimationFrame(rerender);
+        return;
+    }
+    usageHistoryResizeRaf = window.setTimeout(rerender, 0);
 }
 
 function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAULT_HOURS) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements) return;
 
+    usageHistoryLastRequestedHours = Number.isFinite(Number(requestedHours)) && Number(requestedHours) > 0
+        ? Math.round(Number(requestedHours))
+        : USAGE_HISTORY_DEFAULT_HOURS;
     const itemCount = Number(history?.count);
     const updatedAt = formatResetTimestamp(history?.updated_at);
-    const hours = Number(requestedHours);
-    const hoursText = Number.isFinite(hours) && hours > 0 ? Math.round(hours) : USAGE_HISTORY_DEFAULT_HOURS;
+    const hoursText = usageHistoryLastRequestedHours;
     if (elements.subtitle) {
-        elements.subtitle.textContent = `최근 ${hoursText}시간 단위 추이 (KST)`;
+        elements.subtitle.textContent = buildUsageHistorySubtitle(hoursText);
     }
 
     if (elements.meta) {
@@ -8145,6 +8362,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         }
         if (updatedAt) {
             metaParts.push(`Updated ${updatedAt}`);
+        }
+        const retentionDays = Number(history?.retention_days);
+        if (Number.isFinite(retentionDays) && retentionDays > 0) {
+            metaParts.push(`Retention ${Math.round(retentionDays)}d`);
         }
         const relationScope = String(history?.relation?.scope || history?.token_delta_scope || '').trim().toLowerCase();
         if (relationScope === 'account') {
@@ -8162,6 +8383,8 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         const titleParts = [pathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
         if (pathText) {
             metaParts.push(pathText);
+            elements.meta.setAttribute('title', titleParts.join('\n'));
+        } else if (titleParts.length > 0) {
             elements.meta.setAttribute('title', titleParts.join('\n'));
         } else {
             elements.meta.removeAttribute('title');
@@ -8186,6 +8409,7 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
     const normalizedHours = Number.isFinite(Number(hours)) && Number(hours) > 0
         ? Math.round(Number(hours))
         : USAGE_HISTORY_DEFAULT_HOURS;
+    usageHistoryLastRequestedHours = normalizedHours;
     const query = new URLSearchParams({ hours: String(normalizedHours) }).toString();
     try {
         const result = await fetchJson(`/api/codex/usage/history?${query}`, {
@@ -8214,6 +8438,7 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         if (elements?.chart) {
             elements.chart.innerHTML = '';
         }
+        resetUsageHistoryChartPresentation(elements?.chartWrap, elements?.chart);
         if (elements?.scale) {
             elements.scale.textContent = 'Scale --';
         }
@@ -8266,6 +8491,7 @@ async function openUsageHistoryOverlay() {
     if (elements.chart) {
         elements.chart.innerHTML = '';
     }
+    resetUsageHistoryChartPresentation(elements.chartWrap, elements.chart);
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
     }
@@ -8275,6 +8501,7 @@ async function openUsageHistoryOverlay() {
 function closeUsageHistoryOverlay() {
     const elements = getUsageHistoryOverlayElements();
     if (!elements) return;
+    resetUsageHistoryChartPresentation(elements.chartWrap, elements.chart);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
@@ -12142,6 +12369,32 @@ async function resumeStreamsFromStorage(pendingStreams) {
     }
 }
 
+async function syncActiveSessionMessagesFromServer(sessionId) {
+    if (!sessionId || sessionId !== state.activeSessionId) return false;
+    try {
+        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+            timeoutMs: SESSION_DETAIL_REQUEST_TIMEOUT_MS
+        });
+        const session = result?.session;
+        if (!session) return false;
+        if ((session?.id || sessionId) !== state.activeSessionId) {
+            return false;
+        }
+        if (session?.id) {
+            upsertSessionSummary(session);
+        }
+        renderSessions();
+        renderMessages(session?.messages || []);
+        updateHeader(session || null);
+        syncActiveSessionControls();
+        syncActiveSessionStatus();
+        return true;
+    } catch (error) {
+        console.warn('[codex-ui] failed to sync active session messages from server', error);
+        return false;
+    }
+}
+
 async function connectToExistingStream(sessionId, streamId, startedAt = null) {
     if (!sessionId || !streamId) return false;
     const sessionState = ensureSessionState(sessionId);
@@ -12152,6 +12405,9 @@ async function connectToExistingStream(sessionId, streamId, startedAt = null) {
         return false;
     }
     const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
+    if (sessionId === state.activeSessionId) {
+        await syncActiveSessionMessagesFromServer(sessionId);
+    }
     persistActiveStream({
         id: streamId,
         sessionId,

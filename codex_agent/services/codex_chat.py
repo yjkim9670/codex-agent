@@ -13,7 +13,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .. import state
@@ -125,7 +125,9 @@ _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
-_USAGE_HISTORY_MAX_ITEMS = 24 * 180
+_USAGE_HISTORY_RETENTION_DAYS = 14
+_USAGE_HISTORY_DEFAULT_HOURS = 24 * _USAGE_HISTORY_RETENTION_DAYS
+_USAGE_HISTORY_MAX_ITEMS = _USAGE_HISTORY_DEFAULT_HOURS
 _TOKENS_PER_PERCENT_MIN_SAMPLES = 2
 _TOKENS_PER_PERCENT_MIN_PERCENT_SUM = 1.0
 _TOKENS_PER_PERCENT_MEDIUM_SAMPLES = 3
@@ -2239,10 +2241,57 @@ def _aggregate_tokens_per_percent(history_items, delta_key, token_delta_key='del
     }
 
 
-def get_usage_history_summary(hours=168):
+def _summarize_usage_history_hourly_average(history_items, window_hours, delta_key='delta_tokens'):
+    normalized_window_hours = _coerce_non_negative_int(window_hours)
+    if normalized_window_hours is None or normalized_window_hours <= 0:
+        normalized_window_hours = 24
+    normalized_window_hours = max(1, normalized_window_hours)
+
+    latest_bucket = None
+    if history_items:
+        latest_bucket = parse_timestamp(history_items[-1].get('bucket_start'))
+    if latest_bucket is None:
+        return {
+            'window_hours': normalized_window_hours,
+            'token_total': 0,
+            'avg_tokens_per_hour': None,
+            'sample_count': 0,
+            'expected_samples': normalized_window_hours,
+            'covered_hours': 0,
+            'coverage_ratio': 0.0,
+        }
+
+    threshold = latest_bucket - timedelta(hours=max(0, normalized_window_hours - 1))
+    window_items = []
+    for item in history_items:
+        bucket_start = parse_timestamp(item.get('bucket_start'))
+        if bucket_start is None or bucket_start < threshold:
+            continue
+        window_items.append(item)
+
+    token_total = sum(
+        (_coerce_non_negative_int(item.get(delta_key)) or 0)
+        for item in window_items
+    )
+    sample_count = len(window_items)
+    covered_hours = min(normalized_window_hours, sample_count)
+    avg_tokens_per_hour = round(token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    coverage_ratio = round(covered_hours / normalized_window_hours, 4) if normalized_window_hours > 0 else 0.0
+    return {
+        'window_hours': normalized_window_hours,
+        'token_total': token_total,
+        'avg_tokens_per_hour': avg_tokens_per_hour,
+        'sample_count': sample_count,
+        'expected_samples': normalized_window_hours,
+        'covered_hours': covered_hours,
+        'coverage_ratio': coverage_ratio,
+    }
+
+
+def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
     requested_hours = _coerce_non_negative_int(hours)
     if requested_hours is None or requested_hours <= 0:
-        requested_hours = 168
+        requested_hours = _USAGE_HISTORY_DEFAULT_HOURS
     requested_hours = min(requested_hours, _USAGE_HISTORY_MAX_ITEMS)
 
     with _USAGE_HISTORY_LOCK:
@@ -2320,6 +2369,8 @@ def get_usage_history_summary(hours=168):
         account_weekly_relation if relation_scope == 'account' else workspace_weekly_relation
     )
     reset_count = sum(1 for item in history_items if item.get('reset_detected'))
+    daily_average = _summarize_usage_history_hourly_average(history_items, 24, delta_key='delta_tokens')
+    weekly_average = _summarize_usage_history_hourly_average(history_items, 24 * 7, delta_key='delta_tokens')
 
     return {
         'path': str(CODEX_USAGE_HISTORY_PATH),
@@ -2327,6 +2378,8 @@ def get_usage_history_summary(hours=168):
         'bucket_hours': max(1, _coerce_non_negative_int(ledger.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS),
         'timezone': str(ledger.get('timezone') or 'Asia/Seoul'),
         'requested_hours': requested_hours,
+        'retention_hours': _USAGE_HISTORY_MAX_ITEMS,
+        'retention_days': _USAGE_HISTORY_RETENTION_DAYS,
         'count': len(history_items),
         'first_bucket_start': first_bucket,
         'last_bucket_start': last_bucket,
@@ -2341,6 +2394,18 @@ def get_usage_history_summary(hours=168):
             'scope': relation_scope,
             'five_hour': five_hour_relation,
             'weekly': weekly_relation,
+            'averages': {
+                'daily': {
+                    **daily_average,
+                    'scope': relation_scope,
+                    'label': '24h'
+                },
+                'weekly': {
+                    **weekly_average,
+                    'scope': relation_scope,
+                    'label': '7d'
+                },
+            },
             'workspace': {
                 'five_hour': workspace_five_hour_relation,
                 'weekly': workspace_weekly_relation,
@@ -2358,6 +2423,18 @@ def get_usage_history_summary(hours=168):
             'limits_source_path': str(CODEX_SESSIONS_PATH),
             'relation_scope': relation_scope,
             'token_delta_key': token_delta_key,
+        },
+        'averages': {
+            'daily': {
+                **daily_average,
+                'scope': relation_scope,
+                'label': '24h'
+            },
+            'weekly': {
+                **weekly_average,
+                'scope': relation_scope,
+                'label': '7d'
+            },
         },
         'items': history_items
     }

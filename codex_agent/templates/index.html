@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=121">
+    <link rel="stylesheet" href="/static/css/app.css?v=123">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -544,7 +544,7 @@
             <div class="usage-history-overlay-header">
                 <div class="usage-history-overlay-heading">
                     <div class="usage-history-overlay-title" id="codex-usage-history-overlay-title">Usage History</div>
-                    <div class="usage-history-overlay-subtitle" id="codex-usage-history-overlay-subtitle">1시간 단위 사용량 추이</div>
+                    <div class="usage-history-overlay-subtitle" id="codex-usage-history-overlay-subtitle">최근 14일 · 1시간 단위 사용량 추이</div>
                 </div>
                 <button class="btn ghost icon-only usage-history-overlay-close" type="button" id="codex-usage-history-overlay-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
@@ -556,7 +556,7 @@
                     <div class="usage-history-scale-badge" id="codex-usage-history-scale">Scale --</div>
                     <div class="usage-history-ratio-cards" id="codex-usage-history-ratios"></div>
                 </div>
-                <div class="usage-history-chart-wrap">
+                <div class="usage-history-chart-wrap" id="codex-usage-history-chart-wrap">
                     <svg
                         class="usage-history-chart"
                         id="codex-usage-history-chart"
@@ -657,12 +657,18 @@
                     </button>
                 </div>
                 <div class="sync-overlay-loading" id="codex-sync-overlay-loading">원격 이력을 불러오는 중...</div>
-                <div class="sync-overlay-section-title" id="codex-sync-overlay-files-title">커밋 대상 파일</div>
-                <div class="sync-overlay-files-empty is-hidden" id="codex-sync-overlay-files-empty">커밋 대상 파일이 없습니다.</div>
-                <ul class="sync-overlay-files-list git-file-tree-list is-hidden" id="codex-sync-overlay-files-list"></ul>
-                <div class="sync-overlay-section-title" id="codex-sync-overlay-history-title">원격 이력</div>
-                <div class="sync-overlay-empty is-hidden" id="codex-sync-overlay-empty">표시할 이력이 없습니다.</div>
-                <ul class="sync-overlay-list is-hidden" id="codex-sync-overlay-list"></ul>
+                <div class="sync-overlay-sections">
+                    <div class="sync-overlay-section sync-overlay-section-files">
+                        <div class="sync-overlay-section-title" id="codex-sync-overlay-files-title">커밋 대상 파일</div>
+                        <div class="sync-overlay-files-empty is-hidden" id="codex-sync-overlay-files-empty">커밋 대상 파일이 없습니다.</div>
+                        <ul class="sync-overlay-files-list git-file-tree-list is-hidden" id="codex-sync-overlay-files-list"></ul>
+                    </div>
+                    <div class="sync-overlay-section sync-overlay-section-history">
+                        <div class="sync-overlay-section-title" id="codex-sync-overlay-history-title">원격 이력</div>
+                        <div class="sync-overlay-empty is-hidden" id="codex-sync-overlay-empty">표시할 이력이 없습니다.</div>
+                        <ul class="sync-overlay-list is-hidden" id="codex-sync-overlay-list"></ul>
+                    </div>
+                </div>
             </div>
             <div class="sync-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-sync-overlay-close-footer">닫기</button>
@@ -749,6 +755,6 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=100"></script>
+    <script src="/static/js/app.js?v=123"></script>
 </body>
 </html>

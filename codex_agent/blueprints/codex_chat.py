@@ -4,6 +4,7 @@ import json
 import re
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -53,7 +54,10 @@ from ..services.codex_chat import (
 )
 from ..services.file_browser import (
     FileBrowserError,
+    build_download_payload,
+    delete_files,
     list_directory,
+    move_files,
     read_file,
     read_file_raw,
 )
@@ -752,6 +756,68 @@ def codex_files_raw(root_key, relative_path):
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+
+@bp.route('/api/codex/files/download', methods=['POST'])
+def codex_files_download():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = build_download_payload(
+            root_key=payload.get('root'),
+            relative_paths=payload.get('paths'),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+    response = Response(
+        result.get('content') or b'',
+        mimetype=result.get('mime_type') or 'application/octet-stream',
+    )
+    download_name = str(result.get('download_name') or 'download.bin').strip() or 'download.bin'
+    response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(download_name)}"
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
+@bp.route('/api/codex/files/delete', methods=['POST'])
+def codex_files_delete():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = delete_files(
+            root_key=payload.get('root'),
+            relative_paths=payload.get('paths'),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/move', methods=['POST'])
+def codex_files_move():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = move_files(
+            root_key=payload.get('root'),
+            relative_paths=payload.get('paths'),
+            destination_path=payload.get('destination_path'),
+            destination_directory=payload.get('destination_directory'),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
 
 
 @bp.route('/api/codex/git/<action>', methods=['POST', 'GET'])

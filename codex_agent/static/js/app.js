@@ -123,6 +123,7 @@ const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
+const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
@@ -142,6 +143,9 @@ const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_PANEL_VARIANT_WORK_MODE = 'work-mode';
 const FILE_PANEL_VARIANT_OVERLAY = 'overlay';
+const FILE_PANEL_CHAT_CONTEXT_MAX_FILES = 6;
+const FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE = 4000;
+const FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS = 18000;
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
@@ -228,6 +232,9 @@ let fileBrowserViewerFullscreen = false;
 let fileBrowserMobileView = FILE_BROWSER_MOBILE_VIEW_LIST;
 let fileBrowserCachedEntries = [];
 let fileBrowserCachedTruncated = false;
+let fileBrowserSelectedPaths = new Set();
+let fileBrowserSelectionAnchorPath = '';
+let fileBrowserBulkActionInFlight = false;
 let fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let fileBrowserResizePointerId = null;
 let fileBrowserColumnResizeState = null;
@@ -244,6 +251,9 @@ let workModeFilePath = '';
 let workModeFileSelectedPath = '';
 let workModeFileCachedEntries = [];
 let workModeFileCachedTruncated = false;
+let workModeFileSelectedPaths = new Set();
+let workModeFileSelectionAnchorPath = '';
+let workModeFileBulkActionInFlight = false;
 let workModeFileViewerFullscreen = false;
 let workModePreviewFullscreen = false;
 let workModeFileSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
@@ -732,6 +742,23 @@ function syncActiveSessionControls() {
     renderRunningJobsMonitor();
 }
 
+function appendTextToChatInput(text) {
+    const input = document.getElementById('codex-chat-input');
+    const addition = String(text || '');
+    if (!input || !addition.trim()) return false;
+    const current = String(input.value || '');
+    input.value = current.trim()
+        ? `${current.replace(/\s+$/u, '')}\n\n${addition}`
+        : addition;
+    input.focus();
+    const length = input.value.length;
+    if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(length, length);
+    }
+    syncActiveSessionControls();
+    return true;
+}
+
 function resolveRunningJobSessionTitle(sessionId) {
     const targetId = String(sessionId || '').trim();
     if (!targetId) return 'Session';
@@ -1208,6 +1235,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
+    const workModeFileAddContextBtn = document.getElementById('codex-work-mode-file-add-context');
+    const workModeFileMoveBtn = document.getElementById('codex-work-mode-file-move');
+    const workModeFileSelectAllBtn = document.getElementById('codex-work-mode-file-select-all');
+    const workModeFileClearSelectionBtn = document.getElementById('codex-work-mode-file-clear-selection');
+    const workModeFileDownloadBtn = document.getElementById('codex-work-mode-file-download');
+    const workModeFileDeleteBtn = document.getElementById('codex-work-mode-file-delete');
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
     const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
     const workModeFileHScroll = document.getElementById('codex-work-mode-file-hscroll');
@@ -1241,6 +1274,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserAddContextBtn = document.getElementById('codex-file-browser-add-context');
+    const fileBrowserMoveBtn = document.getElementById('codex-file-browser-move');
+    const fileBrowserSelectAllBtn = document.getElementById('codex-file-browser-select-all');
+    const fileBrowserClearSelectionBtn = document.getElementById('codex-file-browser-clear-selection');
+    const fileBrowserDownloadBtn = document.getElementById('codex-file-browser-download');
+    const fileBrowserDeleteBtn = document.getElementById('codex-file-browser-delete');
     const fileBrowserDivider = document.getElementById('codex-file-browser-divider');
     const fileBrowserGridScroll = document.getElementById('codex-file-browser-grid-scroll');
     const fileBrowserHScroll = document.getElementById('codex-file-browser-hscroll');
@@ -1390,9 +1429,40 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    if (workModeFileAddContextBtn) {
+        workModeFileAddContextBtn.addEventListener('click', () => {
+            void addSelectedFilesToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileMoveBtn) {
+        workModeFileMoveBtn.addEventListener('click', () => {
+            void moveSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileSelectAllBtn) {
+        workModeFileSelectAllBtn.addEventListener('click', () => {
+            setFilePanelSelectionToVisibleFiles(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileClearSelectionBtn) {
+        workModeFileClearSelectionBtn.addEventListener('click', () => {
+            clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileDownloadBtn) {
+        workModeFileDownloadBtn.addEventListener('click', () => {
+            void downloadSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileDeleteBtn) {
+        workModeFileDeleteBtn.addEventListener('click', () => {
+            void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
     if (workModeFileUpBtn) {
         workModeFileUpBtn.addEventListener('click', () => {
             if (!workModeFilePath) return;
+            clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
             } else if (isFoldLayout()) {
@@ -1639,6 +1709,36 @@ document.addEventListener('DOMContentLoaded', () => {
             await refreshFileBrowserPreviewSelection();
         });
     }
+    if (fileBrowserAddContextBtn) {
+        fileBrowserAddContextBtn.addEventListener('click', () => {
+            void addSelectedFilesToChatContext(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserMoveBtn) {
+        fileBrowserMoveBtn.addEventListener('click', () => {
+            void moveSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserSelectAllBtn) {
+        fileBrowserSelectAllBtn.addEventListener('click', () => {
+            setFilePanelSelectionToVisibleFiles(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserClearSelectionBtn) {
+        fileBrowserClearSelectionBtn.addEventListener('click', () => {
+            clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserDownloadBtn) {
+        fileBrowserDownloadBtn.addEventListener('click', () => {
+            void downloadSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserDeleteBtn) {
+        fileBrowserDeleteBtn.addEventListener('click', () => {
+            void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
     if (fileBrowserBackBtn) {
         fileBrowserBackBtn.addEventListener('click', () => {
             setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
@@ -1648,6 +1748,7 @@ document.addEventListener('DOMContentLoaded', () => {
         fileBrowserUpBtn.addEventListener('click', () => {
             if (!fileBrowserPath) return;
             const parentPath = getFileBrowserParentPath(fileBrowserPath);
+            clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
             void refreshFileBrowserDirectory({
                 root: fileBrowserRoot,
                 path: parentPath,
@@ -1701,6 +1802,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fileBrowserRoot = nextRoot;
             fileBrowserPath = '';
             fileBrowserSelectedPath = '';
+            clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
             clearFileBrowserViewer();
             updateFileBrowserRootButtons();
             void refreshFileBrowserDirectory({ root: nextRoot, path: '', force: true });
@@ -1746,6 +1848,8 @@ document.addEventListener('DOMContentLoaded', () => {
             void refreshGitSyncOverlayHistory({ force: true });
         });
     });
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
         if (isMobileSessionOverlayOpen()) {
@@ -3130,6 +3234,14 @@ function getFilePanelElementsByPrefix({
     return {
         root,
         layout: byId('layout'),
+        selectionBar: byId('selection-bar'),
+        selectionSummary: byId('selection-summary'),
+        addContextBtn: byId('add-context'),
+        moveBtn: byId('move'),
+        selectAllBtn: byId('select-all'),
+        clearSelectionBtn: byId('clear-selection'),
+        downloadBtn: byId('download'),
+        deleteBtn: byId('delete'),
         gridScroll: byId('grid-scroll'),
         hScroll: byId('hscroll'),
         hScrollTrack: byId('hscroll-track'),
@@ -5806,6 +5918,92 @@ async function fetchArrayBuffer(url, options = {}) {
         contentType,
         buffer: await response.arrayBuffer()
     };
+}
+
+async function fetchBlob(url, options = {}) {
+    const requestOptions = options && typeof options === 'object'
+        ? { ...options }
+        : {};
+    const timeoutMs = requestOptions.timeoutMs;
+    delete requestOptions.timeoutMs;
+    const timeoutController = createFetchTimeoutController(timeoutMs, requestOptions.signal);
+    if (timeoutController.signal) {
+        requestOptions.signal = timeoutController.signal;
+    }
+    let response;
+    try {
+        response = await fetch(url, requestOptions);
+    } catch (error) {
+        if (timeoutController.didTimeout()) {
+            const seconds = Math.max(1, Math.round(Number(timeoutMs) / 1000));
+            const timeoutError = new Error(`요청 시간이 초과되었습니다. (${seconds}초)`);
+            timeoutError.isTimeout = true;
+            timeoutError.timeoutMs = Number(timeoutMs);
+            timeoutError.cause = error;
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        timeoutController.clear();
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok) {
+        if (contentType.includes('application/json')) {
+            const data = await response.json();
+            const error = new Error(data?.error || `Request failed (${response.status})`);
+            error.status = response.status;
+            error.payload = data;
+            throw error;
+        }
+        const text = await response.text();
+        const error = new Error(text || `Request failed (${response.status})`);
+        error.status = response.status;
+        error.payload = text;
+        throw error;
+    }
+
+    return {
+        contentType,
+        contentDisposition: response.headers.get('content-disposition') || '',
+        blob: await response.blob()
+    };
+}
+
+function extractFilenameFromContentDisposition(value = '') {
+    const source = String(value || '').trim();
+    if (!source) return '';
+    const encodedMatch = source.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (encodedMatch?.[1]) {
+        try {
+            return decodeURIComponent(encodedMatch[1]);
+        } catch (error) {
+            void error;
+        }
+    }
+    const quotedMatch = source.match(/filename\s*=\s*"([^"]+)"/i);
+    if (quotedMatch?.[1]) {
+        return quotedMatch[1];
+    }
+    const plainMatch = source.match(/filename\s*=\s*([^;]+)/i);
+    return plainMatch?.[1] ? plainMatch[1].trim() : '';
+}
+
+function saveBlobAsFile(blob, filename = 'download.bin') {
+    if (!(blob instanceof Blob)) return false;
+    const downloadName = String(filename || 'download.bin').trim() || 'download.bin';
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = downloadName;
+    anchor.rel = 'noopener';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+    }, 0);
+    return true;
 }
 
 function getGitErrorPayload(error) {
@@ -8725,6 +8923,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
             syncWorkModeFileHorizontalScrollMetrics();
         }
     });
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
 function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -8757,6 +8956,7 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
             syncFileBrowserHorizontalScrollMetrics();
         }
     });
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하세요.') {
@@ -8779,9 +8979,31 @@ function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     clearWorkModeHtmlPreviewState();
 }
 
-function applyFilePanelSelectionState(listElement, selectedPath) {
+function createNormalizedRelativePathSet(paths) {
+    const values = paths instanceof Set ? Array.from(paths) : (Array.isArray(paths) ? paths : []);
+    const normalized = new Set();
+    values.forEach(value => {
+        const candidate = normalizeFileBrowserRelativePath(value);
+        if (candidate) {
+            normalized.add(candidate);
+        }
+    });
+    return normalized;
+}
+
+function applyFilePanelSelectionState(listElement, selectedPath, bulkSelectedPaths = null) {
     if (!(listElement instanceof Element)) return;
     const normalizedSelection = normalizeFileBrowserRelativePath(selectedPath);
+    const bulkSelection = createNormalizedRelativePathSet(bulkSelectedPaths);
+    listElement.querySelectorAll('.work-mode-file-row[data-entry-path]').forEach(row => {
+        const candidate = normalizeFileBrowserRelativePath(row.dataset?.entryPath || '');
+        const checkbox = row.querySelector('input.work-mode-file-checkbox[data-entry-path]');
+        const isBulkSelected = Boolean(candidate) && bulkSelection.has(candidate);
+        row.classList.toggle('is-bulk-selected', isBulkSelected);
+        if (checkbox instanceof HTMLInputElement) {
+            checkbox.checked = isBulkSelected;
+        }
+    });
     listElement.querySelectorAll('button.work-mode-file-entry[data-entry-path]').forEach(button => {
         const candidate = normalizeFileBrowserRelativePath(button.dataset?.entryPath || '');
         button.classList.toggle('is-active', Boolean(normalizedSelection) && candidate === normalizedSelection);
@@ -8791,8 +9013,10 @@ function applyFilePanelSelectionState(listElement, selectedPath) {
 function renderFilePanelList(entries, {
     elements,
     selectedPath = '',
+    bulkSelectedPaths = null,
     includeParentEntry = false,
     parentEntryPath = '',
+    onToggleSelection = null,
     onOpenDirectory = null,
     onOpenFile = null,
     onAfterRender = null
@@ -8801,6 +9025,7 @@ function renderFilePanelList(entries, {
     elements.list.innerHTML = '';
     const rows = Array.isArray(entries) ? entries : [];
     const normalizedParentPath = normalizeFileBrowserRelativePath(parentEntryPath);
+    const bulkSelection = createNormalizedRelativePathSet(bulkSelectedPaths);
 
     const appendEntryRow = (entry, { isParentEntry = false } = {}) => {
         const entryPath = normalizeFileBrowserRelativePath(entry?.path || '');
@@ -8810,6 +9035,41 @@ function renderFilePanelList(entries, {
 
         const item = document.createElement('li');
         item.className = 'file-browser-list-item';
+
+        const row = document.createElement('div');
+        row.className = 'work-mode-file-row';
+        row.dataset.entryPath = resolvedPath;
+        row.dataset.entryType = entryType;
+        if (bulkSelection.has(resolvedPath)) {
+            row.classList.add('is-bulk-selected');
+        }
+
+        const selectCell = document.createElement('div');
+        selectCell.className = 'work-mode-file-cell-select';
+        if (entryType === 'file' && !isParentEntry) {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'work-mode-file-checkbox';
+            checkbox.dataset.entryPath = resolvedPath;
+            checkbox.checked = bulkSelection.has(resolvedPath);
+            checkbox.setAttribute('aria-label', `${String(entry?.name || resolvedPath)} 선택`);
+            checkbox.addEventListener('click', event => {
+                event.stopPropagation();
+                if (typeof onToggleSelection === 'function') {
+                    onToggleSelection(resolvedPath, entry, {
+                        checked: checkbox.checked,
+                        shiftKey: Boolean(event.shiftKey)
+                    });
+                }
+            });
+            selectCell.appendChild(checkbox);
+        } else {
+            const spacer = document.createElement('span');
+            spacer.className = 'work-mode-file-checkbox-spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            selectCell.appendChild(spacer);
+        }
+        row.appendChild(selectCell);
 
         const button = document.createElement('button');
         button.type = 'button';
@@ -8854,7 +9114,8 @@ function renderFilePanelList(entries, {
             }
         });
 
-        item.appendChild(button);
+        row.appendChild(button);
+        item.appendChild(row);
         elements.list.appendChild(item);
     };
 
@@ -8869,7 +9130,7 @@ function renderFilePanelList(entries, {
     rows.forEach(entry => {
         appendEntryRow(entry);
     });
-    applyFilePanelSelectionState(elements.list, selectedPath);
+    applyFilePanelSelectionState(elements.list, selectedPath, bulkSelectedPaths);
     if (typeof onAfterRender === 'function') {
         onAfterRender();
     }
@@ -8877,7 +9138,247 @@ function renderFilePanelList(entries, {
 
 function applyWorkModeFileSelectionState() {
     const elements = getWorkModeFileElements();
-    applyFilePanelSelectionState(elements?.list, workModeFileSelectedPath);
+    applyFilePanelSelectionState(elements?.list, workModeFileSelectedPath, workModeFileSelectedPaths);
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
+}
+
+function getFilePanelSelectedPaths(variant) {
+    return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+        ? fileBrowserSelectedPaths
+        : workModeFileSelectedPaths;
+}
+
+function setFilePanelSelectedPaths(variant, nextPaths) {
+    const normalized = createNormalizedRelativePathSet(nextPaths);
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        fileBrowserSelectedPaths = normalized;
+        return;
+    }
+    workModeFileSelectedPaths = normalized;
+}
+
+function getFilePanelSelectionAnchorPath(variant) {
+    return normalizeFileBrowserRelativePath(
+        normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+            ? fileBrowserSelectionAnchorPath
+            : workModeFileSelectionAnchorPath
+    );
+}
+
+function setFilePanelSelectionAnchorPath(variant, value = '') {
+    const normalized = normalizeFileBrowserRelativePath(value);
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        fileBrowserSelectionAnchorPath = normalized;
+        return;
+    }
+    workModeFileSelectionAnchorPath = normalized;
+}
+
+function getFilePanelCachedEntries(variant) {
+    return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+        ? fileBrowserCachedEntries
+        : workModeFileCachedEntries;
+}
+
+function getFilePanelCurrentPath(variant) {
+    return normalizeFileBrowserRelativePath(
+        normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+            ? fileBrowserPath
+            : workModeFilePath
+    );
+}
+
+function getFilePanelCurrentRoot(variant) {
+    return normalizeFileBrowserRoot(
+        normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+            ? fileBrowserRoot
+            : workModeFileRoot
+    );
+}
+
+function getFilePanelPreviewPath(variant) {
+    return normalizeFileBrowserRelativePath(
+        normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+            ? fileBrowserSelectedPath
+            : workModeFileSelectedPath
+    );
+}
+
+function setFilePanelPreviewPath(variant, value = '') {
+    const normalized = normalizeFileBrowserRelativePath(value);
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        fileBrowserSelectedPath = normalized;
+        return;
+    }
+    workModeFileSelectedPath = normalized;
+}
+
+function isFilePanelBulkActionInFlight(variant) {
+    return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+        ? fileBrowserBulkActionInFlight
+        : workModeFileBulkActionInFlight;
+}
+
+function setFilePanelBulkActionInFlight(variant, inFlight) {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        fileBrowserBulkActionInFlight = Boolean(inFlight);
+    } else {
+        workModeFileBulkActionInFlight = Boolean(inFlight);
+    }
+    syncFilePanelSelectionBar(variant);
+}
+
+function getFilePanelVisibleFileEntries(variant) {
+    const model = buildFilePanelDirectoryEntriesModel(
+        getFilePanelCachedEntries(variant),
+        getFilePanelCurrentPath(variant)
+    );
+    return Array.isArray(model?.visibleEntries)
+        ? model.visibleEntries.filter(entry => entry?.type === 'file')
+        : [];
+}
+
+function getFilePanelVisibleFilePaths(variant) {
+    return getFilePanelVisibleFileEntries(variant)
+        .map(entry => normalizeFileBrowserRelativePath(entry?.path || ''))
+        .filter(Boolean);
+}
+
+function getFilePanelFileEntryMap(variant) {
+    const entries = Array.isArray(getFilePanelCachedEntries(variant)) ? getFilePanelCachedEntries(variant) : [];
+    const map = new Map();
+    entries.forEach(entry => {
+        const normalizedPath = normalizeFileBrowserRelativePath(entry?.path || '');
+        if (!normalizedPath || entry?.type !== 'file') return;
+        map.set(normalizedPath, entry);
+    });
+    return map;
+}
+
+function isFilePanelLoading(elements) {
+    return Boolean(elements?.loading && !elements.loading.classList.contains('is-hidden'));
+}
+
+function syncFilePanelSelectionBar(variant) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
+    if (!elements) return;
+    const selectedPaths = getFilePanelSelectedPaths(variant);
+    const selectedCount = selectedPaths.size;
+    const visibleFileCount = getFilePanelVisibleFilePaths(variant).length;
+    const entryMap = getFilePanelFileEntryMap(variant);
+    let totalSelectedSize = 0;
+    selectedPaths.forEach(path => {
+        const numeric = Number(entryMap.get(path)?.size);
+        if (Number.isFinite(numeric) && numeric > 0) {
+            totalSelectedSize += numeric;
+        }
+    });
+    if (elements.selectionSummary) {
+        const parts = [`선택 ${selectedCount}개`];
+        if (selectedCount > 0 && totalSelectedSize > 0) {
+            parts.push(formatFileBrowserSize(totalSelectedSize));
+        } else if (selectedCount === 0) {
+            parts.push(`현재 파일 ${visibleFileCount}개`);
+        }
+        elements.selectionSummary.textContent = parts.join(' · ');
+    }
+    const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(variant);
+    if (elements.addContextBtn) {
+        elements.addContextBtn.disabled = isBusy || selectedCount <= 0;
+    }
+    if (elements.moveBtn) {
+        elements.moveBtn.disabled = isBusy || selectedCount <= 0;
+    }
+    if (elements.selectAllBtn) {
+        elements.selectAllBtn.disabled = isBusy || visibleFileCount <= 0;
+    }
+    if (elements.clearSelectionBtn) {
+        elements.clearSelectionBtn.disabled = isBusy || selectedCount <= 0;
+    }
+    if (elements.downloadBtn) {
+        elements.downloadBtn.disabled = isBusy || selectedCount <= 0;
+    }
+    if (elements.deleteBtn) {
+        elements.deleteBtn.disabled = isBusy || selectedCount <= 0;
+    }
+}
+
+function applyFilePanelSelectionStateForVariant(variant) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
+    applyFilePanelSelectionState(
+        elements?.list,
+        getFilePanelPreviewPath(variant),
+        getFilePanelSelectedPaths(variant)
+    );
+    syncFilePanelSelectionBar(variant);
+}
+
+function clearFilePanelSelection(variant, { keepAnchor = false } = {}) {
+    setFilePanelSelectedPaths(variant, []);
+    if (!keepAnchor) {
+        setFilePanelSelectionAnchorPath(variant, '');
+    }
+    applyFilePanelSelectionStateForVariant(variant);
+}
+
+function setFilePanelSelectionToVisibleFiles(variant) {
+    const visiblePaths = getFilePanelVisibleFilePaths(variant);
+    setFilePanelSelectedPaths(variant, visiblePaths);
+    setFilePanelSelectionAnchorPath(variant, visiblePaths[visiblePaths.length - 1] || '');
+    applyFilePanelSelectionStateForVariant(variant);
+}
+
+function pruneFilePanelSelectionToEntries(variant, entries) {
+    const filePaths = new Set();
+    (Array.isArray(entries) ? entries : []).forEach(entry => {
+        const normalizedPath = normalizeFileBrowserRelativePath(entry?.path || '');
+        if (normalizedPath && entry?.type === 'file') {
+            filePaths.add(normalizedPath);
+        }
+    });
+    const currentSelection = getFilePanelSelectedPaths(variant);
+    const nextSelection = Array.from(currentSelection).filter(path => filePaths.has(path));
+    setFilePanelSelectedPaths(variant, nextSelection);
+    const anchorPath = getFilePanelSelectionAnchorPath(variant);
+    if (anchorPath && !filePaths.has(anchorPath)) {
+        setFilePanelSelectionAnchorPath(variant, '');
+    }
+}
+
+function toggleFilePanelEntrySelection(variant, entryPath, { checked = null, shiftKey = false } = {}) {
+    const normalizedPath = normalizeFileBrowserRelativePath(entryPath);
+    if (!normalizedPath) return;
+    const visiblePaths = getFilePanelVisibleFilePaths(variant);
+    if (!visiblePaths.includes(normalizedPath)) return;
+
+    const nextSelection = new Set(getFilePanelSelectedPaths(variant));
+    const anchorPath = getFilePanelSelectionAnchorPath(variant);
+    const nextChecked = typeof checked === 'boolean' ? checked : !nextSelection.has(normalizedPath);
+
+    if (shiftKey && anchorPath && visiblePaths.includes(anchorPath)) {
+        const startIndex = visiblePaths.indexOf(anchorPath);
+        const endIndex = visiblePaths.indexOf(normalizedPath);
+        const [rangeStart, rangeEnd] = startIndex <= endIndex
+            ? [startIndex, endIndex]
+            : [endIndex, startIndex];
+        visiblePaths.slice(rangeStart, rangeEnd + 1).forEach(path => {
+            if (nextChecked) {
+                nextSelection.add(path);
+            } else {
+                nextSelection.delete(path);
+            }
+        });
+    } else if (nextChecked) {
+        nextSelection.add(normalizedPath);
+    } else {
+        nextSelection.delete(normalizedPath);
+    }
+
+    setFilePanelSelectedPaths(variant, nextSelection);
+    setFilePanelSelectionAnchorPath(variant, normalizedPath);
+    applyFilePanelSelectionStateForVariant(variant);
 }
 
 function renderWorkModeFileList(entries, { includeParentEntry = false, parentEntryPath = '' } = {}) {
@@ -8885,10 +9386,16 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
     renderFilePanelList(entries, {
         elements,
         selectedPath: workModeFileSelectedPath,
+        bulkSelectedPaths: workModeFileSelectedPaths,
         includeParentEntry,
         parentEntryPath,
+        onToggleSelection: (entryPath, entry, options) => {
+            void entry;
+            toggleFilePanelEntrySelection(FILE_PANEL_VARIANT_WORK_MODE, entryPath, options);
+        },
         onOpenDirectory: entryPath => {
             workModeFileSelectedPath = '';
+            clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
             schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
@@ -8973,6 +9480,7 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
         parentEntryPath: model.parentEntryPath
     });
     renderFilePanelDirectorySummary(elements, model, { truncated });
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
 async function refreshWorkModeFileDirectory(
@@ -9004,6 +9512,7 @@ async function refreshWorkModeFileDirectory(
         const entries = Array.isArray(result?.entries) ? result.entries : [];
         workModeFileCachedEntries = entries;
         workModeFileCachedTruncated = Boolean(result?.truncated);
+        pruneFilePanelSelectionToEntries(FILE_PANEL_VARIANT_WORK_MODE, entries);
         renderWorkModeFileDirectoryEntries(workModeFileCachedEntries, {
             truncated: workModeFileCachedTruncated
         });
@@ -9166,6 +9675,8 @@ function openWorkModeFileTarget(target, options = {}) {
     workModeFileRoot = requestedRoot;
     workModeFilePath = requestedPath;
     workModeFileSelectedPath = requestedFilePath;
+    setFilePanelSelectedPaths(FILE_PANEL_VARIANT_WORK_MODE, []);
+    setFilePanelSelectionAnchorPath(FILE_PANEL_VARIANT_WORK_MODE, '');
     schedulePersistWorkModeFileViewState();
     if (isMobileLayout()) {
         setWorkModeMobileView(
@@ -9539,7 +10050,8 @@ function formatFileBrowserSize(value) {
 
 function applyFileBrowserSelectionState() {
     const elements = getFileBrowserElements();
-    applyFilePanelSelectionState(elements?.list, fileBrowserSelectedPath);
+    applyFilePanelSelectionState(elements?.list, fileBrowserSelectedPath, fileBrowserSelectedPaths);
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) {
@@ -9552,6 +10064,7 @@ function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) 
         parentEntryPath: model.parentEntryPath
     });
     renderFilePanelDirectorySummary(elements, model, { truncated });
+    syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function rerenderFileBrowserDirectoryFromCache() {
@@ -9565,10 +10078,16 @@ function renderFileBrowserList(entries, { includeParentEntry = false, parentEntr
     renderFilePanelList(entries, {
         elements,
         selectedPath: fileBrowserSelectedPath,
+        bulkSelectedPaths: fileBrowserSelectedPaths,
         includeParentEntry,
         parentEntryPath,
+        onToggleSelection: (entryPath, entry, options) => {
+            void entry;
+            toggleFilePanelEntrySelection(FILE_PANEL_VARIANT_OVERLAY, entryPath, options);
+        },
         onOpenDirectory: entryPath => {
             fileBrowserSelectedPath = '';
+            clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
             setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
             clearFileBrowserViewer();
             void refreshFileBrowserDirectory({
@@ -9612,6 +10131,363 @@ async function fetchFileBrowserFile(root, path) {
     });
 }
 
+async function fetchFilePanelDownload(root, paths) {
+    return fetchBlob('/api/codex/files/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            paths: Array.from(createNormalizedRelativePathSet(paths))
+        })
+    });
+}
+
+async function deleteFilePanelFiles(root, paths) {
+    return fetchJson('/api/codex/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            paths: Array.from(createNormalizedRelativePathSet(paths))
+        })
+    });
+}
+
+async function moveFilePanelFiles(root, paths, payload = {}) {
+    const requestPayload = payload && typeof payload === 'object' ? payload : {};
+    return fetchJson('/api/codex/files/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            paths: Array.from(createNormalizedRelativePathSet(paths)),
+            destination_path: normalizeFileBrowserRelativePath(requestPayload.destination_path),
+            destination_directory: Object.prototype.hasOwnProperty.call(requestPayload, 'destination_directory')
+                ? normalizeFileBrowserRelativePath(requestPayload.destination_directory)
+                : undefined
+        })
+    });
+}
+
+function clearFilePanelViewerForVariant(variant, message = '파일을 선택하세요.') {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        clearFileBrowserViewer(message);
+        return;
+    }
+    clearWorkModeFileViewer(message);
+}
+
+function refreshFilePanelDirectoryForVariant(variant, options = {}) {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        return refreshFileBrowserDirectory(options);
+    }
+    return refreshWorkModeFileDirectory(options);
+}
+
+function refreshFilePanelPreviewSelectionForVariant(variant, options = {}) {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        return refreshFileBrowserPreviewSelection();
+    }
+    return refreshWorkModeFilePreviewSelection(options);
+}
+
+function openFileInPanelVariant(variant, path, options = {}) {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        return openFileInBrowserOverlay(path, options);
+    }
+    return openFileInWorkModePanel(path, options);
+}
+
+function captureFilePanelListScrollSnapshot(variant) {
+    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+        return null;
+    }
+    return captureWorkModeFileScrollSnapshot();
+}
+
+function normalizeFileContextLanguage(language = '') {
+    const normalized = String(language || '').trim().toLowerCase();
+    return /^[a-z0-9_+-]+$/u.test(normalized) ? normalized : '';
+}
+
+function trimFileContextText(text, maxChars) {
+    const source = typeof text === 'string' ? text : '';
+    const limit = Number(maxChars);
+    if (!Number.isFinite(limit) || limit <= 0) {
+        return { text: '', truncated: Boolean(source) };
+    }
+    if (source.length <= limit) {
+        return { text: source, truncated: false };
+    }
+    return {
+        text: `${source.slice(0, Math.max(0, limit - 18)).replace(/\s+$/u, '')}\n... [truncated]`,
+        truncated: true
+    };
+}
+
+function buildFilePanelChatContextSection(path, result, maxChars = FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const sizeText = formatFileBrowserSize(result?.size);
+    const mimeType = String(result?.mime_type || '').trim();
+    const language = normalizeFileContextLanguage(result?.language || '');
+    const sectionHeader = `### ${normalizedPath || '(unknown path)'}`;
+    if (result?.is_binary) {
+        const binaryParts = ['binary file'];
+        if (mimeType) {
+            binaryParts.push(mimeType);
+        }
+        if (sizeText && sizeText !== '--') {
+            binaryParts.push(sizeText);
+        }
+        return `${sectionHeader}\n${binaryParts.join(' · ')}`;
+    }
+    const trimmed = trimFileContextText(result?.content || '', maxChars);
+    const codeFence = `\`\`\`${language}\n${trimmed.text}\n\`\`\``;
+    const metaParts = [];
+    if (sizeText && sizeText !== '--') {
+        metaParts.push(sizeText);
+    }
+    if (mimeType) {
+        metaParts.push(mimeType);
+    }
+    const metaLine = metaParts.length ? `${metaParts.join(' · ')}\n` : '';
+    return `${sectionHeader}\n${metaLine}${codeFence}`;
+}
+
+async function buildFilePanelChatContextText(root, selectedPaths) {
+    const paths = Array.from(createNormalizedRelativePathSet(selectedPaths));
+    if (!paths.length) return '';
+    const limitedPaths = paths.slice(0, FILE_PANEL_CHAT_CONTEXT_MAX_FILES);
+    const sections = [];
+    let remainingChars = FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS;
+    for (const path of limitedPaths) {
+        if (remainingChars <= 200 && sections.length > 0) break;
+        try {
+            const result = await fetchFileBrowserFile(root, path);
+            const budget = Math.min(FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE, Math.max(320, remainingChars - 160));
+            const section = buildFilePanelChatContextSection(path, result, budget);
+            sections.push(section);
+            remainingChars -= section.length;
+        } catch (error) {
+            const section = `### ${path}\n불러오지 못함: ${normalizeError(error, '파일 내용을 읽지 못했습니다.')}`;
+            sections.push(section);
+            remainingChars -= section.length;
+        }
+    }
+    if (paths.length > limitedPaths.length) {
+        sections.push(`추가 ${paths.length - limitedPaths.length}개 파일은 생략했습니다.`);
+    }
+    return [
+        `선택한 파일 컨텍스트입니다. 루트: ${getFileBrowserRootLabel(root)}`,
+        ...sections
+    ].join('\n\n');
+}
+
+async function addSelectedFilesToChatContext(variant) {
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    if (!selectedPaths.length) {
+        showToast('채팅에 넣을 파일을 먼저 선택하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    setFilePanelBulkActionInFlight(variant, true);
+    try {
+        const contextText = await buildFilePanelChatContextText(
+            getFilePanelCurrentRoot(variant),
+            selectedPaths
+        );
+        if (!appendTextToChatInput(contextText)) {
+            throw new Error('채팅 입력창을 찾을 수 없습니다.');
+        }
+        if (variant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
+            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+        }
+        showToast(`선택 파일 ${selectedPaths.length}개를 채팅 입력에 넣었습니다.`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '선택 파일을 채팅 입력에 넣지 못했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(variant, false);
+    }
+}
+
+async function downloadSelectedFilesFromFilePanel(variant) {
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    if (!selectedPaths.length) return false;
+    setFilePanelBulkActionInFlight(variant, true);
+    try {
+        const result = await fetchFilePanelDownload(getFilePanelCurrentRoot(variant), selectedPaths);
+        const filename = extractFilenameFromContentDisposition(result?.contentDisposition)
+            || (selectedPaths.length === 1
+                ? selectedPaths[0].split('/').pop()
+                : 'codex-files.zip');
+        if (!saveBlobAsFile(result?.blob, filename)) {
+            throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
+        }
+        showToast(`선택 파일 ${selectedPaths.length}개 다운로드를 시작했습니다.`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 다운로드에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(variant, false);
+    }
+}
+
+async function deleteSelectedFilesFromFilePanel(variant) {
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    if (!selectedPaths.length) return false;
+    const confirmed = window.confirm(`선택한 ${selectedPaths.length}개 파일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
+    if (!confirmed) return false;
+
+    const root = getFilePanelCurrentRoot(variant);
+    const currentPath = getFilePanelCurrentPath(variant);
+    const previewPath = getFilePanelPreviewPath(variant);
+    const previewDeleted = Boolean(previewPath) && selectedPaths.includes(previewPath);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(variant);
+
+    setFilePanelBulkActionInFlight(variant, true);
+    try {
+        await deleteFilePanelFiles(root, selectedPaths);
+        clearFilePanelSelection(variant);
+        if (previewDeleted) {
+            setFilePanelPreviewPath(variant, '');
+            clearFilePanelViewerForVariant(variant, '삭제한 파일입니다. 다른 파일을 선택하세요.');
+        }
+        const listed = await refreshFilePanelDirectoryForVariant(variant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        if (listed && previewPath && !previewDeleted) {
+            await refreshFilePanelPreviewSelectionForVariant(variant);
+        }
+        showToast(`선택 파일 ${selectedPaths.length}개를 삭제했습니다.`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 삭제에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(variant, false);
+    }
+}
+
+async function moveSelectedFilesFromFilePanel(variant) {
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    if (!selectedPaths.length) return false;
+
+    let payload = null;
+    if (selectedPaths.length === 1) {
+        const nextPath = window.prompt('새 파일 경로를 입력하세요.', selectedPaths[0]);
+        if (nextPath === null) return false;
+        payload = {
+            destination_path: normalizeFileBrowserRelativePath(nextPath)
+        };
+    } else {
+        const nextDirectory = window.prompt(
+            `선택한 ${selectedPaths.length}개 파일을 옮길 대상 폴더 경로를 입력하세요.`,
+            getFilePanelCurrentPath(variant)
+        );
+        if (nextDirectory === null) return false;
+        payload = {
+            destination_directory: normalizeFileBrowserRelativePath(nextDirectory)
+        };
+    }
+
+    const root = getFilePanelCurrentRoot(variant);
+    const currentPath = getFilePanelCurrentPath(variant);
+    const previewPath = getFilePanelPreviewPath(variant);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(variant);
+
+    setFilePanelBulkActionInFlight(variant, true);
+    try {
+        const result = await moveFilePanelFiles(root, selectedPaths, payload);
+        const moved = Array.isArray(result?.moved) ? result.moved : [];
+        const movedMap = new Map(
+            moved.map(entry => [
+                normalizeFileBrowserRelativePath(entry?.source_path || ''),
+                normalizeFileBrowserRelativePath(entry?.destination_path || '')
+            ])
+        );
+        const nextSelection = moved
+            .map(entry => normalizeFileBrowserRelativePath(entry?.destination_path || ''))
+            .filter(path => getFileBrowserParentPath(path) === currentPath);
+        setFilePanelSelectedPaths(variant, nextSelection);
+        setFilePanelSelectionAnchorPath(variant, nextSelection[nextSelection.length - 1] || '');
+
+        let nextPreviewPath = previewPath;
+        if (previewPath && movedMap.has(previewPath)) {
+            const movedPreviewPath = movedMap.get(previewPath) || '';
+            nextPreviewPath = getFileBrowserParentPath(movedPreviewPath) === currentPath
+                ? movedPreviewPath
+                : '';
+            setFilePanelPreviewPath(variant, nextPreviewPath);
+            if (!nextPreviewPath) {
+                clearFilePanelViewerForVariant(variant, '이동한 파일은 현재 폴더에 없습니다.');
+            }
+        }
+
+        const listed = await refreshFilePanelDirectoryForVariant(variant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        applyFilePanelSelectionStateForVariant(variant);
+        if (listed) {
+            if (nextPreviewPath) {
+                await openFileInPanelVariant(variant, nextPreviewPath, {
+                    root,
+                    showViewerOnSuccess: false
+                });
+            } else if (previewPath && !movedMap.has(previewPath)) {
+                await refreshFilePanelPreviewSelectionForVariant(variant);
+            }
+        }
+        showToast(
+            selectedPaths.length === 1 ? '파일 이름/경로를 변경했습니다.' : `선택 파일 ${selectedPaths.length}개를 이동했습니다.`,
+            {
+                tone: 'success',
+                durationMs: 2600
+            }
+        );
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 이동에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(variant, false);
+    }
+}
+
 async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = fileBrowserPath, force = false } = {}) {
     void force;
     const elements = getFileBrowserElements();
@@ -9634,6 +10510,7 @@ async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = file
         const entries = Array.isArray(result?.entries) ? result.entries : [];
         fileBrowserCachedEntries = entries;
         fileBrowserCachedTruncated = Boolean(result?.truncated);
+        pruneFilePanelSelectionToEntries(FILE_PANEL_VARIANT_OVERLAY, entries);
         renderFileBrowserDirectoryEntries(fileBrowserCachedEntries, {
             truncated: fileBrowserCachedTruncated
         });
@@ -9757,6 +10634,22 @@ function isSpreadsheetPreviewableFile(path, mimeType = '') {
     return normalizedMime.includes('spreadsheet')
         || normalizedMime.includes('excel')
         || normalizedMime.includes('sheet.binary');
+}
+
+function isImagePreviewableFile(path, mimeType = '') {
+    const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
+    if (/\.(avif|bmp|gif|jpe?g|png|svg|webp)$/u.test(normalizedPath)) {
+        return true;
+    }
+    return String(mimeType || '').trim().toLowerCase().startsWith('image/');
+}
+
+function isPdfPreviewableFile(path, mimeType = '') {
+    const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
+    if (normalizedPath.endsWith('.pdf')) {
+        return true;
+    }
+    return String(mimeType || '').trim().toLowerCase().includes('application/pdf');
 }
 
 function containsTemplateLikeHtmlSyntax(text = '') {
@@ -10031,6 +10924,8 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const isScript = Boolean(result?.is_script);
     const isBinary = Boolean(result?.is_binary);
     const isSpreadsheet = isSpreadsheetPreviewableFile(normalizedPath, result?.mime_type);
+    const isImage = isImagePreviewableFile(normalizedPath, result?.mime_type);
+    const isPdf = isPdfPreviewableFile(normalizedPath, result?.mime_type);
     const text = typeof result?.content === 'string' ? result.content : '';
     const canRenderHtmlPreview = isHtml
         && result?.html_previewable !== false
@@ -10044,6 +10939,10 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         infoParts.push(language);
     } else if (isSpreadsheet) {
         infoParts.push('spreadsheet');
+    } else if (isImage) {
+        infoParts.push('image');
+    } else if (isPdf) {
+        infoParts.push('pdf');
     } else if (isBinary) {
         infoParts.push('binary');
     }
@@ -10068,6 +10967,40 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     if (isSpreadsheet) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         await renderSpreadsheetPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken);
+        return;
+    }
+
+    if (isImage) {
+        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'file-browser-media-preview';
+        const image = document.createElement('img');
+        image.alt = normalizedPath || 'Image preview';
+        if (previewUrl) {
+            image.src = previewUrl;
+        }
+        wrapper.appendChild(image);
+        elements.viewerContent.appendChild(wrapper);
+        return;
+    }
+
+    if (isPdf) {
+        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        if (!previewUrl) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'file-browser-placeholder';
+            placeholder.textContent = 'PDF 파일 주소를 만들지 못했습니다.';
+            elements.viewerContent.appendChild(placeholder);
+            return;
+        }
+        const wrapper = document.createElement('div');
+        wrapper.className = 'file-browser-pdf-preview-wrap';
+        const iframe = document.createElement('iframe');
+        iframe.className = 'file-browser-pdf-preview';
+        iframe.src = previewUrl;
+        iframe.title = normalizedPath || 'PDF preview';
+        wrapper.appendChild(iframe);
+        elements.viewerContent.appendChild(wrapper);
         return;
     }
 
@@ -10270,6 +11203,8 @@ function openFileBrowserOverlay(options = {}) {
     fileBrowserRoot = requestedRoot;
     fileBrowserPath = requestedPath;
     fileBrowserSelectedPath = requestedFilePath;
+    setFilePanelSelectedPaths(FILE_PANEL_VARIANT_OVERLAY, []);
+    setFilePanelSelectionAnchorPath(FILE_PANEL_VARIANT_OVERLAY, '');
 
     updateFileBrowserRootButtons();
     updateFileBrowserFilterToggleState();

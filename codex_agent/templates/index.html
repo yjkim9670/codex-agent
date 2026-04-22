@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=120">
+    <link rel="stylesheet" href="/static/css/app.css?v=121">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -12,9 +12,71 @@
     <div class="file-browser-layout work-mode-file-layout" id="{{ id_prefix }}-layout" data-file-panel-id="{{ id_prefix }}">
         <div class="file-browser-list-panel work-mode-file-list-panel">
             <div class="file-browser-meta" id="{{ id_prefix }}-meta">디렉터리 목록을 불러오는 중...</div>
+            <div class="file-panel-selection-bar" id="{{ id_prefix }}-selection-bar">
+                <div class="file-panel-selection-summary" id="{{ id_prefix }}-selection-summary">선택 0개</div>
+                <div class="file-panel-selection-actions">
+                    <button
+                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-add-context"
+                        type="button"
+                        id="{{ id_prefix }}-add-context"
+                        aria-label="선택 파일을 채팅에 넣기"
+                        title="선택 파일을 채팅에 넣기"
+                    >
+                        <span class="sr-only">채팅에 넣기</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-move"
+                        type="button"
+                        id="{{ id_prefix }}-move"
+                        aria-label="선택 파일 이동 또는 이름 변경"
+                        title="선택 파일 이동 또는 이름 변경"
+                    >
+                        <span class="sr-only">이동/이름 변경</span>
+                    </button>
+                    <button
+                        class="btn secondary icon-only file-panel-selection-btn file-panel-selection-btn-select-all"
+                        type="button"
+                        id="{{ id_prefix }}-select-all"
+                        aria-label="현재 목록의 파일 전체 선택"
+                        title="현재 목록의 파일 전체 선택"
+                    >
+                        <span class="sr-only">전체 선택</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-clear"
+                        type="button"
+                        id="{{ id_prefix }}-clear-selection"
+                        aria-label="파일 선택 해제"
+                        title="파일 선택 해제"
+                    >
+                        <span class="sr-only">선택 해제</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-download"
+                        type="button"
+                        id="{{ id_prefix }}-download"
+                        aria-label="선택 파일 다운로드"
+                        title="선택 파일 다운로드"
+                    >
+                        <span class="sr-only">다운로드</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
+                        type="button"
+                        id="{{ id_prefix }}-delete"
+                        aria-label="선택 파일 삭제"
+                        title="선택 파일 삭제"
+                    >
+                        <span class="sr-only">삭제</span>
+                    </button>
+                </div>
+            </div>
             <div class="work-mode-file-grid-scroll" id="{{ id_prefix }}-grid-scroll">
                 <div class="work-mode-file-table" id="{{ id_prefix }}-table">
                     <div class="work-mode-file-columns" id="{{ id_prefix }}-columns">
+                        <div class="work-mode-file-col-heading work-mode-file-col-select">
+                            <span class="work-mode-file-col-label">선택</span>
+                        </div>
                         <div class="work-mode-file-col-heading work-mode-file-col-name">
                             <span class="work-mode-file-col-label">이름</span>
                             <button

@@ -73,6 +73,7 @@ _SCRIPT_LANGUAGES = {
 }
 
 _HTML_LANGUAGES = {'html'}
+_HTML_TEMPLATE_MARKERS = ('{%', '{{', '{#', '<%')
 
 
 class FileBrowserError(RuntimeError):
@@ -199,6 +200,19 @@ def _guess_language(path):
     return ''
 
 
+def _looks_like_templated_html(path: Path, *, text: str | None = None, raw: bytes | None = None) -> bool:
+    if _guess_language(path) not in _HTML_LANGUAGES:
+        return False
+
+    sample = text
+    if sample is None and raw:
+        sample = raw[:64 * 1024].decode('utf-8', errors='ignore')
+    if not sample:
+        return False
+
+    return any(marker in sample for marker in _HTML_TEMPLATE_MARKERS)
+
+
 def list_directory(root_key=None, relative_path=''):
     normalized_root, root_path = _normalize_root_key(root_key)
     normalized_path = _normalize_relative_path(relative_path)
@@ -320,6 +334,7 @@ def read_file(root_key=None, relative_path=''):
     else:
         content = raw.decode('utf-8', errors='replace')
         line_count = content.count('\n') + (1 if content else 0)
+    html_previewable = is_html and not _looks_like_templated_html(target_path, text=content)
 
     return {
         'root': normalized_root,
@@ -329,6 +344,7 @@ def read_file(root_key=None, relative_path=''):
         'mime_type': mime_type,
         'language': language,
         'is_html': is_html,
+        'html_previewable': html_previewable,
         'is_script': is_script,
         'is_binary': is_binary,
         'size': total_bytes,
@@ -388,6 +404,8 @@ def read_file_raw(root_key=None, relative_path=''):
         ) from exc
 
     mime_type = mimetypes.guess_type(target_path.name)[0] or 'application/octet-stream'
+    if mime_type.startswith('text/html') and _looks_like_templated_html(target_path, raw=content):
+        mime_type = 'text/plain'
     return {
         'root': normalized_root,
         'root_path': str(root_path),

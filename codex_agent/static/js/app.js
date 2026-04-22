@@ -140,6 +140,8 @@ const FILE_BROWSER_SPREADSHEET_EXTENSIONS = new Set([
 ]);
 const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
+const FILE_PANEL_VARIANT_WORK_MODE = 'work-mode';
+const FILE_PANEL_VARIANT_OVERLAY = 'overlay';
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
@@ -3109,34 +3111,64 @@ function getWorkModeElements() {
     };
 }
 
+function getFilePanelElementsByPrefix({
+    scopeElement,
+    rootElement = scopeElement,
+    prefix = '',
+    pathElement = null,
+    listPanelSelector = '.file-browser-list-panel',
+    viewerPanelSelector = '.file-browser-viewer-panel'
+} = {}) {
+    const scope = scopeElement instanceof Element ? scopeElement : null;
+    if (!scope) return null;
+    const root = rootElement instanceof Element ? rootElement : scope;
+    const normalizedPrefix = String(prefix || '').trim();
+    if (!normalizedPrefix) return null;
+    const scopedQuery = selector => root.querySelector(selector);
+    const byId = suffix => scopedQuery(`#${normalizedPrefix}-${suffix}`);
+    const columns = byId('columns');
+    return {
+        root,
+        layout: byId('layout'),
+        gridScroll: byId('grid-scroll'),
+        hScroll: byId('hscroll'),
+        hScrollTrack: byId('hscroll-track'),
+        table: byId('table'),
+        columns,
+        divider: byId('divider'),
+        path: pathElement instanceof Element ? pathElement : document.getElementById(`${normalizedPrefix}-path`),
+        meta: byId('meta'),
+        loading: byId('loading'),
+        empty: byId('empty'),
+        list: byId('list'),
+        listPanel: root.querySelector(listPanelSelector),
+        viewerPanel: root.querySelector(viewerPanelSelector),
+        viewerMeta: byId('viewer-meta'),
+        viewerContent: byId('viewer-content'),
+        colResizers: columns ? Array.from(columns.querySelectorAll('[data-resize-col]')) : []
+    };
+}
+
 function getWorkModeFileElements() {
     const preview = document.getElementById('codex-work-mode-preview');
     if (!preview) return null;
+    const panel = getFilePanelElementsByPrefix({
+        scopeElement: preview,
+        rootElement: preview,
+        prefix: 'codex-work-mode-file',
+        pathElement: document.getElementById('codex-work-mode-file-path'),
+        listPanelSelector: '.work-mode-file-list-panel'
+    });
+    if (!panel) return null;
     return {
+        ...panel,
         preview,
-        layout: document.getElementById('codex-work-mode-file-layout'),
-        gridScroll: document.getElementById('codex-work-mode-file-grid-scroll'),
-        hScroll: document.getElementById('codex-work-mode-file-hscroll'),
-        hScrollTrack: document.getElementById('codex-work-mode-file-hscroll-track'),
-        table: document.getElementById('codex-work-mode-file-table'),
-        columns: document.getElementById('codex-work-mode-file-columns'),
-        divider: document.getElementById('codex-work-mode-file-divider'),
-        path: document.getElementById('codex-work-mode-file-path'),
-        meta: document.getElementById('codex-work-mode-file-meta'),
-        loading: document.getElementById('codex-work-mode-file-loading'),
-        empty: document.getElementById('codex-work-mode-file-empty'),
-        list: document.getElementById('codex-work-mode-file-list'),
-        listPanel: preview.querySelector('.work-mode-file-list-panel'),
-        viewerPanel: preview.querySelector('.file-browser-viewer-panel'),
-        viewerMeta: document.getElementById('codex-work-mode-file-viewer-meta'),
-        viewerContent: document.getElementById('codex-work-mode-file-viewer-content'),
         refreshBtn: document.getElementById('codex-work-mode-file-refresh'),
         upBtn: document.getElementById('codex-work-mode-file-up'),
         backBtn: document.getElementById('codex-work-mode-file-back'),
         chatBtn: document.getElementById('codex-work-mode-chat-back'),
         openNewBtn: document.getElementById('codex-work-mode-file-open-new'),
-        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen'),
-        colResizers: Array.from(preview.querySelectorAll('#codex-work-mode-file-columns [data-resize-col]'))
+        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen')
     };
 }
 
@@ -3743,9 +3775,60 @@ function clampWorkModeFileListWidth(listWidthPx, totalWidthPx) {
     return Math.min(max, Math.max(min, Number(listWidthPx)));
 }
 
-function applyWorkModeFileSplitRatio(ratio = workModeFileSplitRatio, { persist = false } = {}) {
-    const elements = getWorkModeFileElements();
-    if (!elements?.preview || !elements?.layout) return;
+function normalizeFilePanelVariant(value) {
+    if (value === FILE_PANEL_VARIANT_OVERLAY) return FILE_PANEL_VARIANT_OVERLAY;
+    return FILE_PANEL_VARIANT_WORK_MODE;
+}
+
+function getFilePanelVariantConfig(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (normalizedVariant === FILE_PANEL_VARIANT_OVERLAY) {
+        return {
+            getElements: getFileBrowserElements,
+            getSurfaceElement: elements => elements?.overlay,
+            getSplitRatio: () => fileBrowserSplitRatio,
+            setSplitRatio: value => {
+                fileBrowserSplitRatio = normalizeWorkModeFileSplitRatio(value);
+            },
+            persistSplit: persistFileBrowserSplitPreference,
+            getColumnWidths: () => fileBrowserColumnWidths,
+            setColumnWidths: next => {
+                fileBrowserColumnWidths = next;
+            },
+            persistColumns: persistFileBrowserColumnsPreference,
+            getHorizontalSyncLock: () => fileBrowserHorizontalSyncLock,
+            setHorizontalSyncLock: isLocked => {
+                fileBrowserHorizontalSyncLock = Boolean(isLocked);
+            },
+            canSyncHorizontal: () => !isMobileLayout() && isFileBrowserOverlayOpen()
+        };
+    }
+    return {
+        getElements: getWorkModeFileElements,
+        getSurfaceElement: elements => elements?.preview,
+        getSplitRatio: () => workModeFileSplitRatio,
+        setSplitRatio: value => {
+            workModeFileSplitRatio = normalizeWorkModeFileSplitRatio(value);
+        },
+        persistSplit: persistWorkModeFileSplitPreference,
+        getColumnWidths: () => workModeFileColumnWidths,
+        setColumnWidths: next => {
+            workModeFileColumnWidths = next;
+        },
+        persistColumns: persistWorkModeFileColumnsPreference,
+        getHorizontalSyncLock: () => workModeFileHorizontalSyncLock,
+        setHorizontalSyncLock: isLocked => {
+            workModeFileHorizontalSyncLock = Boolean(isLocked);
+        },
+        canSyncHorizontal: () => isWorkModeEnabled() && !isMobileLayout()
+    };
+}
+
+function applyFilePanelSplitRatio(variant, ratio, { persist = false } = {}) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
+    const surface = config.getSurfaceElement(elements);
+    if (!surface || !elements?.layout) return;
     const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
     const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
     if (totalWidth <= 0) return;
@@ -3753,16 +3836,17 @@ function applyWorkModeFileSplitRatio(ratio = workModeFileSplitRatio, { persist =
     const nextRatio = normalizeWorkModeFileSplitRatio(ratio);
     const desiredWidth = totalWidth * nextRatio;
     const listWidth = clampWorkModeFileListWidth(desiredWidth, totalWidth);
-    workModeFileSplitRatio = totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT;
-    elements.preview.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
-    syncWorkModeFileHorizontalScrollMetrics();
+    config.setSplitRatio(totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT);
+    surface.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
+    syncFilePanelHorizontalScrollMetricsCore(variant);
     if (persist) {
-        persistWorkModeFileSplitPreference(workModeFileSplitRatio);
+        config.persistSplit(config.getSplitRatio());
     }
 }
 
-function updateWorkModeFileSplitFromPointer(clientX, { persist = false } = {}) {
-    const elements = getWorkModeFileElements();
+function updateFilePanelSplitFromPointer(variant, clientX, { persist = false } = {}) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
     if (!elements?.layout) return;
     const layoutRect = elements.layout.getBoundingClientRect();
     const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
@@ -3771,16 +3855,17 @@ function updateWorkModeFileSplitFromPointer(clientX, { persist = false } = {}) {
     const rawWidth = Number(clientX) - layoutRect.left;
     const listWidth = clampWorkModeFileListWidth(rawWidth, totalWidth);
     const ratio = listWidth / totalWidth;
-    applyWorkModeFileSplitRatio(ratio, { persist: false });
+    applyFilePanelSplitRatio(variant, ratio, { persist: false });
     if (persist) {
-        persistWorkModeFileSplitPreference(workModeFileSplitRatio);
+        config.persistSplit(config.getSplitRatio());
     }
 }
 
-function syncWorkModeFileHorizontalScrollMetrics() {
-    const elements = getWorkModeFileElements();
+function syncFilePanelHorizontalScrollMetricsCore(variant) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
     if (!elements?.gridScroll || !elements?.hScroll || !elements?.hScrollTrack || !elements?.table) return;
-    if (!isWorkModeEnabled() || isMobileLayout()) return;
+    if (!config.canSyncHorizontal()) return;
 
     const viewportWidth = Math.max(0, Math.round(elements.gridScroll.clientWidth));
     const contentWidth = Math.max(
@@ -3796,8 +3881,8 @@ function syncWorkModeFileHorizontalScrollMetrics() {
     const railScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.hScroll.scrollLeft || 0)));
     const nextScrollLeft = Math.max(gridScrollLeft, railScrollLeft);
 
-    if (workModeFileHorizontalSyncLock) return;
-    workModeFileHorizontalSyncLock = true;
+    if (config.getHorizontalSyncLock()) return;
+    config.setHorizontalSyncLock(true);
     try {
         if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextScrollLeft) {
             elements.gridScroll.scrollLeft = nextScrollLeft;
@@ -3806,33 +3891,79 @@ function syncWorkModeFileHorizontalScrollMetrics() {
             elements.hScroll.scrollLeft = nextScrollLeft;
         }
     } finally {
-        workModeFileHorizontalSyncLock = false;
+        config.setHorizontalSyncLock(false);
     }
 }
 
-function handleWorkModeFileGridScroll() {
-    const elements = getWorkModeFileElements();
+function syncFilePanelHorizontalScrollFromGrid(variant) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
     if (!elements?.gridScroll || !elements?.hScroll) return;
-    if (workModeFileHorizontalSyncLock) return;
-    workModeFileHorizontalSyncLock = true;
+    if (config.getHorizontalSyncLock()) return;
+    config.setHorizontalSyncLock(true);
     try {
         elements.hScroll.scrollLeft = elements.gridScroll.scrollLeft;
     } finally {
-        workModeFileHorizontalSyncLock = false;
+        config.setHorizontalSyncLock(false);
     }
+}
+
+function syncFilePanelHorizontalScrollFromRail(variant) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
+    if (!elements?.gridScroll || !elements?.hScroll) return;
+    if (config.getHorizontalSyncLock()) return;
+    config.setHorizontalSyncLock(true);
+    try {
+        elements.gridScroll.scrollLeft = elements.hScroll.scrollLeft;
+    } finally {
+        config.setHorizontalSyncLock(false);
+    }
+}
+
+function applyFilePanelColumnWidthsCore(variant, { persist = false } = {}) {
+    const config = getFilePanelVariantConfig(variant);
+    const elements = config.getElements();
+    const surface = config.getSurfaceElement(elements);
+    if (!surface) return;
+    const currentWidths = config.getColumnWidths();
+    const nameWidth = normalizeWorkModeFileColumnWidth('name', currentWidths?.name);
+    const sizeWidth = normalizeWorkModeFileColumnWidth('size', currentWidths?.size);
+    const modifiedWidth = normalizeWorkModeFileColumnWidth('modified', currentWidths?.modified);
+    const nextWidths = {
+        name: nameWidth,
+        size: sizeWidth,
+        modified: modifiedWidth
+    };
+    config.setColumnWidths(nextWidths);
+    surface.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
+    surface.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
+    surface.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
+    syncFilePanelHorizontalScrollMetricsCore(variant);
+    if (persist) {
+        config.persistColumns();
+    }
+}
+
+function applyWorkModeFileSplitRatio(ratio = workModeFileSplitRatio, { persist = false } = {}) {
+    applyFilePanelSplitRatio(FILE_PANEL_VARIANT_WORK_MODE, ratio, { persist });
+}
+
+function updateWorkModeFileSplitFromPointer(clientX, { persist = false } = {}) {
+    updateFilePanelSplitFromPointer(FILE_PANEL_VARIANT_WORK_MODE, clientX, { persist });
+}
+
+function syncWorkModeFileHorizontalScrollMetrics() {
+    syncFilePanelHorizontalScrollMetricsCore(FILE_PANEL_VARIANT_WORK_MODE);
+}
+
+function handleWorkModeFileGridScroll() {
+    syncFilePanelHorizontalScrollFromGrid(FILE_PANEL_VARIANT_WORK_MODE);
     schedulePersistWorkModeFileViewState();
 }
 
 function handleWorkModeFileHScroll() {
-    const elements = getWorkModeFileElements();
-    if (!elements?.gridScroll || !elements?.hScroll) return;
-    if (workModeFileHorizontalSyncLock) return;
-    workModeFileHorizontalSyncLock = true;
-    try {
-        elements.gridScroll.scrollLeft = elements.hScroll.scrollLeft;
-    } finally {
-        workModeFileHorizontalSyncLock = false;
-    }
+    syncFilePanelHorizontalScrollFromRail(FILE_PANEL_VARIANT_WORK_MODE);
     schedulePersistWorkModeFileViewState();
 }
 
@@ -3896,23 +4027,7 @@ function persistWorkModeFileColumnsPreference() {
 }
 
 function applyWorkModeFileColumnWidths({ persist = false } = {}) {
-    const elements = getWorkModeFileElements();
-    if (!elements?.preview) return;
-    const nameWidth = normalizeWorkModeFileColumnWidth('name', workModeFileColumnWidths.name);
-    const sizeWidth = normalizeWorkModeFileColumnWidth('size', workModeFileColumnWidths.size);
-    const modifiedWidth = normalizeWorkModeFileColumnWidth('modified', workModeFileColumnWidths.modified);
-    workModeFileColumnWidths = {
-        name: nameWidth,
-        size: sizeWidth,
-        modified: modifiedWidth
-    };
-    elements.preview.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
-    elements.preview.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
-    elements.preview.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
-    syncWorkModeFileHorizontalScrollMetrics();
-    if (persist) {
-        persistWorkModeFileColumnsPreference();
-    }
+    applyFilePanelColumnWidthsCore(FILE_PANEL_VARIANT_WORK_MODE, { persist });
 }
 
 function isWorkModeEnabled() {
@@ -8311,30 +8426,21 @@ function resolveFileBrowserTargetFromAbsolutePath(value) {
 function getFileBrowserElements() {
     const overlay = document.getElementById('codex-file-browser-overlay');
     if (!overlay) return null;
+    const panel = getFilePanelElementsByPrefix({
+        scopeElement: overlay,
+        rootElement: overlay,
+        prefix: 'codex-file-browser',
+        pathElement: document.getElementById('codex-file-browser-path')
+    });
+    if (!panel) return null;
     return {
+        ...panel,
         overlay,
         subtitle: document.getElementById('codex-file-browser-overlay-subtitle'),
-        layout: document.getElementById('codex-file-browser-layout'),
-        gridScroll: document.getElementById('codex-file-browser-grid-scroll'),
-        hScroll: document.getElementById('codex-file-browser-hscroll'),
-        hScrollTrack: document.getElementById('codex-file-browser-hscroll-track'),
-        table: document.getElementById('codex-file-browser-table'),
-        columns: document.getElementById('codex-file-browser-columns'),
-        divider: document.getElementById('codex-file-browser-divider'),
-        path: document.getElementById('codex-file-browser-path'),
-        meta: document.getElementById('codex-file-browser-meta'),
-        loading: document.getElementById('codex-file-browser-loading'),
-        empty: document.getElementById('codex-file-browser-empty'),
-        list: document.getElementById('codex-file-browser-list'),
-        listPanel: overlay.querySelector('.file-browser-list-panel'),
-        viewerPanel: overlay.querySelector('.file-browser-viewer-panel'),
-        viewerMeta: document.getElementById('codex-file-browser-viewer-meta'),
-        viewerContent: document.getElementById('codex-file-browser-viewer-content'),
         backBtn: document.getElementById('codex-file-browser-back'),
         upBtn: document.getElementById('codex-file-browser-up'),
         refreshBtn: document.getElementById('codex-file-browser-refresh'),
         fullscreenBtn: document.getElementById('codex-file-browser-fullscreen'),
-        colResizers: Array.from(overlay.querySelectorAll('#codex-file-browser-columns [data-resize-col]')),
         showHiddenToggle: document.getElementById('codex-file-browser-show-hidden'),
         showPycacheToggle: document.getElementById('codex-file-browser-show-pycache'),
         rootButtons: Array.from(
@@ -8531,60 +8637,125 @@ function suspendWorkModeHtmlPreviewForMobileTransition(elements, { viewerSnapsho
     return true;
 }
 
+function setFilePanelDirectoryLoadingState(elements, {
+    loading = false,
+    message = '디렉터리 목록을 불러오는 중...',
+    disableRefresh = loading,
+    disableUp = loading,
+    disableBack = loading,
+    disableFullscreen = loading,
+    disableColumnResize = loading,
+    disableDivider = loading,
+    onAfterToggle = null,
+    syncHorizontalMetrics = null
+} = {}) {
+    if (!elements) return;
+    const isLoading = Boolean(loading);
+    if (elements.loading) {
+        elements.loading.textContent = message;
+        elements.loading.classList.toggle('is-hidden', !isLoading);
+    }
+    if (elements.list) {
+        elements.list.classList.toggle('is-hidden', isLoading);
+    }
+    if (elements.empty) {
+        elements.empty.classList.add('is-hidden');
+    }
+    if (elements.refreshBtn) {
+        elements.refreshBtn.disabled = Boolean(disableRefresh);
+    }
+    if (elements.upBtn) {
+        elements.upBtn.disabled = Boolean(disableUp);
+    }
+    if (elements.backBtn) {
+        elements.backBtn.disabled = Boolean(disableBack);
+    }
+    if (elements.fullscreenBtn) {
+        elements.fullscreenBtn.disabled = Boolean(disableFullscreen);
+    }
+    if (Array.isArray(elements.colResizers)) {
+        const shouldDisableResize = Boolean(disableColumnResize);
+        elements.colResizers.forEach(handle => {
+            handle.disabled = shouldDisableResize;
+        });
+    }
+    if (elements.divider) {
+        elements.divider.classList.toggle('is-disabled', Boolean(disableDivider));
+    }
+    if (typeof onAfterToggle === 'function') {
+        onAfterToggle(elements, isLoading);
+    }
+    if (typeof syncHorizontalMetrics === 'function') {
+        requestAnimationFrame(() => {
+            syncHorizontalMetrics();
+        });
+    }
+}
+
 function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
     const elements = getWorkModeFileElements();
     if (!elements) return;
     const loading = Boolean(isLoading);
     const mobile = isMobileLayout();
     const fold = isFoldLayout();
-    if (elements.loading) {
-        elements.loading.textContent = message;
-        elements.loading.classList.toggle('is-hidden', !loading);
-    }
-    if (elements.list) {
-        elements.list.classList.toggle('is-hidden', loading);
-    }
-    if (elements.empty) {
-        elements.empty.classList.add('is-hidden');
-    }
-    if (elements.refreshBtn) {
-        elements.refreshBtn.disabled = loading;
-    }
-    if (elements.upBtn) {
-        elements.upBtn.disabled = loading || !workModeFilePath;
-    }
-    if (elements.backBtn) {
-        const canGoBack = isWorkModeEnabled() && (
-            (mobile && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER)
-            || (fold && normalizeWorkModeMobileBrowseView(workModeMobileBrowseView) === WORK_MODE_MOBILE_VIEW_VIEWER)
-        );
-        elements.backBtn.disabled = loading || !canGoBack;
-    }
-    if (elements.chatBtn) {
-        const canMoveToChat = isWorkModeEnabled()
-            && mobile
-            && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
-        elements.chatBtn.disabled = loading || !canMoveToChat;
-    }
-    if (elements.fullscreenBtn) {
-        elements.fullscreenBtn.disabled = loading || !isWorkModeEnabled() || mobile;
-    }
-    syncWorkModeFileFullscreenButtonState();
-    syncWorkModeHtmlPreviewOpenButton({ loading });
-    if (Array.isArray(elements.colResizers)) {
-        const disableColumnResize = loading || !isWorkModeEnabled() || mobile || fold || workModeFileViewerFullscreen;
-        elements.colResizers.forEach(handle => {
-            handle.disabled = disableColumnResize;
-        });
-    }
-    if (elements.divider) {
-        elements.divider.classList.toggle(
-            'is-disabled',
-            loading || workModeFileViewerFullscreen || mobile || fold || !isWorkModeEnabled()
-        );
-    }
-    requestAnimationFrame(() => {
-        syncWorkModeFileHorizontalScrollMetrics();
+    const canGoBack = isWorkModeEnabled() && (
+        (mobile && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER)
+        || (fold && normalizeWorkModeMobileBrowseView(workModeMobileBrowseView) === WORK_MODE_MOBILE_VIEW_VIEWER)
+    );
+    setFilePanelDirectoryLoadingState(elements, {
+        loading,
+        message,
+        disableRefresh: loading,
+        disableUp: loading || !workModeFilePath,
+        disableBack: loading || !canGoBack,
+        disableFullscreen: loading || !isWorkModeEnabled() || mobile,
+        disableColumnResize: loading || !isWorkModeEnabled() || mobile || fold || workModeFileViewerFullscreen,
+        disableDivider: loading || workModeFileViewerFullscreen || mobile || fold || !isWorkModeEnabled(),
+        onAfterToggle: () => {
+            if (elements.chatBtn) {
+                const canMoveToChat = isWorkModeEnabled()
+                    && mobile
+                    && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
+                elements.chatBtn.disabled = loading || !canMoveToChat;
+            }
+            syncWorkModeFileFullscreenButtonState();
+            syncWorkModeHtmlPreviewOpenButton({ loading });
+        },
+        syncHorizontalMetrics: () => {
+            syncWorkModeFileHorizontalScrollMetrics();
+        }
+    });
+}
+
+function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
+    const elements = getFileBrowserElements();
+    if (!elements) return;
+    const loading = Boolean(isLoading);
+    setFilePanelDirectoryLoadingState(elements, {
+        loading,
+        message,
+        disableRefresh: loading,
+        disableUp: loading || !fileBrowserPath,
+        disableBack: loading || !isMobileLayout(),
+        disableFullscreen: loading,
+        disableColumnResize: loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen(),
+        disableDivider: loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen(),
+        onAfterToggle: () => {
+            if (elements.showHiddenToggle) {
+                elements.showHiddenToggle.disabled = loading;
+            }
+            if (elements.showPycacheToggle) {
+                elements.showPycacheToggle.disabled = loading;
+            }
+            if (Array.isArray(elements.rootButtons)) {
+                elements.rootButtons.forEach(button => {
+                    button.disabled = loading;
+                });
+            }
+        },
+        syncHorizontalMetrics: () => {
+            syncFileBrowserHorizontalScrollMetrics();
+        }
     });
 }
 
@@ -8742,20 +8913,28 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
     });
 }
 
-function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {}) {
-    const elements = getWorkModeFileElements();
-    if (!elements) return;
+function buildFilePanelDirectoryEntriesModel(entries, currentPath = '') {
     const allEntries = Array.isArray(entries) ? entries : [];
     const visibleEntries = filterFileBrowserEntries(allEntries);
-    const hasParentEntry = Boolean(normalizeFileBrowserRelativePath(workModeFilePath));
-    const parentEntryPath = getFileBrowserParentPath(workModeFilePath);
-    const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
+    const normalizedPath = normalizeFileBrowserRelativePath(currentPath);
+    const hasParentEntry = Boolean(normalizedPath);
+    return {
+        allEntries,
+        visibleEntries,
+        hasParentEntry,
+        parentEntryPath: getFileBrowserParentPath(normalizedPath),
+        filteredCount: Math.max(0, allEntries.length - visibleEntries.length)
+    };
+}
 
-    renderWorkModeFileList(visibleEntries, {
-        includeParentEntry: hasParentEntry,
-        parentEntryPath
-    });
-
+function renderFilePanelDirectorySummary(elements, model, { truncated = false } = {}) {
+    if (!elements || !model) return;
+    const {
+        allEntries = [],
+        visibleEntries = [],
+        hasParentEntry = false,
+        filteredCount = 0
+    } = model;
     if (elements.meta) {
         const countText = filteredCount > 0
             ? `항목 ${visibleEntries.length}/${allEntries.length}개`
@@ -8769,7 +8948,6 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
         }
         elements.meta.textContent = extra.length > 0 ? `${countText} (${extra.join(', ')})` : countText;
     }
-
     if (elements.empty) {
         if (visibleEntries.length === 0 && allEntries.length > 0) {
             elements.empty.textContent = '필터 조건으로 모든 항목이 숨겨져 있습니다.';
@@ -8783,6 +8961,18 @@ function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {})
         const hasRows = visibleEntries.length > 0 || hasParentEntry;
         elements.list.classList.toggle('is-hidden', !hasRows);
     }
+}
+
+function renderWorkModeFileDirectoryEntries(entries, { truncated = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements) return;
+    const model = buildFilePanelDirectoryEntriesModel(entries, workModeFilePath);
+
+    renderWorkModeFileList(model.visibleEntries, {
+        includeParentEntry: model.hasParentEntry,
+        parentEntryPath: model.parentEntryPath
+    });
+    renderFilePanelDirectorySummary(elements, model, { truncated });
 }
 
 async function refreshWorkModeFileDirectory(
@@ -9100,115 +9290,27 @@ function persistFileBrowserColumnsPreference() {
 }
 
 function applyFileBrowserSplitRatio(ratio = fileBrowserSplitRatio, { persist = false } = {}) {
-    const elements = getFileBrowserElements();
-    if (!elements?.overlay || !elements?.layout) return;
-    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
-    const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
-    if (totalWidth <= 0) return;
-
-    const nextRatio = normalizeWorkModeFileSplitRatio(ratio);
-    const desiredWidth = totalWidth * nextRatio;
-    const listWidth = clampWorkModeFileListWidth(desiredWidth, totalWidth);
-    fileBrowserSplitRatio = totalWidth > 0 ? (listWidth / totalWidth) : WORK_MODE_FILE_DEFAULT_SPLIT;
-    elements.overlay.style.setProperty('--work-mode-file-list-width', `${Math.round(listWidth)}px`);
-    syncFileBrowserHorizontalScrollMetrics();
-    if (persist) {
-        persistFileBrowserSplitPreference(fileBrowserSplitRatio);
-    }
+    applyFilePanelSplitRatio(FILE_PANEL_VARIANT_OVERLAY, ratio, { persist });
 }
 
 function updateFileBrowserSplitFromPointer(clientX, { persist = false } = {}) {
-    const elements = getFileBrowserElements();
-    if (!elements?.layout) return;
-    const layoutRect = elements.layout.getBoundingClientRect();
-    const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
-    const totalWidth = Math.max(0, layoutRect.width - dividerWidth);
-    if (totalWidth <= 0) return;
-    const rawWidth = Number(clientX) - layoutRect.left;
-    const listWidth = clampWorkModeFileListWidth(rawWidth, totalWidth);
-    const ratio = listWidth / totalWidth;
-    applyFileBrowserSplitRatio(ratio, { persist: false });
-    if (persist) {
-        persistFileBrowserSplitPreference(fileBrowserSplitRatio);
-    }
+    updateFilePanelSplitFromPointer(FILE_PANEL_VARIANT_OVERLAY, clientX, { persist });
 }
 
 function applyFileBrowserColumnWidths({ persist = false } = {}) {
-    const elements = getFileBrowserElements();
-    if (!elements?.overlay) return;
-    const nameWidth = normalizeWorkModeFileColumnWidth('name', fileBrowserColumnWidths.name);
-    const sizeWidth = normalizeWorkModeFileColumnWidth('size', fileBrowserColumnWidths.size);
-    const modifiedWidth = normalizeWorkModeFileColumnWidth('modified', fileBrowserColumnWidths.modified);
-    fileBrowserColumnWidths = {
-        name: nameWidth,
-        size: sizeWidth,
-        modified: modifiedWidth
-    };
-    elements.overlay.style.setProperty('--work-mode-file-col-name-width', `${nameWidth}px`);
-    elements.overlay.style.setProperty('--work-mode-file-col-size-width', `${sizeWidth}px`);
-    elements.overlay.style.setProperty('--work-mode-file-col-modified-width', `${modifiedWidth}px`);
-    syncFileBrowserHorizontalScrollMetrics();
-    if (persist) {
-        persistFileBrowserColumnsPreference();
-    }
+    applyFilePanelColumnWidthsCore(FILE_PANEL_VARIANT_OVERLAY, { persist });
 }
 
 function syncFileBrowserHorizontalScrollMetrics() {
-    const elements = getFileBrowserElements();
-    if (!elements?.gridScroll || !elements?.hScroll || !elements?.hScrollTrack || !elements?.table) return;
-    if (isMobileLayout()) return;
-    if (!isFileBrowserOverlayOpen()) return;
-
-    const viewportWidth = Math.max(0, Math.round(elements.gridScroll.clientWidth));
-    const contentWidth = Math.max(
-        Math.round(elements.table.scrollWidth || 0),
-        Math.round(elements.columns?.scrollWidth || 0),
-        Math.round(elements.list?.scrollWidth || 0)
-    );
-    const effectiveWidth = Math.max(viewportWidth, contentWidth);
-    elements.hScrollTrack.style.width = `${effectiveWidth}px`;
-
-    const maxScroll = Math.max(0, contentWidth - viewportWidth);
-    const gridScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.gridScroll.scrollLeft || 0)));
-    const railScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.hScroll.scrollLeft || 0)));
-    const nextScrollLeft = Math.max(gridScrollLeft, railScrollLeft);
-
-    if (fileBrowserHorizontalSyncLock) return;
-    fileBrowserHorizontalSyncLock = true;
-    try {
-        if (Math.round(elements.gridScroll.scrollLeft || 0) !== nextScrollLeft) {
-            elements.gridScroll.scrollLeft = nextScrollLeft;
-        }
-        if (Math.round(elements.hScroll.scrollLeft || 0) !== nextScrollLeft) {
-            elements.hScroll.scrollLeft = nextScrollLeft;
-        }
-    } finally {
-        fileBrowserHorizontalSyncLock = false;
-    }
+    syncFilePanelHorizontalScrollMetricsCore(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function handleFileBrowserGridScroll() {
-    const elements = getFileBrowserElements();
-    if (!elements?.gridScroll || !elements?.hScroll) return;
-    if (fileBrowserHorizontalSyncLock) return;
-    fileBrowserHorizontalSyncLock = true;
-    try {
-        elements.hScroll.scrollLeft = elements.gridScroll.scrollLeft;
-    } finally {
-        fileBrowserHorizontalSyncLock = false;
-    }
+    syncFilePanelHorizontalScrollFromGrid(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function handleFileBrowserHScroll() {
-    const elements = getFileBrowserElements();
-    if (!elements?.gridScroll || !elements?.hScroll) return;
-    if (fileBrowserHorizontalSyncLock) return;
-    fileBrowserHorizontalSyncLock = true;
-    try {
-        elements.gridScroll.scrollLeft = elements.hScroll.scrollLeft;
-    } finally {
-        fileBrowserHorizontalSyncLock = false;
-    }
+    syncFilePanelHorizontalScrollFromRail(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function stopFileBrowserResize() {
@@ -9415,60 +9517,6 @@ function updateFileBrowserFilterToggleState() {
     }
 }
 
-function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
-    const elements = getFileBrowserElements();
-    if (!elements) return;
-    const loading = Boolean(isLoading);
-    if (elements.loading) {
-        elements.loading.textContent = message;
-        elements.loading.classList.toggle('is-hidden', !loading);
-    }
-    if (elements.list) {
-        elements.list.classList.toggle('is-hidden', loading);
-    }
-    if (elements.empty) {
-        elements.empty.classList.add('is-hidden');
-    }
-    if (elements.refreshBtn) {
-        elements.refreshBtn.disabled = loading;
-    }
-    if (elements.upBtn) {
-        elements.upBtn.disabled = loading || !fileBrowserPath;
-    }
-    if (elements.backBtn) {
-        elements.backBtn.disabled = loading || !isMobileLayout();
-    }
-    if (elements.fullscreenBtn) {
-        elements.fullscreenBtn.disabled = loading;
-    }
-    if (Array.isArray(elements.colResizers)) {
-        const disableColumnResize = loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen();
-        elements.colResizers.forEach(handle => {
-            handle.disabled = disableColumnResize;
-        });
-    }
-    if (elements.divider) {
-        elements.divider.classList.toggle(
-            'is-disabled',
-            loading || isMobileLayout() || fileBrowserViewerFullscreen || !isFileBrowserOverlayOpen()
-        );
-    }
-    if (elements.showHiddenToggle) {
-        elements.showHiddenToggle.disabled = loading;
-    }
-    if (elements.showPycacheToggle) {
-        elements.showPycacheToggle.disabled = loading;
-    }
-    if (Array.isArray(elements.rootButtons)) {
-        elements.rootButtons.forEach(button => {
-            button.disabled = loading;
-        });
-    }
-    requestAnimationFrame(() => {
-        syncFileBrowserHorizontalScrollMetrics();
-    });
-}
-
 function clearFileBrowserViewer(message = '파일을 선택하세요.') {
     const elements = getFileBrowserElements();
     setFilePanelViewerPlaceholder(elements, message);
@@ -9497,44 +9545,13 @@ function applyFileBrowserSelectionState() {
 function renderFileBrowserDirectoryEntries(entries, { truncated = false } = {}) {
     const elements = getFileBrowserElements();
     if (!elements) return;
-    const allEntries = Array.isArray(entries) ? entries : [];
-    const visibleEntries = filterFileBrowserEntries(allEntries);
-    const hasParentEntry = Boolean(normalizeFileBrowserRelativePath(fileBrowserPath));
-    const parentEntryPath = getFileBrowserParentPath(fileBrowserPath);
-    const filteredCount = Math.max(0, allEntries.length - visibleEntries.length);
+    const model = buildFilePanelDirectoryEntriesModel(entries, fileBrowserPath);
 
-    renderFileBrowserList(visibleEntries, {
-        includeParentEntry: hasParentEntry,
-        parentEntryPath
+    renderFileBrowserList(model.visibleEntries, {
+        includeParentEntry: model.hasParentEntry,
+        parentEntryPath: model.parentEntryPath
     });
-
-    if (elements.meta) {
-        const countText = filteredCount > 0
-            ? `항목 ${visibleEntries.length}/${allEntries.length}개`
-            : `항목 ${visibleEntries.length}개`;
-        const extra = [];
-        if (filteredCount > 0) {
-            extra.push(`숨김 ${filteredCount}개`);
-        }
-        if (truncated) {
-            extra.push('일부만 표시됨');
-        }
-        elements.meta.textContent = extra.length > 0 ? `${countText} (${extra.join(', ')})` : countText;
-    }
-
-    if (elements.empty) {
-        if (visibleEntries.length === 0 && allEntries.length > 0) {
-            elements.empty.textContent = '필터 조건으로 모든 항목이 숨겨져 있습니다.';
-        } else {
-            elements.empty.textContent = '표시할 파일/폴더가 없습니다.';
-        }
-        const hasRows = visibleEntries.length > 0 || hasParentEntry;
-        elements.empty.classList.toggle('is-hidden', hasRows);
-    }
-    if (elements.list) {
-        const hasRows = visibleEntries.length > 0 || hasParentEntry;
-        elements.list.classList.toggle('is-hidden', !hasRows);
-    }
+    renderFilePanelDirectorySummary(elements, model, { truncated });
 }
 
 function rerenderFileBrowserDirectoryFromCache() {
@@ -9740,6 +9757,15 @@ function isSpreadsheetPreviewableFile(path, mimeType = '') {
     return normalizedMime.includes('spreadsheet')
         || normalizedMime.includes('excel')
         || normalizedMime.includes('sheet.binary');
+}
+
+function containsTemplateLikeHtmlSyntax(text = '') {
+    const source = typeof text === 'string' ? text : '';
+    if (!source) return false;
+    return source.includes('{%')
+        || source.includes('{{')
+        || source.includes('{#')
+        || source.includes('<%');
 }
 
 function formatSpreadsheetColumnLabel(index) {
@@ -10005,6 +10031,10 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const isScript = Boolean(result?.is_script);
     const isBinary = Boolean(result?.is_binary);
     const isSpreadsheet = isSpreadsheetPreviewableFile(normalizedPath, result?.mime_type);
+    const text = typeof result?.content === 'string' ? result.content : '';
+    const canRenderHtmlPreview = isHtml
+        && result?.html_previewable !== false
+        && !containsTemplateLikeHtmlSyntax(text);
     const sizeText = formatFileBrowserSize(result?.size);
     const infoParts = [normalizedPath || '(unknown path)'];
     if (sizeText && sizeText !== '--') {
@@ -10049,7 +10079,6 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
-    const text = typeof result?.content === 'string' ? result.content : '';
     if (!text) {
         const placeholder = document.createElement('div');
         placeholder.className = 'file-browser-placeholder';
@@ -10058,7 +10087,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
-    if (isHtml && !requestedLine) {
+    if (canRenderHtmlPreview && !requestedLine) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         if (isWorkModeViewer) {
             setWorkModeHtmlPreviewState({

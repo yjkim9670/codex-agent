@@ -82,6 +82,8 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
+    --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
+    --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-select-all: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='M8.5 12.1 10.9 14.5 15.8 9.6'/></svg>");
     --icon-clear-selection: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='m9 9 6 6'/><path d='m15 9-6 6'/></svg>");
     --icon-trash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d92d4c' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 6.7h14.4'/><path d='M9.2 6.7V5.3A1.3 1.3 0 0 1 10.5 4h3a1.3 1.3 0 0 1 1.3 1.3v1.4'/><path d='m7 6.7.8 11.1A1.5 1.5 0 0 0 9.3 19h5.4a1.5 1.5 0 0 0 1.5-1.2L17 6.7'/><path d='M10.2 10.1v5.4'/><path d='M13.8 10.1v5.4'/></svg>");
@@ -161,6 +163,8 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
+    --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
+    --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-select-all: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='M8.5 12.1 10.9 14.5 15.8 9.6'/></svg>");
     --icon-clear-selection: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='m9 9 6 6'/><path d='m15 9-6 6'/></svg>");
     --icon-trash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8977f' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 6.7h14.4'/><path d='M9.2 6.7V5.3A1.3 1.3 0 0 1 10.5 4h3a1.3 1.3 0 0 1 1.3 1.3v1.4'/><path d='m7 6.7.8 11.1A1.5 1.5 0 0 0 9.3 19h5.4a1.5 1.5 0 0 0 1.5-1.2L17 6.7'/><path d='M10.2 10.1v5.4'/><path d='M13.8 10.1v5.4'/></svg>");
@@ -1176,8 +1180,7 @@ body {
     overflow: hidden;
 }
 
-.file-browser-meta,
-.file-browser-viewer-meta {
+.file-browser-meta {
     padding: 9px 10px;
     border-bottom: 1px solid var(--border);
     background: var(--surface-raised);
@@ -1185,6 +1188,56 @@ body {
     font-weight: 600;
     color: var(--text-secondary);
     overflow-wrap: anywhere;
+}
+
+.file-browser-viewer-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.file-browser-viewer-meta {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.file-browser-viewer-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.file-browser-viewer-action {
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px 15px;
+}
+
+.file-browser-viewer-edit {
+    background-image: var(--icon-file-edit);
+}
+
+.file-browser-viewer-save {
+    background-image: var(--icon-save-file);
+}
+
+.file-browser-viewer-action.is-active {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+    background-color: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.file-browser-viewer-save.is-ready {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background-color: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 
 .file-panel-selection-bar {
@@ -1407,6 +1460,45 @@ body {
 
 .file-browser-source-line.is-target .file-browser-source-line-content {
     background: rgba(15, 76, 129, 0.08);
+}
+
+.file-browser-editor {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    background: var(--surface);
+}
+
+.file-browser-editor-input {
+    flex: 1 1 auto;
+    min-height: 260px;
+    resize: none;
+    border: 0;
+    outline: none;
+    margin: 0;
+    padding: 12px 14px;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    tab-size: 4;
+}
+
+.file-browser-editor-input::placeholder {
+    color: var(--text-muted);
+}
+
+.file-browser-editor-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-muted);
+    font-size: 11px;
+    color: var(--text-tertiary);
 }
 
 .file-browser-markdown {
@@ -3288,7 +3380,7 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 }
 
 .work-mode-preview .file-browser-meta,
-.work-mode-preview .file-browser-viewer-meta {
+.work-mode-preview .file-browser-viewer-header {
     padding: 8px 9px;
 }
 
@@ -6819,8 +6911,8 @@ label.hover-tooltip,
     .file-browser-entry-name,
     .work-mode-preview .file-browser-meta,
     .file-browser-meta,
+    .file-browser-viewer-header,
     .file-browser-viewer-meta,
-    .work-mode-preview .file-browser-viewer-meta,
     .work-mode-file-table .file-browser-loading,
     .work-mode-file-table .file-browser-empty,
     .file-browser-loading,
@@ -6835,6 +6927,14 @@ label.hover-tooltip,
 
     .file-browser-source {
         font-size: 10px;
+    }
+
+    .file-browser-editor-input {
+        font-size: 10px;
+    }
+
+    .file-browser-editor-status {
+        font-size: 9px;
     }
 
     .file-browser-markdown {
@@ -6946,6 +7046,7 @@ label.hover-tooltip,
 
     .work-mode-file-entry,
     .work-mode-preview .file-browser-meta,
+    .work-mode-preview .file-browser-viewer-header,
     .work-mode-preview .file-browser-viewer-meta,
     .work-mode-file-table .file-browser-loading,
     .work-mode-file-table .file-browser-empty {

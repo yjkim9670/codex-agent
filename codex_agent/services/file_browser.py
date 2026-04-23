@@ -18,6 +18,7 @@ BROWSER_ROOT_WORKSPACE = 'workspace'
 _MAX_LIST_ENTRIES = 2000
 _MAX_FILE_PREVIEW_BYTES = 512 * 1024
 _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
+_MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = 128 * 1024 * 1024
 _DELETE_QUARANTINE_PREFIX = '.codex-delete-'
@@ -82,6 +83,62 @@ _SCRIPT_LANGUAGES = {
 
 _HTML_LANGUAGES = {'html'}
 _HTML_TEMPLATE_MARKERS = ('{%', '{{', '{#', '<%')
+_EDITABLE_TEXT_SUFFIXES = {
+    '.bash',
+    '.bat',
+    '.c',
+    '.cc',
+    '.cfg',
+    '.conf',
+    '.cpp',
+    '.css',
+    '.csv',
+    '.cxx',
+    '.go',
+    '.h',
+    '.hpp',
+    '.htm',
+    '.html',
+    '.ini',
+    '.java',
+    '.js',
+    '.json',
+    '.jsonl',
+    '.jsx',
+    '.kt',
+    '.log',
+    '.lua',
+    '.md',
+    '.mjs',
+    '.php',
+    '.ps1',
+    '.py',
+    '.rb',
+    '.rs',
+    '.scss',
+    '.sh',
+    '.sql',
+    '.swift',
+    '.toml',
+    '.ts',
+    '.tsx',
+    '.txt',
+    '.xml',
+    '.yaml',
+    '.yml',
+    '.zsh',
+}
+_EDITABLE_TEXT_FILENAMES = {
+    '.dockerignore',
+    '.editorconfig',
+    '.env',
+    '.env.example',
+    '.gitattributes',
+    '.gitignore',
+    'dockerfile',
+    'makefile',
+    'procfile',
+}
 
 
 class FileBrowserError(RuntimeError):
@@ -274,6 +331,64 @@ def _ensure_existing_directory(root_path, relative_path):
 def _build_download_archive_name():
     timestamp = time.strftime('%Y%m%d-%H%M%S')
     return f'codex-files-{timestamp}.zip'
+
+
+def _extract_file_metadata(target_path: Path):
+    try:
+        stats = target_path.stat()
+    except OSError as exc:
+        raise FileBrowserError(
+            f'파일 정보를 확인할 수 없습니다: {exc}',
+            error_code='read_error',
+            status_code=500,
+        ) from exc
+
+    modified_ns = getattr(stats, 'st_mtime_ns', None)
+    if modified_ns is None:
+        modified_ns = int(stats.st_mtime * 1_000_000_000)
+    return {
+        'size': int(stats.st_size),
+        'modified_at': int(stats.st_mtime),
+        'modified_ns': str(int(modified_ns)),
+    }
+
+
+def _decode_utf8_preview(raw: bytes):
+    if not raw:
+        return '', 0, True
+    try:
+        content = raw.decode('utf-8')
+        is_utf8_text = True
+    except UnicodeDecodeError:
+        content = raw.decode('utf-8', errors='replace')
+        is_utf8_text = False
+    line_count = content.count('\n') + (1 if content else 0)
+    return content, line_count, is_utf8_text
+
+
+def _is_editable_text_path(path: Path):
+    lowered_name = path.name.lower()
+    if lowered_name in _EDITABLE_TEXT_FILENAMES:
+        return True
+    for suffix in reversed(path.suffixes):
+        if suffix.lower() in _EDITABLE_TEXT_SUFFIXES:
+            return True
+    return False
+
+
+def _normalize_expected_modified_ns(value):
+    if value is None:
+        return ''
+    text = str(value).strip()
+    if not text:
+        return ''
+    if not text.isdigit():
+        raise FileBrowserError(
+            '파일 버전 정보가 올바르지 않습니다.',
+            error_code='invalid_version',
+            status_code=400,
+        )
+    return text
 
 
 def _build_move_operations(root_path, targets, *, destination_path=None, destination_directory=None):
@@ -493,11 +608,7 @@ def read_file(root_key=None, relative_path=''):
             status_code=400,
         )
 
-    total_bytes = None
-    try:
-        total_bytes = int(target_path.stat().st_size)
-    except OSError:
-        total_bytes = None
+    metadata = _extract_file_metadata(target_path)
 
     try:
         with target_path.open('rb') as file_handle:
@@ -522,10 +633,16 @@ def read_file(root_key=None, relative_path=''):
     if is_binary:
         content = ''
         line_count = 0
+        is_utf8_text = False
     else:
-        content = raw.decode('utf-8', errors='replace')
-        line_count = content.count('\n') + (1 if content else 0)
+        content, line_count, is_utf8_text = _decode_utf8_preview(raw)
     html_previewable = is_html and not _looks_like_templated_html(target_path, text=content)
+    editable = (
+        not is_binary
+        and not truncated
+        and is_utf8_text
+        and _is_editable_text_path(target_path)
+    )
 
     return {
         'root': normalized_root,
@@ -538,11 +655,119 @@ def read_file(root_key=None, relative_path=''):
         'html_previewable': html_previewable,
         'is_script': is_script,
         'is_binary': is_binary,
-        'size': total_bytes,
+        'size': metadata['size'],
+        'modified_at': metadata['modified_at'],
+        'modified_ns': metadata['modified_ns'],
         'truncated': truncated,
+        'editable': editable,
         'line_count': line_count,
         'content': content,
     }
+
+
+def write_file(root_key=None, relative_path='', content='', expected_modified_ns=None):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '파일 경로를 입력해주세요.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+    if not isinstance(content, str):
+        raise FileBrowserError(
+            '저장할 파일 내용이 올바르지 않습니다.',
+            error_code='invalid_content',
+            status_code=400,
+        )
+
+    current_state = read_file(
+        root_key=normalized_root,
+        relative_path=normalized_path,
+    )
+    if not current_state.get('editable'):
+        raise FileBrowserError(
+            '이 파일 형식은 편집 저장을 지원하지 않습니다.',
+            error_code='not_editable',
+            status_code=400,
+        )
+
+    normalized_expected_modified_ns = _normalize_expected_modified_ns(expected_modified_ns)
+    current_modified_ns = str(current_state.get('modified_ns') or '').strip()
+    if normalized_expected_modified_ns and normalized_expected_modified_ns != current_modified_ns:
+        raise FileBrowserError(
+            '파일이 다른 변경으로 업데이트되었습니다. 다시 열어 최신 내용을 확인해주세요.',
+            error_code='modified_conflict',
+            status_code=409,
+        )
+
+    encoded = content.encode('utf-8')
+    if len(encoded) > _MAX_FILE_EDIT_BYTES:
+        raise FileBrowserError(
+            '편집 저장 크기 제한(512KB)을 초과했습니다.',
+            error_code='file_too_large',
+            status_code=413,
+        )
+
+    target_path = _resolve_target_path(root_path, normalized_path)
+    if not target_path.exists():
+        raise FileBrowserError(
+            '파일을 찾을 수 없습니다.',
+            error_code='path_not_found',
+            status_code=404,
+        )
+    if not target_path.is_file():
+        raise FileBrowserError(
+            '파일만 저장할 수 있습니다.',
+            error_code='not_file',
+            status_code=400,
+        )
+    try:
+        target_mode = int(target_path.stat().st_mode) & 0o7777
+    except OSError:
+        target_mode = None
+
+    temp_handle = None
+    temp_path = None
+    try:
+        temp_handle = tempfile.NamedTemporaryFile(
+            mode='wb',
+            delete=False,
+            dir=target_path.parent,
+            prefix=f'.{target_path.name}.codex-save-',
+        )
+        temp_path = Path(temp_handle.name)
+        temp_handle.write(encoded)
+        temp_handle.flush()
+        temp_handle.close()
+        temp_handle = None
+        if target_mode is not None:
+            temp_path.chmod(target_mode)
+        temp_path.replace(target_path)
+    except OSError as exc:
+        raise FileBrowserError(
+            f'파일을 저장하지 못했습니다: {exc}',
+            error_code='write_error',
+            status_code=500,
+        ) from exc
+    finally:
+        if temp_handle is not None:
+            try:
+                temp_handle.close()
+            except OSError:
+                pass
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+    saved_state = read_file(
+        root_key=normalized_root,
+        relative_path=normalized_path,
+    )
+    saved_state['saved'] = True
+    return saved_state
 
 
 def read_file_raw(root_key=None, relative_path=''):

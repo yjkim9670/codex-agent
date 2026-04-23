@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=123">
+    <link rel="stylesheet" href="/static/css/app.css?v=124">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -125,7 +125,30 @@
             aria-label="파일 목록과 미리보기 너비 조정"
         ></div>
         <div class="file-browser-viewer-panel">
-            <div class="file-browser-viewer-meta" id="{{ id_prefix }}-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
+            <div class="file-browser-viewer-header" id="{{ id_prefix }}-viewer-header">
+                <div class="file-browser-viewer-meta" id="{{ id_prefix }}-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
+                <div class="file-browser-viewer-actions" id="{{ id_prefix }}-viewer-actions">
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-edit is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-edit"
+                        aria-label="파일 수정 모드 열기"
+                        title="파일 수정 모드 열기"
+                        aria-pressed="false"
+                    >
+                        <span class="sr-only">수정</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-save is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-save"
+                        aria-label="파일 저장"
+                        title="파일 저장"
+                    >
+                        <span class="sr-only">저장</span>
+                    </button>
+                </div>
+            </div>
             <div class="file-browser-viewer-content" id="{{ id_prefix }}-viewer-content">파일을 선택하세요.</div>
         </div>
     </div>

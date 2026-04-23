@@ -146,6 +146,7 @@ const FILE_PANEL_VARIANT_OVERLAY = 'overlay';
 const FILE_PANEL_CHAT_CONTEXT_MAX_FILES = 6;
 const FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE = 4000;
 const FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS = 18000;
+const FILE_PANEL_EDIT_DISCARD_MESSAGE = '저장하지 않은 변경 사항이 있습니다. 변경 내용을 버릴까요?';
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
@@ -276,6 +277,28 @@ let workModeHtmlPreviewState = {
     previewUrl: '',
     suspended: false,
     viewerScroll: null
+};
+let fileBrowserEditState = {
+    root: FILE_BROWSER_ROOT_WORKSPACE,
+    path: '',
+    editable: false,
+    editing: false,
+    dirty: false,
+    saving: false,
+    modifiedNs: '',
+    previewResult: null,
+    editBuffer: ''
+};
+let workModeFileEditState = {
+    root: FILE_BROWSER_ROOT_WORKSPACE,
+    path: '',
+    editable: false,
+    editing: false,
+    dirty: false,
+    saving: false,
+    modifiedNs: '',
+    previewResult: null,
+    editBuffer: ''
 };
 let remoteStreamStatusCache = {
     streams: [],
@@ -1243,6 +1266,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileClearSelectionBtn = document.getElementById('codex-work-mode-file-clear-selection');
     const workModeFileDownloadBtn = document.getElementById('codex-work-mode-file-download');
     const workModeFileDeleteBtn = document.getElementById('codex-work-mode-file-delete');
+    const workModeFileEditBtn = document.getElementById('codex-work-mode-file-edit');
+    const workModeFileSaveBtn = document.getElementById('codex-work-mode-file-save');
     const workModeFileDivider = document.getElementById('codex-work-mode-file-divider');
     const workModeFileGridScroll = document.getElementById('codex-work-mode-file-grid-scroll');
     const workModeFileHScroll = document.getElementById('codex-work-mode-file-hscroll');
@@ -1282,6 +1307,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserClearSelectionBtn = document.getElementById('codex-file-browser-clear-selection');
     const fileBrowserDownloadBtn = document.getElementById('codex-file-browser-download');
     const fileBrowserDeleteBtn = document.getElementById('codex-file-browser-delete');
+    const fileBrowserEditBtn = document.getElementById('codex-file-browser-edit');
+    const fileBrowserSaveBtn = document.getElementById('codex-file-browser-save');
     const fileBrowserDivider = document.getElementById('codex-file-browser-divider');
     const fileBrowserGridScroll = document.getElementById('codex-file-browser-grid-scroll');
     const fileBrowserHScroll = document.getElementById('codex-file-browser-hscroll');
@@ -1461,9 +1488,21 @@ document.addEventListener('DOMContentLoaded', () => {
             void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
+    if (workModeFileEditBtn) {
+        workModeFileEditBtn.addEventListener('click', () => {
+            void toggleFilePanelEditMode(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileSaveBtn) {
+        workModeFileSaveBtn.addEventListener('click', () => {
+            void saveFilePanelEdits(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
     if (workModeFileUpBtn) {
         workModeFileUpBtn.addEventListener('click', () => {
             if (!workModeFilePath) return;
+            if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) return;
+            workModeFileSelectedPath = '';
             clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
@@ -1474,6 +1513,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 root: workModeFileRoot,
                 path: getFileBrowserParentPath(workModeFilePath),
                 force: true
+            }).then(result => {
+                if (!result) return;
+                clearWorkModeFileViewer('파일을 선택하세요.');
             });
         });
     }
@@ -1741,6 +1783,16 @@ document.addEventListener('DOMContentLoaded', () => {
             void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
+    if (fileBrowserEditBtn) {
+        fileBrowserEditBtn.addEventListener('click', () => {
+            void toggleFilePanelEditMode(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserSaveBtn) {
+        fileBrowserSaveBtn.addEventListener('click', () => {
+            void saveFilePanelEdits(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
     if (fileBrowserBackBtn) {
         fileBrowserBackBtn.addEventListener('click', () => {
             setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
@@ -1749,12 +1801,17 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserUpBtn) {
         fileBrowserUpBtn.addEventListener('click', () => {
             if (!fileBrowserPath) return;
+            if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) return;
             const parentPath = getFileBrowserParentPath(fileBrowserPath);
+            fileBrowserSelectedPath = '';
             clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
             void refreshFileBrowserDirectory({
                 root: fileBrowserRoot,
                 path: parentPath,
                 force: true
+            }).then(result => {
+                if (!result) return;
+                clearFileBrowserViewer();
             });
         });
     }
@@ -1801,13 +1858,16 @@ document.addEventListener('DOMContentLoaded', () => {
         button.addEventListener('click', () => {
             const nextRoot = normalizeFileBrowserRoot(button.dataset?.rootTarget);
             if (!nextRoot || nextRoot === fileBrowserRoot) return;
+            if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) return;
             fileBrowserRoot = nextRoot;
             fileBrowserPath = '';
             fileBrowserSelectedPath = '';
             clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
-            clearFileBrowserViewer();
             updateFileBrowserRootButtons();
-            void refreshFileBrowserDirectory({ root: nextRoot, path: '', force: true });
+            void refreshFileBrowserDirectory({ root: nextRoot, path: '', force: true }).then(result => {
+                if (!result) return;
+                clearFileBrowserViewer();
+            });
         });
     });
     if (syncOverlayRefreshBtn) {
@@ -3260,8 +3320,12 @@ function getFilePanelElementsByPrefix({
         list: byId('list'),
         listPanel: root.querySelector(listPanelSelector),
         viewerPanel: root.querySelector(viewerPanelSelector),
+        viewerHeader: byId('viewer-header'),
         viewerMeta: byId('viewer-meta'),
+        viewerActions: byId('viewer-actions'),
         viewerContent: byId('viewer-content'),
+        editBtn: byId('edit'),
+        saveBtn: byId('save'),
         colResizers: columns ? Array.from(columns.querySelectorAll('[data-resize-col]')) : []
     };
 }
@@ -3939,6 +4003,117 @@ function getFilePanelVariantConfig(variant) {
         },
         canSyncHorizontal: () => isWorkModeEnabled() && !isMobileLayout()
     };
+}
+
+function getFilePanelEditState(variant) {
+    return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+        ? fileBrowserEditState
+        : workModeFileEditState;
+}
+
+function updateFilePanelActionButtonLabel(button, label) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const normalizedLabel = String(label || '').trim();
+    button.setAttribute('aria-label', normalizedLabel);
+    button.setAttribute('title', normalizedLabel);
+}
+
+function setFilePanelViewerMetaText(elements, text, { truncated = false } = {}) {
+    if (!elements?.viewerMeta) return;
+    elements.viewerMeta.textContent = String(text || '');
+    if (truncated) {
+        const note = document.createElement('span');
+        note.className = 'file-browser-truncated-note';
+        note.textContent = '미리보기 용량 제한으로 일부만 표시됩니다.';
+        elements.viewerMeta.appendChild(note);
+    }
+}
+
+function resetFilePanelEditState(variant, { root = null } = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const fallbackRoot = normalizedVariant === FILE_PANEL_VARIANT_OVERLAY ? fileBrowserRoot : workModeFileRoot;
+    state.root = normalizeFileBrowserRoot(root || fallbackRoot);
+    state.path = '';
+    state.editable = false;
+    state.editing = false;
+    state.dirty = false;
+    state.saving = false;
+    state.modifiedNs = '';
+    state.previewResult = null;
+    state.editBuffer = '';
+    syncFilePanelViewerActionState(normalizedVariant);
+}
+
+function hydrateFilePanelEditStateFromResult(variant, result, { root = null } = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    state.root = normalizeFileBrowserRoot(root || result?.root || getFilePanelCurrentRoot(normalizedVariant));
+    state.path = normalizeFileBrowserRelativePath(result?.path || '');
+    state.editable = Boolean(result?.editable);
+    state.editing = false;
+    state.dirty = false;
+    state.saving = false;
+    state.modifiedNs = String(result?.modified_ns || '').trim();
+    state.previewResult = result && typeof result === 'object' ? { ...result } : null;
+    state.editBuffer = typeof result?.content === 'string' ? result.content : '';
+    syncFilePanelViewerActionState(normalizedVariant);
+}
+
+function discardFilePanelEditChanges(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    state.editing = false;
+    state.dirty = false;
+    state.saving = false;
+    state.editBuffer = typeof state.previewResult?.content === 'string' ? state.previewResult.content : '';
+    syncFilePanelViewerActionState(normalizedVariant);
+}
+
+function confirmDiscardFilePanelEditChanges(variant, message = FILE_PANEL_EDIT_DISCARD_MESSAGE) {
+    const state = getFilePanelEditState(variant);
+    if (!state.editing || !state.dirty) return true;
+    const confirmed = window.confirm(message);
+    if (!confirmed) return false;
+    discardFilePanelEditChanges(variant);
+    return true;
+}
+
+function syncFilePanelViewerActionState(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    if (!elements) return;
+
+    const state = getFilePanelEditState(normalizedVariant);
+    const hasPreview = Boolean(state.path);
+    const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
+    const canEdit = hasPreview && Boolean(state.editable);
+    if (elements.viewerPanel) {
+        elements.viewerPanel.classList.toggle('is-editing', Boolean(state.editing));
+    }
+    if (elements.editBtn) {
+        elements.editBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.editBtn.classList.toggle('is-active', Boolean(state.editing));
+        elements.editBtn.disabled = !canEdit || isBusy;
+        elements.editBtn.setAttribute('aria-pressed', state.editing ? 'true' : 'false');
+        updateFilePanelActionButtonLabel(
+            elements.editBtn,
+            state.editing ? '파일 수정 모드 종료' : '파일 수정 모드 열기'
+        );
+    }
+    if (elements.saveBtn) {
+        const showSave = hasPreview && state.editing;
+        elements.saveBtn.classList.toggle('is-hidden', !showSave);
+        elements.saveBtn.classList.toggle('is-ready', Boolean(state.dirty) && !state.saving);
+        elements.saveBtn.classList.toggle('is-loading', Boolean(state.saving));
+        elements.saveBtn.disabled = !showSave || !state.dirty || isBusy;
+        elements.saveBtn.setAttribute('aria-busy', state.saving ? 'true' : 'false');
+        updateFilePanelActionButtonLabel(
+            elements.saveBtn,
+            state.saving ? '파일 저장 중...' : '파일 저장'
+        );
+    }
 }
 
 function applyFilePanelSplitRatio(variant, ratio, { persist = false } = {}) {
@@ -9151,6 +9326,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
         }
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
+    syncFilePanelViewerActionState(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
 function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -9184,13 +9360,12 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
         }
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
+    syncFilePanelViewerActionState(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하세요.') {
     if (!elements) return;
-    if (elements.viewerMeta) {
-        elements.viewerMeta.textContent = '파일을 선택하면 미리보기가 표시됩니다.';
-    }
+    setFilePanelViewerMetaText(elements, '파일을 선택하면 미리보기가 표시됩니다.');
     if (elements.viewerContent) {
         elements.viewerContent.innerHTML = '';
         const placeholder = document.createElement('div');
@@ -9204,6 +9379,7 @@ function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     const elements = getWorkModeFileElements();
     setFilePanelViewerPlaceholder(elements, message);
     clearWorkModeHtmlPreviewState();
+    resetFilePanelEditState(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
 function createNormalizedRelativePathSet(paths) {
@@ -9621,6 +9797,7 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
             toggleFilePanelEntrySelection(FILE_PANEL_VARIANT_WORK_MODE, entryPath, options);
         },
         onOpenDirectory: entryPath => {
+            if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) return;
             workModeFileSelectedPath = '';
             clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
             schedulePersistWorkModeFileViewState();
@@ -9629,11 +9806,13 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
             } else if (isFoldLayout()) {
                 setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
-            clearWorkModeFileViewer('파일을 선택하세요.');
             void refreshWorkModeFileDirectory({
                 root: workModeFileRoot,
                 path: entryPath,
                 force: true
+            }).then(result => {
+                if (!result) return;
+                clearWorkModeFileViewer('파일을 선택하세요.');
             });
         },
         onOpenFile: entryPath => {
@@ -9719,6 +9898,9 @@ async function refreshWorkModeFileDirectory(
     } = {}
 ) {
     void force;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) {
+        return null;
+    }
     const elements = getWorkModeFileElements();
     if (!elements) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
@@ -9798,17 +9980,19 @@ async function openFileInWorkModePanel(
 ) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
     if (!normalizedPath) return null;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) {
+        return null;
+    }
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const requestedLine = normalizeSourceLineNumber(line);
     const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getWorkModeFileElements();
     if (!elements) return null;
     clearWorkModeHtmlPreviewState();
+    resetFilePanelEditState(FILE_PANEL_VARIANT_WORK_MODE, { root: normalizedRoot });
 
-    if (elements.viewerMeta) {
-        const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
-        elements.viewerMeta.textContent = `${displayPath} · 불러오는 중...`;
-    }
+    const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
+    setFilePanelViewerMetaText(elements, `${displayPath} · 불러오는 중...`);
     if (elements.viewerContent) {
         elements.viewerContent.innerHTML = '';
         const placeholder = document.createElement('div');
@@ -9870,9 +10054,7 @@ async function openFileInWorkModePanel(
                 path: normalizedPath
             };
         }
-        if (elements.viewerMeta) {
-            elements.viewerMeta.textContent = normalizedPath;
-        }
+        setFilePanelViewerMetaText(elements, normalizedPath);
         if (elements.viewerContent) {
             elements.viewerContent.innerHTML = '';
             const placeholder = document.createElement('div');
@@ -9891,6 +10073,9 @@ async function openFileInWorkModePanel(
 
 function openWorkModeFileTarget(target, options = {}) {
     if (!target) return false;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) {
+        return false;
+    }
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const requestedRoot = normalizeFileBrowserRoot(target.root);
@@ -10258,6 +10443,7 @@ function updateFileBrowserFilterToggleState() {
 function clearFileBrowserViewer(message = '파일을 선택하세요.') {
     const elements = getFileBrowserElements();
     setFilePanelViewerPlaceholder(elements, message);
+    resetFilePanelEditState(FILE_PANEL_VARIANT_OVERLAY);
 }
 
 function formatFileBrowserSize(value) {
@@ -10313,14 +10499,17 @@ function renderFileBrowserList(entries, { includeParentEntry = false, parentEntr
             toggleFilePanelEntrySelection(FILE_PANEL_VARIANT_OVERLAY, entryPath, options);
         },
         onOpenDirectory: entryPath => {
+            if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) return;
             fileBrowserSelectedPath = '';
             clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
             setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
-            clearFileBrowserViewer();
             void refreshFileBrowserDirectory({
                 root: fileBrowserRoot,
                 path: entryPath,
                 force: true
+            }).then(result => {
+                if (!result) return;
+                clearFileBrowserViewer();
             });
         },
         onOpenFile: entryPath => {
@@ -10354,6 +10543,20 @@ async function fetchFileBrowserFile(root, path) {
         body: JSON.stringify({
             root: normalizeFileBrowserRoot(root),
             path: normalizeFileBrowserRelativePath(path)
+        })
+    });
+}
+
+async function writeFilePanelFile(root, path, content, expectedModifiedNs = '') {
+    return fetchJson('/api/codex/files/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path),
+            content: typeof content === 'string' ? content : '',
+            expected_modified_ns: String(expectedModifiedNs || '').trim()
         })
     });
 }
@@ -10717,6 +10920,9 @@ async function moveSelectedFilesFromFilePanel(variant) {
 
 async function refreshFileBrowserDirectory({ root = fileBrowserRoot, path = fileBrowserPath, force = false } = {}) {
     void force;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) {
+        return null;
+    }
     const elements = getFileBrowserElements();
     if (!elements) return null;
     const normalizedRoot = normalizeFileBrowserRoot(root);
@@ -11135,6 +11341,153 @@ async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, rend
     }
 }
 
+function getFilePanelVariantFromElements(elements) {
+    return elements?.viewerContent?.id === 'codex-work-mode-file-viewer-content'
+        ? FILE_PANEL_VARIANT_WORK_MODE
+        : FILE_PANEL_VARIANT_OVERLAY;
+}
+
+function buildFilePanelEditorStatusText(variant) {
+    const state = getFilePanelEditState(variant);
+    const dirtyLabel = state.dirty ? '변경 사항 있음' : '변경 사항 없음';
+    return `${dirtyLabel} · Ctrl/Cmd+S로 저장`;
+}
+
+function renderFilePanelEditor(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!elements?.viewerContent || !state.previewResult) return false;
+
+    if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
+        clearWorkModeHtmlPreviewState();
+    }
+
+    elements.viewerContent.innerHTML = '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'file-browser-editor';
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'file-browser-editor-input';
+    textarea.spellcheck = false;
+    textarea.autocapitalize = 'off';
+    textarea.autocomplete = 'off';
+    textarea.autocorrect = 'off';
+    textarea.value = typeof state.editBuffer === 'string'
+        ? state.editBuffer
+        : String(state.previewResult?.content || '');
+
+    const status = document.createElement('div');
+    status.className = 'file-browser-editor-status';
+    status.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+
+    textarea.addEventListener('input', () => {
+        state.editBuffer = textarea.value;
+        state.dirty = textarea.value !== String(state.previewResult?.content || '');
+        status.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+        syncFilePanelViewerActionState(normalizedVariant);
+    });
+    textarea.addEventListener('keydown', event => {
+        const key = String(event.key || '').toLowerCase();
+        if ((event.metaKey || event.ctrlKey) && key === 's') {
+            event.preventDefault();
+            void saveFilePanelEdits(normalizedVariant);
+        }
+    });
+
+    wrapper.appendChild(textarea);
+    wrapper.appendChild(status);
+    elements.viewerContent.appendChild(wrapper);
+    syncFilePanelViewerActionState(normalizedVariant);
+    requestAnimationFrame(() => {
+        textarea.focus();
+        const end = textarea.value.length;
+        textarea.setSelectionRange(end, end);
+    });
+    return true;
+}
+
+async function rerenderFilePanelPreviewFromState(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!elements?.viewerContent || !state.previewResult) return false;
+    await renderFileBrowserViewerIntoElements(elements, state.previewResult, {
+        root: state.root
+    });
+    return true;
+}
+
+async function toggleFilePanelEditMode(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!state.path || !state.previewResult) return false;
+    if (!state.editing) {
+        if (!state.editable) {
+            showToast('이 파일 형식은 편집 모드에서 열 수 없습니다.', {
+                tone: 'error',
+                durationMs: 3200
+            });
+            return false;
+        }
+        state.editing = true;
+        state.dirty = false;
+        state.saving = false;
+        state.editBuffer = String(state.previewResult?.content || '');
+        return renderFilePanelEditor(normalizedVariant);
+    }
+
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+    return rerenderFilePanelPreviewFromState(normalizedVariant);
+}
+
+async function saveFilePanelEdits(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!state.editing || !state.dirty || state.saving || !state.path) return false;
+
+    state.saving = true;
+    syncFilePanelViewerActionState(normalizedVariant);
+    try {
+        const result = await writeFilePanelFile(
+            state.root || getFilePanelCurrentRoot(normalizedVariant),
+            state.path,
+            state.editBuffer,
+            state.modifiedNs
+        );
+        setFilePanelPreviewPath(normalizedVariant, result?.path || state.path);
+        await renderFileBrowserViewerIntoElements(
+            getFilePanelVariantConfig(normalizedVariant).getElements(),
+            result,
+            {
+                root: state.root || result?.root || getFilePanelCurrentRoot(normalizedVariant)
+            }
+        );
+        if (normalizedVariant === FILE_PANEL_VARIANT_OVERLAY) {
+            applyFileBrowserSelectionState();
+        } else {
+            applyWorkModeFileSelectionState();
+        }
+        showToast('파일을 저장했습니다.', {
+            tone: 'success',
+            durationMs: 2400
+        });
+        return true;
+    } catch (error) {
+        state.saving = false;
+        syncFilePanelViewerActionState(normalizedVariant);
+        showToast(normalizeError(error, '파일 저장에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    }
+}
+
 async function renderFileBrowserViewerIntoElements(elements, result, options = {}) {
     if (!elements?.viewerContent) return;
 
@@ -11144,6 +11497,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const previewRoot = normalizeFileBrowserRoot(options?.root || result?.root || fileBrowserRoot);
     const isWorkModeViewer = elements.viewerContent.id === 'codex-work-mode-file-viewer-content';
+    const variant = getFilePanelVariantFromElements(elements);
 
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
@@ -11177,15 +11531,10 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         const lineInfo = requestedColumn ? `line ${requestedLine}:${requestedColumn}` : `line ${requestedLine}`;
         infoParts.push(lineInfo);
     }
-    if (elements.viewerMeta) {
-        elements.viewerMeta.textContent = infoParts.join(' · ');
-        if (result?.truncated) {
-            const note = document.createElement('span');
-            note.className = 'file-browser-truncated-note';
-            note.textContent = '미리보기 용량 제한으로 일부만 표시됩니다.';
-            elements.viewerMeta.appendChild(note);
-        }
-    }
+    hydrateFilePanelEditStateFromResult(variant, result, { root: previewRoot });
+    setFilePanelViewerMetaText(elements, infoParts.join(' · '), {
+        truncated: Boolean(result?.truncated)
+    });
 
     elements.viewerContent.innerHTML = '';
     if (isWorkModeViewer) {
@@ -11315,16 +11664,18 @@ async function openFileInBrowserOverlay(
 ) {
     const normalizedPath = normalizeFileBrowserRelativePath(path);
     if (!normalizedPath) return null;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) {
+        return null;
+    }
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const requestedLine = normalizeSourceLineNumber(line);
     const requestedColumn = normalizeSourceColumnNumber(column);
     const elements = getFileBrowserElements();
     if (!elements) return null;
+    resetFilePanelEditState(FILE_PANEL_VARIANT_OVERLAY, { root: normalizedRoot });
 
-    if (elements.viewerMeta) {
-        const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
-        elements.viewerMeta.textContent = `${displayPath} · 불러오는 중...`;
-    }
+    const displayPath = formatFilesystemPathWithLocation(normalizedPath, requestedLine, requestedColumn);
+    setFilePanelViewerMetaText(elements, `${displayPath} · 불러오는 중...`);
     if (elements.viewerContent) {
         elements.viewerContent.innerHTML = '';
         const placeholder = document.createElement('div');
@@ -11361,9 +11712,7 @@ async function openFileInBrowserOverlay(
                 path: normalizedPath
             };
         }
-        if (elements.viewerMeta) {
-            elements.viewerMeta.textContent = normalizedPath;
-        }
+        setFilePanelViewerMetaText(elements, normalizedPath);
         if (elements.viewerContent) {
             elements.viewerContent.innerHTML = '';
             const placeholder = document.createElement('div');
@@ -11392,6 +11741,9 @@ async function refreshFileBrowserPreviewSelection() {
 function openFileBrowserOverlay(options = {}) {
     const elements = getFileBrowserElements();
     if (!elements) return;
+    if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_OVERLAY)) {
+        return;
+    }
     if (isGitSyncOverlayOpen()) {
         closeGitSyncOverlay();
     }

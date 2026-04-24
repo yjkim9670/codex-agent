@@ -12,6 +12,8 @@ from ..config import (
     CODEX_API_ONLY_MODE,
     CODEX_ENABLE_FILES_API,
     CODEX_ENABLE_GIT_API,
+    CODEX_MAX_ATTACHMENT_BYTES,
+    CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_MAX_MODEL_CHARS,
     CODEX_MAX_PROMPT_CHARS,
     CODEX_MAX_REASONING_CHARS,
@@ -25,6 +27,7 @@ from ..config import (
 from ..services.codex_chat import (
     append_message,
     build_codex_prompt,
+    CodexAttachmentError,
     get_session_storage_summary,
     create_session,
     cleanup_codex_streams,
@@ -41,9 +44,11 @@ from ..services.codex_chat import (
     list_codex_streams,
     read_codex_stream,
     list_sessions,
+    normalize_codex_attachments,
     rename_session,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
+    save_codex_attachment,
     start_codex_stream_for_session,
     enqueue_codex_stream_for_session,
     format_assistant_response_content,
@@ -115,6 +120,20 @@ def _parse_plan_mode(value):
     if isinstance(value, str):
         return value.strip().lower() in _PLAN_MODE_TRUTHY_VALUES
     return False
+
+
+def _parse_attachments(payload):
+    if not isinstance(payload, dict):
+        return []
+    return normalize_codex_attachments(payload.get('attachments') or [])
+
+
+def _attachment_error_response(error):
+    status_code = getattr(error, 'status_code', 400)
+    return jsonify({
+        'error': str(error),
+        'error_code': 'invalid_attachment',
+    }), status_code
 
 
 def _append_plan_mode_guardrails(prompt_text):
@@ -326,6 +345,11 @@ def _build_runtime_info():
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
+            'image_attachments_enabled': CODEX_MAX_ATTACHMENTS_PER_TURN > 0,
+        },
+        'attachments': {
+            'max_per_turn': int(CODEX_MAX_ATTACHMENTS_PER_TURN),
+            'max_bytes': int(CODEX_MAX_ATTACHMENT_BYTES),
         },
     }
 
@@ -333,6 +357,27 @@ def _build_runtime_info():
 @bp.route('/api/codex/runtime/info')
 def codex_runtime_info():
     return jsonify(_build_runtime_info())
+
+
+@bp.route('/api/codex/attachments', methods=['POST'])
+def codex_attachment_upload():
+    files = request.files.getlist('files')
+    single_file = request.files.get('file')
+    if single_file and single_file not in files:
+        files.append(single_file)
+    files = [item for item in files if item is not None]
+    if not files:
+        return jsonify({'error': '업로드할 이미지가 없습니다.', 'error_code': 'missing_attachment'}), 400
+    if len(files) > CODEX_MAX_ATTACHMENTS_PER_TURN:
+        return jsonify({
+            'error': f'이미지는 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.',
+            'error_code': 'too_many_attachments',
+        }), 400
+    try:
+        attachments = [save_codex_attachment(file_storage) for file_storage in files]
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
+    return jsonify({'attachments': attachments})
 
 
 @bp.route('/api/codex/settings')
@@ -503,6 +548,10 @@ def codex_session_message(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    try:
+        attachments = _parse_attachments(payload)
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -522,7 +571,8 @@ def codex_session_message(session_id):
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
-    user_message = append_message(session_id, 'user', prompt)
+    user_metadata = {'attachments': attachments} if attachments else None
+    user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
 
@@ -531,6 +581,7 @@ def codex_session_message(session_id):
         prompt_with_context,
         model_override=model_override,
         reasoning_override=reasoning_override,
+        attachments=attachments,
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))
@@ -584,6 +635,10 @@ def codex_session_message_stream(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    try:
+        attachments = _parse_attachments(payload)
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -617,6 +672,7 @@ def codex_session_message_stream(session_id):
         model_override=model_override,
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
+        attachments=attachments,
     )
     if not start_result.get('ok'):
         if start_result.get('already_running'):
@@ -645,6 +701,10 @@ def codex_session_message_queue(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    try:
+        attachments = _parse_attachments(payload)
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -659,6 +719,7 @@ def codex_session_message_queue(session_id):
         session_id,
         prompt,
         plan_mode=plan_mode,
+        attachments=attachments,
     )
     if not result.get('ok'):
         return jsonify({'error': result.get('error') or '큐 등록에 실패했습니다.'}), 500
@@ -692,18 +753,23 @@ def codex_stream_output(stream_id):
         error_offset = int(request.args.get('error_offset', 0))
     except (TypeError, ValueError):
         error_offset = 0
+    try:
+        event_offset = int(request.args.get('event_offset', 0))
+    except (TypeError, ValueError):
+        event_offset = 0
 
     output_offset = max(output_offset, 0)
     error_offset = max(error_offset, 0)
+    event_offset = max(event_offset, 0)
 
-    data = read_codex_stream(stream_id, output_offset, error_offset)
+    data = read_codex_stream(stream_id, output_offset, error_offset, event_offset)
     if not data:
         return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
 
     saved_message = None
     if data.get('done') and not data.get('saved'):
         saved_message = finalize_codex_stream(stream_id)
-        data = read_codex_stream(stream_id, output_offset, error_offset)
+        data = read_codex_stream(stream_id, output_offset, error_offset, event_offset)
         if data:
             data['saved'] = True
 

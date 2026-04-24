@@ -466,9 +466,16 @@
                 </div>
 
                 <form id="codex-chat-form" class="chat-input" autocomplete="off">
-                    <label class="sr-only" for="codex-chat-input">Codex prompt</label>
-                    <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                    <div class="chat-compose-main">
+                        <label class="sr-only" for="codex-chat-input">Codex prompt</label>
+                        <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                        <div id="codex-chat-attachments" class="chat-attachments is-empty" aria-live="polite"></div>
+                    </div>
                     <div class="chat-submit-column">
+                        <input id="codex-chat-image-input" class="sr-only" type="file" accept="image/*" multiple>
+                        <button class="btn ghost icon-only chat-attach-image" type="button" id="codex-chat-image-attach" aria-label="Attach image" title="Attach image">
+                            <span class="sr-only">Attach image</span>
+                        </button>
                         <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Plan mode off" title="Plan mode off">Plan</button>
                         <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
                             <span class="sr-only">Send</span>

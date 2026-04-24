@@ -17,6 +17,7 @@ const state = {
     autoScrollThreshold: 48,
     statusMessage: 'Idle',
     statusIsError: false,
+    pendingAttachments: [],
     settings: {
         model: null,
         modelCatalog: [],
@@ -136,6 +137,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
+const CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 120000;
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
 const GIT_BRANCH_POLL_MS = 10000;
@@ -832,6 +834,10 @@ function syncActiveSessionControls() {
             srLabel.textContent = label;
         }
     }
+    const imageAttachBtn = document.getElementById('codex-chat-image-attach');
+    if (imageAttachBtn && imageAttachBtn.getAttribute('aria-busy') !== 'true') {
+        imageAttachBtn.disabled = remoteBusy && !localBusy;
+    }
     renderRunningJobsMonitor();
 }
 
@@ -850,6 +856,102 @@ function appendTextToChatInput(text) {
     }
     syncActiveSessionControls();
     return true;
+}
+
+function normalizeChatAttachment(attachment) {
+    if (!attachment || typeof attachment !== 'object') return null;
+    const path = typeof attachment.path === 'string' ? attachment.path.trim() : '';
+    if (!path) return null;
+    return {
+        id: typeof attachment.id === 'string' && attachment.id.trim()
+            ? attachment.id.trim()
+            : path,
+        name: typeof attachment.name === 'string' && attachment.name.trim()
+            ? attachment.name.trim()
+            : (typeof attachment.original_name === 'string' ? attachment.original_name.trim() : 'image'),
+        original_name: typeof attachment.original_name === 'string' ? attachment.original_name.trim() : '',
+        path,
+        relative_path: typeof attachment.relative_path === 'string' ? attachment.relative_path.trim() : '',
+        mime_type: typeof attachment.mime_type === 'string' ? attachment.mime_type.trim() : '',
+        size: Number.isFinite(Number(attachment.size)) ? Math.max(0, Math.round(Number(attachment.size))) : 0
+    };
+}
+
+function getPendingAttachmentPayload() {
+    return (Array.isArray(state.pendingAttachments) ? state.pendingAttachments : [])
+        .map(normalizeChatAttachment)
+        .filter(Boolean);
+}
+
+function renderPendingAttachments() {
+    const container = document.getElementById('codex-chat-attachments');
+    if (!container) return;
+    const attachments = getPendingAttachmentPayload();
+    container.innerHTML = '';
+    container.classList.toggle('is-empty', attachments.length === 0);
+    attachments.forEach(attachment => {
+        const chip = document.createElement('span');
+        chip.className = 'chat-attachment-chip';
+        chip.title = attachment.relative_path || attachment.path;
+
+        const label = document.createElement('span');
+        label.className = 'chat-attachment-name';
+        label.textContent = attachment.name || 'image';
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'chat-attachment-remove';
+        remove.setAttribute('aria-label', `Remove ${attachment.name || 'image'}`);
+        remove.setAttribute('title', 'Remove');
+        remove.addEventListener('click', event => {
+            event.preventDefault();
+            state.pendingAttachments = getPendingAttachmentPayload()
+                .filter(item => item.id !== attachment.id);
+            renderPendingAttachments();
+            syncActiveSessionControls();
+        });
+
+        chip.appendChild(label);
+        chip.appendChild(remove);
+        container.appendChild(chip);
+    });
+}
+
+function clearPendingAttachments() {
+    state.pendingAttachments = [];
+    renderPendingAttachments();
+    const input = document.getElementById('codex-chat-image-input');
+    if (input) {
+        input.value = '';
+    }
+    syncActiveSessionControls();
+}
+
+async function uploadChatAttachmentFiles(fileList) {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (files.length === 0) return [];
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    const result = await fetchJson('/api/codex/attachments', {
+        method: 'POST',
+        body: formData,
+        timeoutMs: CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS
+    });
+    const uploaded = Array.isArray(result?.attachments)
+        ? result.attachments.map(normalizeChatAttachment).filter(Boolean)
+        : [];
+    if (uploaded.length > 0) {
+        const merged = getPendingAttachmentPayload();
+        uploaded.forEach(attachment => {
+            if (!merged.some(item => item.path === attachment.path)) {
+                merged.push(attachment);
+            }
+        });
+        state.pendingAttachments = merged;
+        renderPendingAttachments();
+        syncActiveSessionControls();
+    }
+    return uploaded;
 }
 
 function resolveRunningJobSessionTitle(sessionId) {
@@ -1086,6 +1188,7 @@ function createStreamState({
     tokenUsage = null,
     outputOffset = 0,
     errorOffset = 0,
+    eventOffset = 0,
     startedAt = null,
     messageId = ''
 }) {
@@ -1097,6 +1200,7 @@ function createStreamState({
         messageId: typeof messageId === 'string' ? messageId.trim() : '',
         outputOffset,
         errorOffset,
+        eventOffset,
         output,
         error,
         tokenUsage,
@@ -1282,6 +1386,8 @@ function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModel
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('codex-chat-form');
     const input = document.getElementById('codex-chat-input');
+    const imageAttachBtn = document.getElementById('codex-chat-image-attach');
+    const imageInput = document.getElementById('codex-chat-image-input');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const newSessionInlineBtn = document.getElementById('codex-chat-new-session-inline');
     const chatSessionPrevBtn = document.getElementById('codex-chat-session-prev');
@@ -1432,6 +1538,39 @@ document.addEventListener('DOMContentLoaded', () => {
             syncActiveSessionControls();
         });
     }
+
+    if (imageAttachBtn && imageInput) {
+        imageAttachBtn.addEventListener('click', event => {
+            event.preventDefault();
+            imageInput.click();
+        });
+        imageInput.addEventListener('change', async () => {
+            const selectedFiles = Array.from(imageInput.files || []);
+            if (selectedFiles.length === 0) return;
+            imageAttachBtn.disabled = true;
+            imageAttachBtn.setAttribute('aria-busy', 'true');
+            try {
+                const uploaded = await uploadChatAttachmentFiles(selectedFiles);
+                if (uploaded.length > 0) {
+                    showToast(`이미지 ${uploaded.length}개를 첨부했습니다.`, {
+                        tone: 'success',
+                        durationMs: 1800
+                    });
+                }
+            } catch (error) {
+                showToast(normalizeError(error, '이미지 첨부에 실패했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            } finally {
+                imageInput.value = '';
+                imageAttachBtn.disabled = false;
+                imageAttachBtn.removeAttribute('aria-busy');
+                syncActiveSessionControls();
+            }
+        });
+    }
+    renderPendingAttachments();
 
     if (newSessionBtn) {
         newSessionBtn.addEventListener('click', async () => {
@@ -5597,6 +5736,7 @@ function startStreamMonitor(stream) {
         sessionId: stream.session_id || stream.sessionId,
         outputOffset: 0,
         errorOffset: 0,
+        eventOffset: 0,
         output: '',
         error: '',
         done: false,
@@ -5628,7 +5768,7 @@ async function pollStreamMonitor() {
     current.polling = true;
     try {
         const result = await fetchJson(
-            `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}`
+            `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}&event_offset=${current.eventOffset || 0}`
         );
         if (!streamMonitorState || streamMonitorState.id !== current.id) return;
         if (typeof result?.process_running === 'boolean') {
@@ -5659,6 +5799,9 @@ async function pollStreamMonitor() {
             current.errorOffset = Number.isFinite(result.error_length)
                 ? result.error_length
                 : current.error.length;
+        }
+        if (Number.isFinite(result?.event_length)) {
+            current.eventOffset = result.event_length;
         }
         renderStreamMonitorOutput();
         if (result?.done) {
@@ -14529,6 +14672,9 @@ async function resumeStreamsFromStorage(pendingStreams) {
             const errorOffset = Number.isFinite(result?.error_length)
                 ? result.error_length
                 : errorText.length;
+            const eventOffset = Number.isFinite(result?.event_length)
+                ? result.event_length
+                : 0;
             const messageId = typeof result?.assistant_message_id === 'string' && result.assistant_message_id.trim()
                 ? result.assistant_message_id.trim()
                 : (typeof pending?.messageId === 'string' ? pending.messageId.trim() : '');
@@ -14556,6 +14702,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 error: errorText,
                 outputOffset,
                 errorOffset,
+                eventOffset,
                 entry: assistantEntry,
                 messageId,
                 startedAt: normalizeStartedAt(result?.started_at)
@@ -15137,14 +15284,21 @@ function getNextPlanModeState(currentState = getPlanModeState()) {
     return PLAN_MODE_STATE_OFF;
 }
 
-async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {}) {
+async function queuePromptOnServer(sessionId, prompt, { planMode = false, attachments = [] } = {}) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
     }
+    const normalizedAttachments = Array.isArray(attachments)
+        ? attachments.map(normalizeChatAttachment).filter(Boolean)
+        : [];
     const response = await fetch(`/api/codex/sessions/${sessionId}/message/queue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, plan_mode: Boolean(planMode) })
+        body: JSON.stringify({
+            prompt,
+            plan_mode: Boolean(planMode),
+            attachments: normalizedAttachments
+        })
     });
     const result = await response.json();
     if (!response.ok) {
@@ -15185,7 +15339,7 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false } = {})
     };
 }
 
-async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState()) {
+async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState(), { attachments = [] } = {}) {
     const normalizedPrompt = String(prompt || '').trim();
     if (!sessionId || !normalizedPrompt) {
         return {
@@ -15197,19 +15351,23 @@ async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPla
     const normalizedPlanModeState = normalizePlanModeState(planModeState);
     const queueItems = [];
     if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
-        queueItems.push({ prompt: normalizedPrompt, planMode: true });
+        queueItems.push({ prompt: normalizedPrompt, planMode: true, attachments });
         queueItems.push({ prompt: PLAN_MODE_AUTO_EXECUTE_PROMPT, planMode: false });
     } else {
         queueItems.push({
             prompt: normalizedPrompt,
-            planMode: normalizedPlanModeState === PLAN_MODE_STATE_PLAN_ONLY
+            planMode: normalizedPlanModeState === PLAN_MODE_STATE_PLAN_ONLY,
+            attachments
         });
     }
 
     let lastResult = null;
     let totalQueued = 0;
     for (const item of queueItems) {
-        lastResult = await queuePromptOnServer(sessionId, item.prompt, { planMode: item.planMode });
+        lastResult = await queuePromptOnServer(sessionId, item.prompt, {
+            planMode: item.planMode,
+            attachments: item.attachments || []
+        });
         const queueCount = Number(lastResult?.queueCount);
         if (Number.isFinite(queueCount)) {
             totalQueued = Math.max(0, queueCount);
@@ -15252,6 +15410,7 @@ async function handleSubmit(event) {
     if (!input) return;
     const draftPrompt = input.value;
     const prompt = draftPrompt.trim();
+    const attachments = getPendingAttachmentPayload();
     const activeSessionId = state.activeSessionId;
     const sessionState = activeSessionId ? getSessionState(activeSessionId) : null;
     const sessionBusy = activeSessionId ? isSessionBusy(activeSessionId) : false;
@@ -15259,7 +15418,10 @@ async function handleSubmit(event) {
         if (prompt) {
             input.value = '';
             try {
-                const queueResult = await queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState());
+                const queueResult = await queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState(), {
+                    attachments
+                });
+                clearPendingAttachments();
                 const queuedCount = Number(queueResult?.totalQueued) || 0;
                 if (queueResult?.lastResult?.reason === 'queued') {
                     setSessionStatus(activeSessionId, `Queued ${queuedCount} prompt${queuedCount === 1 ? '' : 's'}...`);
@@ -15299,20 +15461,25 @@ async function handleSubmit(event) {
     const planModeState = getPlanModeState();
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
-        planMode: shouldUsePlanModeForRequest(planModeState)
+        planMode: shouldUsePlanModeForRequest(planModeState),
+        attachments
     });
     if (
         sendResult?.ok
         && shouldAutoExecuteAfterPlan(planModeState)
         && (sendResult?.reason === 'started' || sendResult?.reason === 'queued')
     ) {
+        clearPendingAttachments();
         const targetSessionId = sendResult.sessionId || state.activeSessionId || activeSessionId;
         if (targetSessionId) {
             await queuePromptWithPlanMode(targetSessionId, PLAN_MODE_AUTO_EXECUTE_PROMPT, PLAN_MODE_STATE_OFF);
             syncActiveSessionControls();
         }
     }
-    if (sendResult?.ok) return;
+    if (sendResult?.ok) {
+        clearPendingAttachments();
+        return;
+    }
     const latestInput = document.getElementById('codex-chat-input');
     if (!latestInput) return;
     if (state.activeSessionId !== activeSessionId) return;
@@ -15411,8 +15578,11 @@ function processStartedStreamResponse(
     });
 }
 
-async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMode = false } = {}) {
+async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMode = false, attachments = [] } = {}) {
     let sessionId = sessionIdOverride || state.activeSessionId;
+    const normalizedAttachments = Array.isArray(attachments)
+        ? attachments.map(normalizeChatAttachment).filter(Boolean)
+        : [];
     if (!sessionId) {
         const session = await createSession(true);
         sessionId = session?.id;
@@ -15442,7 +15612,11 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
         const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, plan_mode: Boolean(planMode) }),
+            body: JSON.stringify({
+                prompt,
+                plan_mode: Boolean(planMode),
+                attachments: normalizedAttachments
+            }),
             signal: controller.signal
         });
         clearPendingSend(sessionId, controller);
@@ -15481,7 +15655,10 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
         }
         if (error?.status === 409 && error?.payload?.already_running) {
             try {
-                const queueResult = await queuePromptOnServer(sessionId, prompt, { planMode: Boolean(planMode) });
+                const queueResult = await queuePromptOnServer(sessionId, prompt, {
+                    planMode: Boolean(planMode),
+                    attachments: normalizedAttachments
+                });
                 if (sessionState) {
                     sessionState.sending = false;
                 }
@@ -15649,7 +15826,7 @@ async function pollStream(streamId) {
     stream.polling = true;
 
     try {
-        const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}`);
+        const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}&event_offset=${stream.eventOffset || 0}`);
         const current = state.streams[streamId];
         if (!current) {
             return;
@@ -15694,6 +15871,9 @@ async function pollStream(streamId) {
             current.errorOffset = Number.isFinite(result.error_length)
                 ? result.error_length
                 : current.error.length;
+        }
+        if (Number.isFinite(result?.event_length)) {
+            current.eventOffset = result.event_length;
         }
 
         if (result?.output || result?.error) {
@@ -16152,6 +16332,17 @@ function buildFinalizeComparison(message) {
 function buildMessageDetailText(message) {
     if (!message || typeof message !== 'object') return '';
     const sections = [];
+    const attachments = getMessageAttachments(message);
+    if (attachments.length > 0) {
+        sections.push([
+            '## 이미지 첨부',
+            ...attachments.map((attachment, index) => {
+                const label = attachment.name || attachment.original_name || `image-${index + 1}`;
+                const path = attachment.relative_path || attachment.path || '';
+                return `- ${index + 1}. ${label}${path ? `: ${path}` : ''}`;
+            })
+        ].join('\n'));
+    }
     const comparison = buildFinalizeComparison(message);
     if (comparison) {
         sections.push([
@@ -16170,7 +16361,57 @@ function buildMessageDetailText(message) {
         ].join('\n\n'));
     }
 
+    const codexEvents = buildCodexEventsDetailText(message.codex_events);
+    if (codexEvents) {
+        sections.push([
+            '## Codex JSON 이벤트',
+            codexEvents
+        ].join('\n\n'));
+    }
+
     return sections.join('\n\n').trim();
+}
+
+function getMessageAttachments(message) {
+    if (!message || typeof message !== 'object' || !Array.isArray(message.attachments)) {
+        return [];
+    }
+    return message.attachments.map(normalizeChatAttachment).filter(Boolean);
+}
+
+function buildCodexEventsDetailText(events) {
+    if (!Array.isArray(events) || events.length === 0) return '';
+    return events.map(event => {
+        const index = Number.isFinite(Number(event?.index)) ? Math.max(0, Math.round(Number(event.index))) : 0;
+        const type = typeof event?.type === 'string' && event.type.trim() ? event.type.trim() : 'event';
+        const payloadType = typeof event?.payload_type === 'string' && event.payload_type.trim()
+            ? ` payload=${event.payload_type.trim()}`
+            : '';
+        const itemType = typeof event?.item_type === 'string' && event.item_type.trim()
+            ? ` item=${event.item_type.trim()}`
+            : '';
+        const detail = typeof event?.detail === 'string' && event.detail.trim()
+            ? ` - ${event.detail.trim()}`
+            : '';
+        return `- ${index || '-'}: ${type}${payloadType}${itemType}${detail}`;
+    }).join('\n');
+}
+
+function renderMessageAttachments(element, message) {
+    if (!element) return;
+    element.querySelectorAll(':scope > .message-attachments').forEach(node => node.remove());
+    const attachments = getMessageAttachments(message);
+    if (attachments.length === 0) return;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-attachments';
+    attachments.forEach(attachment => {
+        const item = document.createElement('span');
+        item.className = 'message-attachment';
+        item.textContent = attachment.name || attachment.original_name || 'image';
+        item.title = attachment.relative_path || attachment.path || item.textContent;
+        wrapper.appendChild(item);
+    });
+    element.appendChild(wrapper);
 }
 
 function setMarkdownContent(element, content, options = {}) {
@@ -16191,11 +16432,15 @@ function setMarkdownContent(element, content, options = {}) {
         } else {
             element.innerHTML = renderMessageContent(messageContent);
             hydrateRenderedMarkdown(element);
+            renderMessageAttachments(element, messageData);
         }
     }
 
     element.dataset.renderMode = renderMode;
     element.dataset.messageContent = messageContent;
+    if (!streaming && !needsRender) {
+        renderMessageAttachments(element, messageData);
+    }
     const wrapper = element.closest('.message');
     if (wrapper) {
         wrapper.dataset.messageContent = messageContent;

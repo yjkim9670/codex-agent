@@ -22,6 +22,8 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    CODEX_MAX_ATTACHMENT_BYTES,
+    CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_ENABLE_LEGACY_STATE_IMPORT,
     LEGACY_CODEX_CHAT_STORE_PATH,
     LEGACY_CODEX_SETTINGS_PATH,
@@ -29,6 +31,7 @@ from ..config import (
     LEGACY_CODEX_USAGE_HISTORY_PATH,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
+    CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
     CODEX_USAGE_HISTORY_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
@@ -157,6 +160,236 @@ _RESPONSE_MODE_BASIC = 'basic'
 _RESPONSE_MODE_PLAN = 'plan'
 _STREAM_PROGRESS_SAVE_INTERVAL_SECONDS = 0.75
 _STREAM_PROGRESS_SAVE_MIN_CHARS = 96
+_ATTACHMENTS_DIR = CODEX_STORAGE_DIR / 'attachments'
+_IMAGE_ATTACHMENT_EXTENSIONS = {
+    '.avif',
+    '.bmp',
+    '.gif',
+    '.jpeg',
+    '.jpg',
+    '.png',
+    '.tif',
+    '.tiff',
+    '.webp',
+}
+_CODEX_EVENT_LOG_LIMIT = 200
+_CODEX_EVENT_DETAIL_MAX_CHARS = 900
+
+
+class CodexAttachmentError(ValueError):
+    """Controlled validation error for Codex image attachments."""
+
+    def __init__(self, message, *, status_code=400):
+        super().__init__(str(message))
+        self.status_code = int(status_code)
+
+
+def _is_supported_image_path(path):
+    try:
+        suffix = Path(path).suffix.lower()
+    except Exception:
+        suffix = ''
+    return suffix in _IMAGE_ATTACHMENT_EXTENSIONS
+
+
+def _sanitize_attachment_filename(value):
+    source = str(value or '').strip().replace('\\', '/').split('/')[-1]
+    if not source:
+        source = 'image'
+    source = re.sub(r'[^A-Za-z0-9._ -]+', '-', source).strip(' .-_')
+    if not source:
+        source = 'image'
+    stem = Path(source).stem[:72].strip(' .-_') or 'image'
+    suffix = Path(source).suffix.lower()
+    if suffix not in _IMAGE_ATTACHMENT_EXTENSIONS:
+        suffix = '.png'
+    return f'{stem}{suffix}'
+
+
+def _attachment_is_under_allowed_root(path):
+    try:
+        resolved = Path(path).resolve(strict=False)
+    except Exception:
+        return False
+    allowed_roots = (WORKSPACE_DIR.resolve(), _ATTACHMENTS_DIR.resolve())
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _attachment_relative_path(path):
+    try:
+        resolved = Path(path).resolve(strict=False)
+        return resolved.relative_to(WORKSPACE_DIR.resolve()).as_posix()
+    except Exception:
+        return ''
+
+
+def _attachment_payload_from_path(path, *, attachment_id='', name='', original_name='', mime_type='', size=None):
+    resolved = Path(path).resolve(strict=False)
+    size_value = size
+    if size_value is None:
+        try:
+            size_value = resolved.stat().st_size
+        except Exception:
+            size_value = 0
+    display_name = str(name or original_name or resolved.name).strip() or resolved.name
+    return {
+        'id': str(attachment_id or resolved.stem).strip() or uuid.uuid4().hex,
+        'name': display_name,
+        'original_name': str(original_name or display_name).strip() or display_name,
+        'path': str(resolved),
+        'relative_path': _attachment_relative_path(resolved),
+        'mime_type': str(mime_type or '').strip(),
+        'size': int(size_value or 0),
+    }
+
+
+def _validate_attachment_payload(payload):
+    if not isinstance(payload, dict):
+        raise CodexAttachmentError('첨부 형식이 올바르지 않습니다.')
+    path_text = str(payload.get('path') or payload.get('absolute_path') or '').strip()
+    if not path_text:
+        raise CodexAttachmentError('첨부 파일 경로가 비어 있습니다.')
+    try:
+        resolved = Path(path_text).expanduser().resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise CodexAttachmentError('첨부 파일을 찾을 수 없습니다.', status_code=404) from exc
+    except Exception as exc:
+        raise CodexAttachmentError('첨부 파일 경로가 올바르지 않습니다.') from exc
+    if not resolved.is_file():
+        raise CodexAttachmentError('첨부는 이미지 파일만 허용됩니다.')
+    if not _attachment_is_under_allowed_root(resolved):
+        raise CodexAttachmentError('작업공간 밖의 첨부 파일은 허용되지 않습니다.')
+    if not _is_supported_image_path(resolved):
+        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
+    try:
+        size = resolved.stat().st_size
+    except Exception:
+        size = 0
+    if size > CODEX_MAX_ATTACHMENT_BYTES:
+        raise CodexAttachmentError('첨부 이미지가 너무 큽니다.')
+    return _attachment_payload_from_path(
+        resolved,
+        attachment_id=payload.get('id'),
+        name=payload.get('name'),
+        original_name=payload.get('original_name'),
+        mime_type=payload.get('mime_type'),
+        size=size,
+    )
+
+
+def normalize_codex_attachments(raw_attachments):
+    if raw_attachments in (None, ''):
+        return []
+    if not isinstance(raw_attachments, list):
+        raise CodexAttachmentError('attachments는 배열이어야 합니다.')
+    if CODEX_MAX_ATTACHMENTS_PER_TURN <= 0:
+        if raw_attachments:
+            raise CodexAttachmentError('이 서버에서는 이미지 첨부가 비활성화되어 있습니다.', status_code=403)
+        return []
+    if len(raw_attachments) > CODEX_MAX_ATTACHMENTS_PER_TURN:
+        raise CodexAttachmentError(f'이미지는 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.')
+
+    normalized = []
+    seen = set()
+    for item in raw_attachments:
+        payload = _validate_attachment_payload(item)
+        path = payload.get('path')
+        if path in seen:
+            continue
+        normalized.append(payload)
+        seen.add(path)
+    return normalized
+
+
+def save_codex_attachment(file_storage):
+    if CODEX_MAX_ATTACHMENTS_PER_TURN <= 0:
+        raise CodexAttachmentError('이 서버에서는 이미지 첨부가 비활성화되어 있습니다.', status_code=403)
+    if file_storage is None:
+        raise CodexAttachmentError('업로드된 파일이 없습니다.')
+    original_name = str(getattr(file_storage, 'filename', '') or '').strip()
+    original_suffix = Path(original_name).suffix.lower()
+    mimetype = str(getattr(file_storage, 'mimetype', '') or '').strip().lower()
+    if original_suffix and original_suffix not in _IMAGE_ATTACHMENT_EXTENSIONS:
+        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
+    if not original_suffix and not mimetype.startswith('image/'):
+        raise CodexAttachmentError('이미지 파일만 첨부할 수 있습니다.')
+    safe_name = _sanitize_attachment_filename(original_name)
+    if not _is_supported_image_path(safe_name):
+        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
+
+    attachment_id = uuid.uuid4().hex
+    target_dir = _ATTACHMENTS_DIR / datetime.now().strftime('%Y%m%d')
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f'{attachment_id}-{safe_name}'
+
+    total_size = 0
+    source = getattr(file_storage, 'stream', None)
+    if source is None:
+        raise CodexAttachmentError('업로드 스트림을 읽을 수 없습니다.')
+    try:
+        with target_path.open('wb') as handle:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > CODEX_MAX_ATTACHMENT_BYTES:
+                    raise CodexAttachmentError('첨부 이미지가 너무 큽니다.')
+                handle.write(chunk)
+    except Exception:
+        try:
+            target_path.unlink()
+        except Exception:
+            pass
+        raise
+    if total_size <= 0:
+        try:
+            target_path.unlink()
+        except Exception:
+            pass
+        raise CodexAttachmentError('빈 파일은 첨부할 수 없습니다.')
+
+    return _attachment_payload_from_path(
+        target_path,
+        attachment_id=attachment_id,
+        name=safe_name,
+        original_name=original_name or safe_name,
+        mime_type=mimetype,
+        size=total_size,
+    )
+
+
+def _format_attachment_context_lines(attachments):
+    normalized = []
+    try:
+        normalized = normalize_codex_attachments(attachments)
+    except CodexAttachmentError:
+        return []
+    lines = []
+    for index, attachment in enumerate(normalized, start=1):
+        label = attachment.get('name') or attachment.get('original_name') or attachment.get('relative_path') or 'image'
+        relative_path = attachment.get('relative_path') or attachment.get('path') or ''
+        lines.append(f'- Image {index}: {label} ({relative_path})')
+    return lines
+
+
+def _append_attachment_exec_context(prompt_text, attachments):
+    lines = _format_attachment_context_lines(attachments)
+    if not lines:
+        return str(prompt_text or '')
+    return '\n'.join([
+        str(prompt_text or '').strip() or '(empty)',
+        '',
+        '<attached_images>',
+        *lines,
+        '</attached_images>',
+    ])
 
 
 def _normalize_pending_queue_entry(entry):
@@ -165,10 +398,16 @@ def _normalize_pending_queue_entry(entry):
     prompt = str(entry.get('prompt') or '').strip()
     if not prompt:
         return None
+    attachments = []
+    try:
+        attachments = normalize_codex_attachments(entry.get('attachments') or [])
+    except CodexAttachmentError:
+        attachments = []
     return {
         'id': str(entry.get('id') or uuid.uuid4().hex),
         'prompt': prompt,
         'plan_mode': bool(entry.get('plan_mode')),
+        'attachments': attachments,
         'created_at': normalize_timestamp(entry.get('created_at')),
     }
 
@@ -2908,11 +3147,19 @@ def _format_context_message(message, index, max_chars=1400):
     if not content:
         content = '(empty)'
     content = _clip_text(content, max_chars)
-    return '\n'.join([
+    lines = [
         f'<message index="{index}" role="{role}">',
         content,
-        '</message>'
-    ])
+    ]
+    attachment_lines = _format_attachment_context_lines((message or {}).get('attachments') or [])
+    if attachment_lines:
+        lines.extend([
+            '<attachments>',
+            *attachment_lines,
+            '</attachments>',
+        ])
+    lines.append('</message>')
+    return '\n'.join(lines)
 
 
 def _build_memory_lines(messages, max_chars):
@@ -3042,7 +3289,8 @@ def _build_codex_command(
         output_path=None,
         json_output=False,
         model_override=None,
-        reasoning_override=None):
+        reasoning_override=None,
+        attachments=None):
     cmd = [
         'codex',
         'exec',
@@ -3069,8 +3317,13 @@ def _build_codex_command(
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
     if output_path:
         cmd.extend(['--output-last-message', str(output_path)])
+    normalized_attachments = normalize_codex_attachments(attachments or [])
+    for attachment in normalized_attachments:
+        cmd.extend(['--image', attachment.get('path')])
     if json_output:
         cmd.append('--json')
+    if normalized_attachments:
+        cmd.append('--')
     cmd.append(prompt)
     return cmd
 
@@ -3249,15 +3502,18 @@ def _extract_exec_json_summary(raw_stdout):
     }
 
 
-def execute_codex_prompt(prompt, model_override=None, reasoning_override=None):
+def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, attachments=None):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
+    normalized_attachments = normalize_codex_attachments(attachments or [])
+    prompt = _append_attachment_exec_context(prompt, normalized_attachments)
     cmd = _build_codex_command(
         prompt,
         output_path=output_path,
         json_output=True,
         model_override=model_override,
         reasoning_override=reasoning_override,
+        attachments=normalized_attachments,
     )
     queued_at = time.time()
     cli_started_at = None
@@ -3810,11 +4066,86 @@ def _set_stream_output_last_message(stream_id, text):
     return normalized != previous
 
 
+def _summarize_exec_event(event):
+    if not isinstance(event, dict):
+        return None
+    event_type = str(event.get('type') or '').strip() or 'event'
+    payload = event.get('payload')
+    item = event.get('item')
+    payload_type = ''
+    item_type = ''
+    detail_candidates = []
+    if isinstance(payload, dict):
+        payload_type = str(payload.get('type') or '').strip()
+        for key in ('name', 'title', 'status', 'message', 'last_agent_message', 'text'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                detail_candidates.append(value.strip())
+                break
+    if isinstance(item, dict):
+        item_type = str(item.get('type') or '').strip()
+        for key in ('name', 'title', 'status', 'text'):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                detail_candidates.append(value.strip())
+                break
+
+    detail = ''
+    if detail_candidates:
+        detail = _clip_text(' '.join(detail_candidates), _CODEX_EVENT_DETAIL_MAX_CHARS)
+    return {
+        'type': event_type,
+        'payload_type': payload_type,
+        'item_type': item_type,
+        'detail': detail,
+    }
+
+
+def _append_stream_event(stream_id, event):
+    summary = _summarize_exec_event(event)
+    if not summary:
+        return
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        count = int(stream.get('codex_event_count') or 0) + 1
+        summary['index'] = count
+        events = stream.setdefault('codex_events', [])
+        if not isinstance(events, list):
+            events = []
+            stream['codex_events'] = events
+        events.append(summary)
+        if len(events) > _CODEX_EVENT_LOG_LIMIT:
+            del events[:-_CODEX_EVENT_LOG_LIMIT]
+        stream['codex_event_count'] = count
+        stream['updated_at'] = time.time()
+
+
+def _copy_codex_events(events):
+    if not isinstance(events, list):
+        return []
+    copied = []
+    for item in events[-_CODEX_EVENT_LOG_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        copied.append({
+            'index': int(item.get('index') or 0),
+            'type': str(item.get('type') or ''),
+            'payload_type': str(item.get('payload_type') or ''),
+            'item_type': str(item.get('item_type') or ''),
+            'detail': str(item.get('detail') or ''),
+        })
+    return copied
+
+
 def _handle_stream_json_output_line(stream_id, line):
     event = _parse_json_object(line)
     if not event:
         _append_stream_chunk(stream_id, 'output', line)
         return
+
+    _append_stream_event(stream_id, event)
 
     usage = _extract_usage_from_exec_event(event)
     if usage:
@@ -3879,6 +4210,7 @@ def _run_codex_stream(stream_id, prompt):
         started_at = stream.get('started_at') if stream else None
         model_override = stream.get('model_override') if stream else None
         reasoning_override = stream.get('reasoning_override') if stream else None
+        attachments = stream.get('attachments') if stream else []
         json_output = True
         if stream is not None:
             json_output = stream.get('json_output') is not False
@@ -3888,12 +4220,14 @@ def _run_codex_stream(stream_id, prompt):
     if not isinstance(started_at, (int, float)):
         started_at = time.time()
 
+    prompt = _append_attachment_exec_context(prompt, attachments)
     cmd = _build_codex_command(
         prompt,
         output_path=output_path,
         json_output=json_output,
         model_override=model_override,
         reasoning_override=reasoning_override,
+        attachments=attachments,
     )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -4158,12 +4492,14 @@ def create_codex_stream(
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
+        attachments=None,
         assistant_message_id=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
+    normalized_attachments = normalize_codex_attachments(attachments or [])
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -4189,6 +4525,7 @@ def create_codex_stream(
         'model_override': (str(model_override).strip() if model_override is not None else '') or None,
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'plan_mode': bool(plan_mode),
+        'attachments': normalized_attachments,
         'response_mode': response_mode,
         'response_model': response_model,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
@@ -4196,6 +4533,8 @@ def create_codex_stream(
         'assistant_progress_output_length': 0,
         'assistant_progress_error_length': 0,
         'json_output': True,
+        'codex_events': [],
+        'codex_event_count': 0,
         'output_length': 0,
         'error_length': 0,
         'created_at': created_at,
@@ -4281,7 +4620,8 @@ def _start_codex_stream_for_session_locked(
         prompt_with_context,
         model_override=None,
         reasoning_override=None,
-        plan_mode=False):
+        plan_mode=False,
+        attachments=None):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -4291,7 +4631,9 @@ def _start_codex_stream_for_session_locked(
             'active_stream_id': active_stream_id,
         }
 
-    user_message = append_message(session_id, 'user', prompt)
+    normalized_attachments = normalize_codex_attachments(attachments or [])
+    user_metadata = {'attachments': normalized_attachments} if normalized_attachments else None
+    user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
         return {
             'ok': False,
@@ -4322,6 +4664,7 @@ def _start_codex_stream_for_session_locked(
         model_override=model_override,
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
+        attachments=normalized_attachments,
         assistant_message_id=assistant_message.get('id'),
     )
     return {
@@ -4336,16 +4679,18 @@ def _start_codex_stream_for_session_locked(
     }
 
 
-def _build_pending_queue_entry(prompt, plan_mode=False):
+def _build_pending_queue_entry(prompt, plan_mode=False, attachments=None):
+    normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,
         'prompt': str(prompt or '').strip(),
         'plan_mode': bool(plan_mode),
+        'attachments': normalized_attachments,
         'created_at': normalize_timestamp(None),
     }
 
 
-def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False):
+def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachments=None):
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -4353,7 +4698,7 @@ def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False):
         if not session:
             return {'ok': False, 'error': '세션을 찾을 수 없습니다.'}
         queue = _normalize_session_pending_queue(session)
-        entry = _build_pending_queue_entry(prompt, plan_mode=plan_mode)
+        entry = _build_pending_queue_entry(prompt, plan_mode=plan_mode, attachments=attachments)
         if not entry.get('prompt'):
             return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
         queue.append(entry)
@@ -4397,6 +4742,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             continue
 
         plan_mode = bool(pending_entry.get('plan_mode'))
+        attachments = pending_entry.get('attachments') or []
         session = get_session(session_id)
         if not session:
             return {
@@ -4416,6 +4762,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             model_override=model_override,
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
+            attachments=attachments,
         )
         if not start_result.get('ok'):
             return start_result
@@ -4438,7 +4785,8 @@ def start_codex_stream_for_session(
         prompt_with_context,
         model_override=None,
         reasoning_override=None,
-        plan_mode=False):
+        plan_mode=False,
+        attachments=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -4448,13 +4796,14 @@ def start_codex_stream_for_session(
             model_override=model_override,
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
+            attachments=attachments,
         )
 
 
-def enqueue_codex_stream_for_session(session_id, prompt, plan_mode=False):
+def enqueue_codex_stream_for_session(session_id, prompt, plan_mode=False, attachments=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
-        queued = _enqueue_pending_queue_entry(session_id, prompt, plan_mode=plan_mode)
+        queued = _enqueue_pending_queue_entry(session_id, prompt, plan_mode=plan_mode, attachments=attachments)
         if not queued.get('ok'):
             return queued
 
@@ -4542,6 +4891,7 @@ def list_codex_streams(include_done=False):
                 'pending_queue_count': get_pending_queue_count_for_session(session_id),
                 'output_length': int(stream.get('output_length') or len(stream.get('output') or '')),
                 'error_length': int(stream.get('error_length') or len(stream.get('error') or '')),
+                'event_length': int(stream.get('codex_event_count') or 0),
                 'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
                 'cli_started_at': _epoch_to_millis(stream.get('cli_started_at')),
                 'created_at': _epoch_to_millis(stream.get('created_at')) or 0,
@@ -4568,7 +4918,7 @@ def list_codex_streams(include_done=False):
     return streams
 
 
-def read_codex_stream(stream_id, output_offset=0, error_offset=0):
+def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if not stream:
@@ -4576,6 +4926,13 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
         runtime = _snapshot_stream_runtime_locked(stream)
         output = stream['output']
         error = stream['error']
+        events = _copy_codex_events(stream.get('codex_events'))
+        event_count = int(stream.get('codex_event_count') or len(events))
+        event_offset = max(0, int(event_offset or 0))
+        new_events = [
+            event for event in events
+            if int(event.get('index') or 0) > event_offset
+        ]
         usage = _normalize_token_usage(stream.get('token_usage')) or _zero_token_usage()
         session_id = stream['session_id']
         data = {
@@ -4583,6 +4940,8 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0):
             'error': error[error_offset:],
             'output_length': int(stream.get('output_length') or len(output)),
             'error_length': int(stream.get('error_length') or len(error)),
+            'events': new_events,
+            'event_length': event_count,
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
@@ -4647,6 +5006,7 @@ def finalize_codex_stream(stream_id):
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
+        codex_events = _copy_codex_events(stream.get('codex_events'))
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
@@ -4670,6 +5030,8 @@ def finalize_codex_stream(stream_id):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['streaming'] = False
+    if codex_events:
+        metadata['codex_events'] = codex_events
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
         finalize_lag_ms = metadata.get('finalize_lag_ms')
@@ -4753,6 +5115,7 @@ def stop_codex_stream(stream_id):
         completed_at = stream.get('completed_at')
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
+        codex_events = _copy_codex_events(stream.get('codex_events'))
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
@@ -4794,6 +5157,8 @@ def stop_codex_stream(stream_id):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['streaming'] = False
+    if codex_events:
+        metadata['codex_events'] = codex_events
     work_details = _build_work_details(output, output_last_message or output, error)
     if work_details:
         metadata['work_details'] = work_details

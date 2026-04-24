@@ -28,6 +28,19 @@ def _parse_bool_env(name, default=False):
     return default
 
 
+def _parse_int_env(name, default, minimum=None, maximum=None):
+    raw_value = os.environ.get(name)
+    try:
+        parsed = int(str(raw_value).strip()) if raw_value is not None else int(default)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    if minimum is not None:
+        parsed = max(int(minimum), parsed)
+    if maximum is not None:
+        parsed = min(int(maximum), parsed)
+    return parsed
+
+
 def _parse_allowed_origins(raw_value):
     text = str(raw_value or '').strip()
     if not text:
@@ -101,6 +114,13 @@ CODEX_ACCOUNT_TOKEN_USAGE_PATH = CODEX_HOME / 'codex_account_token_usage.json'
 CODEX_USAGE_HISTORY_PATH = CODEX_STORAGE_DIR / 'codex_usage_history.json'
 CODEX_MAX_PROMPT_CHARS = 4000
 CODEX_CONTEXT_MAX_CHARS = 12000
+CODEX_MAX_ATTACHMENTS_PER_TURN = _parse_int_env('CODEX_MAX_ATTACHMENTS_PER_TURN', 8, minimum=0, maximum=32)
+CODEX_MAX_ATTACHMENT_BYTES = _parse_int_env(
+    'CODEX_MAX_ATTACHMENT_BYTES',
+    20 * 1024 * 1024,
+    minimum=1024,
+    maximum=128 * 1024 * 1024,
+)
 CODEX_STREAM_TTL_SECONDS = 900
 CODEX_STREAM_POLL_INTERVAL_SECONDS = float(os.environ.get('CODEX_STREAM_POLL_INTERVAL_SECONDS', '0.5'))
 CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS = float(os.environ.get('CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', '15'))

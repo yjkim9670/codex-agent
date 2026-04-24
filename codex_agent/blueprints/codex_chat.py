@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from ..config import (
     CODEX_API_ONLY_MODE,
@@ -55,6 +55,8 @@ from ..services.codex_chat import (
 from ..services.file_browser import (
     FileBrowserError,
     build_download_payload,
+    create_file,
+    delete_directory,
     delete_files,
     list_directory,
     move_files,
@@ -63,6 +65,16 @@ from ..services.file_browser import (
     write_file,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
+from ..services.terminal_sessions import (
+    TerminalSessionError,
+    close_terminal_session,
+    create_terminal_session,
+    iter_terminal_session_events,
+    list_terminal_sessions,
+    read_terminal_session,
+    resize_terminal_session,
+    write_terminal_input,
+)
 
 bp = Blueprint('codex_chat', __name__)
 
@@ -83,6 +95,16 @@ _CODEX_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
+
+
+def _format_sse_payload(data, *, event=None):
+    payload = json.dumps(data or {}, ensure_ascii=False)
+    lines = []
+    if event and event != 'message':
+        lines.append(f'event: {event}')
+    for line in payload.splitlines() or ['']:
+        lines.append(f'data: {line}')
+    return ''.join(f'{line}\n' for line in lines) + '\n'
 
 
 def _parse_plan_mode(value):
@@ -759,6 +781,24 @@ def codex_files_write():
     return jsonify(result)
 
 
+@bp.route('/api/codex/files/create', methods=['POST'])
+def codex_files_create():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = create_file(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
+            content=payload.get('content', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
 @bp.route('/api/codex/files/raw/<root_key>/<path:relative_path>')
 def codex_files_raw(root_key, relative_path):
     if not CODEX_ENABLE_FILES_API:
@@ -821,6 +861,23 @@ def codex_files_delete():
     return jsonify(result)
 
 
+@bp.route('/api/codex/files/delete-directory', methods=['POST'])
+def codex_files_delete_directory():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = delete_directory(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
 @bp.route('/api/codex/files/move', methods=['POST'])
 def codex_files_move():
     if not CODEX_ENABLE_FILES_API:
@@ -836,6 +893,109 @@ def codex_files_move():
             destination_directory=payload.get('destination_directory'),
         )
     except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals')
+def codex_terminals_list():
+    try:
+        result = list_terminal_sessions()
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals', methods=['POST'])
+def codex_terminals_create():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = create_terminal_session(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
+            cols=payload.get('cols'),
+            rows=payload.get('rows'),
+        )
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals/<session_id>')
+def codex_terminals_read(session_id):
+    try:
+        result = read_terminal_session(
+            session_id,
+            offset=request.args.get('offset'),
+        )
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals/<session_id>/events')
+def codex_terminals_events(session_id):
+    try:
+        events = iter_terminal_session_events(
+            session_id,
+            offset=request.args.get('offset'),
+        )
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+    @stream_with_context
+    def generate():
+        yield 'retry: 1000\n\n'
+        for item in events:
+            yield _format_sse_payload(
+                item.get('data'),
+                event=item.get('event'),
+            )
+
+    response = Response(generate(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'
+    return response
+
+
+@bp.route('/api/codex/terminals/<session_id>/input', methods=['POST'])
+def codex_terminals_input(session_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = write_terminal_input(
+            session_id,
+            data=payload.get('data', ''),
+        )
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals/<session_id>/resize', methods=['POST'])
+def codex_terminals_resize(session_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = resize_terminal_session(
+            session_id,
+            cols=payload.get('cols'),
+            rows=payload.get('rows'),
+        )
+    except TerminalSessionError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/terminals/<session_id>/close', methods=['POST'])
+def codex_terminals_close(session_id):
+    try:
+        result = close_terminal_session(session_id)
+    except TerminalSessionError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
     return jsonify(result)
 

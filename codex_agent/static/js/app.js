@@ -32,6 +32,41 @@ const state = {
     }
 };
 
+const terminalState = {
+    sessions: [],
+    activeSessionId: null,
+    overlayOpen: false,
+    runtimePromise: null,
+    terminal: null,
+    fitAddon: null,
+    mountedSessionId: null,
+    streamSource: null,
+    streamSessionId: null,
+    streamReconnectTimer: null,
+    streamReconnectAttempt: 0,
+    streamConnected: false,
+    pollTimer: null,
+    pollInFlight: false,
+    inputSessionId: null,
+    inputBuffer: '',
+    inputInFlight: false,
+    inputFlushTimer: null,
+    resizeTimerId: null,
+    resizeObserver: null,
+    viewportRefreshFrameId: null,
+    viewportRefreshTimerId: null,
+    viewportRefreshNeedsFocus: false,
+    viewportRefreshNeedsFit: false,
+    launchContext: {
+        root: 'workspace',
+        path: ''
+    },
+    extraKeyModifiers: {
+        ctrl: false,
+        alt: false
+    }
+};
+
 const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
 const ACTIVE_STREAM_KEY = 'codexActiveStream';
 const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
@@ -147,6 +182,39 @@ const FILE_PANEL_CHAT_CONTEXT_MAX_FILES = 6;
 const FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE = 4000;
 const FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS = 18000;
 const FILE_PANEL_EDIT_DISCARD_MESSAGE = '저장하지 않은 변경 사항이 있습니다. 변경 내용을 버릴까요?';
+const TERMINAL_REQUEST_TIMEOUT_MS = 20000;
+const TERMINAL_INPUT_TIMEOUT_MS = 12000;
+const TERMINAL_CLOSE_TIMEOUT_MS = 20000;
+const TERMINAL_POLL_MS = 600;
+const TERMINAL_STREAM_RECONNECT_BASE_MS = 320;
+const TERMINAL_STREAM_RECONNECT_MAX_MS = 4000;
+const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
+const TERMINAL_DEFAULT_COLS = 120;
+const TERMINAL_DEFAULT_ROWS = 32;
+const TERMINAL_FONT_SIZE_PHONE = 12.5;
+const TERMINAL_FONT_SIZE_COMPACT = 13;
+const TERMINAL_FONT_SIZE_DESKTOP = 14;
+const TERMINAL_FONT_FAMILY = 'ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", "IBM Plex Mono", "Liberation Mono", Menlo, Consolas, monospace';
+const TERMINAL_EXTRA_KEYS = Object.freeze([
+    Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
+    Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
+    Object.freeze({ id: 'ctrl', label: 'Ctrl', modifier: 'ctrl' }),
+    Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
+    Object.freeze({ id: 'slash', label: '/', text: '/' }),
+    Object.freeze({ id: 'dash', label: '-', text: '-' }),
+    Object.freeze({ id: 'pipe', label: '|', text: '|' }),
+    Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
+    Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
+    Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
+    Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' }),
+    Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
+    Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
+    Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' }),
+    Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
+]);
+const XTERM_VENDOR_SRC = '/static/vendor/xterm-5.5.0.js';
+const XTERM_VENDOR_CSS_HREF = '/static/vendor/xterm-5.5.0.css';
+const XTERM_FIT_VENDOR_SRC = '/static/vendor/xterm-addon-fit-0.10.0.js';
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
@@ -1257,9 +1325,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
+    const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
+    const workModeFileNewFileBtn = document.getElementById('codex-work-mode-file-new-file');
+    const workModeFileDeleteDirectoryBtn = document.getElementById('codex-work-mode-file-delete-directory');
     const workModeFileAddContextBtn = document.getElementById('codex-work-mode-file-add-context');
     const workModeFileMoveBtn = document.getElementById('codex-work-mode-file-move');
     const workModeFileSelectAllBtn = document.getElementById('codex-work-mode-file-select-all');
@@ -1299,8 +1370,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
     const fileBrowserRefreshBtn = document.getElementById('codex-file-browser-refresh');
     const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
+    const fileBrowserTerminalOpenBtn = document.getElementById('codex-file-browser-terminal-open');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserNewFileBtn = document.getElementById('codex-file-browser-new-file');
+    const fileBrowserDeleteDirectoryBtn = document.getElementById('codex-file-browser-delete-directory');
     const fileBrowserAddContextBtn = document.getElementById('codex-file-browser-add-context');
     const fileBrowserMoveBtn = document.getElementById('codex-file-browser-move');
     const fileBrowserSelectAllBtn = document.getElementById('codex-file-browser-select-all');
@@ -1317,6 +1391,11 @@ document.addEventListener('DOMContentLoaded', () => {
     );
     const fileBrowserShowHiddenToggle = document.getElementById('codex-file-browser-show-hidden');
     const fileBrowserShowPycacheToggle = document.getElementById('codex-file-browser-show-pycache');
+    const terminalOverlay = document.getElementById('codex-terminal-overlay');
+    const terminalOverlayClose = document.getElementById('codex-terminal-overlay-close');
+    const terminalOverlayNewTabBtn = document.getElementById('codex-terminal-overlay-new-tab');
+    const terminalOverlayCloseTabBtn = document.getElementById('codex-terminal-overlay-close-tab');
+    const terminalOverlayCloseFooter = document.getElementById('codex-terminal-overlay-close-footer');
     const headerDetailsTrigger = document.getElementById('codex-header-details-trigger');
     const syncOverlayTargetButtons = Array.from(
         document.querySelectorAll('#codex-sync-overlay .sync-overlay-target[data-repo-target]')
@@ -1458,6 +1537,16 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    if (workModeFileNewFileBtn) {
+        workModeFileNewFileBtn.addEventListener('click', () => {
+            void createFileInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileDeleteDirectoryBtn) {
+        workModeFileDeleteDirectoryBtn.addEventListener('click', () => {
+            void deleteCurrentDirectoryFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
     if (workModeFileAddContextBtn) {
         workModeFileAddContextBtn.addEventListener('click', () => {
             void addSelectedFilesToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
@@ -1531,6 +1620,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+    if (workModeTerminalOpenBtn) {
+        workModeTerminalOpenBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void openTerminalOverlayFromContext({
+                root: workModeFileRoot,
+                path: workModeFilePath
+            }).catch(error => {
+                showToast(normalizeError(error, 'Terminal을 열지 못했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        });
+    }
     if (workModeChatBackBtn) {
         workModeChatBackBtn.addEventListener('click', event => {
             event.preventDefault();
@@ -1543,6 +1646,9 @@ document.addEventListener('DOMContentLoaded', () => {
             openWorkModePreviewInNewWindow();
         });
         syncHoverTooltipFromLabel(workModeFileOpenNewBtn);
+    }
+    if (workModeTerminalOpenBtn) {
+        syncHoverTooltipFromLabel(workModeTerminalOpenBtn, '현재 폴더 Terminal 오버레이 열기');
     }
     if (workModeMobileBrowserBtn) {
         workModeMobileBrowserBtn.addEventListener('click', event => {
@@ -1732,6 +1838,42 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mobileSessionOverlayCloseFooter) {
         mobileSessionOverlayCloseFooter.addEventListener('click', closeMobileSessionOverlay);
     }
+    if (terminalOverlay) {
+        terminalOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeTerminalOverlay();
+            }
+        });
+    }
+    if (terminalOverlayClose) {
+        terminalOverlayClose.addEventListener('click', closeTerminalOverlay);
+    }
+    if (terminalOverlayCloseFooter) {
+        terminalOverlayCloseFooter.addEventListener('click', closeTerminalOverlay);
+    }
+    if (terminalOverlayNewTabBtn) {
+        terminalOverlayNewTabBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void openNewTerminalTab().catch(error => {
+                showToast(normalizeError(error, '새 Terminal 탭을 열지 못했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        });
+    }
+    if (terminalOverlayCloseTabBtn) {
+        terminalOverlayCloseTabBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void closeTerminalTab().catch(error => {
+                showToast(normalizeError(error, 'Terminal 종료에 실패했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        });
+    }
     if (fileBrowserOverlay) {
         fileBrowserOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -1751,6 +1893,16 @@ document.addEventListener('DOMContentLoaded', () => {
             const listed = await refreshFileBrowserDirectory({ force: true });
             if (!listed) return;
             await refreshFileBrowserPreviewSelection();
+        });
+    }
+    if (fileBrowserNewFileBtn) {
+        fileBrowserNewFileBtn.addEventListener('click', () => {
+            void createFileInFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserDeleteDirectoryBtn) {
+        fileBrowserDeleteDirectoryBtn.addEventListener('click', () => {
+            void deleteCurrentDirectoryFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserAddContextBtn) {
@@ -1796,6 +1948,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserBackBtn) {
         fileBrowserBackBtn.addEventListener('click', () => {
             setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_LIST);
+        });
+    }
+    if (fileBrowserTerminalOpenBtn) {
+        fileBrowserTerminalOpenBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void openTerminalOverlayFromContext({
+                root: fileBrowserRoot,
+                path: fileBrowserPath
+            }).catch(error => {
+                showToast(normalizeError(error, 'Terminal을 열지 못했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
         });
     }
     if (fileBrowserUpBtn) {
@@ -1853,6 +2019,9 @@ document.addEventListener('DOMContentLoaded', () => {
         fileBrowserFullscreenBtn.addEventListener('click', () => {
             setFileBrowserViewerFullscreen(!fileBrowserViewerFullscreen);
         });
+    }
+    if (fileBrowserTerminalOpenBtn) {
+        syncHoverTooltipFromLabel(fileBrowserTerminalOpenBtn, '현재 폴더 Terminal 오버레이 열기');
     }
     document.querySelectorAll('.file-browser-root-target[data-root-target]').forEach(button => {
         button.addEventListener('click', () => {
@@ -1912,8 +2081,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
+    syncTerminalOverlayState();
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
+        if (isTerminalOverlayOpen()) {
+            closeTerminalOverlay();
+            return;
+        }
         if (isMobileSessionOverlayOpen()) {
             closeMobileSessionOverlay();
             return;
@@ -2045,6 +2219,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setFileBrowserMobileView(fileBrowserMobileView);
         setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         handleWorkModeMediaChange(isPhoneLayout());
+        syncTerminalExtraKeysState();
     };
     if (typeof compactMedia.addEventListener === 'function') {
         compactMedia.addEventListener('change', handleCompactLayoutChange);
@@ -2059,6 +2234,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setFileBrowserMobileView(fileBrowserMobileView);
         setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         handleWorkModeMediaChange(isPhone);
+        syncTerminalExtraKeysState();
     };
     if (typeof phoneMedia.addEventListener === 'function') {
         phoneMedia.addEventListener('change', handlePhoneLayoutChange);
@@ -2070,6 +2246,9 @@ document.addEventListener('DOMContentLoaded', () => {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
         }
+        if (isTerminalOverlayOpen()) {
+            scheduleTerminalViewportRefresh({ fit: true });
+        }
         if (isFileBrowserOverlayOpen()) {
             applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
             syncFileBrowserHorizontalScrollMetrics();
@@ -2077,6 +2256,9 @@ document.addEventListener('DOMContentLoaded', () => {
         syncWorkModeFileHorizontalScrollMetrics();
         if (isUsageHistoryOverlayOpen()) {
             scheduleUsageHistoryOverlayRerender();
+        }
+        if (isTerminalOverlayOpen()) {
+            syncTerminalExtraKeysState();
         }
     });
     window.addEventListener('resize', handleWindowLayoutResize);
@@ -3301,6 +3483,8 @@ function getFilePanelElementsByPrefix({
         layout: byId('layout'),
         selectionBar: byId('selection-bar'),
         selectionSummary: byId('selection-summary'),
+        newFileBtn: byId('new-file'),
+        deleteDirectoryBtn: byId('delete-directory'),
         addContextBtn: byId('add-context'),
         moveBtn: byId('move'),
         selectAllBtn: byId('select-all'),
@@ -3773,7 +3957,7 @@ function syncWorkModeFileFullscreenButtonState() {
     );
     const active = foldFullscreenEnabled || viewerFullscreenEnabled;
     const nextLabel = fold
-        ? (foldFullscreenEnabled ? 'Docs Preview 축소' : 'Docs Preview 전체화면')
+        ? (foldFullscreenEnabled ? 'File Preview 축소' : 'File Preview 전체화면')
         : (viewerFullscreenEnabled ? '파일 목록 보기' : '파일 내용 전체화면');
 
     button.classList.toggle('is-hidden', !visible);
@@ -4763,6 +4947,12 @@ function syncMobileKeyboardState(isMobile = isCompactLayout()) {
     const isKeyboardOpen = isMobileKeyboardOpen(isMobile);
     setMobileKeyboardOpen(isKeyboardOpen);
     applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen });
+    if (isTerminalOverlayOpen()) {
+        syncTerminalExtraKeysState();
+        if (isKeyboardOpen) {
+            scheduleTerminalViewportRefresh();
+        }
+    }
     return isKeyboardOpen;
 }
 
@@ -5061,6 +5251,8 @@ function applyTheme(theme, { persist = true } = {}) {
             void error;
         }
     }
+    syncTerminalTheme();
+    scheduleTerminalFit();
     requestAnimationFrame(() => {
         void hydrateMermaidDiagrams(document.body);
     });
@@ -6183,6 +6375,1520 @@ function saveBlobAsFile(blob, filename = 'download.bin') {
     window.setTimeout(() => {
         URL.revokeObjectURL(objectUrl);
     }, 0);
+    return true;
+}
+
+function getTerminalOverlayElements() {
+    const overlay = document.getElementById('codex-terminal-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        card: overlay.querySelector('.terminal-overlay-card'),
+        body: overlay.querySelector('.terminal-overlay-body'),
+        subtitle: document.getElementById('codex-terminal-overlay-subtitle'),
+        tabs: document.getElementById('codex-terminal-overlay-tabs'),
+        path: document.getElementById('codex-terminal-overlay-path'),
+        status: document.getElementById('codex-terminal-overlay-status'),
+        empty: document.getElementById('codex-terminal-overlay-empty'),
+        shell: document.getElementById('codex-terminal-overlay-shell'),
+        extraKeys: document.getElementById('codex-terminal-overlay-extra-keys'),
+        newTabBtn: document.getElementById('codex-terminal-overlay-new-tab'),
+        closeTabBtn: document.getElementById('codex-terminal-overlay-close-tab')
+    };
+}
+
+function isTerminalOverlayOpen() {
+    const overlay = document.getElementById('codex-terminal-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function normalizeTerminalLaunchContext(value) {
+    const source = value && typeof value === 'object' ? value : {};
+    return {
+        root: normalizeFileBrowserRoot(source.root),
+        path: normalizeFileBrowserRelativePath(source.path)
+    };
+}
+
+function getTerminalLaunchContext() {
+    return normalizeTerminalLaunchContext(terminalState.launchContext);
+}
+
+function setTerminalLaunchContext(context = null) {
+    terminalState.launchContext = normalizeTerminalLaunchContext(
+        context || resolveDefaultTerminalLaunchContext()
+    );
+    syncTerminalOverlayState();
+    return terminalState.launchContext;
+}
+
+function buildTerminalLaunchContextDisplayPath(context = null) {
+    const normalized = normalizeTerminalLaunchContext(context || terminalState.launchContext);
+    return formatFileBrowserDisplayPath(normalized.root, normalized.path);
+}
+
+function clearTerminalExtraKeyModifiers() {
+    terminalState.extraKeyModifiers.ctrl = false;
+    terminalState.extraKeyModifiers.alt = false;
+    syncTerminalExtraKeysState();
+}
+
+function toggleTerminalExtraKeyModifier(modifierName = '') {
+    const key = modifierName === 'alt' ? 'alt' : (modifierName === 'ctrl' ? 'ctrl' : '');
+    if (!key) return false;
+    terminalState.extraKeyModifiers[key] = !terminalState.extraKeyModifiers[key];
+    syncTerminalExtraKeysState();
+    return terminalState.extraKeyModifiers[key];
+}
+
+function resolveCtrlModifiedTerminalData(data = '') {
+    const source = typeof data === 'string' ? data : '';
+    if (!source) return '';
+    if (source.length !== 1) return source;
+    const codePoint = source.charCodeAt(0);
+    if (codePoint >= 97 && codePoint <= 122) {
+        return String.fromCharCode(codePoint - 96);
+    }
+    if (codePoint >= 65 && codePoint <= 90) {
+        return String.fromCharCode(codePoint - 64);
+    }
+    if (source === ' ') return '\x00';
+    if (source === '@') return '\x00';
+    if (source === '[') return '\x1b';
+    if (source === '\\') return '\x1c';
+    if (source === ']') return '\x1d';
+    if (source === '^') return '\x1e';
+    if (source === '_') return '\x1f';
+    if (source === '?') return '\x7f';
+    return source;
+}
+
+function applyTerminalExtraKeyModifiers(data = '') {
+    let output = typeof data === 'string' ? data : '';
+    const useCtrl = Boolean(terminalState.extraKeyModifiers.ctrl);
+    const useAlt = Boolean(terminalState.extraKeyModifiers.alt);
+    if (!output) return output;
+    if (useCtrl) {
+        output = resolveCtrlModifiedTerminalData(output);
+    }
+    if (useAlt) {
+        output = `\x1b${output}`;
+    }
+    if (useCtrl || useAlt) {
+        clearTerminalExtraKeyModifiers();
+    }
+    return output;
+}
+
+function focusActiveTerminalInstance() {
+    if (!terminalState.terminal) return;
+    try {
+        terminalState.terminal.focus();
+    } catch (error) {
+        void error;
+    }
+}
+
+function cancelTerminalViewportRefresh() {
+    if (terminalState.viewportRefreshFrameId !== null) {
+        window.cancelAnimationFrame(terminalState.viewportRefreshFrameId);
+        terminalState.viewportRefreshFrameId = null;
+    }
+    if (terminalState.viewportRefreshTimerId !== null) {
+        window.clearTimeout(terminalState.viewportRefreshTimerId);
+        terminalState.viewportRefreshTimerId = null;
+    }
+    terminalState.viewportRefreshNeedsFocus = false;
+    terminalState.viewportRefreshNeedsFit = false;
+}
+
+function getTerminalVisibleRowMetrics() {
+    const terminal = terminalState.terminal;
+    const elements = getTerminalOverlayElements();
+    if (!terminal || !elements?.shell) return null;
+
+    const shellRect = elements.shell.getBoundingClientRect();
+    if (!Number.isFinite(shellRect.top) || !Number.isFinite(shellRect.bottom)) {
+        return null;
+    }
+
+    const viewport = window.visualViewport;
+    const visualBottom = Number(viewport?.height) + Number(viewport?.offsetTop);
+    const layoutBottom = Number(window.innerHeight);
+    let visibleBottom = Number.isFinite(visualBottom) && visualBottom > 0
+        ? visualBottom
+        : layoutBottom;
+
+    const extraKeys = elements.extraKeys;
+    if (
+        extraKeys instanceof HTMLElement
+        && extraKeys.classList.contains('is-mobile-visible')
+        && !extraKeys.classList.contains('is-hidden')
+    ) {
+        const extraKeysRect = extraKeys.getBoundingClientRect();
+        if (Number.isFinite(extraKeysRect.top) && extraKeysRect.top > shellRect.top) {
+            visibleBottom = Math.min(visibleBottom, extraKeysRect.top - 8);
+        }
+    }
+
+    const rowsLayer = elements.shell.querySelector('.xterm-rows');
+    const rowsRect = rowsLayer instanceof Element ? rowsLayer.getBoundingClientRect() : shellRect;
+    const rowAreaTop = Math.max(shellRect.top, Number.isFinite(rowsRect.top) ? rowsRect.top : shellRect.top);
+    const rowAreaBottom = Math.min(
+        Number.isFinite(rowsRect.bottom) ? rowsRect.bottom : shellRect.bottom,
+        visibleBottom,
+        shellRect.bottom
+    );
+    const totalRowsHeight = Number.isFinite(rowsRect.height) && rowsRect.height > 0
+        ? rowsRect.height
+        : Math.max(1, shellRect.height);
+    const rowHeight = totalRowsHeight / Math.max(1, terminal.rows);
+    if (!Number.isFinite(rowHeight) || rowHeight <= 0) {
+        return null;
+    }
+
+    const visibleHeight = Math.max(0, rowAreaBottom - rowAreaTop);
+    const visibleRows = Math.min(
+        Math.max(1, terminal.rows),
+        Math.max(1, Math.floor(visibleHeight / rowHeight))
+    );
+    return { visibleRows };
+}
+
+function ensureTerminalCursorVisible({ focus = false } = {}) {
+    const terminal = terminalState.terminal;
+    if (!terminal || !isTerminalOverlayOpen()) {
+        terminalState.viewportRefreshNeedsFocus = false;
+        return;
+    }
+
+    const buffer = terminal.buffer?.active;
+    const metrics = getTerminalVisibleRowMetrics();
+    if (
+        buffer
+        && metrics
+        && Number.isFinite(buffer.baseY)
+        && Number.isFinite(buffer.cursorY)
+        && Number.isFinite(buffer.viewportY)
+        && metrics.visibleRows > 0
+    ) {
+        const cursorLine = Math.max(0, Math.round(buffer.baseY + buffer.cursorY));
+        const currentViewportY = Math.max(0, Math.round(buffer.viewportY));
+        const reducedViewport = metrics.visibleRows < terminal.rows || isMobileKeyboardOpen();
+        const bottomMarginRows = reducedViewport
+            ? Math.min(2, Math.max(1, Math.floor(metrics.visibleRows / 6)))
+            : 0;
+        const bottomSafeRows = Math.max(1, metrics.visibleRows - bottomMarginRows);
+        const maxVisibleLine = currentViewportY + bottomSafeRows - 1;
+        let nextViewportY = currentViewportY;
+
+        if (cursorLine > maxVisibleLine) {
+            nextViewportY = Math.max(0, cursorLine - bottomSafeRows + 1);
+        } else if (cursorLine < currentViewportY) {
+            nextViewportY = cursorLine;
+        }
+
+        if (nextViewportY !== currentViewportY && typeof terminal.scrollToLine === 'function') {
+            try {
+                terminal.scrollToLine(nextViewportY);
+            } catch (error) {
+                void error;
+            }
+        }
+    }
+
+    if (focus || terminalState.viewportRefreshNeedsFocus) {
+        terminalState.viewportRefreshNeedsFocus = false;
+        focusActiveTerminalInstance();
+    }
+}
+
+function scheduleTerminalViewportRefresh({ focus = false, fit = false } = {}) {
+    if (!terminalState.terminal || !isTerminalOverlayOpen()) return;
+    if (focus) {
+        terminalState.viewportRefreshNeedsFocus = true;
+    }
+    if (fit) {
+        terminalState.viewportRefreshNeedsFit = true;
+    }
+    if (terminalState.viewportRefreshFrameId !== null) {
+        return;
+    }
+    terminalState.viewportRefreshFrameId = requestAnimationFrame(() => {
+        terminalState.viewportRefreshFrameId = null;
+        if (!terminalState.terminal || !isTerminalOverlayOpen()) {
+            terminalState.viewportRefreshNeedsFocus = false;
+            return;
+        }
+        const needsFit = Boolean(terminalState.viewportRefreshNeedsFit);
+        terminalState.viewportRefreshNeedsFit = false;
+        if (needsFit) {
+            scheduleTerminalFit();
+        }
+        if (terminalState.viewportRefreshTimerId !== null) {
+            window.clearTimeout(terminalState.viewportRefreshTimerId);
+        }
+        terminalState.viewportRefreshTimerId = window.setTimeout(() => {
+            terminalState.viewportRefreshTimerId = null;
+            if (!terminalState.terminal || !isTerminalOverlayOpen()) {
+                terminalState.viewportRefreshNeedsFocus = false;
+                return;
+            }
+            ensureTerminalCursorVisible({ focus: terminalState.viewportRefreshNeedsFocus });
+        }, needsFit ? 72 : 24);
+    });
+}
+
+function queueTerminalDataForActiveSession(rawData, { focus = false } = {}) {
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (!activeSession?.id) return false;
+    const data = applyTerminalExtraKeyModifiers(rawData);
+    if (!data) return false;
+    queueTerminalInput(activeSession.id, data);
+    if (focus) {
+        requestAnimationFrame(() => {
+            focusActiveTerminalInstance();
+        });
+    }
+    return true;
+}
+
+function renderTerminalExtraKeys() {
+    const elements = getTerminalOverlayElements();
+    const container = elements?.extraKeys;
+    if (!(container instanceof Element)) return;
+    if (container.dataset.rendered === 'true') {
+        syncTerminalExtraKeysState();
+        return;
+    }
+    container.innerHTML = '';
+    TERMINAL_EXTRA_KEYS.forEach(key => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'terminal-overlay-extra-key';
+        button.textContent = key.label;
+        button.dataset.keyId = key.id;
+        if (key.modifier) {
+            button.dataset.terminalModifier = key.modifier;
+        }
+        button.addEventListener('pointerdown', event => {
+            event.preventDefault();
+        });
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            if (key.modifier) {
+                toggleTerminalExtraKeyModifier(key.modifier);
+                focusActiveTerminalInstance();
+                return;
+            }
+            queueTerminalDataForActiveSession(key.sequence || key.text || '', { focus: true });
+        });
+        container.appendChild(button);
+    });
+    container.dataset.rendered = 'true';
+    syncTerminalExtraKeysState();
+}
+
+function shouldShowTerminalExtraKeys() {
+    const hasCoarsePointer = mediaQueryMatches('(pointer: coarse)') || mediaQueryMatches('(any-pointer: coarse)');
+    const hasFinePointer = mediaQueryMatches('(pointer: fine)') || mediaQueryMatches('(any-pointer: fine)');
+    if (isLikelyVirtualKeyboardEnvironment()) {
+        return true;
+    }
+    if (hasCoarsePointer && isCompactLayout()) {
+        return true;
+    }
+    return hasCoarsePointer && !hasFinePointer;
+}
+
+function getTerminalExtraKeysViewportBottomInset() {
+    const viewport = window.visualViewport;
+    const visualHeight = Number(viewport?.height);
+    const visualTop = Number(viewport?.offsetTop);
+    const layoutHeight = Number(window.innerHeight);
+    const visualBottom = visualHeight + visualTop;
+    if (
+        Number.isFinite(visualBottom)
+        && visualBottom > 0
+        && Number.isFinite(layoutHeight)
+        && layoutHeight > 0
+    ) {
+        return Math.max(0, Math.round(layoutHeight - visualBottom));
+    }
+    return 0;
+}
+
+function syncTerminalExtraKeysOverlayMetrics({ visible = false } = {}) {
+    const elements = getTerminalOverlayElements();
+    const container = elements?.extraKeys;
+    if (!(container instanceof HTMLElement)) return false;
+    if (!(elements?.body instanceof HTMLElement)) return false;
+    let layoutChanged = false;
+    if (!visible) {
+        if (elements.body.style.getPropertyValue('--terminal-overlay-extra-keys-reserved-space') !== '0px') {
+            elements.body.style.setProperty('--terminal-overlay-extra-keys-reserved-space', '0px');
+            layoutChanged = true;
+        }
+        if (container.style.getPropertyValue('--terminal-extra-keys-left')) {
+            container.style.removeProperty('--terminal-extra-keys-left');
+            layoutChanged = true;
+        }
+        if (container.style.getPropertyValue('--terminal-extra-keys-width')) {
+            container.style.removeProperty('--terminal-extra-keys-width');
+            layoutChanged = true;
+        }
+        if (container.style.getPropertyValue('--terminal-extra-keys-bottom')) {
+            container.style.removeProperty('--terminal-extra-keys-bottom');
+            layoutChanged = true;
+        }
+        return layoutChanged;
+    }
+
+    const cardRect = elements.card instanceof Element ? elements.card.getBoundingClientRect() : null;
+    const horizontalInset = isCompactLayout() ? 12 : 16;
+    const fallbackWidth = Math.max(220, Math.round(window.innerWidth - (horizontalInset * 2)));
+    const nextLeft = cardRect
+        ? Math.max(8, Math.round(cardRect.left + horizontalInset))
+        : horizontalInset;
+    const nextWidth = cardRect
+        ? Math.max(220, Math.round(cardRect.width - (horizontalInset * 2)))
+        : fallbackWidth;
+    const nextBottom = Math.max(8, getTerminalExtraKeysViewportBottomInset() + 8);
+    const nextLeftValue = `${nextLeft}px`;
+    const nextWidthValue = `${nextWidth}px`;
+    const nextBottomValue = `${nextBottom}px`;
+    if (container.style.getPropertyValue('--terminal-extra-keys-left') !== nextLeftValue) {
+        container.style.setProperty('--terminal-extra-keys-left', nextLeftValue);
+        layoutChanged = true;
+    }
+    if (container.style.getPropertyValue('--terminal-extra-keys-width') !== nextWidthValue) {
+        container.style.setProperty('--terminal-extra-keys-width', nextWidthValue);
+        layoutChanged = true;
+    }
+    if (container.style.getPropertyValue('--terminal-extra-keys-bottom') !== nextBottomValue) {
+        container.style.setProperty('--terminal-extra-keys-bottom', nextBottomValue);
+        layoutChanged = true;
+    }
+
+    const reservedSpace = Math.max(0, Math.ceil(container.getBoundingClientRect().height) + 12);
+    const reservedSpaceValue = `${reservedSpace}px`;
+    if (elements.body.style.getPropertyValue('--terminal-overlay-extra-keys-reserved-space') !== reservedSpaceValue) {
+        elements.body.style.setProperty('--terminal-overlay-extra-keys-reserved-space', reservedSpaceValue);
+        layoutChanged = true;
+    }
+    return layoutChanged;
+}
+
+function syncTerminalExtraKeysState() {
+    const elements = getTerminalOverlayElements();
+    const container = elements?.extraKeys;
+    if (!(container instanceof Element)) return;
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    const shouldShow = shouldShowTerminalExtraKeys();
+    const isVisible = shouldShow && isTerminalOverlayOpen();
+    const wasVisible = container.classList.contains('is-mobile-visible');
+    const hasActiveSession = Boolean(activeSession?.id);
+    container.classList.toggle('is-hidden', !isVisible);
+    container.classList.toggle('is-mobile-visible', isVisible);
+    container.classList.toggle('is-disabled', isVisible && !hasActiveSession);
+    container.setAttribute('aria-hidden', isVisible ? 'false' : 'true');
+    container.querySelectorAll('[data-terminal-modifier]').forEach(button => {
+        const modifierName = button.getAttribute('data-terminal-modifier') || '';
+        button.classList.toggle('is-active', Boolean(terminalState.extraKeyModifiers[modifierName]));
+    });
+    container.querySelectorAll('.terminal-overlay-extra-key').forEach(button => {
+        button.disabled = !hasActiveSession;
+    });
+    const layoutChanged = syncTerminalExtraKeysOverlayMetrics({ visible: isVisible });
+    if (wasVisible !== isVisible || layoutChanged) {
+        scheduleTerminalViewportRefresh({ fit: true });
+    }
+}
+
+function normalizeTerminalSessionSummary(value) {
+    if (!value || typeof value !== 'object') return null;
+    const id = typeof value.id === 'string' ? value.id.trim() : '';
+    if (!id) return null;
+    const outputBaseOffset = Number.isFinite(value.output_base_offset)
+        ? Math.max(0, Math.round(value.output_base_offset))
+        : 0;
+    const outputLength = Number.isFinite(value.output_length)
+        ? Math.max(outputBaseOffset, Math.round(value.output_length))
+        : outputBaseOffset;
+    return {
+        id,
+        root: normalizeFileBrowserRoot(value.root),
+        rootPath: typeof value.root_path === 'string' ? value.root_path : '',
+        path: normalizeFileBrowserRelativePath(value.path),
+        cwd: typeof value.cwd === 'string' ? value.cwd : '',
+        displayPath: typeof value.display_path === 'string' ? value.display_path : '$workspace',
+        title: typeof value.title === 'string' && value.title.trim() ? value.title.trim() : 'Terminal',
+        shell: typeof value.shell === 'string' ? value.shell.trim() : '',
+        cols: Number.isFinite(value.cols) ? Math.max(1, Math.round(value.cols)) : TERMINAL_DEFAULT_COLS,
+        rows: Number.isFinite(value.rows) ? Math.max(1, Math.round(value.rows)) : TERMINAL_DEFAULT_ROWS,
+        processRunning: Boolean(value.process_running),
+        exitCode: Number.isFinite(value.exit_code) ? Math.round(value.exit_code) : null,
+        createdAt: typeof value.created_at === 'string' ? value.created_at : '',
+        updatedAt: typeof value.updated_at === 'string' ? value.updated_at : '',
+        lastOutputAt: typeof value.last_output_at === 'string' ? value.last_output_at : '',
+        outputBaseOffset,
+        outputLength
+    };
+}
+
+function parseTerminalTimestampMs(value) {
+    const parsed = Date.parse(typeof value === 'string' ? value : '');
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mergeTerminalSessionSummary(existing, incoming) {
+    if (!existing) return incoming;
+    const existingUpdatedMs = parseTerminalTimestampMs(existing.updatedAt);
+    const incomingUpdatedMs = parseTerminalTimestampMs(incoming.updatedAt);
+    const preferIncomingState = incomingUpdatedMs >= existingUpdatedMs;
+    const merged = preferIncomingState
+        ? { ...existing, ...incoming }
+        : { ...incoming, ...existing };
+    merged.outputBaseOffset = Math.max(existing.outputBaseOffset, incoming.outputBaseOffset);
+    merged.outputLength = Math.max(existing.outputLength, incoming.outputLength, merged.outputBaseOffset);
+    if (parseTerminalTimestampMs(incoming.lastOutputAt) < parseTerminalTimestampMs(existing.lastOutputAt)) {
+        merged.lastOutputAt = existing.lastOutputAt;
+    }
+    if (!preferIncomingState && existing.processRunning === false) {
+        merged.processRunning = false;
+        merged.exitCode = existing.exitCode;
+    }
+    return merged;
+}
+
+function getTerminalSessionById(sessionId) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return null;
+    return terminalState.sessions.find(session => session.id === targetId) || null;
+}
+
+function setTerminalSessions(sessions, { preserveActive = true, preferSessionId = '' } = {}) {
+    const previousActiveId = preserveActive
+        ? (typeof terminalState.activeSessionId === 'string' ? terminalState.activeSessionId.trim() : '')
+        : '';
+    const preferredId = typeof preferSessionId === 'string' ? preferSessionId.trim() : '';
+    const normalizedSessions = Array.isArray(sessions)
+        ? sessions
+            .map(normalizeTerminalSessionSummary)
+            .filter(Boolean)
+        : [];
+
+    terminalState.sessions = normalizedSessions;
+    let nextActiveId = '';
+    if (preferredId && normalizedSessions.some(session => session.id === preferredId)) {
+        nextActiveId = preferredId;
+    } else if (previousActiveId && normalizedSessions.some(session => session.id === previousActiveId)) {
+        nextActiveId = previousActiveId;
+    } else if (normalizedSessions.length > 0) {
+        nextActiveId = normalizedSessions[normalizedSessions.length - 1].id;
+    }
+    terminalState.activeSessionId = nextActiveId || null;
+    if (!nextActiveId) {
+        terminalState.mountedSessionId = null;
+    }
+}
+
+function upsertTerminalSession(summary) {
+    const normalized = normalizeTerminalSessionSummary(summary);
+    if (!normalized) return null;
+    const nextSessions = terminalState.sessions.slice();
+    const index = nextSessions.findIndex(session => session.id === normalized.id);
+    if (index >= 0) {
+        nextSessions[index] = mergeTerminalSessionSummary(nextSessions[index], normalized);
+    } else {
+        nextSessions.push(normalized);
+    }
+    setTerminalSessions(nextSessions, {
+        preserveActive: true,
+        preferSessionId: normalized.id
+    });
+    return getTerminalSessionById(normalized.id);
+}
+
+function removeTerminalSessionFromState(sessionId) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return;
+    const remaining = terminalState.sessions.filter(session => session.id !== targetId);
+    setTerminalSessions(remaining, {
+        preserveActive: terminalState.activeSessionId !== targetId
+    });
+    if (terminalState.mountedSessionId === targetId) {
+        terminalState.mountedSessionId = null;
+    }
+}
+
+function buildTerminalSessionStatusText(session) {
+    if (!session) {
+        return '열린 Terminal 세션이 없습니다.';
+    }
+    const statusParts = [];
+    statusParts.push(session.processRunning ? '실행 중' : `종료됨 (${session.exitCode ?? '-'})`);
+    if (session.processRunning && session.id === terminalState.activeSessionId) {
+        if (terminalState.streamReconnectTimer !== null) {
+            statusParts.push('실시간 재연결 중');
+        } else if (terminalState.streamSource && terminalState.streamSessionId === session.id) {
+            statusParts.push(terminalState.streamConnected ? '실시간 연결' : '실시간 연결 중');
+        } else if (typeof window.EventSource !== 'function') {
+            statusParts.push('폴링 연결');
+        }
+    }
+    if (session.shell) {
+        statusParts.push(session.shell);
+    }
+    if (Number.isFinite(session.cols) && Number.isFinite(session.rows)) {
+        statusParts.push(`${session.cols}x${session.rows}`);
+    }
+    return statusParts.join(' · ');
+}
+
+function syncTerminalOverlayState() {
+    const elements = getTerminalOverlayElements();
+    if (!elements) return;
+    renderTerminalExtraKeys();
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (!activeSession) {
+        terminalState.extraKeyModifiers.ctrl = false;
+        terminalState.extraKeyModifiers.alt = false;
+    }
+    const hasSessions = terminalState.sessions.length > 0;
+    const launchContext = getTerminalLaunchContext();
+    const launchDisplayPath = buildTerminalLaunchContextDisplayPath(launchContext);
+    if (elements.subtitle) {
+        elements.subtitle.textContent = `현재 폴더 기준 CLI 세션 · ${launchDisplayPath}`;
+        setHoverTooltip(elements.subtitle, launchDisplayPath, { focusable: false });
+    }
+    if (elements.tabs) {
+        elements.tabs.innerHTML = '';
+        terminalState.sessions.forEach(session => {
+            const isActive = activeSession?.id === session.id;
+            const item = document.createElement('div');
+            item.className = `terminal-overlay-tab${isActive ? ' is-active' : ''}`;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'terminal-overlay-tab-button';
+            button.setAttribute('role', 'tab');
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            button.tabIndex = isActive ? 0 : -1;
+            button.addEventListener('click', () => {
+                void setActiveTerminalSession(session.id, {
+                    attach: true,
+                    forceReset: terminalState.mountedSessionId !== session.id
+                });
+            });
+
+            const textWrap = document.createElement('span');
+            textWrap.className = 'terminal-overlay-tab-text';
+            const title = document.createElement('span');
+            title.className = 'terminal-overlay-tab-title';
+            title.textContent = session.title;
+            const subtitle = document.createElement('span');
+            subtitle.className = 'terminal-overlay-tab-subtitle';
+            subtitle.textContent = session.displayPath;
+            textWrap.appendChild(title);
+            textWrap.appendChild(subtitle);
+            button.appendChild(textWrap);
+            item.appendChild(button);
+
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'terminal-overlay-tab-close';
+            closeButton.setAttribute('aria-label', `${session.title} Terminal 종료`);
+            closeButton.setAttribute('title', `${session.title} Terminal 종료`);
+            closeButton.addEventListener('click', event => {
+                event.stopPropagation();
+                void closeTerminalTab(session.id);
+            });
+            item.appendChild(closeButton);
+
+            elements.tabs.appendChild(item);
+        });
+    }
+
+    if (elements.path) {
+        const nextPath = activeSession?.displayPath || launchDisplayPath;
+        elements.path.textContent = nextPath;
+        setHoverTooltip(elements.path, activeSession?.cwd || nextPath);
+    }
+    if (elements.status) {
+        elements.status.textContent = buildTerminalSessionStatusText(activeSession);
+    }
+    if (elements.newTabBtn) {
+        const createLabel = `현재 폴더 기준 새 Terminal 탭 생성 (${launchDisplayPath})`;
+        elements.newTabBtn.disabled = false;
+        elements.newTabBtn.setAttribute('aria-label', createLabel);
+        elements.newTabBtn.setAttribute('title', createLabel);
+        syncHoverTooltipFromLabel(elements.newTabBtn);
+    }
+    if (elements.closeTabBtn) {
+        elements.closeTabBtn.disabled = !activeSession;
+    }
+    if (elements.empty) {
+        elements.empty.textContent = `열린 Terminal 탭이 없습니다. + 버튼으로 ${launchDisplayPath} 세션을 생성하세요.`;
+        elements.empty.classList.toggle('is-hidden', hasSessions);
+    }
+    if (elements.shell) {
+        elements.shell.classList.toggle('is-hidden', !hasSessions);
+    }
+    syncTerminalExtraKeysState();
+}
+
+function loadExternalStylesheet(href, id) {
+    const head = document.head || document.getElementsByTagName('head')[0];
+    if (!head) {
+        return Promise.reject(new Error('stylesheet mount point not found'));
+    }
+    if (id) {
+        const existing = document.getElementById(id);
+        if (existing) return Promise.resolve(existing);
+    }
+    return new Promise((resolve, reject) => {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = href;
+        if (id) {
+            link.id = id;
+        }
+        link.addEventListener('load', () => resolve(link), { once: true });
+        link.addEventListener('error', () => reject(new Error(`Failed to load stylesheet: ${href}`)), { once: true });
+        head.appendChild(link);
+    });
+}
+
+function loadExternalScript(src, { id = '', readyCheck = null } = {}) {
+    if (typeof readyCheck === 'function' && readyCheck()) {
+        return Promise.resolve();
+    }
+    if (id) {
+        const existing = document.getElementById(id);
+        if (existing) {
+            return new Promise((resolve, reject) => {
+                const onLoad = () => resolve();
+                const onError = () => reject(new Error(`Failed to load script: ${src}`));
+                existing.addEventListener('load', onLoad, { once: true });
+                existing.addEventListener('error', onError, { once: true });
+                if (existing.dataset.loaded === 'true') {
+                    resolve();
+                }
+            });
+        }
+    }
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        if (id) {
+            script.id = id;
+        }
+        script.addEventListener('load', () => {
+            script.dataset.loaded = 'true';
+            resolve();
+        }, { once: true });
+        script.addEventListener('error', () => reject(new Error(`Failed to load script: ${src}`)), { once: true });
+        document.head.appendChild(script);
+    });
+}
+
+async function ensureTerminalRuntimeLoaded() {
+    if (terminalState.runtimePromise) {
+        return terminalState.runtimePromise;
+    }
+    terminalState.runtimePromise = (async () => {
+        await loadExternalStylesheet(XTERM_VENDOR_CSS_HREF, 'codex-xterm-style');
+        await loadExternalScript(XTERM_VENDOR_SRC, {
+            id: 'codex-xterm-script',
+            readyCheck: () => typeof window.Terminal === 'function'
+        });
+        await loadExternalScript(XTERM_FIT_VENDOR_SRC, {
+            id: 'codex-xterm-fit-script',
+            readyCheck: () => Boolean(window.FitAddon?.FitAddon || window.FitAddon)
+        });
+        const FitAddonClass = window.FitAddon?.FitAddon || window.FitAddon;
+        if (typeof window.Terminal !== 'function' || typeof FitAddonClass !== 'function') {
+            throw new Error('xterm runtime unavailable');
+        }
+        return {
+            Terminal: window.Terminal,
+            FitAddon: FitAddonClass
+        };
+    })().catch(error => {
+        terminalState.runtimePromise = null;
+        throw error;
+    });
+    return terminalState.runtimePromise;
+}
+
+function buildTerminalTheme() {
+    const styles = getComputedStyle(document.documentElement);
+    const background = styles.getPropertyValue('--code-bg').trim() || '#111111';
+    const foreground = styles.getPropertyValue('--text-primary').trim() || '#f0f0f0';
+    const cursor = styles.getPropertyValue('--accent').trim() || foreground;
+    return {
+        background,
+        foreground,
+        cursor,
+        cursorAccent: background,
+        selectionBackground: 'rgba(127, 143, 163, 0.24)'
+    };
+}
+
+function syncTerminalTheme() {
+    if (!terminalState.terminal) return;
+    terminalState.terminal.options.theme = buildTerminalTheme();
+}
+
+function getTerminalFontSize() {
+    if (isPhoneLayout()) return TERMINAL_FONT_SIZE_PHONE;
+    if (isFoldLayout()) return TERMINAL_FONT_SIZE_COMPACT;
+    return TERMINAL_FONT_SIZE_DESKTOP;
+}
+
+function clearQueuedTerminalInput() {
+    if (terminalState.inputFlushTimer !== null) {
+        window.clearTimeout(terminalState.inputFlushTimer);
+        terminalState.inputFlushTimer = null;
+    }
+    terminalState.inputSessionId = null;
+    terminalState.inputBuffer = '';
+    terminalState.inputInFlight = false;
+}
+
+function isTerminalSessionClosedError(error) {
+    const errorCode = error?.payload?.error_code;
+    return errorCode === 'session_not_running' || errorCode === 'session_closed';
+}
+
+async function syncTerminalSessionAfterInputFailure(sessionId) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return;
+    try {
+        const response = await readTerminalApiSession(targetId);
+        const updatedSession = upsertTerminalSession(response);
+        if (terminalState.activeSessionId === targetId && updatedSession) {
+            writeTerminalOutput(response?.output || '', { reset: true });
+            terminalState.mountedSessionId = updatedSession.id;
+            syncTerminalOverlayState();
+            if (response?.process_running) {
+                connectTerminalEventStream(updatedSession.id, updatedSession.outputLength);
+            } else {
+                closeTerminalEventStream({
+                    clearSession: true,
+                    resetReconnect: true
+                });
+                stopTerminalPolling();
+            }
+        }
+    } catch (error) {
+        void error;
+    }
+}
+
+function queueTerminalInput(sessionId, data) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    const chunk = typeof data === 'string' ? data : '';
+    if (!targetId || !chunk) return;
+    if (terminalState.inputSessionId && terminalState.inputSessionId !== targetId && terminalState.inputBuffer) {
+        clearQueuedTerminalInput();
+    }
+    terminalState.inputSessionId = targetId;
+    terminalState.inputBuffer += chunk;
+    if (terminalState.inputFlushTimer !== null) {
+        return;
+    }
+    terminalState.inputFlushTimer = window.setTimeout(() => {
+        terminalState.inputFlushTimer = null;
+        void flushQueuedTerminalInput();
+    }, 10);
+}
+
+async function flushQueuedTerminalInput() {
+    if (terminalState.inputInFlight) return;
+    const sessionId = typeof terminalState.inputSessionId === 'string' ? terminalState.inputSessionId.trim() : '';
+    const payload = terminalState.inputBuffer;
+    if (!sessionId || !payload) return;
+    terminalState.inputBuffer = '';
+    terminalState.inputInFlight = true;
+    try {
+        const summary = await writeTerminalApiInput(sessionId, payload);
+        upsertTerminalSession(summary);
+        if (terminalState.activeSessionId === sessionId) {
+            syncTerminalOverlayState();
+        }
+    } catch (error) {
+        if (isTerminalSessionClosedError(error)) {
+            await syncTerminalSessionAfterInputFailure(sessionId);
+        } else {
+            showToast(normalizeError(error, '터미널 입력 전송에 실패했습니다.'), {
+                tone: 'error',
+                durationMs: 3600
+            });
+        }
+    } finally {
+        terminalState.inputInFlight = false;
+        if (terminalState.inputBuffer) {
+            void flushQueuedTerminalInput();
+        }
+    }
+}
+
+function queueTerminalResize(sessionId, cols, rows) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return;
+    if (terminalState.resizeTimerId !== null) {
+        window.clearTimeout(terminalState.resizeTimerId);
+    }
+    terminalState.resizeTimerId = window.setTimeout(() => {
+        terminalState.resizeTimerId = null;
+        const activeSession = getTerminalSessionById(targetId);
+        if (!activeSession) return;
+        void resizeTerminalApiSession(targetId, cols, rows).then(summary => {
+            upsertTerminalSession(summary);
+            if (terminalState.activeSessionId === targetId) {
+                syncTerminalOverlayState();
+            }
+        }).catch(() => {
+            void 0;
+        });
+    }, TERMINAL_RESIZE_DEBOUNCE_MS);
+}
+
+async function ensureTerminalInstance() {
+    const elements = getTerminalOverlayElements();
+    if (!elements?.shell) {
+        throw new Error('terminal overlay shell not found');
+    }
+    if (terminalState.terminal && terminalState.fitAddon) {
+        syncTerminalTheme();
+        return terminalState.terminal;
+    }
+    elements.shell.classList.add('is-loading');
+    let runtime;
+    try {
+        runtime = await ensureTerminalRuntimeLoaded();
+    } catch (error) {
+        elements.shell.classList.remove('is-loading');
+        throw error;
+    }
+    const terminal = new runtime.Terminal({
+        cursorBlink: true,
+        convertEol: false,
+        allowTransparency: true,
+        scrollback: 6000,
+        fontSize: getTerminalFontSize(),
+        fontFamily: TERMINAL_FONT_FAMILY,
+        lineHeight: 1.16,
+        fontWeight: '500',
+        theme: buildTerminalTheme()
+    });
+    const fitAddon = new runtime.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(elements.shell);
+    const focusTerminal = () => {
+        try {
+            terminal.focus();
+        } catch (error) {
+            void error;
+        }
+    };
+    elements.shell.addEventListener('mousedown', focusTerminal);
+    elements.shell.addEventListener('touchstart', focusTerminal, { passive: true });
+    terminal.onData(data => {
+        queueTerminalDataForActiveSession(data);
+    });
+    terminal.onCursorMove(() => {
+        if (!isMobileKeyboardOpen()) return;
+        scheduleTerminalViewportRefresh();
+    });
+    terminal.onResize(size => {
+        const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+        if (!activeSession) return;
+        queueTerminalResize(activeSession.id, size.cols, size.rows);
+    });
+    terminalState.terminal = terminal;
+    terminalState.fitAddon = fitAddon;
+    elements.shell.classList.remove('is-loading');
+
+    if (typeof ResizeObserver === 'function' && !terminalState.resizeObserver) {
+        terminalState.resizeObserver = new ResizeObserver(() => {
+            if (!isTerminalOverlayOpen()) return;
+            scheduleTerminalViewportRefresh({ fit: true });
+        });
+        terminalState.resizeObserver.observe(elements.shell);
+    }
+    syncTerminalTheme();
+    scheduleTerminalViewportRefresh({ fit: true });
+    return terminal;
+}
+
+function scheduleTerminalFit() {
+    if (!terminalState.fitAddon || !isTerminalOverlayOpen()) return;
+    requestAnimationFrame(() => {
+        if (!terminalState.fitAddon || !isTerminalOverlayOpen()) return;
+        if (terminalState.terminal) {
+            terminalState.terminal.options.fontSize = getTerminalFontSize();
+            terminalState.terminal.options.fontFamily = TERMINAL_FONT_FAMILY;
+        }
+        try {
+            terminalState.fitAddon.fit();
+        } catch (error) {
+            void error;
+        }
+    });
+}
+
+function getTerminalViewportSize() {
+    const terminal = terminalState.terminal;
+    const cols = terminal && Number.isFinite(terminal.cols) && terminal.cols > 0
+        ? Math.max(1, Math.round(terminal.cols))
+        : TERMINAL_DEFAULT_COLS;
+    const rows = terminal && Number.isFinite(terminal.rows) && terminal.rows > 0
+        ? Math.max(1, Math.round(terminal.rows))
+        : TERMINAL_DEFAULT_ROWS;
+    return { cols, rows };
+}
+
+async function fetchTerminalSessionsList() {
+    return fetchJson('/api/codex/terminals', {
+        cache: 'no-store',
+        timeoutMs: TERMINAL_REQUEST_TIMEOUT_MS
+    });
+}
+
+async function createTerminalApiSession(root, path, cols, rows) {
+    return fetchJson('/api/codex/terminals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: TERMINAL_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path),
+            cols,
+            rows
+        })
+    });
+}
+
+async function readTerminalApiSession(sessionId, offset = null) {
+    const query = offset === null || offset === undefined
+        ? ''
+        : `?offset=${encodeURIComponent(String(offset))}`;
+    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}${query}`, {
+        cache: 'no-store',
+        timeoutMs: TERMINAL_REQUEST_TIMEOUT_MS
+    });
+}
+
+async function writeTerminalApiInput(sessionId, data) {
+    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: TERMINAL_INPUT_TIMEOUT_MS,
+        body: JSON.stringify({
+            data: typeof data === 'string' ? data : ''
+        })
+    });
+}
+
+async function resizeTerminalApiSession(sessionId, cols, rows) {
+    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}/resize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: TERMINAL_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({ cols, rows })
+    });
+}
+
+async function closeTerminalApiSession(sessionId) {
+    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}/close`, {
+        method: 'POST',
+        timeoutMs: TERMINAL_CLOSE_TIMEOUT_MS
+    });
+}
+
+function findTerminalSessionByContext(root, path) {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    return terminalState.sessions.find(session => (
+        session.root === normalizedRoot
+        && session.path === normalizedPath
+    )) || null;
+}
+
+function closeTerminalEventStream({ clearSession = true, resetReconnect = true } = {}) {
+    if (terminalState.streamSource) {
+        terminalState.streamSource.onopen = null;
+        terminalState.streamSource.onmessage = null;
+        terminalState.streamSource.onerror = null;
+        terminalState.streamSource.close();
+        terminalState.streamSource = null;
+    }
+    terminalState.streamConnected = false;
+    if (terminalState.streamReconnectTimer !== null) {
+        window.clearTimeout(terminalState.streamReconnectTimer);
+        terminalState.streamReconnectTimer = null;
+    }
+    if (resetReconnect) {
+        terminalState.streamReconnectAttempt = 0;
+    }
+    if (clearSession) {
+        terminalState.streamSessionId = null;
+    }
+}
+
+function handleTerminalStreamSnapshot(sessionId, rawData) {
+    let payload = null;
+    try {
+        payload = JSON.parse(typeof rawData === 'string' ? rawData : '{}');
+    } catch (error) {
+        void error;
+        return;
+    }
+    const updatedSession = upsertTerminalSession(payload);
+    if (!updatedSession || updatedSession.id !== sessionId) return;
+    if (terminalState.activeSessionId !== updatedSession.id) return;
+    writeTerminalOutput(payload?.output || '', {
+        reset: terminalState.mountedSessionId !== updatedSession.id || Boolean(payload?.reset)
+    });
+    terminalState.mountedSessionId = updatedSession.id;
+    syncTerminalOverlayState();
+}
+
+function handleTerminalStreamEnd(sessionId, rawData) {
+    let payload = null;
+    try {
+        payload = JSON.parse(typeof rawData === 'string' ? rawData : '{}');
+    } catch (error) {
+        void error;
+    }
+    if (payload?.error_code === 'session_not_found' || payload?.closed) {
+        removeTerminalSessionFromState(sessionId);
+    } else if (payload && typeof payload === 'object') {
+        upsertTerminalSession(payload);
+    }
+    closeTerminalEventStream({
+        clearSession: true,
+        resetReconnect: true
+    });
+    syncTerminalOverlayState();
+}
+
+function scheduleTerminalStreamReconnect(sessionId) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return;
+    if (!isTerminalOverlayOpen() || terminalState.activeSessionId !== targetId) return;
+    if (terminalState.streamReconnectTimer !== null) return;
+    const activeSession = getTerminalSessionById(targetId);
+    if (!activeSession?.processRunning) return;
+    const delay = Math.min(
+        TERMINAL_STREAM_RECONNECT_MAX_MS,
+        TERMINAL_STREAM_RECONNECT_BASE_MS * (2 ** Math.min(terminalState.streamReconnectAttempt, 4))
+    );
+    terminalState.streamReconnectAttempt += 1;
+    terminalState.streamReconnectTimer = window.setTimeout(() => {
+        terminalState.streamReconnectTimer = null;
+        const currentSession = getTerminalSessionById(targetId);
+        if (!currentSession?.processRunning || !isTerminalOverlayOpen() || terminalState.activeSessionId !== targetId) {
+            syncTerminalOverlayState();
+            return;
+        }
+        connectTerminalEventStream(targetId, currentSession.outputLength);
+    }, delay);
+    syncTerminalOverlayState();
+}
+
+function connectTerminalEventStream(sessionId, offset = null) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId || !isTerminalOverlayOpen()) {
+        closeTerminalEventStream();
+        return false;
+    }
+    if (typeof window.EventSource !== 'function') {
+        scheduleTerminalPoll(Math.min(TERMINAL_POLL_MS, 240));
+        syncTerminalOverlayState();
+        return false;
+    }
+    stopTerminalPolling();
+    closeTerminalEventStream({
+        clearSession: false,
+        resetReconnect: false
+    });
+    terminalState.streamSessionId = targetId;
+    terminalState.streamConnected = false;
+    const activeSession = getTerminalSessionById(targetId);
+    const startOffset = Number.isFinite(offset)
+        ? Math.max(0, Math.round(offset))
+        : Math.max(0, Math.round(activeSession?.outputLength || 0));
+    const streamUrl = `/api/codex/terminals/${encodeURIComponent(targetId)}/events?offset=${encodeURIComponent(String(startOffset))}`;
+    const source = new EventSource(streamUrl);
+    terminalState.streamSource = source;
+    source.onopen = () => {
+        if (terminalState.streamSource !== source) return;
+        terminalState.streamConnected = true;
+        terminalState.streamReconnectAttempt = 0;
+        syncTerminalOverlayState();
+    };
+    source.onmessage = event => {
+        if (terminalState.streamSource !== source) return;
+        terminalState.streamConnected = true;
+        handleTerminalStreamSnapshot(targetId, event.data);
+    };
+    source.addEventListener('ping', () => {
+        if (terminalState.streamSource !== source) return;
+        terminalState.streamConnected = true;
+        syncTerminalOverlayState();
+    });
+    source.addEventListener('end', event => {
+        if (terminalState.streamSource !== source) return;
+        handleTerminalStreamEnd(targetId, event.data);
+    });
+    source.onerror = () => {
+        if (terminalState.streamSource !== source) return;
+        source.close();
+        terminalState.streamSource = null;
+        terminalState.streamConnected = false;
+        syncTerminalOverlayState();
+        scheduleTerminalStreamReconnect(targetId);
+    };
+    syncTerminalOverlayState();
+    return true;
+}
+
+async function loadTerminalSessions({ preserveActive = true, preferSessionId = '', attachActive = false } = {}) {
+    const payload = await fetchTerminalSessionsList();
+    const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+    const previousActiveId = terminalState.activeSessionId;
+    setTerminalSessions(sessions, { preserveActive, preferSessionId });
+    syncTerminalOverlayState();
+    const nextActiveId = terminalState.activeSessionId;
+    if (attachActive && nextActiveId) {
+        const forceReset = previousActiveId !== nextActiveId || terminalState.mountedSessionId !== nextActiveId;
+        await attachActiveTerminalSession({ forceReset });
+    }
+    return terminalState.sessions;
+}
+
+function openTerminalOverlay() {
+    const elements = getTerminalOverlayElements();
+    if (!elements) return;
+    if (!terminalState.launchContext) {
+        terminalState.launchContext = normalizeTerminalLaunchContext(resolveDefaultTerminalLaunchContext());
+    }
+    terminalState.overlayOpen = true;
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    syncTerminalOverlayState();
+    requestAnimationFrame(() => {
+        syncTerminalExtraKeysState();
+        scheduleTerminalViewportRefresh({ fit: true });
+    });
+}
+
+function closeTerminalOverlay() {
+    const elements = getTerminalOverlayElements();
+    if (!elements) return;
+    terminalState.overlayOpen = false;
+    stopTerminalPolling();
+    closeTerminalEventStream({
+        clearSession: true,
+        resetReconnect: true
+    });
+    clearQueuedTerminalInput();
+    cancelTerminalViewportRefresh();
+    clearTerminalExtraKeyModifiers();
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+    syncTerminalExtraKeysState();
+}
+
+function stopTerminalPolling() {
+    if (terminalState.pollTimer !== null) {
+        window.clearTimeout(terminalState.pollTimer);
+        terminalState.pollTimer = null;
+    }
+    terminalState.pollInFlight = false;
+}
+
+function scheduleTerminalPoll(delayMs = TERMINAL_POLL_MS) {
+    if (!isTerminalOverlayOpen()) return;
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (!activeSession) return;
+    if (terminalState.pollTimer !== null) {
+        window.clearTimeout(terminalState.pollTimer);
+    }
+    terminalState.pollTimer = window.setTimeout(() => {
+        terminalState.pollTimer = null;
+        void pollActiveTerminalSession();
+    }, Math.max(0, Math.round(Number(delayMs) || 0)));
+}
+
+function writeTerminalOutput(output, { reset = false } = {}) {
+    const terminal = terminalState.terminal;
+    if (!terminal) return;
+    if (reset) {
+        terminal.reset();
+        syncTerminalTheme();
+    }
+    if (typeof output === 'string' && output) {
+        terminal.write(output);
+    }
+}
+
+async function attachActiveTerminalSession({ forceReset = false } = {}) {
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (!activeSession) {
+        closeTerminalEventStream({
+            clearSession: true,
+            resetReconnect: true
+        });
+        stopTerminalPolling();
+        syncTerminalOverlayState();
+        return false;
+    }
+    closeTerminalEventStream({
+        clearSession: true,
+        resetReconnect: true
+    });
+    stopTerminalPolling();
+    await ensureTerminalInstance();
+    const needsReset = Boolean(forceReset || terminalState.mountedSessionId !== activeSession.id);
+    const offset = needsReset ? null : activeSession.outputLength;
+    const response = await readTerminalApiSession(activeSession.id, offset);
+    if (terminalState.activeSessionId !== activeSession.id) {
+        return false;
+    }
+    const updatedSession = upsertTerminalSession(response) || activeSession;
+    writeTerminalOutput(response?.output || '', {
+        reset: needsReset || Boolean(response?.reset)
+    });
+    terminalState.mountedSessionId = updatedSession.id;
+    syncTerminalOverlayState();
+    scheduleTerminalViewportRefresh({ focus: true, fit: true });
+    if (response?.process_running) {
+        connectTerminalEventStream(updatedSession.id, updatedSession.outputLength);
+    } else {
+        closeTerminalEventStream({
+            clearSession: true,
+            resetReconnect: true
+        });
+    }
+    return true;
+}
+
+async function pollActiveTerminalSession() {
+    if (terminalState.pollInFlight || !isTerminalOverlayOpen()) return;
+    const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (!activeSession) return;
+    terminalState.pollInFlight = true;
+    try {
+        const response = await readTerminalApiSession(
+            activeSession.id,
+            terminalState.mountedSessionId === activeSession.id ? activeSession.outputLength : null
+        );
+        if (terminalState.activeSessionId !== activeSession.id) {
+            return;
+        }
+        const updatedSession = upsertTerminalSession(response) || activeSession;
+        writeTerminalOutput(response?.output || '', {
+            reset: terminalState.mountedSessionId !== updatedSession.id || Boolean(response?.reset)
+        });
+        terminalState.mountedSessionId = updatedSession.id;
+        syncTerminalOverlayState();
+        if (response?.process_running || response?.output) {
+            scheduleTerminalPoll();
+        } else {
+            stopTerminalPolling();
+        }
+    } catch (error) {
+        const elements = getTerminalOverlayElements();
+        if (elements?.status) {
+            elements.status.textContent = `연결 재시도 중 · ${normalizeError(error, 'Terminal 상태를 불러오지 못했습니다.')}`;
+        }
+        scheduleTerminalPoll(TERMINAL_POLL_MS * 2);
+    } finally {
+        terminalState.pollInFlight = false;
+    }
+}
+
+async function setActiveTerminalSession(sessionId, { attach = true, forceReset = false } = {}) {
+    const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!targetId) return false;
+    if (!getTerminalSessionById(targetId)) return false;
+    if (terminalState.activeSessionId !== targetId) {
+        clearQueuedTerminalInput();
+    }
+    terminalState.activeSessionId = targetId;
+    syncTerminalOverlayState();
+    if (attach && isTerminalOverlayOpen()) {
+        await attachActiveTerminalSession({ forceReset });
+    }
+    return true;
+}
+
+function resolveDefaultTerminalLaunchContext() {
+    const activeTerminalSession = getTerminalSessionById(terminalState.activeSessionId);
+    if (activeTerminalSession) {
+        return {
+            root: activeTerminalSession.root,
+            path: activeTerminalSession.path
+        };
+    }
+    if (isFileBrowserOverlayOpen()) {
+        return {
+            root: fileBrowserRoot,
+            path: fileBrowserPath
+        };
+    }
+    if (isWorkModeEnabled()) {
+        return {
+            root: workModeFileRoot,
+            path: workModeFilePath
+        };
+    }
+    return {
+        root: FILE_BROWSER_ROOT_WORKSPACE,
+        path: ''
+    };
+}
+
+async function openNewTerminalTab(context = null) {
+    const requestedContext = normalizeTerminalLaunchContext(
+        context
+        || terminalState.launchContext
+        || resolveDefaultTerminalLaunchContext()
+    );
+    const root = normalizeFileBrowserRoot(requestedContext?.root);
+    const path = normalizeFileBrowserRelativePath(requestedContext?.path);
+    setTerminalLaunchContext(requestedContext);
+    openTerminalOverlay();
+    syncTerminalOverlayState();
+    const elements = getTerminalOverlayElements();
+    if (elements?.status) {
+        elements.status.textContent = '새 Terminal 세션을 여는 중...';
+    }
+    try {
+        await ensureTerminalInstance();
+        if (terminalState.fitAddon) {
+            try {
+                terminalState.fitAddon.fit();
+            } catch (error) {
+                void error;
+            }
+        }
+        const viewport = getTerminalViewportSize();
+        const response = await createTerminalApiSession(root, path, viewport.cols, viewport.rows);
+        const createdSession = upsertTerminalSession(response);
+        syncTerminalOverlayState();
+        if (!createdSession) {
+            throw new Error('Terminal session creation failed.');
+        }
+        await setActiveTerminalSession(createdSession.id, {
+            attach: true,
+            forceReset: true
+        });
+        showToast(`Terminal 탭을 열었습니다: ${createdSession.displayPath}`, {
+            tone: 'success',
+            durationMs: 2400
+        });
+        return createdSession;
+    } catch (error) {
+        if (elements?.status) {
+            elements.status.textContent = `Terminal 열기 실패 · ${normalizeError(error, 'Terminal 초기화에 실패했습니다.')}`;
+        }
+        throw error;
+    }
+}
+
+async function openTerminalOverlayFromContext(context = null) {
+    const requestedContext = normalizeTerminalLaunchContext(
+        context || resolveDefaultTerminalLaunchContext()
+    );
+    setTerminalLaunchContext(requestedContext);
+    openTerminalOverlay();
+    await loadTerminalSessions({
+        preserveActive: true,
+        attachActive: false
+    }).catch(() => []);
+    const matchingSession = findTerminalSessionByContext(requestedContext?.root, requestedContext?.path);
+    if (matchingSession) {
+        await setActiveTerminalSession(matchingSession.id, {
+            attach: true,
+            forceReset: terminalState.mountedSessionId !== matchingSession.id
+        });
+        return matchingSession;
+    }
+    if (terminalState.activeSessionId) {
+        const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+        if (activeSession) {
+            await setActiveTerminalSession(activeSession.id, {
+                attach: true,
+                forceReset: terminalState.mountedSessionId !== activeSession.id
+            });
+            return activeSession;
+        }
+    }
+    syncTerminalOverlayState();
+    return null;
+}
+
+async function closeTerminalTab(sessionId = '') {
+    const targetId = typeof sessionId === 'string' && sessionId.trim()
+        ? sessionId.trim()
+        : (typeof terminalState.activeSessionId === 'string' ? terminalState.activeSessionId.trim() : '');
+    const targetSession = getTerminalSessionById(targetId);
+    if (!targetSession) return false;
+    const confirmMessage = targetSession.processRunning
+        ? `현재 Terminal을 종료할까요?\n실행 중인 프로세스도 함께 종료됩니다.\n\n${targetSession.displayPath}`
+        : `현재 Terminal 탭을 닫을까요?\n\n${targetSession.displayPath}`;
+    if (!window.confirm(confirmMessage)) {
+        return false;
+    }
+    stopTerminalPolling();
+    closeTerminalEventStream({
+        clearSession: true,
+        resetReconnect: true
+    });
+    clearQueuedTerminalInput();
+    await closeTerminalApiSession(targetId);
+    removeTerminalSessionFromState(targetId);
+    syncTerminalOverlayState();
+    if (!terminalState.sessions.length) {
+        if (terminalState.terminal) {
+            terminalState.terminal.reset();
+            syncTerminalTheme();
+        }
+        showToast('Terminal 탭을 종료했습니다.', {
+            tone: 'default',
+            durationMs: 2200
+        });
+        return true;
+    }
+    const nextActiveSession = getTerminalSessionById(terminalState.activeSessionId) || terminalState.sessions[0];
+    if (nextActiveSession) {
+        await setActiveTerminalSession(nextActiveSession.id, {
+            attach: true,
+            forceReset: terminalState.mountedSessionId !== nextActiveSession.id
+        });
+    }
+    showToast('Terminal 탭을 종료했습니다.', {
+        tone: 'default',
+        durationMs: 2200
+    });
     return true;
 }
 
@@ -7347,6 +9053,7 @@ function closeGitBranchOverlay() {
         && !isFileBrowserOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }
@@ -7906,6 +9613,7 @@ function closeGitSyncOverlay() {
         && !isFileBrowserOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }
@@ -8685,6 +10393,7 @@ function closeUsageHistoryOverlay() {
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
         && !isMobileSessionOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }
@@ -8944,6 +10653,7 @@ function closeMessageLogOverlay() {
         && !isFileBrowserOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }
@@ -8983,9 +10693,27 @@ function getFileBrowserParentPath(path) {
     return normalized.slice(0, normalized.lastIndexOf('/'));
 }
 
+function buildFileBrowserChildPath(parentPath = '', childPath = '') {
+    const normalizedParent = normalizeFileBrowserRelativePath(parentPath);
+    const normalizedChild = normalizeFileBrowserRelativePath(childPath);
+    if (!normalizedChild) return '';
+    return normalizeFileBrowserRelativePath(
+        normalizedParent ? `${normalizedParent}/${normalizedChild}` : normalizedChild
+    );
+}
+
 function getFileBrowserRootLabel(root) {
     const normalizedRoot = normalizeFileBrowserRoot(root);
     return FILE_BROWSER_ROOT_LABELS[normalizedRoot] || normalizedRoot;
+}
+
+function formatFileBrowserDisplayPath(root, relativePath = '') {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
+    const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
+        ? '$workspace'
+        : getFileBrowserRootLabel(normalizedRoot);
+    return normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
 }
 
 function getFileBrowserAbsoluteRoots() {
@@ -9081,8 +10809,7 @@ function updateFileBrowserRootButtons() {
 function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '') {
     if (!pathElement) return;
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const displayPrefix = '$workspace';
-    const display = normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
+    const display = formatFileBrowserDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath);
     pathElement.textContent = display;
 
     const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
@@ -9666,6 +11393,9 @@ function syncFilePanelSelectionBar(variant) {
     const config = getFilePanelVariantConfig(variant);
     const elements = config.getElements();
     if (!elements) return;
+    const root = getFilePanelCurrentRoot(variant);
+    const currentPath = getFilePanelCurrentPath(variant);
+    const currentDisplayPath = formatFileBrowserDisplayPath(root, currentPath);
     const selectedPaths = getFilePanelSelectedPaths(variant);
     const selectedCount = selectedPaths.size;
     const visibleFileCount = getFilePanelVisibleFilePaths(variant).length;
@@ -9687,6 +11417,24 @@ function syncFilePanelSelectionBar(variant) {
         elements.selectionSummary.textContent = parts.join(' · ');
     }
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(variant);
+    if (elements.newFileBtn) {
+        updateFilePanelActionButtonLabel(
+            elements.newFileBtn,
+            `현재 폴더에 새 파일 만들기 (${currentDisplayPath})`
+        );
+        elements.newFileBtn.disabled = isBusy;
+        syncHoverTooltipFromLabel(elements.newFileBtn);
+    }
+    if (elements.deleteDirectoryBtn) {
+        updateFilePanelActionButtonLabel(
+            elements.deleteDirectoryBtn,
+            currentPath
+                ? `현재 폴더 삭제 (${currentDisplayPath})`
+                : '루트 폴더는 삭제할 수 없습니다.'
+        );
+        elements.deleteDirectoryBtn.disabled = isBusy || !currentPath;
+        syncHoverTooltipFromLabel(elements.deleteDirectoryBtn);
+    }
     if (elements.addContextBtn) {
         elements.addContextBtn.disabled = isBusy || selectedCount <= 0;
     }
@@ -10561,6 +12309,19 @@ async function writeFilePanelFile(root, path, content, expectedModifiedNs = '') 
     });
 }
 
+async function createFilePanelFile(root, path, content = '') {
+    return fetchJson('/api/codex/files/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path),
+            content: typeof content === 'string' ? content : ''
+        })
+    });
+}
+
 async function fetchFilePanelDownload(root, paths) {
     return fetchBlob('/api/codex/files/download', {
         method: 'POST',
@@ -10581,6 +12342,18 @@ async function deleteFilePanelFiles(root, paths) {
         body: JSON.stringify({
             root: normalizeFileBrowserRoot(root),
             paths: Array.from(createNormalizedRelativePathSet(paths))
+        })
+    });
+}
+
+async function deleteFilePanelDirectory(root, path) {
+    return fetchJson('/api/codex/files/delete-directory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path)
         })
     });
 }
@@ -10714,6 +12487,110 @@ async function buildFilePanelChatContextText(root, selectedPaths) {
         `선택한 파일 컨텍스트입니다. 루트: ${getFileBrowserRootLabel(root)}`,
         ...sections
     ].join('\n\n');
+}
+
+async function createFileInFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const root = getFilePanelCurrentRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    const initialName = 'untitled.txt';
+    const requestedName = window.prompt(
+        '현재 폴더 기준 새 파일 경로를 입력하세요.',
+        initialName
+    );
+    if (requestedName === null) return false;
+
+    const targetPath = buildFileBrowserChildPath(currentPath, requestedName);
+    if (!targetPath) {
+        showToast('새 파일 경로를 입력하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        await createFilePanelFile(root, targetPath, '');
+        clearFilePanelSelection(normalizedVariant);
+        setFilePanelPreviewPath(normalizedVariant, '');
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        await openFileInPanelVariant(normalizedVariant, targetPath, { root });
+        showToast(`새 파일을 만들었습니다: ${targetPath}`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '새 파일 생성에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+async function deleteCurrentDirectoryFromFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const root = getFilePanelCurrentRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    if (!currentPath) {
+        showToast('루트 폴더는 삭제할 수 없습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const displayPath = formatFileBrowserDisplayPath(root, currentPath);
+    const confirmed = window.confirm(
+        `현재 폴더를 삭제할까요?\n하위 파일과 폴더도 함께 삭제됩니다.\n\n${displayPath}`
+    );
+    if (!confirmed) return false;
+
+    const parentPath = getFileBrowserParentPath(currentPath);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        await deleteFilePanelDirectory(root, currentPath);
+        clearFilePanelSelection(normalizedVariant);
+        setFilePanelPreviewPath(normalizedVariant, '');
+        clearFilePanelViewerForVariant(normalizedVariant, '삭제한 폴더입니다. 상위 폴더를 확인하세요.');
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: parentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        showToast(`폴더를 삭제했습니다: ${displayPath}`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '폴더 삭제에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
 }
 
 async function addSelectedFilesToChatContext(variant) {
@@ -11845,6 +13722,7 @@ function closeFileBrowserOverlay() {
         && !isMessageLogOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }
@@ -12966,6 +14844,7 @@ function closeMobileSessionOverlay() {
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
         && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
     ) {
         document.body.classList.remove('is-overlay-open');
     }

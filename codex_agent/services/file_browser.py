@@ -770,6 +770,70 @@ def write_file(root_key=None, relative_path='', content='', expected_modified_ns
     return saved_state
 
 
+def create_file(root_key=None, relative_path='', content=''):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '파일 경로를 입력해주세요.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+    if not isinstance(content, str):
+        raise FileBrowserError(
+            '저장할 파일 내용이 올바르지 않습니다.',
+            error_code='invalid_content',
+            status_code=400,
+        )
+
+    encoded = content.encode('utf-8')
+    if len(encoded) > _MAX_FILE_EDIT_BYTES:
+        raise FileBrowserError(
+            '파일 생성 크기 제한(512KB)을 초과했습니다.',
+            error_code='file_too_large',
+            status_code=413,
+        )
+
+    target_path = _resolve_target_path(root_path, normalized_path)
+    if target_path.exists():
+        raise FileBrowserError(
+            f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {normalized_path}',
+            error_code='path_conflict',
+            status_code=409,
+        )
+    parent_path = target_path.parent
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise FileBrowserError(
+            '대상 폴더를 찾을 수 없습니다.',
+            error_code='path_not_found',
+            status_code=404,
+        )
+
+    try:
+        with target_path.open('xb') as file_handle:
+            if encoded:
+                file_handle.write(encoded)
+    except FileExistsError as exc:
+        raise FileBrowserError(
+            f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {normalized_path}',
+            error_code='path_conflict',
+            status_code=409,
+        ) from exc
+    except OSError as exc:
+        raise FileBrowserError(
+            f'파일을 만들지 못했습니다: {exc}',
+            error_code='write_error',
+            status_code=500,
+        ) from exc
+
+    created_state = read_file(
+        root_key=normalized_root,
+        relative_path=normalized_path,
+    )
+    created_state['created'] = True
+    return created_state
+
+
 def read_file_raw(root_key=None, relative_path=''):
     normalized_root, root_path = _normalize_root_key(root_key)
     normalized_path = _normalize_relative_path(relative_path)
@@ -933,6 +997,59 @@ def delete_files(root_key=None, relative_paths=None):
         'root_path': str(root_path),
         'deleted_paths': [item['relative_path'] for item in targets],
         'count': len(targets),
+    }
+
+
+def delete_directory(root_key=None, relative_path=''):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '루트 폴더는 삭제할 수 없습니다.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+
+    target_path = _resolve_target_path(root_path, normalized_path)
+    if not target_path.exists():
+        raise FileBrowserError(
+            '대상 폴더를 찾을 수 없습니다.',
+            error_code='path_not_found',
+            status_code=404,
+        )
+    if not target_path.is_dir():
+        raise FileBrowserError(
+            '폴더만 삭제할 수 있습니다.',
+            error_code='not_directory',
+            status_code=400,
+        )
+
+    quarantine_directory = Path(tempfile.mkdtemp(prefix=_DELETE_QUARANTINE_PREFIX, dir=root_path))
+    quarantine_target = quarantine_directory / target_path.name
+
+    try:
+        shutil.move(str(target_path), str(quarantine_target))
+        shutil.rmtree(quarantine_directory)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            if quarantine_target.exists() and not target_path.exists():
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(quarantine_target), str(target_path))
+        except Exception:
+            pass
+        if quarantine_directory.exists():
+            shutil.rmtree(quarantine_directory, ignore_errors=True)
+        raise FileBrowserError(
+            f'폴더를 삭제하지 못했습니다: {exc}',
+            error_code='delete_error',
+            status_code=500,
+        ) from exc
+
+    return {
+        'root': normalized_root,
+        'root_path': str(root_path),
+        'deleted_path': normalized_path,
+        'count': 1,
     }
 
 

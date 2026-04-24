@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=124">
+    <link rel="stylesheet" href="/static/css/app.css?v=134">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -14,6 +14,26 @@
             <div class="file-browser-meta" id="{{ id_prefix }}-meta">디렉터리 목록을 불러오는 중...</div>
             <div class="file-panel-selection-bar" id="{{ id_prefix }}-selection-bar">
                 <div class="file-panel-selection-summary" id="{{ id_prefix }}-selection-summary">선택 0개</div>
+                <div class="file-panel-directory-actions">
+                    <button
+                        class="btn ghost icon-only file-panel-directory-btn file-panel-directory-btn-new"
+                        type="button"
+                        id="{{ id_prefix }}-new-file"
+                        aria-label="현재 폴더에 새 파일 만들기"
+                        title="현재 폴더에 새 파일 만들기"
+                    >
+                        <span class="sr-only">새 파일 만들기</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-panel-directory-btn file-panel-directory-btn-delete file-panel-selection-btn-danger"
+                        type="button"
+                        id="{{ id_prefix }}-delete-directory"
+                        aria-label="현재 폴더 삭제"
+                        title="현재 폴더 삭제"
+                    >
+                        <span class="sr-only">현재 폴더 삭제</span>
+                    </button>
+                </div>
                 <div class="file-panel-selection-actions">
                     <button
                         class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-add-context"
@@ -477,7 +497,7 @@
 
             <section class="work-mode-preview" id="codex-work-mode-preview" aria-hidden="true">
                 <div class="work-mode-preview-header">
-                    <div class="work-mode-preview-title">Docs Preview</div>
+                    <div class="work-mode-preview-title">File Preview</div>
                     <div class="work-mode-preview-actions">
                         <div class="work-mode-preview-tools">
                             <button
@@ -497,6 +517,15 @@
                                 title="상위 폴더로 이동"
                             >
                                 <span class="sr-only">상위 폴더로 이동</span>
+                            </button>
+                            <button
+                                class="btn ghost icon-only work-mode-preview-terminal"
+                                type="button"
+                                id="codex-work-mode-terminal-open"
+                                aria-label="현재 폴더 Terminal 오버레이 열기"
+                                title="현재 폴더 Terminal 오버레이 열기"
+                            >
+                                <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
                             </button>
                             <button
                                 class="btn ghost icon-only work-mode-preview-open-new"
@@ -756,6 +785,15 @@
                         </button>
                         <button class="btn ghost file-browser-fullscreen" type="button" id="codex-file-browser-fullscreen" aria-pressed="false">내용 전체화면</button>
                         <button
+                            class="btn ghost icon-only file-browser-terminal-open"
+                            type="button"
+                            id="codex-file-browser-terminal-open"
+                            aria-label="현재 폴더 Terminal 오버레이 열기"
+                            title="현재 폴더 Terminal 오버레이 열기"
+                        >
+                            <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
+                        </button>
+                        <button
                             class="btn ghost icon-only file-browser-up"
                             type="button"
                             id="codex-file-browser-up"
@@ -778,6 +816,58 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=123"></script>
+    <div class="terminal-overlay" id="codex-terminal-overlay" aria-hidden="true">
+        <div class="terminal-overlay-backdrop" data-action="close"></div>
+        <div class="terminal-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-terminal-overlay-title">
+            <div class="terminal-overlay-header">
+                <div class="terminal-overlay-heading">
+                    <div class="terminal-overlay-title" id="codex-terminal-overlay-title">Terminal</div>
+                    <div class="terminal-overlay-subtitle" id="codex-terminal-overlay-subtitle">현재 폴더 기준 CLI 세션</div>
+                </div>
+                <div class="terminal-overlay-header-actions">
+                    <button
+                        class="btn ghost icon-only terminal-overlay-new-tab"
+                        type="button"
+                        id="codex-terminal-overlay-new-tab"
+                        aria-label="현재 폴더 기준 새 Terminal 탭 생성"
+                        title="현재 폴더 기준 새 Terminal 탭 생성"
+                    >
+                        <span class="sr-only">현재 폴더 기준 새 Terminal 탭 생성</span>
+                    </button>
+                    <button class="btn ghost icon-only terminal-overlay-close" type="button" id="codex-terminal-overlay-close" aria-label="닫기">
+                        <span class="sr-only">닫기</span>
+                    </button>
+                </div>
+            </div>
+            <div class="terminal-overlay-body">
+                <div class="terminal-overlay-tabs-wrap">
+                    <div class="terminal-overlay-tabs" id="codex-terminal-overlay-tabs" role="tablist" aria-label="Terminal tabs"></div>
+                </div>
+                <div class="terminal-overlay-session-bar">
+                    <div class="terminal-overlay-path" id="codex-terminal-overlay-path">$workspace</div>
+                    <div class="terminal-overlay-status" id="codex-terminal-overlay-status">Terminal 세션을 불러오는 중...</div>
+                    <div class="terminal-overlay-session-actions">
+                        <button
+                            class="btn ghost icon-only terminal-overlay-close-tab"
+                            type="button"
+                            id="codex-terminal-overlay-close-tab"
+                            aria-label="현재 Terminal 종료"
+                            title="현재 Terminal 종료"
+                        >
+                            <span class="sr-only">현재 Terminal 종료</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="terminal-overlay-empty is-hidden" id="codex-terminal-overlay-empty">열린 Terminal 탭이 없습니다. + 버튼으로 현재 폴더 세션을 생성하세요.</div>
+                <div class="terminal-overlay-terminal-shell" id="codex-terminal-overlay-shell"></div>
+            </div>
+            <div class="terminal-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-terminal-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+        <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
+    </div>
+
+    <script src="/static/js/app.js?v=134"></script>
 </body>
 </html>

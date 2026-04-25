@@ -152,6 +152,39 @@ _PLAN_MODE_PROMPT_SUFFIX = (
     "- Provide analysis and an implementation plan only.\n"
     "- If changes are needed, describe proposed patches without applying them."
 )
+_IMAGEGEN_WORKBENCH_OVERLAY = (
+    "Apply these extra rules only when the current task uses $imagegen, "
+    "image_gen, or asks Codex to generate/edit raster images:\n"
+    "- Use the installed imagegen skill normally; keep built-in image_gen as the default path. "
+    "Do not switch to CLI/API mode unless the skill rules allow it.\n"
+    "- For iterative, branching, multi-asset, or project-bound image work, treat outputs as "
+    "lineage nodes: prompt, input image roles, parent asset, output path, and selected variant.\n"
+    "- Distinguish regenerate-in-place from new-variant work. Do not overwrite accepted "
+    "project assets unless the user explicitly asked for replacement.\n"
+    "- For consistent asset sets, create a compact reusable style sheet with Medium, Palette, "
+    "Composition, Mood, Subject details, and Avoid fields, then keep it subordinate to the "
+    "user's explicit prompt.\n"
+    "- Keep reference images scoped to the current request. Label edit target, style reference, "
+    "composition reference, and compositing source roles; for child edits, use the immediate "
+    "parent image unless the user explicitly asks for full ancestry.\n"
+    "- Persist accepted project assets into the workspace. When future edits or recovery would "
+    "benefit, add a small .imagegen.json sidecar with prompt, style sheet, input roles, "
+    "parent/output paths, and post-processing notes; never store base64 image payloads in sidecars.\n"
+    "- For failures, retry once for likely transient or empty results, then adjust the prompt "
+    "deliberately or ask before switching modes."
+)
+_IMAGEGEN_WORKBENCH_TRIGGER_RE = re.compile(
+    r'('
+    r'\$imagegen|\bimage[_ -]?gen\b|\bgenerated_images\b|'
+    r'\bimage generation\b|\bgenerate (?:an? )?image\b|\bedit (?:an? )?image\b|'
+    r'\bdraw\b|\billustration\b|\btransparent background\b|'
+    r'그림\s*(?:그려|그리|만들|생성)|'
+    r'이미지(?:를|을)?\s*(?:생성|만들|그려|편집|수정)|'
+    r'(?:생성|그려|만들).*이미지|일러스트|투명\s*배경|배경\s*제거|'
+    r'캐릭터\s*(?:그려|생성|만들|디자인)|썸네일\s*(?:만들|생성|그려|디자인)'
+    r')',
+    re.IGNORECASE,
+)
 _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
     re.IGNORECASE
@@ -3291,6 +3324,14 @@ def _build_memory_lines(messages, max_chars):
     return trimmed
 
 
+def _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
+    haystack_parts = [prompt_text or '']
+    if recent_blocks:
+        haystack_parts.extend(recent_blocks[-3:])
+    haystack = '\n'.join(haystack_parts)
+    return bool(_IMAGEGEN_WORKBENCH_TRIGGER_RE.search(haystack))
+
+
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     sections = [
         (
@@ -3313,6 +3354,8 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
             '</message>'
         ])
     )
+    if _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
+        sections.append(f'## Image Generation Workbench Overlay\n{_IMAGEGEN_WORKBENCH_OVERLAY}')
     sections.append(
         '\n'.join([
             '## Response Rules',

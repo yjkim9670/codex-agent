@@ -239,7 +239,36 @@ const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
-const USAGE_HISTORY_DEFAULT_HOURS = 24 * 14;
+const USAGE_HISTORY_DEFAULT_HOURS = 24;
+const USAGE_HISTORY_MAX_HOURS = 24 * 14;
+const USAGE_HISTORY_RANGE_HOURS = Object.freeze([24, 72, 336]);
+const USAGE_HISTORY_WEEKLY_HOURS = 24 * 7;
+const OPENAI_API_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
+// Standard API prices per 1M text tokens from OpenAI's pricing docs.
+const OPENAI_API_TOKEN_PRICES_PER_MILLION = Object.freeze({
+    'gpt-5.5': { input: 5, cachedInput: 0.5, output: 30, context: 'standard short context' },
+    'gpt-5.5-pro': { input: 30, cachedInput: null, output: 180, context: 'standard short context' },
+    'gpt-5.4': { input: 2.5, cachedInput: 0.25, output: 15, context: 'standard short context' },
+    'gpt-5.4-mini': { input: 0.75, cachedInput: 0.075, output: 4.5, context: 'standard short context' },
+    'gpt-5.4-nano': { input: 0.2, cachedInput: 0.02, output: 1.25, context: 'standard short context' },
+    'gpt-5.4-pro': { input: 30, cachedInput: null, output: 180, context: 'standard short context' },
+    'gpt-5.3-codex': { input: 1.75, cachedInput: 0.175, output: 14, context: 'standard' },
+    'gpt-5.3-chat-latest': { input: 1.75, cachedInput: 0.175, output: 14, context: 'standard' },
+    'gpt-5.2': { input: 1.75, cachedInput: 0.175, output: 14, context: 'standard' },
+    'gpt-5.2-codex': { input: 1.75, cachedInput: 0.175, output: 14, context: 'standard' },
+    'gpt-5.2-chat-latest': { input: 1.75, cachedInput: 0.175, output: 14, context: 'standard' },
+    'gpt-5.1': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5.1-codex': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5.1-codex-max': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5.1-codex-mini': { input: 0.25, cachedInput: 0.025, output: 2, context: 'standard' },
+    'gpt-5.1-chat-latest': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5-codex': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5-chat-latest': { input: 1.25, cachedInput: 0.125, output: 10, context: 'standard' },
+    'gpt-5-mini': { input: 0.25, cachedInput: 0.025, output: 2, context: 'standard' },
+    'gpt-5-nano': { input: 0.05, cachedInput: 0.005, output: 0.4, context: 'standard' },
+    'codex-mini-latest': { input: 1.5, cachedInput: 0.375, output: 6, context: 'standard' }
+});
 const SESSION_PENDING_STALE_MS = 120000;
 const REFRESH_BUTTON_STALE_MS = 30000;
 const HEADER_RESTART_POLICY_REQUEST_TIMEOUT_MS = 3500;
@@ -1928,6 +1957,14 @@ document.addEventListener('DOMContentLoaded', () => {
             void openUsageHistoryOverlay();
         });
     }
+    document.querySelectorAll('#codex-usage-history-range-tabs [data-hours]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            const hours = normalizeUsageHistoryRangeHours(button.dataset?.hours);
+            if (hours === usageHistoryLastRequestedHours) return;
+            void refreshUsageHistory({ hours, silent: false });
+        });
+    });
     if (usageRefreshBtn) {
         usageRefreshBtn.addEventListener('click', async () => {
             usageRefreshBtn.classList.add('is-spinning');
@@ -9772,6 +9809,11 @@ function getUsageHistoryOverlayElements() {
         overlay,
         subtitle: document.getElementById('codex-usage-history-overlay-subtitle'),
         meta: document.getElementById('codex-usage-history-overlay-meta'),
+        rangeTabs: document.getElementById('codex-usage-history-range-tabs'),
+        rangeButtons: Array.from(document.querySelectorAll('#codex-usage-history-range-tabs [data-hours]')),
+        costSummary: document.getElementById('codex-usage-history-cost-summary'),
+        summaryDetails: document.getElementById('codex-usage-history-summary-details'),
+        summaryToggleMeta: document.getElementById('codex-usage-history-summary-toggle-meta'),
         scale: document.getElementById('codex-usage-history-scale'),
         ratios: document.getElementById('codex-usage-history-ratios'),
         chartWrap: document.getElementById('codex-usage-history-chart-wrap'),
@@ -9871,6 +9913,229 @@ function formatUsageHistoryRatePercent(value, unit = '') {
     return `${text}%${unit}`;
 }
 
+function formatUsageHistoryUsd(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '--';
+    if (numeric > 0 && numeric < 0.01) {
+        return `$${numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
+    }
+    if (numeric < 100) {
+        return `$${numeric.toFixed(2)}`;
+    }
+    return `$${Math.round(numeric).toLocaleString('en-US')}`;
+}
+
+function normalizeUsageHistoryRangeHours(hours) {
+    const numeric = Math.round(Number(hours));
+    if (USAGE_HISTORY_RANGE_HOURS.includes(numeric)) {
+        return numeric;
+    }
+    if (Number.isFinite(numeric) && numeric > 0) {
+        return Math.min(numeric, USAGE_HISTORY_MAX_HOURS);
+    }
+    return USAGE_HISTORY_DEFAULT_HOURS;
+}
+
+function syncUsageHistoryRangeControls(hours) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.rangeButtons) return;
+    const activeHours = normalizeUsageHistoryRangeHours(hours);
+    elements.rangeButtons.forEach(button => {
+        const buttonHours = normalizeUsageHistoryRangeHours(button.dataset?.hours);
+        const active = buttonHours === activeHours;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+function getCurrentCodexModelName() {
+    const storedModel = typeof state.settings?.model === 'string'
+        ? state.settings.model.trim()
+        : '';
+    if (storedModel) return storedModel;
+    const selectValue = document.getElementById('codex-model-select')?.value;
+    if (typeof selectValue === 'string' && selectValue.trim()) return selectValue.trim();
+    const inputValue = document.getElementById('codex-model-input')?.value;
+    return typeof inputValue === 'string' ? inputValue.trim() : '';
+}
+
+function normalizeOpenAiPricingModelName(modelName) {
+    const normalized = String(modelName || '').trim().toLowerCase();
+    if (!normalized) return '';
+    if (OPENAI_API_TOKEN_PRICES_PER_MILLION[normalized]) return normalized;
+    const snapshotMatch = normalized.match(/^(.*)-\d{4}-\d{2}-\d{2}$/);
+    if (snapshotMatch && OPENAI_API_TOKEN_PRICES_PER_MILLION[snapshotMatch[1]]) {
+        return snapshotMatch[1];
+    }
+    return normalized;
+}
+
+function resolveOpenAiApiPricing(modelName) {
+    const key = normalizeOpenAiPricingModelName(modelName);
+    const pricing = key ? OPENAI_API_TOKEN_PRICES_PER_MILLION[key] : null;
+    if (!pricing) return null;
+    return { key, ...pricing };
+}
+
+function isFiniteUsageHistoryPrice(value) {
+    return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function resolveUsageHistoryCurrentAverage(history) {
+    return history?.averages?.requested
+        || history?.relation?.averages?.requested
+        || history?.averages?.daily
+        || history?.relation?.averages?.daily
+        || history?.averages?.weekly
+        || history?.relation?.averages?.weekly
+        || null;
+}
+
+function calculateUsageHistoryApiCostEstimate(averageEntry, pricing) {
+    if (!averageEntry || !pricing) return null;
+    const windowHours = Math.max(1, Number(averageEntry?.window_hours) || USAGE_HISTORY_WEEKLY_HOURS);
+    const weeklyScale = USAGE_HISTORY_WEEKLY_HOURS / windowHours;
+    const tokenTotal = Math.max(0, Number(averageEntry?.token_total) || 0);
+    const inputTokens = Math.max(0, Number(averageEntry?.input_token_total) || 0);
+    const cachedInputTokens = Math.max(0, Number(averageEntry?.cached_input_token_total) || 0);
+    const outputTokens = Math.max(0, Number(averageEntry?.output_token_total) || 0);
+    const reasoningOutputTokens = Math.max(0, Number(averageEntry?.reasoning_output_token_total) || 0);
+    const hasBreakdown = inputTokens > 0 || cachedInputTokens > 0 || outputTokens > 0;
+    if (tokenTotal <= 0 && !hasBreakdown) return null;
+
+    if (!hasBreakdown) {
+        const rates = [pricing.input, pricing.cachedInput, pricing.output]
+            .map(Number)
+            .filter((value, index) => {
+                const original = [pricing.input, pricing.cachedInput, pricing.output][index];
+                return isFiniteUsageHistoryPrice(original) && Number.isFinite(value) && value >= 0;
+            });
+        if (rates.length === 0) return null;
+        const projectedTokens = tokenTotal * weeklyScale;
+        const low = (projectedTokens * Math.min(...rates)) / 1_000_000;
+        const high = (projectedTokens * Math.max(...rates)) / 1_000_000;
+        return {
+            weeklyCost: high,
+            weeklyCostLow: low,
+            hourlyCost: high / USAGE_HISTORY_WEEKLY_HOURS,
+            projectedTokens,
+            hasBreakdown: false,
+            reasoningOutputTokens: reasoningOutputTokens * weeklyScale
+        };
+    }
+
+    const billableInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    const cachedRate = isFiniteUsageHistoryPrice(pricing.cachedInput)
+        ? Number(pricing.cachedInput)
+        : Number(pricing.input);
+    const inputCost = (billableInputTokens * weeklyScale * Number(pricing.input)) / 1_000_000;
+    const cachedCost = (cachedInputTokens * weeklyScale * cachedRate) / 1_000_000;
+    const outputCost = (outputTokens * weeklyScale * Number(pricing.output)) / 1_000_000;
+    const weeklyCost = inputCost + cachedCost + outputCost;
+    return {
+        weeklyCost,
+        weeklyCostLow: weeklyCost,
+        hourlyCost: weeklyCost / USAGE_HISTORY_WEEKLY_HOURS,
+        projectedTokens: tokenTotal * weeklyScale,
+        projectedInputTokens: inputTokens * weeklyScale,
+        projectedCachedInputTokens: cachedInputTokens * weeklyScale,
+        projectedOutputTokens: outputTokens * weeklyScale,
+        reasoningOutputTokens: reasoningOutputTokens * weeklyScale,
+        hasBreakdown: true
+    };
+}
+
+function formatUsageHistoryCostRange(cost) {
+    if (!cost) return '--';
+    const low = Number(cost.weeklyCostLow);
+    const high = Number(cost.weeklyCost);
+    if (
+        Number.isFinite(low)
+        && Number.isFinite(high)
+        && Math.abs(high - low) > 0.005
+    ) {
+        return `${formatUsageHistoryUsd(low)}-${formatUsageHistoryUsd(high)}/wk`;
+    }
+    return `${formatUsageHistoryUsd(high)}/wk`;
+}
+
+function resolveUsageHistoryApiCostEstimate(history) {
+    const modelName = getCurrentCodexModelName();
+    const pricing = resolveOpenAiApiPricing(modelName);
+    if (!modelName) {
+        return {
+            available: false,
+            summary: 'API estimate --',
+            value: '--',
+            subvalue: '',
+            meta: '모델 정보 없음'
+        };
+    }
+    if (!pricing) {
+        return {
+            available: false,
+            summary: 'API estimate --',
+            value: '--',
+            subvalue: modelName,
+            meta: '공식 API 가격표와 매칭되지 않음'
+        };
+    }
+    const averageEntry = resolveUsageHistoryCurrentAverage(history);
+    const cost = calculateUsageHistoryApiCostEstimate(averageEntry, pricing);
+    if (!cost) {
+        return {
+            available: false,
+            summary: 'API estimate --',
+            value: '--',
+            subvalue: pricing.key,
+            meta: '계산할 토큰 delta 부족'
+        };
+    }
+    const value = formatUsageHistoryCostRange(cost);
+    const hourly = Number.isFinite(Number(cost.hourlyCost))
+        ? `${formatUsageHistoryUsd(cost.hourlyCost)}/h`
+        : '';
+    const projectedTokens = Number(cost.projectedTokens);
+    const metaParts = [
+        `${pricing.key}`,
+        `input $${pricing.input}/M`,
+        isFiniteUsageHistoryPrice(pricing.cachedInput) ? `cached $${pricing.cachedInput}/M` : 'cached n/a',
+        `output $${pricing.output}/M`
+    ];
+    if (pricing.context) {
+        metaParts.push(pricing.context);
+    }
+    if (!cost.hasBreakdown) {
+        metaParts.push('token mix unknown');
+    }
+    return {
+        available: true,
+        summary: `API est ${value}`,
+        value,
+        subvalue: hourly ? `${hourly} at current pace` : '',
+        meta: metaParts.join(' · '),
+        title: `${modelName}\n${OPENAI_API_PRICING_SOURCE_URL}`,
+        projectedTokens: Number.isFinite(projectedTokens)
+            ? Math.max(0, Math.round(projectedTokens))
+            : null,
+        cost
+    };
+}
+
+function renderUsageHistoryCostSummary(history) {
+    const elements = getUsageHistoryOverlayElements();
+    const estimate = resolveUsageHistoryApiCostEstimate(history);
+    if (elements?.costSummary) {
+        elements.costSummary.textContent = estimate.summary || 'API estimate --';
+        if (estimate.title || estimate.meta) {
+            elements.costSummary.setAttribute('title', [estimate.meta, estimate.title].filter(Boolean).join('\n'));
+        } else {
+            elements.costSummary.removeAttribute('title');
+        }
+    }
+    return estimate;
+}
+
 function resolveUsageHistoryAverageWeeklyPace(history, averageEntry) {
     const avgTokensPerHour = Number(averageEntry?.avg_tokens_per_hour);
     if (!Number.isFinite(avgTokensPerHour) || avgTokensPerHour < 0) {
@@ -9944,13 +10209,29 @@ function appendUsageHistoryMetricCard(container, {
     container.appendChild(wrapper);
 }
 
-function renderUsageHistoryRatioCards(history) {
+function renderUsageHistoryRatioCards(history, costEstimate = null) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.ratios) return;
     elements.ratios.innerHTML = '';
 
     const relationScope = resolveUsageHistoryRelationScope(history);
     const relation = history?.relation || {};
+    if (costEstimate) {
+        const projectedTokens = Number(costEstimate.projectedTokens);
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: 'API cost @ weekly pace',
+            value: costEstimate.value || '--',
+            subvalue: costEstimate.subvalue || '',
+            meta: [
+                costEstimate.meta,
+                Number.isFinite(projectedTokens)
+                    ? `projected ${formatCompactTokenCount(projectedTokens)} tok/wk`
+                    : ''
+            ].filter(Boolean).join(' · '),
+            lowConfidence: !costEstimate.available || Boolean(costEstimate.cost && !costEstimate.cost.hasBreakdown)
+        });
+    }
+
     const ratioItems = [
         { key: 'five_hour', label: '5h 1% token', entry: relation?.five_hour },
         { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
@@ -9986,6 +10267,10 @@ function renderUsageHistoryRatioCards(history) {
     });
 
     const averageItems = [
+        {
+            label: 'Range avg/hour',
+            entry: history?.averages?.requested || history?.relation?.averages?.requested || null
+        },
         {
             label: '24h avg/hour',
             entry: history?.averages?.daily || history?.relation?.averages?.daily || null
@@ -10030,18 +10315,33 @@ function renderUsageHistoryRatioCards(history) {
 
 function renderUsageHistoryScaleBadge(chartMetrics) {
     const elements = getUsageHistoryOverlayElements();
-    if (!elements?.scale) return;
+    if (!elements?.scale) return 'Scale --';
     if (!chartMetrics || !chartMetrics.rendered) {
         elements.scale.textContent = 'Scale --';
-        return;
+        return 'Scale --';
     }
     const maxPercent = Number(chartMetrics.percentScale);
     if (!Number.isFinite(maxPercent) || maxPercent <= 0) {
         elements.scale.textContent = 'Scale --';
-        return;
+        return 'Scale --';
     }
     const mode = maxPercent < 100 ? 'Auto' : 'Full';
-    elements.scale.textContent = `${mode} scale 0-${Math.round(maxPercent)}%`;
+    const text = `${mode} scale 0-${Math.round(maxPercent)}%`;
+    elements.scale.textContent = text;
+    return text;
+}
+
+function renderUsageHistorySummaryToggleMeta(scaleText, costEstimate) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.summaryToggleMeta) return;
+    const parts = [];
+    if (scaleText) {
+        parts.push(scaleText);
+    }
+    if (costEstimate?.summary) {
+        parts.push(costEstimate.summary);
+    }
+    elements.summaryToggleMeta.textContent = parts.join(' · ') || 'Scale -- · API estimate --';
 }
 
 function renderUsageHistoryLegend(history) {
@@ -10375,8 +10675,9 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
     if (!elements) return;
 
     usageHistoryLastRequestedHours = Number.isFinite(Number(requestedHours)) && Number(requestedHours) > 0
-        ? Math.round(Number(requestedHours))
+        ? normalizeUsageHistoryRangeHours(requestedHours)
         : USAGE_HISTORY_DEFAULT_HOURS;
+    syncUsageHistoryRangeControls(usageHistoryLastRequestedHours);
     const itemCount = Number(history?.count);
     const updatedAt = formatResetTimestamp(history?.updated_at);
     const hoursText = usageHistoryLastRequestedHours;
@@ -10423,8 +10724,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
 
     const chartMetrics = renderUsageHistoryChart(history);
     const hasChart = Boolean(chartMetrics?.rendered);
-    renderUsageHistoryScaleBadge(chartMetrics);
-    renderUsageHistoryRatioCards(history);
+    const scaleText = renderUsageHistoryScaleBadge(chartMetrics);
+    const costEstimate = renderUsageHistoryCostSummary(history);
+    renderUsageHistoryRatioCards(history, costEstimate);
+    renderUsageHistorySummaryToggleMeta(scaleText, costEstimate);
     if (elements.empty) {
         elements.empty.classList.toggle('is-hidden', hasChart);
     }
@@ -10436,9 +10739,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
 
 async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent = true } = {}) {
     const normalizedHours = Number.isFinite(Number(hours)) && Number(hours) > 0
-        ? Math.round(Number(hours))
+        ? normalizeUsageHistoryRangeHours(hours)
         : USAGE_HISTORY_DEFAULT_HOURS;
     usageHistoryLastRequestedHours = normalizedHours;
+    syncUsageHistoryRangeControls(normalizedHours);
     const query = new URLSearchParams({ hours: String(normalizedHours) }).toString();
     try {
         const result = await fetchJson(`/api/codex/usage/history?${query}`, {
@@ -10470,6 +10774,13 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         resetUsageHistoryChartPresentation(elements?.chartWrap, elements?.chart);
         if (elements?.scale) {
             elements.scale.textContent = 'Scale --';
+        }
+        if (elements?.costSummary) {
+            elements.costSummary.textContent = 'API estimate --';
+            elements.costSummary.removeAttribute('title');
+        }
+        if (elements?.summaryToggleMeta) {
+            elements.summaryToggleMeta.textContent = 'Scale -- · API estimate --';
         }
         if (elements?.ratios) {
             elements.ratios.innerHTML = '';
@@ -10511,6 +10822,13 @@ async function openUsageHistoryOverlay() {
     if (elements.scale) {
         elements.scale.textContent = 'Scale --';
     }
+    if (elements.costSummary) {
+        elements.costSummary.textContent = 'API estimate --';
+        elements.costSummary.removeAttribute('title');
+    }
+    if (elements.summaryToggleMeta) {
+        elements.summaryToggleMeta.textContent = 'Scale -- · API estimate --';
+    }
     if (elements.ratios) {
         elements.ratios.innerHTML = '';
     }
@@ -10524,7 +10842,8 @@ async function openUsageHistoryOverlay() {
     if (elements.empty) {
         elements.empty.classList.add('is-hidden');
     }
-    await refreshUsageHistory({ hours: USAGE_HISTORY_DEFAULT_HOURS, silent: true });
+    syncUsageHistoryRangeControls(usageHistoryLastRequestedHours);
+    await refreshUsageHistory({ hours: usageHistoryLastRequestedHours, silent: true });
 }
 
 function closeUsageHistoryOverlay() {

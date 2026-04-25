@@ -2361,6 +2361,28 @@ def _build_usage_history_items(items):
             ):
                 reset_detected = True
 
+        def token_delta(current_key, previous_key=None):
+            previous_key = previous_key or current_key
+            current_value = _coerce_non_negative_int(snapshot.get(current_key)) or 0
+            if not previous:
+                return 0
+            previous_value = _coerce_non_negative_int(previous.get(previous_key)) or 0
+            delta_value = current_value - previous_value
+            if delta_value < 0:
+                return current_value
+            return delta_value
+
+        delta_workspace_input = token_delta('token_workspace_input')
+        delta_workspace_cached_input = token_delta('token_workspace_cached_input')
+        delta_workspace_output = token_delta('token_workspace_output')
+        delta_workspace_reasoning_output = token_delta('token_workspace_reasoning_output')
+        delta_workspace_requests = token_delta('token_workspace_requests')
+        delta_account_input = token_delta('token_account_input')
+        delta_account_cached_input = token_delta('token_account_cached_input')
+        delta_account_output = token_delta('token_account_output')
+        delta_account_reasoning_output = token_delta('token_account_reasoning_output')
+        delta_account_requests = token_delta('token_account_requests')
+
         workspace_tokens_per_five_hour_percent = None
         workspace_tokens_per_weekly_percent = None
         account_tokens_per_five_hour_percent = None
@@ -2409,7 +2431,17 @@ def _build_usage_history_items(items):
             'token_account_total': account_token_total,
             'delta_tokens': max(0, int(delta_workspace_tokens)),
             'delta_workspace_tokens': max(0, int(delta_workspace_tokens)),
+            'delta_workspace_input_tokens': max(0, int(delta_workspace_input)),
+            'delta_workspace_cached_input_tokens': max(0, int(delta_workspace_cached_input)),
+            'delta_workspace_output_tokens': max(0, int(delta_workspace_output)),
+            'delta_workspace_reasoning_output_tokens': max(0, int(delta_workspace_reasoning_output)),
+            'delta_workspace_requests': max(0, int(delta_workspace_requests)),
             'delta_account_tokens': max(0, int(delta_account_tokens)),
+            'delta_account_input_tokens': max(0, int(delta_account_input)),
+            'delta_account_cached_input_tokens': max(0, int(delta_account_cached_input)),
+            'delta_account_output_tokens': max(0, int(delta_account_output)),
+            'delta_account_reasoning_output_tokens': max(0, int(delta_account_reasoning_output)),
+            'delta_account_requests': max(0, int(delta_account_requests)),
             'delta_five_hour_used_percent': delta_five_hour_used,
             'delta_weekly_used_percent': delta_weekly_used,
             'reset_detected': reset_detected,
@@ -2493,7 +2525,17 @@ def _summarize_usage_history_hourly_average(history_items, window_hours, delta_k
         return {
             'window_hours': normalized_window_hours,
             'token_total': 0,
+            'input_token_total': 0,
+            'cached_input_token_total': 0,
+            'output_token_total': 0,
+            'reasoning_output_token_total': 0,
+            'request_total': 0,
             'avg_tokens_per_hour': None,
+            'avg_input_tokens_per_hour': None,
+            'avg_cached_input_tokens_per_hour': None,
+            'avg_output_tokens_per_hour': None,
+            'avg_reasoning_output_tokens_per_hour': None,
+            'avg_requests_per_hour': None,
             'sample_count': 0,
             'expected_samples': normalized_window_hours,
             'covered_hours': 0,
@@ -2512,14 +2554,49 @@ def _summarize_usage_history_hourly_average(history_items, window_hours, delta_k
         (_coerce_non_negative_int(item.get(delta_key)) or 0)
         for item in window_items
     )
+    input_token_total = sum(
+        (_coerce_non_negative_int(item.get('delta_input_tokens')) or 0)
+        for item in window_items
+    )
+    cached_input_token_total = sum(
+        (_coerce_non_negative_int(item.get('delta_cached_input_tokens')) or 0)
+        for item in window_items
+    )
+    output_token_total = sum(
+        (_coerce_non_negative_int(item.get('delta_output_tokens')) or 0)
+        for item in window_items
+    )
+    reasoning_output_token_total = sum(
+        (_coerce_non_negative_int(item.get('delta_reasoning_output_tokens')) or 0)
+        for item in window_items
+    )
+    request_total = sum(
+        (_coerce_non_negative_int(item.get('delta_requests')) or 0)
+        for item in window_items
+    )
     sample_count = len(window_items)
     covered_hours = min(normalized_window_hours, sample_count)
     avg_tokens_per_hour = round(token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    avg_input_tokens_per_hour = round(input_token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    avg_cached_input_tokens_per_hour = round(cached_input_token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    avg_output_tokens_per_hour = round(output_token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    avg_reasoning_output_tokens_per_hour = round(reasoning_output_token_total / normalized_window_hours, 4) if sample_count > 0 else None
+    avg_requests_per_hour = round(request_total / normalized_window_hours, 4) if sample_count > 0 else None
     coverage_ratio = round(covered_hours / normalized_window_hours, 4) if normalized_window_hours > 0 else 0.0
     return {
         'window_hours': normalized_window_hours,
         'token_total': token_total,
+        'input_token_total': input_token_total,
+        'cached_input_token_total': cached_input_token_total,
+        'output_token_total': output_token_total,
+        'reasoning_output_token_total': reasoning_output_token_total,
+        'request_total': request_total,
         'avg_tokens_per_hour': avg_tokens_per_hour,
+        'avg_input_tokens_per_hour': avg_input_tokens_per_hour,
+        'avg_cached_input_tokens_per_hour': avg_cached_input_tokens_per_hour,
+        'avg_output_tokens_per_hour': avg_output_tokens_per_hour,
+        'avg_reasoning_output_tokens_per_hour': avg_reasoning_output_tokens_per_hour,
+        'avg_requests_per_hour': avg_requests_per_hour,
         'sample_count': sample_count,
         'expected_samples': normalized_window_hours,
         'covered_hours': covered_hours,
@@ -2565,6 +2642,11 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             {
                 **item,
                 'delta_tokens': _coerce_non_negative_int(item.get('delta_account_tokens')) or 0,
+                'delta_input_tokens': _coerce_non_negative_int(item.get('delta_account_input_tokens')) or 0,
+                'delta_cached_input_tokens': _coerce_non_negative_int(item.get('delta_account_cached_input_tokens')) or 0,
+                'delta_output_tokens': _coerce_non_negative_int(item.get('delta_account_output_tokens')) or 0,
+                'delta_reasoning_output_tokens': _coerce_non_negative_int(item.get('delta_account_reasoning_output_tokens')) or 0,
+                'delta_requests': _coerce_non_negative_int(item.get('delta_account_requests')) or 0,
                 'tokens_per_five_hour_percent': item.get('tokens_per_five_hour_percent_account'),
                 'tokens_per_weekly_percent': item.get('tokens_per_weekly_percent_account'),
             }
@@ -2575,6 +2657,11 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             {
                 **item,
                 'delta_tokens': _coerce_non_negative_int(item.get('delta_workspace_tokens')) or 0,
+                'delta_input_tokens': _coerce_non_negative_int(item.get('delta_workspace_input_tokens')) or 0,
+                'delta_cached_input_tokens': _coerce_non_negative_int(item.get('delta_workspace_cached_input_tokens')) or 0,
+                'delta_output_tokens': _coerce_non_negative_int(item.get('delta_workspace_output_tokens')) or 0,
+                'delta_reasoning_output_tokens': _coerce_non_negative_int(item.get('delta_workspace_reasoning_output_tokens')) or 0,
+                'delta_requests': _coerce_non_negative_int(item.get('delta_workspace_requests')) or 0,
                 'tokens_per_five_hour_percent': item.get('tokens_per_five_hour_percent_workspace'),
                 'tokens_per_weekly_percent': item.get('tokens_per_weekly_percent_workspace'),
             }
@@ -2608,6 +2695,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         account_weekly_relation if relation_scope == 'account' else workspace_weekly_relation
     )
     reset_count = sum(1 for item in history_items if item.get('reset_detected'))
+    requested_average = _summarize_usage_history_hourly_average(history_items, requested_hours, delta_key='delta_tokens')
     daily_average = _summarize_usage_history_hourly_average(history_items, 24, delta_key='delta_tokens')
     weekly_average = _summarize_usage_history_hourly_average(history_items, 24 * 7, delta_key='delta_tokens')
 
@@ -2634,6 +2722,11 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             'five_hour': five_hour_relation,
             'weekly': weekly_relation,
             'averages': {
+                'requested': {
+                    **requested_average,
+                    'scope': relation_scope,
+                    'label': f'{requested_hours}h'
+                },
                 'daily': {
                     **daily_average,
                     'scope': relation_scope,
@@ -2664,6 +2757,11 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             'token_delta_key': token_delta_key,
         },
         'averages': {
+            'requested': {
+                **requested_average,
+                'scope': relation_scope,
+                'label': f'{requested_hours}h'
+            },
             'daily': {
                 **daily_average,
                 'scope': relation_scope,

@@ -1,6 +1,6 @@
-# codex-agent
+# codex-workbench
 
-Codex chat server that powers the Configuration > Codex 채팅 UI.
+Codex Workbench server for Codex chat sessions, workspace files, terminal sessions, Git sync, and usage monitoring.
 
 ## Requirements
 - Python 3.10+

@@ -249,7 +249,7 @@ const GIT_SYNC_TARGET_ORDER = Object.freeze([
 ]);
 const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
-    [GIT_SYNC_TARGET_CODEX_AGENT]: 'codex_agent Repo'
+    [GIT_SYNC_TARGET_CODEX_AGENT]: 'Codex Workbench Repo'
 });
 const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
@@ -3304,7 +3304,7 @@ function getRecognizedViewportWidth() {
 async function showHeaderDetailsToast() {
     const descriptionElement = document.getElementById('codex-header-description');
     const storageElement = document.getElementById('codex-session-storage');
-    const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Agent sessions.').trim();
+    const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Workbench sessions.').trim();
     const storageText = String(storageElement?.textContent || '').trim();
     const restartPolicy = await fetchCodexRestartPolicy();
     const useReloader = restartPolicy?.use_reloader;

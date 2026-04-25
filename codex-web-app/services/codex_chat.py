@@ -1109,7 +1109,7 @@ def _list_competing_codex_processes():
             label = 'Codex app-server'
             blocking = bool(_STRICT_COMPETING_PROCESSES)
         elif 'run_codex_chat_server.py' in normalized_command:
-            label = '다른 codex_agent 서버'
+            label = '다른 Codex Workbench 서버'
             blocking = False
         elif re.search(r'(^|\s)node\s+\S*/codex(?:\s|$)', normalized_command):
             label = 'Codex CLI 런처'
@@ -4658,14 +4658,18 @@ def _start_codex_stream_for_session_locked(
             'error': 'assistant 메시지를 저장하지 못했습니다.'
         }
 
+    stream_kwargs = {
+        'model_override': model_override,
+        'reasoning_override': reasoning_override,
+        'plan_mode': plan_mode,
+        'assistant_message_id': assistant_message.get('id'),
+    }
+    if normalized_attachments:
+        stream_kwargs['attachments'] = normalized_attachments
     stream_info = create_codex_stream(
         session_id,
         prompt_with_context,
-        model_override=model_override,
-        reasoning_override=reasoning_override,
-        plan_mode=plan_mode,
-        attachments=normalized_attachments,
-        assistant_message_id=assistant_message.get('id'),
+        **stream_kwargs,
     )
     return {
         'ok': True,

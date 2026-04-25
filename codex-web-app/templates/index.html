@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex Agent · {{ workspace_directory_name }}</title>
+    <title>Codex Workbench · {{ workspace_directory_name }}</title>
     <link rel="stylesheet" href="/static/css/app.css?v=141">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
@@ -189,11 +189,11 @@
     <div class="app">
         <header class="app-header">
             <div class="app-header-main">
-                <h1>Codex Agent</h1>
+                <h1>Codex Workbench</h1>
                 <div class="app-header-subline">
                     <p class="app-workspace">{{ workspace_directory_name }}</p>
                     <button class="app-header-details-summary" type="button" id="codex-header-details-trigger">세부 정보</button>
-                    <span class="sr-only" id="codex-header-description">Manage Codex Agent sessions.</span>
+                    <span class="sr-only" id="codex-header-description">Manage Codex Workbench sessions.</span>
                     <span class="sr-only" id="codex-session-storage">세션 저장 용량 확인 중...</span>
                 </div>
             </div>
@@ -712,7 +712,7 @@
                 <div class="sync-overlay-last-commit" id="codex-sync-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
                     <button class="btn secondary sync-overlay-target is-active" type="button" id="codex-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
-                    <button class="btn ghost sync-overlay-target" type="button" id="codex-sync-target-codex-agent" data-repo-target="codex_agent">codex_agent Repo</button>
+                    <button class="btn ghost sync-overlay-target" type="button" id="codex-sync-target-codex-agent" data-repo-target="codex_agent">Codex Workbench Repo</button>
                 </div>
                 <div class="sync-overlay-tools">
                     <button class="btn primary sync-overlay-fetch" type="button" id="codex-sync-overlay-fetch" aria-label="Fetch only" title="Fetch only">Fetch only</button>

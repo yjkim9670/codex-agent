@@ -1,4 +1,4 @@
-"""Codex chat Flask application."""
+"""Codex Workbench Flask application."""
 
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -75,7 +75,7 @@ def create_codex_app():
         runtime_context = _build_runtime_context()
         if CODEX_API_ONLY_MODE:
             return jsonify({
-                'service': 'codex-agent',
+                'service': 'codex-workbench',
                 'status': 'ok',
                 'mode': runtime_context['mode'],
                 'api': '/api/codex/sessions',
@@ -97,7 +97,7 @@ def create_codex_app():
     def codex_health():
         runtime_context = _build_runtime_context()
         return jsonify({
-            'service': 'codex-agent',
+            'service': 'codex-workbench',
             'status': 'ok',
             'mode': runtime_context['mode'],
             'api': '/api/codex/sessions',

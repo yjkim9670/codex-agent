@@ -332,7 +332,7 @@ def _build_runtime_info():
     server_directory = Path.cwd().resolve()
     workspace_directory = WORKSPACE_DIR.resolve()
     return {
-        'service': 'codex-agent',
+        'service': 'codex-workbench',
         'mode': 'api-only' if CODEX_API_ONLY_MODE else 'ui+api',
         'server_directory_name': server_directory.name or str(server_directory),
         'server_directory_path': str(server_directory),
@@ -1083,7 +1083,7 @@ def codex_git_action(action):
     if not isinstance(payload, dict):
         payload = {}
     if action == 'sync' and not str(payload.get('repo_target') or '').strip():
-        # Keep top-right sync pinned to codex_agent even if legacy clients omit payload.
+        # Keep top-right sync pinned to the Workbench repo even if legacy clients omit payload.
         payload['repo_target'] = 'codex_agent'
     result = run_git_action(action, payload=payload)
     if not isinstance(result, dict):

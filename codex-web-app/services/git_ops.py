@@ -1,4 +1,4 @@
-"""Git command helpers for Codex Agent."""
+"""Git command helpers for Codex Workbench."""
 
 import ast
 from collections import Counter
@@ -51,8 +51,10 @@ _GIT_REPO_TARGET_ALIASES = {
     'default': _GIT_REPO_TARGET_WORKSPACE,
     _GIT_REPO_TARGET_CODEX_AGENT: _GIT_REPO_TARGET_CODEX_AGENT,
     'codex-agent': _GIT_REPO_TARGET_CODEX_AGENT,
+    'codex-workbench': _GIT_REPO_TARGET_CODEX_AGENT,
     'codex': _GIT_REPO_TARGET_CODEX_AGENT,
-    'agent': _GIT_REPO_TARGET_CODEX_AGENT
+    'agent': _GIT_REPO_TARGET_CODEX_AGENT,
+    'workbench': _GIT_REPO_TARGET_CODEX_AGENT
 }
 _GIT_MUTATION_LOCKS = {
     _GIT_REPO_TARGET_WORKSPACE: threading.Lock(),
@@ -182,7 +184,7 @@ def _resolve_repo_root(repo_target=_GIT_REPO_TARGET_WORKSPACE):
     normalized_target = _normalize_repo_target(repo_target)
     if normalized_target == _GIT_REPO_TARGET_CODEX_AGENT:
         repo_base = REPO_ROOT
-        repo_label = 'Codex Agent 저장소'
+        repo_label = 'Codex Workbench 저장소'
     else:
         repo_base = WORKSPACE_DIR
         repo_label = '워크스페이스 저장소'

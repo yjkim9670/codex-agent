@@ -5183,7 +5183,10 @@ function syncMobileKeyboardState(isMobile = isCompactLayout()) {
 function applyMobileViewportHeight() {
     const root = document.documentElement;
     if (!root) return;
-    const visualHeight = Number(window.visualViewport?.height);
+    const viewport = window.visualViewport;
+    const viewportScale = Number(viewport?.scale);
+    const isPinchZoomed = Number.isFinite(viewportScale) && viewportScale > 1.01;
+    const visualHeight = isPinchZoomed ? NaN : Number(viewport?.height);
     const fallbackHeight = Number(window.innerHeight);
     const nextHeight = Number.isFinite(visualHeight) && visualHeight > 0
         ? visualHeight

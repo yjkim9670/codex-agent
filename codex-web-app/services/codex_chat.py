@@ -144,6 +144,8 @@ _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
 _PENDING_QUEUE_BOOTSTRAP_STARTED = False
+_IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
+_IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
     "- Plan mode is enabled for this turn.\n"
@@ -167,6 +169,10 @@ _IMAGEGEN_WORKBENCH_OVERLAY = (
     "- Keep reference images scoped to the current request. Label edit target, style reference, "
     "composition reference, and compositing source roles; for child edits, use the immediate "
     "parent image unless the user explicitly asks for full ancestry.\n"
+    "- Treat the Workbench execution cwd as the managed workspace. Unless the user names a "
+    "different destination, copy or move selected image outputs into the directory named by "
+    f"`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`; use `{_IMAGEGEN_WORKBENCH_TMP_ENV}` for transient "
+    "sources and post-processing intermediates. Create those directories as needed.\n"
     "- Persist accepted project assets into the workspace. When future edits or recovery would "
     "benefit, add a small .imagegen.json sidecar with prompt, style sheet, input roles, "
     "parent/output paths, and post-processing notes; never store base64 image payloads in sidecars.\n"
@@ -3332,6 +3338,43 @@ def _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
     return bool(_IMAGEGEN_WORKBENCH_TRIGGER_RE.search(haystack))
 
 
+def _imagegen_workbench_output_dir():
+    return WORKSPACE_DIR / 'output' / 'imagegen'
+
+
+def _imagegen_workbench_tmp_dir():
+    return WORKSPACE_DIR / 'tmp' / 'imagegen'
+
+
+def _build_codex_exec_env():
+    env = os.environ.copy()
+    env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
+    env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    return env
+
+
+def _prepare_imagegen_workbench_dirs(prompt_text):
+    if not _should_include_imagegen_workbench_overlay(prompt_text, []):
+        return
+    for directory in (_imagegen_workbench_output_dir(), _imagegen_workbench_tmp_dir()):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            _LOGGER.exception('Failed to prepare imagegen workbench directory: %s', directory)
+
+
+def _build_imagegen_workbench_overlay():
+    output_dir = _imagegen_workbench_output_dir()
+    tmp_dir = _imagegen_workbench_tmp_dir()
+    return (
+        f"{_IMAGEGEN_WORKBENCH_OVERLAY}\n"
+        f"- Workbench-managed image output directory: `{output_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`).\n"
+        f"- Workbench-managed image intermediate directory: `{tmp_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
+    )
+
+
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     sections = [
         (
@@ -3355,7 +3398,7 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
         ])
     )
     if _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
-        sections.append(f'## Image Generation Workbench Overlay\n{_IMAGEGEN_WORKBENCH_OVERLAY}')
+        sections.append(f'## Image Generation Workbench Overlay\n{_build_imagegen_workbench_overlay()}')
     sections.append(
         '\n'.join([
             '## Response Rules',
@@ -3662,11 +3705,13 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
     try:
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
+            _prepare_imagegen_workbench_dirs(prompt)
             result = subprocess.run(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
                 capture_output=True,
                 text=True,
+                env=_build_codex_exec_env(),
                 check=False
             )
             completed_at = time.time()
@@ -4382,11 +4427,13 @@ def _run_codex_stream(stream_id, prompt):
                 stream['updated_at'] = cli_started_at
 
         try:
+            _prepare_imagegen_workbench_dirs(prompt)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=_build_codex_exec_env(),
                 text=True,
                 bufsize=1
             )

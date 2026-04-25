@@ -2125,7 +2125,6 @@ textarea {
     background: #ffffff;
 }
 
-.file-browser-media-preview,
 .file-browser-pdf-preview-wrap {
     display: flex;
     align-items: flex-start;
@@ -2136,13 +2135,42 @@ textarea {
     background: var(--surface);
 }
 
+.file-browser-media-preview {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    min-height: 0;
+    height: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+    overflow: auto;
+    background: var(--surface);
+}
+
 .file-browser-media-preview img {
     max-width: 100%;
-    max-height: calc(100dvh - 220px);
+    max-height: 100%;
     height: auto;
+    flex: 0 0 auto;
+    object-fit: contain;
     border-radius: var(--radius-sm);
     box-shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
     background: #fff;
+}
+
+@media (max-width: 840px), (hover: none) and (pointer: coarse) {
+    .file-browser-media-preview {
+        justify-content: flex-start;
+        touch-action: pan-x pan-y pinch-zoom;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .file-browser-media-preview img {
+        max-width: 100%;
+        max-height: none;
+        width: auto;
+        height: auto;
+    }
 }
 
 .file-browser-pdf-preview {

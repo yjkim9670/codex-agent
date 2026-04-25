@@ -1071,7 +1071,7 @@ function renderRunningJobsMonitor() {
     if (jobs.length === 0) {
         monitor.classList.add('is-idle');
         runtimeStrip?.classList.add('is-idle');
-        summary.textContent = '실행 중인 job 없음';
+        summary.textContent = 'Job 없음';
         list.innerHTML = '';
         return;
     }
@@ -1079,8 +1079,8 @@ function renderRunningJobsMonitor() {
     monitor.classList.remove('is-idle');
     runtimeStrip?.classList.remove('is-idle');
     summary.textContent = jobs.length === 1
-        ? '실행 중인 job 1개'
-        : `실행 중인 job ${jobs.length}개`;
+        ? 'Job 1개 실행 중'
+        : `Job ${jobs.length}개 실행 중`;
     list.innerHTML = '';
 
     const maxVisible = isCompactLayout() ? 2 : 3;
@@ -1698,7 +1698,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileSelectAllBtn) {
         workModeFileSelectAllBtn.addEventListener('click', () => {
-            setFilePanelSelectionToVisibleFiles(FILE_PANEL_VARIANT_WORK_MODE);
+            toggleFilePanelVisibleFileSelection(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileClearSelectionBtn) {
@@ -2056,7 +2056,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (fileBrowserSelectAllBtn) {
         fileBrowserSelectAllBtn.addEventListener('click', () => {
-            setFilePanelSelectionToVisibleFiles(FILE_PANEL_VARIANT_OVERLAY);
+            toggleFilePanelVisibleFileSelection(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserClearSelectionBtn) {
@@ -3622,6 +3622,7 @@ function getFilePanelElementsByPrefix({
         layout: byId('layout'),
         selectionBar: byId('selection-bar'),
         selectionSummary: byId('selection-summary'),
+        selectionActions: byId('selection-actions'),
         newFileBtn: byId('new-file'),
         deleteDirectoryBtn: byId('delete-directory'),
         addContextBtn: byId('add-context'),
@@ -11541,7 +11542,10 @@ function syncFilePanelSelectionBar(variant) {
     const currentDisplayPath = formatFileBrowserDisplayPath(root, currentPath);
     const selectedPaths = getFilePanelSelectedPaths(variant);
     const selectedCount = selectedPaths.size;
-    const visibleFileCount = getFilePanelVisibleFilePaths(variant).length;
+    const visibleFilePaths = getFilePanelVisibleFilePaths(variant);
+    const visibleFileCount = visibleFilePaths.length;
+    const allVisibleFilesSelected = visibleFileCount > 0
+        && visibleFilePaths.every(path => selectedPaths.has(path));
     const entryMap = getFilePanelFileEntryMap(variant);
     let totalSelectedSize = 0;
     selectedPaths.forEach(path => {
@@ -11558,6 +11562,9 @@ function syncFilePanelSelectionBar(variant) {
             parts.push(`현재 파일 ${visibleFileCount}개`);
         }
         elements.selectionSummary.textContent = parts.join(' · ');
+    }
+    if (elements.selectionActions) {
+        elements.selectionActions.classList.toggle('is-hidden', selectedCount <= 0);
     }
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(variant);
     if (elements.newFileBtn) {
@@ -11585,7 +11592,13 @@ function syncFilePanelSelectionBar(variant) {
         elements.moveBtn.disabled = isBusy || selectedCount <= 0;
     }
     if (elements.selectAllBtn) {
+        const selectAllLabel = allVisibleFilesSelected
+            ? '현재 목록의 파일 선택 해제'
+            : '현재 목록의 파일 전체 선택';
+        updateFilePanelActionButtonLabel(elements.selectAllBtn, selectAllLabel);
+        elements.selectAllBtn.setAttribute('aria-pressed', String(allVisibleFilesSelected));
         elements.selectAllBtn.disabled = isBusy || visibleFileCount <= 0;
+        syncHoverTooltipFromLabel(elements.selectAllBtn);
     }
     if (elements.clearSelectionBtn) {
         elements.clearSelectionBtn.disabled = isBusy || selectedCount <= 0;
@@ -11622,6 +11635,21 @@ function setFilePanelSelectionToVisibleFiles(variant) {
     setFilePanelSelectedPaths(variant, visiblePaths);
     setFilePanelSelectionAnchorPath(variant, visiblePaths[visiblePaths.length - 1] || '');
     applyFilePanelSelectionStateForVariant(variant);
+}
+
+function areAllFilePanelVisibleFilesSelected(variant) {
+    const visiblePaths = getFilePanelVisibleFilePaths(variant);
+    if (visiblePaths.length === 0) return false;
+    const selectedPaths = getFilePanelSelectedPaths(variant);
+    return visiblePaths.every(path => selectedPaths.has(path));
+}
+
+function toggleFilePanelVisibleFileSelection(variant) {
+    if (areAllFilePanelVisibleFilesSelected(variant)) {
+        clearFilePanelSelection(variant);
+        return;
+    }
+    setFilePanelSelectionToVisibleFiles(variant);
 }
 
 function pruneFilePanelSelectionToEntries(variant, entries) {

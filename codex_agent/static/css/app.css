@@ -79,6 +79,9 @@
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
+    --icon-file-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230f4c81' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M12 11.2v5.8'/><path d='M9.1 14.1h5.8'/></svg>");
+    --icon-folder-x: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d92d4c' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7A2.2 2.2 0 0 1 18 19.4H6A2.2 2.2 0 0 1 3.8 17.2z'/><path d='m9.7 12.2 4.6 4.6'/><path d='m14.3 12.2-4.6 4.6'/></svg>");
+    --icon-move-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h8.2l4.2 4.2v10.2H5.2z'/><path d='M13.4 4.8V9h4.2'/><path d='M8.6 14h6.5'/><path d='m12.8 11.7 2.3 2.3-2.3 2.3'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
@@ -94,12 +97,11 @@
     --session-response-plan-bg: rgba(202, 90, 31, 0.14);
     --session-response-plan-border: rgba(202, 90, 31, 0.3);
     --session-response-plan-text: #9f4616;
-    --font-session-list-title: "Pretendard", "Inter", "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
-    --font-chat-title: "Iowan Old Style", "Palatino Linotype", "Noto Serif KR", "Times New Roman", serif;
+    --font-session-list-title: var(--font-sans);
+    --font-chat-title: var(--font-sans);
     --font-code-block: "Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "JetBrains Mono", "SF Mono", Menlo, monospace;
-    --font-sans: "SF Pro Rounded", "SF Pro Display", "SF Pro Text", -apple-system,
-        BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR",
-        "Segoe UI", sans-serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+        "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR", "Segoe UI", sans-serif;
 }
 
 [data-theme="dark"] {
@@ -161,6 +163,9 @@
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
     --icon-location: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11z'/><circle cx='12' cy='10' r='2.4'/></svg>");
     --icon-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 5v14'/><path d='M5 12h14'/></svg>");
+    --icon-file-plus: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c1cbd6' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M12 11.2v5.8'/><path d='M9.1 14.1h5.8'/></svg>");
+    --icon-folder-x: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8977f' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7A2.2 2.2 0 0 1 18 19.4H6A2.2 2.2 0 0 1 3.8 17.2z'/><path d='m9.7 12.2 4.6 4.6'/><path d='m14.3 12.2-4.6 4.6'/></svg>");
+    --icon-move-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h8.2l4.2 4.2v10.2H5.2z'/><path d='M13.4 4.8V9h4.2'/><path d='M8.6 14h6.5'/><path d='m12.8 11.7 2.3 2.3-2.3 2.3'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
@@ -216,10 +221,18 @@ body {
 body {
     margin: 0;
     font-family: var(--font-sans);
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
     background: var(--bg-ambient), var(--bg);
     color: var(--text-primary);
     overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+    font-family: var(--font-sans);
+    letter-spacing: 0;
 }
 
 .app {
@@ -1251,11 +1264,13 @@ body {
 }
 
 .file-panel-selection-bar {
+    position: relative;
+    z-index: 3;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px 10px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow: visible;
     padding: 8px 10px;
     border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface-raised) 70%, var(--surface-muted));
@@ -1263,33 +1278,84 @@ body {
 
 .file-panel-selection-summary {
     flex: 1 1 auto;
-    min-width: 0;
+    min-width: 86px;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
+    white-space: nowrap;
 }
 
 .file-panel-directory-actions,
 .file-panel-selection-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-}
-
-.file-panel-directory-actions {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
     align-items: center;
+    gap: 2px;
+    min-width: 0;
+    width: auto;
+    padding-left: 8px;
+    border-left: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
 }
 
 .file-panel-selection-actions {
-    justify-content: flex-end;
-    margin-left: auto;
+    margin-left: 0;
 }
 
 .file-panel-directory-btn,
-.file-panel-selection-btn {
+.file-panel-selection-btn,
+.file-panel-folder-menu-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    gap: 0;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
+    background-image: none;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    line-height: 1;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+.file-panel-selection-bar .btn.file-panel-directory-btn,
+.file-panel-selection-bar .btn.file-panel-selection-btn,
+.file-panel-selection-bar .btn.file-panel-folder-menu-trigger {
+    border-color: transparent;
+    border-radius: 0;
+    background-color: transparent;
+}
+
+.file-panel-selection-bar .btn.file-panel-directory-btn:hover,
+.file-panel-selection-bar .btn.file-panel-selection-btn:hover,
+.file-panel-selection-bar .btn.file-panel-folder-menu-trigger:hover,
+.file-panel-selection-bar .btn.file-panel-directory-btn:focus-visible,
+.file-panel-selection-bar .btn.file-panel-selection-btn:focus-visible,
+.file-panel-selection-bar .btn.file-panel-folder-menu-trigger:focus-visible {
+    border-color: transparent;
+    background-color: var(--surface-muted);
+}
+
+.file-panel-directory-btn::before,
+.file-panel-selection-btn::before,
+.file-panel-folder-menu-trigger::before {
+    content: "";
+    flex: 0 0 var(--file-panel-action-icon-size, 15px);
+    width: var(--file-panel-action-icon-size, 15px);
+    height: var(--file-panel-action-icon-size, 15px);
+    background-image: var(--file-panel-action-icon, none);
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 15px 15px;
+    background-size: contain;
+}
+
+.file-panel-action-label {
+    display: none;
 }
 
 .file-panel-directory-btn.icon-only,
@@ -1298,39 +1364,93 @@ body {
     min-width: 30px;
     height: 30px;
     padding: 0;
+    gap: 0;
+}
+
+.file-panel-directory-btn.icon-only .file-panel-action-label,
+.file-panel-selection-btn.icon-only .file-panel-action-label {
+    display: none;
 }
 
 .file-panel-directory-btn-new {
-    background-image: var(--icon-plus);
+    --file-panel-action-icon: var(--icon-file-plus);
 }
 
 .file-panel-directory-btn-delete {
-    background-image: var(--icon-trash);
+    --file-panel-action-icon: var(--icon-folder-x);
+}
+
+.file-panel-folder-menu {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.file-panel-folder-menu-trigger {
+    --file-panel-action-icon: var(--icon-browse);
+    cursor: pointer;
+    list-style: none;
+}
+
+.file-panel-folder-menu-trigger::-webkit-details-marker {
+    display: none;
+}
+
+.file-panel-folder-menu-trigger::marker {
+    content: "";
+}
+
+.file-panel-folder-menu-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: auto;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: 0 10px 24px rgba(15, 27, 45, 0.16);
+}
+
+.file-panel-folder-menu:not([open]) .file-panel-folder-menu-list {
+    display: none;
+}
+
+.file-panel-folder-menu-item {
+    width: 30px;
+    justify-content: center;
 }
 
 .file-panel-selection-btn-add-context {
-    background-image: var(--icon-chat-add);
+    --file-panel-action-icon: var(--icon-chat-add);
 }
 
 .file-panel-selection-btn-move {
-    background-image: var(--icon-path-edit);
+    --file-panel-action-icon: var(--icon-move-file);
 }
 
 .file-panel-selection-btn-select-all {
-    background-image: var(--icon-select-all);
+    --file-panel-action-icon: var(--icon-select-all);
+}
+
+.file-panel-selection-btn-select-all[aria-pressed="true"] {
+    --file-panel-action-icon: var(--icon-clear-selection);
 }
 
 .file-panel-selection-btn-clear {
-    background-image: var(--icon-clear-selection);
+    --file-panel-action-icon: var(--icon-clear-selection);
 }
 
 .file-panel-selection-btn-download {
-    background-image: var(--icon-fetch);
-    background-size: 16px 16px;
+    --file-panel-action-icon: var(--icon-fetch);
+    --file-panel-action-icon-size: 16px;
 }
 
 .file-panel-selection-btn-delete {
-    background-image: var(--icon-trash);
+    --file-panel-action-icon: var(--icon-trash);
 }
 
 .file-panel-selection-btn-danger {
@@ -5333,7 +5453,7 @@ body.is-work-mode-resizing * {
 
 .chat-runtime-strip {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 6px;
     min-width: 0;
 }
@@ -5344,7 +5464,9 @@ body.is-work-mode-resizing * {
 
 .chat-runtime-strip.is-idle .chat-job-monitor {
     flex: 0 1 auto;
-    padding: 2px 6px;
+    padding: 2px 7px;
+    border: 0;
+    border-radius: 0;
     background: var(--surface-muted);
 }
 
@@ -5399,13 +5521,16 @@ body.is-work-mode-resizing * {
     flex: 1 1 auto;
     min-width: 0;
     margin-top: 0;
-    padding: 4px 7px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
+    min-height: 20px;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface-muted);
+    box-shadow: none;
     display: flex;
     align-items: center;
     gap: 6px;
+    font-family: var(--font-sans);
 }
 
 .chat-job-monitor.is-idle {
@@ -5418,11 +5543,27 @@ body.is-work-mode-resizing * {
 
 .chat-job-monitor-summary {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     white-space: nowrap;
     font-size: 10px;
     line-height: 1.2;
     color: var(--text-secondary);
     font-weight: 600;
+    letter-spacing: 0;
+}
+
+.chat-job-monitor-summary::before {
+    content: "";
+    flex: 0 0 5px;
+    width: 5px;
+    height: 5px;
+    background: var(--text-muted);
+}
+
+.chat-job-monitor:not(.is-idle) .chat-job-monitor-summary::before {
+    background: var(--accent);
 }
 
 .chat-job-monitor-list {
@@ -5471,12 +5612,17 @@ body.is-work-mode-resizing * {
     display: inline-flex;
     align-items: center;
     align-self: flex-start;
+    min-height: 20px;
     padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
+    border: 0;
+    border-radius: 0;
     background: var(--surface-muted);
+    box-shadow: none;
+    font-family: var(--font-sans);
     font-size: 10px;
+    font-weight: 600;
     line-height: 1.2;
+    letter-spacing: 0;
     color: var(--text-tertiary);
     white-space: nowrap;
 }

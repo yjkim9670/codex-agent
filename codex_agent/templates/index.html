@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Agent · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=134">
+    <link rel="stylesheet" href="/static/css/app.css?v=138">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -16,78 +16,90 @@
                 <div class="file-panel-selection-summary" id="{{ id_prefix }}-selection-summary">선택 0개</div>
                 <div class="file-panel-directory-actions">
                     <button
-                        class="btn ghost icon-only file-panel-directory-btn file-panel-directory-btn-new"
+                        class="btn secondary file-panel-directory-btn file-panel-directory-btn-new"
                         type="button"
                         id="{{ id_prefix }}-new-file"
                         aria-label="현재 폴더에 새 파일 만들기"
                         title="현재 폴더에 새 파일 만들기"
                     >
-                        <span class="sr-only">새 파일 만들기</span>
+                        <span class="file-panel-action-label">새 파일</span>
                     </button>
                     <button
-                        class="btn ghost icon-only file-panel-directory-btn file-panel-directory-btn-delete file-panel-selection-btn-danger"
+                        class="btn secondary file-panel-selection-btn file-panel-selection-btn-select-all"
                         type="button"
-                        id="{{ id_prefix }}-delete-directory"
-                        aria-label="현재 폴더 삭제"
-                        title="현재 폴더 삭제"
+                        id="{{ id_prefix }}-select-all"
+                        aria-label="현재 목록의 파일 전체 선택"
+                        aria-pressed="false"
+                        title="현재 목록의 파일 전체 선택"
                     >
-                        <span class="sr-only">현재 폴더 삭제</span>
+                        <span class="file-panel-action-label">전체 선택</span>
                     </button>
+                    <details class="file-panel-folder-menu">
+                        <summary
+                            class="btn ghost file-panel-folder-menu-trigger"
+                            aria-label="폴더 작업 열기"
+                            title="폴더 작업"
+                        >
+                            <span class="file-panel-action-label">폴더 작업</span>
+                        </summary>
+                        <div class="file-panel-folder-menu-list">
+                            <button
+                                class="btn ghost file-panel-directory-btn file-panel-directory-btn-delete file-panel-selection-btn-danger file-panel-folder-menu-item"
+                                type="button"
+                                id="{{ id_prefix }}-delete-directory"
+                                aria-label="현재 폴더 삭제"
+                                title="현재 폴더 삭제"
+                            >
+                                <span class="file-panel-action-label">폴더 삭제</span>
+                            </button>
+                        </div>
+                    </details>
                 </div>
-                <div class="file-panel-selection-actions">
+                <div class="file-panel-selection-actions is-hidden" id="{{ id_prefix }}-selection-actions">
                     <button
-                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-add-context"
+                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-add-context"
                         type="button"
                         id="{{ id_prefix }}-add-context"
                         aria-label="선택 파일을 채팅에 넣기"
                         title="선택 파일을 채팅에 넣기"
                     >
-                        <span class="sr-only">채팅에 넣기</span>
+                        <span class="file-panel-action-label">채팅에 추가</span>
                     </button>
                     <button
-                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-move"
+                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-move"
                         type="button"
                         id="{{ id_prefix }}-move"
                         aria-label="선택 파일 이동 또는 이름 변경"
                         title="선택 파일 이동 또는 이름 변경"
                     >
-                        <span class="sr-only">이동/이름 변경</span>
+                        <span class="file-panel-action-label">이동</span>
                     </button>
                     <button
-                        class="btn secondary icon-only file-panel-selection-btn file-panel-selection-btn-select-all"
-                        type="button"
-                        id="{{ id_prefix }}-select-all"
-                        aria-label="현재 목록의 파일 전체 선택"
-                        title="현재 목록의 파일 전체 선택"
-                    >
-                        <span class="sr-only">전체 선택</span>
-                    </button>
-                    <button
-                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-clear"
+                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-clear"
                         type="button"
                         id="{{ id_prefix }}-clear-selection"
                         aria-label="파일 선택 해제"
                         title="파일 선택 해제"
                     >
-                        <span class="sr-only">선택 해제</span>
+                        <span class="file-panel-action-label">선택 해제</span>
                     </button>
                     <button
-                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-download"
+                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-download"
                         type="button"
                         id="{{ id_prefix }}-download"
                         aria-label="선택 파일 다운로드"
                         title="선택 파일 다운로드"
                     >
-                        <span class="sr-only">다운로드</span>
+                        <span class="file-panel-action-label">다운로드</span>
                     </button>
                     <button
-                        class="btn ghost icon-only file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
+                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
                         type="button"
                         id="{{ id_prefix }}-delete"
                         aria-label="선택 파일 삭제"
                         title="선택 파일 삭제"
                     >
-                        <span class="sr-only">삭제</span>
+                        <span class="file-panel-action-label">삭제</span>
                     </button>
                 </div>
             </div>
@@ -485,7 +497,7 @@
 
                 <div class="chat-runtime-strip">
                     <div id="codex-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
-                        <div id="codex-chat-job-monitor-summary" class="chat-job-monitor-summary">실행 중인 job 없음</div>
+                        <div id="codex-chat-job-monitor-summary" class="chat-job-monitor-summary">Job 없음</div>
                         <ul id="codex-chat-job-monitor-list" class="chat-job-monitor-list"></ul>
                     </div>
 
@@ -875,6 +887,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=134"></script>
+    <script src="/static/js/app.js?v=137"></script>
 </body>
 </html>

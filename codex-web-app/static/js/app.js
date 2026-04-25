@@ -93,8 +93,9 @@ const WORK_MODE_FILE_VIEW_STATE_KEY = 'codexWorkModeFileViewState';
 const WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS = 140;
 const FILE_BROWSER_SPLIT_KEY = 'codexFileBrowserSplit';
 const FILE_BROWSER_COLUMNS_KEY = 'codexFileBrowserColumns';
-const WORK_MODE_FILE_DEFAULT_SPLIT = 0.36;
-const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 220;
+const WORK_MODE_FILE_LEGACY_DEFAULT_SPLIT = 0.36;
+const WORK_MODE_FILE_DEFAULT_SPLIT = 0.44;
+const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 300;
 const WORK_MODE_FILE_MIN_VIEWER_WIDTH_PX = 320;
 const WORK_MODE_FILE_COLUMN_DEFAULTS = Object.freeze({
     name: 220,
@@ -137,6 +138,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
+const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for Codex. (Enter for newline)';
 const CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 120000;
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
@@ -161,6 +163,7 @@ const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
+const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 120000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
@@ -336,6 +339,7 @@ let fileBrowserCachedEntries = [];
 let fileBrowserCachedTruncated = false;
 let fileBrowserSelectedPaths = new Set();
 let fileBrowserSelectionAnchorPath = '';
+let fileBrowserSelectionMode = false;
 let fileBrowserBulkActionInFlight = false;
 let fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let fileBrowserResizePointerId = null;
@@ -355,6 +359,7 @@ let workModeFileCachedEntries = [];
 let workModeFileCachedTruncated = false;
 let workModeFileSelectedPaths = new Set();
 let workModeFileSelectionAnchorPath = '';
+let workModeFileSelectionMode = false;
 let workModeFileBulkActionInFlight = false;
 let workModeFileViewerFullscreen = false;
 let workModePreviewFullscreen = false;
@@ -847,7 +852,7 @@ function syncActiveSessionControls() {
             ? 'Another client is responding for this session...'
             : localBusy
                 ? `Response in progress... queue ready${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
-            : CHAT_INPUT_DEFAULT_PLACEHOLDER;
+            : (isCompactLayout() ? CHAT_INPUT_MOBILE_PLACEHOLDER : CHAT_INPUT_DEFAULT_PLACEHOLDER);
     }
     if (sendBtn) {
         sendBtn.disabled = remoteBusy && !localBusy;
@@ -1467,6 +1472,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileNewFileBtn = document.getElementById('codex-work-mode-file-new-file');
+    const workModeFileUploadBtn = document.getElementById('codex-work-mode-file-upload');
+    const workModeFileUploadInput = document.getElementById('codex-work-mode-file-upload-input');
     const workModeFileDeleteDirectoryBtn = document.getElementById('codex-work-mode-file-delete-directory');
     const workModeFileAddContextBtn = document.getElementById('codex-work-mode-file-add-context');
     const workModeFileMoveBtn = document.getElementById('codex-work-mode-file-move');
@@ -1511,6 +1518,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
     const fileBrowserNewFileBtn = document.getElementById('codex-file-browser-new-file');
+    const fileBrowserUploadBtn = document.getElementById('codex-file-browser-upload');
+    const fileBrowserUploadInput = document.getElementById('codex-file-browser-upload-input');
     const fileBrowserDeleteDirectoryBtn = document.getElementById('codex-file-browser-delete-directory');
     const fileBrowserAddContextBtn = document.getElementById('codex-file-browser-add-context');
     const fileBrowserMoveBtn = document.getElementById('codex-file-browser-move');
@@ -1560,7 +1569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (input) {
         input.addEventListener('keydown', event => {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter' && !event.shiftKey && !isCompactLayout()) {
                 event.preventDefault();
                 handleSubmit();
             }
@@ -1712,6 +1721,18 @@ document.addEventListener('DOMContentLoaded', () => {
             void createFileInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
+    if (workModeFileUploadBtn && workModeFileUploadInput) {
+        workModeFileUploadBtn.addEventListener('click', event => {
+            event.preventDefault();
+            workModeFileUploadInput.click();
+        });
+        workModeFileUploadInput.addEventListener('change', () => {
+            const files = Array.from(workModeFileUploadInput.files || []);
+            workModeFileUploadInput.value = '';
+            if (!files.length) return;
+            void uploadFilesToFilePanel(FILE_PANEL_VARIANT_WORK_MODE, files);
+        });
+    }
     if (workModeFileDeleteDirectoryBtn) {
         workModeFileDeleteDirectoryBtn.addEventListener('click', () => {
             void deleteCurrentDirectoryFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
@@ -1729,7 +1750,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileSelectAllBtn) {
         workModeFileSelectAllBtn.addEventListener('click', () => {
-            toggleFilePanelVisibleFileSelection(FILE_PANEL_VARIANT_WORK_MODE);
+            handleFilePanelSelectionButtonClick(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileClearSelectionBtn) {
@@ -2078,6 +2099,18 @@ document.addEventListener('DOMContentLoaded', () => {
             void createFileInFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
+    if (fileBrowserUploadBtn && fileBrowserUploadInput) {
+        fileBrowserUploadBtn.addEventListener('click', event => {
+            event.preventDefault();
+            fileBrowserUploadInput.click();
+        });
+        fileBrowserUploadInput.addEventListener('change', () => {
+            const files = Array.from(fileBrowserUploadInput.files || []);
+            fileBrowserUploadInput.value = '';
+            if (!files.length) return;
+            void uploadFilesToFilePanel(FILE_PANEL_VARIANT_OVERLAY, files);
+        });
+    }
     if (fileBrowserDeleteDirectoryBtn) {
         fileBrowserDeleteDirectoryBtn.addEventListener('click', () => {
             void deleteCurrentDirectoryFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
@@ -2095,7 +2128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (fileBrowserSelectAllBtn) {
         fileBrowserSelectAllBtn.addEventListener('click', () => {
-            toggleFilePanelVisibleFileSelection(FILE_PANEL_VARIANT_OVERLAY);
+            handleFilePanelSelectionButtonClick(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserClearSelectionBtn) {
@@ -2398,6 +2431,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         handleWorkModeMediaChange(isPhoneLayout());
         syncTerminalExtraKeysState();
+        syncActiveSessionControls();
     };
     if (typeof compactMedia.addEventListener === 'function') {
         compactMedia.addEventListener('change', handleCompactLayoutChange);
@@ -3689,6 +3723,8 @@ function getFilePanelElementsByPrefix({
         viewerContent: byId('viewer-content'),
         editBtn: byId('edit'),
         saveBtn: byId('save'),
+        uploadBtn: byId('upload'),
+        uploadInput: byId('upload-input'),
         colResizers: columns ? Array.from(columns.querySelectorAll('[data-resize-col]')) : []
     };
 }
@@ -4297,7 +4333,13 @@ function normalizeWorkModeFileSplitRatio(value) {
 
 function readWorkModeFileSplitPreference() {
     try {
-        return normalizeWorkModeFileSplitRatio(localStorage.getItem(WORK_MODE_FILE_SPLIT_KEY));
+        const raw = localStorage.getItem(WORK_MODE_FILE_SPLIT_KEY);
+        if (!raw) return WORK_MODE_FILE_DEFAULT_SPLIT;
+        const normalized = normalizeWorkModeFileSplitRatio(raw);
+        if (Math.abs(normalized - WORK_MODE_FILE_LEGACY_DEFAULT_SPLIT) < 0.001) {
+            return WORK_MODE_FILE_DEFAULT_SPLIT;
+        }
+        return normalized;
     } catch (error) {
         return WORK_MODE_FILE_DEFAULT_SPLIT;
     }
@@ -4532,6 +4574,7 @@ function syncFilePanelHorizontalScrollMetricsCore(variant) {
     elements.hScrollTrack.style.width = `${effectiveWidth}px`;
 
     const maxScroll = Math.max(0, contentWidth - viewportWidth);
+    elements.hScroll.classList.toggle('is-hidden', maxScroll <= 0);
     const gridScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.gridScroll.scrollLeft || 0)));
     const railScrollLeft = Math.max(0, Math.min(maxScroll, Math.round(elements.hScroll.scrollLeft || 0)));
     const nextScrollLeft = Math.max(gridScrollLeft, railScrollLeft);
@@ -5174,7 +5217,7 @@ function applyMobilePromptLift({ isMobile = isCompactLayout(), keyboardOpen = fa
                 Number.isFinite(runtimeStripBottom) ? runtimeStripBottom : 0
             );
             if (promptBottom > 0) {
-                nextLift = Math.max(0, Math.ceil(promptBottom + 8 - viewportBottom));
+                nextLift = Math.max(0, Math.ceil(promptBottom - viewportBottom));
             }
         }
     }
@@ -11737,6 +11780,31 @@ function applyWorkModeFileSelectionState() {
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
+function isFilePanelSelectionMode(variant) {
+    return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
+        ? Boolean(fileBrowserSelectionMode)
+        : Boolean(workModeFileSelectionMode);
+}
+
+function setFilePanelSelectionMode(variant, enabled, { sync = true } = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (normalizedVariant === FILE_PANEL_VARIANT_OVERLAY) {
+        fileBrowserSelectionMode = Boolean(enabled);
+    } else {
+        workModeFileSelectionMode = Boolean(enabled);
+    }
+    if (!sync) return;
+    applyFilePanelSelectionStateForVariant(normalizedVariant);
+    syncFilePanelHorizontalScrollMetricsCore(normalizedVariant);
+}
+
+function syncFilePanelSelectionModeClass(elements, variant, selectedCount = 0) {
+    if (!elements?.layout) return false;
+    const isActive = isFilePanelSelectionMode(variant) || selectedCount > 0;
+    elements.layout.classList.toggle('is-file-selection-mode', isActive);
+    return isActive;
+}
+
 function getFilePanelSelectedPaths(variant) {
     return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
         ? fileBrowserSelectedPaths
@@ -11745,7 +11813,11 @@ function getFilePanelSelectedPaths(variant) {
 
 function setFilePanelSelectedPaths(variant, nextPaths) {
     const normalized = createNormalizedRelativePathSet(nextPaths);
-    if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (normalized.size > 0) {
+        setFilePanelSelectionMode(normalizedVariant, true, { sync: false });
+    }
+    if (normalizedVariant === FILE_PANEL_VARIANT_OVERLAY) {
         fileBrowserSelectedPaths = normalized;
         return;
     }
@@ -11865,6 +11937,7 @@ function syncFilePanelSelectionBar(variant) {
     const selectedCount = selectedPaths.size;
     const visibleFilePaths = getFilePanelVisibleFilePaths(variant);
     const visibleFileCount = visibleFilePaths.length;
+    const selectionModeActive = syncFilePanelSelectionModeClass(elements, variant, selectedCount);
     const allVisibleFilesSelected = visibleFileCount > 0
         && visibleFilePaths.every(path => selectedPaths.has(path));
     const entryMap = getFilePanelFileEntryMap(variant);
@@ -11876,16 +11949,20 @@ function syncFilePanelSelectionBar(variant) {
         }
     });
     if (elements.selectionSummary) {
-        const parts = [`선택 ${selectedCount}개`];
-        if (selectedCount > 0 && totalSelectedSize > 0) {
-            parts.push(formatFileBrowserSize(totalSelectedSize));
-        } else if (selectedCount === 0) {
-            parts.push(`현재 파일 ${visibleFileCount}개`);
+        const parts = selectionModeActive
+            ? [`선택 ${selectedCount}개`]
+            : [`현재 파일 ${visibleFileCount}개`];
+        if (selectionModeActive) {
+            if (selectedCount > 0 && totalSelectedSize > 0) {
+                parts.push(formatFileBrowserSize(totalSelectedSize));
+            } else if (selectedCount === 0) {
+                parts.push(`현재 파일 ${visibleFileCount}개`);
+            }
         }
         elements.selectionSummary.textContent = parts.join(' · ');
     }
     if (elements.selectionActions) {
-        elements.selectionActions.classList.toggle('is-hidden', selectedCount <= 0);
+        elements.selectionActions.classList.toggle('is-hidden', !selectionModeActive);
     }
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(variant);
     if (elements.newFileBtn) {
@@ -11895,6 +11972,14 @@ function syncFilePanelSelectionBar(variant) {
         );
         elements.newFileBtn.disabled = isBusy;
         syncHoverTooltipFromLabel(elements.newFileBtn);
+    }
+    if (elements.uploadBtn) {
+        updateFilePanelActionButtonLabel(
+            elements.uploadBtn,
+            `현재 폴더에 파일 업로드 (${currentDisplayPath})`
+        );
+        elements.uploadBtn.disabled = isBusy;
+        syncHoverTooltipFromLabel(elements.uploadBtn);
     }
     if (elements.deleteDirectoryBtn) {
         updateFilePanelActionButtonLabel(
@@ -11913,16 +11998,23 @@ function syncFilePanelSelectionBar(variant) {
         elements.moveBtn.disabled = isBusy || selectedCount <= 0;
     }
     if (elements.selectAllBtn) {
-        const selectAllLabel = allVisibleFilesSelected
-            ? '현재 목록의 파일 선택 해제'
-            : '현재 목록의 파일 전체 선택';
+        const selectAllLabel = !selectionModeActive
+            ? '파일 선택 모드 켜기'
+            : (allVisibleFilesSelected
+                ? '현재 목록의 파일 선택 해제'
+                : '현재 목록의 파일 전체 선택');
         updateFilePanelActionButtonLabel(elements.selectAllBtn, selectAllLabel);
         elements.selectAllBtn.setAttribute('aria-pressed', String(allVisibleFilesSelected));
         elements.selectAllBtn.disabled = isBusy || visibleFileCount <= 0;
         syncHoverTooltipFromLabel(elements.selectAllBtn);
     }
     if (elements.clearSelectionBtn) {
-        elements.clearSelectionBtn.disabled = isBusy || selectedCount <= 0;
+        updateFilePanelActionButtonLabel(
+            elements.clearSelectionBtn,
+            selectedCount > 0 ? '파일 선택 해제' : '파일 선택 모드 끄기'
+        );
+        elements.clearSelectionBtn.disabled = isBusy || !selectionModeActive;
+        syncHoverTooltipFromLabel(elements.clearSelectionBtn);
     }
     if (elements.downloadBtn) {
         elements.downloadBtn.disabled = isBusy || selectedCount <= 0;
@@ -11945,6 +12037,7 @@ function applyFilePanelSelectionStateForVariant(variant) {
 
 function clearFilePanelSelection(variant, { keepAnchor = false } = {}) {
     setFilePanelSelectedPaths(variant, []);
+    setFilePanelSelectionMode(variant, false, { sync: false });
     if (!keepAnchor) {
         setFilePanelSelectionAnchorPath(variant, '');
     }
@@ -11953,6 +12046,7 @@ function clearFilePanelSelection(variant, { keepAnchor = false } = {}) {
 
 function setFilePanelSelectionToVisibleFiles(variant) {
     const visiblePaths = getFilePanelVisibleFilePaths(variant);
+    setFilePanelSelectionMode(variant, true, { sync: false });
     setFilePanelSelectedPaths(variant, visiblePaths);
     setFilePanelSelectionAnchorPath(variant, visiblePaths[visiblePaths.length - 1] || '');
     applyFilePanelSelectionStateForVariant(variant);
@@ -11971,6 +12065,14 @@ function toggleFilePanelVisibleFileSelection(variant) {
         return;
     }
     setFilePanelSelectionToVisibleFiles(variant);
+}
+
+function handleFilePanelSelectionButtonClick(variant) {
+    if (!isFilePanelSelectionMode(variant)) {
+        setFilePanelSelectionMode(variant, true);
+        return;
+    }
+    toggleFilePanelVisibleFileSelection(variant);
 }
 
 function pruneFilePanelSelectionToEntries(variant, entries) {
@@ -12407,7 +12509,13 @@ async function refreshWorkModeFilePreviewSelection({ restoreViewerScrollSnapshot
 
 function readFileBrowserSplitPreference() {
     try {
-        return normalizeWorkModeFileSplitRatio(localStorage.getItem(FILE_BROWSER_SPLIT_KEY));
+        const raw = localStorage.getItem(FILE_BROWSER_SPLIT_KEY);
+        if (!raw) return WORK_MODE_FILE_DEFAULT_SPLIT;
+        const normalized = normalizeWorkModeFileSplitRatio(raw);
+        if (Math.abs(normalized - WORK_MODE_FILE_LEGACY_DEFAULT_SPLIT) < 0.001) {
+            return WORK_MODE_FILE_DEFAULT_SPLIT;
+        }
+        return normalized;
     } catch (error) {
         return WORK_MODE_FILE_DEFAULT_SPLIT;
     }
@@ -12814,6 +12922,22 @@ async function createFilePanelFile(root, path, content = '') {
     });
 }
 
+async function uploadFilePanelFiles(root, path, fileList) {
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) {
+        return { uploaded: [] };
+    }
+    const formData = new FormData();
+    formData.append('root', normalizeFileBrowserRoot(root));
+    formData.append('path', normalizeFileBrowserRelativePath(path));
+    files.forEach(file => formData.append('files', file));
+    return fetchJson('/api/codex/files/upload', {
+        method: 'POST',
+        timeoutMs: FILE_BROWSER_UPLOAD_TIMEOUT_MS,
+        body: formData
+    });
+}
+
 async function fetchFilePanelDownload(root, paths) {
     return fetchBlob('/api/codex/files/download', {
         method: 'POST',
@@ -13025,6 +13149,51 @@ async function createFileInFilePanel(variant) {
         return true;
     } catch (error) {
         showToast(normalizeError(error, '새 파일 생성에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+async function uploadFilesToFilePanel(variant, fileList) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const files = Array.from(fileList || []).filter(Boolean);
+    if (!files.length) return false;
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const root = getFilePanelCurrentRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        const result = await uploadFilePanelFiles(root, currentPath, files);
+        const uploaded = Array.isArray(result?.uploaded) ? result.uploaded : [];
+        const uploadedPaths = uploaded
+            .map(item => normalizeFileBrowserRelativePath(item?.path || ''))
+            .filter(Boolean);
+        clearFilePanelSelection(normalizedVariant);
+        setFilePanelPreviewPath(normalizedVariant, '');
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        if (uploadedPaths.length > 0) {
+            await openFileInPanelVariant(normalizedVariant, uploadedPaths[0], { root });
+        }
+        showToast(`파일 ${uploadedPaths.length || files.length}개를 업로드했습니다.`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 업로드에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });
@@ -15567,15 +15736,16 @@ function updateHeader(session) {
     const title = document.getElementById('codex-chat-title');
     const meta = document.getElementById('codex-chat-meta');
     if (!title || !meta) return;
+    const titleText = title.querySelector('.chat-title-text') || title;
     if (!session) {
-        title.textContent = 'Select a session';
+        titleText.textContent = 'Select a session';
         title.setAttribute('title', 'Select a session');
         title.setAttribute('aria-label', 'Select a session');
         meta.textContent = '';
         return;
     }
     const sessionTitle = session.title || 'New session';
-    title.textContent = sessionTitle;
+    titleText.textContent = sessionTitle;
     title.setAttribute('title', sessionTitle);
     title.setAttribute('aria-label', sessionTitle);
     const updated = formatTimestamp(session.updated_at);

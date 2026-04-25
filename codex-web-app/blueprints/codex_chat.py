@@ -67,6 +67,7 @@ from ..services.file_browser import (
     move_files,
     read_file,
     read_file_raw,
+    upload_files,
     write_file,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
@@ -859,6 +860,25 @@ def codex_files_create():
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
             content=payload.get('content', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/upload', methods=['POST'])
+def codex_files_upload():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    files = request.files.getlist('files')
+    single_file = request.files.get('file')
+    if single_file and single_file not in files:
+        files.append(single_file)
+    try:
+        result = upload_files(
+            root_key=request.form.get('root'),
+            relative_path=request.form.get('path', ''),
+            file_storages=files,
         )
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code

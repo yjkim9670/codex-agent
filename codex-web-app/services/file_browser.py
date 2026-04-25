@@ -21,6 +21,8 @@ _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = 128 * 1024 * 1024
+_MAX_FILE_UPLOAD_BYTES = 64 * 1024 * 1024
+_MAX_MULTI_UPLOAD_TOTAL_BYTES = 128 * 1024 * 1024
 _DELETE_QUARANTINE_PREFIX = '.codex-delete-'
 
 _LANGUAGE_BY_SUFFIX = {
@@ -326,6 +328,50 @@ def _ensure_existing_directory(root_path, relative_path):
             status_code=400,
         )
     return normalized_directory, target_directory
+
+
+def _normalize_upload_filename(value):
+    name = str(value or '').strip().replace('\\', '/').split('/')[-1]
+    if not name or name in {'.', '..'}:
+        raise FileBrowserError(
+            '업로드 파일 이름이 올바르지 않습니다.',
+            error_code='invalid_filename',
+            status_code=400,
+        )
+    if '\x00' in name or '/' in name:
+        raise FileBrowserError(
+            '업로드 파일 이름이 올바르지 않습니다.',
+            error_code='invalid_filename',
+            status_code=400,
+        )
+    return name
+
+
+def _normalize_upload_files(file_storages):
+    files = [item for item in (file_storages or []) if item is not None]
+    if not files:
+        raise FileBrowserError(
+            '업로드할 파일을 선택해주세요.',
+            error_code='missing_upload',
+            status_code=400,
+        )
+
+    normalized = []
+    seen = set()
+    for file_storage in files:
+        filename = _normalize_upload_filename(getattr(file_storage, 'filename', '') or '')
+        if filename in seen:
+            raise FileBrowserError(
+                f'업로드 파일명이 중복됩니다: {filename}',
+                error_code='path_conflict',
+                status_code=409,
+            )
+        seen.add(filename)
+        normalized.append({
+            'file_storage': file_storage,
+            'filename': filename,
+        })
+    return normalized
 
 
 def _build_download_archive_name():
@@ -832,6 +878,120 @@ def create_file(root_key=None, relative_path='', content=''):
     )
     created_state['created'] = True
     return created_state
+
+
+def upload_files(root_key=None, relative_path='', file_storages=None):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_directory, target_directory = _ensure_existing_directory(root_path, relative_path)
+    files = _normalize_upload_files(file_storages)
+
+    upload_plan = []
+    for item in files:
+        filename = item['filename']
+        destination_path = target_directory / filename
+        destination_path = _resolve_target_path(root_path, _to_relative_path(root_path, destination_path))
+        if destination_path.exists():
+            raise FileBrowserError(
+                f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {_to_relative_path(root_path, destination_path)}',
+                error_code='path_conflict',
+                status_code=409,
+            )
+        upload_plan.append({
+            'file_storage': item['file_storage'],
+            'filename': filename,
+            'destination_path': destination_path,
+            'relative_path': _to_relative_path(root_path, destination_path),
+        })
+
+    uploaded = []
+    created_paths = []
+    total_size = 0
+    try:
+        for item in upload_plan:
+            source = getattr(item['file_storage'], 'stream', None)
+            if source is None:
+                raise FileBrowserError(
+                    f'업로드 스트림을 읽을 수 없습니다: {item["filename"]}',
+                    error_code='upload_error',
+                    status_code=400,
+                )
+
+            bytes_written = 0
+            try:
+                with item['destination_path'].open('xb') as handle:
+                    created_paths.append(item['destination_path'])
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        bytes_written += len(chunk)
+                        total_size += len(chunk)
+                        if bytes_written > _MAX_FILE_UPLOAD_BYTES:
+                            raise FileBrowserError(
+                                f'업로드 파일 크기 제한(64MB)을 초과했습니다: {item["filename"]}',
+                                error_code='file_too_large',
+                                status_code=413,
+                            )
+                        if total_size > _MAX_MULTI_UPLOAD_TOTAL_BYTES:
+                            raise FileBrowserError(
+                                '전체 업로드 크기 제한(128MB)을 초과했습니다.',
+                                error_code='file_too_large',
+                                status_code=413,
+                            )
+                        handle.write(chunk)
+            except FileExistsError as exc:
+                raise FileBrowserError(
+                    f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {item["relative_path"]}',
+                    error_code='path_conflict',
+                    status_code=409,
+                ) from exc
+
+            if bytes_written <= 0:
+                try:
+                    item['destination_path'].unlink()
+                except OSError:
+                    pass
+                raise FileBrowserError(
+                    f'빈 파일은 업로드할 수 없습니다: {item["filename"]}',
+                    error_code='empty_upload',
+                    status_code=400,
+                )
+
+            metadata = _extract_file_metadata(item['destination_path'])
+            uploaded.append({
+                'name': item['filename'],
+                'path': item['relative_path'],
+                'type': 'file',
+                'size': metadata['size'],
+                'modified_at': metadata['modified_at'],
+            })
+    except FileBrowserError:
+        for created_path in reversed(created_paths):
+            try:
+                created_path.unlink()
+            except OSError:
+                pass
+        raise
+    except OSError as exc:
+        for created_path in reversed(created_paths):
+            try:
+                created_path.unlink()
+            except OSError:
+                pass
+        raise FileBrowserError(
+            f'파일을 업로드하지 못했습니다: {exc}',
+            error_code='upload_error',
+            status_code=500,
+        ) from exc
+
+    return {
+        'root': normalized_root,
+        'root_path': str(root_path),
+        'path': normalized_directory,
+        'uploaded': uploaded,
+        'count': len(uploaded),
+        'total_size': total_size,
+    }
 
 
 def read_file_raw(root_key=None, relative_path=''):

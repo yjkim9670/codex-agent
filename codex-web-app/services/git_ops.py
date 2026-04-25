@@ -16,7 +16,7 @@ _GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
-_GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync'}
+_GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync', 'revert'}
 _WINDOWS_INVALID_FILENAME_CHAR_ORDER = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
 _WINDOWS_INVALID_FILENAME_CHARS = set(_WINDOWS_INVALID_FILENAME_CHAR_ORDER)
 _WINDOWS_RESERVED_DEVICE_NAMES = {
@@ -712,15 +712,23 @@ def _extract_changed_file_details(status_text):
         path = line[3:].strip()
         if not path:
             continue
+        original_path = ''
         if ' -> ' in path:
-            path = path.split(' -> ')[-1].strip()
+            parts = path.split(' -> ')
+            original_path = parts[0].strip()
+            path = parts[-1].strip()
+        original_path = _decode_git_path(original_path) if original_path else ''
         path = _decode_git_path(path)
         if not path:
             continue
-        entries.append({
+        entry = {
             'path': path,
-            'status': _normalize_status_marker(status_code)
-        })
+            'status': _normalize_status_marker(status_code),
+            'raw_status': status_code
+        }
+        if original_path:
+            entry['original_path'] = original_path
+        entries.append(entry)
     return entries
 
 
@@ -1362,6 +1370,33 @@ def _normalize_selected_files(value):
     return normalized
 
 
+def _find_changed_file_detail(changed_files_detail, selected_path):
+    selected = str(selected_path or '').strip().replace('\\', '/')
+    while selected.startswith('./'):
+        selected = selected[2:]
+    if not selected:
+        return None
+    for entry in changed_files_detail if isinstance(changed_files_detail, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get('path') or '').strip().replace('\\', '/')
+        original_path = str(entry.get('original_path') or '').strip().replace('\\', '/')
+        if path == selected or (original_path and original_path == selected):
+            return entry
+    return None
+
+
+def _build_git_revert_paths(entry):
+    paths = []
+    for key in ('original_path', 'path'):
+        path = str(entry.get(key) or '').strip().replace('\\', '/')
+        while path.startswith('./'):
+            path = path[2:]
+        if path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def _to_bool(value):
     if isinstance(value, bool):
         return value
@@ -1546,7 +1581,7 @@ def run_git_action(action, payload=None):
     try:
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
-        if action not in {'status', 'preview', 'history', 'stage', 'commit', 'push', 'sync', 'cancel', 'submit'}:
+        if action not in {'status', 'preview', 'history', 'stage', 'commit', 'push', 'sync', 'revert', 'cancel', 'submit'}:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
@@ -1908,6 +1943,123 @@ def run_git_action(action, payload=None):
                         'selected_files_count': len(selected_files),
                         'selected_files': selected_files,
                         'repo_target': repo_target
+                    }
+                )
+
+            if action == 'revert':
+                file_value = payload.get('file')
+                if file_value is None:
+                    file_value = payload.get('path')
+                selected_files = _normalize_selected_files([file_value])
+                if len(selected_files) != 1:
+                    return {'error': '되돌릴 파일을 하나 선택해주세요.'}
+
+                selected_file = selected_files[0]
+                changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+                target_entry = _find_changed_file_detail(changed_files_detail, selected_file)
+                if not target_entry:
+                    return {
+                        'error': '선택한 파일은 현재 변경 목록에 없습니다.',
+                        'error_code': 'git_revert_file_not_changed',
+                        'repo_target': repo_target,
+                        'reverted_file': selected_file
+                    }
+
+                raw_status = str(target_entry.get('raw_status') or '').strip()
+                revert_paths = _build_git_revert_paths(target_entry)
+                if not revert_paths:
+                    return {'error': '되돌릴 파일 경로를 확인할 수 없습니다.'}
+
+                reset_stdout = ''
+                reset_stderr = ''
+                restore_stdout = ''
+                restore_stderr = ''
+                clean_stdout = ''
+                clean_stderr = ''
+                command = ''
+
+                if raw_status == '??':
+                    clean_cmd = ['git', '-C', str(repo_root), 'clean', '-fd', '--', selected_file]
+                    clean_result, error = _run_checked(
+                        clean_cmd,
+                        repo_root,
+                        env,
+                        60,
+                        'git clean에 실패했습니다.',
+                        cancel_event=cancel_event,
+                        mutation_state=mutation_state
+                    )
+                    if error:
+                        return error
+                    clean_stdout = (clean_result.stdout or '').strip()
+                    clean_stderr = (clean_result.stderr or '').strip()
+                    command = 'git clean -fd -- <selected file>'
+                else:
+                    restore_cmd = ['git', '-C', str(repo_root), 'restore', '--staged', '--worktree', '--', *revert_paths]
+                    restore_result, error = _run_checked(
+                        restore_cmd,
+                        repo_root,
+                        env,
+                        60,
+                        'git restore에 실패했습니다.',
+                        cancel_event=cancel_event,
+                        mutation_state=mutation_state
+                    )
+                    if error and 'A' in raw_status:
+                        reset_cmd = ['git', '-C', str(repo_root), 'reset', '--', *revert_paths]
+                        reset_result, reset_error = _run_checked(
+                            reset_cmd,
+                            repo_root,
+                            env,
+                            60,
+                            'git reset에 실패했습니다.',
+                            cancel_event=cancel_event,
+                            mutation_state=mutation_state
+                        )
+                        if reset_error:
+                            return reset_error
+                        reset_stdout = (reset_result.stdout or '').strip()
+                        reset_stderr = (reset_result.stderr or '').strip()
+                        clean_cmd = ['git', '-C', str(repo_root), 'clean', '-fd', '--', selected_file]
+                        clean_result, clean_error = _run_checked(
+                            clean_cmd,
+                            repo_root,
+                            env,
+                            60,
+                            'git clean에 실패했습니다.',
+                            cancel_event=cancel_event,
+                            mutation_state=mutation_state
+                        )
+                        if clean_error:
+                            return clean_error
+                        clean_stdout = (clean_result.stdout or '').strip()
+                        clean_stderr = (clean_result.stderr or '').strip()
+                        command = 'git reset -- <selected file> && git clean -fd -- <selected file>'
+                    elif error:
+                        return error
+                    else:
+                        restore_stdout = (restore_result.stdout or '').strip()
+                        restore_stderr = (restore_result.stderr or '').strip()
+                        command = 'git restore --staged --worktree -- <selected file>'
+
+                combined_stdout = '\n'.join(
+                    item for item in [restore_stdout, reset_stdout, clean_stdout] if item
+                )
+                combined_stderr = '\n'.join(
+                    item for item in [restore_stderr, reset_stderr, clean_stderr] if item
+                )
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=command,
+                    exit_code=0,
+                    stdout=combined_stdout,
+                    stderr=combined_stderr,
+                    extra={
+                        'repo_target': repo_target,
+                        'reverted_file': selected_file,
+                        'reverted_paths': revert_paths
                     }
                 )
 

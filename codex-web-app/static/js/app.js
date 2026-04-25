@@ -148,6 +148,7 @@ const GIT_HISTORY_REQUEST_TIMEOUT_MS = 90000;
 const GIT_COMMIT_PREVIEW_REQUEST_TIMEOUT_MS = 90000;
 const GIT_COMMIT_PREVIEW_CACHE_MS = 15000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 100000;
+const GIT_REVERT_REQUEST_TIMEOUT_MS = 100000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 620000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
 const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
@@ -326,6 +327,7 @@ let gitSyncOverlayPreviewKeyByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: '',
     [GIT_SYNC_TARGET_CODEX_AGENT]: ''
 };
+let gitSyncOverlayRevertingPath = '';
 const gitCommitPreviewCacheByKey = new Map();
 const gitCommitPreviewInFlightByKey = new Map();
 let fileBrowserRoot = FILE_BROWSER_ROOT_WORKSPACE;
@@ -8267,15 +8269,17 @@ function getRecoverableGitActionButtons() {
         '#codex-sync-overlay-sync',
         '#codex-sync-overlay-commit',
         '#codex-sync-overlay-push',
-        '#codex-sync-overlay-refresh'
+        '#codex-sync-overlay-refresh',
+        '.git-file-tree-revert'
     ];
     const seen = new Set();
     const buttons = [];
     selectors.forEach(selector => {
-        const button = document.querySelector(selector);
-        if (!button || seen.has(button)) return;
-        seen.add(button);
-        buttons.push(button);
+        document.querySelectorAll(selector).forEach(button => {
+            if (!button || seen.has(button)) return;
+            seen.add(button);
+            buttons.push(button);
+        });
     });
     return buttons;
 }
@@ -8722,6 +8726,13 @@ function renderGitChangedFileTreeList(options = {}) {
     const onFolderCollapseToggle = typeof options.onFolderCollapseToggle === 'function'
         ? options.onFolderCollapseToggle
         : null;
+    const onFileRevert = typeof options.onFileRevert === 'function'
+        ? options.onFileRevert
+        : null;
+    const fileRevertDisabled = Boolean(options.fileRevertDisabled);
+    const fileRevertBusyPath = typeof options.fileRevertBusyPath === 'string'
+        ? options.fileRevertBusyPath
+        : '';
 
     const tree = buildGitChangedFileTree(options.files);
     const rows = flattenGitChangedFileTree(tree, collapsedFolders);
@@ -8819,6 +8830,28 @@ function renderGitChangedFileTreeList(options = {}) {
             textWrap.appendChild(fileName);
 
             rowNode.appendChild(textWrap);
+
+            if (onFileRevert && file?.path) {
+                const revertButton = document.createElement('button');
+                revertButton.type = 'button';
+                revertButton.className = 'btn ghost icon-only git-file-tree-revert';
+                const revertLabel = `${file.path} 변경 되돌리기`;
+                revertButton.dataset.label = revertLabel;
+                revertButton.setAttribute('aria-label', revertLabel);
+                revertButton.setAttribute('title', revertLabel);
+                revertButton.disabled = fileRevertDisabled || fileRevertBusyPath === file.path;
+                const srLabel = document.createElement('span');
+                srLabel.className = 'sr-only';
+                srLabel.textContent = revertLabel;
+                revertButton.appendChild(srLabel);
+                revertButton.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onFileRevert(file.path, file, revertButton);
+                });
+                rowNode.appendChild(revertButton);
+                syncHoverTooltipFromLabel(revertButton, revertLabel);
+            }
         }
 
         item.appendChild(rowNode);
@@ -9693,6 +9726,11 @@ function renderGitSyncOverlay(history) {
             files: changedFiles,
             collapsedFolders,
             selectable: false,
+            fileRevertDisabled: Boolean(gitMutationInFlight),
+            fileRevertBusyPath: gitSyncOverlayRevertingPath,
+            onFileRevert: (path, file, button) => {
+                void handleGitSyncFileRevert(button, path, repoTarget);
+            },
             onFolderCollapseToggle: (folderPath, shouldCollapse) => {
                 if (!folderPath) return;
                 if (shouldCollapse) {
@@ -14785,6 +14823,82 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
         isStale: false,
         fetchedAt: Date.now()
     };
+}
+
+function setGitSyncOverlayFileRevertButtonsDisabled(disabled, activeButton = null) {
+    document.querySelectorAll('#codex-sync-overlay .git-file-tree-revert').forEach(button => {
+        const isActive = activeButton && button === activeButton;
+        const isBusy = button.classList.contains('is-loading')
+            || button.getAttribute('aria-busy') === 'true';
+        button.disabled = Boolean(disabled && !isActive) || isBusy;
+    });
+}
+
+async function handleGitSyncFileRevert(button, path, repoTarget = gitSyncOverlayRepoTarget) {
+    const normalizedPath = String(path || '').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!normalizedPath) {
+        showToast('되돌릴 파일 경로를 확인할 수 없습니다.', { tone: 'error', durationMs: 3200 });
+        return;
+    }
+    if (gitMutationInFlight) {
+        console.warn('[codex-ui] git file revert blocked: git mutation is already in flight');
+        showToast('다른 git 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', {
+            tone: 'error',
+            durationMs: 3800
+        });
+        return;
+    }
+
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    const repoLabel = getGitSyncRepoLabel(target);
+    const confirmed = window.confirm(
+        `${repoLabel} · ${normalizedPath} 변경사항을 되돌릴까요?\n이 작업은 해당 파일의 로컬 변경을 삭제합니다.`
+    );
+    if (!confirmed) {
+        return;
+    }
+
+    gitMutationInFlight = true;
+    gitSyncOverlayRevertingPath = normalizedPath;
+    setGitSyncOverlayFileRevertButtonsDisabled(true, button);
+    setGitButtonBusy(button, true, 'Reverting...');
+    try {
+        const result = await fetchJson('/api/codex/git/revert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_REVERT_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({
+                repo_target: target,
+                file: normalizedPath
+            })
+        });
+        const summary = summarizeGitOutput(result?.stdout || result?.stderr);
+        const suffix = summary ? `: ${summary}` : '';
+        showToast(`${repoLabel} · ${normalizedPath} revert 완료${suffix}`, {
+            tone: 'success',
+            durationMs: 3600
+        });
+        setGitSyncHistoryCache(target, { fetchedAt: 0 });
+        if (isGitSyncOverlayOpen() && target === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
+            await refreshGitSyncOverlayHistory({ force: true, silent: true });
+        }
+    } catch (error) {
+        let message = normalizeGitActionError(error, 'git revert 작업에 실패했습니다.');
+        const cancelNotice = await requestGitCancelAfterTimeout(error, target);
+        if (cancelNotice) {
+            message = `${message} · ${cancelNotice}`;
+        }
+        showToast(`${repoLabel} · ${normalizedPath} revert 실패: ${message}`, {
+            tone: 'error',
+            durationMs: 5200
+        });
+    } finally {
+        gitMutationInFlight = false;
+        gitSyncOverlayRevertingPath = '';
+        setGitButtonBusy(button, false);
+        setGitSyncOverlayFileRevertButtonsDisabled(false);
+        void refreshGitBranchStatus({ force: true, updateOverlay: true });
+    }
 }
 
 async function handleGitCommit(button) {

@@ -746,6 +746,20 @@ textarea {
     white-space: nowrap;
 }
 
+.git-file-tree-revert {
+    --icon-button-size: 26px;
+    flex: 0 0 var(--icon-button-size);
+    background-image: var(--icon-refresh);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 13px 13px;
+    opacity: 0.82;
+}
+
+.git-file-tree-revert:hover {
+    opacity: 1;
+}
+
 .holiday-weekday {
     color: var(--danger);
     font-weight: 700;

@@ -1825,6 +1825,39 @@ textarea {
     background: transparent;
 }
 
+.file-browser-markdown pre.markdown-code-block {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    font-family: var(--font-code-block);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.file-browser-markdown .markdown-code-gutter {
+    display: block;
+    min-width: calc(var(--markdown-code-line-digit-width, 2) * 1ch + 18px);
+    padding: 10px 10px 10px 12px;
+    border-right: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-tertiary);
+    text-align: right;
+    white-space: pre;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-code-block);
+}
+
+.file-browser-markdown pre.markdown-code-block > code {
+    display: block;
+    min-width: 0;
+    padding: 10px 12px;
+    background: transparent;
+    white-space: pre;
+}
+
 .file-browser-markdown ul,
 .file-browser-markdown ol {
     margin: 8px 0 10px;
@@ -1838,6 +1871,10 @@ textarea {
 .file-browser-markdown .markdown-task-list {
     list-style: none;
     padding-left: 0;
+}
+
+.file-browser-markdown .markdown-task-item {
+    list-style: none;
 }
 
 .file-browser-markdown .markdown-task-item label {
@@ -6241,6 +6278,16 @@ body.is-work-mode-resizing * {
     margin-top: 4px;
 }
 
+.message-bubble hr {
+    margin: 8px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+.message.user .message-bubble hr {
+    border-top-color: rgba(255, 255, 255, 0.28);
+}
+
 .message-bubble code {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
@@ -6262,6 +6309,87 @@ body.is-work-mode-resizing * {
 .message.user .message-bubble pre {
     background: rgba(255, 255, 255, 0.2);
     border-color: rgba(255, 255, 255, 0.2);
+}
+
+.message-bubble ul,
+.message-bubble ol {
+    margin: 6px 0 0;
+    padding-left: 20px;
+    white-space: normal;
+}
+
+.message-bubble li + li {
+    margin-top: 3px;
+}
+
+.message-bubble .markdown-task-list {
+    list-style: none;
+    padding-left: 0;
+}
+
+.message-bubble .markdown-task-item {
+    list-style: none;
+}
+
+.message-bubble .markdown-task-item label {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 7px;
+}
+
+.message-bubble .markdown-task-item input[type="checkbox"] {
+    flex: 0 0 auto;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+
+.message.user .message-bubble .markdown-task-item input[type="checkbox"] {
+    accent-color: #fff;
+}
+
+.message-bubble blockquote {
+    margin: 8px 0 0;
+    padding: 0 0 0 10px;
+    border-left: 3px solid var(--border);
+    color: var(--text-secondary);
+    white-space: normal;
+}
+
+.message.user .message-bubble blockquote {
+    border-left-color: rgba(255, 255, 255, 0.36);
+    color: rgba(255, 255, 255, 0.86);
+}
+
+.message-bubble table,
+.message-bubble .markdown-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0 0;
+    table-layout: fixed;
+    white-space: normal;
+}
+
+.message-bubble th,
+.message-bubble td {
+    border: 1px solid var(--border);
+    padding: 6px 8px;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+.message-bubble th {
+    background: var(--surface-raised);
+    font-weight: 700;
+}
+
+.message.user .message-bubble th,
+.message.user .message-bubble td {
+    border-color: rgba(255, 255, 255, 0.26);
+}
+
+.message.user .message-bubble th {
+    background: rgba(255, 255, 255, 0.14);
 }
 
 .message-bubble pre.markdown-code-block {

@@ -18355,38 +18355,275 @@ function hydrateMessageLabelLinks(container) {
     });
 }
 
+function reserveMarkdownInlineHtmlToken(tokens, html) {
+    const token = `\uE000MDINLINE${tokens.length}\uE001`;
+    tokens.push(String(html || ''));
+    return token;
+}
+
+function isMarkdownEscapableInlineChar(char) {
+    return /[\\`*_{}\[\]()#+\-.!|~<>]/.test(String(char || ''));
+}
+
+function getMarkdownBacktickRunLength(source, startIndex) {
+    let index = startIndex;
+    while (index < source.length && source[index] === '`') {
+        index += 1;
+    }
+    return index - startIndex;
+}
+
+function normalizeMarkdownCodeSpanText(value) {
+    const source = String(value || '').replace(/\s*\n\s*/g, ' ');
+    if (source.length >= 2 && source.startsWith(' ') && source.endsWith(' ') && source.trim()) {
+        return source.slice(1, -1);
+    }
+    return source;
+}
+
+function parseMarkdownInlineCodeSpan(source, startIndex, inlineTokens) {
+    if (source[startIndex] !== '`') return null;
+    const runLength = getMarkdownBacktickRunLength(source, startIndex);
+    const marker = '`'.repeat(runLength);
+    const contentStart = startIndex + runLength;
+    const contentEnd = source.indexOf(marker, contentStart);
+    if (contentEnd === -1) return null;
+    const codeText = normalizeMarkdownCodeSpanText(source.slice(contentStart, contentEnd));
+    return {
+        text: reserveMarkdownInlineHtmlToken(inlineTokens, `<code>${escapeHtml(codeText)}</code>`),
+        nextIndex: contentEnd + runLength
+    };
+}
+
+function findMarkdownLinkLabelEnd(source, startIndex) {
+    let depth = 1;
+    let index = startIndex + 1;
+    while (index < source.length) {
+        const current = source[index];
+        if (current === '\\') {
+            index += 2;
+            continue;
+        }
+        if (current === '`') {
+            const runLength = getMarkdownBacktickRunLength(source, index);
+            const marker = '`'.repeat(runLength);
+            const end = source.indexOf(marker, index + runLength);
+            if (end !== -1) {
+                index = end + runLength;
+                continue;
+            }
+        }
+        if (current === '[') {
+            depth += 1;
+        } else if (current === ']') {
+            depth -= 1;
+            if (depth === 0) return index;
+        }
+        index += 1;
+    }
+    return -1;
+}
+
+function parseMarkdownLinkTarget(source, openParenIndex) {
+    if (source[openParenIndex] !== '(') return null;
+    let depth = 0;
+    let inAngleDestination = false;
+    let index = openParenIndex + 1;
+    while (index < source.length) {
+        const current = source[index];
+        if (current === '\\') {
+            index += 2;
+            continue;
+        }
+        if (current === '<' && depth === 0) {
+            inAngleDestination = true;
+            index += 1;
+            continue;
+        }
+        if (current === '>' && inAngleDestination) {
+            inAngleDestination = false;
+            index += 1;
+            continue;
+        }
+        if (!inAngleDestination) {
+            if (current === '(') {
+                depth += 1;
+            } else if (current === ')') {
+                if (depth === 0) {
+                    return {
+                        raw: source.slice(openParenIndex + 1, index),
+                        nextIndex: index + 1
+                    };
+                }
+                depth -= 1;
+            }
+        }
+        index += 1;
+    }
+    return null;
+}
+
+function extractMarkdownLinkHref(rawTarget) {
+    const trimmed = String(rawTarget || '').trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('<')) {
+        let index = 1;
+        while (index < trimmed.length) {
+            if (trimmed[index] === '\\') {
+                index += 2;
+                continue;
+            }
+            if (trimmed[index] === '>') {
+                return trimmed.slice(1, index).replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, '$1').trim();
+            }
+            index += 1;
+        }
+        return '';
+    }
+    const match = trimmed.match(/^\S+/);
+    return match ? match[0].replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, '$1') : '';
+}
+
+function parseMarkdownInlineLink(source, startIndex, inlineTokens) {
+    if (source[startIndex] !== '[' || source[startIndex - 1] === '!') return null;
+    const labelEnd = findMarkdownLinkLabelEnd(source, startIndex);
+    if (labelEnd === -1 || source[labelEnd + 1] !== '(') return null;
+    const target = parseMarkdownLinkTarget(source, labelEnd + 1);
+    if (!target) return null;
+    const href = extractMarkdownLinkHref(target.raw);
+    if (!href) return null;
+    const label = source.slice(startIndex + 1, labelEnd).replace(/\\([\\`*_{}\[\]()#+\-.!|~<>])/g, '$1');
+    return {
+        text: reserveMarkdownInlineHtmlToken(inlineTokens, renderMarkdownLink(label, href)),
+        nextIndex: target.nextIndex
+    };
+}
+
+function trimMarkdownAutolinkTrailingPunctuation(value) {
+    let href = String(value || '');
+    let trailing = '';
+    while (href && /[.,!?;:]$/.test(href)) {
+        trailing = `${href.slice(-1)}${trailing}`;
+        href = href.slice(0, -1);
+    }
+    while (href.endsWith(')')) {
+        const openCount = (href.match(/\(/g) || []).length;
+        const closeCount = (href.match(/\)/g) || []).length;
+        if (closeCount <= openCount) break;
+        trailing = `)${trailing}`;
+        href = href.slice(0, -1);
+    }
+    return { href, trailing };
+}
+
+function parseMarkdownAngleAutolink(source, startIndex, inlineTokens) {
+    if (source[startIndex] !== '<') return null;
+    const match = source.slice(startIndex).match(/^<(https?:\/\/[^<>\s]+)>/i);
+    if (!match) return null;
+    const href = match[1];
+    return {
+        text: reserveMarkdownInlineHtmlToken(inlineTokens, renderMarkdownLink(href, href)),
+        nextIndex: startIndex + match[0].length
+    };
+}
+
+function parseMarkdownBareAutolink(source, startIndex, inlineTokens) {
+    const previous = startIndex > 0 ? source[startIndex - 1] : '';
+    if (previous && /[A-Za-z0-9_/@.-]/.test(previous)) return null;
+    const match = source.slice(startIndex).match(/^https?:\/\/[^\s<]+/i);
+    if (!match) return null;
+    const { href, trailing } = trimMarkdownAutolinkTrailingPunctuation(match[0]);
+    if (!href) return null;
+    return {
+        text: `${reserveMarkdownInlineHtmlToken(inlineTokens, renderMarkdownLink(href, href))}${trailing}`,
+        nextIndex: startIndex + match[0].length
+    };
+}
+
+function applyInlineMarkdownFormatting(html) {
+    let output = String(html || '');
+    output = output.replace(/\*\*\*([^\n]+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    output = output.replace(/___([^\n]+?)___/g, '<strong><em>$1</em></strong>');
+    output = output.replace(/\*\*([^\n]+?)\*\*/g, '<strong>$1</strong>');
+    output = output.replace(/__([^\n]+?)__/g, '<strong>$1</strong>');
+    output = output.replace(/~~([^\n]+?)~~/g, '<del>$1</del>');
+    output = output.replace(/(^|[\s([{>])\*([^\s*](?:[^*\n]*?[^\s*])?)\*(?=$|[\s)\]},.!?:;<])/g, '$1<em>$2</em>');
+    output = output.replace(/(^|[^A-Za-z0-9_])_([^_\s](?:[^_\n]*?[^_\s])?)_(?=$|[^A-Za-z0-9_])/g, '$1<em>$2</em>');
+    return output;
+}
+
 function renderInlineMarkdownSpans(text) {
     const source = String(text || '');
-    const inlineCodeTokens = [];
-    let html = source.replace(/`([^`\n]+)`/g, (match, codeText) => {
-        const token = `@@MDCODE${inlineCodeTokens.length}@@`;
-        inlineCodeTokens.push(`<code>${escapeHtml(codeText)}</code>`);
-        return token;
-    });
+    const inlineTokens = [];
+    let buffer = '';
+    let index = 0;
 
-    html = escapeHtml(html);
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
-        return renderMarkdownLink(decodeHtmlEntities(label), decodeHtmlEntities(href));
-    });
-    html = html.replace(/@@MDCODE(\d+)@@/g, (match, indexText) => {
-        const index = Number(indexText);
-        return inlineCodeTokens[index] || '';
+    while (index < source.length) {
+        const codeSpan = parseMarkdownInlineCodeSpan(source, index, inlineTokens);
+        if (codeSpan) {
+            buffer += codeSpan.text;
+            index = codeSpan.nextIndex;
+            continue;
+        }
+
+        const angleAutolink = parseMarkdownAngleAutolink(source, index, inlineTokens);
+        if (angleAutolink) {
+            buffer += angleAutolink.text;
+            index = angleAutolink.nextIndex;
+            continue;
+        }
+
+        const markdownLink = parseMarkdownInlineLink(source, index, inlineTokens);
+        if (markdownLink) {
+            buffer += markdownLink.text;
+            index = markdownLink.nextIndex;
+            continue;
+        }
+
+        const bareAutolink = parseMarkdownBareAutolink(source, index, inlineTokens);
+        if (bareAutolink) {
+            buffer += bareAutolink.text;
+            index = bareAutolink.nextIndex;
+            continue;
+        }
+
+        const current = source[index];
+        const next = source[index + 1] || '';
+        if (current === '\\' && isMarkdownEscapableInlineChar(next)) {
+            buffer += reserveMarkdownInlineHtmlToken(inlineTokens, escapeHtml(next));
+            index += 2;
+            continue;
+        }
+
+        buffer += current;
+        index += 1;
+    }
+
+    let html = applyInlineMarkdownFormatting(escapeHtml(buffer));
+    html = html.replace(/\uE000MDINLINE(\d+)\uE001/g, (match, indexText) => {
+        const tokenIndex = Number(indexText);
+        return inlineTokens[tokenIndex] || '';
     });
     return html;
 }
 
 function parseMarkdownFenceStart(line) {
     const source = String(line || '');
-    const match = source.match(/^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+.#-]*)\s*$/);
+    const match = source.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
     if (!match) return null;
     const fence = match[1];
+    const info = String(match[2] || '').trim();
+    if (fence[0] === '`' && info.includes('`')) return null;
+    const languageToken = info.split(/\s+/)[0] || '';
+    const normalizedLanguage = languageToken
+        .replace(/^\{?\.?/, '')
+        .replace(/\}?$/, '')
+        .trim()
+        .toLowerCase();
     return {
         markerChar: fence[0],
         markerSize: fence.length,
-        language: String(match[2] || '').trim().toLowerCase()
+        language: normalizedLanguage
     };
 }
 
@@ -18471,6 +18708,24 @@ function parseMarkdownHeadingLine(line) {
     };
 }
 
+function parseMarkdownSetextHeading(lines, startIndex) {
+    if (!Array.isArray(lines) || startIndex + 1 >= lines.length) return null;
+    const text = String(lines[startIndex] || '').trim();
+    const underline = String(lines[startIndex + 1] || '');
+    if (!text) return null;
+    if (parseMarkdownFenceStart(lines[startIndex])) return null;
+    if (parseMarkdownHeadingLine(lines[startIndex])) return null;
+    if (parseMarkdownListLine(lines[startIndex])) return null;
+    if (/^\s{0,3}>\s?/.test(lines[startIndex])) return null;
+    const match = underline.match(/^\s{0,3}(=+|-+)\s*$/);
+    if (!match) return null;
+    return {
+        level: match[1][0] === '=' ? 1 : 2,
+        text,
+        nextIndex: startIndex + 2
+    };
+}
+
 function isMarkdownHorizontalRule(line) {
     const source = String(line || '').trim();
     if (!source) return false;
@@ -18481,59 +18736,140 @@ function isMarkdownHorizontalRule(line) {
 
 function parseMarkdownListLine(line) {
     const source = String(line || '');
-    const unordered = source.match(/^\s*([-+*])\s+(.+)$/);
+    const unordered = source.match(/^([ \t]*)([-+*])([ \t]+)(.*)$/);
     if (unordered) {
+        const indent = countMarkdownIndent(unordered[1]);
         return {
             ordered: false,
             number: null,
-            content: unordered[2]
+            indent,
+            contentIndent: indent + unordered[2].length + countMarkdownIndent(unordered[3]),
+            content: unordered[4]
         };
     }
-    const ordered = source.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    const ordered = source.match(/^([ \t]*)(\d{1,9})([.)])([ \t]+)(.*)$/);
     if (ordered) {
+        const indent = countMarkdownIndent(ordered[1]);
         return {
             ordered: true,
-            number: Number(ordered[1]) || 1,
-            content: ordered[2]
+            number: Number(ordered[2]) || 1,
+            indent,
+            contentIndent: indent + ordered[2].length + ordered[3].length + countMarkdownIndent(ordered[4]),
+            content: ordered[5]
         };
     }
     return null;
 }
 
-function parseMarkdownList(lines, startIndex) {
+function countMarkdownIndent(value) {
+    const source = String(value || '');
+    let column = 0;
+    for (const char of source) {
+        if (char === ' ') {
+            column += 1;
+        } else if (char === '\t') {
+            column += 4 - (column % 4);
+        } else {
+            break;
+        }
+    }
+    return column;
+}
+
+function removeMarkdownIndent(line, columns) {
+    const source = String(line || '');
+    let column = 0;
+    let index = 0;
+    while (index < source.length && column < columns) {
+        const char = source[index];
+        if (char === ' ') {
+            column += 1;
+            index += 1;
+        } else if (char === '\t') {
+            column += 4 - (column % 4);
+            index += 1;
+        } else {
+            break;
+        }
+    }
+    return source.slice(index);
+}
+
+function renderMarkdownListItem(parsed) {
+    const lines = [String(parsed.content || '').trim(), ...parsed.continuationLines].filter(line => line.length > 0);
+    const itemText = lines.join('\n');
+    const taskMatch = itemText.match(/^\[( |x|X)\]\s+([\s\S]*)$/);
+    if (taskMatch) {
+        const checked = /x/i.test(taskMatch[1]);
+        const labelHtml = renderInlineMarkdownSpans(taskMatch[2]).replace(/\n/g, '<br>');
+        return {
+            task: true,
+            html: `<li class="markdown-task-item"><label><input type="checkbox" disabled${checked ? ' checked' : ''}><span>${labelHtml}</span></label>${parsed.children.join('')}</li>`
+        };
+    }
+    const contentHtml = itemText
+        ? renderInlineMarkdownSpans(itemText).replace(/\n/g, '<br>')
+        : '';
+    return {
+        task: false,
+        html: `<li>${contentHtml}${parsed.children.join('')}</li>`
+    };
+}
+
+function parseMarkdownList(lines, startIndex, options = {}) {
     if (!Array.isArray(lines) || startIndex < 0 || startIndex >= lines.length) return null;
     const first = parseMarkdownListLine(lines[startIndex]);
     if (!first) return null;
 
     const ordered = first.ordered;
     const startNumber = first.number || 1;
+    const listIndent = first.indent;
     const items = [];
     let index = startIndex;
+    let currentItem = null;
     while (index < lines.length) {
-        const parsed = parseMarkdownListLine(lines[index]);
-        if (!parsed || parsed.ordered !== ordered) break;
+        const source = String(lines[index] || '');
+        if (!source.trim()) break;
 
-        const content = String(parsed.content || '').trim();
-        const taskMatch = content.match(/^\[( |x|X)\]\s+(.*)$/);
-        if (taskMatch) {
-            const checked = /x/i.test(taskMatch[1]);
-            const labelHtml = renderInlineMarkdownSpans(taskMatch[2]);
-            items.push(
-                `<li class="markdown-task-item"><label><input type="checkbox" disabled${checked ? ' checked' : ''}><span>${labelHtml}</span></label></li>`
-            );
-        } else {
-            items.push(`<li>${renderInlineMarkdownSpans(content)}</li>`);
+        const parsed = parseMarkdownListLine(lines[index]);
+        if (parsed && parsed.indent === listIndent && parsed.ordered === ordered) {
+            currentItem = {
+                content: parsed.content,
+                contentIndent: parsed.contentIndent,
+                continuationLines: [],
+                children: []
+            };
+            items.push(currentItem);
+            index += 1;
+            continue;
         }
-        index += 1;
+
+        if (currentItem && parsed && parsed.indent > listIndent) {
+            const nested = parseMarkdownList(lines, index, options);
+            if (nested) {
+                currentItem.children.push(nested.html);
+                index = nested.nextIndex;
+                continue;
+            }
+        }
+
+        if (currentItem && !parsed && countMarkdownIndent(source) >= currentItem.contentIndent) {
+            currentItem.continuationLines.push(removeMarkdownIndent(source, currentItem.contentIndent).trim());
+            index += 1;
+            continue;
+        }
+
+        break;
     }
 
     if (items.length === 0) return null;
     const tag = ordered ? 'ol' : 'ul';
     const startAttr = ordered && startNumber > 1 ? ` start="${startNumber}"` : '';
-    const hasTaskItems = items.some(item => item.includes('markdown-task-item'));
-    const classAttr = hasTaskItems ? ' class="markdown-task-list"' : '';
+    const renderedItems = items.map(renderMarkdownListItem);
+    const allTaskItems = renderedItems.every(item => item.task);
+    const classAttr = allTaskItems ? ' class="markdown-task-list"' : '';
     return {
-        html: `<${tag}${startAttr}${classAttr}>${items.join('')}</${tag}>`,
+        html: `<${tag}${startAttr}${classAttr}>${renderedItems.map(item => item.html).join('')}</${tag}>`,
         nextIndex: index
     };
 }
@@ -18565,14 +18901,60 @@ function parseMarkdownBlockquote(lines, startIndex, options = {}) {
     };
 }
 
+function isMarkdownCharacterEscaped(source, index) {
+    let slashCount = 0;
+    let cursor = index - 1;
+    while (cursor >= 0 && source[cursor] === '\\') {
+        slashCount += 1;
+        cursor -= 1;
+    }
+    return slashCount % 2 === 1;
+}
+
 function splitMarkdownTableRow(line) {
     const source = String(line || '').trim();
     if (!source.includes('|')) return [];
     let row = source;
     if (row.startsWith('|')) row = row.slice(1);
-    if (row.endsWith('|')) row = row.slice(0, -1);
-    if (!row.includes('|')) return [];
-    return row.split('|').map(cell => cell.trim());
+    if (row.endsWith('|') && !isMarkdownCharacterEscaped(row, row.length - 1)) row = row.slice(0, -1);
+    const cells = [];
+    let cell = '';
+    let codeRunLength = 0;
+    let index = 0;
+    while (index < row.length) {
+        const current = row[index];
+        if (current === '\\') {
+            cell += current;
+            if (index + 1 < row.length) {
+                cell += row[index + 1];
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if (current === '`') {
+            const runLength = getMarkdownBacktickRunLength(row, index);
+            if (codeRunLength === 0) {
+                codeRunLength = runLength;
+            } else if (runLength === codeRunLength) {
+                codeRunLength = 0;
+            }
+            cell += '`'.repeat(runLength);
+            index += runLength;
+            continue;
+        }
+        if (current === '|' && codeRunLength === 0) {
+            cells.push(cell.trim());
+            cell = '';
+            index += 1;
+            continue;
+        }
+        cell += current;
+        index += 1;
+    }
+    cells.push(cell.trim());
+    return cells.length >= 2 ? cells : [];
 }
 
 function parseMarkdownTableAlignment(cell) {
@@ -18648,6 +19030,7 @@ function isMarkdownBlockBoundary(lines, index) {
     if (!line.trim()) return true;
     if (parseMarkdownFenceStart(line)) return true;
     if (parseMarkdownHeadingLine(line)) return true;
+    if (parseMarkdownSetextHeading(lines, index)) return true;
     if (isMarkdownHorizontalRule(line)) return true;
     if (parseMarkdownListLine(line)) return true;
     if (/^\s{0,3}>\s?/.test(line)) return true;
@@ -18687,6 +19070,13 @@ function renderInlineMarkdown(text, options = {}) {
             continue;
         }
 
+        const setextHeading = parseMarkdownSetextHeading(lines, lineIndex);
+        if (setextHeading) {
+            parts.push(`<h${setextHeading.level}>${renderInlineMarkdownSpans(setextHeading.text)}</h${setextHeading.level}>`);
+            lineIndex = setextHeading.nextIndex;
+            continue;
+        }
+
         if (isMarkdownHorizontalRule(lines[lineIndex])) {
             parts.push('<hr>');
             lineIndex += 1;
@@ -18700,7 +19090,7 @@ function renderInlineMarkdown(text, options = {}) {
             continue;
         }
 
-        const list = parseMarkdownList(lines, lineIndex);
+        const list = parseMarkdownList(lines, lineIndex, renderOptions);
         if (list) {
             parts.push(list.html);
             lineIndex = list.nextIndex;

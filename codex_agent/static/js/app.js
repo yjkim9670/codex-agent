@@ -196,7 +196,9 @@ const TERMINAL_DEFAULT_ROWS = 32;
 const TERMINAL_FONT_SIZE_PHONE = 12.5;
 const TERMINAL_FONT_SIZE_COMPACT = 13;
 const TERMINAL_FONT_SIZE_DESKTOP = 14;
-const TERMINAL_FONT_FAMILY = 'ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", "IBM Plex Mono", "Liberation Mono", Menlo, Consolas, monospace';
+const NAVER_UI_FONT_FAMILY = '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", "Noto Sans CJK KR", "Apple SD Gothic Neo", sans-serif';
+const NAVER_CODE_FONT_FAMILY = '"D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace';
+const TERMINAL_FONT_FAMILY = NAVER_CODE_FONT_FAMILY;
 const TERMINAL_EXTRA_KEYS = Object.freeze([
     Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
     Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
@@ -17420,6 +17422,7 @@ async function hydrateMermaidDiagrams(container) {
     const theme = getMermaidThemeName();
     mermaidApi.initialize({
         startOnLoad: false,
+        fontFamily: NAVER_UI_FONT_FAMILY,
         theme
     });
     for (const node of diagrams) {

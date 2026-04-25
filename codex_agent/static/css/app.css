@@ -1,3 +1,79 @@
+@font-face {
+    font-family: "NanumSquareNeo";
+    src: url("/static/fonts/NanumSquareNeoTTF-aLt.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+    size-adjust: 92%;
+    ascent-override: 94%;
+    descent-override: 24%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "NanumSquareNeo";
+    src: url("/static/fonts/NanumSquareNeoTTF-bRg.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    size-adjust: 92%;
+    ascent-override: 94%;
+    descent-override: 24%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "NanumSquareNeo";
+    src: url("/static/fonts/NanumSquareNeoTTF-cBd.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    size-adjust: 92%;
+    ascent-override: 94%;
+    descent-override: 24%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "NanumSquareNeo";
+    src: url("/static/fonts/NanumSquareNeoTTF-dEb.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    size-adjust: 92%;
+    ascent-override: 94%;
+    descent-override: 24%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "NanumSquareNeo";
+    src: url("/static/fonts/NanumSquareNeoTTF-eHv.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+    size-adjust: 92%;
+    ascent-override: 94%;
+    descent-override: 24%;
+    line-gap-override: 0%;
+}
+
+@font-face {
+    font-family: "D2Coding";
+    src: url("/static/fonts/D2Coding-Ver1.3.2-20180524.ttf") format("truetype");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "D2Coding";
+    src: url("/static/fonts/D2CodingBold-Ver1.3.2-20180524.ttf") format("truetype");
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+}
+
 :root {
     color-scheme: light;
     --bg: #f4f7fb;
@@ -97,11 +173,12 @@
     --session-response-plan-bg: rgba(202, 90, 31, 0.14);
     --session-response-plan-border: rgba(202, 90, 31, 0.3);
     --session-response-plan-text: #9f4616;
-    --font-session-list-title: var(--font-sans);
-    --font-chat-title: var(--font-sans);
-    --font-code-block: "Cascadia Code", "Cascadia Mono", "Consolas", "Fira Code", "JetBrains Mono", "SF Mono", Menlo, monospace;
-    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-        "Apple SD Gothic Neo", "Helvetica Neue", "Noto Sans KR", "Segoe UI", sans-serif;
+    --font-naver-ui: "NanumSquareNeo", "NanumSquare", "Nanum Gothic", "Noto Sans CJK KR", "Apple SD Gothic Neo", sans-serif;
+    --font-naver-code: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
+    --font-session-list-title: var(--font-naver-ui);
+    --font-chat-title: var(--font-naver-ui);
+    --font-code-block: var(--font-naver-code);
+    --font-sans: var(--font-naver-ui);
 }
 
 [data-theme="dark"] {
@@ -491,7 +568,7 @@ textarea {
     border: 1px solid var(--border);
     background: var(--surface);
     font-size: 12px;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     word-break: break-all;
     display: flex;
@@ -857,7 +934,7 @@ textarea {
     border: 1px solid var(--border);
     background: var(--surface);
     font-size: 12px;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     word-break: break-all;
     display: flex;
@@ -942,7 +1019,7 @@ textarea {
     font-size: 12px;
     font-weight: 700;
     color: var(--accent);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 
@@ -1149,7 +1226,7 @@ textarea {
 .file-browser-path {
     font-size: 12px;
     color: var(--text-secondary);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface-muted);
@@ -1528,7 +1605,7 @@ textarea {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     font-size: 12px;
 }
 
@@ -1558,7 +1635,7 @@ textarea {
 .file-browser-source {
     margin: 0;
     padding: 10px 0;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
     line-height: 1.55;
     color: var(--text-primary);
@@ -1627,7 +1704,7 @@ textarea {
     padding: 12px 14px;
     background: transparent;
     color: var(--text-primary);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
     line-height: 1.6;
     tab-size: 4;
@@ -1788,7 +1865,7 @@ textarea {
 
 .file-browser-mermaid-source {
     margin: 0;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     font-size: 12px;
     line-height: 1.55;
     white-space: pre;
@@ -2284,7 +2361,7 @@ textarea {
     min-width: 0;
     font-size: 12px;
     color: var(--text-secondary);
-    font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2344,7 +2421,7 @@ textarea {
 .terminal-overlay-terminal-shell .xterm,
 .terminal-overlay-terminal-shell .xterm-helper-textarea,
 .terminal-overlay-terminal-shell .xterm-rows {
-    font-family: ui-monospace, "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", "IBM Plex Mono", "Liberation Mono", Menlo, Consolas, monospace !important;
+    font-family: var(--font-code-block) !important;
     font-variant-ligatures: none;
     line-height: 1.16;
 }
@@ -3843,7 +3920,7 @@ body.is-work-mode-resizing .work-mode-divider::before {
     border-radius: var(--radius-sm);
     background: var(--surface-muted);
     color: var(--text-secondary);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     font-size: 11px;
     padding: 8px 10px;
     min-height: 34px;
@@ -4160,13 +4237,13 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 .work-mode-file-cell-size {
     text-align: right;
     color: var(--text-secondary);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
 }
 
 .work-mode-file-cell-modified {
     text-align: center;
     color: var(--text-tertiary);
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-sans);
     font-size: 11px;
 }
 
@@ -4811,7 +4888,7 @@ body.is-work-mode-resizing * {
     border-radius: var(--radius-sm);
     padding: 8px;
     font-size: 12px;
-    font-family: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+    font-family: var(--font-code-block);
     color: var(--text-secondary);
     white-space: pre-wrap;
     word-break: break-word;

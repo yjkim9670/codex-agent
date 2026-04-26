@@ -583,6 +583,7 @@ def codex_session_message(session_id):
         model_override=model_override,
         reasoning_override=reasoning_override,
         attachments=attachments,
+        imagegen_prompt=prompt,
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))

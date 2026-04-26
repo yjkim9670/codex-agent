@@ -56,6 +56,29 @@ def _parse_allowed_origins(raw_value):
     return tuple(normalized_origins)
 
 
+def _parse_path_list_env(name):
+    raw_value = os.environ.get(name)
+    text = str(raw_value or '').strip()
+    if not text:
+        return tuple()
+    paths = []
+    seen = set()
+    for chunk in text.replace('\n', ',').split(','):
+        token = chunk.strip()
+        if not token:
+            continue
+        try:
+            path = Path(token).expanduser().resolve()
+        except Exception:
+            path = Path(token).expanduser()
+        key = str(path)
+        if key in seen:
+            continue
+        paths.append(path)
+        seen.add(key)
+    return tuple(paths)
+
+
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 _workspace_override = os.environ.get('CODEX_WORKSPACE_DIR')
@@ -415,6 +438,8 @@ CODEX_ENABLE_LEGACY_STATE_IMPORT = _parse_bool_env(
     default=False,
 )
 CODEX_SKIP_GIT_REPO_CHECK = _parse_bool_env('CODEX_SKIP_GIT_REPO_CHECK', default=False)
+CODEX_CLI_SELF_PROTECT = _parse_bool_env('CODEX_CLI_SELF_PROTECT', default=False)
+CODEX_CLI_PROTECTED_PATHS = _parse_path_list_env('CODEX_CLI_PROTECTED_PATHS')
 
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None

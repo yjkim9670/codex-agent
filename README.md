@@ -32,6 +32,14 @@ Or with the helper script:
 
 The helper launcher also uses `../.venv`.
 
+## Codex CLI Self Protection
+Set `CODEX_CLI_SELF_PROTECT=1` to run only the Codex CLI child process with
+Workbench/agent paths mounted read-only. Other Workbench APIs remain unchanged.
+
+On Linux this uses `bwrap`. By default it protects this Workbench checkout and
+an adjacent `codex_agent` directory when present. Add comma-separated extra
+paths with `CODEX_CLI_PROTECTED_PATHS=/path/to/codex_agent,/path/to/other`.
+
 ## Git Sync Script
 `z00_sync_git.py` is included for branch sync/mirror workflows.
 

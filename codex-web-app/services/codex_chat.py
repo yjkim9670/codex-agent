@@ -23,6 +23,8 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    CODEX_CLI_PROTECTED_PATHS,
+    CODEX_CLI_SELF_PROTECT,
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_ENABLE_LEGACY_STATE_IMPORT,
@@ -151,6 +153,58 @@ _PENDING_QUEUE_BOOTSTRAP_STARTED = False
 _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+_IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS = 72
+_IMAGEGEN_WORKBENCH_FILENAME_STOPWORDS = {
+    'image',
+    'images',
+    'gen',
+    'imagegen',
+    'generate',
+    'generated',
+    'generation',
+    'draw',
+    'drawing',
+    'create',
+    'make',
+    'please',
+    'use',
+    'using',
+    '이미지',
+    '그림',
+    '그려',
+    '그려줘',
+    '그려줘요',
+    '그려주세요',
+    '생성',
+    '생성해줘',
+    '생성해주세요',
+    '만들어',
+    '만들어줘',
+    '만들어주세요',
+    '활용',
+    '사용',
+    '이용',
+}
+_CODEX_CLI_SELF_PROTECT_REPO_CHILDREN = (
+    '.env.example',
+    '.git',
+    '.gitattributes',
+    '.gitignore',
+    'apps',
+    'codex-web-app',
+    'deploy',
+    'scripts',
+    'tests',
+    'activate_venv.sh',
+    'codex_agent.py',
+    'README.md',
+    'requirements.txt',
+    'run_codex_chat_server.py',
+    'run_codex_chat_server.sh',
+    'run_codex_chat_server_company.sh',
+    'sync_protect.list',
+    'z00_sync_git.py',
+)
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
     "- Plan mode is enabled for this turn.\n"
@@ -3404,6 +3458,115 @@ def _prepare_queued_codex_home(env):
     return queued_home
 
 
+def _safe_resolve_path(path):
+    try:
+        return Path(path).expanduser().resolve()
+    except Exception:
+        return Path(path).expanduser()
+
+
+def _path_contains(parent, child):
+    parent_path = _safe_resolve_path(parent)
+    child_path = _safe_resolve_path(child)
+    try:
+        child_path.relative_to(parent_path)
+        return True
+    except ValueError:
+        return False
+    except Exception:
+        return str(child_path) == str(parent_path)
+
+
+def _append_codex_cli_protected_path(paths, path, require_exists=False):
+    protected_path = _safe_resolve_path(path)
+    if require_exists and not protected_path.exists():
+        return
+    for existing_path in list(paths):
+        if _path_contains(existing_path, protected_path):
+            return
+        if _path_contains(protected_path, existing_path):
+            paths.remove(existing_path)
+    paths.append(protected_path)
+
+
+def _default_codex_cli_protected_paths():
+    repo_root = _safe_resolve_path(REPO_ROOT)
+    workspace_dir = _safe_resolve_path(WORKSPACE_DIR)
+    protected_paths = []
+
+    if _path_contains(repo_root, workspace_dir):
+        for child_name in _CODEX_CLI_SELF_PROTECT_REPO_CHILDREN:
+            _append_codex_cli_protected_path(
+                protected_paths,
+                repo_root / child_name,
+                require_exists=True,
+            )
+    else:
+        _append_codex_cli_protected_path(protected_paths, repo_root, require_exists=True)
+
+    for candidate in (repo_root.parent / 'codex_agent', workspace_dir / 'codex_agent'):
+        if _path_contains(candidate, workspace_dir):
+            continue
+        _append_codex_cli_protected_path(protected_paths, candidate, require_exists=True)
+
+    return protected_paths
+
+
+def _codex_cli_protected_paths():
+    if not CODEX_CLI_SELF_PROTECT:
+        return []
+    protected_paths = []
+    for path in _default_codex_cli_protected_paths():
+        _append_codex_cli_protected_path(protected_paths, path)
+    for path in CODEX_CLI_PROTECTED_PATHS:
+        _append_codex_cli_protected_path(protected_paths, path)
+    return protected_paths
+
+
+def _path_is_under_codex_cli_protection(path):
+    return any(_path_contains(protected_path, path) for protected_path in _codex_cli_protected_paths())
+
+
+def _codex_output_base_dir():
+    candidates = [WORKSPACE_DIR, CODEX_STORAGE_DIR / 'codex_outputs']
+    if CODEX_CLI_SELF_PROTECT:
+        candidates.append(Path('/tmp') / 'codex_workbench_outputs')
+    for candidate in candidates:
+        if not _path_is_under_codex_cli_protection(candidate):
+            return candidate
+    return Path('/tmp') / 'codex_workbench_outputs'
+
+
+def _new_codex_output_path(identifier=None):
+    output_dir = _codex_output_base_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    suffix = str(identifier or uuid.uuid4().hex)
+    return output_dir / f"codex_output_{suffix}.txt"
+
+
+def _wrap_codex_cli_command(cmd):
+    protected_paths = _codex_cli_protected_paths()
+    if not protected_paths:
+        return cmd
+    bwrap_path = shutil.which('bwrap')
+    if not bwrap_path:
+        raise RuntimeError('CODEX_CLI_SELF_PROTECT=1 requires bubblewrap (`bwrap`) on this host.')
+    wrapped_cmd = [
+        bwrap_path,
+        '--dev-bind',
+        '/',
+        '/',
+        '--die-with-parent',
+        '--chdir',
+        str(WORKSPACE_DIR),
+    ]
+    for protected_path in protected_paths:
+        wrapped_cmd.extend(['--ro-bind-try', str(protected_path), str(protected_path)])
+    wrapped_cmd.append('--')
+    wrapped_cmd.extend(cmd)
+    return wrapped_cmd
+
+
 def _build_codex_exec_env(queued_execution=False):
     env = os.environ.copy()
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
@@ -3756,9 +3919,14 @@ def _extract_exec_json_summary(raw_stdout):
     }
 
 
-def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, attachments=None):
+def execute_codex_prompt(
+        prompt,
+        model_override=None,
+        reasoning_override=None,
+        attachments=None,
+        imagegen_prompt=None):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = WORKSPACE_DIR / f"codex_output_{uuid.uuid4().hex}.txt"
+    output_path = _new_codex_output_path()
     normalized_attachments = normalize_codex_attachments(attachments or [])
     prompt = _append_attachment_exec_context(prompt, normalized_attachments)
     cmd = _build_codex_command(
@@ -3773,6 +3941,7 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
     cli_started_at = None
     completed_at = None
     try:
+        cmd = _wrap_codex_cli_command(cmd)
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
             _prepare_imagegen_workbench_dirs(prompt)
@@ -3814,10 +3983,13 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
     if not output_text:
         output_text = json_summary.get('last_text') or ''
     copied_image_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
-        json_summary.get('codex_session_id')
+        json_summary.get('codex_session_id'),
+        since=cli_started_at,
+        until=completed_at,
+        prompt_text=imagegen_prompt,
     )
-    if copied_image_outputs and (not output_text or json_summary.get('saw_empty_final_answer')):
-        output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
+    if copied_image_outputs:
+        output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
     elif not output_text and json_summary.get('saw_empty_final_answer'):
         output_text = 'Codex completed without a final response.'
     if not output_text:
@@ -4140,10 +4312,23 @@ def _format_imagegen_workbench_output_message(paths):
     if not outputs:
         return ''
     if len(outputs) == 1:
-        return f"Image generation output recovered:\n`{outputs[0]}`"
-    lines = ["Image generation outputs recovered:"]
+        return f"Generated image saved:\n`{outputs[0]}`"
+    lines = ["Generated images saved:"]
     lines.extend(f"- `{path}`" for path in outputs)
     return "\n".join(lines)
+
+
+def _append_imagegen_workbench_output_message(output_text, paths):
+    normalized = str(output_text or '').strip()
+    outputs = _copy_imagegen_workbench_outputs(paths)
+    if not outputs:
+        return normalized
+    if normalized and all(path in normalized for path in outputs):
+        return normalized
+    output_message = _format_imagegen_workbench_output_message(outputs)
+    if not normalized:
+        return output_message
+    return f"{normalized}\n\n{output_message}"
 
 
 def _extract_codex_session_id_from_exec_event(event):
@@ -4220,34 +4405,154 @@ def _stream_has_empty_final_answer(stream_id):
         return bool(stream and stream.get('assistant_final_empty'))
 
 
-def _unique_imagegen_workbench_output_path(output_dir, source_path):
-    candidate = output_dir / source_path.name
+def _imagegen_workbench_filename_stem_from_prompt(prompt_text, fallback_stem='imagegen'):
+    prompt = str(prompt_text or '').strip()
+    tokens = []
+    current = []
+    for char in prompt:
+        if char.isalnum():
+            if char.isascii():
+                current.append(char.lower())
+            else:
+                current.append(char)
+            continue
+        if current:
+            tokens.append(''.join(current))
+            current = []
+    if current:
+        tokens.append(''.join(current))
+
+    tokens = [token for token in tokens if token not in _IMAGEGEN_WORKBENCH_FILENAME_STOPWORDS]
+    stem = '-'.join(tokens).strip(' .-_')
+    if not stem:
+        stem = str(fallback_stem or '').strip(' .-_') or 'imagegen'
+    if len(stem) > _IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS:
+        truncated = stem[:_IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS].strip(' .-_')
+        if '-' in truncated:
+            word_boundary = truncated.rsplit('-', 1)[0].strip(' .-_')
+            if len(word_boundary) >= 16:
+                truncated = word_boundary
+        stem = truncated or 'imagegen'
+    return stem
+
+
+def _imagegen_workbench_file_digest(path):
     try:
-        source_size = source_path.stat().st_size
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.hexdigest()
     except Exception:
-        source_size = None
+        return ''
+
+
+def _imagegen_workbench_files_match(source_path, candidate_path):
+    try:
+        if source_path.stat().st_size != candidate_path.stat().st_size:
+            return False
+    except Exception:
+        return False
+    source_digest = _imagegen_workbench_file_digest(source_path)
+    if not source_digest:
+        return False
+    return source_digest == _imagegen_workbench_file_digest(candidate_path)
+
+
+def _unique_imagegen_workbench_output_path(output_dir, source_path, prompt_text=None):
+    stem = _imagegen_workbench_filename_stem_from_prompt(prompt_text, fallback_stem=source_path.stem)
+    suffix = source_path.suffix.lower() or '.png'
+    candidate = output_dir / f'{stem}{suffix}'
     if candidate.exists():
-        try:
-            if source_size is not None and candidate.stat().st_size == source_size:
-                return candidate
-        except Exception:
-            pass
+        if _imagegen_workbench_files_match(source_path, candidate):
+            return candidate
         for index in range(2, 1000):
-            versioned = output_dir / f"{source_path.stem}-{index}{source_path.suffix}"
+            versioned = output_dir / f"{stem}-{index}{suffix}"
+            if versioned.exists() and _imagegen_workbench_files_match(source_path, versioned):
+                return versioned
             if not versioned.exists():
                 return versioned
-        return output_dir / f"{source_path.stem}-{uuid.uuid4().hex[:8]}{source_path.suffix}"
+        return output_dir / f"{stem}-{uuid.uuid4().hex[:8]}{suffix}"
     return candidate
 
 
-def _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id, codex_home=None):
+def _imagegen_source_path_in_window(source_path, since=None, until=None):
+    try:
+        modified_at = source_path.stat().st_mtime
+    except Exception:
+        return False
+    if isinstance(since, (int, float)) and modified_at < since - 10:
+        return False
+    if isinstance(until, (int, float)) and modified_at > until + 60:
+        return False
+    return True
+
+
+def _iter_imagegen_source_paths(source_home, session_id='', since=None, until=None):
+    generated_images_dir = source_home / 'generated_images'
+    source_dirs = []
+    if session_id:
+        source_dirs.append(generated_images_dir / session_id)
+    if isinstance(since, (int, float)) or isinstance(until, (int, float)):
+        try:
+            fallback_dirs = sorted(
+                (path for path in generated_images_dir.iterdir() if path.is_dir()),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            fallback_dirs = []
+        seen_dirs = {str(path) for path in source_dirs}
+        for fallback_dir in fallback_dirs:
+            fallback_key = str(fallback_dir)
+            if fallback_key in seen_dirs:
+                continue
+            source_dirs.append(fallback_dir)
+            seen_dirs.add(fallback_key)
+
+    seen_paths = set()
+    for source_dir in source_dirs:
+        if not source_dir.is_dir():
+            continue
+        try:
+            source_paths = sorted(source_dir.iterdir(), key=lambda path: path.name)
+        except Exception:
+            continue
+        for source_path in source_paths:
+            try:
+                source_key = str(source_path.resolve())
+            except Exception:
+                source_key = str(source_path)
+            if source_key in seen_paths:
+                continue
+            if not source_path.is_file():
+                continue
+            if source_path.suffix.lower() not in _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS:
+                continue
+            if source_dir.name != session_id and not _imagegen_source_path_in_window(
+                    source_path,
+                    since=since,
+                    until=until,
+            ):
+                continue
+            seen_paths.add(source_key)
+            yield source_path
+
+
+def _copy_imagegen_workbench_outputs_for_codex_session(
+        codex_session_id,
+        codex_home=None,
+        since=None,
+        until=None,
+        prompt_text=None,
+):
     session_id = str(codex_session_id or '').strip()
-    if not session_id:
+    if not session_id and not isinstance(since, (int, float)) and not isinstance(until, (int, float)):
         return []
     source_home = Path(str(codex_home or _CODEX_HOME)).expanduser()
-    source_dir = source_home / 'generated_images' / session_id
-    if not source_dir.is_dir():
-        return []
     output_dir = _imagegen_workbench_output_dir()
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -4256,12 +4561,13 @@ def _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id, codex_h
         return []
 
     copied = []
-    for source_path in sorted(source_dir.iterdir(), key=lambda path: path.name):
-        if not source_path.is_file():
-            continue
-        if source_path.suffix.lower() not in _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS:
-            continue
-        destination = _unique_imagegen_workbench_output_path(output_dir, source_path)
+    for source_path in _iter_imagegen_source_paths(
+            source_home,
+            session_id=session_id,
+            since=since,
+            until=until,
+    ):
+        destination = _unique_imagegen_workbench_output_path(output_dir, source_path, prompt_text)
         try:
             if not destination.exists():
                 shutil.copy2(source_path, destination)
@@ -4278,12 +4584,23 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
             return []
         codex_session_id = str(stream.get('codex_session_id') or '').strip()
         codex_home = str(stream.get('codex_home') or '').strip() or None
+        prompt_text = str(stream.get('user_prompt') or '').strip()
+        cli_started_at = stream.get('cli_started_at')
+        completed_at = (
+            stream.get('completed_at')
+            or stream.get('process_exited_at')
+            or stream.get('updated_at')
+            or time.time()
+        )
         existing_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
     copied_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
         codex_session_id,
         codex_home=codex_home,
+        since=cli_started_at,
+        until=completed_at,
+        prompt_text=prompt_text,
     )
     merged_outputs = _copy_imagegen_workbench_outputs(existing_outputs + copied_outputs)
     if merged_outputs != existing_outputs:
@@ -4685,7 +5002,7 @@ def _run_codex_stream(stream_id, prompt):
             json_output = stream.get('json_output') is not False
 
     if not output_path:
-        output_path = str(WORKSPACE_DIR / f"codex_output_{stream_id}.txt")
+        output_path = str(_new_codex_output_path(stream_id))
     if not isinstance(started_at, (int, float)):
         started_at = time.time()
 
@@ -4712,6 +5029,7 @@ def _run_codex_stream(stream_id, prompt):
                 stream['updated_at'] = cli_started_at
 
         try:
+            cmd = _wrap_codex_cli_command(cmd)
             _prepare_imagegen_workbench_dirs(prompt)
             process = subprocess.Popen(
                 cmd,
@@ -4819,6 +5137,10 @@ def _run_codex_stream(stream_id, prompt):
                 output_text = _read_output_last_message(output_path)
                 copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
                 imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
+                selected_output_text = _append_imagegen_workbench_output_message(
+                    output_text or current_output_last_message,
+                    copied_image_outputs,
+                )
                 has_final_response = (
                     bool(output_text.strip())
                     or bool(imagegen_output_text)
@@ -4832,17 +5154,8 @@ def _run_codex_stream(stream_id, prompt):
                         stream = state.codex_streams.get(stream_id)
                         if stream:
                             done_now = time.time()
-                            if output_text:
-                                stream['output_last_message'] = output_text
-                            elif imagegen_output_text:
-                                stream['output_last_message'] = imagegen_output_text
-                            elif current_output_last_message:
-                                stream['output_last_message'] = current_output_last_message
-                            selected_output_text = (
-                                output_text
-                                or imagegen_output_text
-                                or current_output_last_message
-                            )
+                            if selected_output_text:
+                                stream['output_last_message'] = selected_output_text
                             if selected_output_text and not (stream.get('output') or '').strip():
                                 stream['output'] = selected_output_text
                                 stream['output_length'] = len(stream.get('output') or '')
@@ -4925,8 +5238,7 @@ def _run_codex_stream(stream_id, prompt):
 
         output_text = _read_output_last_message(output_path)
         copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
-        imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
-        selected_output_text = output_text or imagegen_output_text
+        selected_output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
         if selected_output_text:
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
@@ -4976,10 +5288,11 @@ def create_codex_stream(
         plan_mode=False,
         attachments=None,
         assistant_message_id=None,
-        queued_execution=False):
+        queued_execution=False,
+        user_prompt=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
-    output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
+    output_path = _new_codex_output_path(stream_id)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
     normalized_attachments = normalize_codex_attachments(attachments or [])
@@ -5010,6 +5323,7 @@ def create_codex_stream(
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
         'attachments': normalized_attachments,
+        'user_prompt': str(user_prompt or '').strip(),
         'response_mode': response_mode,
         'response_model': response_model,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
@@ -5153,6 +5467,7 @@ def _start_codex_stream_for_session_locked(
         'plan_mode': plan_mode,
         'assistant_message_id': assistant_message.get('id'),
         'queued_execution': bool(queued_execution),
+        'user_prompt': prompt,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -5545,8 +5860,8 @@ def finalize_codex_stream(stream_id):
                 finalize_reason
             )
     final_output = output_last_message or ('' if assistant_final_empty else output)
-    if not final_output and imagegen_workbench_outputs:
-        final_output = _format_imagegen_workbench_output_message(imagegen_workbench_outputs)
+    if imagegen_workbench_outputs:
+        final_output = _append_imagegen_workbench_output_message(final_output, imagegen_workbench_outputs)
     elif not final_output and assistant_final_empty:
         final_output = 'Codex completed without a final response.'
     work_details = _build_work_details(output, final_output, error)

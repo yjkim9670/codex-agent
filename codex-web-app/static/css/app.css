@@ -1496,6 +1496,12 @@ textarea {
     pointer-events: none;
 }
 
+.work-mode-file-layout.has-file-context-target .file-panel-directory-actions {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
 .file-panel-directory-btn,
 .file-panel-selection-btn,
 .file-panel-folder-menu-trigger {

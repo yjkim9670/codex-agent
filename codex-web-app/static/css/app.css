@@ -4210,6 +4210,14 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
     touch-action: pan-y;
 }
 
+@media (max-width: 840px), (hover: none) and (pointer: coarse) {
+    .work-mode-file-grid-scroll {
+        overflow-x: auto;
+        overscroll-behavior: contain;
+        touch-action: pan-x pan-y pinch-zoom;
+    }
+}
+
 .work-mode-file-hscroll {
     flex: 0 0 18px;
     min-height: 18px;

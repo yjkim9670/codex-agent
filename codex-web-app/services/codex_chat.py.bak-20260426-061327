@@ -7,7 +7,6 @@ import logging
 import math
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -145,7 +144,8 @@ _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
 _PENDING_QUEUE_BOOTSTRAP_STARTED = False
-_IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
+_IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
+_IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
     "- Plan mode is enabled for this turn.\n"
@@ -169,6 +169,10 @@ _IMAGEGEN_WORKBENCH_OVERLAY = (
     "- Keep reference images scoped to the current request. Label edit target, style reference, "
     "composition reference, and compositing source roles; for child edits, use the immediate "
     "parent image unless the user explicitly asks for full ancestry.\n"
+    "- Treat the Workbench execution cwd as the managed workspace. Unless the user names a "
+    "different destination, copy or move selected image outputs into the directory named by "
+    f"`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`; use `{_IMAGEGEN_WORKBENCH_TMP_ENV}` for transient "
+    "sources and post-processing intermediates. Create those directories as needed.\n"
     "- Persist accepted project assets into the workspace. When future edits or recovery would "
     "benefit, add a small .imagegen.json sidecar with prompt, style sheet, input roles, "
     "parent/output paths, and post-processing notes; never store base64 image payloads in sidecars.\n"
@@ -3338,12 +3342,37 @@ def _imagegen_workbench_output_dir():
     return WORKSPACE_DIR / 'output' / 'imagegen'
 
 
+def _imagegen_workbench_tmp_dir():
+    return WORKSPACE_DIR / 'tmp' / 'imagegen'
+
+
 def _build_codex_exec_env():
-    return os.environ.copy()
+    env = os.environ.copy()
+    env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
+    env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    return env
+
+
+def _prepare_imagegen_workbench_dirs(prompt_text):
+    if not _should_include_imagegen_workbench_overlay(prompt_text, []):
+        return
+    for directory in (_imagegen_workbench_output_dir(), _imagegen_workbench_tmp_dir()):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            _LOGGER.exception('Failed to prepare imagegen workbench directory: %s', directory)
 
 
 def _build_imagegen_workbench_overlay():
-    return _IMAGEGEN_WORKBENCH_OVERLAY
+    output_dir = _imagegen_workbench_output_dir()
+    tmp_dir = _imagegen_workbench_tmp_dir()
+    return (
+        f"{_IMAGEGEN_WORKBENCH_OVERLAY}\n"
+        f"- Workbench-managed image output directory: `{output_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`).\n"
+        f"- Workbench-managed image intermediate directory: `{tmp_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
+    )
 
 
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
@@ -3637,8 +3666,6 @@ def _extract_exec_json_summary(raw_stdout):
     usage = None
     text_candidates = []
     raw_lines = []
-    codex_session_id = ''
-    saw_empty_final_answer = False
 
     for line in str(raw_stdout or '').splitlines():
         event = _parse_json_object(line)
@@ -3647,26 +3674,15 @@ def _extract_exec_json_summary(raw_stdout):
         event_usage = _extract_usage_from_exec_event(event)
         if event_usage:
             usage = event_usage
-        event_session_id = _extract_codex_session_id_from_exec_event(event)
-        if event_session_id:
-            codex_session_id = event_session_id
-        raw_lines.append(line.strip())
-        if _event_is_empty_final_answer(event):
-            saw_empty_final_answer = True
-            text_candidates.clear()
-            continue
-        if saw_empty_final_answer and _event_is_task_complete(event):
-            continue
         text = _extract_agent_text_from_exec_event(event)
         if text:
             text_candidates.append(text)
+        raw_lines.append(line.strip())
 
     return {
         'usage': usage,
         'last_text': text_candidates[-1] if text_candidates else '',
         'event_count': len(raw_lines),
-        'codex_session_id': codex_session_id,
-        'saw_empty_final_answer': saw_empty_final_answer,
     }
 
 
@@ -3689,6 +3705,7 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
     try:
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
+            _prepare_imagegen_workbench_dirs(prompt)
             result = subprocess.run(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
@@ -3726,13 +3743,6 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
 
     if not output_text:
         output_text = json_summary.get('last_text') or ''
-    copied_image_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
-        json_summary.get('codex_session_id')
-    )
-    if copied_image_outputs and (not output_text or json_summary.get('saw_empty_final_answer')):
-        output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
-    elif not output_text and json_summary.get('saw_empty_final_answer'):
-        output_text = 'Codex completed without a final response.'
     if not output_text:
         output_text = (result.stdout or '').strip()
 
@@ -4034,176 +4044,6 @@ def _cleanup_output_last_message(path):
         pass
 
 
-def _copy_imagegen_workbench_outputs(paths):
-    if not isinstance(paths, list):
-        return []
-    copied = []
-    seen = set()
-    for path in paths:
-        normalized = str(path or '').strip()
-        if not normalized or normalized in seen:
-            continue
-        copied.append(normalized)
-        seen.add(normalized)
-    return copied
-
-
-def _format_imagegen_workbench_output_message(paths):
-    outputs = _copy_imagegen_workbench_outputs(paths)
-    if not outputs:
-        return ''
-    if len(outputs) == 1:
-        return f"Image generation output recovered:\n`{outputs[0]}`"
-    lines = ["Image generation outputs recovered:"]
-    lines.extend(f"- `{path}`" for path in outputs)
-    return "\n".join(lines)
-
-
-def _extract_codex_session_id_from_exec_event(event):
-    if not isinstance(event, dict):
-        return ''
-    event_type = str(event.get('type') or '').strip().lower()
-    if event_type != 'session_meta':
-        return ''
-    payload = event.get('payload')
-    if not isinstance(payload, dict):
-        return ''
-    session_id = str(payload.get('id') or '').strip()
-    if not re.fullmatch(r'[0-9a-fA-F-]{20,}', session_id):
-        return ''
-    return session_id
-
-
-def _event_is_empty_final_answer(event):
-    if not isinstance(event, dict):
-        return False
-    payload = event.get('payload')
-    if isinstance(payload, dict):
-        phase = str(payload.get('phase') or event.get('phase') or '').strip().lower()
-        payload_type = str(payload.get('type') or '').strip().lower()
-        if phase == 'final_answer' and payload_type == 'agent_message':
-            return not str(payload.get('message') or '').strip()
-        if phase == 'final_answer' and payload_type == 'message':
-            return not _extract_text_from_assistant_message_payload(payload).strip()
-    item = event.get('item')
-    if isinstance(item, dict):
-        phase = str(item.get('phase') or event.get('phase') or '').strip().lower()
-        item_type = str(item.get('type') or '').strip().lower()
-        if phase == 'final_answer' and item_type == 'agent_message':
-            return not str(item.get('text') or '').strip()
-    return False
-
-
-def _event_is_task_complete(event):
-    if not isinstance(event, dict):
-        return False
-    event_type = str(event.get('type') or '').strip().lower()
-    if event_type == 'task_complete':
-        return True
-    payload = event.get('payload')
-    if isinstance(payload, dict):
-        return str(payload.get('type') or '').strip().lower() == 'task_complete'
-    return False
-
-
-def _record_stream_codex_session_id(stream_id, event):
-    codex_session_id = _extract_codex_session_id_from_exec_event(event)
-    if not codex_session_id:
-        return
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        if stream and not str(stream.get('codex_session_id') or '').strip():
-            stream['codex_session_id'] = codex_session_id
-            stream['updated_at'] = time.time()
-
-
-def _mark_stream_empty_final_answer(stream_id):
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        if not stream:
-            return
-        stream['assistant_final_empty'] = True
-        stream['output_last_message'] = ''
-        stream['updated_at'] = time.time()
-
-
-def _stream_has_empty_final_answer(stream_id):
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        return bool(stream and stream.get('assistant_final_empty'))
-
-
-def _unique_imagegen_workbench_output_path(output_dir, source_path):
-    candidate = output_dir / source_path.name
-    try:
-        source_size = source_path.stat().st_size
-    except Exception:
-        source_size = None
-    if candidate.exists():
-        try:
-            if source_size is not None and candidate.stat().st_size == source_size:
-                return candidate
-        except Exception:
-            pass
-        for index in range(2, 1000):
-            versioned = output_dir / f"{source_path.stem}-{index}{source_path.suffix}"
-            if not versioned.exists():
-                return versioned
-        return output_dir / f"{source_path.stem}-{uuid.uuid4().hex[:8]}{source_path.suffix}"
-    return candidate
-
-
-def _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id):
-    session_id = str(codex_session_id or '').strip()
-    if not session_id:
-        return []
-    source_dir = _CODEX_HOME / 'generated_images' / session_id
-    if not source_dir.is_dir():
-        return []
-    output_dir = _imagegen_workbench_output_dir()
-    try:
-        output_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        _LOGGER.exception('Failed to prepare imagegen workbench output directory: %s', output_dir)
-        return []
-
-    copied = []
-    for source_path in sorted(source_dir.iterdir(), key=lambda path: path.name):
-        if not source_path.is_file():
-            continue
-        if source_path.suffix.lower() not in _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS:
-            continue
-        destination = _unique_imagegen_workbench_output_path(output_dir, source_path)
-        try:
-            if not destination.exists():
-                shutil.copy2(source_path, destination)
-            copied.append(str(destination))
-        except Exception:
-            _LOGGER.exception('Failed to copy imagegen output %s to %s', source_path, destination)
-    return _copy_imagegen_workbench_outputs(copied)
-
-
-def _copy_imagegen_workbench_outputs_for_stream(stream_id):
-    with state.codex_streams_lock:
-        stream = state.codex_streams.get(stream_id)
-        if not stream:
-            return []
-        codex_session_id = str(stream.get('codex_session_id') or '').strip()
-        existing_outputs = _copy_imagegen_workbench_outputs(
-            stream.get('imagegen_workbench_outputs')
-        )
-    copied_outputs = _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id)
-    merged_outputs = _copy_imagegen_workbench_outputs(existing_outputs + copied_outputs)
-    if merged_outputs != existing_outputs:
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if stream:
-                stream['imagegen_workbench_outputs'] = merged_outputs
-                stream['updated_at'] = time.time()
-    return merged_outputs
-
-
-
 def _terminate_stream_process(process, grace_seconds):
     if process is None:
         return None
@@ -4492,17 +4332,10 @@ def _handle_stream_json_output_line(stream_id, line):
         return
 
     _append_stream_event(stream_id, event)
-    _record_stream_codex_session_id(stream_id, event)
 
     usage = _extract_usage_from_exec_event(event)
     if usage:
         _set_stream_token_usage(stream_id, usage)
-
-    if _event_is_empty_final_answer(event):
-        _mark_stream_empty_final_answer(stream_id)
-        return
-    if _event_is_task_complete(event) and _stream_has_empty_final_answer(stream_id):
-        return
 
     text = _extract_agent_text_from_exec_event(event)
     if text:
@@ -4594,6 +4427,7 @@ def _run_codex_stream(stream_id, prompt):
                 stream['updated_at'] = cli_started_at
 
         try:
+            _prepare_imagegen_workbench_dirs(prompt)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
@@ -4698,11 +4532,8 @@ def _run_codex_stream(stream_id, prompt):
                         current_output_last_message = ''
 
                 output_text = _read_output_last_message(output_path)
-                copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
-                imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
                 has_final_response = (
                     bool(output_text.strip())
-                    or bool(imagegen_output_text)
                     or bool(current_output_last_message)
                     or bool(current_output)
                     or bool(current_error)
@@ -4715,13 +4546,10 @@ def _run_codex_stream(stream_id, prompt):
                             done_now = time.time()
                             if output_text:
                                 stream['output_last_message'] = output_text
-                            elif imagegen_output_text:
-                                stream['output_last_message'] = imagegen_output_text
                             elif current_output_last_message:
                                 stream['output_last_message'] = current_output_last_message
                             selected_output_text = (
                                 output_text
-                                or imagegen_output_text
                                 or current_output_last_message
                             )
                             if selected_output_text and not (stream.get('output') or '').strip():
@@ -4805,20 +4633,17 @@ def _run_codex_stream(stream_id, prompt):
         stderr_thread.join(timeout=terminate_grace_seconds)
 
         output_text = _read_output_last_message(output_path)
-        copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
-        imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
-        selected_output_text = output_text or imagegen_output_text
-        if selected_output_text:
+        if output_text:
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
                     now = time.time()
-                    stream['output_last_message'] = selected_output_text
+                    stream['output_last_message'] = output_text
                     if not (stream.get('output') or '').strip():
-                        stream['output'] = selected_output_text
+                        stream['output'] = output_text
                         stream['output_length'] = len(stream.get('output') or '')
                         stream['last_output_at'] = now
-                    stream['updated_at'] = now
+                        stream['updated_at'] = now
 
         _cleanup_output_last_message(output_path)
 
@@ -4898,9 +4723,6 @@ def create_codex_stream(
         'json_output': True,
         'codex_events': [],
         'codex_event_count': 0,
-        'codex_session_id': '',
-        'assistant_final_empty': False,
-        'imagegen_workbench_outputs': [],
         'output_length': 0,
         'error_length': 0,
         'created_at': created_at,
@@ -5377,10 +5199,6 @@ def finalize_codex_stream(stream_id):
         output_path = stream.get('output_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
         codex_events = _copy_codex_events(stream.get('codex_events'))
-        assistant_final_empty = bool(stream.get('assistant_final_empty'))
-        imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
-            stream.get('imagegen_workbench_outputs')
-        )
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
@@ -5406,8 +5224,6 @@ def finalize_codex_stream(stream_id):
     metadata['streaming'] = False
     if codex_events:
         metadata['codex_events'] = codex_events
-    if imagegen_workbench_outputs:
-        metadata['imagegen_workbench_outputs'] = imagegen_workbench_outputs
     created_at_value = _iso_timestamp_from_epoch(completed_at)
     if metadata:
         finalize_lag_ms = metadata.get('finalize_lag_ms')
@@ -5418,11 +5234,7 @@ def finalize_codex_stream(stream_id):
                 finalize_lag_ms,
                 finalize_reason
             )
-    final_output = output_last_message or ('' if assistant_final_empty else output)
-    if not final_output and imagegen_workbench_outputs:
-        final_output = _format_imagegen_workbench_output_message(imagegen_workbench_outputs)
-    elif not final_output and assistant_final_empty:
-        final_output = 'Codex completed without a final response.'
+    final_output = output_last_message or output
     work_details = _build_work_details(output, final_output, error)
     if work_details:
         metadata['work_details'] = work_details

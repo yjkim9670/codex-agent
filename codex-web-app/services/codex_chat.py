@@ -70,6 +70,9 @@ _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
+_QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
+_QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
+_QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules', 'memories')
 _ALLOW_PARALLEL_CLI_EXEC = str(
     os.environ.get('CODEX_ALLOW_PARALLEL_CLI_EXEC') or '1'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -145,6 +148,8 @@ _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
 _PENDING_QUEUE_BOOTSTRAP_STARTED = False
+_IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
+_IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 _PLAN_MODE_PROMPT_SUFFIX = (
     "## Plan Mode Guardrails\n"
@@ -169,6 +174,11 @@ _IMAGEGEN_WORKBENCH_OVERLAY = (
     "- Keep reference images scoped to the current request. Label edit target, style reference, "
     "composition reference, and compositing source roles; for child edits, use the immediate "
     "parent image unless the user explicitly asks for full ancestry.\n"
+    "- Treat the Workbench execution cwd as the managed workspace. Unless the user names a "
+    "different destination, use the shared directory exposed through "
+    f"`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}` and `{_IMAGEGEN_WORKBENCH_TMP_ENV}` for selected "
+    "image outputs, transient sources, and post-processing intermediates. Create that "
+    "directory as needed.\n"
     "- Persist accepted project assets into the workspace. When future edits or recovery would "
     "benefit, add a small .imagegen.json sidecar with prompt, style sheet, input roles, "
     "parent/output paths, and post-processing notes; never store base64 image payloads in sidecars.\n"
@@ -3335,15 +3345,91 @@ def _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
 
 
 def _imagegen_workbench_output_dir():
-    return WORKSPACE_DIR / 'output' / 'imagegen'
+    return WORKSPACE_DIR / 'imagegen'
 
 
-def _build_codex_exec_env():
-    return os.environ.copy()
+def _imagegen_workbench_tmp_dir():
+    return _imagegen_workbench_output_dir()
+
+
+def _copy_codex_home_file_if_available(source_home, target_home, filename):
+    try:
+        source_path = Path(source_home) / filename
+        if not source_path.is_file():
+            return
+        target_path = Path(target_home) / filename
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+    except Exception:
+        _LOGGER.debug('Failed to sync queued Codex home file: %s', filename, exc_info=True)
+
+
+def _link_codex_home_entry_if_available(source_home, target_home, entry_name):
+    try:
+        source_path = Path(source_home) / entry_name
+        if not source_path.exists():
+            return
+        target_path = Path(target_home) / entry_name
+        if target_path.exists() or target_path.is_symlink():
+            return
+        target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
+    except Exception:
+        _LOGGER.debug('Failed to link queued Codex home entry: %s', entry_name, exc_info=True)
+
+
+def _prepare_queued_codex_home(env):
+    configured_home = str(env.get(_QUEUED_CODEX_HOME_ENV) or '').strip()
+    if configured_home:
+        queued_home = Path(configured_home).expanduser()
+    else:
+        queued_home = CODEX_STORAGE_DIR / 'queued_codex_home'
+    queued_home.mkdir(parents=True, exist_ok=True)
+    try:
+        queued_home.chmod(0o700)
+    except Exception:
+        _LOGGER.debug('Failed to chmod queued Codex home', exc_info=True)
+    for child_name in ('sessions', 'tmp', 'shell_snapshots'):
+        (queued_home / child_name).mkdir(parents=True, exist_ok=True)
+
+    source_home = Path(str(env.get('CODEX_HOME') or _CODEX_HOME)).expanduser()
+    try:
+        same_home = queued_home.resolve() == source_home.resolve()
+    except Exception:
+        same_home = False
+    if not same_home:
+        for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+            _copy_codex_home_file_if_available(source_home, queued_home, filename)
+        for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
+            _link_codex_home_entry_if_available(source_home, queued_home, entry_name)
+    return queued_home
+
+
+def _build_codex_exec_env(queued_execution=False):
+    env = os.environ.copy()
+    env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
+    env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    if queued_execution:
+        env['CODEX_HOME'] = str(_prepare_queued_codex_home(env))
+    return env
+
+
+def _prepare_imagegen_workbench_dirs(prompt_text):
+    if not _should_include_imagegen_workbench_overlay(prompt_text, []):
+        return
+    directory = _imagegen_workbench_output_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        _LOGGER.exception('Failed to prepare imagegen workbench directory: %s', directory)
 
 
 def _build_imagegen_workbench_overlay():
-    return _IMAGEGEN_WORKBENCH_OVERLAY
+    imagegen_dir = _imagegen_workbench_output_dir()
+    return (
+        f"{_IMAGEGEN_WORKBENCH_OVERLAY}\n"
+        f"- Workbench-managed imagegen directory for outputs and intermediates: `{imagegen_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`, `{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
+    )
 
 
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
@@ -3689,6 +3775,7 @@ def execute_codex_prompt(prompt, model_override=None, reasoning_override=None, a
     try:
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
+            _prepare_imagegen_workbench_dirs(prompt)
             result = subprocess.run(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
@@ -4153,11 +4240,12 @@ def _unique_imagegen_workbench_output_path(output_dir, source_path):
     return candidate
 
 
-def _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id):
+def _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id, codex_home=None):
     session_id = str(codex_session_id or '').strip()
     if not session_id:
         return []
-    source_dir = _CODEX_HOME / 'generated_images' / session_id
+    source_home = Path(str(codex_home or _CODEX_HOME)).expanduser()
+    source_dir = source_home / 'generated_images' / session_id
     if not source_dir.is_dir():
         return []
     output_dir = _imagegen_workbench_output_dir()
@@ -4189,10 +4277,14 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
         if not stream:
             return []
         codex_session_id = str(stream.get('codex_session_id') or '').strip()
+        codex_home = str(stream.get('codex_home') or '').strip() or None
         existing_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
-    copied_outputs = _copy_imagegen_workbench_outputs_for_codex_session(codex_session_id)
+    copied_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
+        codex_session_id,
+        codex_home=codex_home,
+    )
     merged_outputs = _copy_imagegen_workbench_outputs(existing_outputs + copied_outputs)
     if merged_outputs != existing_outputs:
         with state.codex_streams_lock:
@@ -4423,11 +4515,34 @@ def _summarize_exec_event(event):
     detail_candidates = []
     if isinstance(payload, dict):
         payload_type = str(payload.get('type') or '').strip()
-        for key in ('name', 'title', 'status', 'message', 'last_agent_message', 'text'):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                detail_candidates.append(value.strip())
-                break
+        if payload_type in {'image_generation_call', 'image_generation_end'}:
+            parts = []
+            for key in ('id', 'call_id', 'status'):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(f'{key}={value.strip()}')
+            if parts:
+                detail_candidates.append(' '.join(parts))
+        elif payload_type == 'message' and str(payload.get('role') or '').strip().lower() == 'developer':
+            content = payload.get('content')
+            fragments = []
+            if isinstance(content, list):
+                for content_item in content:
+                    if not isinstance(content_item, dict):
+                        continue
+                    text_value = content_item.get('text')
+                    if isinstance(text_value, str) and text_value.strip():
+                        fragments.append(text_value.strip())
+            if fragments:
+                detail_text = ' '.join(fragments)
+                if 'Generated images are saved' in detail_text:
+                    detail_candidates.append(detail_text)
+        else:
+            for key in ('name', 'title', 'status', 'message', 'last_agent_message', 'text'):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    detail_candidates.append(value.strip())
+                    break
     if isinstance(item, dict):
         item_type = str(item.get('type') or '').strip()
         for key in ('name', 'title', 'status', 'text'):
@@ -4564,6 +4679,7 @@ def _run_codex_stream(stream_id, prompt):
         model_override = stream.get('model_override') if stream else None
         reasoning_override = stream.get('reasoning_override') if stream else None
         attachments = stream.get('attachments') if stream else []
+        queued_execution = bool(stream.get('queued_execution')) if stream else False
         json_output = True
         if stream is not None:
             json_output = stream.get('json_output') is not False
@@ -4574,6 +4690,7 @@ def _run_codex_stream(stream_id, prompt):
         started_at = time.time()
 
     prompt = _append_attachment_exec_context(prompt, attachments)
+    exec_env = _build_codex_exec_env(queued_execution=queued_execution)
     cmd = _build_codex_command(
         prompt,
         output_path=output_path,
@@ -4591,15 +4708,17 @@ def _run_codex_stream(stream_id, prompt):
             if stream:
                 stream['cli_started_at'] = cli_started_at
                 stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
+                stream['codex_home'] = str(exec_env.get('CODEX_HOME') or _CODEX_HOME)
                 stream['updated_at'] = cli_started_at
 
         try:
+            _prepare_imagegen_workbench_dirs(prompt)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=_build_codex_exec_env(),
+                env=exec_env,
                 text=True,
                 bufsize=1
             )
@@ -4856,7 +4975,8 @@ def create_codex_stream(
         reasoning_override=None,
         plan_mode=False,
         attachments=None,
-        assistant_message_id=None):
+        assistant_message_id=None,
+        queued_execution=False):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = WORKSPACE_DIR / f"codex_output_{stream_id}.txt"
@@ -4888,6 +5008,7 @@ def create_codex_stream(
         'model_override': (str(model_override).strip() if model_override is not None else '') or None,
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'plan_mode': bool(plan_mode),
+        'queued_execution': bool(queued_execution),
         'attachments': normalized_attachments,
         'response_mode': response_mode,
         'response_model': response_model,
@@ -4899,6 +5020,7 @@ def create_codex_stream(
         'codex_events': [],
         'codex_event_count': 0,
         'codex_session_id': '',
+        'codex_home': '',
         'assistant_final_empty': False,
         'imagegen_workbench_outputs': [],
         'output_length': 0,
@@ -4987,7 +5109,8 @@ def _start_codex_stream_for_session_locked(
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
-        attachments=None):
+        attachments=None,
+        queued_execution=False):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -5029,6 +5152,7 @@ def _start_codex_stream_for_session_locked(
         'reasoning_override': reasoning_override,
         'plan_mode': plan_mode,
         'assistant_message_id': assistant_message.get('id'),
+        'queued_execution': bool(queued_execution),
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -5133,6 +5257,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
             attachments=attachments,
+            queued_execution=True,
         )
         if not start_result.get('ok'):
             return start_result
@@ -5167,6 +5292,7 @@ def start_codex_stream_for_session(
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
             attachments=attachments,
+            queued_execution=False,
         )
 
 

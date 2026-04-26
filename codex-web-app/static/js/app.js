@@ -5200,32 +5200,11 @@ function applyMobileViewportHeight() {
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
-function applyMobilePromptLift({ isMobile = isCompactLayout(), keyboardOpen = false } = {}) {
+function applyMobilePromptLift() {
     const root = document.documentElement;
     if (!root) return;
 
-    let nextLift = 0;
-    if (isMobile && keyboardOpen) {
-        const form = document.getElementById('codex-chat-form');
-        const runtimeStrip = document.querySelector('.chat-runtime-strip');
-        const viewport = window.visualViewport;
-        const visualBottom = Number(viewport?.height) + Number(viewport?.offsetTop);
-        const fallbackBottom = Number(window.innerHeight);
-        const viewportBottom = Number.isFinite(visualBottom) && visualBottom > 0
-            ? visualBottom
-            : fallbackBottom;
-        if (Number.isFinite(viewportBottom) && viewportBottom > 0) {
-            const formBottom = Number(form?.getBoundingClientRect?.().bottom);
-            const runtimeStripBottom = Number(runtimeStrip?.getBoundingClientRect?.().bottom);
-            const promptBottom = Math.max(
-                Number.isFinite(formBottom) ? formBottom : 0,
-                Number.isFinite(runtimeStripBottom) ? runtimeStripBottom : 0
-            );
-            if (promptBottom > 0) {
-                nextLift = Math.max(0, Math.ceil(promptBottom - viewportBottom));
-            }
-        }
-    }
+    const nextLift = 0;
 
     if (lastAppliedMobilePromptLift === nextLift) {
         return;

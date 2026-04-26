@@ -154,6 +154,10 @@ _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 _IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS = 72
+_IMAGEGEN_WORKBENCH_FILENAME_DECLARATION_RE = re.compile(
+    r'<!--\s*codex-workbench:imagegen-filename\s*:\s*([^<>\r\n]+?)\s*-->',
+    re.IGNORECASE,
+)
 _IMAGEGEN_WORKBENCH_FILENAME_STOPWORDS = {
     'image',
     'images',
@@ -233,6 +237,13 @@ _IMAGEGEN_WORKBENCH_OVERLAY = (
     f"`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}` and `{_IMAGEGEN_WORKBENCH_TMP_ENV}` for selected "
     "image outputs, transient sources, and post-processing intermediates. Create that "
     "directory as needed.\n"
+    "- Before each built-in image_gen call, choose a concise descriptive output filename "
+    "for the result and emit exactly one hidden metadata line on its own line, immediately "
+    "before the tool call: "
+    "`<!-- codex-workbench:imagegen-filename: descriptive-name.png -->`. "
+    "Use a lowercase kebab-case English name unless the user explicitly asked for another "
+    "name; include a normal raster extension such as .png. Do not mention this metadata "
+    "line in the visible final answer.\n"
     "- Persist accepted project assets into the workspace. When future edits or recovery would "
     "benefit, add a small .imagegen.json sidecar with prompt, style sheet, input roles, "
     "parent/output paths, and post-processing notes; never store base64 image payloads in sidecars.\n"
@@ -3888,6 +3899,7 @@ def _extract_exec_json_summary(raw_stdout):
     raw_lines = []
     codex_session_id = ''
     saw_empty_final_answer = False
+    imagegen_workbench_filenames = []
 
     for line in str(raw_stdout or '').splitlines():
         event = _parse_json_object(line)
@@ -3908,6 +3920,9 @@ def _extract_exec_json_summary(raw_stdout):
             continue
         text = _extract_agent_text_from_exec_event(event)
         if text:
+            text, filenames = _extract_imagegen_workbench_filename_declarations(text)
+            imagegen_workbench_filenames.extend(filenames)
+        if text:
             text_candidates.append(text)
 
     return {
@@ -3916,6 +3931,7 @@ def _extract_exec_json_summary(raw_stdout):
         'event_count': len(raw_lines),
         'codex_session_id': codex_session_id,
         'saw_empty_final_answer': saw_empty_final_answer,
+        'imagegen_workbench_filenames': imagegen_workbench_filenames,
     }
 
 
@@ -3969,9 +3985,13 @@ def execute_codex_prompt(
     )
 
     output_text = ''
+    output_imagegen_filenames = []
     if output_path.exists():
         try:
-            output_text = output_path.read_text(encoding='utf-8').strip()
+            output_text, output_imagegen_filenames = _extract_imagegen_workbench_filename_declarations(
+                output_path.read_text(encoding='utf-8')
+            )
+            output_text = output_text.strip()
         except Exception:
             output_text = ''
         finally:
@@ -3982,18 +4002,22 @@ def execute_codex_prompt(
 
     if not output_text:
         output_text = json_summary.get('last_text') or ''
+    imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
+        list(json_summary.get('imagegen_workbench_filenames') or []) + output_imagegen_filenames
+    )
     copied_image_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
         json_summary.get('codex_session_id'),
         since=cli_started_at,
         until=completed_at,
         prompt_text=imagegen_prompt,
+        preferred_filenames=imagegen_workbench_filenames,
     )
     if copied_image_outputs:
         output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
     elif not output_text and json_summary.get('saw_empty_final_answer'):
         output_text = 'Codex completed without a final response.'
     if not output_text:
-        output_text = (result.stdout or '').strip()
+        output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
 
     if result.returncode != 0:
         error_text = (result.stderr or '').strip()
@@ -4273,7 +4297,9 @@ def _read_output_last_message(path):
     if not output_path.exists():
         return ''
     try:
-        return output_path.read_text(encoding='utf-8').strip()
+        return _strip_imagegen_workbench_filename_declarations(
+            output_path.read_text(encoding='utf-8')
+        ).strip()
     except Exception:
         return ''
 
@@ -4305,6 +4331,71 @@ def _copy_imagegen_workbench_outputs(paths):
         copied.append(normalized)
         seen.add(normalized)
     return copied
+
+
+def _sanitize_imagegen_workbench_filename(value):
+    raw = str(value or '').strip().strip('`"\' ')
+    if not raw:
+        return ''
+    raw = raw.replace('\\', '/')
+    name = raw.rsplit('/', 1)[-1].strip()
+    if not name or name in {'.', '..'}:
+        return ''
+
+    chars = []
+    for char in name:
+        if ord(char) < 32 or ord(char) == 127:
+            continue
+        if char.isalnum() or char in {' ', '-', '_', '.', '(', ')'}:
+            chars.append(char.lower() if char.isascii() else char)
+        else:
+            chars.append('-')
+    cleaned = re.sub(r'[-\s]+', '-', ''.join(chars)).strip(' .-_')
+    if not cleaned or cleaned in {'.', '..'}:
+        return ''
+
+    suffix = Path(cleaned).suffix.lower()
+    if suffix and suffix not in _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS:
+        cleaned = cleaned[: -len(suffix)].strip(' .-_')
+    suffix = Path(cleaned).suffix.lower()
+    if suffix:
+        stem = cleaned[: -len(suffix)].strip(' .-_')
+    else:
+        stem = cleaned.strip(' .-_')
+    if not stem:
+        return ''
+    if len(stem) > _IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS:
+        stem = stem[:_IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS].strip(' .-_')
+    if not stem:
+        return ''
+    return f'{stem}{suffix}' if suffix else stem
+
+
+def _copy_imagegen_workbench_preferred_filenames(values):
+    if not isinstance(values, list):
+        return []
+    filenames = []
+    for value in values:
+        filename = _sanitize_imagegen_workbench_filename(value)
+        if filename:
+            filenames.append(filename)
+    return filenames
+
+
+def _strip_imagegen_workbench_filename_declarations(text):
+    if not text:
+        return ''
+    return _IMAGEGEN_WORKBENCH_FILENAME_DECLARATION_RE.sub('', str(text or '')).strip()
+
+
+def _extract_imagegen_workbench_filename_declarations(text):
+    value = str(text or '')
+    if not value:
+        return '', []
+    filenames = _copy_imagegen_workbench_preferred_filenames(
+        [match.group(1) for match in _IMAGEGEN_WORKBENCH_FILENAME_DECLARATION_RE.finditer(value)]
+    )
+    return _strip_imagegen_workbench_filename_declarations(value), filenames
 
 
 def _format_imagegen_workbench_output_message(paths):
@@ -4436,6 +4527,21 @@ def _imagegen_workbench_filename_stem_from_prompt(prompt_text, fallback_stem='im
     return stem
 
 
+def _imagegen_workbench_filename_stem_from_preferred_name(preferred_name):
+    filename = _sanitize_imagegen_workbench_filename(preferred_name)
+    if not filename:
+        return ''
+    suffix = Path(filename).suffix.lower()
+    if suffix and suffix in _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS:
+        stem = filename[: -len(suffix)]
+    else:
+        stem = filename
+    stem = stem.strip(' .-_')
+    if len(stem) > _IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS:
+        stem = stem[:_IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS].strip(' .-_')
+    return stem
+
+
 def _imagegen_workbench_file_digest(path):
     try:
         digest = hashlib.sha256()
@@ -4462,8 +4568,15 @@ def _imagegen_workbench_files_match(source_path, candidate_path):
     return source_digest == _imagegen_workbench_file_digest(candidate_path)
 
 
-def _unique_imagegen_workbench_output_path(output_dir, source_path, prompt_text=None):
-    stem = _imagegen_workbench_filename_stem_from_prompt(prompt_text, fallback_stem=source_path.stem)
+def _unique_imagegen_workbench_output_path(
+        output_dir,
+        source_path,
+        prompt_text=None,
+        preferred_name=None,
+):
+    stem = _imagegen_workbench_filename_stem_from_preferred_name(preferred_name)
+    if not stem:
+        stem = _imagegen_workbench_filename_stem_from_prompt(prompt_text, fallback_stem=source_path.stem)
     suffix = source_path.suffix.lower() or '.png'
     candidate = output_dir / f'{stem}{suffix}'
     if candidate.exists():
@@ -4548,6 +4661,7 @@ def _copy_imagegen_workbench_outputs_for_codex_session(
         since=None,
         until=None,
         prompt_text=None,
+        preferred_filenames=None,
 ):
     session_id = str(codex_session_id or '').strip()
     if not session_id and not isinstance(since, (int, float)) and not isinstance(until, (int, float)):
@@ -4561,13 +4675,20 @@ def _copy_imagegen_workbench_outputs_for_codex_session(
         return []
 
     copied = []
+    preferred_names = _copy_imagegen_workbench_preferred_filenames(preferred_filenames)
     for source_path in _iter_imagegen_source_paths(
             source_home,
             session_id=session_id,
             since=since,
             until=until,
     ):
-        destination = _unique_imagegen_workbench_output_path(output_dir, source_path, prompt_text)
+        preferred_name = preferred_names[len(copied)] if len(copied) < len(preferred_names) else None
+        destination = _unique_imagegen_workbench_output_path(
+            output_dir,
+            source_path,
+            prompt_text=prompt_text,
+            preferred_name=preferred_name,
+        )
         try:
             if not destination.exists():
                 shutil.copy2(source_path, destination)
@@ -4595,12 +4716,16 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
         existing_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
+        preferred_filenames = _copy_imagegen_workbench_preferred_filenames(
+            stream.get('imagegen_workbench_filenames')
+        )
     copied_outputs = _copy_imagegen_workbench_outputs_for_codex_session(
         codex_session_id,
         codex_home=codex_home,
         since=cli_started_at,
         until=completed_at,
         prompt_text=prompt_text,
+        preferred_filenames=preferred_filenames,
     )
     merged_outputs = _copy_imagegen_workbench_outputs(existing_outputs + copied_outputs)
     if merged_outputs != existing_outputs:
@@ -4733,6 +4858,11 @@ def _persist_stream_progress(stream_id, force=False):
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
+    if key == 'output':
+        chunk, filenames = _extract_imagegen_workbench_filename_declarations(chunk)
+        _record_stream_imagegen_workbench_filenames(stream_id, filenames)
+        if not chunk:
+            return
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if not stream:
@@ -4804,6 +4934,21 @@ def _set_stream_token_usage(stream_id, usage):
         if not stream:
             return
         stream['token_usage'] = normalized
+        stream['updated_at'] = time.time()
+
+
+def _record_stream_imagegen_workbench_filenames(stream_id, filenames):
+    normalized = _copy_imagegen_workbench_preferred_filenames(filenames)
+    if not normalized:
+        return
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        existing = stream.get('imagegen_workbench_filenames')
+        if not isinstance(existing, list):
+            existing = []
+        stream['imagegen_workbench_filenames'] = existing + normalized
         stream['updated_at'] = time.time()
 
 
@@ -4937,6 +5082,9 @@ def _handle_stream_json_output_line(stream_id, line):
         return
 
     text = _extract_agent_text_from_exec_event(event)
+    if text:
+        text, filenames = _extract_imagegen_workbench_filename_declarations(text)
+        _record_stream_imagegen_workbench_filenames(stream_id, filenames)
     if text:
         should_append = _set_stream_output_last_message(stream_id, text)
         if not should_append:
@@ -5337,6 +5485,7 @@ def create_codex_stream(
         'codex_home': '',
         'assistant_final_empty': False,
         'imagegen_workbench_outputs': [],
+        'imagegen_workbench_filenames': [],
         'output_length': 0,
         'error_length': 0,
         'created_at': created_at,

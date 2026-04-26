@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=145">
+    <link rel="stylesheet" href="/static/css/app.css?v=147">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -14,110 +14,112 @@
             <div class="file-browser-meta" id="{{ id_prefix }}-meta">디렉터리 목록을 불러오는 중...</div>
             <div class="file-panel-selection-bar" id="{{ id_prefix }}-selection-bar">
                 <div class="file-panel-selection-summary" id="{{ id_prefix }}-selection-summary">선택 0개</div>
-                <div class="file-panel-directory-actions">
-                    <button
-                        class="btn secondary file-panel-directory-btn file-panel-directory-btn-new"
-                        type="button"
-                        id="{{ id_prefix }}-new-file"
-                        aria-label="현재 폴더에 새 파일 만들기"
-                        title="현재 폴더에 새 파일 만들기"
-                    >
-                        <span class="file-panel-action-label">새 파일</span>
-                    </button>
-                    <button
-                        class="btn secondary file-panel-directory-btn file-panel-directory-btn-upload"
-                        type="button"
-                        id="{{ id_prefix }}-upload"
-                        aria-label="현재 폴더에 파일 업로드"
-                        title="현재 폴더에 파일 업로드"
-                    >
-                        <span class="file-panel-action-label">업로드</span>
-                    </button>
-                    <input
-                        class="file-panel-upload-input"
-                        type="file"
-                        id="{{ id_prefix }}-upload-input"
-                        multiple
-                        aria-hidden="true"
-                        tabindex="-1"
-                    >
-                    <button
-                        class="btn secondary file-panel-selection-btn file-panel-selection-btn-select-all"
-                        type="button"
-                        id="{{ id_prefix }}-select-all"
-                        aria-label="현재 목록의 파일 전체 선택"
-                        aria-pressed="false"
-                        title="현재 목록의 파일 전체 선택"
-                    >
-                        <span class="file-panel-action-label">전체 선택</span>
-                    </button>
-                    <details class="file-panel-folder-menu">
-                        <summary
-                            class="btn ghost file-panel-folder-menu-trigger"
-                            aria-label="폴더 작업 열기"
-                            title="폴더 작업"
+                <div class="file-panel-action-stack">
+                    <div class="file-panel-directory-actions">
+                        <button
+                            class="btn secondary file-panel-directory-btn file-panel-directory-btn-new"
+                            type="button"
+                            id="{{ id_prefix }}-new-file"
+                            aria-label="현재 폴더에 새 파일 만들기"
+                            title="현재 폴더에 새 파일 만들기"
                         >
-                            <span class="file-panel-action-label">폴더 작업</span>
-                        </summary>
-                        <div class="file-panel-folder-menu-list">
-                            <button
-                                class="btn ghost file-panel-directory-btn file-panel-directory-btn-delete file-panel-selection-btn-danger file-panel-folder-menu-item"
-                                type="button"
-                                id="{{ id_prefix }}-delete-directory"
-                                aria-label="현재 폴더 삭제"
-                                title="현재 폴더 삭제"
+                            <span class="file-panel-action-label">새 파일</span>
+                        </button>
+                        <button
+                            class="btn secondary file-panel-directory-btn file-panel-directory-btn-upload"
+                            type="button"
+                            id="{{ id_prefix }}-upload"
+                            aria-label="현재 폴더에 파일 업로드"
+                            title="현재 폴더에 파일 업로드"
+                        >
+                            <span class="file-panel-action-label">업로드</span>
+                        </button>
+                        <input
+                            class="file-panel-upload-input"
+                            type="file"
+                            id="{{ id_prefix }}-upload-input"
+                            multiple
+                            aria-hidden="true"
+                            tabindex="-1"
+                        >
+                        <button
+                            class="btn secondary file-panel-selection-btn file-panel-selection-btn-select-all"
+                            type="button"
+                            id="{{ id_prefix }}-select-all"
+                            aria-label="현재 목록의 파일 전체 선택"
+                            aria-pressed="false"
+                            title="현재 목록의 파일 전체 선택"
+                        >
+                            <span class="file-panel-action-label">전체 선택</span>
+                        </button>
+                        <details class="file-panel-folder-menu">
+                            <summary
+                                class="btn ghost file-panel-folder-menu-trigger"
+                                aria-label="폴더 작업 열기"
+                                title="폴더 작업"
                             >
-                                <span class="file-panel-action-label">폴더 삭제</span>
-                            </button>
-                        </div>
-                    </details>
-                </div>
-                <div class="file-panel-selection-actions is-hidden" id="{{ id_prefix }}-selection-actions">
-                    <button
-                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-add-context"
-                        type="button"
-                        id="{{ id_prefix }}-add-context"
-                        aria-label="선택 파일을 채팅에 넣기"
-                        title="선택 파일을 채팅에 넣기"
-                    >
-                        <span class="file-panel-action-label">채팅에 추가</span>
-                    </button>
-                    <button
-                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-move"
-                        type="button"
-                        id="{{ id_prefix }}-move"
-                        aria-label="선택 파일 이동 또는 이름 변경"
-                        title="선택 파일 이동 또는 이름 변경"
-                    >
-                        <span class="file-panel-action-label">이동</span>
-                    </button>
-                    <button
-                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-clear"
-                        type="button"
-                        id="{{ id_prefix }}-clear-selection"
-                        aria-label="파일 선택 해제"
-                        title="파일 선택 해제"
-                    >
-                        <span class="file-panel-action-label">선택 해제</span>
-                    </button>
-                    <button
-                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-download"
-                        type="button"
-                        id="{{ id_prefix }}-download"
-                        aria-label="선택 파일 다운로드"
-                        title="선택 파일 다운로드"
-                    >
-                        <span class="file-panel-action-label">다운로드</span>
-                    </button>
-                    <button
-                        class="btn ghost file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
-                        type="button"
-                        id="{{ id_prefix }}-delete"
-                        aria-label="선택 파일 삭제"
-                        title="선택 파일 삭제"
-                    >
-                        <span class="file-panel-action-label">삭제</span>
-                    </button>
+                                <span class="file-panel-action-label">폴더 작업</span>
+                            </summary>
+                            <div class="file-panel-folder-menu-list">
+                                <button
+                                    class="btn ghost file-panel-directory-btn file-panel-directory-btn-delete file-panel-selection-btn-danger file-panel-folder-menu-item"
+                                    type="button"
+                                    id="{{ id_prefix }}-delete-directory"
+                                    aria-label="현재 폴더 삭제"
+                                    title="현재 폴더 삭제"
+                                >
+                                    <span class="file-panel-action-label">폴더 삭제</span>
+                                </button>
+                            </div>
+                        </details>
+                    </div>
+                    <div class="file-panel-selection-actions is-hidden" id="{{ id_prefix }}-selection-actions">
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-add-context"
+                            type="button"
+                            id="{{ id_prefix }}-add-context"
+                            aria-label="선택 파일을 채팅에 넣기"
+                            title="선택 파일을 채팅에 넣기"
+                        >
+                            <span class="file-panel-action-label">채팅에 추가</span>
+                        </button>
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-move"
+                            type="button"
+                            id="{{ id_prefix }}-move"
+                            aria-label="선택 파일 이동 또는 이름 변경"
+                            title="선택 파일 이동 또는 이름 변경"
+                        >
+                            <span class="file-panel-action-label">이동</span>
+                        </button>
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-download"
+                            type="button"
+                            id="{{ id_prefix }}-download"
+                            aria-label="선택 파일 다운로드"
+                            title="선택 파일 다운로드"
+                        >
+                            <span class="file-panel-action-label">다운로드</span>
+                        </button>
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
+                            type="button"
+                            id="{{ id_prefix }}-delete"
+                            aria-label="선택 파일 삭제"
+                            title="선택 파일 삭제"
+                        >
+                            <span class="file-panel-action-label">삭제</span>
+                        </button>
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-clear"
+                            type="button"
+                            id="{{ id_prefix }}-clear-selection"
+                            aria-label="파일 선택 해제"
+                            title="파일 선택 해제"
+                        >
+                            <span class="file-panel-action-label">선택 해제</span>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="work-mode-file-grid-scroll" id="{{ id_prefix }}-grid-scroll">
@@ -177,6 +179,46 @@
             <div class="file-browser-viewer-header" id="{{ id_prefix }}-viewer-header">
                 <div class="file-browser-viewer-meta" id="{{ id_prefix }}-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
                 <div class="file-browser-viewer-actions" id="{{ id_prefix }}-viewer-actions">
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-open-new"
+                        type="button"
+                        id="{{ id_prefix }}-open-new"
+                        aria-label="선택 파일 새 창에서 열기"
+                        title="선택 파일 새 창에서 열기"
+                        disabled
+                    >
+                        <span class="sr-only">선택 파일 새 창에서 열기</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-copy is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-copy"
+                        aria-label="파일 내용 전체 복사"
+                        title="파일 내용 전체 복사"
+                        disabled
+                    >
+                        <span class="sr-only">파일 내용 전체 복사</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-rename is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-rename-current"
+                        aria-label="선택 파일 이름 변경"
+                        title="선택 파일 이름 변경"
+                        disabled
+                    >
+                        <span class="sr-only">선택 파일 이름 변경</span>
+                    </button>
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-delete is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-delete-current"
+                        aria-label="선택 파일 삭제"
+                        title="선택 파일 삭제"
+                        disabled
+                    >
+                        <span class="sr-only">선택 파일 삭제</span>
+                    </button>
                     <button
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-edit is-hidden"
                         type="button"
@@ -533,9 +575,8 @@
 
             <section class="work-mode-preview" id="codex-work-mode-preview" aria-hidden="true">
                 <div class="work-mode-preview-header">
-                    <div class="work-mode-preview-title">File Preview</div>
-                    <div class="work-mode-preview-actions">
-                        <div class="work-mode-preview-tools">
+                    <div class="work-mode-preview-nav">
+                        <div class="work-mode-preview-nav-slot">
                             <button
                                 class="btn ghost icon-only file-browser-back work-mode-preview-back is-hidden"
                                 type="button"
@@ -545,6 +586,14 @@
                             >
                                 <span class="sr-only">목록으로 이동</span>
                             </button>
+                        </div>
+                    </div>
+                    <div class="work-mode-preview-heading">
+                        <div class="work-mode-preview-title">File Preview</div>
+                        <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
+                    </div>
+                    <div class="work-mode-preview-actions">
+                        <div class="work-mode-preview-tools">
                             <button
                                 class="btn ghost icon-only work-mode-preview-up"
                                 type="button"
@@ -553,6 +602,9 @@
                                 title="상위 폴더로 이동"
                             >
                                 <span class="sr-only">상위 폴더로 이동</span>
+                            </button>
+                            <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
+                                <span class="sr-only">문서 목록 새로고침</span>
                             </button>
                             <button
                                 class="btn ghost icon-only work-mode-preview-terminal"
@@ -564,16 +616,6 @@
                                 <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
                             </button>
                             <button
-                                class="btn ghost icon-only work-mode-preview-open-new"
-                                type="button"
-                                id="codex-work-mode-file-open-new"
-                                aria-label="선택 파일 새 창에서 열기"
-                                title="선택 파일 새 창에서 열기"
-                                disabled
-                            >
-                                <span class="sr-only">선택 파일 새 창에서 열기</span>
-                            </button>
-                            <button
                                 class="btn ghost icon-only work-mode-preview-fullscreen"
                                 type="button"
                                 id="codex-work-mode-file-fullscreen"
@@ -582,9 +624,6 @@
                                 title="파일 내용 전체화면"
                             >
                                 <span class="sr-only">파일 내용 전체화면</span>
-                            </button>
-                            <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
-                                <span class="sr-only">문서 목록 새로고침</span>
                             </button>
                         </div>
                         <div class="work-mode-switch-slot work-mode-preview-switch-slot is-hidden">
@@ -600,7 +639,6 @@
                         </div>
                     </div>
                 </div>
-                <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
                 {{ render_file_panel('codex-work-mode-file') }}
             </section>
         </main>
@@ -807,42 +845,19 @@
                     <div class="file-browser-overlay-title" id="codex-file-browser-overlay-title">파일 브라우저</div>
                     <div class="file-browser-overlay-subtitle" id="codex-file-browser-overlay-subtitle">Workspace</div>
                 </div>
-                <button class="btn ghost icon-only file-browser-overlay-close" type="button" id="codex-file-browser-overlay-close" aria-label="닫기">
-                    <span class="sr-only">닫기</span>
-                </button>
-            </div>
-            <div class="file-browser-overlay-body">
-                <div class="file-browser-overlay-tools">
-                    <div class="file-browser-filter-tools" role="group" aria-label="File filters">
-                        <label class="file-browser-toggle" for="codex-file-browser-show-hidden">
-                            <input type="checkbox" id="codex-file-browser-show-hidden">
-                            숨김 파일 표시
-                        </label>
-                        <label class="file-browser-toggle" for="codex-file-browser-show-pycache">
-                            <input type="checkbox" id="codex-file-browser-show-pycache">
-                            pycache 표시
-                        </label>
-                    </div>
+                <div class="file-browser-header-actions">
                     <div class="file-browser-nav-tools">
-                        <button
-                            class="btn ghost icon-only file-browser-back is-hidden"
-                            type="button"
-                            id="codex-file-browser-back"
-                            aria-label="목록으로 이동"
-                            title="목록으로 이동"
-                        >
-                            <span class="sr-only">목록으로 이동</span>
-                        </button>
-                        <button class="btn ghost file-browser-fullscreen" type="button" id="codex-file-browser-fullscreen" aria-pressed="false">내용 전체화면</button>
-                        <button
-                            class="btn ghost icon-only file-browser-terminal-open"
-                            type="button"
-                            id="codex-file-browser-terminal-open"
-                            aria-label="현재 폴더 Terminal 오버레이 열기"
-                            title="현재 폴더 Terminal 오버레이 열기"
-                        >
-                            <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
-                        </button>
+                        <div class="file-browser-nav-slot">
+                            <button
+                                class="btn ghost icon-only file-browser-back is-hidden"
+                                type="button"
+                                id="codex-file-browser-back"
+                                aria-label="목록으로 이동"
+                                title="목록으로 이동"
+                            >
+                                <span class="sr-only">목록으로 이동</span>
+                            </button>
+                        </div>
                         <button
                             class="btn ghost icon-only file-browser-up"
                             type="button"
@@ -855,6 +870,35 @@
                         <button class="btn ghost icon-only file-browser-refresh" type="button" id="codex-file-browser-refresh" aria-label="목록 새로고침" title="목록 새로고침">
                             <span class="sr-only">목록 새로고침</span>
                         </button>
+                        <button
+                            class="btn ghost icon-only file-browser-terminal-open"
+                            type="button"
+                            id="codex-file-browser-terminal-open"
+                            aria-label="현재 폴더 Terminal 오버레이 열기"
+                            title="현재 폴더 Terminal 오버레이 열기"
+                        >
+                            <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
+                        </button>
+                        <button class="btn ghost icon-only file-browser-fullscreen" type="button" id="codex-file-browser-fullscreen" aria-pressed="false" aria-label="내용 전체화면" title="내용 전체화면">
+                            <span class="sr-only">내용 전체화면</span>
+                        </button>
+                    </div>
+                    <button class="btn ghost icon-only file-browser-overlay-close" type="button" id="codex-file-browser-overlay-close" aria-label="닫기">
+                        <span class="sr-only">닫기</span>
+                    </button>
+                </div>
+            </div>
+            <div class="file-browser-overlay-body">
+                <div class="file-browser-overlay-tools">
+                    <div class="file-browser-filter-tools" role="group" aria-label="File filters">
+                        <label class="file-browser-toggle" for="codex-file-browser-show-hidden">
+                            <input type="checkbox" id="codex-file-browser-show-hidden">
+                            숨김 파일 표시
+                        </label>
+                        <label class="file-browser-toggle" for="codex-file-browser-show-pycache">
+                            <input type="checkbox" id="codex-file-browser-show-pycache">
+                            pycache 표시
+                        </label>
                     </div>
                 </div>
                 <div class="file-browser-path" id="codex-file-browser-path">$workspace</div>
@@ -918,6 +962,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=144"></script>
+    <script src="/static/js/app.js?v=145"></script>
 </body>
 </html>

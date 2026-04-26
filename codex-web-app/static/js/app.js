@@ -1471,6 +1471,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
     const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
+    const workModeFileCopyBtn = document.getElementById('codex-work-mode-file-copy');
+    const workModeFileRenameCurrentBtn = document.getElementById('codex-work-mode-file-rename-current');
+    const workModeFileDeleteCurrentBtn = document.getElementById('codex-work-mode-file-delete-current');
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileNewFileBtn = document.getElementById('codex-work-mode-file-new-file');
@@ -1519,6 +1522,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserTerminalOpenBtn = document.getElementById('codex-file-browser-terminal-open');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserOpenNewBtn = document.getElementById('codex-file-browser-open-new');
+    const fileBrowserCopyBtn = document.getElementById('codex-file-browser-copy');
+    const fileBrowserRenameCurrentBtn = document.getElementById('codex-file-browser-rename-current');
+    const fileBrowserDeleteCurrentBtn = document.getElementById('codex-file-browser-delete-current');
     const fileBrowserNewFileBtn = document.getElementById('codex-file-browser-new-file');
     const fileBrowserUploadBtn = document.getElementById('codex-file-browser-upload');
     const fileBrowserUploadInput = document.getElementById('codex-file-browser-upload-input');
@@ -1768,6 +1775,21 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileDeleteBtn) {
         workModeFileDeleteBtn.addEventListener('click', () => {
             void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileCopyBtn) {
+        workModeFileCopyBtn.addEventListener('click', () => {
+            void copyCurrentFileContentFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileRenameCurrentBtn) {
+        workModeFileRenameCurrentBtn.addEventListener('click', () => {
+            void renameCurrentFileInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileDeleteCurrentBtn) {
+        workModeFileDeleteCurrentBtn.addEventListener('click', () => {
+            void deleteCurrentFileFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileEditBtn) {
@@ -2148,6 +2170,21 @@ document.addEventListener('DOMContentLoaded', () => {
             void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
+    if (fileBrowserCopyBtn) {
+        fileBrowserCopyBtn.addEventListener('click', () => {
+            void copyCurrentFileContentFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserRenameCurrentBtn) {
+        fileBrowserRenameCurrentBtn.addEventListener('click', () => {
+            void renameCurrentFileInFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserDeleteCurrentBtn) {
+        fileBrowserDeleteCurrentBtn.addEventListener('click', () => {
+            void deleteCurrentFileFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
     if (fileBrowserEditBtn) {
         fileBrowserEditBtn.addEventListener('click', () => {
             void toggleFilePanelEditMode(FILE_PANEL_VARIANT_OVERLAY);
@@ -2232,6 +2269,13 @@ document.addEventListener('DOMContentLoaded', () => {
         fileBrowserFullscreenBtn.addEventListener('click', () => {
             setFileBrowserViewerFullscreen(!fileBrowserViewerFullscreen);
         });
+    }
+    if (fileBrowserOpenNewBtn) {
+        fileBrowserOpenNewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openFilePanelPreviewInNewWindow(FILE_PANEL_VARIANT_OVERLAY);
+        });
+        syncHoverTooltipFromLabel(fileBrowserOpenNewBtn);
     }
     if (fileBrowserTerminalOpenBtn) {
         syncHoverTooltipFromLabel(fileBrowserTerminalOpenBtn, '현재 폴더 Terminal 오버레이 열기');
@@ -3723,6 +3767,10 @@ function getFilePanelElementsByPrefix({
         viewerMeta: byId('viewer-meta'),
         viewerActions: byId('viewer-actions'),
         viewerContent: byId('viewer-content'),
+        openNewBtn: byId('open-new'),
+        copyBtn: byId('copy'),
+        renameCurrentBtn: byId('rename-current'),
+        deleteCurrentBtn: byId('delete-current'),
         editBtn: byId('edit'),
         saveBtn: byId('save'),
         uploadBtn: byId('upload'),
@@ -4496,8 +4544,33 @@ function syncFilePanelViewerActionState(variant) {
     const hasPreview = Boolean(state.path);
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
     const canEdit = hasPreview && Boolean(state.editable);
+    const canCopy = hasPreview && !state.previewResult?.is_binary;
     if (elements.viewerPanel) {
         elements.viewerPanel.classList.toggle('is-editing', Boolean(state.editing));
+    }
+    if (elements.openNewBtn) {
+        syncFilePanelPreviewOpenButton(normalizedVariant, { loading: isBusy });
+    }
+    if (elements.copyBtn) {
+        elements.copyBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.copyBtn.disabled = !canCopy || isBusy;
+        updateFilePanelActionButtonLabel(
+            elements.copyBtn,
+            state.previewResult?.truncated
+                ? '파일 내용 전체 복사'
+                : '파일 내용 복사'
+        );
+        setIconButtonScreenReaderText(elements.copyBtn, '파일 내용 전체 복사');
+    }
+    if (elements.renameCurrentBtn) {
+        elements.renameCurrentBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.renameCurrentBtn.disabled = !hasPreview || isBusy;
+        updateFilePanelActionButtonLabel(elements.renameCurrentBtn, '선택 파일 이름 변경');
+    }
+    if (elements.deleteCurrentBtn) {
+        elements.deleteCurrentBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.deleteCurrentBtn.disabled = !hasPreview || isBusy;
+        updateFilePanelActionButtonLabel(elements.deleteCurrentBtn, '선택 파일 삭제');
     }
     if (elements.editBtn) {
         elements.editBtn.classList.toggle('is-hidden', !hasPreview);
@@ -11429,27 +11502,74 @@ function getWorkModePreviewLaunchUrl() {
     return buildFileBrowserRawFileUrl(selectedRoot, selectedPath);
 }
 
+function getFilePanelPreviewLaunchUrl(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
+        return getWorkModePreviewLaunchUrl();
+    }
+    const selectedRoot = normalizeFileBrowserRoot(fileBrowserRoot);
+    const selectedPath = normalizeFileBrowserRelativePath(fileBrowserSelectedPath);
+    return buildFileBrowserRawFileUrl(selectedRoot, selectedPath);
+}
+
+function getFilePanelPreviewOpenButtonLabel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const htmlPreviewUrl = normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE
+        ? getWorkModeHtmlPreviewLaunchUrl()
+        : '';
+    return normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE
+        && workModeHtmlPreviewState?.suspended
+        && htmlPreviewUrl
+        ? '새 창에서 HTML 미리보기 다시 열기'
+        : '선택 파일 새 창에서 열기';
+}
+
+function setIconButtonScreenReaderText(button, label) {
+    if (!(button instanceof HTMLElement)) return;
+    const node = button.querySelector('.sr-only');
+    if (node) {
+        node.textContent = String(label || '');
+    }
+}
+
 function canOpenWorkModePreviewInNewWindow() {
     if (!isWorkModeEnabled()) return false;
     return Boolean(getWorkModePreviewLaunchUrl());
 }
 
-function syncWorkModeHtmlPreviewOpenButton({ loading = false } = {}) {
-    const elements = getWorkModeFileElements();
+function canOpenFilePanelPreviewInNewWindow(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
+        return canOpenWorkModePreviewInNewWindow();
+    }
+    return isFileBrowserOverlayOpen() && Boolean(getFilePanelPreviewLaunchUrl(normalizedVariant));
+}
+
+function syncFilePanelPreviewOpenButton(variant, { loading = false } = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
     const button = elements?.openNewBtn;
     if (!button) return;
-    const htmlPreviewUrl = getWorkModeHtmlPreviewLaunchUrl();
-    const label = workModeHtmlPreviewState?.suspended && htmlPreviewUrl
-        ? '새 창에서 HTML 미리보기 다시 열기'
-        : '선택 파일 새 창에서 열기';
+    const label = getFilePanelPreviewOpenButtonLabel(normalizedVariant);
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
-    button.disabled = Boolean(loading) || !canOpenWorkModePreviewInNewWindow();
+    button.disabled = Boolean(loading) || !canOpenFilePanelPreviewInNewWindow(normalizedVariant);
+    setIconButtonScreenReaderText(button, label);
     syncHoverTooltipFromLabel(button, label);
 }
 
+function syncWorkModeHtmlPreviewOpenButton(options = {}) {
+    syncFilePanelPreviewOpenButton(FILE_PANEL_VARIANT_WORK_MODE, options);
+}
+
 function openWorkModePreviewInNewWindow() {
-    const previewUrl = getWorkModePreviewLaunchUrl();
+    return openFilePanelPreviewInNewWindow(FILE_PANEL_VARIANT_WORK_MODE);
+}
+
+function openFilePanelPreviewInNewWindow(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const previewUrl = getFilePanelPreviewLaunchUrl(normalizedVariant);
     if (!previewUrl) {
         showToast('새 창으로 열 수 있는 선택 파일이 없습니다.', {
             tone: 'default',
@@ -12707,9 +12827,12 @@ function setFileBrowserViewerFullscreen(isFullscreen) {
     }
     if (elements.fullscreenBtn) {
         const buttonLabel = fileBrowserViewerFullscreen ? '목록 보기' : '내용 전체화면';
+        elements.fullscreenBtn.classList.toggle('is-active', Boolean(fileBrowserViewerFullscreen));
         elements.fullscreenBtn.setAttribute('aria-pressed', fileBrowserViewerFullscreen ? 'true' : 'false');
+        elements.fullscreenBtn.setAttribute('aria-label', buttonLabel);
         elements.fullscreenBtn.setAttribute('title', buttonLabel);
-        elements.fullscreenBtn.textContent = buttonLabel;
+        setIconButtonScreenReaderText(elements.fullscreenBtn, buttonLabel);
+        syncHoverTooltipFromLabel(elements.fullscreenBtn, buttonLabel);
     }
     if (!overlayFullscreen && isFileBrowserOverlayOpen()) {
         applyFileBrowserSplitRatio(fileBrowserSplitRatio, { persist: false });
@@ -12968,6 +13091,17 @@ async function fetchFilePanelDownload(root, paths) {
             paths: Array.from(createNormalizedRelativePathSet(paths))
         })
     });
+}
+
+async function fetchFilePanelRawText(root, path) {
+    const previewUrl = buildFileBrowserRawFileUrl(root, path);
+    if (!previewUrl) {
+        throw new Error('파일 내용을 불러올 주소를 만들지 못했습니다.');
+    }
+    const result = await fetchBlob(previewUrl, {
+        timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
+    });
+    return result?.blob ? result.blob.text() : '';
 }
 
 async function deleteFilePanelFiles(root, paths) {
@@ -13337,6 +13471,202 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         return false;
     } finally {
         setFilePanelBulkActionInFlight(variant, false);
+    }
+}
+
+async function copyCurrentFileContentFromFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    const state = getFilePanelEditState(normalizedVariant);
+    const root = state.root || getFilePanelCurrentRoot(normalizedVariant);
+    const path = normalizeFileBrowserRelativePath(state.path || getFilePanelPreviewPath(normalizedVariant));
+    if (!path || !state.previewResult) {
+        showToast('복사할 파일을 먼저 선택하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    if (state.previewResult?.is_binary) {
+        showToast('Binary 파일은 내용 복사를 지원하지 않습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    const button = elements?.copyBtn;
+    if (button) {
+        button.disabled = true;
+        button.classList.add('is-loading');
+    }
+    try {
+        const text = state.editing
+            ? String(state.editBuffer || '')
+            : (state.previewResult?.truncated
+                ? await fetchFilePanelRawText(root, path)
+                : String(state.previewResult?.content || ''));
+        await writeTextToClipboard(text);
+        showFilePanelCopyButtonFeedback(normalizedVariant);
+        showToast('파일 내용을 복사했습니다.', {
+            tone: 'success',
+            durationMs: 2200
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 내용을 복사하지 못했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        if (button) {
+            button.classList.remove('is-loading');
+        }
+        syncFilePanelViewerActionState(normalizedVariant);
+    }
+}
+
+function showFilePanelCopyButtonFeedback(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const elements = getFilePanelVariantConfig(normalizedVariant).getElements();
+    const button = elements?.copyBtn;
+    if (!button) return;
+    button.classList.add('is-copied');
+    updateFilePanelActionButtonLabel(button, '파일 내용 복사됨');
+    window.setTimeout(() => {
+        button.classList.remove('is-copied');
+        syncFilePanelViewerActionState(normalizedVariant);
+    }, 1500);
+}
+
+function getFilePanelCurrentPreviewFilePath(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    return normalizeFileBrowserRelativePath(state.path || getFilePanelPreviewPath(normalizedVariant));
+}
+
+async function deleteCurrentFileFromFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const path = getFilePanelCurrentPreviewFilePath(normalizedVariant);
+    if (!path) {
+        showToast('삭제할 파일을 먼저 선택하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const root = getFilePanelEditState(normalizedVariant).root || getFilePanelCurrentRoot(normalizedVariant);
+    const confirmed = window.confirm(
+        `현재 미리보기 파일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.\n\n${formatFileBrowserDisplayPath(root, path)}`
+    );
+    if (!confirmed) return false;
+
+    const currentPath = getFileBrowserParentPath(path);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        await deleteFilePanelFiles(root, [path]);
+        clearFilePanelSelection(normalizedVariant);
+        setFilePanelPreviewPath(normalizedVariant, '');
+        clearFilePanelViewerForVariant(normalizedVariant, '삭제한 파일입니다. 다른 파일을 선택하세요.');
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        showToast(`파일을 삭제했습니다: ${path}`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 삭제에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+function normalizeSingleFilenameInput(value) {
+    const source = String(value || '').trim();
+    if (!source || source === '.' || source === '..') return '';
+    if (source.includes('/') || source.includes('\\')) return '';
+    return source;
+}
+
+async function renameCurrentFileInFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const path = getFilePanelCurrentPreviewFilePath(normalizedVariant);
+    if (!path) {
+        showToast('이름을 변경할 파일을 먼저 선택하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const currentName = path.split('/').filter(Boolean).pop() || path;
+    const requestedName = window.prompt('새 파일 이름을 입력하세요.', currentName);
+    if (requestedName === null) return false;
+    const nextName = normalizeSingleFilenameInput(requestedName);
+    if (!nextName) {
+        showToast('파일 이름만 입력하세요. 폴더 경로는 이동 버튼을 사용하세요.', {
+            tone: 'error',
+            durationMs: 3600
+        });
+        return false;
+    }
+
+    const parentPath = getFileBrowserParentPath(path);
+    const nextPath = buildFileBrowserChildPath(parentPath, nextName);
+    if (!nextPath || nextPath === path) return false;
+
+    const root = getFilePanelEditState(normalizedVariant).root || getFilePanelCurrentRoot(normalizedVariant);
+    const currentPath = parentPath;
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        await moveFilePanelFiles(root, [path], {
+            destination_path: nextPath
+        });
+        clearFilePanelSelection(normalizedVariant);
+        setFilePanelPreviewPath(normalizedVariant, nextPath);
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        await openFileInPanelVariant(normalizedVariant, nextPath, {
+            root,
+            showViewerOnSuccess: false
+        });
+        showToast(`파일 이름을 변경했습니다: ${nextPath}`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 이름 변경에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }
 
@@ -17091,8 +17421,8 @@ function createMessageCopyButton(wrapper) {
     button.setAttribute('title', 'Copy');
     button.innerHTML = `
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <rect x="7" y="4" width="10" height="4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
-            <rect x="5" y="8" width="14" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"></rect>
+            <rect x="8" y="8" width="10" height="11" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.7"></rect>
+            <path d="M6 15.5V6.8A1.8 1.8 0 0 1 7.8 5h7.7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
         </svg>
     `;
     button.addEventListener('click', event => {
@@ -17103,6 +17433,19 @@ function createMessageCopyButton(wrapper) {
     return button;
 }
 
+async function writeTextToClipboard(text) {
+    const source = String(text ?? '');
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(source);
+            return;
+        } catch (error) {
+            void error;
+        }
+    }
+    copyMessageFallback(source);
+}
+
 async function copyMessageContent(wrapper, button) {
     if (!wrapper) return;
     const bubble = wrapper.querySelector('.message-bubble');
@@ -17111,11 +17454,7 @@ async function copyMessageContent(wrapper, button) {
         || bubble?.textContent
         || '';
     try {
-        if (navigator.clipboard?.writeText) {
-            await navigator.clipboard.writeText(text);
-        } else {
-            copyMessageFallback(text);
-        }
+        await writeTextToClipboard(text);
         showMessageCopyFeedback(button);
     } catch (error) {
         copyMessageFallback(text);

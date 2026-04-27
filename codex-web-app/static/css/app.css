@@ -1377,9 +1377,9 @@ textarea {
     align-items: center;
     justify-content: flex-end;
     gap: 4px;
-    flex: 0 0 calc((var(--icon-button-size) * 6) + 20px);
-    width: calc((var(--icon-button-size) * 6) + 20px);
-    min-width: calc((var(--icon-button-size) * 6) + 20px);
+    flex: 0 0 calc((var(--icon-button-size) * 7) + 24px);
+    width: calc((var(--icon-button-size) * 7) + 24px);
+    min-width: calc((var(--icon-button-size) * 7) + 24px);
 }
 
 .file-browser-viewer-action {
@@ -1396,6 +1396,10 @@ textarea {
 
 .file-browser-viewer-open-new {
     background-image: var(--icon-overlay-open);
+}
+
+.file-browser-viewer-add-context {
+    background-image: var(--icon-chat-add);
 }
 
 .file-browser-viewer-copy {

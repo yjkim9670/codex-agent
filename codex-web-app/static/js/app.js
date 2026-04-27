@@ -184,9 +184,6 @@ const FILE_BROWSER_MOBILE_VIEW_LIST = 'list';
 const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_PANEL_VARIANT_WORK_MODE = 'work-mode';
 const FILE_PANEL_VARIANT_OVERLAY = 'overlay';
-const FILE_PANEL_CHAT_CONTEXT_MAX_FILES = 6;
-const FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE = 4000;
-const FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS = 18000;
 const FILE_PANEL_EDIT_DISCARD_MESSAGE = '저장하지 않은 변경 사항이 있습니다. 변경 내용을 버릴까요?';
 const TERMINAL_REQUEST_TIMEOUT_MS = 20000;
 const TERMINAL_INPUT_TIMEOUT_MS = 12000;
@@ -1471,6 +1468,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
     const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
+    const workModeFileAddCurrentContextBtn = document.getElementById('codex-work-mode-file-add-current-context');
     const workModeFileCopyBtn = document.getElementById('codex-work-mode-file-copy');
     const workModeFileRenameCurrentBtn = document.getElementById('codex-work-mode-file-rename-current');
     const workModeFileDeleteCurrentBtn = document.getElementById('codex-work-mode-file-delete-current');
@@ -1523,6 +1521,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
     const fileBrowserOpenNewBtn = document.getElementById('codex-file-browser-open-new');
+    const fileBrowserAddCurrentContextBtn = document.getElementById('codex-file-browser-add-current-context');
     const fileBrowserCopyBtn = document.getElementById('codex-file-browser-copy');
     const fileBrowserRenameCurrentBtn = document.getElementById('codex-file-browser-rename-current');
     const fileBrowserDeleteCurrentBtn = document.getElementById('codex-file-browser-delete-current');
@@ -1750,6 +1749,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileAddContextBtn) {
         workModeFileAddContextBtn.addEventListener('click', () => {
             void addSelectedFilesToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileAddCurrentContextBtn) {
+        workModeFileAddCurrentContextBtn.addEventListener('click', () => {
+            void addCurrentFileToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileMoveBtn) {
@@ -2143,6 +2147,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserAddContextBtn) {
         fileBrowserAddContextBtn.addEventListener('click', () => {
             void addSelectedFilesToChatContext(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserAddCurrentContextBtn) {
+        fileBrowserAddCurrentContextBtn.addEventListener('click', () => {
+            void addCurrentFileToChatContext(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserMoveBtn) {
@@ -3768,6 +3777,7 @@ function getFilePanelElementsByPrefix({
         viewerActions: byId('viewer-actions'),
         viewerContent: byId('viewer-content'),
         openNewBtn: byId('open-new'),
+        addCurrentContextBtn: byId('add-current-context'),
         copyBtn: byId('copy'),
         renameCurrentBtn: byId('rename-current'),
         deleteCurrentBtn: byId('delete-current'),
@@ -4552,6 +4562,11 @@ function syncFilePanelViewerActionState(variant) {
     }
     if (elements.openNewBtn) {
         syncFilePanelPreviewOpenButton(normalizedVariant, { loading: isBusy });
+    }
+    if (elements.addCurrentContextBtn) {
+        elements.addCurrentContextBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.addCurrentContextBtn.disabled = !hasPreview || isBusy;
+        updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일 경로를 채팅에 추가');
     }
     if (elements.copyBtn) {
         elements.copyBtn.classList.toggle('is-hidden', !hasPreview);
@@ -12160,7 +12175,7 @@ function syncFilePanelSelectionBar(variant) {
     if (elements.addContextBtn) {
         updateFilePanelActionButtonLabel(
             elements.addContextBtn,
-            usingPreviewContext ? '미리보기 파일을 채팅에 넣기' : '선택 파일을 채팅에 넣기'
+            usingPreviewContext ? '미리보기 파일 경로를 채팅에 넣기' : '선택 파일 경로를 채팅에 넣기'
         );
         elements.addContextBtn.disabled = isBusy || contextTargetCount <= 0;
         syncHoverTooltipFromLabel(elements.addContextBtn);
@@ -13212,82 +13227,12 @@ function captureFilePanelListScrollSnapshot(variant) {
     return captureWorkModeFileScrollSnapshot();
 }
 
-function normalizeFileContextLanguage(language = '') {
-    const normalized = String(language || '').trim().toLowerCase();
-    return /^[a-z0-9_+-]+$/u.test(normalized) ? normalized : '';
-}
-
-function trimFileContextText(text, maxChars) {
-    const source = typeof text === 'string' ? text : '';
-    const limit = Number(maxChars);
-    if (!Number.isFinite(limit) || limit <= 0) {
-        return { text: '', truncated: Boolean(source) };
-    }
-    if (source.length <= limit) {
-        return { text: source, truncated: false };
-    }
-    return {
-        text: `${source.slice(0, Math.max(0, limit - 18)).replace(/\s+$/u, '')}\n... [truncated]`,
-        truncated: true
-    };
-}
-
-function buildFilePanelChatContextSection(path, result, maxChars = FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE) {
-    const normalizedPath = normalizeFileBrowserRelativePath(path);
-    const sizeText = formatFileBrowserSize(result?.size);
-    const mimeType = String(result?.mime_type || '').trim();
-    const language = normalizeFileContextLanguage(result?.language || '');
-    const sectionHeader = `### ${normalizedPath || '(unknown path)'}`;
-    if (result?.is_binary) {
-        const binaryParts = ['binary file'];
-        if (mimeType) {
-            binaryParts.push(mimeType);
-        }
-        if (sizeText && sizeText !== '--') {
-            binaryParts.push(sizeText);
-        }
-        return `${sectionHeader}\n${binaryParts.join(' · ')}`;
-    }
-    const trimmed = trimFileContextText(result?.content || '', maxChars);
-    const codeFence = `\`\`\`${language}\n${trimmed.text}\n\`\`\``;
-    const metaParts = [];
-    if (sizeText && sizeText !== '--') {
-        metaParts.push(sizeText);
-    }
-    if (mimeType) {
-        metaParts.push(mimeType);
-    }
-    const metaLine = metaParts.length ? `${metaParts.join(' · ')}\n` : '';
-    return `${sectionHeader}\n${metaLine}${codeFence}`;
-}
-
-async function buildFilePanelChatContextText(root, selectedPaths) {
+function buildFilePanelChatContextText(root, selectedPaths) {
     const paths = Array.from(createNormalizedRelativePathSet(selectedPaths));
     if (!paths.length) return '';
-    const limitedPaths = paths.slice(0, FILE_PANEL_CHAT_CONTEXT_MAX_FILES);
-    const sections = [];
-    let remainingChars = FILE_PANEL_CHAT_CONTEXT_MAX_TOTAL_CHARS;
-    for (const path of limitedPaths) {
-        if (remainingChars <= 200 && sections.length > 0) break;
-        try {
-            const result = await fetchFileBrowserFile(root, path);
-            const budget = Math.min(FILE_PANEL_CHAT_CONTEXT_MAX_CHARS_PER_FILE, Math.max(320, remainingChars - 160));
-            const section = buildFilePanelChatContextSection(path, result, budget);
-            sections.push(section);
-            remainingChars -= section.length;
-        } catch (error) {
-            const section = `### ${path}\n불러오지 못함: ${normalizeError(error, '파일 내용을 읽지 못했습니다.')}`;
-            sections.push(section);
-            remainingChars -= section.length;
-        }
-    }
-    if (paths.length > limitedPaths.length) {
-        sections.push(`추가 ${paths.length - limitedPaths.length}개 파일은 생략했습니다.`);
-    }
-    return [
-        `선택한 파일 컨텍스트입니다. 루트: ${getFileBrowserRootLabel(root)}`,
-        ...sections
-    ].join('\n\n');
+    return paths
+        .map(path => formatFileBrowserDisplayPath(root, path))
+        .join('\n');
 }
 
 async function createFileInFilePanel(variant) {
@@ -13466,13 +13411,50 @@ async function addSelectedFilesToChatContext(variant) {
         if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         }
-        showToast(`${usingPreviewContext ? '미리보기 파일' : `선택 파일 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
+        showToast(`${usingPreviewContext ? '미리보기 파일 경로' : `선택 파일 경로 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
             tone: 'success',
             durationMs: 2600
         });
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일을 채팅 입력에 넣지 못했습니다.'), {
+        showToast(normalizeError(error, '파일 경로를 채팅 입력에 넣지 못했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+async function addCurrentFileToChatContext(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const currentPath = normalizeFileBrowserRelativePath(state.path || '');
+    if (!currentPath) {
+        showToast('채팅에 넣을 파일을 먼저 여세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        const contextRoot = state.root || getFilePanelCurrentRoot(normalizedVariant);
+        const contextText = buildFilePanelChatContextText(contextRoot, [currentPath]);
+        if (!appendTextToChatInput(contextText)) {
+            throw new Error('채팅 입력창을 찾을 수 없습니다.');
+        }
+        if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
+            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+        }
+        showToast('현재 파일 경로를 채팅 입력에 넣었습니다.', {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일 경로를 채팅 입력에 넣지 못했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });

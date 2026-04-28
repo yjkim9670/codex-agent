@@ -396,6 +396,263 @@ textarea {
     color: var(--toast-error-text);
 }
 
+@property --answer-complete-edge-angle {
+    syntax: "<angle>";
+    inherits: false;
+    initial-value: 0deg;
+}
+
+.answer-complete-notice {
+    --answer-complete-edge-size: 24px;
+    --answer-complete-edge-angle: 0deg;
+    position: fixed;
+    inset: 0;
+    z-index: 2700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.98);
+    transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.answer-complete-notice.is-visible {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.answer-complete-notice::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    padding: var(--answer-complete-edge-size);
+    background: conic-gradient(
+        from var(--answer-complete-edge-angle) at 50% 50%,
+        #0f4c81 0deg,
+        #17a56b 58deg,
+        #f7c957 126deg,
+        #d92d4c 196deg,
+        #7a4cff 286deg,
+        #0f4c81 360deg
+    );
+    box-shadow:
+        inset 0 0 44px rgba(15, 76, 129, 0.34),
+        inset 0 0 18px rgba(255, 255, 255, 0.18);
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: answer-complete-edge-fade 8s linear infinite;
+}
+
+.answer-complete-notice-message {
+    position: relative;
+    width: min(720px, calc(100vw - 72px));
+    min-height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 76px;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-radius: 8px;
+    background:
+        radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.42), transparent 26%),
+        radial-gradient(circle at 78% 18%, rgba(23, 165, 107, 0.72), transparent 34%),
+        radial-gradient(circle at 88% 82%, rgba(217, 45, 76, 0.62), transparent 36%),
+        radial-gradient(circle at 20% 88%, rgba(247, 201, 87, 0.72), transparent 32%),
+        linear-gradient(135deg, rgba(15, 76, 129, 0.96), rgba(23, 165, 107, 0.92), rgba(122, 76, 255, 0.88), rgba(217, 45, 76, 0.9));
+    background-size: 240% 240%, 280% 280%, 260% 260%, 300% 300%, 420% 420%;
+    background-position: 0% 18%, 100% 0%, 88% 100%, 0% 100%, 0% 50%;
+    box-shadow:
+        0 36px 110px rgba(15, 27, 45, 0.34),
+        0 0 46px rgba(23, 165, 107, 0.2);
+    color: #fff;
+    font-size: 28px;
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: 0;
+    text-align: center;
+    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.28);
+    isolation: isolate;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    animation: answer-complete-message-fade 11s ease-in-out infinite;
+}
+
+.answer-complete-notice-message::before,
+.answer-complete-notice-message::after {
+    content: "";
+    position: absolute;
+    inset: -36%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.answer-complete-notice-message::before {
+    background:
+        radial-gradient(circle at 12% 28%, rgba(255, 255, 255, 0.48), transparent 18%),
+        radial-gradient(circle at 78% 18%, rgba(247, 201, 87, 0.72), transparent 24%),
+        radial-gradient(circle at 86% 74%, rgba(23, 165, 107, 0.58), transparent 26%),
+        radial-gradient(circle at 24% 82%, rgba(122, 76, 255, 0.62), transparent 24%),
+        radial-gradient(circle at 48% 52%, rgba(217, 45, 76, 0.48), transparent 32%);
+    mix-blend-mode: screen;
+    opacity: 0.68;
+    animation: answer-complete-message-wash 8s ease-in-out infinite;
+}
+
+.answer-complete-notice-message::after {
+    background:
+        radial-gradient(ellipse at 20% 48%, rgba(15, 76, 129, 0.44), transparent 30%),
+        radial-gradient(ellipse at 70% 42%, rgba(217, 45, 76, 0.46), transparent 28%),
+        radial-gradient(ellipse at 52% 78%, rgba(247, 201, 87, 0.42), transparent 26%);
+    mix-blend-mode: overlay;
+    opacity: 0.46;
+    animation: answer-complete-message-stain 13s ease-in-out infinite;
+}
+
+.answer-complete-notice-text {
+    position: relative;
+    z-index: 1;
+}
+
+@keyframes answer-complete-edge-fade {
+    0% {
+        --answer-complete-edge-angle: 0deg;
+        filter: hue-rotate(0deg) saturate(1.14) brightness(1);
+        opacity: 0.9;
+    }
+    33% {
+        --answer-complete-edge-angle: 138deg;
+        filter: hue-rotate(96deg) saturate(1.34) brightness(1.06);
+        opacity: 1;
+    }
+    66% {
+        --answer-complete-edge-angle: 264deg;
+        filter: hue-rotate(218deg) saturate(1.22) brightness(0.98);
+        opacity: 1;
+    }
+    100% {
+        --answer-complete-edge-angle: 360deg;
+        filter: hue-rotate(360deg) saturate(1.3) brightness(1.04);
+        opacity: 0.94;
+    }
+}
+
+@keyframes answer-complete-message-fade {
+    0% {
+        background-position: 0% 18%, 100% 0%, 88% 100%, 0% 100%, 0% 50%;
+        filter: hue-rotate(0deg) saturate(1.12) brightness(1);
+    }
+    30% {
+        background-position: 62% 0%, 28% 70%, 100% 28%, 38% 0%, 44% 44%;
+        filter: hue-rotate(112deg) saturate(1.3) brightness(1.07);
+    }
+    64% {
+        background-position: 100% 72%, 0% 34%, 42% 0%, 100% 82%, 86% 66%;
+        filter: hue-rotate(236deg) saturate(1.2) brightness(0.98);
+    }
+    100% {
+        background-position: 28% 100%, 92% 48%, 8% 74%, 100% 14%, 100% 50%;
+        filter: hue-rotate(360deg) saturate(1.28) brightness(1.04);
+    }
+}
+
+@keyframes answer-complete-message-wash {
+    0% {
+        transform: translate3d(-3%, -2%, 0) rotate(0deg) scale(1);
+        filter: hue-rotate(0deg) saturate(1.08);
+        opacity: 0.42;
+    }
+    45% {
+        transform: translate3d(5%, 3%, 0) rotate(9deg) scale(1.08);
+        filter: hue-rotate(176deg) saturate(1.36);
+        opacity: 0.82;
+    }
+    100% {
+        transform: translate3d(-1%, 6%, 0) rotate(-7deg) scale(1.04);
+        filter: hue-rotate(360deg) saturate(1.2);
+        opacity: 0.56;
+    }
+}
+
+@keyframes answer-complete-message-stain {
+    0% {
+        transform: translate3d(4%, 2%, 0) rotate(0deg) scale(1.02);
+        filter: hue-rotate(0deg) blur(0);
+        opacity: 0.3;
+    }
+    50% {
+        transform: translate3d(-6%, -4%, 0) rotate(-10deg) scale(1.12);
+        filter: hue-rotate(196deg) blur(2px);
+        opacity: 0.58;
+    }
+    100% {
+        transform: translate3d(2%, -5%, 0) rotate(8deg) scale(1.06);
+        filter: hue-rotate(360deg) blur(0);
+        opacity: 0.36;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .answer-complete-notice,
+    .answer-complete-notice::before,
+    .answer-complete-notice-message,
+    .answer-complete-notice-message::before,
+    .answer-complete-notice-message::after {
+        animation: none;
+        transition: none;
+    }
+}
+
+@media (max-width: 599px) {
+    .answer-complete-notice {
+        --answer-complete-edge-size: 18px;
+        padding:
+            max(20px, env(safe-area-inset-top))
+            max(24px, env(safe-area-inset-right))
+            max(20px, env(safe-area-inset-bottom))
+            max(24px, env(safe-area-inset-left));
+    }
+
+    .answer-complete-notice-message {
+        width: min(360px, calc(100vw - 80px));
+        min-height: 124px;
+        padding: 30px 26px;
+        box-shadow:
+            0 24px 72px rgba(15, 27, 45, 0.3),
+            0 0 32px rgba(23, 165, 107, 0.18);
+        font-size: 24px;
+    }
+}
+
+@media (max-width: 380px) {
+    .answer-complete-notice {
+        padding-right: max(20px, env(safe-area-inset-right));
+        padding-left: max(20px, env(safe-area-inset-left));
+    }
+
+    .answer-complete-notice-message {
+        width: min(320px, calc(100vw - 64px));
+        min-height: 112px;
+        padding: 26px 22px;
+        font-size: 22px;
+    }
+}
+
+@media (max-width: 599px) and (orientation: landscape) {
+    .answer-complete-notice-message {
+        min-height: 104px;
+        padding-top: 24px;
+        padding-bottom: 24px;
+    }
+}
+
 .branch-overlay {
     position: fixed;
     inset: 0;

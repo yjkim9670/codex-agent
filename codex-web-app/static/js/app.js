@@ -126,6 +126,7 @@ const KST_TIME_ZONE = 'Asia/Seoul';
 const WEATHER_COMPACT_KEY = 'codexWeatherCompact';
 const WEATHER_LOCATION_FAILURE_TOAST_MS = 3800;
 const TOAST_LAYER_ID = 'codex-toast-layer';
+const ANSWER_COMPLETE_NOTICE_ID = 'codex-answer-complete-notice';
 const HOVER_TOOLTIP_LAYER_ID = 'codex-hover-tooltip-layer';
 const HOVER_TOOLTIP_OFFSET_PX = 8;
 const HOVER_TOOLTIP_VIEWPORT_MARGIN_PX = 10;
@@ -415,6 +416,7 @@ let sessionLoadLockStartedAt = 0;
 let streamMonitorState = null;
 let usageHistoryLastRequestedHours = USAGE_HISTORY_DEFAULT_HOURS;
 let usageHistoryResizeRaf = 0;
+let answerCompleteNoticeDismissHandler = null;
 let hoverTooltipInteractionsBound = false;
 let hoverTooltipLayer = null;
 let hoverTooltipAnchor = null;
@@ -3397,6 +3399,59 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
             }
         }, 180);
     }, visibleMs);
+}
+
+function hideAnswerCompleteNotice({ immediate = false } = {}) {
+    if (answerCompleteNoticeDismissHandler) {
+        document.removeEventListener('pointerdown', answerCompleteNoticeDismissHandler, true);
+        answerCompleteNoticeDismissHandler = null;
+    }
+
+    const notice = document.getElementById(ANSWER_COMPLETE_NOTICE_ID);
+    if (!notice) return;
+    if (immediate) {
+        notice.remove();
+        return;
+    }
+    notice.classList.remove('is-visible');
+    window.setTimeout(() => {
+        if (notice.parentNode && !notice.classList.contains('is-visible')) {
+            notice.parentNode.removeChild(notice);
+        }
+    }, 220);
+}
+
+function showAnswerCompleteNotice() {
+    if (!document.body) return;
+    hideAnswerCompleteNotice({ immediate: true });
+
+    const notice = document.createElement('div');
+    notice.id = ANSWER_COMPLETE_NOTICE_ID;
+    notice.className = 'answer-complete-notice';
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+    notice.setAttribute('aria-atomic', 'true');
+
+    const message = document.createElement('div');
+    message.className = 'answer-complete-notice-message';
+    const messageText = document.createElement('span');
+    messageText.className = 'answer-complete-notice-text';
+    messageText.textContent = '답변 완료';
+    message.appendChild(messageText);
+    notice.appendChild(message);
+    document.body.appendChild(notice);
+
+    answerCompleteNoticeDismissHandler = () => {
+        hideAnswerCompleteNotice();
+    };
+    document.addEventListener('pointerdown', answerCompleteNoticeDismissHandler, {
+        once: true,
+        capture: true
+    });
+
+    window.requestAnimationFrame(() => {
+        notice.classList.add('is-visible');
+    });
 }
 
 async function fetchCodexRestartPolicy() {
@@ -16976,6 +17031,9 @@ async function finishStream(streamId, result) {
     }
     unpinAutoScrollForSession(sessionId);
     setSessionStatus(sessionId, exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
+    if (exitCode === 0) {
+        showAnswerCompleteNotice();
+    }
     const shouldReloadActive = sessionId === state.activeSessionId;
     if (shouldReloadActive) {
         syncActiveSessionControls();

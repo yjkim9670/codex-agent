@@ -240,9 +240,9 @@ const SESSION_LIST_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
-const USAGE_HISTORY_DEFAULT_HOURS = 24;
-const USAGE_HISTORY_MAX_HOURS = 24 * 14;
-const USAGE_HISTORY_RANGE_HOURS = Object.freeze([24, 72, 336]);
+const USAGE_HISTORY_DEFAULT_HOURS = 24 * 3;
+const USAGE_HISTORY_MAX_HOURS = 24 * 30;
+const USAGE_HISTORY_RANGE_HOURS = Object.freeze([72, 168, 336, 720]);
 const USAGE_HISTORY_WEEKLY_HOURS = 24 * 7;
 const OPENAI_API_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
 // Standard API prices per 1M text tokens from OpenAI's pricing docs.
@@ -15650,7 +15650,10 @@ async function resumeStreamsFromStorage(pendingStreams) {
                         id: messageId || '',
                         role: 'assistant',
                         content: '',
-                        created_at: new Date().toISOString()
+                        created_at: new Date().toISOString(),
+                        response_mode: result?.response_mode,
+                        response_model: result?.response_model,
+                        response_reasoning_effort: result?.response_reasoning_effort
                     }, 'assistant');
                 }
                 if (assistantEntry) {
@@ -16087,6 +16090,7 @@ function renderMessages(messages) {
         wrapper.classList.add(roleClass);
         const timestampValue = getMessageTimestampValue(message);
         setMessageWrapperIdentity(wrapper, roleClass, timestampValue, message?.id);
+        syncMessageResponseModeClass(wrapper, roleClass, message);
 
         const metaText = buildMessageMetaText(roleClass, timestampValue, message);
         const meta = buildMessageMeta(metaText, wrapper);
@@ -16147,6 +16151,7 @@ function appendMessageToDOM(message, roleOverride = null) {
     wrapper.classList.add(role);
     const timestampValue = getMessageTimestampValue(message);
     setMessageWrapperIdentity(wrapper, role, timestampValue, message?.id);
+    syncMessageResponseModeClass(wrapper, role, message);
 
     const metaText = buildMessageMetaText(role, timestampValue, message);
     const meta = buildMessageMeta(metaText, wrapper);
@@ -16284,7 +16289,8 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false, attach
             resolveRequestResponseMetadata({
                 planMode,
                 responseMode: result?.response_mode,
-                responseModel: result?.response_model
+                responseModel: result?.response_model,
+                responseReasoningEffort: result?.response_reasoning_effort
             })
         );
         return {
@@ -16526,7 +16532,8 @@ function processStartedStreamResponse(
             content: '',
             created_at: new Date().toISOString(),
             response_mode: responseMetadata?.response_mode,
-            response_model: responseMetadata?.response_model
+            response_model: responseMetadata?.response_model,
+            response_reasoning_effort: responseMetadata?.response_reasoning_effort
         }, 'assistant');
     }
 
@@ -16599,7 +16606,8 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             resolveRequestResponseMetadata({
                 planMode,
                 responseMode: result?.response_mode,
-                responseModel: result?.response_model
+                responseModel: result?.response_model,
+                responseReasoningEffort: result?.response_reasoning_effort
             })
         );
         return { ok: true, reason: 'started', sessionId };
@@ -17075,7 +17083,9 @@ function setMessageMetaLabel(meta, role, timestampValue, message = null) {
     const textElement = meta.querySelector('.message-meta-text');
     if (!textElement) return;
     textElement.textContent = buildMessageMetaText(role, timestampValue, message);
-    setMessageWrapperIdentity(meta.closest('.message'), role, timestampValue, message?.id);
+    const wrapper = meta.closest('.message');
+    setMessageWrapperIdentity(wrapper, role, timestampValue, message?.id);
+    syncMessageResponseModeClass(wrapper, role, message);
 }
 
 function getRoleLabel(role) {
@@ -17114,6 +17124,14 @@ function resolveResponseModeText(modeLabel) {
     return normalizeResponseModeLabel(modeLabel) === 'plan' ? 'plan모드' : '기본모드';
 }
 
+function syncMessageResponseModeClass(wrapper, role, message = null) {
+    if (!wrapper) return;
+    const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
+    const canHaveResponseMode = normalizedRole === 'assistant' || normalizedRole === 'error';
+    const isPlanResponse = canHaveResponseMode && normalizeResponseModeLabel(message?.response_mode) === 'plan';
+    wrapper.classList.toggle('is-plan-response', isPlanResponse);
+}
+
 function createSessionResponseModeBadge(session) {
     const mode = resolveSessionLastResponseMode(session);
     if (!mode) {
@@ -17143,28 +17161,75 @@ function resolveResponseModelForRequest(planMode = false) {
     return defaultModel || 'codex-default';
 }
 
-function resolveRequestResponseMetadata({ planMode = false, responseMode = '', responseModel = '' } = {}) {
+function resolveReasoningEffortForRequest(planMode = false, model = '') {
+    const fallbackReasoning = typeof state.settings?.reasoningEffort === 'string'
+        ? state.settings.reasoningEffort.trim()
+        : '';
+    const planReasoning = typeof state.settings?.planModeReasoningEffort === 'string'
+        ? state.settings.planModeReasoningEffort.trim()
+        : '';
+    const requestedReasoning = planMode ? (planReasoning || fallbackReasoning) : fallbackReasoning;
+    const profile = getReasoningProfile(model, requestedReasoning);
+    return profile.effectiveReasoning || requestedReasoning || '';
+}
+
+function resolveMessageResponseReasoningEffort(message, modelValue = '') {
+    if (!message || typeof message !== 'object') return '';
+    const candidates = [
+        message.response_reasoning_effort,
+        message.reasoning_effort,
+        message.model_reasoning_effort
+    ];
+    for (const candidate of candidates) {
+        const value = typeof candidate === 'string' ? candidate.trim() : '';
+        if (value) return value;
+    }
+    if (!modelValue) return '';
+    const inferred = formatReasoningStatus(modelValue, '');
+    return inferred === 'default' ? '' : inferred;
+}
+
+function resolveRequestResponseMetadata({
+    planMode = false,
+    responseMode = '',
+    responseModel = '',
+    responseReasoningEffort = ''
+} = {}) {
     const normalizedMode = normalizeResponseModeLabel(responseMode || (planMode ? 'plan' : 'basic'));
     const normalizedModel = typeof responseModel === 'string' ? responseModel.trim() : '';
+    const resolvedModel = normalizedModel || resolveResponseModelForRequest(normalizedMode === 'plan');
+    const normalizedReasoningEffort = typeof responseReasoningEffort === 'string'
+        ? responseReasoningEffort.trim()
+        : '';
     return {
         response_mode: normalizedMode,
-        response_model: normalizedModel || resolveResponseModelForRequest(normalizedMode === 'plan')
+        response_model: resolvedModel,
+        response_reasoning_effort: normalizedReasoningEffort
+            || resolveReasoningEffortForRequest(normalizedMode === 'plan', resolvedModel)
     };
 }
 
 function buildMessageMetaText(role, timestampValue, message = null) {
     let label = getRoleLabel(role);
-    if (role === 'assistant' && message && typeof message === 'object') {
+    if ((role === 'assistant' || role === 'error') && message && typeof message === 'object') {
         const hasResponseMetadata = Object.prototype.hasOwnProperty.call(message, 'response_mode')
-            || Object.prototype.hasOwnProperty.call(message, 'response_model');
+            || Object.prototype.hasOwnProperty.call(message, 'response_model')
+            || Object.prototype.hasOwnProperty.call(message, 'response_reasoning_effort');
         if (hasResponseMetadata) {
             const modeValue = resolveResponseModeText(message.response_mode);
             const modelValue = typeof message.response_model === 'string'
                 ? message.response_model.trim()
                 : '';
-            const modeModelLabel = modelValue ? `${modeValue} · ${modelValue}` : modeValue;
-            if (modeModelLabel) {
-                label = `${label} · ${modeModelLabel}`;
+            const reasoningValue = resolveMessageResponseReasoningEffort(message, modelValue);
+            const responseParts = [modeValue];
+            if (modelValue) {
+                responseParts.push(modelValue);
+            }
+            if (reasoningValue) {
+                responseParts.push(`effort ${reasoningValue}`);
+            }
+            if (responseParts.length > 0) {
+                label = `${label} · ${responseParts.join(' · ')}`;
             }
         }
     }

@@ -134,7 +134,7 @@ _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
-_USAGE_HISTORY_RETENTION_DAYS = 14
+_USAGE_HISTORY_RETENTION_DAYS = 30
 _USAGE_HISTORY_DEFAULT_HOURS = 24 * _USAGE_HISTORY_RETENTION_DAYS
 _USAGE_HISTORY_MAX_ITEMS = _USAGE_HISTORY_DEFAULT_HOURS
 _TOKENS_PER_PERCENT_MIN_SAMPLES = 2
@@ -1013,6 +1013,24 @@ def resolve_response_model_name(model_override=None):
         settings = get_settings()
         model_name = str(settings.get('model') or '').strip()
     return model_name or 'codex-default'
+
+
+def resolve_response_reasoning_effort(model_override=None, reasoning_override=None):
+    settings = get_settings()
+    model_name = ''
+    if model_override is not None:
+        model_name = str(model_override).strip()
+    if not model_name:
+        model_name = str(settings.get('model') or '').strip()
+    reasoning_effort = ''
+    if reasoning_override is not None:
+        reasoning_effort = str(reasoning_override).strip()
+    if not reasoning_effort:
+        reasoning_effort = str(settings.get('reasoning_effort') or '').strip()
+    return resolve_codex_reasoning_effort(
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
+    ) or None
 
 
 def format_assistant_response_content(content, mode_label='basic', model_name=''):
@@ -4887,9 +4905,14 @@ def _build_partial_stream_message_metadata(stream):
     response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
         model_override=stream.get('model_override')
     )
+    response_reasoning_effort = str(stream.get('response_reasoning_effort') or '').strip() or resolve_response_reasoning_effort(
+        model_override=stream.get('model_override'),
+        reasoning_override=stream.get('reasoning_override'),
+    )
     metadata = {
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
         'streaming': True,
     }
     usage = _normalize_token_usage(stream.get('token_usage'))
@@ -4897,6 +4920,7 @@ def _build_partial_stream_message_metadata(stream):
     return metadata if isinstance(metadata, dict) else {
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
         'streaming': True,
     }
 
@@ -5558,6 +5582,10 @@ def create_codex_stream(
     output_path = _new_codex_output_path(stream_id)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
+    response_reasoning_effort = resolve_response_reasoning_effort(
+        model_override=model_override,
+        reasoning_override=reasoning_override,
+    )
     normalized_attachments = normalize_codex_attachments(attachments or [])
     stream = {
         'id': stream_id,
@@ -5589,6 +5617,7 @@ def create_codex_stream(
         'user_prompt': str(user_prompt or '').strip(),
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
         'assistant_progress_saved_at': None,
         'assistant_progress_output_length': 0,
@@ -5623,6 +5652,7 @@ def create_codex_stream(
         'created_at': int(created_at * 1000),
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
     }
 
@@ -5711,6 +5741,10 @@ def _start_codex_stream_for_session_locked(
 
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
+    response_reasoning_effort = resolve_response_reasoning_effort(
+        model_override=model_override,
+        reasoning_override=reasoning_override,
+    )
     assistant_message = append_message(
         session_id,
         'assistant',
@@ -5718,6 +5752,7 @@ def _start_codex_stream_for_session_locked(
         metadata={
             'response_mode': response_mode,
             'response_model': response_model,
+            'response_reasoning_effort': response_reasoning_effort,
             'streaming': True,
         }
     )
@@ -5751,6 +5786,7 @@ def _start_codex_stream_for_session_locked(
         'assistant_message_id': assistant_message.get('id'),
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
     }
 
 
@@ -5980,6 +6016,9 @@ def list_codex_streams(include_done=False):
                 'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
                 'cli_runtime_ms': stream.get('cli_runtime_ms'),
                 'assistant_message_id': stream.get('assistant_message_id'),
+                'response_mode': stream.get('response_mode'),
+                'response_model': stream.get('response_model'),
+                'response_reasoning_effort': stream.get('response_reasoning_effort'),
                 'token_usage': usage,
                 'input_tokens': usage.get('input_tokens', 0),
                 'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6037,6 +6076,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'assistant_message_id': stream.get('assistant_message_id'),
             'response_mode': stream.get('response_mode'),
             'response_model': stream.get('response_model'),
+            'response_reasoning_effort': stream.get('response_reasoning_effort'),
             'token_usage': usage,
             'input_tokens': usage.get('input_tokens', 0),
             'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6092,6 +6132,10 @@ def finalize_codex_stream(stream_id):
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
         )
+        response_reasoning_effort = str(stream.get('response_reasoning_effort') or '').strip() or resolve_response_reasoning_effort(
+            model_override=stream.get('model_override'),
+            reasoning_override=stream.get('reasoning_override'),
+        )
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -6110,6 +6154,7 @@ def finalize_codex_stream(stream_id):
         metadata = {}
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
+    metadata['response_reasoning_effort'] = response_reasoning_effort
     metadata['streaming'] = False
     if codex_events:
         metadata['codex_events'] = codex_events
@@ -6207,6 +6252,10 @@ def stop_codex_stream(stream_id):
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
         )
+        response_reasoning_effort = str(stream.get('response_reasoning_effort') or '').strip() or resolve_response_reasoning_effort(
+            model_override=stream.get('model_override'),
+            reasoning_override=stream.get('reasoning_override'),
+        )
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -6243,6 +6292,7 @@ def stop_codex_stream(stream_id):
         metadata = {}
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
+    metadata['response_reasoning_effort'] = response_reasoning_effort
     metadata['streaming'] = False
     if codex_events:
         metadata['codex_events'] = codex_events

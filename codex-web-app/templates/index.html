@@ -680,7 +680,7 @@
             <div class="usage-history-overlay-header">
                 <div class="usage-history-overlay-heading">
                     <div class="usage-history-overlay-title" id="codex-usage-history-overlay-title">Usage History</div>
-                    <div class="usage-history-overlay-subtitle" id="codex-usage-history-overlay-subtitle">최근 1일 · 1시간 단위 사용량 추이</div>
+                    <div class="usage-history-overlay-subtitle" id="codex-usage-history-overlay-subtitle">최근 3일 · 1시간 단위 사용량 추이</div>
                 </div>
                 <button class="btn ghost icon-only usage-history-overlay-close" type="button" id="codex-usage-history-overlay-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
@@ -690,9 +690,10 @@
                 <div class="usage-history-meta" id="codex-usage-history-overlay-meta">사용량 이력을 불러오는 중...</div>
                 <div class="usage-history-toolbar">
                     <div class="usage-history-range-tabs" id="codex-usage-history-range-tabs" role="group" aria-label="Usage history period">
-                        <button class="usage-history-range-btn is-active" type="button" data-hours="24" aria-pressed="true">1일</button>
-                        <button class="usage-history-range-btn" type="button" data-hours="72" aria-pressed="false">3일</button>
+                        <button class="usage-history-range-btn is-active" type="button" data-hours="72" aria-pressed="true">3일</button>
+                        <button class="usage-history-range-btn" type="button" data-hours="168" aria-pressed="false">7일</button>
                         <button class="usage-history-range-btn" type="button" data-hours="336" aria-pressed="false">14일</button>
+                        <button class="usage-history-range-btn" type="button" data-hours="720" aria-pressed="false">30일</button>
                     </div>
                     <div class="usage-history-cost-inline" id="codex-usage-history-cost-summary">API estimate --</div>
                 </div>

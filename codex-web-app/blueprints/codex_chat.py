@@ -55,6 +55,7 @@ from ..services.codex_chat import (
     update_settings,
     resolve_response_mode_label,
     resolve_response_model_name,
+    resolve_response_reasoning_effort,
     stop_codex_stream,
 )
 from ..services.file_browser import (
@@ -572,6 +573,10 @@ def codex_session_message(session_id):
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_model = resolve_response_model_name(model_override=model_override)
+    response_reasoning_effort = resolve_response_reasoning_effort(
+        model_override=model_override,
+        reasoning_override=reasoning_override,
+    )
     user_metadata = {'attachments': attachments} if attachments else None
     user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
@@ -591,6 +596,7 @@ def codex_session_message(session_id):
         'duration_ms': duration_ms,
         'response_mode': response_mode,
         'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
     }
     if isinstance(timing, dict):
         queue_wait_ms = int(timing.get('queue_wait_ms') or 0)
@@ -628,7 +634,10 @@ def codex_session_message(session_id):
     return jsonify({
         'session': session,
         'user_message': user_message,
-        'assistant_message': assistant_message
+        'assistant_message': assistant_message,
+        'response_mode': response_mode,
+        'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
     })
 
 
@@ -695,6 +704,7 @@ def codex_session_message_stream(session_id):
         'assistant_message_id': start_result.get('assistant_message_id'),
         'response_mode': start_result.get('response_mode'),
         'response_model': start_result.get('response_model'),
+        'response_reasoning_effort': start_result.get('response_reasoning_effort'),
     })
 
 
@@ -741,6 +751,7 @@ def codex_session_message_queue(session_id):
         response['assistant_message_id'] = result.get('assistant_message_id')
         response['response_mode'] = result.get('response_mode')
         response['response_model'] = result.get('response_model')
+        response['response_reasoning_effort'] = result.get('response_reasoning_effort')
     return jsonify(response)
 
 

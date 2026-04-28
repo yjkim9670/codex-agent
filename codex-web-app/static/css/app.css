@@ -6432,6 +6432,12 @@ body.is-work-mode-resizing * {
     border-color: transparent;
 }
 
+.message.is-plan-response .message-bubble {
+    border-width: 2px;
+    border-color: var(--session-response-plan-border);
+    box-shadow: 0 0 0 1px rgba(242, 177, 120, 0.12);
+}
+
 .message.error .message-bubble {
     background: var(--message-error-bg);
     color: var(--danger);

@@ -75,6 +75,12 @@ _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
 _QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules', 'memories')
+_QUEUED_CODEX_RUNTIME_DIRS = {
+    'XDG_CACHE_HOME': 'cache',
+    'XDG_STATE_HOME': 'state',
+    'XDG_CONFIG_HOME': 'config',
+    'TMPDIR': 'tmp',
+}
 _ALLOW_PARALLEL_CLI_EXEC = str(
     os.environ.get('CODEX_ALLOW_PARALLEL_CLI_EXEC') or '1'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
@@ -3493,6 +3499,40 @@ def _prepare_queued_codex_home(env):
     return queued_home
 
 
+def _path_is_writable_directory(path):
+    try:
+        candidate = Path(path).expanduser()
+        if not candidate.is_dir():
+            return False
+        probe_path = candidate / f'.codex-workbench-write-test-{uuid.uuid4().hex}'
+        with probe_path.open('x', encoding='utf-8'):
+            pass
+        try:
+            probe_path.unlink()
+        except Exception:
+            _LOGGER.debug('Failed to remove queued HOME write probe: %s', probe_path, exc_info=True)
+        return True
+    except Exception:
+        return False
+
+
+def _home_needs_queued_redirect(env):
+    home_value = str(env.get('HOME') or '').strip()
+    if not home_value:
+        return True
+    return not _path_is_writable_directory(home_value)
+
+
+def _prepare_queued_codex_runtime_env(env, queued_home):
+    queued_home = Path(queued_home).expanduser()
+    for env_name, child_name in _QUEUED_CODEX_RUNTIME_DIRS.items():
+        runtime_dir = queued_home / child_name
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        env[env_name] = str(runtime_dir)
+    if _home_needs_queued_redirect(env):
+        env['HOME'] = str(queued_home)
+
+
 def _safe_resolve_path(path):
     try:
         return Path(path).expanduser().resolve()
@@ -3607,7 +3647,9 @@ def _build_codex_exec_env(queued_execution=False):
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
     if queued_execution:
-        env['CODEX_HOME'] = str(_prepare_queued_codex_home(env))
+        queued_home = _prepare_queued_codex_home(env)
+        env['CODEX_HOME'] = str(queued_home)
+        _prepare_queued_codex_runtime_env(env, queued_home)
     return env
 
 

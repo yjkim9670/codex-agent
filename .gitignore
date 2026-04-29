@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+*.bak*
 .env
 model_agent_env.local.sh
 workspace/
@@ -12,7 +13,6 @@ workspace/*_usage_summary.json
 workspace/*_token_usage.json
 .sync_runtime/
 .venv/
-tests/
 model_agent/
 deploy/vercel/*.env
 deploy/codex-backend.env

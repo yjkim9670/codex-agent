@@ -70,6 +70,25 @@ def test_git_revert_removes_untracked_file(tmp_path, monkeypatch):
     assert not (repo_root / 'scratch.txt').exists()
 
 
+def test_git_status_lists_files_inside_untracked_directory(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt')
+    (repo_root / 'scratch' / 'nested').mkdir(parents=True)
+    (repo_root / 'scratch' / 'first.txt').write_text('first\n', encoding='utf-8')
+    (repo_root / 'scratch' / 'nested' / 'second.txt').write_text('second\n', encoding='utf-8')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('status', {'repo_target': 'workspace'})
+
+    assert result['ok'] is True
+    assert result['changed_files'] == [
+        'scratch/first.txt',
+        'scratch/nested/second.txt',
+    ]
+    assert all(entry['status'] == 'U' for entry in result['changed_files_detail'])
+
+
 def test_git_revert_restores_staged_rename(tmp_path, monkeypatch):
     repo_root = tmp_path / 'workspace'
     _init_repo(repo_root)

@@ -1469,7 +1469,7 @@ def _build_history_unavailable_result(
 
 def _read_changed_snapshot(repo_root, env):
     status_result, status_error = _run_git_command(
-        ['git', '-C', str(repo_root), 'status', '--porcelain'],
+        ['git', '-C', str(repo_root), 'status', '--porcelain', '--untracked-files=all'],
         repo_root,
         15,
         env
@@ -1657,7 +1657,7 @@ def run_git_action(action, payload=None):
         try:
             if action == 'status':
                 result, error = _run_checked(
-                    ['git', '-C', str(repo_root), 'status', '--porcelain'],
+                    ['git', '-C', str(repo_root), 'status', '--porcelain', '--untracked-files=all'],
                     repo_root,
                     env,
                     15,
@@ -1671,7 +1671,7 @@ def run_git_action(action, payload=None):
                     repo_root,
                     env,
                     started_at,
-                    command='git status --porcelain',
+                    command='git status --porcelain --untracked-files=all',
                     exit_code=result.returncode,
                     stdout=result.stdout,
                     stderr=result.stderr,

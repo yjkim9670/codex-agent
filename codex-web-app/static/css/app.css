@@ -677,6 +677,7 @@ textarea {
 .branch-overlay-card {
     position: relative;
     width: min(640px, calc(100vw - 48px));
+    height: min(80vh, 720px);
     max-height: min(80vh, 720px);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
@@ -701,6 +702,7 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
 }
 
 .branch-overlay-title {
@@ -719,6 +721,27 @@ textarea {
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
+}
+
+.branch-overlay-header-actions,
+.sync-overlay-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.branch-overlay-fullscreen,
+.sync-overlay-fullscreen {
+    background-image: var(--icon-fullscreen-enter);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.branch-overlay-fullscreen.is-active,
+.sync-overlay-fullscreen.is-active {
+    background-image: var(--icon-fullscreen-exit);
 }
 
 .branch-overlay-refresh {
@@ -742,7 +765,22 @@ textarea {
     background-size: 16px 16px;
 }
 
+.branch-overlay.is-fullscreen,
+.sync-overlay.is-fullscreen {
+    padding: 8px;
+}
+
+.branch-overlay.is-fullscreen .branch-overlay-card,
+.sync-overlay.is-fullscreen .sync-overlay-card {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: none;
+    border-radius: var(--radius-md);
+}
+
 .branch-overlay-body {
+    flex: 1;
+    min-height: 0;
     padding: 16px 20px 18px;
     display: flex;
     flex-direction: column;
@@ -825,8 +863,10 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    flex: 1;
+    min-height: 0;
     overflow: auto;
-    max-height: 320px;
+    max-height: none;
 }
 
 .branch-overlay-list li {
@@ -1084,6 +1124,7 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
 }
 
 .sync-overlay-title {
@@ -7491,6 +7532,7 @@ label.hover-tooltip,
 
     .branch-overlay-card {
         width: min(520px, calc(100vw - 32px));
+        height: calc(100dvh - 32px);
         max-height: calc(100dvh - 32px);
     }
 

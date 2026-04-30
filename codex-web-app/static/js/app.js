@@ -307,6 +307,7 @@ let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
 let gitBranchOverlayCollapsedFolders = new Set();
 let gitBranchOverlayPreviewKey = '';
+let gitBranchOverlayFullscreen = false;
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -325,6 +326,7 @@ let gitSyncOverlayPreviewKeyByTarget = {
     [GIT_SYNC_TARGET_WORKSPACE]: '',
     [GIT_SYNC_TARGET_CODEX_AGENT]: ''
 };
+let gitSyncOverlayFullscreen = false;
 let gitFileRevertingPath = '';
 const gitCommitPreviewCacheByKey = new Map();
 const gitCommitPreviewInFlightByKey = new Map();
@@ -1966,6 +1968,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const branchOverlay = document.getElementById('codex-branch-overlay');
     const branchOverlayClose = document.getElementById('codex-branch-overlay-close');
     const branchOverlayCloseFooter = document.getElementById('codex-branch-overlay-close-footer');
+    const branchOverlayFullscreen = document.getElementById('codex-branch-overlay-fullscreen');
     const branchOverlayRefresh = document.getElementById('codex-branch-overlay-refresh');
     if (branchOverlay) {
         branchOverlay.addEventListener('click', event => {
@@ -1981,6 +1984,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (branchOverlayCloseFooter) {
         branchOverlayCloseFooter.addEventListener('click', closeGitBranchOverlay);
     }
+    if (branchOverlayFullscreen) {
+        branchOverlayFullscreen.addEventListener('click', event => {
+            event.preventDefault();
+            setGitBranchOverlayFullscreen(!gitBranchOverlayFullscreen);
+        });
+        syncGitOverlayFullscreenButton(branchOverlayFullscreen, gitBranchOverlayFullscreen);
+    }
     if (branchOverlayRefresh) {
         branchOverlayRefresh.addEventListener('click', () => {
             void refreshGitBranchStatus({ force: true, updateOverlay: true });
@@ -1989,6 +1999,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const syncOverlay = document.getElementById('codex-sync-overlay');
     const syncOverlayClose = document.getElementById('codex-sync-overlay-close');
     const syncOverlayCloseFooter = document.getElementById('codex-sync-overlay-close-footer');
+    const syncOverlayFullscreen = document.getElementById('codex-sync-overlay-fullscreen');
     if (syncOverlay) {
         syncOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -2002,6 +2013,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (syncOverlayCloseFooter) {
         syncOverlayCloseFooter.addEventListener('click', closeGitSyncOverlay);
+    }
+    if (syncOverlayFullscreen) {
+        syncOverlayFullscreen.addEventListener('click', event => {
+            event.preventDefault();
+            setGitSyncOverlayFullscreen(!gitSyncOverlayFullscreen);
+        });
+        syncGitOverlayFullscreenButton(syncOverlayFullscreen, gitSyncOverlayFullscreen);
     }
     if (usageHistoryOpen) {
         usageHistoryOpen.addEventListener('click', () => {
@@ -8584,6 +8602,34 @@ function applyGitBranchStatusToElement(element, status) {
     syncHoverTooltipFromLabel(element, branchName);
 }
 
+function syncGitOverlayFullscreenButton(button, isFullscreen) {
+    if (!button) return;
+    const active = Boolean(isFullscreen);
+    const label = active ? '창 크기 복원' : '전체화면으로 확대';
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    setIconButtonScreenReaderText(button, label);
+    syncHoverTooltipFromLabel(button, label);
+}
+
+function setGitBranchOverlayFullscreen(isFullscreen) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements?.overlay) return;
+    gitBranchOverlayFullscreen = Boolean(isFullscreen);
+    elements.overlay.classList.toggle('is-fullscreen', gitBranchOverlayFullscreen);
+    syncGitOverlayFullscreenButton(elements.fullscreenBtn, gitBranchOverlayFullscreen);
+}
+
+function setGitSyncOverlayFullscreen(isFullscreen) {
+    const elements = getGitSyncOverlayElements();
+    if (!elements?.overlay) return;
+    gitSyncOverlayFullscreen = Boolean(isFullscreen);
+    elements.overlay.classList.toggle('is-fullscreen', gitSyncOverlayFullscreen);
+    syncGitOverlayFullscreenButton(elements.fullscreenBtn, gitSyncOverlayFullscreen);
+}
+
 function getGitBranchOverlayElements() {
     const overlay = document.getElementById('codex-branch-overlay');
     if (!overlay) return null;
@@ -8598,6 +8644,7 @@ function getGitBranchOverlayElements() {
         commitMessage: document.getElementById('codex-branch-overlay-commit-message'),
         commitBtn: document.getElementById('codex-branch-overlay-commit'),
         pushBtn: document.getElementById('codex-branch-overlay-push'),
+        fullscreenBtn: document.getElementById('codex-branch-overlay-fullscreen'),
         loading: document.getElementById('codex-branch-overlay-loading'),
         empty: document.getElementById('codex-branch-overlay-empty'),
         list: document.getElementById('codex-branch-overlay-list')
@@ -9425,6 +9472,7 @@ function openGitBranchOverlay() {
     if (elements.commitMessage) {
         elements.commitMessage.value = '';
     }
+    setGitBranchOverlayFullscreen(false);
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
@@ -9436,6 +9484,7 @@ function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
     gitBranchOverlayPreviewKey = '';
+    setGitBranchOverlayFullscreen(false);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
@@ -9566,6 +9615,7 @@ function getGitSyncOverlayElements() {
         commitBtn: document.getElementById('codex-sync-overlay-commit'),
         pushBtn: document.getElementById('codex-sync-overlay-push'),
         refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
+        fullscreenBtn: document.getElementById('codex-sync-overlay-fullscreen'),
         loading: document.getElementById('codex-sync-overlay-loading'),
         filesEmpty: document.getElementById('codex-sync-overlay-files-empty'),
         filesList: document.getElementById('codex-sync-overlay-files-list'),
@@ -9991,6 +10041,7 @@ function openGitSyncOverlay() {
         elements.filesList.classList.add('is-hidden');
         elements.filesList.innerHTML = '';
     }
+    setGitSyncOverlayFullscreen(false);
     setGitSyncOverlayRepoTarget(gitSyncOverlayRepoTarget);
     setGitSyncOverlayLoading(true);
     void refreshGitSyncOverlayHistory({ force: true });
@@ -10001,6 +10052,7 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     gitSyncOverlayPreviewKeyByTarget[activeTarget] = '';
+    setGitSyncOverlayFullscreen(false);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (

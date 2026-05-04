@@ -195,28 +195,33 @@ const TERMINAL_STREAM_RECONNECT_MAX_MS = 4000;
 const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
 const TERMINAL_DEFAULT_COLS = 120;
 const TERMINAL_DEFAULT_ROWS = 32;
+const TERMINAL_SHIFT_TAB_SEQUENCE = '\x1b[Z';
 const TERMINAL_FONT_SIZE_PHONE = 12.5;
 const TERMINAL_FONT_SIZE_COMPACT = 13;
 const TERMINAL_FONT_SIZE_DESKTOP = 14;
 const NAVER_UI_FONT_FAMILY = '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", "Noto Sans CJK KR", "Apple SD Gothic Neo", sans-serif';
 const NAVER_CODE_FONT_FAMILY = '"D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace';
 const TERMINAL_FONT_FAMILY = NAVER_CODE_FONT_FAMILY;
-const TERMINAL_EXTRA_KEYS = Object.freeze([
-    Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
-    Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
-    Object.freeze({ id: 'ctrl', label: 'Ctrl', modifier: 'ctrl' }),
-    Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
-    Object.freeze({ id: 'slash', label: '/', text: '/' }),
-    Object.freeze({ id: 'dash', label: '-', text: '-' }),
-    Object.freeze({ id: 'pipe', label: '|', text: '|' }),
-    Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
-    Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
-    Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
-    Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' }),
-    Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
-    Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
-    Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' }),
-    Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
+const TERMINAL_EXTRA_KEY_ROWS = Object.freeze([
+    Object.freeze([
+        Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
+        Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
+        Object.freeze({ id: 'ctrl', label: 'Ctrl', modifier: 'ctrl' }),
+        Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
+        Object.freeze({ id: 'slash', label: '/', text: '/' }),
+        Object.freeze({ id: 'dash', label: '-', text: '-' }),
+        Object.freeze({ id: 'pipe', label: '|', text: '|' })
+    ]),
+    Object.freeze([
+        Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
+        Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
+        Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
+        Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' }),
+        Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
+        Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
+        Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' }),
+        Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
+    ])
 ]);
 const XTERM_VENDOR_SRC = '/static/vendor/xterm-5.5.0.js';
 const XTERM_VENDOR_CSS_HREF = '/static/vendor/xterm-5.5.0.css';
@@ -1581,6 +1586,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (input) {
         input.addEventListener('keydown', event => {
+            if (cyclePlanModeFromKeyboardEvent(event)) {
+                return;
+            }
             if (event.key === 'Enter' && !event.shiftKey && !isCompactLayout()) {
                 event.preventDefault();
                 handleSubmit();
@@ -7035,28 +7043,34 @@ function renderTerminalExtraKeys() {
         return;
     }
     container.innerHTML = '';
-    TERMINAL_EXTRA_KEYS.forEach(key => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'terminal-overlay-extra-key';
-        button.textContent = key.label;
-        button.dataset.keyId = key.id;
-        if (key.modifier) {
-            button.dataset.terminalModifier = key.modifier;
-        }
-        button.addEventListener('pointerdown', event => {
-            event.preventDefault();
-        });
-        button.addEventListener('click', event => {
-            event.preventDefault();
+    TERMINAL_EXTRA_KEY_ROWS.forEach(rowKeys => {
+        const row = document.createElement('div');
+        row.className = 'terminal-overlay-extra-key-row';
+        row.style.setProperty('--terminal-extra-key-count', String(rowKeys.length));
+        rowKeys.forEach(key => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'terminal-overlay-extra-key';
+            button.textContent = key.label;
+            button.dataset.keyId = key.id;
             if (key.modifier) {
-                toggleTerminalExtraKeyModifier(key.modifier);
-                focusActiveTerminalInstance();
-                return;
+                button.dataset.terminalModifier = key.modifier;
             }
-            queueTerminalDataForActiveSession(key.sequence || key.text || '', { focus: true });
+            button.addEventListener('pointerdown', event => {
+                event.preventDefault();
+            });
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                if (key.modifier) {
+                    toggleTerminalExtraKeyModifier(key.modifier);
+                    focusActiveTerminalInstance();
+                    return;
+                }
+                queueTerminalDataForActiveSession(key.sequence || key.text || '', { focus: true });
+            });
+            row.appendChild(button);
         });
-        container.appendChild(button);
+        container.appendChild(row);
     });
     container.dataset.rendered = 'true';
     syncTerminalExtraKeysState();
@@ -7102,14 +7116,6 @@ function syncTerminalExtraKeysOverlayMetrics({ visible = false } = {}) {
             elements.body.style.setProperty('--terminal-overlay-extra-keys-reserved-space', '0px');
             layoutChanged = true;
         }
-        if (container.style.getPropertyValue('--terminal-extra-keys-left')) {
-            container.style.removeProperty('--terminal-extra-keys-left');
-            layoutChanged = true;
-        }
-        if (container.style.getPropertyValue('--terminal-extra-keys-width')) {
-            container.style.removeProperty('--terminal-extra-keys-width');
-            layoutChanged = true;
-        }
         if (container.style.getPropertyValue('--terminal-extra-keys-bottom')) {
             container.style.removeProperty('--terminal-extra-keys-bottom');
             layoutChanged = true;
@@ -7117,27 +7123,8 @@ function syncTerminalExtraKeysOverlayMetrics({ visible = false } = {}) {
         return layoutChanged;
     }
 
-    const cardRect = elements.card instanceof Element ? elements.card.getBoundingClientRect() : null;
-    const horizontalInset = isCompactLayout() ? 12 : 16;
-    const fallbackWidth = Math.max(220, Math.round(window.innerWidth - (horizontalInset * 2)));
-    const nextLeft = cardRect
-        ? Math.max(8, Math.round(cardRect.left + horizontalInset))
-        : horizontalInset;
-    const nextWidth = cardRect
-        ? Math.max(220, Math.round(cardRect.width - (horizontalInset * 2)))
-        : fallbackWidth;
     const nextBottom = Math.max(8, getTerminalExtraKeysViewportBottomInset() + 8);
-    const nextLeftValue = `${nextLeft}px`;
-    const nextWidthValue = `${nextWidth}px`;
     const nextBottomValue = `${nextBottom}px`;
-    if (container.style.getPropertyValue('--terminal-extra-keys-left') !== nextLeftValue) {
-        container.style.setProperty('--terminal-extra-keys-left', nextLeftValue);
-        layoutChanged = true;
-    }
-    if (container.style.getPropertyValue('--terminal-extra-keys-width') !== nextWidthValue) {
-        container.style.setProperty('--terminal-extra-keys-width', nextWidthValue);
-        layoutChanged = true;
-    }
     if (container.style.getPropertyValue('--terminal-extra-keys-bottom') !== nextBottomValue) {
         container.style.setProperty('--terminal-extra-keys-bottom', nextBottomValue);
         layoutChanged = true;
@@ -7670,6 +7657,17 @@ async function ensureTerminalInstance() {
     };
     elements.shell.addEventListener('mousedown', focusTerminal);
     elements.shell.addEventListener('touchstart', focusTerminal, { passive: true });
+    if (typeof terminal.attachCustomKeyEventHandler === 'function') {
+        terminal.attachCustomKeyEventHandler(event => {
+            if (event.type === 'keydown' && isPlainShiftTabEvent(event)) {
+                event.preventDefault();
+                event.stopPropagation();
+                queueTerminalDataForActiveSession(TERMINAL_SHIFT_TAB_SEQUENCE);
+                return false;
+            }
+            return true;
+        });
+    }
     terminal.onData(data => {
         queueTerminalDataForActiveSession(data);
     });
@@ -16345,6 +16343,23 @@ function normalizePlanModeState(value) {
 
 function getPlanModeState() {
     return normalizePlanModeState(state.settings.planModeState);
+}
+
+function isPlainShiftTabEvent(event) {
+    return Boolean(event)
+        && event.key === 'Tab'
+        && event.shiftKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.metaKey;
+}
+
+function cyclePlanModeFromKeyboardEvent(event) {
+    if (!isPlainShiftTabEvent(event)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
+    return true;
 }
 
 function shouldUsePlanModeForRequest(planModeState = getPlanModeState()) {

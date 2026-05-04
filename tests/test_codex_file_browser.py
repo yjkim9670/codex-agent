@@ -468,6 +468,34 @@ def test_terminal_session_supports_input_resize_and_close(isolated_browser_roots
     assert exc_info.value.error_code == 'session_not_found'
 
 
+def test_terminal_environment_uses_current_path_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv('CODEX_TERMINAL_STARTUP_DIR', str(tmp_path / 'terminal-startup'))
+
+    bash_environment = terminal_sessions._build_environment('/bin/bash')
+    zsh_environment = terminal_sessions._build_environment('/bin/zsh')
+    sh_environment = terminal_sessions._build_environment('/bin/sh')
+
+    assert bash_environment['PS1'] == r'\[\033[38;5;67m\]\w\[\033[0m\]> '
+    assert bash_environment['PROMPT_COMMAND'] == ''
+    assert zsh_environment['PS1'] == '%F{67}%~%f> '
+    assert zsh_environment['PROMPT'] == '%F{67}%~%f> '
+    assert sh_environment['PS1'] == '\033[38;5;67m${PWD}\033[0m> '
+    assert sh_environment['PROMPT_COMMAND'] == ''
+    assert bash_environment['LS_COLORS'] == 'di=38;5;67'
+    assert bash_environment['CLICOLOR'] == '1'
+    assert bash_environment['LSCOLORS'] == 'exfxcxdxbxegedabagacad'
+    assert zsh_environment['ZDOTDIR'] == str(tmp_path / 'terminal-startup')
+    assert sh_environment['ENV'] == str(tmp_path / 'terminal-startup' / 'shrc')
+    assert bash_environment['CODEX_AGENT_TERMINAL'] == '1'
+
+    startup_files = terminal_sessions._build_shell_startup_files()
+    assert "alias ls='ls --color=auto'" in startup_files['bashrc']
+    assert "alias ls='ls -G'" in startup_files['bashrc']
+
+    bash_commands = terminal_sessions._build_shell_commands('/bin/bash')
+    assert bash_commands[0][:3] == ['/bin/bash', '--noprofile', '--rcfile']
+
+
 def test_open_terminal_process_retries_when_first_shell_exits_immediately(monkeypatch):
     class FakeProcess:
         def __init__(self, pid, poll_results):

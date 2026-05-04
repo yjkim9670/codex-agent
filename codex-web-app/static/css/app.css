@@ -2933,24 +2933,28 @@ textarea {
 }
 
 .terminal-overlay-extra-keys {
-    --terminal-extra-keys-left: 16px;
-    --terminal-extra-keys-width: calc(100vw - 32px);
+    --terminal-extra-keys-edge-gap: 14px;
     --terminal-extra-keys-bottom: 8px;
     display: none;
+    flex-direction: column;
     align-items: stretch;
-    gap: 0;
-    overflow-x: auto;
+    gap: 6px;
+    overflow-x: hidden;
     overflow-y: hidden;
-    padding: 0;
+    box-sizing: border-box;
+    padding: 8px var(--terminal-extra-keys-edge-gap);
     margin: 0;
     border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+    border-left: 0;
+    border-right: 0;
     border-radius: 0;
-    background: color-mix(in srgb, var(--surface) 96%, transparent);
+    background: var(--surface);
     box-shadow: 0 16px 28px rgba(12, 20, 30, 0.16);
     position: fixed;
-    left: var(--terminal-extra-keys-left);
-    width: var(--terminal-extra-keys-width);
-    max-width: calc(100vw - 24px);
+    left: 0;
+    right: 0;
+    width: auto;
+    max-width: none;
     bottom: calc(var(--terminal-extra-keys-bottom) + env(safe-area-inset-bottom));
     z-index: 2522;
     scrollbar-width: none;
@@ -2970,25 +2974,27 @@ textarea {
     opacity: 0.98;
 }
 
+.terminal-overlay-extra-key-row {
+    display: grid;
+    grid-template-columns: repeat(var(--terminal-extra-key-count, 1), minmax(0, 1fr));
+    gap: 4px;
+    min-width: 0;
+}
+
 .terminal-overlay-extra-key {
-    flex: 0 0 auto;
-    min-width: 46px;
+    width: 100%;
+    min-width: 0;
     min-height: 38px;
-    padding: 0 12px;
-    border: 0;
-    border-right: 1px solid var(--border);
-    border-radius: 0;
-    background: transparent;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--surface-raised) 96%, var(--surface));
     color: var(--text-secondary);
     font: inherit;
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
-}
-
-.terminal-overlay-extra-key:last-child {
-    border-right: 0;
 }
 
 .terminal-overlay-extra-key:hover,
@@ -7688,12 +7694,12 @@ label.hover-tooltip,
     }
 
     .terminal-overlay-extra-keys {
-        --terminal-extra-keys-width: calc(100vw - 24px);
+        --terminal-extra-keys-edge-gap: 10px;
     }
 
     .terminal-overlay-extra-key {
         min-height: 40px;
-        min-width: 48px;
+        padding: 0 4px;
     }
 
     .terminal-overlay-tab {

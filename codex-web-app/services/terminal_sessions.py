@@ -174,6 +174,8 @@ def _build_shell_commands(shell_path):
         commands.append(command)
 
     if shell_name == 'bash':
+        bashrc_path = _ensure_shell_startup_files() / 'bashrc'
+        append_command('--noprofile', '--rcfile', str(bashrc_path), '-i')
         append_command('--noprofile', '--norc', '-i')
         append_command('-i')
         append_command('--login', '-i')
@@ -207,17 +209,105 @@ def _apply_window_size(fd, rows, cols):
         ) from exc
 
 
-def _build_environment():
+_TERMINAL_COLOR_ANSI = '38;5;67'
+_TERMINAL_COLOR_ZSH = '67'
+_BASH_DIRECTORY_PROMPT = rf'\[\033[{_TERMINAL_COLOR_ANSI}m\]\w\[\033[0m\]> '
+_ZSH_DIRECTORY_PROMPT = f'%F{{{_TERMINAL_COLOR_ZSH}}}%~%f> '
+_SH_DIRECTORY_PROMPT = f'\033[{_TERMINAL_COLOR_ANSI}m${{PWD}}\033[0m> '
+_LS_DIRECTORY_COLORS = f'di={_TERMINAL_COLOR_ANSI}'
+_BSD_LS_COLORS = 'exfxcxdxbxegedabagacad'
+_SHELL_STARTUP_LOCK = threading.Lock()
+_SHELL_STARTUP_READY = False
+_SHELL_STARTUP_PATH: Path | None = None
+
+
+def _terminal_startup_directory():
+    return Path(os.environ.get('CODEX_TERMINAL_STARTUP_DIR') or '/tmp/codex-web-terminal')
+
+
+def _common_shell_startup_script():
+    return f"""export LS_COLORS="${{LS_COLORS:-{_LS_DIRECTORY_COLORS}}}"
+export CLICOLOR="${{CLICOLOR:-1}}"
+export LSCOLORS="${{LSCOLORS:-{_BSD_LS_COLORS}}}"
+if ls --color=auto -d . >/dev/null 2>&1; then
+    alias ls='ls --color=auto'
+elif ls -G -d . >/dev/null 2>&1; then
+    alias ls='ls -G'
+fi
+"""
+
+
+def _build_shell_startup_files():
+    common_setup = _common_shell_startup_script()
+    return {
+        'bashrc': f'{common_setup}PS1=\'{_BASH_DIRECTORY_PROMPT}\'\nPROMPT_COMMAND=\n',
+        '.zshrc': f'{common_setup}PS1=\'{_ZSH_DIRECTORY_PROMPT}\'\nPROMPT="${{PS1}}"\n',
+        'shrc': f'{common_setup}PS1=\'{_SH_DIRECTORY_PROMPT}\'\nPROMPT_COMMAND=\n',
+    }
+
+
+def _ensure_shell_startup_files():
+    global _SHELL_STARTUP_PATH, _SHELL_STARTUP_READY
+
+    startup_directory = _terminal_startup_directory()
+    with _SHELL_STARTUP_LOCK:
+        if _SHELL_STARTUP_READY and _SHELL_STARTUP_PATH == startup_directory and startup_directory.exists():
+            return startup_directory
+        startup_directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(startup_directory, 0o700)
+        for filename, content in _build_shell_startup_files().items():
+            startup_file = startup_directory / filename
+            startup_file.write_text(content, encoding='utf-8')
+            os.chmod(startup_file, 0o600)
+        _SHELL_STARTUP_PATH = startup_directory
+        _SHELL_STARTUP_READY = True
+    return startup_directory
+
+
+def _build_prompt_environment(shell_path=''):
+    shell_name = Path(str(shell_path or '')).name.lower()
+    if shell_name == 'zsh':
+        return {
+            'PS1': _ZSH_DIRECTORY_PROMPT,
+            'PROMPT': _ZSH_DIRECTORY_PROMPT,
+        }
+    if shell_name == 'bash':
+        return {
+            'PS1': _BASH_DIRECTORY_PROMPT,
+            'PROMPT_COMMAND': '',
+        }
+    return {
+        'PS1': _SH_DIRECTORY_PROMPT,
+        'PROMPT_COMMAND': '',
+    }
+
+
+def _build_shell_color_environment(shell_path=''):
+    shell_name = Path(str(shell_path or '')).name.lower()
+    startup_directory = _ensure_shell_startup_files()
+    environment = {
+        'LS_COLORS': _LS_DIRECTORY_COLORS,
+        'CLICOLOR': '1',
+        'LSCOLORS': _BSD_LS_COLORS,
+    }
+    if shell_name == 'zsh':
+        environment['ZDOTDIR'] = str(startup_directory)
+    elif shell_name not in {'bash'}:
+        environment['ENV'] = str(startup_directory / 'shrc')
+    return environment
+
+
+def _build_environment(shell_path=''):
     environment = os.environ.copy()
     environment.update({
         'TERM': 'xterm-256color',
         'COLORTERM': 'truecolor',
-        'PS1': 'codex-terminal> ',
-        'PROMPT_COMMAND': '',
         'BASH_SILENCE_DEPRECATION_WARNING': '1',
         'PYTHONUNBUFFERED': '1',
         'CODEX_AGENT_TERMINAL': '1',
     })
+    environment.update(_build_shell_color_environment(shell_path))
+    environment.update(_build_prompt_environment(shell_path))
     return environment
 
 
@@ -240,7 +330,7 @@ def _spawn_terminal_process(command, directory_path, cols, rows):
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            env=_build_environment(),
+            env=_build_environment(command[0] if command else ''),
             close_fds=True,
             start_new_session=True,
         )

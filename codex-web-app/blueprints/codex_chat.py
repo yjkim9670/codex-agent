@@ -12,6 +12,13 @@ from ..config import (
     CODEX_API_ONLY_MODE,
     CODEX_ENABLE_FILES_API,
     CODEX_ENABLE_GIT_API,
+    CODEX_MAIL_FROM,
+    CODEX_MAIL_MAX_ARCHIVE_BYTES,
+    CODEX_MAIL_MAX_ARCHIVE_ENTRIES,
+    CODEX_MAIL_PASSWORD,
+    CODEX_MAIL_SMTP_HOST,
+    CODEX_MAIL_SMTP_PORT,
+    CODEX_MAIL_USERNAME,
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_MAX_MODEL_CHARS,
@@ -61,6 +68,7 @@ from ..services.codex_chat import (
 from ..services.file_browser import (
     FileBrowserError,
     build_download_payload,
+    build_mail_archive_payload,
     create_file,
     delete_directory,
     delete_files,
@@ -72,6 +80,7 @@ from ..services.file_browser import (
     write_file,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
+from ..services.mail_sender import MailSendError, send_mail_with_archive
 from ..services.terminal_sessions import (
     TerminalSessionError,
     close_terminal_session,
@@ -348,10 +357,18 @@ def _build_runtime_info():
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
             'image_attachments_enabled': CODEX_MAX_ATTACHMENTS_PER_TURN > 0,
+            'mail_api_enabled': bool(CODEX_ENABLE_FILES_API),
         },
         'attachments': {
             'max_per_turn': int(CODEX_MAX_ATTACHMENTS_PER_TURN),
             'max_bytes': int(CODEX_MAX_ATTACHMENT_BYTES),
+        },
+        'mail': {
+            'configured': bool(CODEX_MAIL_USERNAME and CODEX_MAIL_PASSWORD),
+            'from': CODEX_MAIL_FROM or CODEX_MAIL_USERNAME,
+            'smtp_host': CODEX_MAIL_SMTP_HOST,
+            'smtp_port': int(CODEX_MAIL_SMTP_PORT),
+            'max_archive_bytes': int(CODEX_MAIL_MAX_ARCHIVE_BYTES),
         },
     }
 
@@ -940,6 +957,46 @@ def codex_files_download():
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+
+@bp.route('/api/codex/files/mail', methods=['POST'])
+def codex_files_mail():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        archive = build_mail_archive_payload(
+            root_key=payload.get('root'),
+            relative_paths=payload.get('paths'),
+            max_bytes=CODEX_MAIL_MAX_ARCHIVE_BYTES,
+            max_entries=CODEX_MAIL_MAX_ARCHIVE_ENTRIES,
+        )
+        mail_result = send_mail_with_archive(
+            to=payload.get('to'),
+            cc=payload.get('cc'),
+            bcc=payload.get('bcc'),
+            subject=payload.get('subject', ''),
+            body=payload.get('body', ''),
+            archive_payload=archive,
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    except MailSendError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+    return jsonify({
+        **mail_result,
+        'archive': {
+            'name': archive.get('download_name'),
+            'size': archive.get('archive_size'),
+            'source_size': archive.get('source_size'),
+            'file_count': archive.get('file_count'),
+            'directory_count': archive.get('directory_count'),
+            'entry_count': archive.get('entry_count'),
+        },
+    })
 
 
 @bp.route('/api/codex/files/delete', methods=['POST'])

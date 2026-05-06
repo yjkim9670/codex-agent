@@ -165,6 +165,7 @@ const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
+const FILE_BROWSER_MAIL_TIMEOUT_MS = 180000;
 const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 120000;
 const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
@@ -348,6 +349,7 @@ let fileBrowserSelectedPaths = new Set();
 let fileBrowserSelectionAnchorPath = '';
 let fileBrowserSelectionMode = false;
 let fileBrowserBulkActionInFlight = false;
+let filePanelMailComposeState = null;
 let fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let fileBrowserResizePointerId = null;
 let fileBrowserColumnResizeState = null;
@@ -1492,6 +1494,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileSelectAllBtn = document.getElementById('codex-work-mode-file-select-all');
     const workModeFileClearSelectionBtn = document.getElementById('codex-work-mode-file-clear-selection');
     const workModeFileDownloadBtn = document.getElementById('codex-work-mode-file-download');
+    const workModeFileMailBtn = document.getElementById('codex-work-mode-file-mail');
     const workModeFileDeleteBtn = document.getElementById('codex-work-mode-file-delete');
     const workModeFileEditBtn = document.getElementById('codex-work-mode-file-edit');
     const workModeFileSaveBtn = document.getElementById('codex-work-mode-file-save');
@@ -1543,6 +1546,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserSelectAllBtn = document.getElementById('codex-file-browser-select-all');
     const fileBrowserClearSelectionBtn = document.getElementById('codex-file-browser-clear-selection');
     const fileBrowserDownloadBtn = document.getElementById('codex-file-browser-download');
+    const fileBrowserMailBtn = document.getElementById('codex-file-browser-mail');
     const fileBrowserDeleteBtn = document.getElementById('codex-file-browser-delete');
     const fileBrowserEditBtn = document.getElementById('codex-file-browser-edit');
     const fileBrowserSaveBtn = document.getElementById('codex-file-browser-save');
@@ -1554,6 +1558,10 @@ document.addEventListener('DOMContentLoaded', () => {
     );
     const fileBrowserShowHiddenToggle = document.getElementById('codex-file-browser-show-hidden');
     const fileBrowserShowPycacheToggle = document.getElementById('codex-file-browser-show-pycache');
+    const mailComposeOverlay = document.getElementById('codex-mail-compose-overlay');
+    const mailComposeForm = document.getElementById('codex-mail-compose-form');
+    const mailComposeClose = document.getElementById('codex-mail-compose-close');
+    const mailComposeCancel = document.getElementById('codex-mail-compose-cancel');
     const terminalOverlay = document.getElementById('codex-terminal-overlay');
     const terminalOverlayClose = document.getElementById('codex-terminal-overlay-close');
     const terminalOverlayNewTabBtn = document.getElementById('codex-terminal-overlay-new-tab');
@@ -1786,6 +1794,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileDownloadBtn) {
         workModeFileDownloadBtn.addEventListener('click', () => {
             void downloadSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileMailBtn) {
+        workModeFileMailBtn.addEventListener('click', () => {
+            openMailComposeFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileDeleteBtn) {
@@ -2202,6 +2215,11 @@ document.addEventListener('DOMContentLoaded', () => {
             void downloadSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
+    if (fileBrowserMailBtn) {
+        fileBrowserMailBtn.addEventListener('click', () => {
+            openMailComposeFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
     if (fileBrowserDeleteBtn) {
         fileBrowserDeleteBtn.addEventListener('click', () => {
             void deleteSelectedFilesFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
@@ -2313,6 +2331,26 @@ document.addEventListener('DOMContentLoaded', () => {
             openFilePanelPreviewInNewWindow(FILE_PANEL_VARIANT_OVERLAY);
         });
         syncHoverTooltipFromLabel(fileBrowserOpenNewBtn);
+    }
+    if (mailComposeOverlay) {
+        mailComposeOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeMailComposeOverlay();
+            }
+        });
+    }
+    if (mailComposeClose) {
+        mailComposeClose.addEventListener('click', closeMailComposeOverlay);
+    }
+    if (mailComposeCancel) {
+        mailComposeCancel.addEventListener('click', closeMailComposeOverlay);
+    }
+    if (mailComposeForm) {
+        mailComposeForm.addEventListener('submit', event => {
+            event.preventDefault();
+            void submitMailComposeForm();
+        });
     }
     if (fileBrowserTerminalOpenBtn) {
         syncHoverTooltipFromLabel(fileBrowserTerminalOpenBtn, '현재 폴더 Terminal 오버레이 열기');
@@ -3839,6 +3877,7 @@ function getFilePanelElementsByPrefix({
         selectAllBtn: byId('select-all'),
         clearSelectionBtn: byId('clear-selection'),
         downloadBtn: byId('download'),
+        mailBtn: byId('mail'),
         deleteBtn: byId('delete'),
         gridScroll: byId('grid-scroll'),
         hScroll: byId('hscroll'),
@@ -7979,6 +8018,7 @@ function closeTerminalOverlay() {
         && !isGitSyncOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
     ) {
@@ -9489,6 +9529,7 @@ function closeGitBranchOverlay() {
         !isGitSyncOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
         && !isTerminalOverlayOpen()
@@ -10057,6 +10098,7 @@ function closeGitSyncOverlay() {
         !isGitBranchOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
         && !isTerminalOverlayOpen()
@@ -11120,6 +11162,7 @@ function closeUsageHistoryOverlay() {
         && !isGitSyncOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isTerminalOverlayOpen()
     ) {
@@ -11379,6 +11422,7 @@ function closeMessageLogOverlay() {
         !isGitBranchOverlayOpen()
         && !isGitSyncOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
         && !isTerminalOverlayOpen()
@@ -11951,11 +11995,12 @@ function renderFilePanelList(entries, {
 
         const selectCell = document.createElement('div');
         selectCell.className = 'work-mode-file-cell-select';
-        if (entryType === 'file' && !isParentEntry) {
+        if (!isParentEntry) {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.className = 'work-mode-file-checkbox';
             checkbox.dataset.entryPath = resolvedPath;
+            checkbox.dataset.entryType = entryType;
             checkbox.checked = bulkSelection.has(resolvedPath);
             checkbox.setAttribute('aria-label', `${String(entry?.name || resolvedPath)} 선택`);
             checkbox.addEventListener('click', event => {
@@ -12185,7 +12230,7 @@ function getFilePanelVisibleFileEntries(variant) {
         getFilePanelCurrentPath(variant)
     );
     return Array.isArray(model?.visibleEntries)
-        ? model.visibleEntries.filter(entry => entry?.type === 'file')
+        ? model.visibleEntries.filter(entry => entry?.type === 'file' || entry?.type === 'dir')
         : [];
 }
 
@@ -12200,10 +12245,30 @@ function getFilePanelFileEntryMap(variant) {
     const map = new Map();
     entries.forEach(entry => {
         const normalizedPath = normalizeFileBrowserRelativePath(entry?.path || '');
-        if (!normalizedPath || entry?.type !== 'file') return;
+        if (!normalizedPath || (entry?.type !== 'file' && entry?.type !== 'dir')) return;
         map.set(normalizedPath, entry);
     });
     return map;
+}
+
+function getFilePanelSelectedEntrySummary(variant) {
+    const entryMap = getFilePanelFileEntryMap(variant);
+    let fileCount = 0;
+    let directoryCount = 0;
+    getFilePanelSelectedPaths(variant).forEach(path => {
+        const entry = entryMap.get(path);
+        if (entry?.type === 'dir') {
+            directoryCount += 1;
+        } else {
+            fileCount += 1;
+        }
+    });
+    return {
+        fileCount,
+        directoryCount,
+        hasDirectories: directoryCount > 0,
+        hasFiles: fileCount > 0
+    };
 }
 
 function isFilePanelLoading(elements) {
@@ -12232,6 +12297,8 @@ function syncFilePanelSelectionBar(variant) {
     const allVisibleFilesSelected = visibleFileCount > 0
         && visibleFilePaths.every(path => selectedPaths.has(path));
     const entryMap = getFilePanelFileEntryMap(variant);
+    const selectedEntrySummary = getFilePanelSelectedEntrySummary(variant);
+    const hasSelectedDirectories = selectedEntrySummary.hasDirectories;
     let totalSelectedSize = 0;
     selectedPaths.forEach(path => {
         const numeric = Number(entryMap.get(path)?.size);
@@ -12242,12 +12309,15 @@ function syncFilePanelSelectionBar(variant) {
     if (elements.selectionSummary) {
         const parts = actionModeActive
             ? (usingPreviewContext ? ['미리보기 파일 1개'] : [`선택 ${selectedCount}개`])
-            : [`현재 파일 ${visibleFileCount}개`];
+            : [`현재 항목 ${visibleFileCount}개`];
         if (actionModeActive) {
             if (selectedCount > 0 && totalSelectedSize > 0) {
                 parts.push(formatFileBrowserSize(totalSelectedSize));
             } else if (!usingPreviewContext && selectedCount === 0) {
-                parts.push(`현재 파일 ${visibleFileCount}개`);
+                parts.push(`현재 항목 ${visibleFileCount}개`);
+            }
+            if (selectedEntrySummary.directoryCount > 0) {
+                parts.push(`폴더 ${selectedEntrySummary.directoryCount}개`);
             }
         }
         elements.selectionSummary.textContent = parts.join(' · ');
@@ -12285,20 +12355,20 @@ function syncFilePanelSelectionBar(variant) {
     if (elements.addContextBtn) {
         updateFilePanelActionButtonLabel(
             elements.addContextBtn,
-            usingPreviewContext ? '미리보기 파일 경로를 채팅에 넣기' : '선택 파일 경로를 채팅에 넣기'
+            usingPreviewContext ? '미리보기 파일 경로를 채팅에 넣기' : '선택 항목 경로를 채팅에 넣기'
         );
         elements.addContextBtn.disabled = isBusy || contextTargetCount <= 0;
         syncHoverTooltipFromLabel(elements.addContextBtn);
     }
     if (elements.moveBtn) {
-        elements.moveBtn.disabled = isBusy || selectedCount <= 0;
+        elements.moveBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
     }
     if (elements.selectAllBtn) {
         const selectAllLabel = !selectionModeActive
-            ? '파일 선택 모드 켜기'
+            ? '항목 선택 모드 켜기'
             : (allVisibleFilesSelected
-                ? '현재 목록의 파일 선택 해제'
-                : '현재 목록의 파일 전체 선택');
+                ? '현재 목록의 항목 선택 해제'
+                : '현재 목록의 항목 전체 선택');
         updateFilePanelActionButtonLabel(elements.selectAllBtn, selectAllLabel);
         elements.selectAllBtn.setAttribute('aria-pressed', String(allVisibleFilesSelected));
         elements.selectAllBtn.disabled = isBusy || visibleFileCount <= 0;
@@ -12313,10 +12383,13 @@ function syncFilePanelSelectionBar(variant) {
         syncHoverTooltipFromLabel(elements.clearSelectionBtn);
     }
     if (elements.downloadBtn) {
-        elements.downloadBtn.disabled = isBusy || selectedCount <= 0;
+        elements.downloadBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
+    }
+    if (elements.mailBtn) {
+        elements.mailBtn.disabled = isBusy || selectedCount <= 0;
     }
     if (elements.deleteBtn) {
-        elements.deleteBtn.disabled = isBusy || selectedCount <= 0;
+        elements.deleteBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
     }
 }
 
@@ -12375,7 +12448,7 @@ function pruneFilePanelSelectionToEntries(variant, entries) {
     const filePaths = new Set();
     (Array.isArray(entries) ? entries : []).forEach(entry => {
         const normalizedPath = normalizeFileBrowserRelativePath(entry?.path || '');
-        if (normalizedPath && entry?.type === 'file') {
+        if (normalizedPath && (entry?.type === 'file' || entry?.type === 'dir')) {
             filePaths.add(normalizedPath);
         }
     });
@@ -13249,6 +13322,24 @@ async function fetchFilePanelDownload(root, paths) {
     });
 }
 
+async function sendFilePanelMail(root, paths, mailPayload = {}) {
+    const payload = mailPayload && typeof mailPayload === 'object' ? mailPayload : {};
+    return fetchJson('/api/codex/files/mail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MAIL_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            paths: Array.from(createNormalizedRelativePathSet(paths)),
+            to: String(payload.to || '').trim(),
+            cc: String(payload.cc || '').trim(),
+            bcc: String(payload.bcc || '').trim(),
+            subject: String(payload.subject || '').trim(),
+            body: String(payload.body || '')
+        })
+    });
+}
+
 async function fetchFilePanelRawText(root, path) {
     const previewUrl = buildFileBrowserRawFileUrl(root, path);
     if (!previewUrl) {
@@ -13521,7 +13612,7 @@ async function addSelectedFilesToChatContext(variant) {
         if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         }
-        showToast(`${usingPreviewContext ? '미리보기 파일 경로' : `선택 파일 경로 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
+        showToast(`${usingPreviewContext ? '미리보기 파일 경로' : `선택 항목 경로 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
             tone: 'success',
             durationMs: 2600
         });
@@ -13574,9 +13665,217 @@ async function addCurrentFileToChatContext(variant) {
     }
 }
 
+function getMailComposeElements() {
+    const overlay = document.getElementById('codex-mail-compose-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        form: document.getElementById('codex-mail-compose-form'),
+        summary: document.getElementById('codex-mail-compose-summary'),
+        to: document.getElementById('codex-mail-compose-to'),
+        cc: document.getElementById('codex-mail-compose-cc'),
+        bcc: document.getElementById('codex-mail-compose-bcc'),
+        subject: document.getElementById('codex-mail-compose-subject'),
+        body: document.getElementById('codex-mail-compose-body'),
+        status: document.getElementById('codex-mail-compose-status'),
+        submit: document.getElementById('codex-mail-compose-submit'),
+        cancel: document.getElementById('codex-mail-compose-cancel'),
+        close: document.getElementById('codex-mail-compose-close')
+    };
+}
+
+function isMailComposeOverlayOpen() {
+    const overlay = document.getElementById('codex-mail-compose-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function setMailComposeStatus(message = '', { error = false } = {}) {
+    const elements = getMailComposeElements();
+    if (!elements?.status) return;
+    elements.status.textContent = String(message || '');
+    elements.status.classList.toggle('is-error', Boolean(error));
+}
+
+function setMailComposeSubmitting(isSubmitting) {
+    const elements = getMailComposeElements();
+    if (!elements) return;
+    const submitting = Boolean(isSubmitting);
+    if (elements.submit) {
+        elements.submit.disabled = submitting;
+        elements.submit.textContent = submitting ? '전송 중...' : '보내기';
+    }
+    if (elements.cancel) {
+        elements.cancel.disabled = submitting;
+    }
+    if (elements.close) {
+        elements.close.disabled = submitting;
+    }
+    [elements.to, elements.cc, elements.bcc, elements.subject, elements.body].forEach(input => {
+        if (input) input.disabled = submitting;
+    });
+}
+
+function buildFilePanelMailSubject(paths) {
+    const normalizedPaths = Array.from(createNormalizedRelativePathSet(paths));
+    if (normalizedPaths.length === 1) {
+        const name = normalizedPaths[0].split('/').filter(Boolean).pop() || normalizedPaths[0];
+        return `파일 첨부: ${name}`;
+    }
+    return `파일 첨부 ${normalizedPaths.length}개`;
+}
+
+function buildFilePanelMailSummary(root, paths, variant) {
+    const normalizedPaths = Array.from(createNormalizedRelativePathSet(paths));
+    const selectedEntrySummary = getFilePanelSelectedEntrySummary(variant);
+    const countText = selectedEntrySummary.directoryCount > 0
+        ? `선택 ${normalizedPaths.length}개 · 폴더 ${selectedEntrySummary.directoryCount}개`
+        : `선택 ${normalizedPaths.length}개`;
+    const pathText = normalizedPaths.length === 1
+        ? formatFileBrowserDisplayPath(root, normalizedPaths[0])
+        : formatFileBrowserDisplayPath(root, getFilePanelCurrentPath(variant));
+    return `${countText} · zip 첨부 · ${pathText}`;
+}
+
+function openMailComposeFromFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(normalizedVariant));
+    if (!selectedPaths.length) {
+        showToast('메일로 보낼 파일 또는 폴더를 선택하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    const root = getFilePanelCurrentRoot(normalizedVariant);
+    filePanelMailComposeState = {
+        variant: normalizedVariant,
+        root,
+        paths: selectedPaths
+    };
+
+    const elements = getMailComposeElements();
+    if (!elements?.overlay || !elements.form) {
+        showToast('메일 작성 창을 열 수 없습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    elements.form.reset();
+    if (elements.subject) {
+        elements.subject.value = buildFilePanelMailSubject(selectedPaths);
+    }
+    if (elements.body) {
+        elements.body.value = '';
+    }
+    if (elements.summary) {
+        elements.summary.textContent = buildFilePanelMailSummary(root, selectedPaths, normalizedVariant);
+    }
+    setMailComposeStatus('');
+    setMailComposeSubmitting(false);
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    requestAnimationFrame(() => {
+        if (elements.to) {
+            elements.to.focus();
+            elements.to.select?.();
+        }
+    });
+    return true;
+}
+
+function closeMailComposeOverlay() {
+    const elements = getMailComposeElements();
+    if (!elements?.overlay) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    filePanelMailComposeState = null;
+    setMailComposeSubmitting(false);
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+async function submitMailComposeForm() {
+    const elements = getMailComposeElements();
+    const composeState = filePanelMailComposeState;
+    if (!elements?.form || !composeState?.paths?.length) {
+        showToast('메일로 보낼 선택 항목을 확인할 수 없습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    const mailPayload = {
+        to: elements.to?.value || '',
+        cc: elements.cc?.value || '',
+        bcc: elements.bcc?.value || '',
+        subject: elements.subject?.value || '',
+        body: elements.body?.value || ''
+    };
+    if (!String(mailPayload.to || '').trim()) {
+        setMailComposeStatus('받는 사람을 입력해주세요.', { error: true });
+        elements.to?.focus();
+        return false;
+    }
+    if (!String(mailPayload.subject || '').trim()) {
+        setMailComposeStatus('제목을 입력해주세요.', { error: true });
+        elements.subject?.focus();
+        return false;
+    }
+
+    setMailComposeSubmitting(true);
+    setFilePanelBulkActionInFlight(composeState.variant, true);
+    setMailComposeStatus('압축 파일을 만들고 메일을 전송하는 중입니다.');
+    try {
+        const result = await sendFilePanelMail(composeState.root, composeState.paths, mailPayload);
+        const archive = result?.archive || {};
+        const archiveSize = Number(archive.size);
+        const sizeText = Number.isFinite(archiveSize) && archiveSize > 0
+            ? ` · ${formatFileBrowserSize(archiveSize)}`
+            : '';
+        closeMailComposeOverlay();
+        showToast(`메일을 전송했습니다${sizeText}.`, {
+            tone: 'success',
+            durationMs: 3200
+        });
+        return true;
+    } catch (error) {
+        const message = normalizeError(error, '메일 전송에 실패했습니다.');
+        setMailComposeStatus(message, { error: true });
+        showToast(message, {
+            tone: 'error',
+            durationMs: 5200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(composeState.variant, false);
+        setMailComposeSubmitting(false);
+    }
+}
+
 async function downloadSelectedFilesFromFilePanel(variant) {
     const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
     if (!selectedPaths.length) return false;
+    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
+        showToast('다운로드는 파일 선택만 지원합니다. 폴더는 메일 전송에서 압축 첨부할 수 있습니다.', {
+            tone: 'error',
+            durationMs: 3600
+        });
+        return false;
+    }
     setFilePanelBulkActionInFlight(variant, true);
     try {
         const result = await fetchFilePanelDownload(getFilePanelCurrentRoot(variant), selectedPaths);
@@ -13802,6 +14101,13 @@ async function renameCurrentFileInFilePanel(variant) {
 async function deleteSelectedFilesFromFilePanel(variant) {
     const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
     if (!selectedPaths.length) return false;
+    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
+        showToast('선택 삭제는 파일만 지원합니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
     const confirmed = window.confirm(`선택한 ${selectedPaths.length}개 파일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
     if (!confirmed) return false;
 
@@ -13847,6 +14153,13 @@ async function deleteSelectedFilesFromFilePanel(variant) {
 async function moveSelectedFilesFromFilePanel(variant) {
     const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
     if (!selectedPaths.length) return false;
+    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
+        showToast('선택 이동은 파일만 지원합니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
 
     let payload = null;
     if (selectedPaths.length === 1) {
@@ -14860,6 +15173,7 @@ function closeFileBrowserOverlay() {
         !isGitBranchOverlayOpen()
         && !isGitSyncOverlayOpen()
         && !isMessageLogOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen()
         && !isUsageHistoryOverlayOpen()
         && !isTerminalOverlayOpen()
@@ -16066,6 +16380,7 @@ function closeMobileSessionOverlay() {
         && !isGitSyncOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
         && !isUsageHistoryOverlayOpen()
         && !isTerminalOverlayOpen()
     ) {

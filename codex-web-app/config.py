@@ -441,6 +441,33 @@ CODEX_SKIP_GIT_REPO_CHECK = _parse_bool_env('CODEX_SKIP_GIT_REPO_CHECK', default
 CODEX_CLI_SELF_PROTECT = _parse_bool_env('CODEX_CLI_SELF_PROTECT', default=False)
 CODEX_CLI_PROTECTED_PATHS = _parse_path_list_env('CODEX_CLI_PROTECTED_PATHS')
 
+CODEX_MAIL_SMTP_HOST = os.environ.get('CODEX_MAIL_SMTP_HOST', 'smtp.naver.com').strip() or 'smtp.naver.com'
+CODEX_MAIL_SMTP_PORT = _parse_int_env('CODEX_MAIL_SMTP_PORT', 465, minimum=1, maximum=65535)
+CODEX_MAIL_SMTP_SSL = _parse_bool_env('CODEX_MAIL_SMTP_SSL', default=True)
+CODEX_MAIL_SMTP_STARTTLS = _parse_bool_env('CODEX_MAIL_SMTP_STARTTLS', default=not CODEX_MAIL_SMTP_SSL)
+CODEX_MAIL_SMTP_TIMEOUT_SECONDS = _parse_int_env(
+    'CODEX_MAIL_SMTP_TIMEOUT_SECONDS',
+    30,
+    minimum=5,
+    maximum=120,
+)
+CODEX_MAIL_USERNAME = os.environ.get('CODEX_MAIL_USERNAME', 'kyjabc@naver.com').strip()
+CODEX_MAIL_PASSWORD = os.environ.get('CODEX_MAIL_PASSWORD', '')
+CODEX_MAIL_FROM = os.environ.get('CODEX_MAIL_FROM', CODEX_MAIL_USERNAME).strip()
+CODEX_MAIL_FROM_NAME = os.environ.get('CODEX_MAIL_FROM_NAME', '').strip()
+CODEX_MAIL_MAX_ARCHIVE_BYTES = _parse_int_env(
+    'CODEX_MAIL_MAX_ARCHIVE_BYTES',
+    20 * 1024 * 1024,
+    minimum=1024,
+    maximum=128 * 1024 * 1024,
+)
+CODEX_MAIL_MAX_ARCHIVE_ENTRIES = _parse_int_env(
+    'CODEX_MAIL_MAX_ARCHIVE_ENTRIES',
+    5000,
+    minimum=1,
+    maximum=100000,
+)
+
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None
 

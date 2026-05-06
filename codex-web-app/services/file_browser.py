@@ -379,6 +379,92 @@ def _build_download_archive_name():
     return f'codex-files-{timestamp}.zip'
 
 
+def _build_mail_archive_name():
+    timestamp = time.strftime('%Y%m%d-%H%M%S')
+    return f'codex-mail-{timestamp}.zip'
+
+
+def _resolve_archive_targets(root_key=None, relative_paths=None):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_paths = _normalize_relative_paths(relative_paths)
+    targets = []
+    for relative_path in normalized_paths:
+        target_path = _resolve_target_path(root_path, relative_path)
+        if not target_path.exists():
+            raise FileBrowserError(
+                f'파일 또는 폴더를 찾을 수 없습니다: {relative_path}',
+                error_code='path_not_found',
+                status_code=404,
+            )
+        is_directory = target_path.is_dir()
+        if not is_directory and not target_path.is_file():
+            raise FileBrowserError(
+                f'파일 또는 폴더만 첨부할 수 있습니다: {relative_path}',
+                error_code='invalid_target',
+                status_code=400,
+            )
+        try:
+            size = 0 if is_directory else int(target_path.stat().st_size)
+        except OSError:
+            size = None
+        targets.append({
+            'relative_path': relative_path,
+            'target_path': target_path,
+            'name': target_path.name,
+            'type': 'dir' if is_directory else 'file',
+            'size': size,
+        })
+    return normalized_root, root_path, targets
+
+
+def _iter_mail_archive_entries(root_path, targets):
+    seen = set()
+    for target in targets:
+        target_path = target['target_path']
+        relative_path = target['relative_path']
+        if target['type'] == 'file':
+            if relative_path not in seen:
+                seen.add(relative_path)
+                yield target_path, relative_path, False
+            continue
+
+        directory_entry_name = f'{relative_path.rstrip("/")}/'
+        if directory_entry_name not in seen:
+            seen.add(directory_entry_name)
+            yield target_path, directory_entry_name, True
+
+        try:
+            descendants = sorted(
+                target_path.rglob('*'),
+                key=lambda item: item.relative_to(target_path).as_posix().lower(),
+            )
+        except OSError as exc:
+            raise FileBrowserError(
+                f'폴더를 읽을 수 없습니다: {relative_path}: {exc}',
+                error_code='read_error',
+                status_code=500,
+            ) from exc
+
+        for child in descendants:
+            try:
+                resolved_child = child.resolve(strict=False)
+                resolved_child.relative_to(root_path)
+            except (OSError, ValueError):
+                continue
+            archive_name = _to_relative_path(root_path, resolved_child)
+            if not archive_name:
+                continue
+            is_directory = resolved_child.is_dir()
+            if is_directory:
+                archive_name = f'{archive_name.rstrip("/")}/'
+            elif not resolved_child.is_file():
+                continue
+            if archive_name in seen:
+                continue
+            seen.add(archive_name)
+            yield resolved_child, archive_name, is_directory
+
+
 def _extract_file_metadata(target_path: Path):
     try:
         stats = target_path.stat()
@@ -1116,6 +1202,87 @@ def build_download_payload(root_key=None, relative_paths=None):
         'mime_type': 'application/zip',
         'download_name': _build_download_archive_name(),
         'content': buffer.getvalue(),
+        'is_archive': True,
+    }
+
+
+def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=None, max_entries=None):
+    normalized_root, root_path, targets = _resolve_archive_targets(root_key, relative_paths)
+    byte_limit = int(max_bytes) if max_bytes is not None else 20 * 1024 * 1024
+    entry_limit = int(max_entries) if max_entries is not None else 5000
+    buffer = io.BytesIO()
+    archive_paths = []
+    file_count = 0
+    directory_count = 0
+    total_source_bytes = 0
+
+    try:
+        with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
+            for entry_path, archive_name, is_directory in _iter_mail_archive_entries(root_path, targets):
+                if len(archive_paths) >= entry_limit:
+                    raise FileBrowserError(
+                        f'메일 첨부 항목 수 제한({entry_limit}개)을 초과했습니다.',
+                        error_code='archive_too_many_entries',
+                        status_code=413,
+                    )
+                archive_paths.append(archive_name)
+                if is_directory:
+                    archive.write(entry_path, arcname=archive_name)
+                    directory_count += 1
+                    continue
+                try:
+                    source_size = int(entry_path.stat().st_size)
+                except OSError as exc:
+                    raise FileBrowserError(
+                        f'파일 정보를 확인할 수 없습니다: {archive_name}: {exc}',
+                        error_code='read_error',
+                        status_code=500,
+                    ) from exc
+                total_source_bytes += max(0, source_size)
+                if total_source_bytes > byte_limit:
+                    raise FileBrowserError(
+                        f'메일 첨부 크기 제한({byte_limit} bytes)을 초과했습니다.',
+                        error_code='archive_too_large',
+                        status_code=413,
+                    )
+                archive.write(entry_path, arcname=archive_name)
+                file_count += 1
+    except FileBrowserError:
+        raise
+    except OSError as exc:
+        raise FileBrowserError(
+            f'메일 첨부 압축 파일을 만들지 못했습니다: {exc}',
+            error_code='archive_error',
+            status_code=500,
+        ) from exc
+
+    content = buffer.getvalue()
+    if len(content) > byte_limit:
+        raise FileBrowserError(
+            f'메일 첨부 압축 파일 크기 제한({byte_limit} bytes)을 초과했습니다.',
+            error_code='archive_too_large',
+            status_code=413,
+        )
+    if file_count <= 0 and directory_count <= 0:
+        raise FileBrowserError(
+            '첨부할 파일 또는 폴더를 찾을 수 없습니다.',
+            error_code='empty_archive',
+            status_code=400,
+        )
+
+    return {
+        'root': normalized_root,
+        'root_path': str(root_path),
+        'paths': [item['relative_path'] for item in targets],
+        'target_count': len(targets),
+        'file_count': file_count,
+        'directory_count': directory_count,
+        'entry_count': len(archive_paths),
+        'source_size': total_source_bytes,
+        'archive_size': len(content),
+        'mime_type': 'application/zip',
+        'download_name': _build_mail_archive_name(),
+        'content': content,
         'is_archive': True,
     }
 

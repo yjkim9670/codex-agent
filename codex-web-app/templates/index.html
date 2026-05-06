@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=148">
+    <link rel="stylesheet" href="/static/css/app.css?v=149">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -46,9 +46,9 @@
                             class="btn secondary file-panel-selection-btn file-panel-selection-btn-select-all"
                             type="button"
                             id="{{ id_prefix }}-select-all"
-                            aria-label="현재 목록의 파일 전체 선택"
+                            aria-label="현재 목록의 항목 전체 선택"
                             aria-pressed="false"
-                            title="현재 목록의 파일 전체 선택"
+                            title="현재 목록의 항목 전체 선택"
                         >
                             <span class="file-panel-action-label">전체 선택</span>
                         </button>
@@ -78,8 +78,8 @@
                             class="btn ghost file-panel-selection-btn file-panel-selection-btn-add-context"
                             type="button"
                             id="{{ id_prefix }}-add-context"
-                            aria-label="선택 파일을 채팅에 넣기"
-                            title="선택 파일을 채팅에 넣기"
+                            aria-label="선택 항목을 채팅에 넣기"
+                            title="선택 항목을 채팅에 넣기"
                         >
                             <span class="file-panel-action-label">채팅에 추가</span>
                         </button>
@@ -100,6 +100,15 @@
                             title="선택 파일 다운로드"
                         >
                             <span class="file-panel-action-label">다운로드</span>
+                        </button>
+                        <button
+                            class="btn ghost file-panel-selection-btn file-panel-selection-btn-mail"
+                            type="button"
+                            id="{{ id_prefix }}-mail"
+                            aria-label="선택 파일 또는 폴더 메일 전송"
+                            title="선택 파일 또는 폴더 메일 전송"
+                        >
+                            <span class="file-panel-action-label">메일</span>
                         </button>
                         <button
                             class="btn ghost file-panel-selection-btn file-panel-selection-btn-delete file-panel-selection-btn-danger"
@@ -931,6 +940,50 @@
         </div>
     </div>
 
+    <div class="mail-compose-overlay" id="codex-mail-compose-overlay" aria-hidden="true">
+        <div class="mail-compose-overlay-backdrop" data-action="close"></div>
+        <form class="mail-compose-card" id="codex-mail-compose-form" role="dialog" aria-modal="true" aria-labelledby="codex-mail-compose-title">
+            <div class="mail-compose-header">
+                <div class="mail-compose-heading">
+                    <div class="mail-compose-title" id="codex-mail-compose-title">메일 전송</div>
+                    <div class="mail-compose-subtitle" id="codex-mail-compose-summary">선택 항목을 압축하여 첨부합니다.</div>
+                </div>
+                <button class="btn ghost icon-only mail-compose-close" type="button" id="codex-mail-compose-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="mail-compose-body">
+                <label class="mail-compose-field" for="codex-mail-compose-to">
+                    <span>받는 사람</span>
+                    <input type="text" id="codex-mail-compose-to" name="to" autocomplete="email" required>
+                </label>
+                <div class="mail-compose-field-row">
+                    <label class="mail-compose-field" for="codex-mail-compose-cc">
+                        <span>참조</span>
+                        <input type="text" id="codex-mail-compose-cc" name="cc" autocomplete="email">
+                    </label>
+                    <label class="mail-compose-field" for="codex-mail-compose-bcc">
+                        <span>숨은 참조</span>
+                        <input type="text" id="codex-mail-compose-bcc" name="bcc" autocomplete="email">
+                    </label>
+                </div>
+                <label class="mail-compose-field" for="codex-mail-compose-subject">
+                    <span>제목</span>
+                    <input type="text" id="codex-mail-compose-subject" name="subject" required maxlength="200">
+                </label>
+                <label class="mail-compose-field mail-compose-field-body" for="codex-mail-compose-body">
+                    <span>본문</span>
+                    <textarea id="codex-mail-compose-body" name="body" rows="8"></textarea>
+                </label>
+                <div class="mail-compose-status" id="codex-mail-compose-status" aria-live="polite"></div>
+            </div>
+            <div class="mail-compose-footer">
+                <button class="btn ghost" type="button" id="codex-mail-compose-cancel">취소</button>
+                <button class="btn primary" type="submit" id="codex-mail-compose-submit">보내기</button>
+            </div>
+        </form>
+    </div>
+
     <div class="terminal-overlay" id="codex-terminal-overlay" aria-hidden="true">
         <div class="terminal-overlay-backdrop" data-action="close"></div>
         <div class="terminal-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-terminal-overlay-title">
@@ -983,6 +1036,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=146"></script>
+    <script src="/static/js/app.js?v=147"></script>
 </body>
 </html>

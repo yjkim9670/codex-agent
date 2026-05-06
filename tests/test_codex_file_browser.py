@@ -184,6 +184,33 @@ def test_build_download_payload_returns_zip_for_multiple_files(isolated_browser_
         assert archive.read('docs/guide.txt').decode('utf-8') == 'guide'
 
 
+def test_build_mail_archive_payload_includes_selected_directories(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs' / 'nested').mkdir(parents=True, exist_ok=True)
+    (server_root / 'docs' / 'guide.txt').write_text('guide', encoding='utf-8')
+    (server_root / 'docs' / 'nested' / 'deep.txt').write_text('deep', encoding='utf-8')
+    (server_root / 'README.md').write_text('# hello', encoding='utf-8')
+
+    result = file_browser.build_mail_archive_payload(
+        root_key='server',
+        relative_paths=['docs', 'README.md'],
+        max_bytes=1024 * 1024,
+        max_entries=20,
+    )
+
+    assert result['is_archive'] is True
+    assert result['mime_type'] == 'application/zip'
+    assert result['file_count'] == 3
+    assert result['directory_count'] >= 1
+    with ZipFile(io.BytesIO(result['content'])) as archive:
+        names = sorted(archive.namelist())
+        assert 'README.md' in names
+        assert 'docs/' in names
+        assert 'docs/guide.txt' in names
+        assert 'docs/nested/deep.txt' in names
+        assert archive.read('docs/guide.txt').decode('utf-8') == 'guide'
+
+
 def test_delete_files_rolls_back_when_move_fails(isolated_browser_roots, monkeypatch):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'a.txt').write_text('alpha', encoding='utf-8')
@@ -251,6 +278,46 @@ def test_download_route_returns_attachment(browser_test_client, isolated_browser
     assert response.headers['Content-Type'].startswith('text/plain')
     assert 'attachment;' in response.headers['Content-Disposition']
     assert response.data == b'report body'
+
+
+def test_mail_route_builds_archive_and_calls_sender(browser_test_client, isolated_browser_roots, monkeypatch):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'bundle').mkdir(parents=True, exist_ok=True)
+    (server_root / 'bundle' / 'report.txt').write_text('report body', encoding='utf-8')
+    captured = {}
+
+    def fake_send_mail_with_archive(**kwargs):
+        captured.update(kwargs)
+        return {
+            'sent': True,
+            'from': 'kyjabc@naver.com',
+            'to': ['recipient@example.com'],
+            'cc': [],
+            'bcc_count': 0,
+            'archive_name': kwargs['archive_payload']['download_name'],
+            'archive_size': kwargs['archive_payload']['archive_size'],
+        }
+
+    monkeypatch.setattr(codex_chat_blueprint, 'send_mail_with_archive', fake_send_mail_with_archive)
+
+    response = browser_test_client.post(
+        '/api/codex/files/mail',
+        json={
+            'root': 'server',
+            'paths': ['bundle'],
+            'to': 'recipient@example.com',
+            'subject': 'Report',
+            'body': 'See attachment.',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json['sent'] is True
+    assert response.json['archive']['file_count'] == 1
+    assert captured['to'] == 'recipient@example.com'
+    assert captured['subject'] == 'Report'
+    with ZipFile(io.BytesIO(captured['archive_payload']['content'])) as archive:
+        assert archive.read('bundle/report.txt').decode('utf-8') == 'report body'
 
 
 def test_write_route_updates_file(browser_test_client, isolated_browser_roots):

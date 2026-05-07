@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=149">
+    <link rel="stylesheet" href="/static/css/app.css?v=150">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -202,11 +202,11 @@
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-add-context is-hidden"
                         type="button"
                         id="{{ id_prefix }}-add-current-context"
-                        aria-label="현재 파일 경로를 채팅에 추가"
-                        title="현재 파일 경로를 채팅에 추가"
+                        aria-label="현재 파일과 폴더 위치를 채팅에 추가"
+                        title="현재 파일과 폴더 위치를 채팅에 추가"
                         disabled
                     >
-                        <span class="sr-only">현재 파일 경로를 채팅에 추가</span>
+                        <span class="sr-only">현재 파일과 폴더 위치를 채팅에 추가</span>
                     </button>
                     <button
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-copy is-hidden"
@@ -622,6 +622,15 @@
                             >
                                 <span class="sr-only">상위 폴더로 이동</span>
                             </button>
+                            <button
+                                class="btn ghost icon-only work-mode-preview-folder-context"
+                                type="button"
+                                id="codex-work-mode-folder-context"
+                                aria-label="현재 폴더 위치를 채팅에 추가"
+                                title="현재 폴더 위치를 채팅에 추가"
+                            >
+                                <span class="sr-only">현재 폴더 위치를 채팅에 추가</span>
+                            </button>
                             <button class="btn ghost icon-only work-mode-preview-refresh" type="button" id="codex-work-mode-file-refresh" aria-label="문서 목록 새로고침" title="문서 목록 새로고침">
                                 <span class="sr-only">문서 목록 새로고침</span>
                             </button>
@@ -897,6 +906,15 @@
                         >
                             <span class="sr-only">상위 폴더로 이동</span>
                         </button>
+                        <button
+                            class="btn ghost icon-only file-browser-folder-context"
+                            type="button"
+                            id="codex-file-browser-folder-context"
+                            aria-label="현재 폴더 위치를 채팅에 추가"
+                            title="현재 폴더 위치를 채팅에 추가"
+                        >
+                            <span class="sr-only">현재 폴더 위치를 채팅에 추가</span>
+                        </button>
                         <button class="btn ghost icon-only file-browser-refresh" type="button" id="codex-file-browser-refresh" aria-label="목록 새로고침" title="목록 새로고침">
                             <span class="sr-only">목록 새로고침</span>
                         </button>
@@ -1036,6 +1054,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=147"></script>
+    <script src="/static/js/app.js?v=148"></script>
 </body>
 </html>

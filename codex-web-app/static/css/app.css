@@ -117,7 +117,13 @@
     --radius-md: 9px;
     --radius-sm: 6px;
     --radius-pill: 999px;
-    --icon-button-size: 32px;
+    --icon-button-size: 34px;
+    --icon-button-radius: 8px;
+    --icon-button-bg: color-mix(in srgb, var(--surface-muted) 84%, #ffffff 16%);
+    --icon-button-border: color-mix(in srgb, var(--border) 82%, var(--text-muted) 18%);
+    --icon-button-hover-bg: color-mix(in srgb, var(--surface-raised) 72%, var(--accent) 10%);
+    --icon-button-active-bg: color-mix(in srgb, var(--accent) 13%, var(--surface) 87%);
+    --icon-button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.58);
     --sidebar-collapsed-height: 58px;
     --sidebar-collapsed-pad-y: 6px;
     --sidebar-collapsed-pad-x: 6px;
@@ -229,6 +235,11 @@
     --tooltip-bg: rgba(10, 12, 15, 0.9);
     --tooltip-text: #e8edf3;
     --tooltip-border: rgba(176, 188, 201, 0.28);
+    --icon-button-bg: color-mix(in srgb, var(--surface-raised) 84%, #ffffff 4%);
+    --icon-button-border: color-mix(in srgb, var(--border) 76%, var(--text-muted) 24%);
+    --icon-button-hover-bg: color-mix(in srgb, var(--surface-muted) 78%, var(--accent) 18%);
+    --icon-button-active-bg: color-mix(in srgb, var(--accent) 24%, var(--surface-raised) 76%);
+    --icon-button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
@@ -1582,6 +1593,14 @@ textarea {
 .file-browser-up,
 .work-mode-preview-up {
     background-image: var(--icon-folder-up);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.file-browser-folder-context,
+.work-mode-preview-folder-context {
+    background-image: var(--icon-location);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
@@ -2971,7 +2990,9 @@ textarea {
     width: 26px;
     min-width: 26px;
     height: 26px;
-    border-radius: 999px;
+    border: 1px solid transparent;
+    border-radius: calc(var(--icon-button-radius) - 1px);
+    background-color: transparent;
     background-image: var(--icon-close);
     background-repeat: no-repeat;
     background-position: center;
@@ -2980,7 +3001,8 @@ textarea {
 
 .terminal-overlay-tab-close:hover,
 .terminal-overlay-tab-close:focus-visible {
-    background-color: color-mix(in srgb, var(--surface-muted) 74%, transparent);
+    border-color: var(--icon-button-border);
+    background-color: var(--icon-button-hover-bg);
     outline: none;
 }
 
@@ -5824,9 +5846,9 @@ body.is-work-mode-resizing * {
     width: 40px;
     min-width: 40px;
     height: 40px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-pill);
-    background: var(--surface-raised);
+    border: 1px solid var(--icon-button-border);
+    border-radius: calc(var(--icon-button-radius) + 2px);
+    background: var(--icon-button-bg);
     color: var(--text-secondary);
     display: inline-flex;
     align-items: center;
@@ -5835,7 +5857,7 @@ body.is-work-mode-resizing * {
     font-size: 20px;
     line-height: 1;
     cursor: pointer;
-    box-shadow: var(--card-shadow);
+    box-shadow: var(--icon-button-shadow);
     opacity: 0;
     transform: translateY(8px);
     pointer-events: none;
@@ -5850,8 +5872,8 @@ body.is-work-mode-resizing * {
 }
 
 .chat-scroll-bottom:hover {
-    background: var(--surface);
-    border-color: var(--accent);
+    background: var(--icon-button-hover-bg);
+    border-color: color-mix(in srgb, var(--accent) 56%, var(--icon-button-border));
     color: var(--accent);
 }
 
@@ -6586,19 +6608,20 @@ body.is-work-mode-resizing * {
 }
 
 .message-copy {
-    border: 1px solid var(--border);
-    background: var(--surface-raised);
-    border-radius: var(--radius-sm);
-    width: 24px;
-    min-width: 24px;
-    height: 24px;
+    border: 1px solid var(--icon-button-border);
+    background: var(--icon-button-bg);
+    border-radius: calc(var(--icon-button-radius) - 1px);
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     color: var(--text-tertiary);
     cursor: pointer;
-    transition: all 0.2s ease;
+    box-shadow: var(--icon-button-shadow);
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .message-copy svg {
@@ -6607,9 +6630,9 @@ body.is-work-mode-resizing * {
 }
 
 .message-copy:hover {
-    border-color: var(--text-muted);
+    border-color: color-mix(in srgb, var(--accent) 50%, var(--icon-button-border));
     color: var(--text-secondary);
-    background: var(--surface-muted);
+    background: var(--icon-button-hover-bg);
 }
 
 .message-copy.is-copied {
@@ -7146,6 +7169,34 @@ body.is-work-mode-resizing * {
     justify-content: center;
     font-size: 15px;
     line-height: 1;
+}
+
+.btn.icon-only,
+.chat-header-mobile-browser,
+.chat-header-fullscreen,
+.stream-monitor-toggle,
+.stream-monitor-close {
+    border-color: var(--icon-button-border);
+    border-radius: var(--icon-button-radius);
+    background-color: var(--icon-button-bg);
+    box-shadow: var(--icon-button-shadow);
+}
+
+.btn.icon-only:hover,
+.chat-header-mobile-browser:hover,
+.chat-header-fullscreen:hover,
+.stream-monitor-toggle:hover,
+.stream-monitor-close:hover {
+    background-color: var(--icon-button-hover-bg);
+    border-color: color-mix(in srgb, var(--accent) 56%, var(--icon-button-border));
+}
+
+.btn.icon-only:active,
+.chat-header-mobile-browser:active,
+.chat-header-fullscreen:active,
+.stream-monitor-toggle:active,
+.stream-monitor-close:active {
+    background-color: var(--icon-button-active-bg);
 }
 
 .chat-submit-column .btn.chat-attach-image,

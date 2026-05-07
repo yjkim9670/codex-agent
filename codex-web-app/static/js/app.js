@@ -1475,6 +1475,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeDivider = document.getElementById('codex-work-mode-divider');
     const workModeFileRefreshBtn = document.getElementById('codex-work-mode-file-refresh');
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
+    const workModeFolderContextBtn = document.getElementById('codex-work-mode-folder-context');
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
     const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
@@ -1531,6 +1532,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserBackBtn = document.getElementById('codex-file-browser-back');
     const fileBrowserTerminalOpenBtn = document.getElementById('codex-file-browser-terminal-open');
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
+    const fileBrowserFolderContextBtn = document.getElementById('codex-file-browser-folder-context');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
     const fileBrowserOpenNewBtn = document.getElementById('codex-file-browser-open-new');
     const fileBrowserAddCurrentContextBtn = document.getElementById('codex-file-browser-add-current-context');
@@ -1850,6 +1852,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!result) return;
                 clearWorkModeFileViewer('파일을 선택하세요.');
             });
+        });
+    }
+    if (workModeFolderContextBtn) {
+        workModeFolderContextBtn.addEventListener('click', () => {
+            addCurrentDirectoryToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileBackBtn) {
@@ -2284,6 +2291,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!result) return;
                 clearFileBrowserViewer();
             });
+        });
+    }
+    if (fileBrowserFolderContextBtn) {
+        fileBrowserFolderContextBtn.addEventListener('click', () => {
+            addCurrentDirectoryToChatContext(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserDivider) {
@@ -3925,6 +3937,7 @@ function getWorkModeFileElements() {
         preview,
         refreshBtn: document.getElementById('codex-work-mode-file-refresh'),
         upBtn: document.getElementById('codex-work-mode-file-up'),
+        folderContextBtn: document.getElementById('codex-work-mode-folder-context'),
         backBtn: document.getElementById('codex-work-mode-file-back'),
         chatBtn: document.getElementById('codex-work-mode-chat-back'),
         openNewBtn: document.getElementById('codex-work-mode-file-open-new'),
@@ -4686,8 +4699,11 @@ function syncFilePanelViewerActionState(variant) {
     if (elements.addCurrentContextBtn) {
         elements.addCurrentContextBtn.classList.toggle('is-hidden', !hasPreview);
         elements.addCurrentContextBtn.disabled = !hasPreview || isBusy;
-        updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일 경로를 채팅에 추가');
+        updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일과 폴더 위치를 채팅에 추가');
+        setIconButtonScreenReaderText(elements.addCurrentContextBtn, '현재 파일과 폴더 위치를 채팅에 추가');
+        syncHoverTooltipFromLabel(elements.addCurrentContextBtn);
     }
+    syncFilePanelFolderContextButton(normalizedVariant);
     if (elements.copyBtn) {
         elements.copyBtn.classList.toggle('is-hidden', !hasPreview);
         elements.copyBtn.disabled = !canCopy || isBusy;
@@ -11539,6 +11555,7 @@ function getFileBrowserElements() {
         subtitle: document.getElementById('codex-file-browser-overlay-subtitle'),
         backBtn: document.getElementById('codex-file-browser-back'),
         upBtn: document.getElementById('codex-file-browser-up'),
+        folderContextBtn: document.getElementById('codex-file-browser-folder-context'),
         refreshBtn: document.getElementById('codex-file-browser-refresh'),
         fullscreenBtn: document.getElementById('codex-file-browser-fullscreen'),
         showHiddenToggle: document.getElementById('codex-file-browser-show-hidden'),
@@ -11873,6 +11890,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
     syncFilePanelViewerActionState(FILE_PANEL_VARIANT_WORK_MODE);
+    syncFilePanelFolderContextButton(FILE_PANEL_VARIANT_WORK_MODE, { loading });
 }
 
 function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -11907,6 +11925,7 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
     syncFilePanelViewerActionState(FILE_PANEL_VARIANT_OVERLAY);
+    syncFilePanelFolderContextButton(FILE_PANEL_VARIANT_OVERLAY, { loading });
 }
 
 function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하세요.') {
@@ -12199,6 +12218,68 @@ function getFilePanelPreviewContextPath(variant) {
     return normalizeFileBrowserRelativePath(state.path || '');
 }
 
+function getFilePanelPreviewContextRoot(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    return normalizeFileBrowserRoot(state?.root || getFilePanelCurrentRoot(normalizedVariant));
+}
+
+function getFilePanelDirectoryContextPath(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const previewPath = getFilePanelPreviewContextPath(normalizedVariant);
+    if (previewPath) {
+        return getFileBrowserParentPath(previewPath);
+    }
+    return getFilePanelCurrentPath(normalizedVariant);
+}
+
+function getFilePanelDirectoryContextRoot(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const previewPath = getFilePanelPreviewContextPath(normalizedVariant);
+    if (previewPath) {
+        return getFilePanelPreviewContextRoot(normalizedVariant);
+    }
+    return getFilePanelCurrentRoot(normalizedVariant);
+}
+
+function buildFilePanelPreviewChatContextText(root, filePath) {
+    const normalizedFilePath = normalizeFileBrowserRelativePath(filePath);
+    if (!normalizedFilePath) return '';
+    const folderPath = getFileBrowserParentPath(normalizedFilePath);
+    return [
+        '[File Preview Context]',
+        `file: ${formatFileBrowserDisplayPath(root, normalizedFilePath)}`,
+        `folder: ${formatFileBrowserDisplayPath(root, folderPath)}`
+    ].join('\n');
+}
+
+function buildFilePanelDirectoryChatContextText(root, directoryPath) {
+    const normalizedDirectoryPath = normalizeFileBrowserRelativePath(directoryPath);
+    return [
+        '[Folder Context]',
+        `folder: ${formatFileBrowserDisplayPath(root, normalizedDirectoryPath)}`
+    ].join('\n');
+}
+
+function syncFilePanelFolderContextButton(variant, { loading = false } = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    const button = elements?.folderContextBtn;
+    if (!button) return;
+    const root = getFilePanelDirectoryContextRoot(normalizedVariant);
+    const directoryPath = getFilePanelDirectoryContextPath(normalizedVariant);
+    const displayPath = formatFileBrowserDisplayPath(root, directoryPath);
+    const label = `현재 폴더 위치를 채팅에 추가 (${displayPath})`;
+    const isBusy = Boolean(loading)
+        || isFilePanelLoading(elements)
+        || isFilePanelBulkActionInFlight(normalizedVariant);
+    button.disabled = isBusy;
+    updateFilePanelActionButtonLabel(button, label);
+    setIconButtonScreenReaderText(button, label);
+    syncHoverTooltipFromLabel(button, label);
+}
+
 function getFilePanelChatContextTargetPaths(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const selectedPaths = Array.from(getFilePanelSelectedPaths(normalizedVariant));
@@ -12355,7 +12436,7 @@ function syncFilePanelSelectionBar(variant) {
     if (elements.addContextBtn) {
         updateFilePanelActionButtonLabel(
             elements.addContextBtn,
-            usingPreviewContext ? '미리보기 파일 경로를 채팅에 넣기' : '선택 항목 경로를 채팅에 넣기'
+            usingPreviewContext ? '미리보기 파일과 폴더 위치를 채팅에 넣기' : '선택 항목 경로를 채팅에 넣기'
         );
         elements.addContextBtn.disabled = isBusy || contextTargetCount <= 0;
         syncHoverTooltipFromLabel(elements.addContextBtn);
@@ -12391,6 +12472,7 @@ function syncFilePanelSelectionBar(variant) {
     if (elements.deleteBtn) {
         elements.deleteBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
     }
+    syncFilePanelFolderContextButton(variant);
 }
 
 function applyFilePanelSelectionStateForVariant(variant) {
@@ -13428,9 +13510,12 @@ function captureFilePanelListScrollSnapshot(variant) {
     return captureWorkModeFileScrollSnapshot();
 }
 
-function buildFilePanelChatContextText(root, selectedPaths) {
+function buildFilePanelChatContextText(root, selectedPaths, { includePreviewDirectory = false } = {}) {
     const paths = Array.from(createNormalizedRelativePathSet(selectedPaths));
     if (!paths.length) return '';
+    if (includePreviewDirectory && paths.length === 1) {
+        return buildFilePanelPreviewChatContextText(root, paths[0]);
+    }
     return paths
         .map(path => formatFileBrowserDisplayPath(root, path))
         .join('\n');
@@ -13600,11 +13685,12 @@ async function addSelectedFilesToChatContext(variant) {
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
         const contextRoot = usingPreviewContext
-            ? (getFilePanelEditState(normalizedVariant).root || getFilePanelCurrentRoot(normalizedVariant))
+            ? getFilePanelPreviewContextRoot(normalizedVariant)
             : getFilePanelCurrentRoot(normalizedVariant);
         const contextText = await buildFilePanelChatContextText(
             contextRoot,
-            contextPaths
+            contextPaths,
+            { includePreviewDirectory: usingPreviewContext }
         );
         if (!appendTextToChatInput(contextText)) {
             throw new Error('채팅 입력창을 찾을 수 없습니다.');
@@ -13612,13 +13698,13 @@ async function addSelectedFilesToChatContext(variant) {
         if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         }
-        showToast(`${usingPreviewContext ? '미리보기 파일 경로' : `선택 항목 경로 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
+        showToast(`${usingPreviewContext ? '미리보기 파일과 폴더 위치' : `선택 항목 경로 ${contextPaths.length}개`}를 채팅 입력에 넣었습니다.`, {
             tone: 'success',
             durationMs: 2600
         });
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일 경로를 채팅 입력에 넣지 못했습니다.'), {
+        showToast(normalizeError(error, '파일과 폴더 위치를 채팅 입력에 넣지 못했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });
@@ -13642,26 +13728,52 @@ async function addCurrentFileToChatContext(variant) {
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
         const contextRoot = state.root || getFilePanelCurrentRoot(normalizedVariant);
-        const contextText = buildFilePanelChatContextText(contextRoot, [currentPath]);
+        const contextText = buildFilePanelPreviewChatContextText(contextRoot, currentPath);
         if (!appendTextToChatInput(contextText)) {
             throw new Error('채팅 입력창을 찾을 수 없습니다.');
         }
         if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         }
-        showToast('현재 파일 경로를 채팅 입력에 넣었습니다.', {
+        showToast('현재 파일과 폴더 위치를 채팅 입력에 넣었습니다.', {
             tone: 'success',
             durationMs: 2600
         });
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일 경로를 채팅 입력에 넣지 못했습니다.'), {
+        showToast(normalizeError(error, '파일과 폴더 위치를 채팅 입력에 넣지 못했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });
         return false;
     } finally {
         setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+function addCurrentDirectoryToChatContext(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    try {
+        const contextRoot = getFilePanelDirectoryContextRoot(normalizedVariant);
+        const directoryPath = getFilePanelDirectoryContextPath(normalizedVariant);
+        const contextText = buildFilePanelDirectoryChatContextText(contextRoot, directoryPath);
+        if (!appendTextToChatInput(contextText)) {
+            throw new Error('채팅 입력창을 찾을 수 없습니다.');
+        }
+        if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
+            setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+        }
+        showToast('현재 폴더 위치를 채팅 입력에 넣었습니다.', {
+            tone: 'success',
+            durationMs: 2400
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '폴더 위치를 채팅 입력에 넣지 못했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
     }
 }
 

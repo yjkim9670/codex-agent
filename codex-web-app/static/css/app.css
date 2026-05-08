@@ -109,7 +109,7 @@
     --chat-action-gap: 6px;
     --chat-action-short-height: 28px;
     --chat-action-send-height: 42px;
-    --chat-compose-min-height: calc(var(--chat-action-short-height) + var(--chat-action-short-height) + var(--chat-action-send-height) + var(--chat-action-gap) + var(--chat-action-gap));
+    --chat-compose-min-height: calc((var(--chat-action-short-height) * 3) + var(--chat-action-send-height) + (var(--chat-action-gap) * 3));
     --mobile-viewport-height: 100dvh;
     --mobile-prompt-lift: 0px;
     --app-max-width: 1200px;
@@ -6289,7 +6289,7 @@ body.is-work-mode-resizing * {
 .chat-submit-column {
     display: grid;
     grid-template-columns: var(--chat-action-button-width);
-    grid-template-rows: var(--chat-action-short-height) var(--chat-action-short-height) minmax(var(--chat-action-send-height), 1fr);
+    grid-template-rows: var(--chat-action-short-height) var(--chat-action-short-height) var(--chat-action-short-height) minmax(var(--chat-action-send-height), 1fr);
     align-items: stretch;
     gap: var(--chat-action-gap);
     align-self: stretch;
@@ -6336,6 +6336,23 @@ body.is-work-mode-resizing * {
 
 [data-theme="dark"] .chat-attach-image {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M21.4 11.4 12 20.8a5.2 5.2 0 0 1-7.4-7.4l9.7-9.7a3.5 3.5 0 0 1 5 5l-9.7 9.7a1.8 1.8 0 0 1-2.6-2.6l8.9-8.9'/></svg>");
+}
+
+.chat-subjob {
+    width: var(--chat-action-button-width);
+    min-width: 0;
+    max-width: var(--chat-action-button-width);
+    height: var(--chat-action-short-height);
+    min-height: var(--chat-action-short-height);
+    padding: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h4a4 4 0 0 1 4 4v6'/><path d='M7 17h8'/><path d='M17 15l-2 2 2 2'/><circle cx='5' cy='7' r='2'/><circle cx='5' cy='17' r='2'/></svg>");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+[data-theme="dark"] .chat-subjob {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h4a4 4 0 0 1 4 4v6'/><path d='M7 17h8'/><path d='M17 15l-2 2 2 2'/><circle cx='5' cy='7' r='2'/><circle cx='5' cy='17' r='2'/></svg>");
 }
 
 .chat-attachments {
@@ -7200,6 +7217,7 @@ body.is-work-mode-resizing * {
 }
 
 .chat-submit-column .btn.chat-attach-image,
+.chat-submit-column .btn.chat-subjob,
 .chat-submit-column .btn.chat-plan-mode-toggle,
 .chat-submit-column .btn#codex-chat-send {
     box-sizing: border-box;
@@ -7211,6 +7229,7 @@ body.is-work-mode-resizing * {
 }
 
 .chat-submit-column .btn.chat-attach-image,
+.chat-submit-column .btn.chat-subjob,
 .chat-submit-column .btn.chat-plan-mode-toggle {
     height: var(--chat-action-short-height);
     min-height: var(--chat-action-short-height);
@@ -8136,9 +8155,9 @@ label.hover-tooltip,
         --chat-action-short-height: 28px;
         --chat-action-send-height: 38px;
         --mobile-chat-compose-height: calc(
-            (var(--chat-action-short-height) * 2)
+            (var(--chat-action-short-height) * 3)
             + var(--chat-action-send-height)
-            + (var(--chat-action-gap) * 2)
+            + (var(--chat-action-gap) * 3)
         );
         grid-template-columns: minmax(0, 1fr) var(--chat-action-button-width);
         position: sticky;
@@ -8171,6 +8190,7 @@ label.hover-tooltip,
         grid-template-rows:
             var(--chat-action-short-height)
             var(--chat-action-short-height)
+            var(--chat-action-short-height)
             var(--chat-action-send-height);
         gap: var(--chat-action-gap);
         align-self: start;
@@ -8193,6 +8213,7 @@ label.hover-tooltip,
     }
 
     .chat-input .chat-attach-image,
+    .chat-input .chat-subjob,
     .chat-input .chat-plan-mode-toggle,
     .chat-input #codex-chat-send {
         box-sizing: border-box;
@@ -8202,6 +8223,7 @@ label.hover-tooltip,
     }
 
     .chat-input .chat-attach-image,
+    .chat-input .chat-subjob,
     .chat-input .chat-plan-mode-toggle {
         height: var(--chat-action-short-height);
         min-height: var(--chat-action-short-height);

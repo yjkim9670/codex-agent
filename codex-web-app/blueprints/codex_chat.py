@@ -57,6 +57,7 @@ from ..services.codex_chat import (
     record_token_usage_for_message,
     save_codex_attachment,
     start_codex_stream_for_session,
+    start_codex_subjob_for_session,
     enqueue_codex_stream_for_session,
     format_assistant_response_content,
     update_settings,
@@ -770,6 +771,47 @@ def codex_session_message_queue(session_id):
         response['response_model'] = result.get('response_model')
         response['response_reasoning_effort'] = result.get('response_reasoning_effort')
     return jsonify(response)
+
+
+@bp.route('/api/codex/sessions/<session_id>/subjobs', methods=['POST'])
+def codex_session_subjob_create(session_id):
+    payload = request.get_json(silent=True) or {}
+    prompt = (payload.get('prompt') or '').strip()
+    try:
+        attachments = _parse_attachments(payload)
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
+
+    if not prompt:
+        return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
+    if len(prompt) > CODEX_MAX_PROMPT_CHARS:
+        return jsonify({'error': '프롬프트가 너무 깁니다.'}), 400
+
+    result = start_codex_subjob_for_session(
+        session_id,
+        prompt,
+        attachments=attachments,
+    )
+    if not result.get('ok'):
+        error = result.get('error') or 'sub job 시작에 실패했습니다.'
+        status_code = 404 if '세션을 찾을 수 없습니다' in error or '부모 세션' in error else 500
+        return jsonify({'error': error}), status_code
+
+    child_session = result.get('child_session') or {}
+    return jsonify({
+        'subjob': True,
+        'parent_session_id': result.get('parent_session_id') or session_id,
+        'child_session': child_session,
+        'stream_id': result.get('stream_id'),
+        'started_at': result.get('started_at'),
+        'user_message': result.get('user_message'),
+        'assistant_message': result.get('assistant_message'),
+        'assistant_message_id': result.get('assistant_message_id'),
+        'response_mode': result.get('response_mode'),
+        'response_model': result.get('response_model'),
+        'response_reasoning_effort': result.get('response_reasoning_effort'),
+        'session_storage': get_session_storage_summary(),
+    })
 
 
 @bp.route('/api/codex/streams/<stream_id>')

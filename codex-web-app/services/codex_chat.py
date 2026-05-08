@@ -156,6 +156,14 @@ _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
 _PENDING_QUEUE_BOOTSTRAP_STARTED = False
+_SESSION_METADATA_RESERVED_KEYS = {
+    'id',
+    'title',
+    'created_at',
+    'updated_at',
+    'messages',
+    _PENDING_QUEUE_KEY,
+}
 _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
 _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
@@ -224,6 +232,14 @@ _PLAN_MODE_PROMPT_SUFFIX = (
     "- Do not run commands that create, edit, move, or delete files.\n"
     "- Provide analysis and an implementation plan only.\n"
     "- If changes are needed, describe proposed patches without applying them."
+)
+_SUBJOB_PROMPT_SUFFIX = (
+    "## Sub Job Guardrails\n"
+    "- This is a read-only child sub job spawned from an existing parent session.\n"
+    "- Answer the current user request directly and concisely.\n"
+    "- Do not modify files, create files, delete files, move files, or change git state.\n"
+    "- If repository context is needed, inspect files using read-only commands only.\n"
+    "- Keep results in this child session; do not assume the parent session is blocked on you."
 )
 _IMAGEGEN_WORKBENCH_OVERLAY = (
     "Apply these extra rules only when the current task uses $imagegen, "
@@ -3146,6 +3162,8 @@ def list_sessions():
         summary.append({
             'id': session.get('id'),
             'title': session.get('title') or 'New session',
+            'session_type': session.get('session_type') or 'chat',
+            'parent_session_id': session.get('parent_session_id') or None,
             'created_at': session.get('created_at'),
             'updated_at': session.get('updated_at'),
             'message_count': len(session.get('messages', [])),
@@ -3186,7 +3204,7 @@ def get_session(session_id):
     return session_copy
 
 
-def create_session(title=None):
+def create_session(title=None, metadata=None):
     now = normalize_timestamp(None)
     session = {
         'id': uuid.uuid4().hex,
@@ -3196,6 +3214,14 @@ def create_session(title=None):
         'messages': [],
         _PENDING_QUEUE_KEY: [],
     }
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            normalized_key = str(key or '').strip()
+            if not normalized_key or normalized_key in _SESSION_METADATA_RESERVED_KEYS:
+                continue
+            if value is None:
+                continue
+            session[normalized_key] = deepcopy(value)
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -3771,14 +3797,28 @@ def _build_codex_command(
         json_output=False,
         model_override=None,
         reasoning_override=None,
-        attachments=None):
-    cmd = [
-        'codex',
-        'exec',
-        '--full-auto',
-        '--color',
-        'never'
-    ]
+        attachments=None,
+        question_only=False):
+    if question_only:
+        cmd = [
+            'codex',
+            '--ask-for-approval',
+            'never',
+            'exec',
+            '--sandbox',
+            'read-only',
+            '--ephemeral',
+            '--color',
+            'never'
+        ]
+    else:
+        cmd = [
+            'codex',
+            'exec',
+            '--full-auto',
+            '--color',
+            'never'
+        ]
     if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(WORKSPACE_DIR):
         cmd.append('--skip-git-repo-check')
     settings = get_settings()
@@ -5320,6 +5360,7 @@ def _run_codex_stream(stream_id, prompt):
         reasoning_override = stream.get('reasoning_override') if stream else None
         attachments = stream.get('attachments') if stream else []
         queued_execution = bool(stream.get('queued_execution')) if stream else False
+        question_only = bool(stream.get('question_only')) if stream else False
         json_output = True
         if stream is not None:
             json_output = stream.get('json_output') is not False
@@ -5338,6 +5379,7 @@ def _run_codex_stream(stream_id, prompt):
         model_override=model_override,
         reasoning_override=reasoning_override,
         attachments=attachments,
+        question_only=question_only,
     )
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -5618,6 +5660,7 @@ def create_codex_stream(
         attachments=None,
         assistant_message_id=None,
         queued_execution=False,
+        question_only=False,
         user_prompt=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
@@ -5655,6 +5698,7 @@ def create_codex_stream(
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
+        'question_only': bool(question_only),
         'attachments': normalized_attachments,
         'user_prompt': str(user_prompt or '').strip(),
         'response_mode': response_mode,
@@ -5706,7 +5750,7 @@ def _get_session_submit_lock(session_id):
     with _SESSION_SUBMIT_LOCKS_GUARD:
         submit_lock = _SESSION_SUBMIT_LOCKS.get(session_key)
         if submit_lock is None:
-            submit_lock = threading.Lock()
+            submit_lock = threading.RLock()
             _SESSION_SUBMIT_LOCKS[session_key] = submit_lock
     return submit_lock
 
@@ -5724,6 +5768,67 @@ def _find_active_stream_id_locked(session_id):
     return None
 
 
+def _mark_stale_finalizing_streams_done_locked(session_id):
+    now = time.time()
+    timeout_seconds = _coerce_positive_seconds(
+        CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
+        default_value=60,
+        minimum=1
+    )
+    stale_after_seconds = timeout_seconds + 1
+    stale_stream_ids = []
+
+    for stream_id, stream in state.codex_streams.items():
+        if stream.get('session_id') != session_id:
+            continue
+        if stream.get('done') or stream.get('saved') or stream.get('cancelled'):
+            continue
+        runtime = _snapshot_stream_runtime_locked(stream)
+        if runtime.get('process_running') or stream.get('process') is not None:
+            continue
+        process_exited_at = stream.get('process_exited_at')
+        if not isinstance(process_exited_at, (int, float)):
+            continue
+
+        has_response = bool(
+            (stream.get('output') or '').strip()
+            or (stream.get('output_last_message') or '').strip()
+            or (stream.get('error') or '').strip()
+        )
+        recovery_after_seconds = 1 if has_response else stale_after_seconds
+        if now - process_exited_at < recovery_after_seconds:
+            continue
+
+        stream['done'] = True
+        stream['completed_at'] = stream.get('completed_at') or process_exited_at
+        stream['updated_at'] = now
+        stream['process'] = None
+        if not has_response:
+            message = (
+                f'CLI 종료 후 {int(timeout_seconds)}초 동안 최종 응답을 받지 못해 '
+                '대기열 진행을 위해 스트림을 종료 처리했습니다.\n'
+            )
+            stream['error'] = (stream.get('error') or '') + message
+            stream['error_length'] = len(stream.get('error') or '')
+            stream['exit_code'] = 124
+            stream['finalize_reason'] = 'stale_final_response_timeout'
+        elif not stream.get('finalize_reason'):
+            stream['finalize_reason'] = 'stale_finalizing_recovered'
+        stale_stream_ids.append(stream_id)
+    return stale_stream_ids
+
+
+def _recover_stale_finalizing_streams_for_session(session_id):
+    with state.codex_streams_lock:
+        stale_stream_ids = _mark_stale_finalizing_streams_done_locked(session_id)
+    for stream_id in stale_stream_ids:
+        try:
+            finalize_codex_stream(stream_id, trigger_queue=False)
+        except Exception:
+            _LOGGER.exception('Failed to finalize stale Codex stream (stream_id=%s)', stream_id)
+    return stale_stream_ids
+
+
 def get_active_stream_id_for_session(session_id):
     with state.codex_streams_lock:
         return _find_active_stream_id_locked(session_id)
@@ -5734,6 +5839,13 @@ def _append_plan_mode_guardrails(prompt_text):
     if not normalized:
         normalized = '(empty)'
     return f'{normalized}\n\n{_PLAN_MODE_PROMPT_SUFFIX}'
+
+
+def _append_subjob_guardrails(prompt_text):
+    normalized = str(prompt_text or '').strip()
+    if not normalized:
+        normalized = '(empty)'
+    return f'{normalized}\n\n{_SUBJOB_PROMPT_SUFFIX}'
 
 
 def _resolve_codex_overrides_for_plan_mode(plan_mode=False):
@@ -5762,7 +5874,8 @@ def _start_codex_stream_for_session_locked(
         reasoning_override=None,
         plan_mode=False,
         attachments=None,
-        queued_execution=False):
+        queued_execution=False,
+        question_only=False):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -5810,6 +5923,7 @@ def _start_codex_stream_for_session_locked(
         'plan_mode': plan_mode,
         'assistant_message_id': assistant_message.get('id'),
         'queued_execution': bool(queued_execution),
+        'question_only': bool(question_only),
         'user_prompt': prompt,
     }
     if normalized_attachments:
@@ -5866,6 +5980,7 @@ def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachment
 
 
 def _start_next_queued_codex_stream_locked(session_id):
+    _recover_stale_finalizing_streams_for_session(session_id)
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -5917,6 +6032,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             plan_mode=plan_mode,
             attachments=attachments,
             queued_execution=True,
+            question_only=False,
         )
         if not start_result.get('ok'):
             return start_result
@@ -5952,7 +6068,55 @@ def start_codex_stream_for_session(
             plan_mode=plan_mode,
             attachments=attachments,
             queued_execution=False,
+            question_only=False,
         )
+
+
+def start_codex_subjob_for_session(parent_session_id, prompt, attachments=None):
+    parent_key = str(parent_session_id or '').strip()
+    prompt_text = str(prompt or '').strip()
+    if not parent_key:
+        return {'ok': False, 'error': '부모 세션을 찾을 수 없습니다.'}
+    if not prompt_text:
+        return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
+
+    parent_session = get_session(parent_key)
+    if not parent_session:
+        return {'ok': False, 'error': '부모 세션을 찾을 수 없습니다.'}
+
+    normalized_attachments = normalize_codex_attachments(attachments or [])
+    child_title = f"Sub job: {generate_session_title(prompt_text)}"
+    child_session = create_session(
+        title=child_title,
+        metadata={
+            'session_type': 'subjob',
+            'parent_session_id': parent_key,
+            'subjob_prompt': prompt_text,
+        }
+    )
+    child_session_id = child_session.get('id')
+    if not child_session_id:
+        return {'ok': False, 'error': 'sub job 세션을 만들지 못했습니다.'}
+
+    prompt_with_context = build_codex_prompt(parent_session.get('messages', []), prompt_text)
+    prompt_with_context = _append_subjob_guardrails(prompt_with_context)
+    start_result = _start_codex_stream_for_session_locked(
+        child_session_id,
+        prompt_text,
+        prompt_with_context,
+        model_override=None,
+        reasoning_override=None,
+        plan_mode=False,
+        attachments=normalized_attachments,
+        queued_execution=True,
+        question_only=True,
+    )
+    if not start_result.get('ok'):
+        return start_result
+    start_result['child_session'] = get_session(child_session_id) or child_session
+    start_result['parent_session_id'] = parent_key
+    start_result['subjob'] = True
+    return start_result
 
 
 def enqueue_codex_stream_for_session(session_id, prompt, plan_mode=False, attachments=None):
@@ -6133,7 +6297,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
         return data
 
 
-def finalize_codex_stream(stream_id):
+def finalize_codex_stream(stream_id, trigger_queue=True):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if not stream or stream.get('saved') or not stream.get('done'):
@@ -6258,7 +6422,8 @@ def finalize_codex_stream(stream_id):
         usage=token_usage,
         source=usage_source
     )
-    trigger_next_queued_codex_stream(session_id)
+    if trigger_queue:
+        trigger_next_queued_codex_stream(session_id)
     return saved_message
 
 

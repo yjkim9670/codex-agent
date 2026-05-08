@@ -8135,10 +8135,10 @@ label.hover-tooltip,
         --chat-action-button-width: 40px;
         --chat-action-gap: 5px;
         --chat-action-short-height: 32px;
-        --chat-action-send-height: 32px;
-        --mobile-chat-action-grid-width: calc((var(--chat-action-button-width) * 2) + var(--chat-action-gap));
-        --mobile-chat-compose-height: calc((var(--chat-action-short-height) * 2) + var(--chat-action-gap));
-        grid-template-columns: minmax(0, 1fr) var(--mobile-chat-action-grid-width);
+        --chat-action-send-height: 38px;
+        --chat-action-separator-height: 7px;
+        --mobile-chat-compose-height: calc((var(--chat-action-short-height) * 2) + var(--chat-action-send-height) + var(--chat-action-separator-height) + (var(--chat-action-gap) * 3));
+        grid-template-columns: minmax(0, 1fr) var(--chat-action-button-width);
         position: sticky;
         bottom: 0;
         background: var(--surface);
@@ -8165,15 +8165,27 @@ label.hover-tooltip,
 
     .chat-submit-column {
         display: grid;
-        grid-template-columns: repeat(2, var(--chat-action-button-width));
-        grid-template-rows: repeat(2, var(--chat-action-short-height));
+        grid-template-columns: var(--chat-action-button-width);
+        grid-template-rows: var(--chat-action-short-height) var(--chat-action-short-height) var(--chat-action-separator-height) var(--chat-action-send-height);
         gap: var(--chat-action-gap);
         align-self: start;
-        width: var(--mobile-chat-action-grid-width);
+        width: var(--chat-action-button-width);
         height: var(--mobile-chat-compose-height);
         min-height: var(--mobile-chat-compose-height);
-        min-width: var(--mobile-chat-action-grid-width);
-        max-width: var(--mobile-chat-action-grid-width);
+        min-width: var(--chat-action-button-width);
+        max-width: var(--chat-action-button-width);
+    }
+
+    .chat-submit-column::after {
+        content: "";
+        display: block;
+        grid-column: 1;
+        grid-row: 3;
+        align-self: center;
+        justify-self: stretch;
+        height: 1px;
+        background: var(--border);
+        pointer-events: none;
     }
 
     .chat-input + .chat-runtime-strip {
@@ -8196,6 +8208,16 @@ label.hover-tooltip,
         max-width: var(--chat-action-button-width);
     }
 
+    .chat-input .chat-attach-image {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .chat-input .chat-plan-mode-toggle {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
     .chat-input .chat-attach-image,
     .chat-input .chat-plan-mode-toggle {
         height: var(--chat-action-short-height);
@@ -8204,10 +8226,11 @@ label.hover-tooltip,
     }
 
     .chat-input #codex-chat-send {
-        grid-column: 1 / -1;
-        width: 100%;
-        min-width: 100%;
-        max-width: none;
+        grid-column: 1;
+        grid-row: 4;
+        width: var(--chat-action-button-width);
+        min-width: var(--chat-action-button-width);
+        max-width: var(--chat-action-button-width);
         height: var(--chat-action-send-height);
         min-height: var(--chat-action-send-height);
     }

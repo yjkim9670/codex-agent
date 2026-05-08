@@ -843,7 +843,6 @@ function syncActiveSessionStatus() {
 function syncActiveSessionControls() {
     const input = document.getElementById('codex-chat-input');
     const sendBtn = document.getElementById('codex-chat-send');
-    const subjobBtn = document.getElementById('codex-chat-subjob');
     const sessionId = state.activeSessionId;
     const sessionState = sessionId ? getSessionState(sessionId) : null;
     const localBusy = sessionId
@@ -880,12 +879,6 @@ function syncActiveSessionControls() {
         if (srLabel) {
             srLabel.textContent = label;
         }
-    }
-    if (subjobBtn) {
-        const canStartSubjob = Boolean(sessionId && hasDraftPrompt);
-        subjobBtn.disabled = !canStartSubjob;
-        subjobBtn.setAttribute('aria-disabled', String(!canStartSubjob));
-        subjobBtn.setAttribute('title', canStartSubjob ? 'Run as sub job' : 'Type a prompt to run as sub job');
     }
     const imageAttachBtn = document.getElementById('codex-chat-image-attach');
     if (imageAttachBtn && imageAttachBtn.getAttribute('aria-busy') !== 'true') {
@@ -1467,7 +1460,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
-    const subjobBtn = document.getElementById('codex-chat-subjob');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
@@ -1600,12 +1592,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
-    }
-
-    if (subjobBtn) {
-        subjobBtn.addEventListener('click', event => {
-            void handleSubjobSubmit(event);
-        });
     }
 
     if (input) {
@@ -16924,99 +16910,6 @@ async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPla
         totalQueued,
         lastResult
     };
-}
-
-async function startSubjobOnServer(sessionId, prompt, { attachments = [] } = {}) {
-    if (!sessionId) {
-        return { ok: false, reason: 'missing_session' };
-    }
-    const normalizedAttachments = Array.isArray(attachments)
-        ? attachments.map(normalizeChatAttachment).filter(Boolean)
-        : [];
-    const response = await fetch(`/api/codex/sessions/${sessionId}/subjobs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            prompt,
-            attachments: normalizedAttachments
-        })
-    });
-    const result = await response.json();
-    if (!response.ok) {
-        const err = new Error(result?.error || 'Failed to start sub job.');
-        err.status = response.status;
-        err.payload = result;
-        throw err;
-    }
-    return result;
-}
-
-async function handleSubjobSubmit(event) {
-    if (event) event.preventDefault();
-    const input = document.getElementById('codex-chat-input');
-    if (!input) return;
-    const parentSessionId = state.activeSessionId;
-    const draftPrompt = input.value;
-    const prompt = draftPrompt.trim();
-    if (!parentSessionId || !prompt) {
-        syncActiveSessionControls();
-        return;
-    }
-
-    const attachments = getPendingAttachmentPayload();
-    input.value = '';
-    setSessionStatus(parentSessionId, 'Starting sub job...');
-    syncActiveSessionControls();
-    try {
-        const result = await startSubjobOnServer(parentSessionId, prompt, { attachments });
-        const childSession = result?.child_session || null;
-        if (childSession?.id) {
-            upsertSessionSummary(childSession);
-            ensureSessionState(childSession.id);
-            renderSessions();
-        }
-        if (result?.session_storage) {
-            state.sessionStorage = result.session_storage;
-            updateSessionStorageSummary(state.sessionStorage);
-        }
-        clearPendingAttachments();
-        showToast('Sub job started', {
-            tone: 'success',
-            durationMs: 2200
-        });
-        await refreshRemoteStreams({ force: true });
-        if (result?.stream_id && childSession?.id) {
-            startStreamMonitor({
-                id: result.stream_id,
-                session_id: childSession.id,
-                started_at: result?.started_at
-            });
-        }
-        const parentStream = getSessionStream(parentSessionId);
-        if (parentStream) {
-            setSessionStatus(parentSessionId, buildActiveStreamStatus(parentStream.processRunning));
-        } else if (state.remoteStreamSessions?.has(parentSessionId)) {
-            syncRemoteActiveSessionStatus();
-        } else {
-            setSessionStatus(parentSessionId, 'Idle');
-        }
-    } catch (error) {
-        const message = normalizeError(error, 'Failed to start sub job.');
-        setSessionStatus(parentSessionId, message, true);
-        showToast(`Sub job failed: ${message}`, {
-            tone: 'error',
-            durationMs: 4200
-        });
-        if (state.activeSessionId === parentSessionId) {
-            const latestInput = document.getElementById('codex-chat-input');
-            if (latestInput && latestInput.value === '') {
-                latestInput.value = draftPrompt;
-                latestInput.focus();
-            }
-        }
-    } finally {
-        syncActiveSessionControls();
-    }
 }
 
 function setPlanModeToggleState(nextState) {

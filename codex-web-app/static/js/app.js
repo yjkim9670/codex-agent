@@ -37,10 +37,12 @@ const terminalState = {
     sessions: [],
     activeSessionId: null,
     overlayOpen: false,
+    surface: 'overlay',
     runtimePromise: null,
     terminal: null,
     fitAddon: null,
     mountedSessionId: null,
+    mountedShell: null,
     streamSource: null,
     streamSessionId: null,
     streamReconnectTimer: null,
@@ -54,6 +56,7 @@ const terminalState = {
     inputFlushTimer: null,
     resizeTimerId: null,
     resizeObserver: null,
+    resizeObservedShell: null,
     viewportRefreshFrameId: null,
     viewportRefreshTimerId: null,
     viewportRefreshNeedsFocus: false,
@@ -187,6 +190,11 @@ const FILE_BROWSER_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_PANEL_VARIANT_WORK_MODE = 'work-mode';
 const FILE_PANEL_VARIANT_OVERLAY = 'overlay';
 const FILE_PANEL_EDIT_DISCARD_MESSAGE = '저장하지 않은 변경 사항이 있습니다. 변경 내용을 버릴까요?';
+const WORK_MODE_PANEL_MODE_KEY = 'codexWorkModePanelMode';
+const WORK_MODE_PANEL_MODE_FILE = 'file';
+const WORK_MODE_PANEL_MODE_TERMINAL = 'terminal';
+const TERMINAL_SURFACE_OVERLAY = 'overlay';
+const TERMINAL_SURFACE_WORK_MODE = 'work-mode';
 const TERMINAL_REQUEST_TIMEOUT_MS = 20000;
 const TERMINAL_INPUT_TIMEOUT_MS = 12000;
 const TERMINAL_CLOSE_TIMEOUT_MS = 20000;
@@ -378,6 +386,7 @@ let workModeFileColumnResizeState = null;
 let workModeFileHorizontalSyncLock = false;
 let workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
 let workModeMobileBrowseView = WORK_MODE_MOBILE_VIEW_LIST;
+let workModePanelMode = WORK_MODE_PANEL_MODE_FILE;
 let workModeFileColumnWidths = {
     name: WORK_MODE_FILE_COLUMN_DEFAULTS.name,
     size: WORK_MODE_FILE_COLUMN_DEFAULTS.size,
@@ -1479,6 +1488,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
     const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
+    const workModeTerminalNewTabBtn = document.getElementById('codex-work-mode-terminal-new-tab');
+    const workModeTerminalCloseTabBtn = document.getElementById('codex-work-mode-terminal-close-tab');
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeFileAddCurrentContextBtn = document.getElementById('codex-work-mode-file-add-current-context');
     const workModeFileCopyBtn = document.getElementById('codex-work-mode-file-copy');
@@ -1874,7 +1885,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeTerminalOpenBtn) {
         workModeTerminalOpenBtn.addEventListener('click', event => {
             event.preventDefault();
-            void openTerminalOverlayFromContext({
+            if (isWorkModeTerminalPanelOpen()) {
+                setWorkModePanelMode(WORK_MODE_PANEL_MODE_FILE, { persist: true });
+                return;
+            }
+            void openWorkModeTerminalPanelFromContext({
                 root: workModeFileRoot,
                 path: workModeFilePath
             }).catch(error => {
@@ -1899,7 +1914,29 @@ document.addEventListener('DOMContentLoaded', () => {
         syncHoverTooltipFromLabel(workModeFileOpenNewBtn);
     }
     if (workModeTerminalOpenBtn) {
-        syncHoverTooltipFromLabel(workModeTerminalOpenBtn, '현재 폴더 Terminal 오버레이 열기');
+        syncHoverTooltipFromLabel(workModeTerminalOpenBtn, '현재 폴더 Terminal 패널 열기');
+    }
+    if (workModeTerminalNewTabBtn) {
+        workModeTerminalNewTabBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void openNewTerminalTab(null, { surface: TERMINAL_SURFACE_WORK_MODE }).catch(error => {
+                showToast(normalizeError(error, '새 Terminal 탭을 열지 못했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        });
+    }
+    if (workModeTerminalCloseTabBtn) {
+        workModeTerminalCloseTabBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void closeTerminalTab().catch(error => {
+                showToast(normalizeError(error, 'Terminal 종료에 실패했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        });
     }
     if (workModeMobileBrowserBtn) {
         workModeMobileBrowserBtn.addEventListener('click', event => {
@@ -2425,6 +2462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_OVERLAY);
+    syncWorkModePanelModeState();
     syncTerminalOverlayState();
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
@@ -2591,7 +2629,7 @@ document.addEventListener('DOMContentLoaded', () => {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
         }
-        if (isTerminalOverlayOpen()) {
+        if (isTerminalUiOpen()) {
             scheduleTerminalViewportRefresh({ fit: true });
         }
         if (isFileBrowserOverlayOpen()) {
@@ -2602,7 +2640,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isUsageHistoryOverlayOpen()) {
             scheduleUsageHistoryOverlayRerender();
         }
-        if (isTerminalOverlayOpen()) {
+        if (isTerminalUiOpen()) {
             syncTerminalExtraKeysState();
         }
     });
@@ -3945,6 +3983,150 @@ function getWorkModeFileElements() {
     };
 }
 
+function getWorkModeTerminalElements() {
+    const preview = document.getElementById('codex-work-mode-preview');
+    const panel = document.getElementById('codex-work-mode-terminal-panel');
+    if (!preview || !panel) return null;
+    return {
+        overlay: panel,
+        card: panel,
+        body: panel.querySelector('.work-mode-terminal-body'),
+        subtitle: null,
+        tabs: document.getElementById('codex-work-mode-terminal-tabs'),
+        path: document.getElementById('codex-work-mode-terminal-path'),
+        status: document.getElementById('codex-work-mode-terminal-status'),
+        empty: document.getElementById('codex-work-mode-terminal-empty'),
+        shell: document.getElementById('codex-work-mode-terminal-shell'),
+        extraKeys: document.getElementById('codex-work-mode-terminal-extra-keys'),
+        newTabBtn: document.getElementById('codex-work-mode-terminal-new-tab'),
+        closeTabBtn: document.getElementById('codex-work-mode-terminal-close-tab'),
+        preview,
+        panel
+    };
+}
+
+function normalizeWorkModePanelMode(value) {
+    return value === WORK_MODE_PANEL_MODE_TERMINAL
+        ? WORK_MODE_PANEL_MODE_TERMINAL
+        : WORK_MODE_PANEL_MODE_FILE;
+}
+
+function readWorkModePanelModePreference() {
+    try {
+        return normalizeWorkModePanelMode(window.sessionStorage?.getItem(WORK_MODE_PANEL_MODE_KEY));
+    } catch (error) {
+        return WORK_MODE_PANEL_MODE_FILE;
+    }
+}
+
+function persistWorkModePanelModePreference(mode) {
+    try {
+        window.sessionStorage?.setItem(WORK_MODE_PANEL_MODE_KEY, normalizeWorkModePanelMode(mode));
+    } catch (error) {
+        void error;
+    }
+}
+
+function isWorkModeTerminalPanelActive() {
+    return isWorkModeEnabled() && workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL;
+}
+
+function isWorkModeTerminalPanelOpen() {
+    return isWorkModeTerminalPanelActive()
+        && !(isMobileLayout() && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT);
+}
+
+function syncWorkModePanelModeState() {
+    const elements = getWorkModeElements();
+    const fileElements = getWorkModeFileElements();
+    const terminalElements = getWorkModeTerminalElements();
+    const terminalMode = isWorkModeTerminalPanelActive();
+    const title = document.getElementById('codex-work-mode-preview-title');
+    const path = document.getElementById('codex-work-mode-file-path');
+    const terminalToggle = document.getElementById('codex-work-mode-terminal-open');
+
+    if (elements?.preview) {
+        elements.preview.classList.toggle('is-terminal-mode', terminalMode);
+    }
+    if (fileElements?.layout) {
+        fileElements.layout.setAttribute('aria-hidden', terminalMode ? 'true' : 'false');
+    }
+    if (terminalElements?.panel) {
+        terminalElements.panel.classList.toggle('is-hidden', !terminalMode);
+        terminalElements.panel.setAttribute('aria-hidden', terminalMode ? 'false' : 'true');
+    }
+
+    if (title) {
+        title.textContent = terminalMode ? 'Terminal' : 'File Preview';
+    }
+    if (path) {
+        if (terminalMode) {
+            const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+            const launchContext = getTerminalLaunchContext();
+            const displayPath = activeSession?.displayPath || buildTerminalLaunchContextDisplayPath(launchContext);
+            path.textContent = displayPath;
+            setHoverTooltip(path, activeSession?.cwd || displayPath);
+        } else {
+            setFilePanelPathLabel(path, workModeFilePath);
+        }
+    }
+    if (terminalToggle) {
+        const label = terminalMode ? 'File Preview로 전환' : '현재 폴더 Terminal 패널 열기';
+        terminalToggle.classList.toggle('is-file-toggle', terminalMode);
+        terminalToggle.classList.toggle('is-active', terminalMode);
+        terminalToggle.setAttribute('aria-pressed', terminalMode ? 'true' : 'false');
+        terminalToggle.setAttribute('aria-label', label);
+        terminalToggle.setAttribute('title', label);
+        setIconButtonScreenReaderText(terminalToggle, label);
+        syncHoverTooltipFromLabel(terminalToggle, label);
+    }
+    if (elements?.mobileBrowserBtn) {
+        const mobileBrowserLabel = terminalMode ? 'Terminal로 이동' : '브라우저로 이동';
+        elements.mobileBrowserBtn.classList.toggle('is-terminal-target', terminalMode);
+        elements.mobileBrowserBtn.setAttribute('aria-label', mobileBrowserLabel);
+        elements.mobileBrowserBtn.setAttribute('title', mobileBrowserLabel);
+        syncHoverTooltipFromLabel(elements.mobileBrowserBtn, mobileBrowserLabel);
+    }
+}
+
+function suspendTerminalUiConnection() {
+    stopTerminalPolling();
+    closeTerminalEventStream({
+        clearSession: true,
+        resetReconnect: true
+    });
+    cancelTerminalViewportRefresh();
+    clearTerminalExtraKeyModifiers();
+    if (terminalState.inputBuffer) {
+        void flushQueuedTerminalInput();
+    }
+    hideTerminalExtraKeysForAllSurfaces();
+}
+
+function setWorkModePanelMode(mode, { persist = true } = {}) {
+    const previousMode = normalizeWorkModePanelMode(workModePanelMode);
+    const nextMode = normalizeWorkModePanelMode(mode);
+    workModePanelMode = nextMode;
+    if (persist) {
+        persistWorkModePanelModePreference(workModePanelMode);
+    }
+    if (nextMode === WORK_MODE_PANEL_MODE_TERMINAL && isWorkModeEnabled()) {
+        terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
+    }
+    syncWorkModePanelModeState();
+    if (
+        previousMode === WORK_MODE_PANEL_MODE_TERMINAL
+        && nextMode !== WORK_MODE_PANEL_MODE_TERMINAL
+        && !isTerminalOverlayOpen()
+    ) {
+        suspendTerminalUiConnection();
+    }
+    syncTerminalOverlayState();
+    if (isTerminalUiOpen()) {
+        scheduleTerminalViewportRefresh({ fit: true });
+    }
+}
+
 function normalizeWorkModeFileScrollSnapshot(value, { includeContext = false } = {}) {
     if (!value || typeof value !== 'object') return null;
     const rawTop = Number(value.top);
@@ -4431,8 +4613,13 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
 
     const showMobileBrowserButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
     if (elements?.mobileBrowserBtn) {
+        const mobileBrowserLabel = isWorkModeTerminalPanelActive() ? 'Terminal로 이동' : '브라우저로 이동';
         elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
+        elements.mobileBrowserBtn.classList.toggle('is-terminal-target', isWorkModeTerminalPanelActive());
         elements.mobileBrowserBtn.disabled = !showMobileBrowserButton;
+        elements.mobileBrowserBtn.setAttribute('aria-label', mobileBrowserLabel);
+        elements.mobileBrowserBtn.setAttribute('title', mobileBrowserLabel);
+        syncHoverTooltipFromLabel(elements.mobileBrowserBtn, mobileBrowserLabel);
         const switchSlot = elements.mobileBrowserBtn.closest('.chat-work-mode-switch-slot');
         if (switchSlot) {
             switchSlot.classList.toggle('is-hidden', !showMobileBrowserButton);
@@ -4457,6 +4644,21 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (fileElements?.backBtn) {
         fileElements.backBtn.classList.toggle('is-hidden', !showBackButton);
         fileElements.backBtn.disabled = !showBackButton;
+    }
+    syncWorkModePanelModeState();
+    if (isWorkModeTerminalPanelActive()) {
+        if (isWorkModeTerminalPanelOpen()) {
+            terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
+            if (terminalState.activeSessionId) {
+                void attachActiveTerminalSession({
+                    forceReset: terminalState.mountedSessionId !== terminalState.activeSessionId
+                });
+            } else {
+                syncTerminalOverlayState();
+            }
+        } else {
+            suspendTerminalUiConnection();
+        }
     }
     syncWorkModeFileFullscreenButtonState();
     syncWorkModeHtmlPreviewOpenButton();
@@ -5058,6 +5260,9 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         }
         stopWorkModeFileResize();
         stopWorkModeFileColumnResize();
+        if (isWorkModeTerminalPanelActive()) {
+            suspendTerminalUiConnection();
+        }
     }
 
     elements.app.classList.toggle(WORK_MODE_CLASS, wantsEnabled);
@@ -5082,14 +5287,24 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         }
         setWorkModeMobileView(workModeMobileView);
         setWorkModePreviewFullscreen(workModePreviewFullscreen);
+        syncWorkModePanelModeState();
         requestAnimationFrame(() => {
             syncWorkModeFileHorizontalScrollMetrics();
         });
         void ensureWorkModeFilePanelContent();
+        if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
+            void openWorkModeTerminalPanelFromContext(getTerminalLaunchContext()).catch(error => {
+                showToast(normalizeError(error, 'Terminal을 열지 못했습니다.'), {
+                    tone: 'error',
+                    durationMs: 4200
+                });
+            });
+        }
     } else {
         setWorkModeFileViewerFullscreen(false);
         setWorkModePreviewFullscreen(false);
         setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+        syncWorkModePanelModeState();
     }
 
     if (persist) {
@@ -5102,6 +5317,7 @@ function initializeWorkMode(isMobile) {
     workModeSplitRatio = readWorkModeSplitPreference();
     workModeFileSplitRatio = readWorkModeFileSplitPreference();
     workModeFileColumnWidths = readWorkModeFileColumnsPreference();
+    workModePanelMode = readWorkModePanelModePreference();
     initializeWorkModeFileViewState(isMobile);
     setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
     const preferred = readWorkModePreference();
@@ -5115,6 +5331,7 @@ function initializeWorkMode(isMobile) {
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
+    syncWorkModePanelModeState();
     requestAnimationFrame(() => {
         syncWorkModeFileHorizontalScrollMetrics();
     });
@@ -5137,7 +5354,11 @@ function handleWorkModeMediaChange(isMobile) {
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
     setWorkModePreviewFullscreen(workModePreviewFullscreen);
+    syncWorkModePanelModeState();
     applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+    if (isTerminalUiOpen()) {
+        scheduleTerminalViewportRefresh({ fit: true });
+    }
     requestAnimationFrame(() => {
         syncWorkModeFileHorizontalScrollMetrics();
     });
@@ -5397,7 +5618,7 @@ function syncMobileKeyboardState(isMobile = isCompactLayout()) {
     const isKeyboardOpen = isMobileKeyboardOpen(isMobile);
     setMobileKeyboardOpen(isKeyboardOpen);
     applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen });
-    if (isTerminalOverlayOpen()) {
+    if (isTerminalUiOpen()) {
         syncTerminalExtraKeysState();
         if (isKeyboardOpen) {
             scheduleTerminalViewportRefresh();
@@ -6814,7 +7035,7 @@ function saveBlobAsFile(blob, filename = 'download.bin') {
     return true;
 }
 
-function getTerminalOverlayElements() {
+function getTerminalOverlaySurfaceElements() {
     const overlay = document.getElementById('codex-terminal-overlay');
     if (!overlay) return null;
     return {
@@ -6833,9 +7054,52 @@ function getTerminalOverlayElements() {
     };
 }
 
+function normalizeTerminalSurface(value) {
+    return value === TERMINAL_SURFACE_WORK_MODE
+        ? TERMINAL_SURFACE_WORK_MODE
+        : TERMINAL_SURFACE_OVERLAY;
+}
+
+function getTerminalSurfaceElements(surface = terminalState.surface) {
+    return normalizeTerminalSurface(surface) === TERMINAL_SURFACE_WORK_MODE
+        ? getWorkModeTerminalElements()
+        : getTerminalOverlaySurfaceElements();
+}
+
+function getTerminalOverlayElements() {
+    return getTerminalSurfaceElements(resolveActiveTerminalSurface());
+}
+
 function isTerminalOverlayOpen() {
     const overlay = document.getElementById('codex-terminal-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function isTerminalUiOpen() {
+    return isTerminalOverlayOpen() || isWorkModeTerminalPanelOpen();
+}
+
+function resolveActiveTerminalSurface() {
+    if (isTerminalOverlayOpen()) return TERMINAL_SURFACE_OVERLAY;
+    if (isWorkModeTerminalPanelOpen()) return TERMINAL_SURFACE_WORK_MODE;
+    return normalizeTerminalSurface(terminalState.surface);
+}
+
+function hideTerminalExtraKeysForSurface(elements) {
+    const container = elements?.extraKeys;
+    if (container instanceof Element) {
+        container.classList.add('is-hidden');
+        container.classList.remove('is-mobile-visible', 'is-disabled');
+        container.setAttribute('aria-hidden', 'true');
+    }
+    if (elements?.body instanceof HTMLElement) {
+        elements.body.style.setProperty('--terminal-overlay-extra-keys-reserved-space', '0px');
+    }
+}
+
+function hideTerminalExtraKeysForAllSurfaces() {
+    hideTerminalExtraKeysForSurface(getTerminalSurfaceElements(TERMINAL_SURFACE_OVERLAY));
+    hideTerminalExtraKeysForSurface(getTerminalSurfaceElements(TERMINAL_SURFACE_WORK_MODE));
 }
 
 function normalizeTerminalLaunchContext(value) {
@@ -6993,7 +7257,7 @@ function getTerminalVisibleRowMetrics() {
 
 function ensureTerminalCursorVisible({ focus = false } = {}) {
     const terminal = terminalState.terminal;
-    if (!terminal || !isTerminalOverlayOpen()) {
+    if (!terminal || !isTerminalUiOpen()) {
         terminalState.viewportRefreshNeedsFocus = false;
         return;
     }
@@ -7040,7 +7304,7 @@ function ensureTerminalCursorVisible({ focus = false } = {}) {
 }
 
 function scheduleTerminalViewportRefresh({ focus = false, fit = false } = {}) {
-    if (!terminalState.terminal || !isTerminalOverlayOpen()) return;
+    if (!terminalState.terminal || !isTerminalUiOpen()) return;
     if (focus) {
         terminalState.viewportRefreshNeedsFocus = true;
     }
@@ -7052,7 +7316,7 @@ function scheduleTerminalViewportRefresh({ focus = false, fit = false } = {}) {
     }
     terminalState.viewportRefreshFrameId = requestAnimationFrame(() => {
         terminalState.viewportRefreshFrameId = null;
-        if (!terminalState.terminal || !isTerminalOverlayOpen()) {
+        if (!terminalState.terminal || !isTerminalUiOpen()) {
             terminalState.viewportRefreshNeedsFocus = false;
             return;
         }
@@ -7066,7 +7330,7 @@ function scheduleTerminalViewportRefresh({ focus = false, fit = false } = {}) {
         }
         terminalState.viewportRefreshTimerId = window.setTimeout(() => {
             terminalState.viewportRefreshTimerId = null;
-            if (!terminalState.terminal || !isTerminalOverlayOpen()) {
+            if (!terminalState.terminal || !isTerminalUiOpen()) {
                 terminalState.viewportRefreshNeedsFocus = false;
                 return;
             }
@@ -7195,12 +7459,18 @@ function syncTerminalExtraKeysOverlayMetrics({ visible = false } = {}) {
 }
 
 function syncTerminalExtraKeysState() {
+    const activeSurface = resolveActiveTerminalSurface();
+    [TERMINAL_SURFACE_OVERLAY, TERMINAL_SURFACE_WORK_MODE].forEach(surface => {
+        if (surface !== activeSurface) {
+            hideTerminalExtraKeysForSurface(getTerminalSurfaceElements(surface));
+        }
+    });
     const elements = getTerminalOverlayElements();
     const container = elements?.extraKeys;
     if (!(container instanceof Element)) return;
     const activeSession = getTerminalSessionById(terminalState.activeSessionId);
     const shouldShow = shouldShowTerminalExtraKeys();
-    const isVisible = shouldShow && isTerminalOverlayOpen();
+    const isVisible = shouldShow && isTerminalUiOpen();
     const wasVisible = container.classList.contains('is-mobile-visible');
     const hasActiveSession = Boolean(activeSession?.id);
     container.classList.toggle('is-hidden', !isVisible);
@@ -7450,6 +7720,7 @@ function syncTerminalOverlayState() {
     if (elements.shell) {
         elements.shell.classList.toggle('is-hidden', !hasSessions);
     }
+    syncWorkModePanelModeState();
     syncTerminalExtraKeysState();
 }
 
@@ -7672,13 +7943,64 @@ function queueTerminalResize(sessionId, cols, rows) {
     }, TERMINAL_RESIZE_DEBOUNCE_MS);
 }
 
+function attachTerminalShellFocusListeners(shell) {
+    if (!(shell instanceof HTMLElement)) return;
+    if (shell.dataset.terminalFocusBound === 'true') return;
+    const focusTerminal = () => {
+        focusActiveTerminalInstance();
+    };
+    shell.addEventListener('mousedown', focusTerminal);
+    shell.addEventListener('touchstart', focusTerminal, { passive: true });
+    shell.dataset.terminalFocusBound = 'true';
+}
+
+function observeTerminalShell(shell) {
+    if (!(shell instanceof Element)) return;
+    if (typeof ResizeObserver !== 'function') return;
+    if (!terminalState.resizeObserver) {
+        terminalState.resizeObserver = new ResizeObserver(() => {
+            if (!isTerminalUiOpen()) return;
+            scheduleTerminalViewportRefresh({ fit: true });
+        });
+    }
+    if (terminalState.resizeObservedShell && terminalState.resizeObservedShell !== shell) {
+        try {
+            terminalState.resizeObserver.unobserve(terminalState.resizeObservedShell);
+        } catch (error) {
+            void error;
+        }
+        terminalState.resizeObservedShell = null;
+    }
+    if (terminalState.resizeObservedShell !== shell) {
+        terminalState.resizeObserver.observe(shell);
+        terminalState.resizeObservedShell = shell;
+    }
+}
+
+function mountTerminalInstanceToShell(shell) {
+    if (!(shell instanceof HTMLElement)) return false;
+    const terminal = terminalState.terminal;
+    if (!terminal) return false;
+    attachTerminalShellFocusListeners(shell);
+    observeTerminalShell(shell);
+    const terminalElement = terminal.element;
+    if (terminalElement instanceof HTMLElement && terminalElement.parentElement !== shell) {
+        shell.appendChild(terminalElement);
+    }
+    terminalState.mountedShell = shell;
+    shell.classList.remove('is-loading');
+    return true;
+}
+
 async function ensureTerminalInstance() {
     const elements = getTerminalOverlayElements();
     if (!elements?.shell) {
-        throw new Error('terminal overlay shell not found');
+        throw new Error('terminal shell not found');
     }
     if (terminalState.terminal && terminalState.fitAddon) {
+        mountTerminalInstanceToShell(elements.shell);
         syncTerminalTheme();
+        scheduleTerminalViewportRefresh({ fit: true });
         return terminalState.terminal;
     }
     elements.shell.classList.add('is-loading');
@@ -7703,15 +8025,7 @@ async function ensureTerminalInstance() {
     const fitAddon = new runtime.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(elements.shell);
-    const focusTerminal = () => {
-        try {
-            terminal.focus();
-        } catch (error) {
-            void error;
-        }
-    };
-    elements.shell.addEventListener('mousedown', focusTerminal);
-    elements.shell.addEventListener('touchstart', focusTerminal, { passive: true });
+    attachTerminalShellFocusListeners(elements.shell);
     if (typeof terminal.attachCustomKeyEventHandler === 'function') {
         terminal.attachCustomKeyEventHandler(event => {
             if (event.type === 'keydown' && isPlainShiftTabEvent(event)) {
@@ -7737,24 +8051,19 @@ async function ensureTerminalInstance() {
     });
     terminalState.terminal = terminal;
     terminalState.fitAddon = fitAddon;
+    terminalState.mountedShell = elements.shell;
     elements.shell.classList.remove('is-loading');
 
-    if (typeof ResizeObserver === 'function' && !terminalState.resizeObserver) {
-        terminalState.resizeObserver = new ResizeObserver(() => {
-            if (!isTerminalOverlayOpen()) return;
-            scheduleTerminalViewportRefresh({ fit: true });
-        });
-        terminalState.resizeObserver.observe(elements.shell);
-    }
+    observeTerminalShell(elements.shell);
     syncTerminalTheme();
     scheduleTerminalViewportRefresh({ fit: true });
     return terminal;
 }
 
 function scheduleTerminalFit() {
-    if (!terminalState.fitAddon || !isTerminalOverlayOpen()) return;
+    if (!terminalState.fitAddon || !isTerminalUiOpen()) return;
     requestAnimationFrame(() => {
-        if (!terminalState.fitAddon || !isTerminalOverlayOpen()) return;
+        if (!terminalState.fitAddon || !isTerminalUiOpen()) return;
         if (terminalState.terminal) {
             terminalState.terminal.options.fontSize = getTerminalFontSize();
             terminalState.terminal.options.fontFamily = TERMINAL_FONT_FAMILY;
@@ -7906,7 +8215,7 @@ function handleTerminalStreamEnd(sessionId, rawData) {
 function scheduleTerminalStreamReconnect(sessionId) {
     const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!targetId) return;
-    if (!isTerminalOverlayOpen() || terminalState.activeSessionId !== targetId) return;
+    if (!isTerminalUiOpen() || terminalState.activeSessionId !== targetId) return;
     if (terminalState.streamReconnectTimer !== null) return;
     const activeSession = getTerminalSessionById(targetId);
     if (!activeSession?.processRunning) return;
@@ -7918,7 +8227,7 @@ function scheduleTerminalStreamReconnect(sessionId) {
     terminalState.streamReconnectTimer = window.setTimeout(() => {
         terminalState.streamReconnectTimer = null;
         const currentSession = getTerminalSessionById(targetId);
-        if (!currentSession?.processRunning || !isTerminalOverlayOpen() || terminalState.activeSessionId !== targetId) {
+        if (!currentSession?.processRunning || !isTerminalUiOpen() || terminalState.activeSessionId !== targetId) {
             syncTerminalOverlayState();
             return;
         }
@@ -7929,7 +8238,7 @@ function scheduleTerminalStreamReconnect(sessionId) {
 
 function connectTerminalEventStream(sessionId, offset = null) {
     const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
-    if (!targetId || !isTerminalOverlayOpen()) {
+    if (!targetId || !isTerminalUiOpen()) {
         closeTerminalEventStream();
         return false;
     }
@@ -7999,11 +8308,12 @@ async function loadTerminalSessions({ preserveActive = true, preferSessionId = '
 }
 
 function openTerminalOverlay() {
-    const elements = getTerminalOverlayElements();
+    const elements = getTerminalSurfaceElements(TERMINAL_SURFACE_OVERLAY);
     if (!elements) return;
     if (!terminalState.launchContext) {
         terminalState.launchContext = normalizeTerminalLaunchContext(resolveDefaultTerminalLaunchContext());
     }
+    terminalState.surface = TERMINAL_SURFACE_OVERLAY;
     terminalState.overlayOpen = true;
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
@@ -8016,7 +8326,7 @@ function openTerminalOverlay() {
 }
 
 function closeTerminalOverlay() {
-    const elements = getTerminalOverlayElements();
+    const elements = getTerminalSurfaceElements(TERMINAL_SURFACE_OVERLAY);
     if (!elements) return;
     terminalState.overlayOpen = false;
     stopTerminalPolling();
@@ -8040,6 +8350,13 @@ function closeTerminalOverlay() {
     ) {
         document.body.classList.remove('is-overlay-open');
     }
+    hideTerminalExtraKeysForSurface(elements);
+    if (isWorkModeTerminalPanelOpen()) {
+        terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
+        void attachActiveTerminalSession({
+            forceReset: terminalState.mountedSessionId !== terminalState.activeSessionId
+        });
+    }
     syncTerminalExtraKeysState();
 }
 
@@ -8052,7 +8369,7 @@ function stopTerminalPolling() {
 }
 
 function scheduleTerminalPoll(delayMs = TERMINAL_POLL_MS) {
-    if (!isTerminalOverlayOpen()) return;
+    if (!isTerminalUiOpen()) return;
     const activeSession = getTerminalSessionById(terminalState.activeSessionId);
     if (!activeSession) return;
     if (terminalState.pollTimer !== null) {
@@ -8118,7 +8435,7 @@ async function attachActiveTerminalSession({ forceReset = false } = {}) {
 }
 
 async function pollActiveTerminalSession() {
-    if (terminalState.pollInFlight || !isTerminalOverlayOpen()) return;
+    if (terminalState.pollInFlight || !isTerminalUiOpen()) return;
     const activeSession = getTerminalSessionById(terminalState.activeSessionId);
     if (!activeSession) return;
     terminalState.pollInFlight = true;
@@ -8161,7 +8478,7 @@ async function setActiveTerminalSession(sessionId, { attach = true, forceReset =
     }
     terminalState.activeSessionId = targetId;
     syncTerminalOverlayState();
-    if (attach && isTerminalOverlayOpen()) {
+    if (attach && isTerminalUiOpen()) {
         await attachActiveTerminalSession({ forceReset });
     }
     return true;
@@ -8193,7 +8510,7 @@ function resolveDefaultTerminalLaunchContext() {
     };
 }
 
-async function openNewTerminalTab(context = null) {
+async function openNewTerminalTab(context = null, { surface = null } = {}) {
     const requestedContext = normalizeTerminalLaunchContext(
         context
         || terminalState.launchContext
@@ -8202,7 +8519,18 @@ async function openNewTerminalTab(context = null) {
     const root = normalizeFileBrowserRoot(requestedContext?.root);
     const path = normalizeFileBrowserRelativePath(requestedContext?.path);
     setTerminalLaunchContext(requestedContext);
-    openTerminalOverlay();
+    const targetSurface = surface
+        ? normalizeTerminalSurface(surface)
+        : resolveActiveTerminalSurface();
+    if (targetSurface === TERMINAL_SURFACE_WORK_MODE && isWorkModeEnabled()) {
+        setWorkModePanelMode(WORK_MODE_PANEL_MODE_TERMINAL, { persist: true });
+        terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
+        if (isMobileLayout() && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT) {
+            setWorkModeMobileView(normalizeWorkModeMobileBrowseView(workModeMobileBrowseView));
+        }
+    } else {
+        openTerminalOverlay();
+    }
     syncTerminalOverlayState();
     const elements = getTerminalOverlayElements();
     if (elements?.status) {
@@ -8247,6 +8575,45 @@ async function openTerminalOverlayFromContext(context = null) {
     );
     setTerminalLaunchContext(requestedContext);
     openTerminalOverlay();
+    await loadTerminalSessions({
+        preserveActive: true,
+        attachActive: false
+    }).catch(() => []);
+    const matchingSession = findTerminalSessionByContext(requestedContext?.root, requestedContext?.path);
+    if (matchingSession) {
+        await setActiveTerminalSession(matchingSession.id, {
+            attach: true,
+            forceReset: terminalState.mountedSessionId !== matchingSession.id
+        });
+        return matchingSession;
+    }
+    if (terminalState.activeSessionId) {
+        const activeSession = getTerminalSessionById(terminalState.activeSessionId);
+        if (activeSession) {
+            await setActiveTerminalSession(activeSession.id, {
+                attach: true,
+                forceReset: terminalState.mountedSessionId !== activeSession.id
+            });
+            return activeSession;
+        }
+    }
+    syncTerminalOverlayState();
+    return null;
+}
+
+async function openWorkModeTerminalPanelFromContext(context = null) {
+    if (!isWorkModeEnabled()) {
+        return openTerminalOverlayFromContext(context);
+    }
+    const requestedContext = normalizeTerminalLaunchContext(
+        context || resolveDefaultTerminalLaunchContext()
+    );
+    setTerminalLaunchContext(requestedContext);
+    terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
+    setWorkModePanelMode(WORK_MODE_PANEL_MODE_TERMINAL, { persist: true });
+    if (isMobileLayout() && workModeMobileView === WORK_MODE_MOBILE_VIEW_CHAT) {
+        setWorkModeMobileView(normalizeWorkModeMobileBrowseView(workModeMobileBrowseView));
+    }
     await loadTerminalSessions({
         preserveActive: true,
         attachActive: false
@@ -11617,6 +11984,10 @@ function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '')
 function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = '') {
     void root;
     const elements = getWorkModeFileElements();
+    if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
+        syncWorkModePanelModeState();
+        return;
+    }
     setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
 }
 
@@ -12868,6 +13239,9 @@ function openWorkModeFileTarget(target, options = {}) {
     if (!target) return false;
     if (!confirmDiscardFilePanelEditChanges(FILE_PANEL_VARIANT_WORK_MODE)) {
         return false;
+    }
+    if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
+        setWorkModePanelMode(WORK_MODE_PANEL_MODE_FILE, { persist: true });
     }
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);

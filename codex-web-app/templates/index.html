@@ -608,7 +608,7 @@
                         </div>
                     </div>
                     <div class="work-mode-preview-heading">
-                        <div class="work-mode-preview-title">File Preview</div>
+                        <div class="work-mode-preview-title" id="codex-work-mode-preview-title">File Preview</div>
                         <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
                     </div>
                     <div class="work-mode-preview-actions">
@@ -638,10 +638,10 @@
                                 class="btn ghost icon-only work-mode-preview-terminal"
                                 type="button"
                                 id="codex-work-mode-terminal-open"
-                                aria-label="현재 폴더 Terminal 오버레이 열기"
-                                title="현재 폴더 Terminal 오버레이 열기"
+                                aria-label="현재 폴더 Terminal 패널 열기"
+                                title="현재 폴더 Terminal 패널 열기"
                             >
-                                <span class="sr-only">현재 폴더 Terminal 오버레이 열기</span>
+                                <span class="sr-only">현재 폴더 Terminal 패널 열기</span>
                             </button>
                             <button
                                 class="btn ghost icon-only work-mode-preview-fullscreen"
@@ -668,6 +668,40 @@
                     </div>
                 </div>
                 {{ render_file_panel('codex-work-mode-file') }}
+                <div class="work-mode-terminal-panel is-hidden" id="codex-work-mode-terminal-panel" aria-hidden="true">
+                    <div class="terminal-overlay-body work-mode-terminal-body">
+                        <div class="terminal-overlay-tabs-wrap work-mode-terminal-tabs-wrap">
+                            <div class="terminal-overlay-tabs work-mode-terminal-tabs" id="codex-work-mode-terminal-tabs" role="tablist" aria-label="Terminal tabs"></div>
+                        </div>
+                        <div class="terminal-overlay-session-bar work-mode-terminal-session-bar">
+                            <div class="terminal-overlay-path work-mode-terminal-path" id="codex-work-mode-terminal-path">$workspace</div>
+                            <div class="terminal-overlay-status work-mode-terminal-status" id="codex-work-mode-terminal-status">Terminal 세션을 불러오는 중...</div>
+                            <div class="terminal-overlay-session-actions work-mode-terminal-session-actions">
+                                <button
+                                    class="btn ghost icon-only terminal-overlay-new-tab work-mode-terminal-new-tab"
+                                    type="button"
+                                    id="codex-work-mode-terminal-new-tab"
+                                    aria-label="현재 폴더 기준 새 Terminal 탭 생성"
+                                    title="현재 폴더 기준 새 Terminal 탭 생성"
+                                >
+                                    <span class="sr-only">현재 폴더 기준 새 Terminal 탭 생성</span>
+                                </button>
+                                <button
+                                    class="btn ghost icon-only terminal-overlay-close-tab work-mode-terminal-close-tab"
+                                    type="button"
+                                    id="codex-work-mode-terminal-close-tab"
+                                    aria-label="현재 Terminal 종료"
+                                    title="현재 Terminal 종료"
+                                >
+                                    <span class="sr-only">현재 Terminal 종료</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="terminal-overlay-empty work-mode-terminal-empty is-hidden" id="codex-work-mode-terminal-empty">열린 Terminal 탭이 없습니다. + 버튼으로 현재 폴더 세션을 생성하세요.</div>
+                        <div class="terminal-overlay-terminal-shell work-mode-terminal-shell" id="codex-work-mode-terminal-shell"></div>
+                    </div>
+                    <div class="terminal-overlay-extra-keys work-mode-terminal-extra-keys is-hidden" id="codex-work-mode-terminal-extra-keys" aria-label="Terminal extra keys"></div>
+                </div>
             </section>
         </main>
     </div>
@@ -1054,6 +1088,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=148"></script>
+    <script src="/static/js/app.js?v=149"></script>
 </body>
 </html>

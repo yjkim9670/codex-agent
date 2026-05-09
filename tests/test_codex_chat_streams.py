@@ -105,6 +105,47 @@ def test_append_message_preserves_created_at(isolated_codex_workspace):
     assert message['created_at'] == created_at
 
 
+def test_delete_session_message_removes_message_from_context(isolated_codex_workspace):
+    session = codex_chat.create_session('delete-message')
+    first = codex_chat.append_message(session['id'], 'user', 'remove me')
+    second = codex_chat.append_message(session['id'], 'assistant', 'keep me')
+
+    updated = codex_chat.delete_session_message(session['id'], first['id'])
+
+    assert updated is not None
+    assert updated['message_count'] == 1
+    assert [message['id'] for message in updated['messages']] == [second['id']]
+    assert updated['messages'][0]['content'] == 'keep me'
+
+    reloaded = codex_chat.get_session(session['id'])
+    assert reloaded['message_count'] == 1
+    assert reloaded['messages'][0]['id'] == second['id']
+
+
+def test_branch_session_from_message_copies_history_through_target(isolated_codex_workspace):
+    session = codex_chat.create_session('source-session')
+    first = codex_chat.append_message(session['id'], 'user', 'first prompt')
+    second = codex_chat.append_message(session['id'], 'assistant', 'first answer')
+    third = codex_chat.append_message(session['id'], 'user', 'later prompt')
+
+    branched = codex_chat.branch_session_from_message(session['id'], second['id'])
+
+    assert branched is not None
+    assert branched['id'] != session['id']
+    assert branched['parent_session_id'] == session['id']
+    assert branched['branch_source_message_id'] == second['id']
+    assert branched['message_count'] == 2
+    assert [message['content'] for message in branched['messages']] == ['first prompt', 'first answer']
+    assert branched['messages'][0]['id'] != first['id']
+    assert branched['messages'][1]['id'] != second['id']
+    assert branched['messages'][0]['branched_from_message_id'] == first['id']
+    assert branched['messages'][1]['branched_from_message_id'] == second['id']
+
+    source = codex_chat.get_session(session['id'])
+    assert source['message_count'] == 3
+    assert source['messages'][-1]['id'] == third['id']
+
+
 def test_merge_message_lists_does_not_wrap_message_payload():
     existing = [{
         'id': 'message-1',

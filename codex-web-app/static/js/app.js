@@ -176,6 +176,18 @@ const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
+const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 96 * 1024;
+const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 96 * 1024;
+const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 1800;
+const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 48 * 1024;
+const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 600;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 96 * 1024;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 1200;
+const FILE_BROWSER_HTML_PREVIEW_MAX_CHARS = 256 * 1024;
+const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
+const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 64 * 1024;
+const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 1200;
+const FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES = 60;
 const FILE_BROWSER_SPREADSHEET_EXTENSIONS = new Set([
     '.xls',
     '.xlsb',
@@ -4818,13 +4830,13 @@ function updateFilePanelActionButtonLabel(button, label) {
     button.setAttribute('title', normalizedLabel);
 }
 
-function setFilePanelViewerMetaText(elements, text, { truncated = false } = {}) {
+function setFilePanelViewerMetaText(elements, text, { truncated = false, noteText = '' } = {}) {
     if (!elements?.viewerMeta) return;
     elements.viewerMeta.textContent = String(text || '');
-    if (truncated) {
+    if (truncated || noteText) {
         const note = document.createElement('span');
         note.className = 'file-browser-truncated-note';
-        note.textContent = '미리보기 용량 제한으로 일부만 표시됩니다.';
+        note.textContent = String(noteText || '미리보기 용량 제한으로 일부만 표시됩니다.');
         elements.viewerMeta.appendChild(note);
     }
 }
@@ -4857,7 +4869,7 @@ function hydrateFilePanelEditStateFromResult(variant, result, { root = null } = 
     state.saving = false;
     state.modifiedNs = String(result?.modified_ns || '').trim();
     state.previewResult = result && typeof result === 'object' ? { ...result } : null;
-    state.editBuffer = typeof result?.content === 'string' ? result.content : '';
+    state.editBuffer = state.editable && typeof result?.content === 'string' ? result.content : '';
     syncFilePanelViewerActionState(normalizedVariant);
     syncFilePanelSelectionBar(normalizedVariant);
 }
@@ -13718,7 +13730,8 @@ async function fetchFileBrowserFile(root, path) {
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS,
         body: JSON.stringify({
             root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path)
+            path: normalizeFileBrowserRelativePath(path),
+            preview_max_bytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
         })
     });
 }
@@ -14802,8 +14815,279 @@ function isMarkdownLanguage(language) {
     return String(language || '').trim().toLowerCase() === 'markdown';
 }
 
+function normalizeFileBrowserPreviewText(content) {
+    return String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function getFileBrowserPreviewLineCount(content, fallbackLineCount = null) {
+    const fallback = Number(fallbackLineCount);
+    if (Number.isFinite(fallback) && fallback > 0) {
+        return Math.max(1, Math.floor(fallback));
+    }
+    const text = String(content || '');
+    if (!text) return 0;
+    let count = 1;
+    for (let index = 0; index < text.length; index += 1) {
+        if (text[index] === '\n') {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+function hasFileBrowserLongPreviewLine(content, threshold = FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD) {
+    const text = String(content || '');
+    const maxLength = Math.max(1, Number(threshold) || FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD);
+    let currentLength = 0;
+    for (let index = 0; index < text.length; index += 1) {
+        if (text[index] === '\n') {
+            currentLength = 0;
+            continue;
+        }
+        currentLength += 1;
+        if (currentLength > maxLength) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function shouldUseLargeFileBrowserTextPreview(content, {
+    lineCount = null,
+    isMarkdown = false,
+    truncated = false,
+    size = null
+} = {}) {
+    const text = String(content || '');
+    if (!text) return false;
+    if (truncated) return true;
+    const fileSize = Number(size);
+    if (Number.isFinite(fileSize) && fileSize > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
+    const normalizedLineCount = getFileBrowserPreviewLineCount(text, lineCount);
+    if (text.length > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
+    if (normalizedLineCount > FILE_BROWSER_TEXT_DETAIL_MAX_LINES) return true;
+    if (text.length > FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD && hasFileBrowserLongPreviewLine(text)) return true;
+    if (isMarkdown) {
+        return text.length > FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS
+            || normalizedLineCount > FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES;
+    }
+    return false;
+}
+
+function shouldHighlightFileBrowserSource(content, lineCount, isScript) {
+    if (!isScript) return false;
+    const text = String(content || '');
+    return text.length <= FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS
+        && getFileBrowserPreviewLineCount(text, lineCount) <= FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES;
+}
+
+function normalizeFileBrowserPreviewSlice(content) {
+    return String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function findFileBrowserLineStartIndex(content, lineNumber) {
+    const text = String(content || '');
+    const targetLine = normalizeSourceLineNumber(lineNumber);
+    if (!targetLine || targetLine <= 1) return 0;
+    let currentLine = 1;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (char !== '\n' && char !== '\r') continue;
+        if (char === '\r' && text[index + 1] === '\n') {
+            index += 1;
+        }
+        currentLine += 1;
+        if (currentLine >= targetLine) {
+            return index + 1;
+        }
+    }
+    return -1;
+}
+
+function isFileBrowserLineBreakChar(char) {
+    return char === '\n' || char === '\r';
+}
+
+function getFileBrowserLineBreakEndIndex(text, index) {
+    if (text[index] === '\r' && text[index + 1] === '\n') {
+        return index + 2;
+    }
+    return index + 1;
+}
+
+function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLineCount = null } = {}) {
+    const source = String(content || '');
+    const requestedLine = normalizeSourceLineNumber(highlightLine);
+    const knownLineCount = Number(totalLineCount);
+    const totalLines = Number.isFinite(knownLineCount) && knownLineCount > 0
+        ? Math.max(1, Math.floor(knownLineCount))
+        : getFileBrowserPreviewLineCount(source);
+    let startLine = 1;
+    if (requestedLine && requestedLine <= totalLines) {
+        startLine = Math.max(1, requestedLine - FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES);
+    }
+
+    let startIndex = findFileBrowserLineStartIndex(source, startLine);
+    if (startIndex < 0) {
+        startLine = 1;
+        startIndex = 0;
+    }
+
+    let index = startIndex;
+    let currentLine = startLine;
+    let lineStartIndex = startIndex;
+    let visibleLineCount = source ? 1 : 0;
+    let targetStartIndex = -1;
+    let targetEndIndex = -1;
+    let clippedByLineLimit = false;
+    let clippedByCharLimit = false;
+    const maxEndIndex = Math.min(source.length, startIndex + FILE_BROWSER_LARGE_TEXT_MAX_CHARS);
+
+    while (index < source.length && index < maxEndIndex && visibleLineCount > 0) {
+        if (!isFileBrowserLineBreakChar(source[index])) {
+            index += 1;
+            continue;
+        }
+
+        const separatorStartIndex = index;
+        const separatorEndIndex = getFileBrowserLineBreakEndIndex(source, index);
+        if (currentLine === requestedLine) {
+            targetStartIndex = lineStartIndex;
+            targetEndIndex = separatorStartIndex;
+        }
+        if (visibleLineCount >= FILE_BROWSER_LARGE_TEXT_MAX_LINES) {
+            clippedByLineLimit = true;
+            index = separatorStartIndex;
+            break;
+        }
+        if (separatorEndIndex > maxEndIndex) {
+            clippedByCharLimit = true;
+            index = separatorStartIndex;
+            break;
+        }
+        index = separatorEndIndex;
+        currentLine += 1;
+        visibleLineCount += 1;
+        lineStartIndex = index;
+    }
+
+    if (index >= maxEndIndex && index < source.length) {
+        clippedByCharLimit = true;
+    }
+    const endIndex = Math.max(startIndex, index);
+    if (requestedLine && currentLine === requestedLine && targetStartIndex < 0 && lineStartIndex <= endIndex) {
+        targetStartIndex = lineStartIndex;
+        targetEndIndex = endIndex;
+    }
+
+    const hasTarget = targetStartIndex >= startIndex
+        && targetEndIndex >= targetStartIndex
+        && targetStartIndex <= endIndex;
+    const endLine = visibleLineCount > 0 ? startLine + visibleLineCount - 1 : startLine;
+    const text = normalizeFileBrowserPreviewSlice(source.slice(startIndex, endIndex));
+    const prefixText = hasTarget
+        ? normalizeFileBrowserPreviewSlice(source.slice(startIndex, targetStartIndex))
+        : '';
+    const targetText = hasTarget
+        ? normalizeFileBrowserPreviewSlice(source.slice(targetStartIndex, targetEndIndex)) || ' '
+        : '';
+    const suffixText = hasTarget
+        ? normalizeFileBrowserPreviewSlice(source.slice(targetEndIndex, endIndex))
+        : '';
+
+    return {
+        text,
+        prefixText,
+        targetText,
+        suffixText,
+        totalLines,
+        startLine,
+        endLine,
+        requestedLine,
+        targetRelativeIndex: hasTarget ? requestedLine - startLine : -1,
+        prefixOmitted: startIndex > 0,
+        suffixOmitted: clippedByLineLimit || clippedByCharLimit || endIndex < source.length,
+        lineClipped: clippedByCharLimit
+    };
+}
+
+function appendFileBrowserLargeTextContent(codeElement, slice) {
+    if (!(codeElement instanceof HTMLElement) || !slice) return null;
+    if (!slice.targetText) {
+        codeElement.textContent = slice.text || '';
+        return null;
+    }
+    if (slice.prefixText) {
+        codeElement.appendChild(document.createTextNode(slice.prefixText));
+    }
+    const target = document.createElement('span');
+    target.className = 'file-browser-large-text-target-line';
+    target.dataset.lineNumber = String(slice.requestedLine || '');
+    target.textContent = slice.targetText;
+    codeElement.appendChild(target);
+    if (slice.suffixText) {
+        codeElement.appendChild(document.createTextNode(slice.suffixText));
+    }
+    return target;
+}
+
+function buildFileBrowserLargeTextViewer(content, {
+    language = '',
+    highlightLine = null,
+    totalLineCount = null,
+    truncated = false
+} = {}) {
+    const slice = buildFileBrowserLargeTextSlice(content, { highlightLine, totalLineCount });
+    const wrapper = document.createElement('section');
+    wrapper.className = 'file-browser-large-text';
+    if (language) {
+        wrapper.dataset.language = String(language || '');
+    }
+
+    const note = document.createElement('div');
+    note.className = 'file-browser-large-text-note';
+    const lineCount = Math.max(slice.totalLines, Number(totalLineCount) || 0);
+    const displayedRange = slice.startLine === slice.endLine
+        ? `${slice.startLine}줄`
+        : `${slice.startLine}-${slice.endLine}줄`;
+    const noteParts = [
+        '대용량 텍스트라 경량 미리보기로 표시합니다.',
+        `${displayedRange} 표시`
+    ];
+    if (lineCount > 0) {
+        noteParts.push(`미리보기 ${lineCount}줄 기준`);
+    }
+    if (slice.prefixOmitted || slice.suffixOmitted || truncated) {
+        noteParts.push('전체 내용은 복사 또는 다운로드로 확인하세요.');
+    }
+    if (slice.requestedLine && slice.targetRelativeIndex < 0) {
+        noteParts.push(
+            truncated
+                ? '요청 라인이 현재 미리보기 범위를 벗어났습니다.'
+                : `요청한 ${slice.requestedLine}줄을 찾지 못했습니다.`
+        );
+    }
+    note.textContent = noteParts.join(' · ');
+    wrapper.appendChild(note);
+
+    const pre = document.createElement('pre');
+    pre.className = 'file-browser-large-text-content';
+    const code = document.createElement('code');
+    const targetElement = appendFileBrowserLargeTextContent(code, slice);
+    pre.appendChild(code);
+    wrapper.appendChild(pre);
+
+    return {
+        element: wrapper,
+        lineCount,
+        highlightFound: Boolean(targetElement),
+        targetElement,
+        slice
+    };
+}
+
 function buildFileBrowserSourceViewer(content, { language = '', isScript = false, highlightLine = null } = {}) {
-    const normalizedContent = String(content || '').replace(/\r\n/g, '\n');
+    const normalizedContent = normalizeFileBrowserPreviewText(content);
     const lines = normalizedContent.split('\n');
     const lineCount = Math.max(1, lines.length);
     const source = document.createElement('div');
@@ -14831,9 +15115,11 @@ function buildFileBrowserSourceViewer(content, { language = '', isScript = false
         line.className = 'file-browser-source-line-content';
         if (isScript) {
             const highlightedLine = highlightScriptContent(lineText, language);
-            line.innerHTML = highlightedLine || '&nbsp;';
+            if (highlightedLine) {
+                line.innerHTML = highlightedLine;
+            }
         } else {
-            line.innerHTML = lineText ? escapeHtml(lineText) : '&nbsp;';
+            line.textContent = lineText;
         }
 
         row.appendChild(number);
@@ -15324,8 +15610,21 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const isImage = isImagePreviewableFile(normalizedPath, result?.mime_type);
     const isPdf = isPdfPreviewableFile(normalizedPath, result?.mime_type);
     const text = typeof result?.content === 'string' ? result.content : '';
-    const canRenderHtmlPreview = isHtml
+    const previewLineCount = getFileBrowserPreviewLineCount(text, result?.line_count);
+    const isMarkdown = isMarkdownLanguage(language);
+    const useLargeTextPreview = shouldUseLargeFileBrowserTextPreview(text, {
+        lineCount: previewLineCount,
+        isMarkdown,
+        truncated: Boolean(result?.truncated),
+        size: result?.size
+    });
+    const normalizedText = useLargeTextPreview ? '' : normalizeFileBrowserPreviewText(text);
+    const canRenderHtmlPreview = !useLargeTextPreview
+        && isHtml
         && result?.html_previewable !== false
+        && normalizedText.length <= FILE_BROWSER_HTML_PREVIEW_MAX_CHARS
+        && previewLineCount <= FILE_BROWSER_TEXT_DETAIL_MAX_LINES
+        && !hasFileBrowserLongPreviewLine(normalizedText)
         && !containsTemplateLikeHtmlSyntax(text);
     const sizeText = formatFileBrowserSize(result?.size);
     const infoParts = [normalizedPath || '(unknown path)'];
@@ -15349,7 +15648,10 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
     hydrateFilePanelEditStateFromResult(variant, result, { root: previewRoot });
     setFilePanelViewerMetaText(elements, infoParts.join(' · '), {
-        truncated: Boolean(result?.truncated)
+        truncated: Boolean(result?.truncated),
+        noteText: useLargeTextPreview
+            ? '큰 텍스트는 성능을 위해 경량 모드로 표시됩니다.'
+            : ''
     });
 
     elements.viewerContent.innerHTML = '';
@@ -15412,6 +15714,32 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
+    if (useLargeTextPreview) {
+        const largeTextView = buildFileBrowserLargeTextViewer(text, {
+            language,
+            highlightLine: requestedLine,
+            totalLineCount: previewLineCount,
+            truncated: Boolean(result?.truncated)
+        });
+        elements.viewerContent.appendChild(largeTextView.element);
+        if (!requestedLine) return;
+        if (!largeTextView.highlightFound) {
+            showToast(`요청한 라인 ${requestedLine}을 찾을 수 없습니다. (미리보기 ${largeTextView.lineCount}줄 기준)`, {
+                tone: 'default',
+                durationMs: 3400
+            });
+            return;
+        }
+        requestAnimationFrame(() => {
+            largeTextView.targetElement?.scrollIntoView({
+                block: 'center',
+                inline: 'nearest',
+                behavior: 'smooth'
+            });
+        });
+        return;
+    }
+
     if (canRenderHtmlPreview && !requestedLine) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         if (isWorkModeViewer) {
@@ -15434,7 +15762,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
-    if (isMarkdownLanguage(language) && !requestedLine) {
+    if (isMarkdown && !requestedLine) {
         const article = document.createElement('article');
         article.className = 'file-browser-markdown';
         article.innerHTML = renderMarkdown(text);
@@ -15445,7 +15773,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
 
     const sourceView = buildFileBrowserSourceViewer(text, {
         language,
-        isScript,
+        isScript: shouldHighlightFileBrowserSource(normalizedText, previewLineCount, isScript),
         highlightLine: requestedLine
     });
     elements.viewerContent.appendChild(sourceView.element);
@@ -18443,6 +18771,8 @@ function buildMessageMeta(text, wrapper) {
     const actions = document.createElement('div');
     actions.className = 'message-meta-actions';
     actions.appendChild(createMessageCopyButton(wrapper));
+    actions.appendChild(createMessageBranchButton(wrapper));
+    actions.appendChild(createMessageDeleteButton(wrapper));
 
     meta.appendChild(label);
     meta.appendChild(actions);
@@ -18467,6 +18797,170 @@ function createMessageCopyButton(wrapper) {
         copyMessageContent(wrapper, button);
     });
     return button;
+}
+
+function createMessageBranchButton(wrapper) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'message-action message-branch';
+    button.setAttribute('aria-label', 'Branch from this message');
+    button.setAttribute('title', 'Branch from here');
+    button.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 4v5.5a4.5 4.5 0 0 0 4.5 4.5H18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M13.5 9.5 18 14l-4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+            <circle cx="6" cy="4" r="2" fill="none" stroke="currentColor" stroke-width="1.7"></circle>
+        </svg>
+    `;
+    button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        void branchMessageFromWrapper(wrapper, button);
+    });
+    return button;
+}
+
+function createMessageDeleteButton(wrapper) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'message-action message-delete';
+    button.setAttribute('aria-label', 'Delete message');
+    button.setAttribute('title', 'Delete message');
+    button.innerHTML = `
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M4.8 6.7h14.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
+            <path d="M9.2 6.7V5.3A1.3 1.3 0 0 1 10.5 4h3a1.3 1.3 0 0 1 1.3 1.3v1.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="m7 6.7.8 11.1A1.5 1.5 0 0 0 9.3 19h5.4a1.5 1.5 0 0 0 1.5-1.2L17 6.7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M10.2 10.1v5.4M13.8 10.1v5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"></path>
+        </svg>
+    `;
+    button.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        void deleteMessageFromWrapper(wrapper, button);
+    });
+    return button;
+}
+
+function getMessageActionContext(wrapper) {
+    const sessionId = typeof state.activeSessionId === 'string' ? state.activeSessionId.trim() : '';
+    const messageId = typeof wrapper?.dataset?.messageId === 'string'
+        ? wrapper.dataset.messageId.trim()
+        : '';
+    return { sessionId, messageId };
+}
+
+function setMessageActionBusy(button, busy) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.disabled = Boolean(busy);
+    button.classList.toggle('is-loading', Boolean(busy));
+}
+
+async function deleteMessageFromWrapper(wrapper, button) {
+    const { sessionId, messageId } = getMessageActionContext(wrapper);
+    if (!sessionId || !messageId) {
+        const message = 'This message cannot be edited yet.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 2800 });
+        return;
+    }
+    if (isSessionBusy(sessionId)) {
+        const message = 'Cannot delete a message while this session is running.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3200 });
+        return;
+    }
+    const confirmed = window.confirm('Delete this message from the session context?');
+    if (!confirmed) return;
+
+    setStatus('Deleting message...');
+    setMessageActionBusy(button, true);
+    try {
+        const result = await fetchJson(
+            `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}`,
+            {
+                method: 'DELETE',
+                timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS
+            }
+        );
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
+        const updated = result?.session;
+        if (updated?.id) {
+            upsertSessionSummary(updated);
+        }
+        renderSessions();
+        if (state.activeSessionId === sessionId && updated) {
+            renderMessages(updated.messages || []);
+            updateHeader(updated);
+        }
+        syncActiveSessionStatus();
+        setStatus('Message deleted.');
+        showToast('Message deleted.', { tone: 'success', durationMs: 2400 });
+    } catch (error) {
+        const message = normalizeError(error, 'Failed to delete message.');
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3600 });
+    } finally {
+        setMessageActionBusy(button, false);
+    }
+}
+
+async function branchMessageFromWrapper(wrapper, button) {
+    const { sessionId, messageId } = getMessageActionContext(wrapper);
+    if (!sessionId || !messageId) {
+        const message = 'This message cannot be branched yet.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 2800 });
+        return;
+    }
+    if (isSessionBusy(sessionId)) {
+        const message = 'Cannot branch a session while it is running.';
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3200 });
+        return;
+    }
+    const confirmed = window.confirm(
+        'Create a new session with the conversation up to this message?'
+    );
+    if (!confirmed) return;
+
+    setStatus('Creating branched session...');
+    setMessageActionBusy(button, true);
+    try {
+        const result = await fetchJson(
+            `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/branch`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
+                body: JSON.stringify({})
+            }
+        );
+        if (result?.session_storage) {
+            state.sessionStorage = result.session_storage;
+            updateSessionStorageSummary(state.sessionStorage);
+        }
+        const branched = result?.session;
+        if (!branched?.id) {
+            throw new Error('Branched session was not returned.');
+        }
+        upsertSessionSummary(branched);
+        state.activeSessionId = branched.id;
+        ensureSessionState(branched.id);
+        renderSessions();
+        await loadSession(branched.id);
+        setStatus('Branched session created.');
+        showToast('Branched session created.', { tone: 'success', durationMs: 2600 });
+    } catch (error) {
+        const message = normalizeError(error, 'Failed to create branched session.');
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 3600 });
+    } finally {
+        setMessageActionBusy(button, false);
+    }
 }
 
 async function writeTextToClipboard(text) {

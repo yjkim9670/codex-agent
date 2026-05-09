@@ -3184,6 +3184,10 @@ def get_session(session_id):
     session = _find_session(data.get('sessions', []), session_id)
     if not session:
         return None
+    return _build_session_response(session)
+
+
+def _build_session_response(session):
     session_copy = deepcopy(session)
     pending_queue = _normalize_session_pending_queue(session_copy)
     usage = _estimate_session_token_usage(session_copy)
@@ -3369,6 +3373,123 @@ def delete_session(session_id):
         data['sessions'] = _sort_sessions(remaining)
         _save_data(data)
         return True
+
+
+def delete_session_message(session_id, message_id):
+    session_key = str(session_id or '').strip()
+    message_key = str(message_id or '').strip()
+    if not session_key or not message_key:
+        return None
+
+    updated_session = None
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_key)
+        if not session:
+            return None
+        messages = session.get('messages')
+        if not isinstance(messages, list):
+            return None
+
+        next_messages = []
+        removed = False
+        for message in messages:
+            current_id = ''
+            if isinstance(message, dict):
+                current_id = str(message.get('id') or '').strip()
+            if current_id == message_key:
+                removed = True
+                continue
+            next_messages.append(message)
+
+        if not removed:
+            return None
+
+        session['messages'] = next_messages
+        session['updated_at'] = normalize_timestamp(None)
+        data['sessions'] = _sort_sessions(sessions)
+        _save_data(data)
+        updated_session = deepcopy(session)
+
+    return _build_session_response(updated_session)
+
+
+def _build_branch_session_title(source_title):
+    normalized = ' '.join(str(source_title or '').strip().split()) or 'New session'
+    prefix = 'Branch: '
+    max_source_chars = 72 - len(prefix)
+    if len(normalized) > max_source_chars:
+        normalized = f'{normalized[:max_source_chars]}...'
+    return f'{prefix}{normalized}'
+
+
+def _clone_message_for_branch(message):
+    cloned = _safe_deepcopy(message)
+    if not isinstance(cloned, dict):
+        return None
+    source_message_id = str(cloned.get('id') or '').strip()
+    cloned['id'] = uuid.uuid4().hex
+    if source_message_id:
+        cloned['branched_from_message_id'] = source_message_id
+    return cloned
+
+
+def branch_session_from_message(session_id, message_id, title=None):
+    session_key = str(session_id or '').strip()
+    message_key = str(message_id or '').strip()
+    if not session_key or not message_key:
+        return None
+
+    branched_session = None
+    with _DATA_LOCK:
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        source_session = _find_session(sessions, session_key)
+        if not source_session:
+            return None
+        source_messages = source_session.get('messages')
+        if not isinstance(source_messages, list):
+            return None
+
+        branch_messages = []
+        found_message = False
+        for message in source_messages:
+            normalized_message = _sanitize_message_record(message)
+            if not isinstance(normalized_message, dict):
+                continue
+            source_message_id = str(normalized_message.get('id') or '').strip()
+            cloned_message = _clone_message_for_branch(normalized_message)
+            if cloned_message is not None:
+                branch_messages.append(cloned_message)
+            if source_message_id == message_key:
+                found_message = True
+                break
+
+        if not found_message:
+            return None
+
+        now = normalize_timestamp(None)
+        source_title = str(source_session.get('title') or '').strip() or 'New session'
+        branch_title = str(title or '').strip() or _build_branch_session_title(source_title)
+        branched_session = {
+            'id': uuid.uuid4().hex,
+            'title': branch_title,
+            'session_type': 'chat',
+            'parent_session_id': session_key,
+            'branch_source_message_id': message_key,
+            'branch_source_session_title': source_title,
+            'created_at': now,
+            'updated_at': now,
+            'messages': branch_messages,
+            _PENDING_QUEUE_KEY: [],
+        }
+        sessions.append(branched_session)
+        data['sessions'] = _sort_sessions(sessions)
+        _save_data(data)
+        branched_session = deepcopy(branched_session)
+
+    return _build_session_response(branched_session)
 
 
 def _normalize_context_text(value):

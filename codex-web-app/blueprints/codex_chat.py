@@ -33,12 +33,14 @@ from ..config import (
 )
 from ..services.codex_chat import (
     append_message,
+    branch_session_from_message,
     build_codex_prompt,
     CodexAttachmentError,
     get_session_storage_summary,
     create_session,
     cleanup_codex_streams,
     delete_session,
+    delete_session_message,
     ensure_default_title,
     ensure_usage_snapshot_background_worker,
     execute_codex_prompt,
@@ -563,6 +565,49 @@ def codex_session_delete(session_id):
     })
 
 
+@bp.route('/api/codex/sessions/<session_id>/messages/<message_id>', methods=['DELETE'])
+def codex_session_message_delete(session_id, message_id):
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify({
+            'error': '세션 응답이 실행 중일 때는 대화를 삭제할 수 없습니다.',
+            'active_stream_id': active_stream_id,
+            'already_running': True
+        }), 409
+
+    session = delete_session_message(session_id, message_id)
+    if not session:
+        return jsonify({'error': '대화를 찾을 수 없습니다.'}), 404
+    return jsonify({
+        'session': session,
+        'session_storage': get_session_storage_summary(),
+    })
+
+
+@bp.route('/api/codex/sessions/<session_id>/messages/<message_id>/branch', methods=['POST'])
+def codex_session_message_branch(session_id, message_id):
+    payload = request.get_json(silent=True) or {}
+    title = (payload.get('title') or '').strip()
+    if len(title) > CODEX_MAX_TITLE_CHARS:
+        return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
+
+    active_stream_id = get_active_stream_id_for_session(session_id)
+    if active_stream_id:
+        return jsonify({
+            'error': '세션 응답이 실행 중일 때는 브랜치 세션을 만들 수 없습니다.',
+            'active_stream_id': active_stream_id,
+            'already_running': True
+        }), 409
+
+    session = branch_session_from_message(session_id, message_id, title=title or None)
+    if not session:
+        return jsonify({'error': '브랜치 기준 대화를 찾을 수 없습니다.'}), 404
+    return jsonify({
+        'session': session,
+        'session_storage': get_session_storage_summary(),
+    })
+
+
 @bp.route('/api/codex/sessions/<session_id>/message', methods=['POST'])
 def codex_session_message(session_id):
     payload = request.get_json(silent=True) or {}
@@ -894,6 +939,7 @@ def codex_files_read():
         result = read_file(
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
+            preview_max_bytes=payload.get('preview_max_bytes'),
         )
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code

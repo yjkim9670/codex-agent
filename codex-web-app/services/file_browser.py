@@ -17,6 +17,7 @@ BROWSER_ROOT_WORKSPACE = 'workspace'
 
 _MAX_LIST_ENTRIES = 2000
 _MAX_FILE_PREVIEW_BYTES = 512 * 1024
+_MIN_FILE_PREVIEW_BYTES = 16 * 1024
 _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = 64 * 1024 * 1024
@@ -498,6 +499,18 @@ def _decode_utf8_preview(raw: bytes):
     return content, line_count, is_utf8_text
 
 
+def _normalize_file_preview_byte_limit(value):
+    if value is None:
+        return None
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        return None
+    if limit <= 0:
+        return None
+    return max(_MIN_FILE_PREVIEW_BYTES, min(_MAX_FILE_PREVIEW_BYTES, limit))
+
+
 def _is_editable_text_path(path: Path):
     lowered_name = path.name.lower()
     if lowered_name in _EDITABLE_TEXT_FILENAMES:
@@ -716,7 +729,7 @@ def list_directory(root_key=None, relative_path=''):
     }
 
 
-def read_file(root_key=None, relative_path=''):
+def read_file(root_key=None, relative_path='', preview_max_bytes=None):
     normalized_root, root_path = _normalize_root_key(root_key)
     normalized_path = _normalize_relative_path(relative_path)
     if not normalized_path:
@@ -742,9 +755,14 @@ def read_file(root_key=None, relative_path=''):
 
     metadata = _extract_file_metadata(target_path)
 
+    preview_byte_limit = _MAX_FILE_PREVIEW_BYTES
+    requested_preview_byte_limit = _normalize_file_preview_byte_limit(preview_max_bytes)
+    if requested_preview_byte_limit and metadata['size'] > _MAX_FILE_EDIT_BYTES:
+        preview_byte_limit = requested_preview_byte_limit
+
     try:
         with target_path.open('rb') as file_handle:
-            raw = file_handle.read(_MAX_FILE_PREVIEW_BYTES + 1)
+            raw = file_handle.read(preview_byte_limit + 1)
     except OSError as exc:
         raise FileBrowserError(
             f'파일을 읽을 수 없습니다: {exc}',
@@ -752,9 +770,9 @@ def read_file(root_key=None, relative_path=''):
             status_code=500,
         ) from exc
 
-    truncated = len(raw) > _MAX_FILE_PREVIEW_BYTES
+    truncated = len(raw) > preview_byte_limit
     if truncated:
-        raw = raw[:_MAX_FILE_PREVIEW_BYTES]
+        raw = raw[:preview_byte_limit]
 
     is_binary = _is_binary_content(raw)
     language = _guess_language(target_path)

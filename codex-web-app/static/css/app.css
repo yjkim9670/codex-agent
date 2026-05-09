@@ -2113,6 +2113,8 @@ textarea {
     display: grid;
     grid-template-columns: max-content minmax(0, 1fr);
     align-items: stretch;
+    content-visibility: auto;
+    contain-intrinsic-size: 20px;
 }
 
 .file-browser-source-line-number {
@@ -2149,6 +2151,45 @@ textarea {
 
 .file-browser-source-line.is-target .file-browser-source-line-content {
     background: rgba(15, 76, 129, 0.08);
+}
+
+.file-browser-large-text {
+    min-height: 100%;
+    background: var(--surface);
+    color: var(--text-primary);
+    contain: content;
+}
+
+.file-browser-large-text-note {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.file-browser-large-text-content {
+    margin: 0;
+    padding: 10px 14px;
+    font-family: var(--font-code-block);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre;
+    overflow-wrap: normal;
+    tab-size: 4;
+    min-width: 100%;
+    width: max-content;
+}
+
+.file-browser-large-text-target-line {
+    display: block;
+    margin: 0 -14px;
+    padding: 0 14px;
+    background: rgba(15, 76, 129, 0.12);
 }
 
 .file-browser-editor {
@@ -6648,7 +6689,13 @@ body.is-work-mode-resizing * {
     color: var(--text-tertiary);
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
+    max-width: 100%;
+}
+
+.message.user .message-meta {
+    justify-content: flex-end;
 }
 
 .message-meta-actions {
@@ -6657,6 +6704,7 @@ body.is-work-mode-resizing * {
     gap: 6px;
 }
 
+.message-action,
 .message-copy {
     border: 1px solid var(--icon-button-border);
     background: var(--icon-button-bg);
@@ -6674,15 +6722,38 @@ body.is-work-mode-resizing * {
     transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
+.message-action svg,
 .message-copy svg {
     width: 13px;
     height: 13px;
 }
 
+.message-action:hover,
 .message-copy:hover {
     border-color: color-mix(in srgb, var(--accent) 50%, var(--icon-button-border));
     color: var(--text-secondary);
     background: var(--icon-button-hover-bg);
+}
+
+.message-action:disabled,
+.message-copy:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.message-action.is-loading,
+.message-copy.is-loading {
+    cursor: wait;
+}
+
+.message-delete {
+    color: var(--danger);
+}
+
+.message-delete:hover {
+    border-color: color-mix(in srgb, var(--danger) 54%, var(--icon-button-border));
+    color: var(--danger);
+    background: var(--message-error-bg);
 }
 
 .message-copy.is-copied {
@@ -7296,6 +7367,8 @@ body.is-work-mode-resizing * {
 .btn:focus-visible,
 .session-action:focus-visible,
 .session-select:focus-visible,
+.message-action:focus-visible,
+.message-copy:focus-visible,
 .sessions-toggle:focus-visible,
 .chat-header-mobile-browser:focus-visible,
 .chat-header-fullscreen:focus-visible,

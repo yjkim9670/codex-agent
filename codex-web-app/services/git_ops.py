@@ -557,6 +557,11 @@ def _decode_git_path(path):
                 text = text[1:-1]
         except Exception:
             text = text[1:-1]
+        # Git quotePath emits non-ASCII UTF-8 bytes as octal escapes.
+        try:
+            text = text.encode('latin-1').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
     return text
 
 

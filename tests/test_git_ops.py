@@ -89,6 +89,27 @@ def test_git_status_lists_files_inside_untracked_directory(tmp_path, monkeypatch
     assert all(entry['status'] == 'U' for entry in result['changed_files_detail'])
 
 
+def test_git_status_decodes_korean_untracked_excel_filename(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _run_git(repo_root, 'config', 'core.quotePath', 'true')
+    filename = '마이클_리포트_2026.05.09_GV80(제네시스 GV80).xls'
+    (repo_root / filename).write_bytes(b'excel placeholder\n')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('status', {'repo_target': 'workspace'})
+
+    assert result['ok'] is True
+    assert result['changed_files'] == [filename]
+    assert result['changed_files_detail'] == [
+        {
+            'path': filename,
+            'status': 'U',
+            'raw_status': '??',
+        }
+    ]
+
+
 def test_git_revert_restores_staged_rename(tmp_path, monkeypatch):
     repo_root = tmp_path / 'workspace'
     _init_repo(repo_root)

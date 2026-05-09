@@ -11053,6 +11053,9 @@ function renderUsageHistoryLegend(history) {
     const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
     const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
+    const fiveHourResetCount = Number(history?.five_hour_reset_detected_count);
+    const weeklyResetCount = Number(history?.weekly_reset_detected_count);
+    const tokenCounterResetCount = Number(history?.token_counter_reset_detected_count);
     const relationScope = resolveUsageHistoryRelationScope(history);
     const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
 
@@ -11068,11 +11071,29 @@ function renderUsageHistoryLegend(history) {
             text: `Workspace Δ ${Number.isFinite(workspaceDeltaTotal) ? formatNumber(workspaceDeltaTotal) : '--'} · Account Δ ${Number.isFinite(accountDeltaTotal) ? formatNumber(accountDeltaTotal) : '--'}`
         });
     }
-    if (Number.isFinite(resetCount) && resetCount > 0) {
+    if (Number.isFinite(fiveHourResetCount)) {
+        legendItems.push({
+            key: 'five-hour-reset',
+            text: `5h 리셋 감지 ${formatNumber(fiveHourResetCount)}회`
+        });
+    }
+    if (Number.isFinite(weeklyResetCount)) {
+        legendItems.push({
+            key: 'weekly-reset',
+            text: `Weekly 리셋 감지 ${formatNumber(weeklyResetCount)}회`
+        });
+    }
+    if (Number.isFinite(tokenCounterResetCount) && tokenCounterResetCount > 0) {
         legendItems.push({
             key: '',
-            text: `Reset 감지 ${formatNumber(resetCount)}회`
+            text: `Token counter 리셋 ${formatNumber(tokenCounterResetCount)}회`
         });
+    } else if (
+        Number.isFinite(resetCount)
+        && resetCount > 0
+        && (!Number.isFinite(fiveHourResetCount) || !Number.isFinite(weeklyResetCount))
+    ) {
+        legendItems.push({ key: '', text: `Reset 감지 ${formatNumber(resetCount)}회` });
     }
 
     legendItems.forEach(item => {
@@ -11088,6 +11109,97 @@ function renderUsageHistoryLegend(history) {
         wrapper.appendChild(text);
         elements.legend.appendChild(wrapper);
     });
+}
+
+function formatUsageHistoryTimestamp(value) {
+    if (!value) return '--';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '--';
+    return date.toLocaleString('ko-KR', {
+        timeZone: KST_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function formatUsageHistoryPercentValue(value) {
+    if (value === null || value === undefined || value === '') return '--';
+    const normalized = normalizeUsedPercent(value);
+    return Number.isFinite(normalized) ? `${formatUsagePercent(normalized)}%` : '--';
+}
+
+function formatUsageHistorySignedPercent(value) {
+    if (value === null || value === undefined || value === '') return '--';
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '--';
+    const sign = numeric > 0 ? '+' : '';
+    const absolute = Math.abs(numeric);
+    const text = absolute >= 10
+        ? absolute.toFixed(1).replace(/\.0$/, '')
+        : absolute.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    return `${sign}${numeric < 0 ? '-' : ''}${text}%`;
+}
+
+function formatUsageHistoryTokenBreakdown(item) {
+    const input = Number(item?.delta_input_tokens);
+    const cached = Number(item?.delta_cached_input_tokens);
+    const output = Number(item?.delta_output_tokens);
+    const reasoning = Number(item?.delta_reasoning_output_tokens);
+    const requests = Number(item?.delta_requests);
+    const parts = [];
+    if (Number.isFinite(input) && input > 0) parts.push(`in ${formatCompactTokenCount(input)}`);
+    if (Number.isFinite(cached) && cached > 0) parts.push(`cached ${formatCompactTokenCount(cached)}`);
+    if (Number.isFinite(output) && output > 0) parts.push(`out ${formatCompactTokenCount(output)}`);
+    if (Number.isFinite(reasoning) && reasoning > 0) parts.push(`reasoning ${formatCompactTokenCount(reasoning)}`);
+    if (Number.isFinite(requests) && requests > 0) parts.push(`req ${formatNumber(requests)}`);
+    return parts.join(', ');
+}
+
+function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relationScope = 'workspace') {
+    const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
+    const tokenDelta = Number(item?.delta_tokens);
+    const tokenBreakdown = formatUsageHistoryTokenBreakdown(item);
+    const resetLabels = [];
+    if (item?.five_hour_reset_detected) resetLabels.push('5h');
+    if (item?.weekly_reset_detected) resetLabels.push('weekly');
+    if (item?.token_counter_reset_detected) resetLabels.push('token counter');
+
+    const parts = [
+        metricLabel,
+        formatUsageHistoryTimestamp(item?.bucket_start),
+        `Token Δ (${scopeLabel}) ${Number.isFinite(tokenDelta) ? formatCompactTokenCount(tokenDelta) : '--'}`
+    ];
+    if (tokenBreakdown) {
+        parts.push(tokenBreakdown);
+    }
+    parts.push(
+        `5h ${formatUsageHistoryPercentValue(item?.five_hour_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_five_hour_used_percent)})`,
+        `5h reset ${formatResetTimestamp(item?.five_hour_resets_at) || '--'}`,
+        `Weekly ${formatUsageHistoryPercentValue(item?.weekly_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_weekly_used_percent)})`,
+        `Weekly reset ${formatResetTimestamp(item?.weekly_resets_at) || '--'}`
+    );
+    if (resetLabels.length > 0) {
+        parts.push(`Reset 감지 ${resetLabels.join(', ')}`);
+    }
+    const recordedAt = formatUsageHistoryTimestamp(item?.recorded_at);
+    if (recordedAt !== '--' && recordedAt !== formatUsageHistoryTimestamp(item?.bucket_start)) {
+        parts.push(`Recorded ${recordedAt}`);
+    }
+    return parts.filter(Boolean).join(' · ');
+}
+
+function attachUsageHistoryTooltip(node, tooltipText) {
+    if (!node || !tooltipText) return node;
+    setHoverTooltip(node, tooltipText);
+    node.setAttribute('aria-label', tooltipText);
+    return node;
+}
+
+function buildUsageHistoryResetTooltip(item, label, relationScope) {
+    return buildUsageHistoryPointTooltip(item, `${label} 리셋 감지`, relationScope);
 }
 
 function resolveUsageHistoryChartDisplayHeight(containerWidth, mobileLayout) {
@@ -11215,6 +11327,48 @@ function renderUsageHistoryChart(history) {
         const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
         return percentBottom - ((normalized / percentScale) * percentPlotHeight);
     };
+    const relationScope = resolveUsageHistoryRelationScope(history);
+    const appendTooltipHitCircle = (x, y, tooltipText, className = '') => {
+        const hit = createUsageHistorySvgNode('circle', {
+            cx: x,
+            cy: y,
+            r: mobileLayout ? 9 : 7,
+            class: `usage-history-hit-area ${className}`.trim(),
+            tabindex: '0'
+        });
+        attachUsageHistoryTooltip(hit, tooltipText);
+        chart.appendChild(hit);
+        return hit;
+    };
+    const appendTooltipHitRect = (x, y, widthValue, heightValue, tooltipText, className = '') => {
+        const hit = createUsageHistorySvgNode('rect', {
+            x,
+            y,
+            width: Math.max(1, widthValue),
+            height: Math.max(1, heightValue),
+            class: `usage-history-hit-area ${className}`.trim(),
+            tabindex: '0'
+        });
+        attachUsageHistoryTooltip(hit, tooltipText);
+        chart.appendChild(hit);
+        return hit;
+    };
+    const appendGridLine = (attrs, className = '') => {
+        chart.appendChild(createUsageHistorySvgNode('line', {
+            ...attrs,
+            class: `grid-line ${className}`.trim()
+        }));
+    };
+    const buildTimeGridIndexes = () => {
+        const lastIndex = items.length - 1;
+        if (lastIndex <= 0) return [0];
+        const targetCount = mobileLayout ? 5 : 7;
+        const indexes = new Set();
+        for (let tickIndex = 0; tickIndex < targetCount; tickIndex += 1) {
+            indexes.add(Math.round((lastIndex * tickIndex) / Math.max(1, targetCount - 1)));
+        }
+        return Array.from(indexes).sort((a, b) => a - b);
+    };
 
     if (mobileLayout) {
         chart.appendChild(createUsageHistorySvgNode('text', {
@@ -11234,13 +11388,12 @@ function renderUsageHistoryChart(history) {
     if (mobileLayout) {
         [0, 25, 50, 75, 100].forEach(percent => {
             const y = tokenTop + tokenPlotHeight - ((percent / 100) * tokenPlotHeight);
-            chart.appendChild(createUsageHistorySvgNode('line', {
+            appendGridLine({
                 x1: margin.left,
                 y1: y,
                 x2: margin.left + plotWidth,
-                y2: y,
-                class: 'grid-line'
-            }));
+                y2: y
+            }, percent === 0 || percent === 100 ? 'y-grid edge-grid token-grid' : 'y-grid token-grid');
             const leftToken = Math.round((maxTokenDelta * percent) / 100);
             chart.appendChild(createUsageHistorySvgNode('text', {
                 x: margin.left - typography.axisSideGap,
@@ -11251,13 +11404,12 @@ function renderUsageHistoryChart(history) {
         });
         percentTicks.forEach(percent => {
             const y = yPercent(percent);
-            chart.appendChild(createUsageHistorySvgNode('line', {
+            appendGridLine({
                 x1: margin.left,
                 y1: y,
                 x2: margin.left + plotWidth,
-                y2: y,
-                class: 'grid-line'
-            }));
+                y2: y
+            }, percent === 0 || percent === percentScale ? 'y-grid edge-grid percent-grid' : 'y-grid percent-grid');
             chart.appendChild(createUsageHistorySvgNode('text', {
                 x: margin.left + plotWidth + typography.axisSideGap,
                 y: y + typography.axisLabelOffset,
@@ -11268,13 +11420,12 @@ function renderUsageHistoryChart(history) {
     } else {
         percentTicks.forEach(percent => {
             const y = yPercent(percent);
-            chart.appendChild(createUsageHistorySvgNode('line', {
+            appendGridLine({
                 x1: margin.left,
                 y1: y,
                 x2: margin.left + plotWidth,
-                y2: y,
-                class: 'grid-line'
-            }));
+                y2: y
+            }, percent === 0 || percent === percentScale ? 'y-grid edge-grid' : 'y-grid');
             const leftToken = Math.round((maxTokenDelta * percent) / percentScale);
             chart.appendChild(createUsageHistorySvgNode('text', {
                 x: margin.left - typography.axisSideGap,
@@ -11290,7 +11441,18 @@ function renderUsageHistoryChart(history) {
             })).textContent = formatUsageHistoryPercentTick(percent);
         });
     }
+    buildTimeGridIndexes().forEach(index => {
+        const x = xAt(index);
+        const isEdge = index === 0 || index === items.length - 1;
+        appendGridLine({
+            x1: x,
+            y1: margin.top,
+            x2: x,
+            y2: percentBottom
+        }, isEdge ? 'time-grid edge-grid' : 'time-grid');
+    });
 
+    const tokenBarHits = [];
     tokenDeltas.forEach((delta, index) => {
         if (delta <= 0) return;
         const x = xAt(index);
@@ -11304,13 +11466,27 @@ function renderUsageHistoryChart(history) {
             rx: 1.5,
             class: 'token-bar'
         }));
+        tokenBarHits.push({ x, y, barHeight, index });
+    });
+    tokenBarHits.forEach(({ x, y, barHeight, index }) => {
+        const hitWidth = Math.max(barWidth, mobileLayout ? 18 : 12);
+        const hitY = Math.min(y, tokenBottom - (mobileLayout ? 18 : 14));
+        const hitHeight = Math.max(barHeight, tokenBottom - hitY, mobileLayout ? 18 : 14);
+        appendTooltipHitRect(
+            x - (hitWidth / 2),
+            hitY,
+            hitWidth,
+            hitHeight,
+            buildUsageHistoryPointTooltip(items[index], 'Token delta', relationScope),
+            'token-hit'
+        );
     });
 
-    const appendPercentLine = (values, className, pointColor) => {
+    const appendPercentLine = (values, className, pointColor, metricLabel, hitClassName) => {
         const points = [];
         values.forEach((value, index) => {
             if (!Number.isFinite(value)) return;
-            points.push({ x: xAt(index), y: yPercent(value), value });
+            points.push({ x: xAt(index), y: yPercent(value), value, index });
         });
         if (points.length < 2) return;
         const d = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' ');
@@ -11326,11 +11502,53 @@ function renderUsageHistoryChart(history) {
                 fill: pointColor,
                 class: 'line-point'
             }));
+            appendTooltipHitCircle(
+                point.x,
+                point.y,
+                buildUsageHistoryPointTooltip(items[point.index], metricLabel, relationScope),
+                hitClassName
+            );
         });
     };
 
-    appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(220, 90, 52, 0.95)');
-    appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)');
+    appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(220, 90, 52, 0.95)', '5h used', 'five-hour-hit');
+    appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
+
+    const appendResetMarker = (item, index, label, keyClass, offset) => {
+        const x = xAt(index);
+        const markerY = (mobileLayout ? percentTop : margin.top) + offset;
+        const guide = createUsageHistorySvgNode('line', {
+            x1: x,
+            y1: mobileLayout ? percentTop : margin.top,
+            x2: x,
+            y2: percentBottom,
+            class: `reset-guide ${keyClass}`
+        });
+        chart.appendChild(guide);
+        const size = mobileLayout ? 5.5 : 4.5;
+        const marker = createUsageHistorySvgNode('path', {
+            d: `M${x} ${markerY - size} L${x + size} ${markerY} L${x} ${markerY + size} L${x - size} ${markerY} Z`,
+            class: `reset-marker ${keyClass}`,
+            tabindex: '0'
+        });
+        attachUsageHistoryTooltip(marker, buildUsageHistoryResetTooltip(item, label, relationScope));
+        chart.appendChild(marker);
+        appendTooltipHitCircle(
+            x,
+            markerY,
+            buildUsageHistoryResetTooltip(item, label, relationScope),
+            `${keyClass}-hit`
+        );
+    };
+
+    items.forEach((item, index) => {
+        if (item?.five_hour_reset_detected) {
+            appendResetMarker(item, index, '5h', 'five-hour-reset', mobileLayout ? 10 : 11);
+        }
+        if (item?.weekly_reset_detected) {
+            appendResetMarker(item, index, 'Weekly', 'weekly-reset', mobileLayout ? 24 : 23);
+        }
+    });
 
     const firstLabel = formatUsageHistoryTickLabel(items[0]?.bucket_start);
     const middleLabel = formatUsageHistoryTickLabel(items[Math.floor((items.length - 1) / 2)]?.bucket_start);

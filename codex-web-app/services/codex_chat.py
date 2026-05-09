@@ -2436,6 +2436,35 @@ def record_usage_snapshot_if_due(force=False, usage_summary=None):
     }
 
 
+def _limit_reset_detected(previous_reset, current_reset, previous_used, current_used):
+    if not (
+        isinstance(previous_used, (int, float))
+        and isinstance(current_used, (int, float))
+    ):
+        return False
+
+    previous_reset_text = str(previous_reset or '').strip()
+    current_reset_text = str(current_reset or '').strip()
+    previous_reset_at = parse_timestamp(previous_reset_text) if previous_reset_text else None
+    current_reset_at = parse_timestamp(current_reset_text) if current_reset_text else None
+    if (
+        previous_reset_at is not None
+        and current_reset_at is not None
+        and current_reset_at > previous_reset_at + timedelta(seconds=1)
+    ):
+        return True
+
+    if (
+        previous_reset_text
+        and current_reset_text
+        and previous_reset_text != current_reset_text
+        and current_used <= previous_used
+    ):
+        return True
+
+    return current_used + 0.1 < previous_used
+
+
 def _build_usage_history_items(items):
     derived = []
     previous = None
@@ -2453,6 +2482,9 @@ def _build_usage_history_items(items):
         five_hour_used = snapshot.get('five_hour_used_percent')
         weekly_used = snapshot.get('weekly_used_percent')
         reset_detected = False
+        five_hour_reset_detected = False
+        weekly_reset_detected = False
+        token_counter_reset_detected = False
 
         delta_workspace_tokens = 0
         delta_account_tokens = 0
@@ -2467,12 +2499,14 @@ def _build_usage_history_items(items):
             previous_workspace_total = previous_workspace_total or 0
             delta_workspace_tokens = workspace_token_total - previous_workspace_total
             if delta_workspace_tokens < 0:
+                token_counter_reset_detected = True
                 reset_detected = True
                 delta_workspace_tokens = workspace_token_total
 
             previous_account_total = _coerce_non_negative_int(previous.get('token_account_total')) or 0
             delta_account_tokens = account_token_total - previous_account_total
             if delta_account_tokens < 0:
+                token_counter_reset_detected = True
                 reset_detected = True
                 delta_account_tokens = account_token_total
 
@@ -2491,26 +2525,24 @@ def _build_usage_history_items(items):
 
             previous_five_reset = str(previous.get('five_hour_resets_at') or '').strip()
             current_five_reset = str(snapshot.get('five_hour_resets_at') or '').strip()
-            if (
-                previous_five_reset
-                and current_five_reset
-                and previous_five_reset != current_five_reset
-                and isinstance(previous_five_used, (int, float))
-                and isinstance(five_hour_used, (int, float))
-                and five_hour_used <= previous_five_used
+            if _limit_reset_detected(
+                previous_five_reset,
+                current_five_reset,
+                previous_five_used,
+                five_hour_used,
             ):
+                five_hour_reset_detected = True
                 reset_detected = True
 
             previous_weekly_reset = str(previous.get('weekly_resets_at') or '').strip()
             current_weekly_reset = str(snapshot.get('weekly_resets_at') or '').strip()
-            if (
-                previous_weekly_reset
-                and current_weekly_reset
-                and previous_weekly_reset != current_weekly_reset
-                and isinstance(previous_weekly_used, (int, float))
-                and isinstance(weekly_used, (int, float))
-                and weekly_used <= previous_weekly_used
+            if _limit_reset_detected(
+                previous_weekly_reset,
+                current_weekly_reset,
+                previous_weekly_used,
+                weekly_used,
             ):
+                weekly_reset_detected = True
                 reset_detected = True
 
         def token_delta(current_key, previous_key=None):
@@ -2597,6 +2629,9 @@ def _build_usage_history_items(items):
             'delta_five_hour_used_percent': delta_five_hour_used,
             'delta_weekly_used_percent': delta_weekly_used,
             'reset_detected': reset_detected,
+            'five_hour_reset_detected': five_hour_reset_detected,
+            'weekly_reset_detected': weekly_reset_detected,
+            'token_counter_reset_detected': token_counter_reset_detected,
             'tokens_per_five_hour_percent': workspace_tokens_per_five_hour_percent,
             'tokens_per_weekly_percent': workspace_tokens_per_weekly_percent,
             'tokens_per_five_hour_percent_workspace': workspace_tokens_per_five_hour_percent,
@@ -2847,6 +2882,9 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         account_weekly_relation if relation_scope == 'account' else workspace_weekly_relation
     )
     reset_count = sum(1 for item in history_items if item.get('reset_detected'))
+    five_hour_reset_count = sum(1 for item in history_items if item.get('five_hour_reset_detected'))
+    weekly_reset_count = sum(1 for item in history_items if item.get('weekly_reset_detected'))
+    token_counter_reset_count = sum(1 for item in history_items if item.get('token_counter_reset_detected'))
     requested_average = _summarize_usage_history_hourly_average(history_items, requested_hours, delta_key='delta_tokens')
     daily_average = _summarize_usage_history_hourly_average(history_items, 24, delta_key='delta_tokens')
     weekly_average = _summarize_usage_history_hourly_average(history_items, 24 * 7, delta_key='delta_tokens')
@@ -2869,6 +2907,9 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         'token_delta_total_workspace': workspace_token_delta_total,
         'token_delta_total_account': account_token_delta_total,
         'reset_detected_count': reset_count,
+        'five_hour_reset_detected_count': five_hour_reset_count,
+        'weekly_reset_detected_count': weekly_reset_count,
+        'token_counter_reset_detected_count': token_counter_reset_count,
         'relation': {
             'scope': relation_scope,
             'five_hour': five_hour_relation,

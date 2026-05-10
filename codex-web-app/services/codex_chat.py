@@ -3976,8 +3976,11 @@ def _build_codex_command(
     else:
         cmd = [
             'codex',
+            '--ask-for-approval',
+            'never',
             'exec',
-            '--full-auto',
+            '--sandbox',
+            'workspace-write',
             '--color',
             'never'
         ]

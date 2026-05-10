@@ -455,6 +455,22 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
     assert token_usage['total_tokens'] == 120
 
 
+def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspace):
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[:8] == [
+        'codex',
+        '--ask-for-approval',
+        'never',
+        'exec',
+        '--sandbox',
+        'workspace-write',
+        '--color',
+        'never',
+    ]
+    assert '--full-auto' not in cmd
+
+
 def test_imagegen_overlay_points_to_workbench_managed_dirs(isolated_codex_workspace):
     workspace_dir = isolated_codex_workspace['workspace_dir']
 

@@ -82,6 +82,12 @@ const MOBILE_PROMPT_LIFT_VAR = '--mobile-prompt-lift';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
 const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
+const MOBILE_KEYBOARD_BASELINE_DELTA = 64;
+const MOBILE_PROMPT_BOTTOM_TARGET_GAP = 0;
+const MOBILE_PROMPT_ANDROID_BOTTOM_TARGET_GAP = 8;
+const MOBILE_PROMPT_MAX_SHIFT = 96;
+const MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS = Object.freeze([80, 160, 320]);
+const MOBILE_VIEWPORT_ANDROID_FOCUS_RESYNC_DELAYS = Object.freeze([480]);
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const WORK_MODE_CLASS = 'is-work-mode';
 const WORK_MODE_PREVIEW_FULLSCREEN_CLASS = 'is-work-mode-fold-preview-fullscreen';
@@ -462,6 +468,7 @@ let mermaidLoadPromise = null;
 let xlsxLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
 let lastAppliedMobilePromptLift = null;
+let lastStableMobileViewportHeight = null;
 let sessionsRenderFrameId = 0;
 
 function runAfterAnimationFrame(callback) {
@@ -5567,12 +5574,26 @@ function mediaQueryMatches(query) {
     return false;
 }
 
+function isAndroidPlatform() {
+    const userAgentData = navigator.userAgentData;
+    const platform = String(userAgentData?.platform || navigator.platform || '');
+    if (/\bAndroid\b/i.test(platform)) {
+        return true;
+    }
+    return /\bAndroid\b/i.test(String(navigator.userAgent || ''));
+}
+
 function isLikelyVirtualKeyboardEnvironment() {
     const userAgentData = navigator.userAgentData;
     if (userAgentData && typeof userAgentData.mobile === 'boolean' && userAgentData.mobile) {
         return true;
     }
     const userAgent = String(navigator.userAgent || '');
+    const touchPoints = Number(navigator.maxTouchPoints || 0);
+    const platform = String(navigator.platform || '');
+    if (/\bMac/i.test(platform) && touchPoints > 1) {
+        return true;
+    }
     if (/\b(Android|iPhone|iPad|iPod|Mobile)\b/i.test(userAgent)) {
         return true;
     }
@@ -5581,8 +5602,11 @@ function isLikelyVirtualKeyboardEnvironment() {
     if (hasCoarsePointer && !hasFinePointer) {
         return true;
     }
-    const touchPoints = Number(navigator.maxTouchPoints || 0);
     return touchPoints > 0 && !hasFinePointer;
+}
+
+function isMobileViewportBehaviorActive(mediaMatches = isCompactLayout()) {
+    return Boolean(mediaMatches || isLikelyVirtualKeyboardEnvironment());
 }
 
 function isEditableElement(element) {
@@ -5594,18 +5618,63 @@ function isEditableElement(element) {
     return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type);
 }
 
-function isMobileKeyboardOpen(isMobile = isCompactLayout()) {
+function getVisualViewportMetrics() {
+    const viewport = window.visualViewport;
+    const scale = Number(viewport?.scale);
+    const isPinchZoomed = Number.isFinite(scale) && scale > 1.01;
+    const visualHeight = isPinchZoomed ? NaN : Number(viewport?.height);
+    const offsetTop = isPinchZoomed ? 0 : Math.max(0, Number(viewport?.offsetTop) || 0);
+    const layoutHeight = Number(window.innerHeight);
+    const hasVisualHeight = Number.isFinite(visualHeight) && visualHeight > 0;
+    const hasLayoutHeight = Number.isFinite(layoutHeight) && layoutHeight > 0;
+    return {
+        visualHeight,
+        offsetTop,
+        layoutHeight,
+        hasVisualHeight,
+        hasLayoutHeight
+    };
+}
+
+function getUsableMobileViewportHeight(metrics = getVisualViewportMetrics()) {
+    const visualBottom = metrics.hasVisualHeight
+        ? metrics.visualHeight + metrics.offsetTop
+        : NaN;
+    const nextHeight = Number.isFinite(visualBottom) && visualBottom > 0
+        ? (metrics.hasLayoutHeight ? Math.min(visualBottom, metrics.layoutHeight) : visualBottom)
+        : metrics.layoutHeight;
+    return Number.isFinite(nextHeight) && nextHeight > 0 ? nextHeight : NaN;
+}
+
+function rememberStableMobileViewportHeight(metrics = getVisualViewportMetrics()) {
+    const nextHeight = getUsableMobileViewportHeight(metrics);
+    if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
+    lastStableMobileViewportHeight = Math.round(nextHeight);
+}
+
+function isMobileKeyboardOpen(isMobile = isMobileViewportBehaviorActive(), metrics = getVisualViewportMetrics()) {
     if (!isMobile) return false;
     const activeElement = document.activeElement;
     const hasEditableFocus = isEditableElement(activeElement);
     if (!hasEditableFocus) return false;
-    const visualHeight = Number(window.visualViewport?.height);
-    const layoutHeight = Number(window.innerHeight);
-    if (Number.isFinite(visualHeight) && Number.isFinite(layoutHeight) && visualHeight > 0 && layoutHeight > 0) {
-        const viewportDelta = layoutHeight - visualHeight;
-        if (viewportDelta > MOBILE_KEYBOARD_VIEWPORT_DELTA) {
+    const usableHeight = getUsableMobileViewportHeight(metrics);
+    if (
+        Number.isFinite(usableHeight)
+        && lastStableMobileViewportHeight
+        && isLikelyVirtualKeyboardEnvironment()
+        && lastStableMobileViewportHeight - usableHeight > MOBILE_KEYBOARD_BASELINE_DELTA
+    ) {
+        return true;
+    }
+    if (metrics.hasVisualHeight && metrics.hasLayoutHeight) {
+        const viewportDelta = metrics.layoutHeight - metrics.visualHeight;
+        const bottomOcclusion = Number.isFinite(usableHeight)
+            ? metrics.layoutHeight - usableHeight
+            : 0;
+        if (Math.max(viewportDelta, bottomOcclusion) > MOBILE_KEYBOARD_VIEWPORT_DELTA) {
             return true;
         }
+        return false;
     }
     return hasEditableFocus && isLikelyVirtualKeyboardEnvironment();
 }
@@ -5626,10 +5695,14 @@ function setMobileKeyboardOpen(open) {
     }
 }
 
-function syncMobileKeyboardState(isMobile = isCompactLayout()) {
-    const isKeyboardOpen = isMobileKeyboardOpen(isMobile);
+function syncMobileKeyboardState(isMobile = isMobileViewportBehaviorActive()) {
+    const metrics = getVisualViewportMetrics();
+    if (isMobile && !isEditableElement(document.activeElement)) {
+        rememberStableMobileViewportHeight(metrics);
+    }
+    const isKeyboardOpen = isMobileKeyboardOpen(isMobile, metrics);
     setMobileKeyboardOpen(isKeyboardOpen);
-    applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen });
+    applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen, metrics });
     if (isTerminalUiOpen()) {
         syncTerminalExtraKeysState();
         if (isKeyboardOpen) {
@@ -5642,14 +5715,8 @@ function syncMobileKeyboardState(isMobile = isCompactLayout()) {
 function applyMobileViewportHeight() {
     const root = document.documentElement;
     if (!root) return;
-    const viewport = window.visualViewport;
-    const viewportScale = Number(viewport?.scale);
-    const isPinchZoomed = Number.isFinite(viewportScale) && viewportScale > 1.01;
-    const visualHeight = isPinchZoomed ? NaN : Number(viewport?.height);
-    const fallbackHeight = Number(window.innerHeight);
-    const nextHeight = Number.isFinite(visualHeight) && visualHeight > 0
-        ? visualHeight
-        : fallbackHeight;
+    const metrics = getVisualViewportMetrics();
+    const nextHeight = getUsableMobileViewportHeight(metrics);
     if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
     const clamped = Math.max(320, Math.round(nextHeight));
     if (lastAppliedMobileViewportHeight === clamped) {
@@ -5659,11 +5726,53 @@ function applyMobileViewportHeight() {
     root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
 }
 
-function applyMobilePromptLift() {
+function getPromptViewportBottom(metrics = getVisualViewportMetrics()) {
+    if (!metrics.hasVisualHeight) {
+        return metrics.hasLayoutHeight ? metrics.layoutHeight : NaN;
+    }
+    if (metrics.offsetTop <= 0) {
+        return metrics.visualHeight;
+    }
+    const app = document.querySelector('.app');
+    const appTop = Number(app?.getBoundingClientRect?.().top);
+    if (Number.isFinite(appTop) && Math.abs(appTop) < Math.abs(appTop + metrics.offsetTop)) {
+        return metrics.visualHeight + metrics.offsetTop;
+    }
+    return metrics.visualHeight;
+}
+
+function clampNumber(value, min, max) {
+    if (!Number.isFinite(value)) return min;
+    return Math.min(max, Math.max(min, value));
+}
+
+function applyMobilePromptLift({ isMobile = isMobileViewportBehaviorActive(), keyboardOpen = false, metrics = getVisualViewportMetrics() } = {}) {
     const root = document.documentElement;
     if (!root) return;
 
-    const nextLift = 0;
+    let nextLift = 0;
+    const promptForm = document.getElementById('codex-chat-form');
+    if (isMobile && keyboardOpen && promptForm?.contains(document.activeElement)) {
+        const rect = promptForm.getBoundingClientRect();
+        const viewportBottom = getPromptViewportBottom(metrics);
+        if (Number.isFinite(rect?.bottom) && Number.isFinite(viewportBottom)) {
+            const currentLift = Number.isFinite(lastAppliedMobilePromptLift)
+                ? lastAppliedMobilePromptLift
+                : 0;
+            const currentTranslateY = currentLift * -1;
+            const unshiftedPromptBottom = rect.bottom - currentTranslateY;
+            const targetGap = isAndroidPlatform()
+                ? MOBILE_PROMPT_ANDROID_BOTTOM_TARGET_GAP
+                : MOBILE_PROMPT_BOTTOM_TARGET_GAP;
+            const desiredShift = viewportBottom - unshiftedPromptBottom - targetGap;
+            const clampedShift = clampNumber(
+                desiredShift,
+                MOBILE_PROMPT_MAX_SHIFT * -1,
+                MOBILE_PROMPT_MAX_SHIFT
+            );
+            nextLift = Math.round(clampedShift * -1);
+        }
+    }
 
     if (lastAppliedMobilePromptLift === nextLift) {
         return;
@@ -5688,7 +5797,7 @@ function normalizeMobileDocumentScroll(isMobile = isCompactLayout()) {
 function setupMobileViewportBehavior(mobileMedia, input) {
     const syncViewportState = ({ normalizeScroll = false } = {}) => {
         applyMobileViewportHeight();
-        const isMobile = mobileMedia.matches;
+        const isMobile = isMobileViewportBehaviorActive(mobileMedia.matches);
         syncMobileKeyboardState(isMobile);
         if (normalizeScroll) {
             normalizeMobileDocumentScroll(isMobile);
@@ -5701,7 +5810,7 @@ function setupMobileViewportBehavior(mobileMedia, input) {
     });
 
     const handleLayoutModeChange = event => {
-        syncViewportState({ normalizeScroll: Boolean(event?.matches) });
+        syncViewportState({ normalizeScroll: isMobileViewportBehaviorActive(Boolean(event?.matches)) });
     };
 
     if (typeof mobileMedia.addEventListener === 'function') {
@@ -5718,14 +5827,19 @@ function setupMobileViewportBehavior(mobileMedia, input) {
 
     if (!input) return;
     input.addEventListener('focus', () => {
-        if (!mobileMedia.matches) return;
+        if (!isMobileViewportBehaviorActive(mobileMedia.matches)) return;
         syncViewportState({ normalizeScroll: true });
-        window.setTimeout(() => {
-            syncViewportState({ normalizeScroll: true });
-        }, 80);
+        const resyncDelays = isAndroidPlatform()
+            ? MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS.concat(MOBILE_VIEWPORT_ANDROID_FOCUS_RESYNC_DELAYS)
+            : MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS;
+        resyncDelays.forEach(delay => {
+            window.setTimeout(() => {
+                syncViewportState({ normalizeScroll: true });
+            }, delay);
+        });
     });
     input.addEventListener('blur', () => {
-        if (!mobileMedia.matches) return;
+        if (!isMobileViewportBehaviorActive(mobileMedia.matches)) return;
         window.setTimeout(() => {
             syncViewportState({ normalizeScroll: true });
         }, 120);
@@ -5736,6 +5850,7 @@ function setupMobileViewportBehavior(mobileMedia, input) {
 function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
     const fields = Array.isArray(inputs) ? inputs.filter(Boolean) : [];
     if (!fields.length) return;
+    const isKeyboardLayoutActive = () => isMobileViewportBehaviorActive(mobileMedia.matches);
     const getFocusedField = () => fields.find(field => field === document.activeElement) || null;
     const hasFocusedField = () => Boolean(getFocusedField());
 
@@ -5797,26 +5912,28 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
     };
 
     const clearFocusStateIfNeeded = () => {
-        if (!mobileMedia.matches || hasFocusedField()) return;
+        if (!isKeyboardLayoutActive() || hasFocusedField()) return;
         applyMobileFocusState(false);
         syncMobileKeyboardState(true);
     };
 
     const handleLayoutModeChange = event => {
-        if (event.matches) return;
+        if (isMobileViewportBehaviorActive(Boolean(event?.matches))) return;
         applyMobileFocusState(false);
         setMobileKeyboardOpen(false);
         applyMobilePromptLift({ isMobile: false, keyboardOpen: false });
     };
 
     const handleMobileViewportChange = createRafThrottledHandler(() => {
-        if (!mobileMedia.matches) {
+        if (!isKeyboardLayoutActive()) {
             setMobileKeyboardOpen(false);
             applyMobilePromptLift({ isMobile: false, keyboardOpen: false });
             return;
         }
         syncMobileKeyboardState(true);
-        scheduleFocusedFieldVisibility();
+        if (mobileMedia.matches) {
+            scheduleFocusedFieldVisibility();
+        }
     });
 
     if (typeof mobileMedia.addEventListener === 'function') {
@@ -5832,19 +5949,23 @@ function setupMobileSettingsInputBehavior(mobileMedia, inputs) {
 
     fields.forEach(field => {
         field.addEventListener('focus', () => {
-            if (!mobileMedia.matches) return;
-            applyMobileFocusState(true);
+            if (!isKeyboardLayoutActive()) return;
             syncMobileKeyboardState(true);
-            keepFieldVisible(field, 'auto');
-            scheduleFocusedFieldVisibility();
+            if (mobileMedia.matches) {
+                applyMobileFocusState(true);
+                keepFieldVisible(field, 'auto');
+                scheduleFocusedFieldVisibility();
+            }
         });
 
         field.addEventListener('blur', () => {
-            if (!mobileMedia.matches) return;
+            if (!isKeyboardLayoutActive()) return;
             window.setTimeout(() => {
                 applyMobileViewportHeight();
                 clearFocusStateIfNeeded();
-                keepFocusedFieldVisible('auto');
+                if (mobileMedia.matches) {
+                    keepFocusedFieldVisible('auto');
+                }
             }, 160);
         });
     });

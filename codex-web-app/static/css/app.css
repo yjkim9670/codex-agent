@@ -329,6 +329,30 @@ body {
     overflow: hidden;
 }
 
+html.is-mobile-keyboard-open,
+body.is-mobile-keyboard-open {
+    height: var(--mobile-viewport-height);
+    overflow: hidden;
+    overscroll-behavior-y: none;
+}
+
+.app.is-mobile-keyboard-open {
+    min-height: var(--mobile-viewport-height);
+    height: var(--mobile-viewport-height);
+    overflow: hidden;
+    padding-bottom: 0;
+}
+
+.app.is-mobile-keyboard-open .layout,
+.app.is-mobile-keyboard-open .chat {
+    overflow: hidden;
+    overscroll-behavior-y: none;
+}
+
+.app.is-mobile-keyboard-open .chat {
+    padding-bottom: 0;
+}
+
 button,
 input,
 select,
@@ -7880,6 +7904,7 @@ label.hover-tooltip,
 
     .app.is-mobile-keyboard-open {
         overflow: hidden;
+        padding-bottom: 0;
     }
 
     .live-weather-panel {
@@ -8631,6 +8656,7 @@ label.hover-tooltip,
 
     .app.is-mobile-keyboard-open .chat {
         overflow: hidden;
+        padding-bottom: 0;
     }
 
     .app.is-mobile-keyboard-open .chat-controls-body {

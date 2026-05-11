@@ -189,6 +189,7 @@ const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 48 * 1024;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 600;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 96 * 1024;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 1200;
+const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
 const FILE_BROWSER_HTML_PREVIEW_MAX_CHARS = 256 * 1024;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
 const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 64 * 1024;
@@ -12422,8 +12423,136 @@ function getFilePanelPreviewLaunchUrl(variant) {
     return buildFileBrowserRawFileUrl(selectedRoot, selectedPath);
 }
 
+function getFilePanelMarkdownPreviewPayload(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const result = state?.previewResult;
+    if (!state?.path || !result || result?.is_binary || typeof result?.content !== 'string') {
+        return null;
+    }
+    if (!isMarkdownLanguage(result?.language)) {
+        return null;
+    }
+    const root = normalizeFileBrowserRoot(
+        state.root || result?.root || getFilePanelCurrentRoot(normalizedVariant)
+    );
+    const path = normalizeFileBrowserRelativePath(result?.path || state.path);
+    if (!path) return null;
+    return {
+        root,
+        path,
+        name: String(result?.name || path.split('/').filter(Boolean).pop() || path),
+        size: result?.size,
+        modifiedAt: result?.modified_at,
+        truncated: Boolean(result?.truncated),
+        content: result.content
+    };
+}
+
+function buildFilePanelMarkdownPreviewDocument(payload) {
+    const normalizedPath = normalizeFileBrowserRelativePath(payload?.path || '');
+    const title = String(payload?.name || normalizedPath || 'Markdown preview');
+    const sourceText = normalizeFileBrowserPreviewText(payload?.content || '');
+    const renderedMarkdown = renderMarkdown(sourceText, {
+        showCodeLineNumbers: true
+    });
+    const theme = document.documentElement?.dataset?.theme === 'dark' ? 'dark' : 'light';
+    const stylesheetUrl = new URL('/static/css/app.css', window.location.href).href;
+    const mermaidUrl = new URL(MERMAID_VENDOR_SRC, window.location.href).href;
+    const sizeText = formatFileBrowserSize(payload?.size);
+    const modifiedText = payload?.modifiedAt
+        ? formatFileBrowserModifiedAt(payload.modifiedAt)
+        : '';
+    const metaParts = [
+        normalizedPath,
+        sizeText && sizeText !== '--' ? sizeText : '',
+        modifiedText
+    ].filter(Boolean);
+    const truncatedNote = payload?.truncated
+        ? '<span class="markdown-preview-note">미리보기 용량 제한으로 일부만 표시됩니다.</span>'
+        : '';
+
+    return [
+        '<!doctype html>',
+        `<html lang="ko" data-theme="${escapeHtml(theme)}">`,
+        '<head>',
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        `<title>${escapeHtml(title)}</title>`,
+        `<base href="${escapeHtml(window.location.origin)}/">`,
+        `<link rel="stylesheet" href="${escapeHtml(stylesheetUrl)}">`,
+        '<style>',
+        'html,body{min-height:100%;}',
+        'body.file-browser-markdown-preview-page{margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);}',
+        '.markdown-preview-shell{box-sizing:border-box;width:min(980px,calc(100vw - 32px));margin:0 auto;padding:28px 0 48px;}',
+        '.markdown-preview-header{display:flex;flex-direction:column;gap:6px;margin:0 0 18px;padding:0 2px 16px;border-bottom:1px solid var(--border);}',
+        '.markdown-preview-title{margin:0;color:var(--text-primary);font-size:20px;line-height:1.35;font-weight:800;overflow-wrap:anywhere;}',
+        '.markdown-preview-meta{color:var(--text-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere;}',
+        '.markdown-preview-note{display:inline-block;margin-top:2px;color:var(--danger);font-size:12px;font-weight:700;}',
+        'body.file-browser-markdown-preview-page .file-browser-markdown{padding:0;font-size:14px;line-height:1.7;}',
+        '@media(max-width:640px){.markdown-preview-shell{width:min(100vw - 22px,980px);padding:18px 0 32px;}.markdown-preview-title{font-size:18px;}}',
+        '</style>',
+        '</head>',
+        `<body class="file-browser-markdown-preview-page" data-mermaid-src="${escapeHtml(mermaidUrl)}">`,
+        '<main class="markdown-preview-shell">',
+        '<header class="markdown-preview-header">',
+        `<h1 class="markdown-preview-title">${escapeHtml(title)}</h1>`,
+        `<div class="markdown-preview-meta">${escapeHtml(metaParts.join(' · '))}</div>`,
+        truncatedNote,
+        '</header>',
+        `<article class="file-browser-markdown">${renderedMarkdown}</article>`,
+        '</main>',
+        '<script>',
+        '(() => {',
+        'const decodeSource = value => { try { return decodeURIComponent(String(value || "")); } catch (error) { return String(value || ""); } };',
+        'const loadScript = src => new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = src; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); });',
+        'const hydrate = async () => {',
+        'const diagrams = Array.from(document.querySelectorAll(".file-browser-mermaid[data-mermaid-source]"));',
+        'if (!diagrams.length) return;',
+        'try { await loadScript(document.body.dataset.mermaidSrc || "/static/vendor/mermaid-11.13.0.min.js"); } catch (error) { return; }',
+        'const api = window.mermaid;',
+        'if (!api || typeof api.initialize !== "function" || typeof api.render !== "function") return;',
+        'api.initialize({ startOnLoad: false, theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default" });',
+        'let serial = 0;',
+        'for (const node of diagrams) {',
+        'const source = decodeSource(node.dataset.mermaidSource || "");',
+        'if (!source.trim()) continue;',
+        'try { const result = await api.render(`markdown-preview-mermaid-${serial += 1}`, source); node.innerHTML = result && result.svg ? result.svg : ""; node.dataset.mermaidRendered = "1"; if (result && typeof result.bindFunctions === "function") result.bindFunctions(node); }',
+        'catch (error) { node.classList.add("is-error"); }',
+        '}',
+        '};',
+        'if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hydrate, { once: true }); else void hydrate();',
+        '})();',
+        '</script>',
+        '</body>',
+        '</html>'
+    ].join('');
+}
+
+function openFilePanelMarkdownPreviewInNewWindow(payload) {
+    const html = buildFilePanelMarkdownPreviewDocument(payload);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+        URL.revokeObjectURL(objectUrl);
+        showToast('팝업이 차단되어 마크다운 미리보기를 열지 못했습니다.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+    window.setTimeout(() => {
+        URL.revokeObjectURL(objectUrl);
+    }, FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS);
+    return true;
+}
+
 function getFilePanelPreviewOpenButtonLabel(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
+        return '새 창에서 마크다운 렌더링 보기';
+    }
     const htmlPreviewUrl = normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE
         ? getWorkModeHtmlPreviewLaunchUrl()
         : '';
@@ -12450,9 +12579,17 @@ function canOpenWorkModePreviewInNewWindow() {
 function canOpenFilePanelPreviewInNewWindow(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
+        if (!isWorkModeEnabled()) return false;
+        if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
+            return true;
+        }
         return canOpenWorkModePreviewInNewWindow();
     }
-    return isFileBrowserOverlayOpen() && Boolean(getFilePanelPreviewLaunchUrl(normalizedVariant));
+    if (!isFileBrowserOverlayOpen()) return false;
+    if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
+        return true;
+    }
+    return Boolean(getFilePanelPreviewLaunchUrl(normalizedVariant));
 }
 
 function syncFilePanelPreviewOpenButton(variant, { loading = false } = {}) {
@@ -12479,6 +12616,13 @@ function openWorkModePreviewInNewWindow() {
 
 function openFilePanelPreviewInNewWindow(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
+    const markdownPayload = getFilePanelMarkdownPreviewPayload(normalizedVariant);
+    const panelOpen = normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE
+        ? isWorkModeEnabled()
+        : isFileBrowserOverlayOpen();
+    if (panelOpen && markdownPayload) {
+        return openFilePanelMarkdownPreviewInNewWindow(markdownPayload);
+    }
     const previewUrl = getFilePanelPreviewLaunchUrl(normalizedVariant);
     if (!previewUrl) {
         showToast('새 창으로 열 수 있는 선택 파일이 없습니다.', {

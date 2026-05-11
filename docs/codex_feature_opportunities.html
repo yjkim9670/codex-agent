@@ -432,8 +432,10 @@
       </p>
       <div class="meta-row">
         <span class="pill">작성일: 2026-05-09 KST</span>
+        <span class="pill">업데이트: 2026-05-11 KST</span>
         <span class="pill">대상: codex_workbench</span>
         <span class="pill">확인된 CLI: codex-cli 0.130.0</span>
+        <span class="pill">코드 기준: 명시적 sandbox 적용 확인</span>
         <span class="pill">근거: OpenAI 공식 Codex 문서</span>
       </div>
     </header>
@@ -443,7 +445,7 @@
       <div class="grid three">
         <article class="card">
           <h3>가장 먼저 할 일</h3>
-          <p>현재 <code>codex exec --json</code> 스트리밍 구조는 유지하되, 실행 프리셋, structured output, 명시적 sandbox, worktree 격리 작업을 먼저 붙이는 편이 안정적입니다.</p>
+          <p>현재 <code>codex exec --json</code> 스트리밍 구조와 명시적 sandbox 기준선은 유지하고, structured output, 실행 프리셋 UI, worktree 격리 작업을 먼저 붙이는 편이 안정적입니다.</p>
           <div class="metric"><strong>1</strong><span>낮은 구조 변경</span></div>
         </article>
         <article class="card">
@@ -462,7 +464,7 @@
     <section>
       <h2 class="section-title">현재 워크벤치 기준선</h2>
       <div class="callout">
-        워크벤치는 Python/Flask 서버가 브라우저 UI, 파일 브라우저, 터미널, Git 동기화, 사용량 모니터링을 제공하고, Codex 실행은 <code>codex exec --json</code> 프로세스를 띄워 stdout JSONL과 stderr를 스트리밍하는 방식입니다.
+        워크벤치는 Python/Flask 서버가 브라우저 UI, 파일 브라우저, 터미널, Git 동기화, 사용량 모니터링을 제공하고, Codex 실행은 <code>codex exec --json</code> 프로세스를 띄워 stdout JSONL과 stderr를 스트리밍하는 방식입니다. 현재 일반 실행은 <code>codex --ask-for-approval never exec --sandbox workspace-write</code>, question-only 실행은 <code>read-only --ephemeral</code> 경로를 사용합니다.
       </div>
       <div class="grid two" style="margin-top:16px">
         <article class="card">
@@ -470,7 +472,7 @@
           <ul class="plain-list">
             <li>이미 JSONL 이벤트, 토큰 사용량, 원격 스트림 재연결, queue wait, runtime 상태를 수집합니다.</li>
             <li>브라우저 UI와 Git overlay, usage overlay가 있어 기능 추가 지점이 명확합니다.</li>
-            <li>실행 환경을 워크스페이스 안으로 제한하고, queued Codex home을 준비하는 안전 장치가 있습니다.</li>
+            <li><code>--full-auto</code> 없이 명시적 sandbox를 사용하고, queued Codex home을 준비하는 안전 장치가 있습니다.</li>
           </ul>
         </article>
         <article class="card">
@@ -478,7 +480,7 @@
           <ul class="plain-list">
             <li>현재 thread store와 Codex 내부 thread lifecycle을 직접 읽는 구조는 아닙니다.</li>
             <li>subagent, model catalog, experimental feature flag, rollback/fork는 JSONL 이벤트만으로 표현하기 어렵습니다.</li>
-            <li>현재 일반 실행에서 <code>--full-auto</code>를 쓰고 있어 최신 문서 권장 방식인 명시적 sandbox 플래그로 바꾸는 검토가 필요합니다.</li>
+            <li>명시적 sandbox 전환은 완료됐지만, UI에서 approval/sandbox 프리셋과 위험도를 선택하거나 비교하는 화면은 아직 없습니다.</li>
           </ul>
         </article>
       </div>
@@ -564,7 +566,7 @@
 
           <g>
             <circle cx="170" cy="92" r="8" fill="#23704f"/>
-            <text x="186" y="97" fill="#17202a" font-size="13">명시적 sandbox 및 exec 현대화</text>
+            <text x="186" y="97" fill="#17202a" font-size="13">sandbox 프리셋 UI</text>
           </g>
           <g>
             <circle cx="250" cy="130" r="8" fill="#23704f"/>
@@ -623,12 +625,12 @@
         </thead>
         <tbody>
           <tr>
-            <td>실행 정책 현대화</td>
-            <td><code>--full-auto</code>를 명시적 <code>--sandbox workspace-write</code>와 approval 정책 조합으로 대체하고, 실행 프리셋을 UI에서 선택합니다.</td>
-            <td>기존 <code>_build_codex_command</code> 경로를 좁게 변경합니다.</td>
+            <td>실행 정책 프리셋화</td>
+            <td>이미 적용된 명시적 <code>--sandbox workspace-write</code>와 <code>read-only --ephemeral</code> 경로를 UI 프리셋으로 노출하고, 실행 전 위험도를 보여줍니다.</td>
+            <td>기존 <code>_build_codex_command</code>는 유지하고, 설정/표시 레이어를 얇게 추가합니다.</td>
             <td><span class="score high">높음</span></td>
             <td><span class="score high">낮음</span></td>
-            <td>최우선. 최신 문서 권장과 일치하고 회귀 범위가 작습니다.</td>
+            <td>기반 전환은 완료. 남은 일은 UI 프리셋과 회귀 테스트 보강입니다.</td>
           </tr>
           <tr>
             <td>Structured report presets</td>
@@ -850,7 +852,7 @@
         <article class="phase">
           <h3>Phase 1: 실행 레이어 정리</h3>
           <ul>
-            <li><code>--full-auto</code> 제거 검토</li>
+            <li><code>--full-auto</code> 제거 완료 확인</li>
             <li>sandbox/approval 프리셋 UI</li>
             <li>structured output report 버튼</li>
             <li>JSONL event timeline 개선</li>
@@ -884,6 +886,47 @@
           </ul>
         </article>
       </div>
+    </section>
+
+    <section>
+      <h2 class="section-title">업데이트 리스크 헤지</h2>
+      <p class="section-note">바로 App Server나 SDK 중심 구조로 갈아타지 않고, 현재 안정 경로를 유지한 채 새 기능을 작게 붙이는 방식이 안전합니다.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>리스크</th>
+            <th>헤지 방법</th>
+            <th>완료 기준</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>실행 경로 회귀</td>
+            <td><code>codex exec --json</code>을 기본 경로로 유지하고, App Server/remote-control은 feature flag 뒤의 별도 어댑터로 둡니다. 실패 시 기존 exec 경로로 즉시 fallback합니다.</td>
+            <td>기존 스트림, usage, queue, reconnect 테스트가 그대로 통과하고 flag off 상태에서 동작 차이가 없습니다.</td>
+          </tr>
+          <tr>
+            <td>권한 확대</td>
+            <td>현재 <code>workspace-write</code>와 question-only <code>read-only --ephemeral</code> 조합을 기준선으로 고정하고, sandbox 밖 명령이나 <code>thread/shellCommand</code> 류 기능은 초기에 UI에 노출하지 않습니다.</td>
+            <td>실행 커맨드 스냅샷 테스트가 <code>--full-auto</code> 미사용과 sandbox 값을 검증합니다.</td>
+          </tr>
+          <tr>
+            <td>작업물 충돌</td>
+            <td>새로운 구현/수정 작업은 Git worktree에서 실행하고, 본 checkout에는 diff review, handoff, cleanup 버튼만 제공합니다.</td>
+            <td>dirty worktree가 있는 상태에서도 독립 작업 생성, diff 확인, 폐기가 가능합니다.</td>
+          </tr>
+          <tr>
+            <td>출력 파싱 불안정</td>
+            <td>structured report는 <code>--output-schema</code> 최종 응답만 엄격 검증하고, 중간 JSONL 이벤트 파서는 현재 tolerant parser를 유지합니다.</td>
+            <td>schema validation 실패가 전체 스트림 실패로 번지지 않고 사용자에게 재시도 가능한 오류로 표시됩니다.</td>
+          </tr>
+          <tr>
+            <td>운영 비용 증가</td>
+            <td>subagent 병렬 실행은 자동 fan-out이 아니라 명시 버튼과 최대 병렬 수, 예상 token 표시를 둔 프리셋으로 시작합니다.</td>
+            <td>사용자가 병렬 수와 모델을 확인한 뒤에만 subagent 실행이 시작됩니다.</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
 
     <section>

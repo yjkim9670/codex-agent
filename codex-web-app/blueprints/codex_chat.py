@@ -35,6 +35,7 @@ from ..services.codex_chat import (
     append_message,
     branch_session_from_message,
     build_codex_prompt,
+    build_structured_report_prompt,
     CodexAttachmentError,
     get_session_storage_summary,
     create_session,
@@ -46,14 +47,18 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
+    get_execution_policy_presets,
     get_usage_history_summary,
     get_session,
     get_settings,
+    get_structured_report_preset,
     get_usage_summary,
+    list_structured_report_presets,
     list_codex_streams,
     read_codex_stream,
     list_sessions,
     normalize_codex_attachments,
+    normalize_structured_report_preset_id,
     rename_session,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
@@ -140,6 +145,18 @@ def _parse_attachments(payload):
     if not isinstance(payload, dict):
         return []
     return normalize_codex_attachments(payload.get('attachments') or [])
+
+
+def _parse_structured_report_preset(payload):
+    if not isinstance(payload, dict):
+        return ''
+    raw_value = payload.get('structured_report_preset')
+    if raw_value is None or str(raw_value).strip() == '':
+        return ''
+    preset_id = normalize_structured_report_preset_id(raw_value)
+    if not preset_id or not get_structured_report_preset(preset_id):
+        raise ValueError('지원하지 않는 structured report preset입니다.')
+    return preset_id
 
 
 def _attachment_error_response(error):
@@ -414,6 +431,8 @@ def codex_settings():
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
+        'execution_policy_presets': get_execution_policy_presets(),
+        'structured_report_presets': list_structured_report_presets(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
@@ -491,6 +510,8 @@ def codex_settings_update():
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
+        'execution_policy_presets': get_execution_policy_presets(),
+        'structured_report_presets': list_structured_report_presets(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
@@ -713,6 +734,10 @@ def codex_session_message_stream(session_id):
         attachments = _parse_attachments(payload)
     except CodexAttachmentError as exc:
         return _attachment_error_response(exc)
+    try:
+        structured_report_preset = _parse_structured_report_preset(payload)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -737,6 +762,11 @@ def codex_session_message_stream(session_id):
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
+    if structured_report_preset:
+        prompt_with_context = build_structured_report_prompt(
+            prompt_with_context,
+            structured_report_preset,
+        )
     model_override = _resolve_model_override(plan_mode=plan_mode)
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     start_result = start_codex_stream_for_session(
@@ -747,6 +777,8 @@ def codex_session_message_stream(session_id):
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
         attachments=attachments,
+        question_only=bool(structured_report_preset),
+        structured_report_preset=structured_report_preset,
     )
     if not start_result.get('ok'):
         if start_result.get('already_running'):
@@ -768,6 +800,8 @@ def codex_session_message_stream(session_id):
         'response_mode': start_result.get('response_mode'),
         'response_model': start_result.get('response_model'),
         'response_reasoning_effort': start_result.get('response_reasoning_effort'),
+        'execution_policy': start_result.get('execution_policy'),
+        'structured_report_preset': start_result.get('structured_report_preset'),
     })
 
 
@@ -780,6 +814,10 @@ def codex_session_message_queue(session_id):
         attachments = _parse_attachments(payload)
     except CodexAttachmentError as exc:
         return _attachment_error_response(exc)
+    try:
+        structured_report_preset = _parse_structured_report_preset(payload)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -795,6 +833,7 @@ def codex_session_message_queue(session_id):
         prompt,
         plan_mode=plan_mode,
         attachments=attachments,
+        structured_report_preset=structured_report_preset,
     )
     if not result.get('ok'):
         return jsonify({'error': result.get('error') or '큐 등록에 실패했습니다.'}), 500
@@ -815,6 +854,8 @@ def codex_session_message_queue(session_id):
         response['response_mode'] = result.get('response_mode')
         response['response_model'] = result.get('response_model')
         response['response_reasoning_effort'] = result.get('response_reasoning_effort')
+        response['execution_policy'] = result.get('execution_policy')
+        response['structured_report_preset'] = result.get('structured_report_preset')
     return jsonify(response)
 
 

@@ -471,6 +471,62 @@ def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspa
     assert '--full-auto' not in cmd
 
 
+def test_build_codex_command_supports_read_only_output_schema(isolated_codex_workspace, tmp_path):
+    schema_path = tmp_path / 'report.schema.json'
+
+    cmd = codex_chat._build_codex_command(
+        'report prompt',
+        output_schema_path=schema_path,
+        question_only=True,
+    )
+
+    assert cmd[:10] == [
+        'codex',
+        '--ask-for-approval',
+        'never',
+        'exec',
+        '--sandbox',
+        'read-only',
+        '--ephemeral',
+        '--color',
+        'never',
+        '--skip-git-repo-check',
+    ]
+    assert '--full-auto' not in cmd
+    assert cmd[cmd.index('--output-schema') + 1] == str(schema_path)
+
+
+def test_structured_report_preset_formats_valid_payload():
+    payload = {
+        'title': 'Risk report',
+        'summary': 'No critical risk.',
+        'risk_level': 'low',
+        'sections': [
+            {'heading': 'Checks', 'bullets': ['Run unit tests']},
+        ],
+        'action_items': ['Review diff'],
+        'findings': [],
+        'report_markdown': '## Risk report\n\nNo critical risk.',
+    }
+
+    output, metadata = codex_chat._format_structured_report_output(
+        json.dumps(payload),
+        'pr_risk',
+    )
+
+    assert output == '## Risk report\n\nNo critical risk.'
+    assert metadata['preset'] == 'pr_risk'
+    assert metadata['schema_valid'] is True
+
+
+def test_execution_policy_presets_keep_danger_access_hidden():
+    presets = codex_chat.get_execution_policy_presets()
+
+    assert any(item['sandbox'] == 'workspace-write' for item in presets)
+    assert any(item['sandbox'] == 'read-only' and item['ephemeral'] for item in presets)
+    assert all(item['sandbox'] != 'danger-full-access' for item in presets)
+
+
 def test_imagegen_overlay_points_to_workbench_managed_dirs(isolated_codex_workspace):
     workspace_dir = isolated_codex_workspace['workspace_dir']
 

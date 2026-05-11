@@ -22,11 +22,13 @@ const state = {
         model: null,
         modelCatalog: [],
         modelOptions: [],
+        executionPolicyPresets: [],
         planModeModel: null,
         planModeReasoningEffort: null,
         planModeState: 'off',
         reasoningEffort: null,
         reasoningOptions: [],
+        structuredReportPresets: [],
         usage: null,
         usageHistory: null,
         loaded: false
@@ -1286,6 +1288,7 @@ function createStreamState({
         tokenUsage,
         entry,
         startedAt: normalizedStartedAt,
+        codexEvents: [],
         processRunning: null,
         processPid: null,
         runtimeMs: null,
@@ -1374,6 +1377,39 @@ function normalizeModelCatalog(catalog) {
         seen.add(slug);
     });
     return normalized;
+}
+
+function normalizeExecutionPolicyPresets(presets) {
+    if (!Array.isArray(presets)) return [];
+    return presets.map(item => {
+        const id = typeof item?.id === 'string' ? item.id.trim() : '';
+        const label = typeof item?.label === 'string' ? item.label.trim() : id;
+        if (!id || !label) return null;
+        return {
+            id,
+            label,
+            approval: typeof item?.approval === 'string' ? item.approval.trim() : '',
+            sandbox: typeof item?.sandbox === 'string' ? item.sandbox.trim() : '',
+            ephemeral: Boolean(item?.ephemeral),
+            risk: typeof item?.risk === 'string' ? item.risk.trim() : '',
+            scope: typeof item?.scope === 'string' ? item.scope.trim() : ''
+        };
+    }).filter(Boolean);
+}
+
+function normalizeStructuredReportPresets(presets) {
+    if (!Array.isArray(presets)) return [];
+    return presets.map(item => {
+        const id = typeof item?.id === 'string' ? item.id.trim() : '';
+        const label = typeof item?.label === 'string' ? item.label.trim() : id;
+        if (!id || !label) return null;
+        return {
+            id,
+            label,
+            description: typeof item?.description === 'string' ? item.description.trim() : '',
+            defaultPrompt: typeof item?.default_prompt === 'string' ? item.default_prompt.trim() : ''
+        };
+    }).filter(Boolean);
 }
 
 function collectCatalogModelOptions(catalog) {
@@ -6155,6 +6191,21 @@ function getStreamMonitorElements() {
     };
 }
 
+function appendCodexEvents(target, events) {
+    if (!target || !Array.isArray(events) || events.length === 0) return;
+    if (!Array.isArray(target.codexEvents)) {
+        target.codexEvents = [];
+    }
+    events.forEach(event => {
+        if (event && typeof event === 'object') {
+            target.codexEvents.push(event);
+        }
+    });
+    if (target.codexEvents.length > 120) {
+        target.codexEvents.splice(0, target.codexEvents.length - 120);
+    }
+}
+
 function setStreamMonitorCollapsed(collapsed) {
     const monitor = document.getElementById('codex-stream-monitor');
     if (!monitor) return;
@@ -6189,7 +6240,17 @@ function renderStreamMonitorOutput() {
     }
     if (elements.outputContent) {
         const combined = streamMonitorState.output + (streamMonitorState.error ? `\n${streamMonitorState.error}` : '');
-        elements.outputContent.textContent = combined || 'Waiting for output...';
+        const eventText = buildCodexEventsDetailText(streamMonitorState.codexEvents);
+        const sections = [];
+        if (combined) {
+            sections.push(combined);
+        } else {
+            sections.push('Waiting for output...');
+        }
+        if (eventText) {
+            sections.push(`Codex JSON events\n${eventText}`);
+        }
+        elements.outputContent.textContent = sections.join('\n\n');
         if (!streamMonitorState.done) {
             elements.outputContent.scrollTop = elements.outputContent.scrollHeight;
         }
@@ -6401,6 +6462,7 @@ function startStreamMonitor(stream) {
         processPid: Number.isFinite(stream?.process_pid) ? stream.process_pid : null,
         runtimeMs: Number.isFinite(stream?.runtime_ms) ? stream.runtime_ms : null,
         idleMs: Number.isFinite(stream?.idle_ms) ? stream.idle_ms : null,
+        codexEvents: [],
         timer: null,
         polling: false
     };
@@ -6460,6 +6522,7 @@ async function pollStreamMonitor() {
         if (Number.isFinite(result?.event_length)) {
             current.eventOffset = result.event_length;
         }
+        appendCodexEvents(current, result?.events);
         renderStreamMonitorOutput();
         if (result?.done) {
             current.done = true;
@@ -6550,15 +6613,19 @@ async function loadSettings({ silent = true } = {}) {
             ? catalogModelOptions
             : normalizeOptionList(result?.model_options);
         const reasoningOptions = normalizeOptionList(result?.reasoning_options);
+        const executionPolicyPresets = normalizeExecutionPolicyPresets(result?.execution_policy_presets);
+        const structuredReportPresets = normalizeStructuredReportPresets(result?.structured_report_presets);
         state.settings = {
             model: result?.settings?.model || null,
             modelCatalog,
             modelOptions,
+            executionPolicyPresets,
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
+            structuredReportPresets,
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
             loaded: true
@@ -6572,6 +6639,8 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        renderExecutionPolicyStrip();
+        renderStructuredReportBar();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
@@ -6579,6 +6648,8 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        renderExecutionPolicyStrip();
+        renderStructuredReportBar();
         setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
@@ -6928,6 +6999,12 @@ async function updateSettings() {
             : (catalogReasoningOptions.length > 0
                 ? catalogReasoningOptions
                 : state.settings.reasoningOptions);
+        state.settings.executionPolicyPresets = Array.isArray(result?.execution_policy_presets)
+            ? normalizeExecutionPolicyPresets(result.execution_policy_presets)
+            : state.settings.executionPolicyPresets;
+        state.settings.structuredReportPresets = Array.isArray(result?.structured_report_presets)
+            ? normalizeStructuredReportPresets(result.structured_report_presets)
+            : state.settings.structuredReportPresets;
         state.settings.usage = result?.usage || state.settings.usage;
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
@@ -6943,6 +7020,8 @@ async function updateSettings() {
             state.settings.reasoningOptions,
             state.settings.planModeModel || state.settings.model
         );
+        renderExecutionPolicyStrip();
+        renderStructuredReportBar();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
@@ -18428,7 +18507,11 @@ function getNextPlanModeState(currentState = getPlanModeState()) {
     return PLAN_MODE_STATE_OFF;
 }
 
-async function queuePromptOnServer(sessionId, prompt, { planMode = false, attachments = [] } = {}) {
+async function queuePromptOnServer(
+    sessionId,
+    prompt,
+    { planMode = false, attachments = [], structuredReportPreset = '' } = {}
+) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
     }
@@ -18441,6 +18524,7 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false, attach
         body: JSON.stringify({
             prompt,
             plan_mode: Boolean(planMode),
+            structured_report_preset: structuredReportPreset || '',
             attachments: normalizedAttachments
         })
     });
@@ -18465,7 +18549,8 @@ async function queuePromptOnServer(sessionId, prompt, { planMode = false, attach
                 planMode,
                 responseMode: result?.response_mode,
                 responseModel: result?.response_model,
-                responseReasoningEffort: result?.response_reasoning_effort
+                responseReasoningEffort: result?.response_reasoning_effort,
+                structuredReportPreset
             })
         );
         return {
@@ -18547,6 +18632,123 @@ function setPlanModeToggleState(nextState) {
     button.textContent = buttonText;
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
+}
+
+function getExecutionPolicyPreset(id) {
+    const targetId = typeof id === 'string' ? id.trim() : '';
+    return (Array.isArray(state.settings.executionPolicyPresets) ? state.settings.executionPolicyPresets : [])
+        .find(item => item.id === targetId) || null;
+}
+
+function renderExecutionPolicyStrip() {
+    const strip = document.getElementById('codex-execution-policy-strip');
+    if (!strip) return;
+    const standard = getExecutionPolicyPreset('standard');
+    const report = getExecutionPolicyPreset('read_only_ephemeral');
+    const presets = [standard, report].filter(Boolean);
+    if (presets.length === 0) {
+        strip.classList.add('is-hidden');
+        strip.textContent = '';
+        return;
+    }
+    strip.classList.remove('is-hidden');
+    strip.innerHTML = '';
+    presets.forEach(preset => {
+        const pill = document.createElement('button');
+        pill.type = 'button';
+        pill.className = 'execution-policy-pill';
+        if (preset.id === 'standard') {
+            pill.classList.add('is-active');
+        }
+        const parts = [
+            preset.label,
+            preset.sandbox,
+            preset.approval ? `approval ${preset.approval}` : '',
+            preset.ephemeral ? 'ephemeral' : ''
+        ].filter(Boolean);
+        pill.textContent = parts.join(' · ');
+        pill.disabled = true;
+        const risk = preset.risk ? `Risk ${preset.risk}. ` : '';
+        const scope = preset.scope ? `Scope ${preset.scope}. ` : '';
+        pill.setAttribute('title', `${risk}${scope}${preset.sandbox || ''}`.trim());
+        strip.appendChild(pill);
+    });
+}
+
+function renderStructuredReportBar() {
+    const bar = document.getElementById('codex-structured-report-bar');
+    if (!bar) return;
+    const presets = Array.isArray(state.settings.structuredReportPresets)
+        ? state.settings.structuredReportPresets
+        : [];
+    bar.innerHTML = '';
+    bar.classList.toggle('is-hidden', presets.length === 0);
+    presets.forEach(preset => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'structured-report-button';
+        button.dataset.structuredReportPreset = preset.id;
+        button.textContent = preset.label;
+        const title = preset.description || preset.defaultPrompt || preset.label;
+        button.setAttribute('aria-label', title);
+        button.setAttribute('title', title);
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            void handleStructuredReportPreset(preset.id);
+        });
+        bar.appendChild(button);
+    });
+}
+
+async function handleStructuredReportPreset(presetId) {
+    const preset = (Array.isArray(state.settings.structuredReportPresets) ? state.settings.structuredReportPresets : [])
+        .find(item => item.id === presetId);
+    if (!preset) return;
+    const input = document.getElementById('codex-chat-input');
+    const draftPrompt = input?.value || '';
+    const prompt = draftPrompt.trim() || preset.defaultPrompt || `${preset.label} report`;
+    const activeSessionId = state.activeSessionId;
+    const attachments = getPendingAttachmentPayload();
+    if (input) {
+        input.value = '';
+    }
+    try {
+        if (activeSessionId && isSessionBusy(activeSessionId)) {
+            const queueResult = await queuePromptOnServer(activeSessionId, prompt, {
+                planMode: false,
+                attachments,
+                structuredReportPreset: preset.id
+            });
+            clearPendingAttachments();
+            if (queueResult?.reason === 'queued') {
+                setSessionStatus(activeSessionId, `Queued ${preset.label} report...`);
+            }
+            syncActiveSessionControls();
+            return;
+        }
+        const result = await sendPrompt(prompt, {
+            sessionId: activeSessionId,
+            planMode: false,
+            attachments,
+            structuredReportPreset: preset.id
+        });
+        if (result?.ok) {
+            clearPendingAttachments();
+            return;
+        }
+    } catch (error) {
+        const targetSessionId = activeSessionId || state.activeSessionId;
+        if (targetSessionId) {
+            setSessionStatus(targetSessionId, normalizeError(error, 'Failed to start structured report.'), true);
+        } else {
+            setStatus(normalizeError(error, 'Failed to start structured report.'), true);
+        }
+    }
+    if (input && state.activeSessionId === activeSessionId && input.value === '') {
+        input.value = draftPrompt;
+        input.focus();
+    }
+    syncActiveSessionControls();
 }
 
 async function handleSubmit(event) {
@@ -18708,7 +18910,8 @@ function processStartedStreamResponse(
             created_at: new Date().toISOString(),
             response_mode: responseMetadata?.response_mode,
             response_model: responseMetadata?.response_model,
-            response_reasoning_effort: responseMetadata?.response_reasoning_effort
+            response_reasoning_effort: responseMetadata?.response_reasoning_effort,
+            structured_report_preset: responseMetadata?.structured_report_preset || ''
         }, 'assistant');
     }
 
@@ -18724,7 +18927,15 @@ function processStartedStreamResponse(
     });
 }
 
-async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMode = false, attachments = [] } = {}) {
+async function sendPrompt(
+    prompt,
+    {
+        sessionId: sessionIdOverride = null,
+        planMode = false,
+        attachments = [],
+        structuredReportPreset = ''
+    } = {}
+) {
     let sessionId = sessionIdOverride || state.activeSessionId;
     const normalizedAttachments = Array.isArray(attachments)
         ? attachments.map(normalizeChatAttachment).filter(Boolean)
@@ -18761,6 +18972,7 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             body: JSON.stringify({
                 prompt,
                 plan_mode: Boolean(planMode),
+                structured_report_preset: structuredReportPreset || '',
                 attachments: normalizedAttachments
             }),
             signal: controller.signal
@@ -18782,7 +18994,8 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
                 planMode,
                 responseMode: result?.response_mode,
                 responseModel: result?.response_model,
-                responseReasoningEffort: result?.response_reasoning_effort
+                responseReasoningEffort: result?.response_reasoning_effort,
+                structuredReportPreset
             })
         );
         return { ok: true, reason: 'started', sessionId };
@@ -18804,7 +19017,8 @@ async function sendPrompt(prompt, { sessionId: sessionIdOverride = null, planMod
             try {
                 const queueResult = await queuePromptOnServer(sessionId, prompt, {
                     planMode: Boolean(planMode),
-                    attachments: normalizedAttachments
+                    attachments: normalizedAttachments,
+                    structuredReportPreset
                 });
                 if (sessionState) {
                     sessionState.sending = false;
@@ -19035,6 +19249,7 @@ async function pollStream(streamId) {
         if (Number.isFinite(result?.event_length)) {
             current.eventOffset = result.event_length;
         }
+        appendCodexEvents(current, result?.events);
 
         if (result?.output || result?.error) {
             updateStreamEntry(current);
@@ -19289,7 +19504,9 @@ function getRoleLabel(role) {
 
 function normalizeResponseModeLabel(value) {
     const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-    return normalized === 'plan' ? 'plan' : 'basic';
+    if (normalized === 'plan') return 'plan';
+    if (normalized === 'report') return 'report';
+    return 'basic';
 }
 
 function resolveSessionLastResponseMode(session) {
@@ -19312,15 +19529,20 @@ function resolveSessionLastResponseMode(session) {
 }
 
 function resolveResponseModeText(modeLabel) {
-    return normalizeResponseModeLabel(modeLabel) === 'plan' ? 'plan모드' : '기본모드';
+    const mode = normalizeResponseModeLabel(modeLabel);
+    if (mode === 'plan') return 'plan모드';
+    if (mode === 'report') return 'report';
+    return '기본모드';
 }
 
 function syncMessageResponseModeClass(wrapper, role, message = null) {
     if (!wrapper) return;
     const normalizedRole = typeof role === 'string' ? role.trim().toLowerCase() : '';
     const canHaveResponseMode = normalizedRole === 'assistant' || normalizedRole === 'error';
-    const isPlanResponse = canHaveResponseMode && normalizeResponseModeLabel(message?.response_mode) === 'plan';
+    const responseMode = canHaveResponseMode ? normalizeResponseModeLabel(message?.response_mode) : '';
+    const isPlanResponse = responseMode === 'plan';
     wrapper.classList.toggle('is-plan-response', isPlanResponse);
+    wrapper.classList.toggle('is-report-response', responseMode === 'report');
 }
 
 function createSessionResponseModeBadge(session) {
@@ -19332,7 +19554,7 @@ function createSessionResponseModeBadge(session) {
     badge.type = 'button';
     badge.className = `session-response-mode is-${mode}`;
     badge.disabled = true;
-    badge.textContent = mode === 'plan' ? 'Plan' : 'Basic';
+    badge.textContent = mode === 'plan' ? 'Plan' : (mode === 'report' ? 'Report' : 'Basic');
     const label = `마지막 응답: ${resolveResponseModeText(mode)}`;
     badge.setAttribute('aria-label', label);
     badge.setAttribute('title', label);
@@ -19384,9 +19606,12 @@ function resolveRequestResponseMetadata({
     planMode = false,
     responseMode = '',
     responseModel = '',
-    responseReasoningEffort = ''
+    responseReasoningEffort = '',
+    structuredReportPreset = ''
 } = {}) {
-    const normalizedMode = normalizeResponseModeLabel(responseMode || (planMode ? 'plan' : 'basic'));
+    const normalizedMode = normalizeResponseModeLabel(
+        responseMode || (structuredReportPreset ? 'report' : (planMode ? 'plan' : 'basic'))
+    );
     const normalizedModel = typeof responseModel === 'string' ? responseModel.trim() : '';
     const resolvedModel = normalizedModel || resolveResponseModelForRequest(normalizedMode === 'plan');
     const normalizedReasoningEffort = typeof responseReasoningEffort === 'string'
@@ -19396,7 +19621,8 @@ function resolveRequestResponseMetadata({
         response_mode: normalizedMode,
         response_model: resolvedModel,
         response_reasoning_effort: normalizedReasoningEffort
-            || resolveReasoningEffortForRequest(normalizedMode === 'plan', resolvedModel)
+            || resolveReasoningEffortForRequest(normalizedMode === 'plan', resolvedModel),
+        structured_report_preset: structuredReportPreset || ''
     };
 }
 

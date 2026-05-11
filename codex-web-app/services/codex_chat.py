@@ -292,9 +292,11 @@ _AUTH_REFRESH_ERROR_RE = re.compile(
 )
 _RESPONSE_MODE_BASIC = 'basic'
 _RESPONSE_MODE_PLAN = 'plan'
+_RESPONSE_MODE_REPORT = 'report'
 _STREAM_PROGRESS_SAVE_INTERVAL_SECONDS = 0.75
 _STREAM_PROGRESS_SAVE_MIN_CHARS = 96
 _ATTACHMENTS_DIR = CODEX_STORAGE_DIR / 'attachments'
+_OUTPUT_SCHEMA_DIR = CODEX_STORAGE_DIR / 'output_schemas'
 _IMAGE_ATTACHMENT_EXTENSIONS = {
     '.avif',
     '.bmp',
@@ -308,6 +310,114 @@ _IMAGE_ATTACHMENT_EXTENSIONS = {
 }
 _CODEX_EVENT_LOG_LIMIT = 200
 _CODEX_EVENT_DETAIL_MAX_CHARS = 900
+
+_STRUCTURED_REPORT_SCHEMA = {
+    '$schema': 'http://json-schema.org/draft-07/schema#',
+    'type': 'object',
+    'additionalProperties': False,
+    'required': ['title', 'summary', 'risk_level', 'sections', 'action_items', 'report_markdown'],
+    'properties': {
+        'title': {'type': 'string'},
+        'summary': {'type': 'string'},
+        'risk_level': {'type': 'string', 'enum': ['low', 'medium', 'high', 'unknown']},
+        'sections': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['heading', 'bullets'],
+                'properties': {
+                    'heading': {'type': 'string'},
+                    'bullets': {'type': 'array', 'items': {'type': 'string'}},
+                },
+            },
+        },
+        'action_items': {'type': 'array', 'items': {'type': 'string'}},
+        'findings': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['severity', 'title', 'detail'],
+                'properties': {
+                    'severity': {'type': 'string', 'enum': ['low', 'medium', 'high', 'info']},
+                    'title': {'type': 'string'},
+                    'detail': {'type': 'string'},
+                    'recommendation': {'type': 'string'},
+                },
+            },
+        },
+        'report_markdown': {'type': 'string'},
+    },
+}
+
+_STRUCTURED_REPORT_PRESETS = {
+    'pr_risk': {
+        'id': 'pr_risk',
+        'label': 'PR Risk',
+        'description': '변경 리스크, 회귀 가능성, 리뷰 포인트를 구조화합니다.',
+        'default_prompt': '현재 세션과 워크스페이스 기준으로 PR 리스크 보고서를 작성해줘.',
+        'instruction': (
+            'Create a PR risk report. Focus on behavioral regressions, unsafe assumptions, '
+            'missing tests, rollback concerns, and concrete review checkpoints.'
+        ),
+        'schema': _STRUCTURED_REPORT_SCHEMA,
+    },
+    'test_plan': {
+        'id': 'test_plan',
+        'label': 'Test Plan',
+        'description': '핵심 회귀 테스트와 수동 검증 순서를 정리합니다.',
+        'default_prompt': '현재 세션과 워크스페이스 기준으로 테스트 계획 보고서를 작성해줘.',
+        'instruction': (
+            'Create a test plan. Prioritize automated checks, manual verification steps, '
+            'edge cases, fixtures, and explicit pass/fail signals.'
+        ),
+        'schema': _STRUCTURED_REPORT_SCHEMA,
+    },
+    'release_notes': {
+        'id': 'release_notes',
+        'label': 'Release Notes',
+        'description': '사용자 영향, 마이그레이션, 운영 참고사항을 정리합니다.',
+        'default_prompt': '현재 세션과 워크스페이스 기준으로 릴리즈 노트를 작성해줘.',
+        'instruction': (
+            'Create release notes. Separate user-visible changes, operational notes, '
+            'migration concerns, known limitations, and follow-up work.'
+        ),
+        'schema': _STRUCTURED_REPORT_SCHEMA,
+    },
+    'codebase_explain': {
+        'id': 'codebase_explain',
+        'label': 'Code Map',
+        'description': '관련 코드 경로와 책임 경계를 설명합니다.',
+        'default_prompt': '현재 세션과 워크스페이스 기준으로 코드베이스 설명 보고서를 작성해줘.',
+        'instruction': (
+            'Create a codebase explanation. Map the relevant files, responsibilities, data flow, '
+            'extension points, and areas that require caution.'
+        ),
+        'schema': _STRUCTURED_REPORT_SCHEMA,
+    },
+}
+
+_EXECUTION_POLICY_PRESETS = (
+    {
+        'id': 'standard',
+        'label': 'Standard edit',
+        'approval': 'never',
+        'sandbox': 'workspace-write',
+        'ephemeral': False,
+        'risk': 'medium',
+        'scope': 'default',
+    },
+    {
+        'id': 'read_only_ephemeral',
+        'label': 'Read-only ephemeral',
+        'approval': 'never',
+        'sandbox': 'read-only',
+        'ephemeral': True,
+        'risk': 'low',
+        'scope': 'subjob/report',
+    },
+)
 
 
 class CodexAttachmentError(ValueError):
@@ -542,6 +652,9 @@ def _normalize_pending_queue_entry(entry):
         'prompt': prompt,
         'plan_mode': bool(entry.get('plan_mode')),
         'attachments': attachments,
+        'structured_report_preset': normalize_structured_report_preset_id(
+            entry.get('structured_report_preset')
+        ),
         'created_at': normalize_timestamp(entry.get('created_at')),
     }
 
@@ -1020,11 +1133,65 @@ def _normalize_response_mode_label(mode_label):
     value = str(mode_label or '').strip().lower()
     if value == _RESPONSE_MODE_PLAN:
         return _RESPONSE_MODE_PLAN
+    if value == _RESPONSE_MODE_REPORT:
+        return _RESPONSE_MODE_REPORT
     return _RESPONSE_MODE_BASIC
 
 
-def resolve_response_mode_label(plan_mode=False):
+def resolve_response_mode_label(plan_mode=False, structured_report_preset=None):
+    if normalize_structured_report_preset_id(structured_report_preset):
+        return _RESPONSE_MODE_REPORT
     return _RESPONSE_MODE_PLAN if bool(plan_mode) else _RESPONSE_MODE_BASIC
+
+
+def normalize_structured_report_preset_id(value):
+    preset_id = str(value or '').strip().lower().replace('-', '_')
+    if preset_id in _STRUCTURED_REPORT_PRESETS:
+        return preset_id
+    return ''
+
+
+def get_structured_report_preset(value):
+    preset_id = normalize_structured_report_preset_id(value)
+    if not preset_id:
+        return None
+    preset = _STRUCTURED_REPORT_PRESETS.get(preset_id)
+    return deepcopy(preset) if isinstance(preset, dict) else None
+
+
+def list_structured_report_presets():
+    presets = []
+    for preset in _STRUCTURED_REPORT_PRESETS.values():
+        presets.append({
+            'id': preset.get('id'),
+            'label': preset.get('label'),
+            'description': preset.get('description'),
+            'default_prompt': preset.get('default_prompt'),
+        })
+    return presets
+
+
+def get_execution_policy_presets():
+    return deepcopy(list(_EXECUTION_POLICY_PRESETS))
+
+
+def build_structured_report_prompt(prompt_text, preset_id):
+    preset = get_structured_report_preset(preset_id)
+    if not preset:
+        return str(prompt_text or '')
+    normalized = str(prompt_text or '').strip() or '(empty)'
+    label = str(preset.get('label') or preset.get('id') or 'Structured report').strip()
+    instruction = str(preset.get('instruction') or '').strip()
+    return (
+        f'{normalized}\n\n'
+        '## Structured Report Preset\n'
+        f'- Preset: {label}\n'
+        f'- Instruction: {instruction}\n'
+        '- Run in read-only mode. Do not modify files or git state.\n'
+        '- The final answer must match the provided JSON Schema exactly.\n'
+        '- Put the complete user-visible Markdown report in `report_markdown`.\n'
+        '- Also fill `title`, `summary`, `risk_level`, `sections`, `action_items`, and `findings`.'
+    )
 
 
 def resolve_response_model_name(model_override=None):
@@ -3807,6 +3974,42 @@ def _new_codex_output_path(identifier=None):
     return output_dir / f"codex_output_{suffix}.txt"
 
 
+def _new_codex_output_schema_path(identifier=None):
+    _OUTPUT_SCHEMA_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = str(identifier or uuid.uuid4().hex)
+    return _OUTPUT_SCHEMA_DIR / f"codex_output_schema_{suffix}.json"
+
+
+def _write_codex_output_schema(identifier, schema):
+    if not isinstance(schema, dict):
+        return None
+    try:
+        output_schema_path = _new_codex_output_schema_path(identifier)
+        output_schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding='utf-8',
+        )
+        return str(output_schema_path)
+    except Exception:
+        _LOGGER.exception('Failed to write Codex output schema for stream %s', identifier)
+        return None
+
+
+def _cleanup_output_schema(path):
+    if not path:
+        return
+    try:
+        output_schema_path = Path(path)
+    except Exception:
+        return
+    try:
+        output_schema_path.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
 def _wrap_codex_cli_command(cmd):
     protected_paths = _codex_cli_protected_paths()
     if not protected_paths:
@@ -3956,6 +4159,7 @@ def build_codex_prompt(messages, prompt):
 def _build_codex_command(
         prompt,
         output_path=None,
+        output_schema_path=None,
         json_output=False,
         model_override=None,
         reasoning_override=None,
@@ -4003,6 +4207,8 @@ def _build_codex_command(
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
     if output_path:
         cmd.extend(['--output-last-message', str(output_path)])
+    if output_schema_path:
+        cmd.extend(['--output-schema', str(output_schema_path)])
     normalized_attachments = normalize_codex_attachments(attachments or [])
     for attachment in normalized_attachments:
         cmd.extend(['--image', attachment.get('path')])
@@ -4615,6 +4821,114 @@ def _cleanup_output_last_message(path):
         pass
 
 
+def _parse_json_response_text(text):
+    raw = str(text or '').strip()
+    if not raw:
+        return None
+    if raw.startswith('```'):
+        lines = raw.splitlines()
+        if lines and lines[0].strip().startswith('```'):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        raw = '\n'.join(lines).strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _validate_structured_report_payload(payload):
+    if not isinstance(payload, dict):
+        return False, 'final response is not a JSON object'
+    required = ('title', 'summary', 'risk_level', 'sections', 'action_items', 'report_markdown')
+    for key in required:
+        if key not in payload:
+            return False, f'missing required field: {key}'
+    if not isinstance(payload.get('title'), str) or not payload.get('title').strip():
+        return False, 'title must be a non-empty string'
+    if not isinstance(payload.get('summary'), str):
+        return False, 'summary must be a string'
+    if payload.get('risk_level') not in {'low', 'medium', 'high', 'unknown'}:
+        return False, 'risk_level must be low, medium, high, or unknown'
+    if not isinstance(payload.get('sections'), list):
+        return False, 'sections must be an array'
+    for section in payload.get('sections') or []:
+        if not isinstance(section, dict):
+            return False, 'each section must be an object'
+        if not isinstance(section.get('heading'), str):
+            return False, 'section.heading must be a string'
+        if not isinstance(section.get('bullets'), list):
+            return False, 'section.bullets must be an array'
+        if any(not isinstance(item, str) for item in section.get('bullets') or []):
+            return False, 'section.bullets must contain strings'
+    if not isinstance(payload.get('action_items'), list):
+        return False, 'action_items must be an array'
+    if any(not isinstance(item, str) for item in payload.get('action_items') or []):
+        return False, 'action_items must contain strings'
+    if not isinstance(payload.get('report_markdown'), str):
+        return False, 'report_markdown must be a string'
+    return True, ''
+
+
+def _render_structured_report_markdown(payload):
+    report_markdown = str(payload.get('report_markdown') or '').strip()
+    if report_markdown:
+        return report_markdown
+
+    lines = []
+    title = str(payload.get('title') or '').strip()
+    if title:
+        lines.append(f'# {title}')
+    summary = str(payload.get('summary') or '').strip()
+    if summary:
+        lines.extend(['', summary])
+    for section in payload.get('sections') or []:
+        heading = str(section.get('heading') or '').strip()
+        bullets = [str(item).strip() for item in (section.get('bullets') or []) if str(item).strip()]
+        if heading:
+            lines.extend(['', f'## {heading}'])
+        lines.extend(f'- {item}' for item in bullets)
+    action_items = [str(item).strip() for item in (payload.get('action_items') or []) if str(item).strip()]
+    if action_items:
+        lines.extend(['', '## Action Items'])
+        lines.extend(f'- {item}' for item in action_items)
+    return '\n'.join(lines).strip()
+
+
+def _format_structured_report_output(text, preset_id):
+    preset = get_structured_report_preset(preset_id)
+    if not preset:
+        return str(text or '').strip(), None
+
+    parsed = _parse_json_response_text(text)
+    valid, error = _validate_structured_report_payload(parsed)
+    metadata = {
+        'preset': preset.get('id'),
+        'label': preset.get('label'),
+        'schema_valid': bool(valid),
+    }
+    if valid:
+        return _render_structured_report_markdown(parsed), metadata
+
+    metadata['schema_error'] = error or 'schema validation failed'
+    raw = str(text or '').strip()
+    if raw:
+        fallback = (
+            'Structured report schema validation failed.\n\n'
+            f'Reason: {metadata["schema_error"]}\n\n'
+            'Raw final response:\n\n'
+            f'```json\n{raw}\n```'
+        )
+    else:
+        fallback = (
+            'Structured report schema validation failed.\n\n'
+            f'Reason: {metadata["schema_error"]}'
+        )
+    return fallback, metadata
+
+
 def _copy_imagegen_workbench_outputs(paths):
     if not isinstance(paths, list):
         return []
@@ -5160,8 +5474,12 @@ def _build_partial_stream_message_metadata(stream):
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'execution_policy': str(stream.get('execution_policy') or 'standard').strip() or 'standard',
         'streaming': True,
     }
+    structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
+    if structured_report_preset:
+        metadata['structured_report_preset'] = structured_report_preset
     usage = _normalize_token_usage(stream.get('token_usage'))
     metadata = _attach_token_usage_metadata(metadata, usage)
     return metadata if isinstance(metadata, dict) else {
@@ -5520,6 +5838,7 @@ def _run_codex_stream(stream_id, prompt):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         output_path = stream.get('output_path') if stream else None
+        output_schema_path = stream.get('output_schema_path') if stream else None
         started_at = stream.get('started_at') if stream else None
         model_override = stream.get('model_override') if stream else None
         reasoning_override = stream.get('reasoning_override') if stream else None
@@ -5540,6 +5859,7 @@ def _run_codex_stream(stream_id, prompt):
     cmd = _build_codex_command(
         prompt,
         output_path=output_path,
+        output_schema_path=output_schema_path,
         json_output=json_output,
         model_override=model_override,
         reasoning_override=reasoning_override,
@@ -5581,6 +5901,7 @@ def _run_codex_stream(stream_id, prompt):
                     stream['updated_at'] = stream['completed_at']
                     stream['finalize_reason'] = 'process_start_failed'
             finalize_codex_stream(stream_id)
+            _cleanup_output_schema(output_schema_path)
             return
         except Exception as exc:
             _append_stream_chunk(stream_id, 'error', f'Codex 실행 중 오류가 발생했습니다: {exc}\n')
@@ -5593,6 +5914,7 @@ def _run_codex_stream(stream_id, prompt):
                     stream['updated_at'] = stream['completed_at']
                     stream['finalize_reason'] = 'process_start_failed'
             finalize_codex_stream(stream_id)
+            _cleanup_output_schema(output_schema_path)
             return
 
         with state.codex_streams_lock:
@@ -5788,6 +6110,7 @@ def _run_codex_stream(stream_id, prompt):
                     stream['updated_at'] = now
 
         _cleanup_output_last_message(output_path)
+        _cleanup_output_schema(output_schema_path)
 
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
@@ -5826,11 +6149,21 @@ def create_codex_stream(
         assistant_message_id=None,
         queued_execution=False,
         question_only=False,
-        user_prompt=None):
+        user_prompt=None,
+        structured_report_preset=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
-    response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
+    structured_report = get_structured_report_preset(structured_report_preset_id)
+    output_schema_path = _write_codex_output_schema(
+        stream_id,
+        structured_report.get('schema') if structured_report else None,
+    )
+    response_mode = resolve_response_mode_label(
+        plan_mode=plan_mode,
+        structured_report_preset=structured_report_preset_id,
+    )
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -5863,12 +6196,16 @@ def create_codex_stream(
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
-        'question_only': bool(question_only),
+        'question_only': bool(question_only or structured_report_preset_id),
         'attachments': normalized_attachments,
         'user_prompt': str(user_prompt or '').strip(),
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
+        'structured_report_preset': structured_report_preset_id,
+        'structured_report_label': structured_report.get('label') if structured_report else '',
+        'output_schema_path': output_schema_path,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
         'assistant_progress_saved_at': None,
         'assistant_progress_output_length': 0,
@@ -5905,6 +6242,8 @@ def create_codex_stream(
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
+        'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
+        'structured_report_preset': structured_report_preset_id,
     }
 
 
@@ -6040,7 +6379,8 @@ def _start_codex_stream_for_session_locked(
         plan_mode=False,
         attachments=None,
         queued_execution=False,
-        question_only=False):
+        question_only=False,
+        structured_report_preset=None):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -6059,7 +6399,11 @@ def _start_codex_stream_for_session_locked(
             'error': '메시지를 저장하지 못했습니다.'
         }
 
-    response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
+    response_mode = resolve_response_mode_label(
+        plan_mode=plan_mode,
+        structured_report_preset=structured_report_preset_id,
+    )
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -6074,6 +6418,8 @@ def _start_codex_stream_for_session_locked(
             'response_model': response_model,
             'response_reasoning_effort': response_reasoning_effort,
             'streaming': True,
+            'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
+            'structured_report_preset': structured_report_preset_id,
         }
     )
     if not assistant_message:
@@ -6088,8 +6434,9 @@ def _start_codex_stream_for_session_locked(
         'plan_mode': plan_mode,
         'assistant_message_id': assistant_message.get('id'),
         'queued_execution': bool(queued_execution),
-        'question_only': bool(question_only),
+        'question_only': bool(question_only or structured_report_preset_id),
         'user_prompt': prompt,
+        'structured_report_preset': structured_report_preset_id,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -6108,21 +6455,24 @@ def _start_codex_stream_for_session_locked(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'execution_policy': stream_info.get('execution_policy'),
+        'structured_report_preset': stream_info.get('structured_report_preset'),
     }
 
 
-def _build_pending_queue_entry(prompt, plan_mode=False, attachments=None):
+def _build_pending_queue_entry(prompt, plan_mode=False, attachments=None, structured_report_preset=None):
     normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,
         'prompt': str(prompt or '').strip(),
         'plan_mode': bool(plan_mode),
         'attachments': normalized_attachments,
+        'structured_report_preset': normalize_structured_report_preset_id(structured_report_preset),
         'created_at': normalize_timestamp(None),
     }
 
 
-def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachments=None):
+def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachments=None, structured_report_preset=None):
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -6130,7 +6480,12 @@ def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachment
         if not session:
             return {'ok': False, 'error': '세션을 찾을 수 없습니다.'}
         queue = _normalize_session_pending_queue(session)
-        entry = _build_pending_queue_entry(prompt, plan_mode=plan_mode, attachments=attachments)
+        entry = _build_pending_queue_entry(
+            prompt,
+            plan_mode=plan_mode,
+            attachments=attachments,
+            structured_report_preset=structured_report_preset,
+        )
         if not entry.get('prompt'):
             return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
         queue.append(entry)
@@ -6176,6 +6531,9 @@ def _start_next_queued_codex_stream_locked(session_id):
 
         plan_mode = bool(pending_entry.get('plan_mode'))
         attachments = pending_entry.get('attachments') or []
+        structured_report_preset = normalize_structured_report_preset_id(
+            pending_entry.get('structured_report_preset')
+        )
         session = get_session(session_id)
         if not session:
             return {
@@ -6187,6 +6545,11 @@ def _start_next_queued_codex_stream_locked(session_id):
         prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
         if plan_mode:
             prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
+        if structured_report_preset:
+            prompt_with_context = build_structured_report_prompt(
+                prompt_with_context,
+                structured_report_preset,
+            )
         model_override, reasoning_override = _resolve_codex_overrides_for_plan_mode(plan_mode=plan_mode)
         start_result = _start_codex_stream_for_session_locked(
             session_id,
@@ -6197,7 +6560,8 @@ def _start_next_queued_codex_stream_locked(session_id):
             plan_mode=plan_mode,
             attachments=attachments,
             queued_execution=True,
-            question_only=False,
+            question_only=bool(structured_report_preset),
+            structured_report_preset=structured_report_preset,
         )
         if not start_result.get('ok'):
             return start_result
@@ -6221,7 +6585,9 @@ def start_codex_stream_for_session(
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
-        attachments=None):
+        attachments=None,
+        question_only=False,
+        structured_report_preset=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -6233,7 +6599,8 @@ def start_codex_stream_for_session(
             plan_mode=plan_mode,
             attachments=attachments,
             queued_execution=False,
-            question_only=False,
+            question_only=question_only,
+            structured_report_preset=structured_report_preset,
         )
 
 
@@ -6284,10 +6651,21 @@ def start_codex_subjob_for_session(parent_session_id, prompt, attachments=None):
     return start_result
 
 
-def enqueue_codex_stream_for_session(session_id, prompt, plan_mode=False, attachments=None):
+def enqueue_codex_stream_for_session(
+        session_id,
+        prompt,
+        plan_mode=False,
+        attachments=None,
+        structured_report_preset=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
-        queued = _enqueue_pending_queue_entry(session_id, prompt, plan_mode=plan_mode, attachments=attachments)
+        queued = _enqueue_pending_queue_entry(
+            session_id,
+            prompt,
+            plan_mode=plan_mode,
+            attachments=attachments,
+            structured_report_preset=structured_report_preset,
+        )
         if not queued.get('ok'):
             return queued
 
@@ -6390,6 +6768,9 @@ def list_codex_streams(include_done=False):
                 'response_mode': stream.get('response_mode'),
                 'response_model': stream.get('response_model'),
                 'response_reasoning_effort': stream.get('response_reasoning_effort'),
+                'execution_policy': stream.get('execution_policy') or 'standard',
+                'structured_report_preset': stream.get('structured_report_preset') or '',
+                'structured_report_label': stream.get('structured_report_label') or '',
                 'token_usage': usage,
                 'input_tokens': usage.get('input_tokens', 0),
                 'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6448,6 +6829,9 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'response_mode': stream.get('response_mode'),
             'response_model': stream.get('response_model'),
             'response_reasoning_effort': stream.get('response_reasoning_effort'),
+            'execution_policy': stream.get('execution_policy') or 'standard',
+            'structured_report_preset': stream.get('structured_report_preset') or '',
+            'structured_report_label': stream.get('structured_report_label') or '',
             'token_usage': usage,
             'input_tokens': usage.get('input_tokens', 0),
             'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6507,6 +6891,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             model_override=stream.get('model_override'),
             reasoning_override=stream.get('reasoning_override'),
         )
+        execution_policy = str(stream.get('execution_policy') or 'standard').strip() or 'standard'
+        structured_report_preset = normalize_structured_report_preset_id(
+            stream.get('structured_report_preset')
+        )
+        structured_report_label = str(stream.get('structured_report_label') or '').strip()
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -6526,6 +6915,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
     if codex_events:
         metadata['codex_events'] = codex_events
@@ -6546,6 +6936,16 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         final_output = _append_imagegen_workbench_output_message(final_output, imagegen_workbench_outputs)
     elif not final_output and assistant_final_empty:
         final_output = 'Codex completed without a final response.'
+    if structured_report_preset:
+        final_output, structured_report_metadata = _format_structured_report_output(
+            final_output,
+            structured_report_preset,
+        )
+        if isinstance(structured_report_metadata, dict):
+            if structured_report_label and not structured_report_metadata.get('label'):
+                structured_report_metadata['label'] = structured_report_label
+            metadata['structured_report'] = structured_report_metadata
+            metadata['structured_report_preset'] = structured_report_preset
     work_details = _build_work_details(output, final_output, error)
     if work_details:
         metadata['work_details'] = work_details
@@ -6618,6 +7018,7 @@ def stop_codex_stream(stream_id):
         cli_started_at = stream.get('cli_started_at')
         completed_at = stream.get('completed_at')
         output_path = stream.get('output_path')
+        output_schema_path = stream.get('output_schema_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
         codex_events = _copy_codex_events(stream.get('codex_events'))
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
@@ -6628,6 +7029,8 @@ def stop_codex_stream(stream_id):
             model_override=stream.get('model_override'),
             reasoning_override=stream.get('reasoning_override'),
         )
+        execution_policy = str(stream.get('execution_policy') or 'standard').strip() or 'standard'
+        structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -6640,6 +7043,7 @@ def stop_codex_stream(stream_id):
     if output_from_file:
         output_last_message = output_from_file
     _cleanup_output_last_message(output_path)
+    _cleanup_output_schema(output_schema_path)
 
     message_text = None
     if output_last_message or output or error:
@@ -6665,7 +7069,10 @@ def stop_codex_stream(stream_id):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
+    if structured_report_preset:
+        metadata['structured_report_preset'] = structured_report_preset
     if codex_events:
         metadata['codex_events'] = codex_events
     work_details = _build_work_details(output, output_last_message or output, error)

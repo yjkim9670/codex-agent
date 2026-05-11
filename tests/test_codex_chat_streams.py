@@ -290,13 +290,15 @@ def test_token_usage_ledger_tracks_input_output_and_deduplicates(isolated_codex_
     assert isolated_codex_workspace['token_usage_path'].exists()
 
 
-def test_usage_history_keeps_recent_14_days_and_reports_hourly_averages(isolated_codex_workspace):
+def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)
+    expected_hours = codex_chat._USAGE_HISTORY_MAX_ITEMS
+    expected_days = codex_chat._USAGE_HISTORY_RETENTION_DAYS
 
     workspace_total = 0
     items = []
-    for hour_index in range(24 * 16):
+    for hour_index in range(expected_hours + 48):
         if hour_index > 0:
             workspace_total += 120
         bucket_start = codex_chat.normalize_timestamp(start + timedelta(hours=hour_index))
@@ -330,14 +332,14 @@ def test_usage_history_keeps_recent_14_days_and_reports_hourly_averages(isolated
     }, path=history_path)
 
     loaded = codex_chat._load_usage_history_ledger(path=history_path)
-    assert len(loaded['items']) == 24 * 14
+    assert len(loaded['items']) == expected_hours
 
     summary = codex_chat.get_usage_history_summary(hours=24 * 30)
 
-    assert summary['requested_hours'] == 24 * 14
-    assert summary['retention_days'] == 14
-    assert summary['retention_hours'] == 24 * 14
-    assert summary['count'] == 24 * 14
+    assert summary['requested_hours'] == expected_hours
+    assert summary['retention_days'] == expected_days
+    assert summary['retention_hours'] == expected_hours
+    assert summary['count'] == expected_hours
     assert summary['token_delta_scope'] == 'workspace'
     assert summary['averages']['daily']['avg_tokens_per_hour'] == pytest.approx(120)
     assert summary['averages']['daily']['token_total'] == 120 * 24
@@ -523,8 +525,61 @@ def test_execution_policy_presets_keep_danger_access_hidden():
     presets = codex_chat.get_execution_policy_presets()
 
     assert any(item['sandbox'] == 'workspace-write' for item in presets)
+    assert any(item['id'] == 'worktree_isolated' for item in presets)
     assert any(item['sandbox'] == 'read-only' and item['ephemeral'] for item in presets)
     assert all(item['sandbox'] != 'danger-full-access' for item in presets)
+
+
+def _init_git_repo(repo_root):
+    repo_root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['git', '-C', str(repo_root), 'init'], check=True, capture_output=True, text=True)
+    subprocess.run(['git', '-C', str(repo_root), 'config', 'user.email', 'test@example.com'], check=True)
+    subprocess.run(['git', '-C', str(repo_root), 'config', 'user.name', 'Test User'], check=True)
+    (repo_root / 'README.md').write_text('# test\n', encoding='utf-8')
+    subprocess.run(['git', '-C', str(repo_root), 'add', 'README.md'], check=True)
+    subprocess.run(['git', '-C', str(repo_root), 'commit', '-m', 'initial'], check=True, capture_output=True, text=True)
+
+
+def test_git_worktree_task_create_and_cleanup(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'repo'
+    _init_git_repo(repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', repo_root)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
+    monkeypatch.setenv('CODEX_WORKTREE_ROOT', str(tmp_path / 'worktrees'))
+
+    task = codex_chat.create_git_worktree_task('isolated change', session_id='session-1')
+
+    task_path = Path(task['path'])
+    assert task['id'].startswith('wt-')
+    assert task['branch'].startswith('codex-workbench/')
+    assert task_path.exists()
+    assert (task_path / 'README.md').exists()
+    assert task['dirty'] is False
+
+    removed = codex_chat.cleanup_git_worktree_task(task['id'])
+
+    assert removed['status'] == 'removed'
+    assert not task_path.exists()
+
+
+def test_git_worktree_cleanup_requires_force_when_dirty(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'repo'
+    _init_git_repo(repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', repo_root)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
+    monkeypatch.setenv('CODEX_WORKTREE_ROOT', str(tmp_path / 'worktrees'))
+
+    task = codex_chat.create_git_worktree_task('dirty worktree')
+    task_path = Path(task['path'])
+    (task_path / 'new-file.txt').write_text('dirty\n', encoding='utf-8')
+
+    with pytest.raises(codex_chat.CodexWorktreeError) as exc_info:
+        codex_chat.cleanup_git_worktree_task(task['id'])
+
+    assert exc_info.value.error_code == 'worktree_dirty'
+    forced = codex_chat.cleanup_git_worktree_task(task['id'], force=True)
+    assert forced['status'] == 'removed'
+    assert not task_path.exists()
 
 
 def test_imagegen_overlay_points_to_workbench_managed_dirs(isolated_codex_workspace):
@@ -645,11 +700,12 @@ def test_enqueue_codex_queue_persists_and_starts_when_triggered(monkeypatch, iso
         prompt,
         model_override=None,
         reasoning_override=None,
-        plan_mode=False,
-        assistant_message_id=None,
-        queued_execution=False,
-        attachments=None,
-    ):
+            plan_mode=False,
+            assistant_message_id=None,
+            queued_execution=False,
+            attachments=None,
+            **_kwargs,
+        ):
         captured['session_id'] = session_id_arg
         captured['prompt'] = prompt
         captured['model_override'] = model_override

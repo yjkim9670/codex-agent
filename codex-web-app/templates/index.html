@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=151">
+    <link rel="stylesheet" href="/static/css/app.css?v=154">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -557,11 +557,22 @@
 
                 <form id="codex-chat-form" class="chat-input" autocomplete="off">
                     <div class="chat-compose-main">
-                        <label class="sr-only" for="codex-chat-input">Codex prompt</label>
-                        <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                        <div class="chat-prompt-field">
+                            <label class="sr-only" for="codex-chat-input">Codex prompt</label>
+                            <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                            <button
+                                class="btn ghost icon-only chat-tools-toggle"
+                                type="button"
+                                id="codex-chat-tools-toggle"
+                                aria-label="추가 도구 열기"
+                                aria-controls="codex-chat-tools-overlay"
+                                aria-expanded="false"
+                                title="추가 도구 열기"
+                            >
+                                <span class="sr-only">추가 도구 열기</span>
+                            </button>
+                        </div>
                         <div id="codex-chat-attachments" class="chat-attachments is-empty" aria-live="polite"></div>
-                        <div id="codex-execution-policy-strip" class="execution-policy-strip" aria-live="polite"></div>
-                        <div id="codex-structured-report-bar" class="structured-report-bar" aria-label="Structured report presets"></div>
                     </div>
                     <div class="chat-submit-column">
                         <input id="codex-chat-image-input" class="sr-only" type="file" accept="image/*" multiple>
@@ -574,6 +585,41 @@
                         </button>
                     </div>
                 </form>
+
+                <div class="chat-tools-overlay" id="codex-chat-tools-overlay" aria-hidden="true">
+                    <div class="chat-tools-overlay-backdrop" data-action="close"></div>
+                    <div class="chat-tools-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-chat-tools-overlay-title">
+                        <div class="chat-tools-overlay-header">
+                            <div class="chat-tools-overlay-heading">
+                                <div class="chat-tools-overlay-title" id="codex-chat-tools-overlay-title">추가 도구</div>
+                                <div class="chat-tools-overlay-subtitle">Execution · Reports · Worktree</div>
+                            </div>
+                            <button class="btn ghost icon-only chat-tools-overlay-close" type="button" id="codex-chat-tools-overlay-close" aria-label="닫기">
+                                <span class="sr-only">닫기</span>
+                            </button>
+                        </div>
+                        <div class="chat-tools-overlay-body">
+                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-execution-title">
+                                <div class="chat-tools-section-title" id="codex-chat-tools-execution-title">실행 정책</div>
+                                <div id="codex-execution-policy-strip" class="execution-policy-strip" role="list" aria-live="polite"></div>
+                            </section>
+                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-report-title">
+                                <div class="chat-tools-section-title" id="codex-chat-tools-report-title">Reports</div>
+                                <div id="codex-structured-report-bar" class="structured-report-bar" aria-label="Structured report presets"></div>
+                            </section>
+                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-worktree-title">
+                                <div class="chat-tools-section-header">
+                                    <div class="chat-tools-section-title" id="codex-chat-tools-worktree-title">Worktree</div>
+                                    <button class="btn ghost chat-worktree-toggle" type="button" id="codex-worktree-mode-toggle" aria-pressed="false" aria-label="Worktree mode off" title="Worktree mode off">Worktree</button>
+                                </div>
+                                <div id="codex-worktree-task-bar" class="worktree-task-bar is-hidden" aria-live="polite"></div>
+                            </section>
+                        </div>
+                        <div class="chat-tools-overlay-footer">
+                            <button class="btn ghost" type="button" id="codex-chat-tools-overlay-close-footer">닫기</button>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="chat-runtime-strip">
                     <div id="codex-chat-job-monitor" class="chat-job-monitor is-idle" aria-live="polite">
@@ -1090,6 +1136,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=150"></script>
+    <script src="/static/js/app.js?v=152"></script>
 </body>
 </html>

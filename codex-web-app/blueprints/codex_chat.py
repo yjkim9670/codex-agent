@@ -37,6 +37,9 @@ from ..services.codex_chat import (
     build_codex_prompt,
     build_structured_report_prompt,
     CodexAttachmentError,
+    CodexWorktreeError,
+    cleanup_git_worktree_task,
+    create_git_worktree_task,
     get_session_storage_summary,
     create_session,
     cleanup_codex_streams,
@@ -52,9 +55,12 @@ from ..services.codex_chat import (
     get_session,
     get_settings,
     get_structured_report_preset,
+    get_git_worktree_task,
     get_usage_summary,
+    handoff_git_worktree_task,
     list_structured_report_presets,
     list_codex_streams,
+    list_git_worktree_tasks,
     read_codex_stream,
     list_sessions,
     normalize_codex_attachments,
@@ -139,6 +145,15 @@ def _parse_plan_mode(value):
     if isinstance(value, str):
         return value.strip().lower() in _PLAN_MODE_TRUTHY_VALUES
     return False
+
+
+def _parse_worktree_mode(payload):
+    if not isinstance(payload, dict):
+        return False
+    value = payload.get('worktree_mode')
+    if value is None:
+        value = payload.get('worktree_task_mode')
+    return _parse_plan_mode(value)
 
 
 def _parse_attachments(payload):
@@ -730,6 +745,7 @@ def codex_session_message_stream(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
     except CodexAttachmentError as exc:
@@ -738,6 +754,8 @@ def codex_session_message_stream(session_id):
         structured_report_preset = _parse_structured_report_preset(payload)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
+    if structured_report_preset and worktree_mode:
+        return jsonify({'error': 'structured report는 read-only 실행만 지원합니다.'}), 400
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -779,6 +797,7 @@ def codex_session_message_stream(session_id):
         attachments=attachments,
         question_only=bool(structured_report_preset),
         structured_report_preset=structured_report_preset,
+        worktree_mode=worktree_mode,
     )
     if not start_result.get('ok'):
         if start_result.get('already_running'):
@@ -789,7 +808,11 @@ def codex_session_message_stream(session_id):
                     'already_running': True,
                 }
             ), 409
-        return jsonify({'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}), 500
+        status_code = 400 if start_result.get('error_code') else 500
+        payload = {'error': start_result.get('error') or '메시지를 저장하지 못했습니다.'}
+        if start_result.get('error_code'):
+            payload['error_code'] = start_result.get('error_code')
+        return jsonify(payload), status_code
 
     return jsonify({
         'stream_id': start_result.get('stream_id'),
@@ -802,6 +825,7 @@ def codex_session_message_stream(session_id):
         'response_reasoning_effort': start_result.get('response_reasoning_effort'),
         'execution_policy': start_result.get('execution_policy'),
         'structured_report_preset': start_result.get('structured_report_preset'),
+        'worktree_task': start_result.get('worktree_task'),
     })
 
 
@@ -810,6 +834,7 @@ def codex_session_message_queue(session_id):
     payload = request.get_json(silent=True) or {}
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
     except CodexAttachmentError as exc:
@@ -818,6 +843,8 @@ def codex_session_message_queue(session_id):
         structured_report_preset = _parse_structured_report_preset(payload)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
+    if structured_report_preset and worktree_mode:
+        return jsonify({'error': 'structured report는 read-only 실행만 지원합니다.'}), 400
 
     if not prompt:
         return jsonify({'error': '프롬프트가 비어 있습니다.'}), 400
@@ -834,9 +861,14 @@ def codex_session_message_queue(session_id):
         plan_mode=plan_mode,
         attachments=attachments,
         structured_report_preset=structured_report_preset,
+        worktree_mode=worktree_mode,
     )
     if not result.get('ok'):
-        return jsonify({'error': result.get('error') or '큐 등록에 실패했습니다.'}), 500
+        status_code = 400 if result.get('error_code') else 500
+        payload = {'error': result.get('error') or '큐 등록에 실패했습니다.'}
+        if result.get('error_code'):
+            payload['error_code'] = result.get('error_code')
+        return jsonify(payload), status_code
 
     response = {
         'queued': bool(result.get('queued', not result.get('started'))),
@@ -856,6 +888,7 @@ def codex_session_message_queue(session_id):
         response['response_reasoning_effort'] = result.get('response_reasoning_effort')
         response['execution_policy'] = result.get('execution_policy')
         response['structured_report_preset'] = result.get('structured_report_preset')
+        response['worktree_task'] = result.get('worktree_task')
     return jsonify(response)
 
 
@@ -1282,6 +1315,56 @@ def codex_terminals_close(session_id):
     except TerminalSessionError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
     return jsonify(result)
+
+
+def _worktree_error_response(error):
+    status_code = getattr(error, 'status_code', 400)
+    return jsonify({
+        'error': str(error),
+        'error_code': getattr(error, 'error_code', 'worktree_error'),
+    }), status_code
+
+
+@bp.route('/api/codex/worktrees', methods=['GET', 'POST'])
+def codex_worktrees():
+    if request.method == 'GET':
+        return jsonify({'worktrees': list_git_worktree_tasks()})
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    prompt = str(payload.get('prompt') or payload.get('label') or '').strip()
+    session_id = str(payload.get('session_id') or '').strip()
+    try:
+        task = create_git_worktree_task(prompt, session_id=session_id)
+    except CodexWorktreeError as exc:
+        return _worktree_error_response(exc)
+    return jsonify({'ok': True, 'worktree': task})
+
+
+@bp.route('/api/codex/worktrees/<task_id>', methods=['GET', 'DELETE'])
+def codex_worktree_detail(task_id):
+    if request.method == 'GET':
+        try:
+            return jsonify({'worktree': get_git_worktree_task(task_id)})
+        except CodexWorktreeError as exc:
+            return _worktree_error_response(exc)
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    force = _parse_plan_mode(payload.get('force')) or request.args.get('force') == '1'
+    try:
+        task = cleanup_git_worktree_task(task_id, force=force)
+    except CodexWorktreeError as exc:
+        return _worktree_error_response(exc)
+    return jsonify({'ok': True, 'worktree': task})
+
+
+@bp.route('/api/codex/worktrees/<task_id>/handoff', methods=['POST'])
+def codex_worktree_handoff(task_id):
+    try:
+        return jsonify(handoff_git_worktree_task(task_id))
+    except CodexWorktreeError as exc:
+        return _worktree_error_response(exc)
 
 
 @bp.route('/api/codex/git/<action>', methods=['POST', 'GET'])

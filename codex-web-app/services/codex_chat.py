@@ -65,6 +65,7 @@ _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
 _USAGE_HISTORY_LOCK = threading.Lock()
+_WORKTREE_TASKS_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _AUTH_STATE_LOCK = threading.Lock()
@@ -310,6 +311,9 @@ _IMAGE_ATTACHMENT_EXTENSIONS = {
 }
 _CODEX_EVENT_LOG_LIMIT = 200
 _CODEX_EVENT_DETAIL_MAX_CHARS = 900
+_WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
+_WORKTREE_BRANCH_PREFIX = 'codex-workbench'
+_WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
 
 _STRUCTURED_REPORT_SCHEMA = {
     '$schema': 'http://json-schema.org/draft-07/schema#',
@@ -409,6 +413,15 @@ _EXECUTION_POLICY_PRESETS = (
         'scope': 'default',
     },
     {
+        'id': 'worktree_isolated',
+        'label': 'Isolated worktree',
+        'approval': 'never',
+        'sandbox': 'workspace-write',
+        'ephemeral': False,
+        'risk': 'medium',
+        'scope': 'git worktree',
+    },
+    {
         'id': 'read_only_ephemeral',
         'label': 'Read-only ephemeral',
         'approval': 'never',
@@ -426,6 +439,15 @@ class CodexAttachmentError(ValueError):
     def __init__(self, message, *, status_code=400):
         super().__init__(str(message))
         self.status_code = int(status_code)
+
+
+class CodexWorktreeError(ValueError):
+    """Controlled validation error for Git worktree task operations."""
+
+    def __init__(self, message, *, status_code=400, error_code='worktree_error'):
+        super().__init__(str(message))
+        self.status_code = int(status_code)
+        self.error_code = str(error_code or 'worktree_error')
 
 
 def _is_supported_image_path(path):
@@ -655,6 +677,7 @@ def _normalize_pending_queue_entry(entry):
         'structured_report_preset': normalize_structured_report_preset_id(
             entry.get('structured_report_preset')
         ),
+        'worktree_mode': bool(entry.get('worktree_mode')),
         'created_at': normalize_timestamp(entry.get('created_at')),
     }
 
@@ -1173,6 +1196,352 @@ def list_structured_report_presets():
 
 def get_execution_policy_presets():
     return deepcopy(list(_EXECUTION_POLICY_PRESETS))
+
+
+def _worktree_registry_path():
+    return CODEX_STORAGE_DIR / 'worktree_tasks.json'
+
+
+def _load_worktree_registry_locked():
+    path = _worktree_registry_path()
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return {'version': 1, 'tasks': []}
+    except Exception:
+        return {'version': 1, 'tasks': []}
+    tasks = payload.get('tasks') if isinstance(payload, dict) else []
+    if not isinstance(tasks, list):
+        tasks = []
+    return {'version': 1, 'tasks': [item for item in tasks if isinstance(item, dict)]}
+
+
+def _save_worktree_registry_locked(payload):
+    path = _worktree_registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tasks = payload.get('tasks') if isinstance(payload, dict) else []
+    if not isinstance(tasks, list):
+        tasks = []
+    path.write_text(
+        json.dumps({'version': 1, 'tasks': tasks}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+
+def _normalize_worktree_task_id(value):
+    task_id = str(value or '').strip()
+    if not task_id or not _WORKTREE_TASK_ID_RE.match(task_id):
+        return ''
+    return task_id
+
+
+def _git_worktree_timestamp():
+    return normalize_timestamp(datetime.now(KST))
+
+
+def _run_worktree_git_command(args, cwd, *, timeout=30, check=True):
+    command = ['git', '-C', str(cwd), *[str(arg) for arg in args]]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise CodexWorktreeError('git 명령을 찾을 수 없습니다.', error_code='git_not_found') from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CodexWorktreeError('git worktree 작업 시간이 초과되었습니다.', error_code='git_timeout') from exc
+    except Exception as exc:
+        raise CodexWorktreeError(f'git worktree 작업 중 오류가 발생했습니다: {exc}') from exc
+    if check and result.returncode != 0:
+        message = (result.stderr or result.stdout or '').strip()
+        raise CodexWorktreeError(message or 'git worktree 작업에 실패했습니다.')
+    return result
+
+
+def _resolve_worktree_source_repo():
+    if not WORKSPACE_DIR.exists():
+        raise CodexWorktreeError(f'워크스페이스 경로를 찾을 수 없습니다: {WORKSPACE_DIR}', error_code='workspace_missing')
+    result = _run_worktree_git_command(
+        ['rev-parse', '--show-toplevel'],
+        WORKSPACE_DIR,
+        timeout=10,
+    )
+    repo_root = Path((result.stdout or '').strip())
+    if not repo_root.exists():
+        raise CodexWorktreeError('git 저장소 경로를 확인할 수 없습니다.', error_code='repo_not_found')
+    return repo_root.resolve()
+
+
+def _read_worktree_git_value(repo_root, args, default=''):
+    try:
+        result = _run_worktree_git_command(args, repo_root, timeout=10, check=False)
+    except CodexWorktreeError:
+        return default
+    if result.returncode != 0:
+        return default
+    return (result.stdout or '').strip() or default
+
+
+def _resolve_worktree_root(repo_root):
+    configured = str(os.environ.get(_WORKTREE_ROOT_ENV) or '').strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (repo_root.parent / f'.{repo_root.name}-codex-worktrees').resolve()
+
+
+def _sanitize_worktree_prompt_preview(prompt_text):
+    text = re.sub(r'\s+', ' ', str(prompt_text or '').strip())
+    if len(text) > 160:
+        return text[:157].rstrip() + '...'
+    return text
+
+
+def _parse_worktree_porcelain_status(status_text):
+    entries = []
+    for line in str(status_text or '').splitlines():
+        if len(line) < 4:
+            continue
+        status_code = line[:2]
+        path = line[3:].strip()
+        if not path:
+            continue
+        original_path = ''
+        if ' -> ' in path:
+            parts = path.split(' -> ')
+            original_path = parts[0].strip()
+            path = parts[-1].strip()
+        marker = 'U' if status_code == '??' else status_code.strip()[:1]
+        entry = {
+            'path': path,
+            'status': marker or status_code.strip(),
+            'raw_status': status_code,
+        }
+        if original_path:
+            entry['original_path'] = original_path
+        entries.append(entry)
+    return entries
+
+
+def _read_git_worktree_status(entry):
+    path = Path(str(entry.get('path') or ''))
+    payload = {
+        'exists': path.exists(),
+        'dirty': False,
+        'changed_files_count': 0,
+        'changed_files': [],
+        'changed_files_detail': [],
+        'current_branch': '',
+        'shortstat': '',
+        'status_error': '',
+    }
+    if not payload['exists']:
+        payload['status_error'] = 'worktree path missing'
+        return payload
+    try:
+        status_result = _run_worktree_git_command(
+            ['status', '--porcelain', '--untracked-files=all'],
+            path,
+            timeout=15,
+            check=False,
+        )
+        branch_result = _run_worktree_git_command(
+            ['rev-parse', '--abbrev-ref', 'HEAD'],
+            path,
+            timeout=10,
+            check=False,
+        )
+        shortstat_result = _run_worktree_git_command(
+            ['diff', '--shortstat', 'HEAD', '--'],
+            path,
+            timeout=15,
+            check=False,
+        )
+    except CodexWorktreeError as exc:
+        payload['status_error'] = str(exc)
+        return payload
+    if status_result.returncode == 0:
+        details = _parse_worktree_porcelain_status(status_result.stdout or '')
+        payload['changed_files_detail'] = details
+        payload['changed_files'] = [item.get('path') for item in details if item.get('path')]
+        payload['changed_files_count'] = len(payload['changed_files'])
+        payload['dirty'] = payload['changed_files_count'] > 0
+    else:
+        payload['status_error'] = (status_result.stderr or status_result.stdout or '').strip()
+    if branch_result.returncode == 0:
+        payload['current_branch'] = (branch_result.stdout or '').strip()
+    if shortstat_result.returncode in (0, 1):
+        payload['shortstat'] = (shortstat_result.stdout or '').strip()
+    return payload
+
+
+def _build_git_worktree_task_payload(entry, *, include_status=True):
+    if not isinstance(entry, dict):
+        return None
+    payload = deepcopy(entry)
+    payload.setdefault('status', 'active')
+    payload.setdefault('changed_files_count', 0)
+    payload.setdefault('changed_files', [])
+    payload.setdefault('changed_files_detail', [])
+    if include_status and payload.get('status') == 'active':
+        payload.update(_read_git_worktree_status(payload))
+    return payload
+
+
+def _get_git_worktree_task_entry_locked(task_id):
+    registry = _load_worktree_registry_locked()
+    for entry in registry.get('tasks') or []:
+        if str(entry.get('id') or '') == task_id:
+            return registry, entry
+    return registry, None
+
+
+def create_git_worktree_task(prompt_text='', session_id=''):
+    repo_root = _resolve_worktree_source_repo()
+    task_id = f'wt-{datetime.now(KST).strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:8]}'
+    worktree_root = _resolve_worktree_root(repo_root)
+    worktree_path = (worktree_root / task_id).resolve()
+    branch_name = f'{_WORKTREE_BRANCH_PREFIX}/{task_id}'
+    base_branch = _read_worktree_git_value(repo_root, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    base_ref = _read_worktree_git_value(repo_root, ['rev-parse', '--short', 'HEAD'])
+
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    if worktree_path.exists():
+        raise CodexWorktreeError('worktree 대상 경로가 이미 존재합니다.', error_code='worktree_path_exists')
+    _run_worktree_git_command(
+        ['worktree', 'add', '-b', branch_name, str(worktree_path), 'HEAD'],
+        repo_root,
+        timeout=60,
+    )
+
+    entry = {
+        'id': task_id,
+        'status': 'active',
+        'branch': branch_name,
+        'path': str(worktree_path),
+        'repo_root': str(repo_root),
+        'base_branch': base_branch,
+        'base_ref': base_ref,
+        'session_id': str(session_id or '').strip(),
+        'prompt_preview': _sanitize_worktree_prompt_preview(prompt_text),
+        'created_at': _git_worktree_timestamp(),
+        'updated_at': _git_worktree_timestamp(),
+    }
+    with _WORKTREE_TASKS_LOCK:
+        registry = _load_worktree_registry_locked()
+        tasks = registry.setdefault('tasks', [])
+        tasks.append(entry)
+        _save_worktree_registry_locked(registry)
+    return _build_git_worktree_task_payload(entry)
+
+
+def update_git_worktree_task(task_id, **fields):
+    normalized_id = _normalize_worktree_task_id(task_id)
+    if not normalized_id:
+        return None
+    with _WORKTREE_TASKS_LOCK:
+        registry, entry = _get_git_worktree_task_entry_locked(normalized_id)
+        if not entry:
+            return None
+        for key, value in fields.items():
+            if key in {'id', 'path', 'repo_root'}:
+                continue
+            entry[key] = value
+        entry['updated_at'] = _git_worktree_timestamp()
+        _save_worktree_registry_locked(registry)
+        return deepcopy(entry)
+
+
+def get_git_worktree_task(task_id):
+    normalized_id = _normalize_worktree_task_id(task_id)
+    if not normalized_id:
+        raise CodexWorktreeError('worktree id가 올바르지 않습니다.', status_code=400, error_code='invalid_worktree_id')
+    with _WORKTREE_TASKS_LOCK:
+        _registry, entry = _get_git_worktree_task_entry_locked(normalized_id)
+        if not entry:
+            raise CodexWorktreeError('worktree 작업을 찾을 수 없습니다.', status_code=404, error_code='worktree_not_found')
+        return _build_git_worktree_task_payload(entry)
+
+
+def list_git_worktree_tasks():
+    with _WORKTREE_TASKS_LOCK:
+        registry = _load_worktree_registry_locked()
+        tasks = [_build_git_worktree_task_payload(entry) for entry in registry.get('tasks') or []]
+    return [task for task in tasks if task]
+
+
+def cleanup_git_worktree_task(task_id, force=False):
+    normalized_id = _normalize_worktree_task_id(task_id)
+    if not normalized_id:
+        raise CodexWorktreeError('worktree id가 올바르지 않습니다.', status_code=400, error_code='invalid_worktree_id')
+    with _WORKTREE_TASKS_LOCK:
+        registry, entry = _get_git_worktree_task_entry_locked(normalized_id)
+        if not entry:
+            raise CodexWorktreeError('worktree 작업을 찾을 수 없습니다.', status_code=404, error_code='worktree_not_found')
+        task = _build_git_worktree_task_payload(entry)
+        if task.get('dirty') and not force:
+            raise CodexWorktreeError(
+                'worktree에 변경사항이 있어 cleanup을 중단했습니다. 변경을 확인하거나 force cleanup을 사용하세요.',
+                error_code='worktree_dirty',
+            )
+        repo_root = Path(str(task.get('repo_root') or ''))
+        worktree_path = Path(str(task.get('path') or ''))
+        if worktree_path.exists():
+            args = ['worktree', 'remove']
+            if force:
+                args.append('--force')
+            args.append(str(worktree_path))
+            _run_worktree_git_command(args, repo_root, timeout=60)
+        branch_deleted = False
+        branch_name = str(task.get('branch') or '').strip()
+        if branch_name:
+            delete_args = ['branch', '-D' if force else '-d', branch_name]
+            delete_result = _run_worktree_git_command(delete_args, repo_root, timeout=20, check=False)
+            branch_deleted = delete_result.returncode == 0
+        entry['status'] = 'removed'
+        entry['removed_at'] = _git_worktree_timestamp()
+        entry['updated_at'] = entry['removed_at']
+        entry['cleanup_force'] = bool(force)
+        entry['branch_deleted'] = branch_deleted
+        _save_worktree_registry_locked(registry)
+        return _build_git_worktree_task_payload(entry, include_status=False)
+
+
+def handoff_git_worktree_task(task_id):
+    task = get_git_worktree_task(task_id)
+    update_git_worktree_task(task_id, handoff_at=_git_worktree_timestamp())
+    return {
+        'ok': True,
+        'task': task,
+        'handoff': {
+            'branch': task.get('branch') or '',
+            'path': task.get('path') or '',
+            'changed_files_count': int(task.get('changed_files_count') or 0),
+            'dirty': bool(task.get('dirty')),
+        },
+    }
+
+
+def _normalize_worktree_task_payload(value):
+    if not isinstance(value, dict):
+        return None
+    task_id = _normalize_worktree_task_id(value.get('id'))
+    path = str(value.get('path') or '').strip()
+    if not task_id or not path:
+        return None
+    payload = {
+        'id': task_id,
+        'branch': str(value.get('branch') or '').strip(),
+        'path': path,
+        'repo_root': str(value.get('repo_root') or '').strip(),
+        'base_branch': str(value.get('base_branch') or '').strip(),
+        'base_ref': str(value.get('base_ref') or '').strip(),
+        'prompt_preview': str(value.get('prompt_preview') or '').strip(),
+        'created_at': str(value.get('created_at') or '').strip(),
+    }
+    return payload
 
 
 def build_structured_report_prompt(prompt_text, preset_id):
@@ -3795,11 +4164,11 @@ def _is_imagegen_workbench_request(prompt_text):
 
 
 def _imagegen_workbench_output_dir():
-    return WORKSPACE_DIR / 'imagegen'
+    return WORKSPACE_DIR / 'output' / 'imagegen'
 
 
 def _imagegen_workbench_tmp_dir():
-    return _imagegen_workbench_output_dir()
+    return WORKSPACE_DIR / 'tmp' / 'imagegen'
 
 
 def _copy_codex_home_file_if_available(source_home, target_home, filename):
@@ -4047,19 +4416,23 @@ def _build_codex_exec_env(queued_execution=False):
 def _prepare_imagegen_workbench_dirs(prompt_text):
     if not _should_include_imagegen_workbench_overlay(prompt_text, []):
         return
-    directory = _imagegen_workbench_output_dir()
+    directories = (_imagegen_workbench_output_dir(), _imagegen_workbench_tmp_dir())
     try:
-        directory.mkdir(parents=True, exist_ok=True)
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
     except Exception:
-        _LOGGER.exception('Failed to prepare imagegen workbench directory: %s', directory)
+        _LOGGER.exception('Failed to prepare imagegen workbench directories')
 
 
 def _build_imagegen_workbench_overlay():
     imagegen_dir = _imagegen_workbench_output_dir()
+    tmp_dir = _imagegen_workbench_tmp_dir()
     return (
         f"{_IMAGEGEN_WORKBENCH_OVERLAY}\n"
-        f"- Workbench-managed imagegen directory for outputs and intermediates: `{imagegen_dir}` "
-        f"(`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`, `{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
+        f"- Workbench-managed imagegen output directory: `{imagegen_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_OUTPUT_ENV}`).\n"
+        f"- Workbench-managed imagegen temporary directory: `{tmp_dir}` "
+        f"(`{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
     )
 
 
@@ -4164,7 +4537,8 @@ def _build_codex_command(
         model_override=None,
         reasoning_override=None,
         attachments=None,
-        question_only=False):
+        question_only=False,
+        execution_cwd=None):
     if question_only:
         cmd = [
             'codex',
@@ -4188,7 +4562,8 @@ def _build_codex_command(
             '--color',
             'never'
         ]
-    if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(WORKSPACE_DIR):
+    repo_check_dir = Path(execution_cwd) if execution_cwd else WORKSPACE_DIR
+    if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(repo_check_dir):
         cmd.append('--skip-git-repo-check')
     settings = get_settings()
     model = (str(model_override).strip() if model_override is not None else '') or settings.get('model')
@@ -5480,6 +5855,9 @@ def _build_partial_stream_message_metadata(stream):
     structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
     if structured_report_preset:
         metadata['structured_report_preset'] = structured_report_preset
+    worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
+    if worktree_task:
+        metadata['worktree_task'] = worktree_task
     usage = _normalize_token_usage(stream.get('token_usage'))
     metadata = _attach_token_usage_metadata(metadata, usage)
     return metadata if isinstance(metadata, dict) else {
@@ -5845,6 +6223,8 @@ def _run_codex_stream(stream_id, prompt):
         attachments = stream.get('attachments') if stream else []
         queued_execution = bool(stream.get('queued_execution')) if stream else False
         question_only = bool(stream.get('question_only')) if stream else False
+        execution_cwd = stream.get('execution_cwd') if stream else None
+        worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task')) if stream else None
         json_output = True
         if stream is not None:
             json_output = stream.get('json_output') is not False
@@ -5853,6 +6233,24 @@ def _run_codex_stream(stream_id, prompt):
         output_path = str(_new_codex_output_path(stream_id))
     if not isinstance(started_at, (int, float)):
         started_at = time.time()
+    try:
+        execution_cwd = Path(execution_cwd).resolve() if execution_cwd else WORKSPACE_DIR.resolve()
+    except Exception:
+        execution_cwd = WORKSPACE_DIR.resolve()
+    if worktree_task and not execution_cwd.exists():
+        _append_stream_chunk(stream_id, 'error', f'worktree 경로를 찾을 수 없습니다: {execution_cwd}\n')
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream['done'] = True
+                stream['exit_code'] = 1
+                stream['completed_at'] = time.time()
+                stream['updated_at'] = stream['completed_at']
+                stream['finalize_reason'] = 'worktree_missing'
+        finalize_codex_stream(stream_id)
+        _cleanup_output_last_message(output_path)
+        _cleanup_output_schema(output_schema_path)
+        return
 
     prompt = _append_attachment_exec_context(prompt, attachments)
     exec_env = _build_codex_exec_env(queued_execution=queued_execution)
@@ -5865,8 +6263,10 @@ def _run_codex_stream(stream_id, prompt):
         reasoning_override=reasoning_override,
         attachments=attachments,
         question_only=question_only,
+        execution_cwd=execution_cwd,
     )
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    if not worktree_task:
+        execution_cwd.mkdir(parents=True, exist_ok=True)
 
     with _codex_exec_gate() as lock_info:
         cli_started_at = lock_info.get('acquired_at') or time.time()
@@ -5883,7 +6283,7 @@ def _run_codex_stream(stream_id, prompt):
             _prepare_imagegen_workbench_dirs(prompt)
             process = subprocess.Popen(
                 cmd,
-                cwd=str(WORKSPACE_DIR),
+                cwd=str(execution_cwd),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=exec_env,
@@ -6150,10 +6550,15 @@ def create_codex_stream(
         queued_execution=False,
         question_only=False,
         user_prompt=None,
-        structured_report_preset=None):
+        structured_report_preset=None,
+        worktree_task=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
+    worktree_task_payload = _normalize_worktree_task_payload(worktree_task)
+    execution_cwd = WORKSPACE_DIR
+    if worktree_task_payload:
+        execution_cwd = Path(worktree_task_payload.get('path')).resolve()
     structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
     structured_report = get_structured_report_preset(structured_report_preset_id)
     output_schema_path = _write_codex_output_schema(
@@ -6168,6 +6573,10 @@ def create_codex_stream(
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
         reasoning_override=reasoning_override,
+    )
+    execution_policy = (
+        'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
+        else ('worktree_isolated' if worktree_task_payload else 'standard')
     )
     normalized_attachments = normalize_codex_attachments(attachments or [])
     stream = {
@@ -6202,9 +6611,11 @@ def create_codex_stream(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
-        'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
+        'execution_policy': execution_policy,
         'structured_report_preset': structured_report_preset_id,
         'structured_report_label': structured_report.get('label') if structured_report else '',
+        'worktree_task': worktree_task_payload,
+        'execution_cwd': str(execution_cwd),
         'output_schema_path': output_schema_path,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
         'assistant_progress_saved_at': None,
@@ -6227,6 +6638,8 @@ def create_codex_stream(
     }
     with state.codex_streams_lock:
         state.codex_streams[stream_id] = stream
+    if worktree_task_payload:
+        update_git_worktree_task(worktree_task_payload.get('id'), stream_id=stream_id)
 
     thread = threading.Thread(
         target=_run_codex_stream,
@@ -6242,8 +6655,9 @@ def create_codex_stream(
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
-        'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
+        'execution_policy': execution_policy,
         'structured_report_preset': structured_report_preset_id,
+        'worktree_task': worktree_task_payload,
     }
 
 
@@ -6380,7 +6794,8 @@ def _start_codex_stream_for_session_locked(
         attachments=None,
         queued_execution=False,
         question_only=False,
-        structured_report_preset=None):
+        structured_report_preset=None,
+        worktree_mode=False):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -6391,7 +6806,24 @@ def _start_codex_stream_for_session_locked(
         }
 
     normalized_attachments = normalize_codex_attachments(attachments or [])
-    user_metadata = {'attachments': normalized_attachments} if normalized_attachments else None
+    structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
+    worktree_task = None
+    if bool(worktree_mode) and not structured_report_preset_id:
+        try:
+            worktree_task = create_git_worktree_task(prompt, session_id=session_id)
+        except CodexWorktreeError as exc:
+            return {
+                'ok': False,
+                'error': str(exc),
+                'error_code': exc.error_code,
+            }
+    user_metadata = {}
+    if normalized_attachments:
+        user_metadata['attachments'] = normalized_attachments
+    if worktree_task:
+        user_metadata['worktree_task'] = worktree_task
+    if not user_metadata:
+        user_metadata = None
     user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
         return {
@@ -6399,7 +6831,6 @@ def _start_codex_stream_for_session_locked(
             'error': '메시지를 저장하지 못했습니다.'
         }
 
-    structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
     response_mode = resolve_response_mode_label(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
@@ -6409,18 +6840,26 @@ def _start_codex_stream_for_session_locked(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    execution_policy = (
+        'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
+        else ('worktree_isolated' if worktree_task else 'standard')
+    )
+    assistant_metadata = {
+        'response_mode': response_mode,
+        'response_model': response_model,
+        'response_reasoning_effort': response_reasoning_effort,
+        'streaming': True,
+        'execution_policy': execution_policy,
+    }
+    if structured_report_preset_id:
+        assistant_metadata['structured_report_preset'] = structured_report_preset_id
+    if worktree_task:
+        assistant_metadata['worktree_task'] = worktree_task
     assistant_message = append_message(
         session_id,
         'assistant',
         '',
-        metadata={
-            'response_mode': response_mode,
-            'response_model': response_model,
-            'response_reasoning_effort': response_reasoning_effort,
-            'streaming': True,
-            'execution_policy': 'read_only_ephemeral' if bool(question_only or structured_report_preset_id) else 'standard',
-            'structured_report_preset': structured_report_preset_id,
-        }
+        metadata=assistant_metadata
     )
     if not assistant_message:
         return {
@@ -6437,6 +6876,7 @@ def _start_codex_stream_for_session_locked(
         'question_only': bool(question_only or structured_report_preset_id),
         'user_prompt': prompt,
         'structured_report_preset': structured_report_preset_id,
+        'worktree_task': worktree_task,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -6457,10 +6897,16 @@ def _start_codex_stream_for_session_locked(
         'response_reasoning_effort': response_reasoning_effort,
         'execution_policy': stream_info.get('execution_policy'),
         'structured_report_preset': stream_info.get('structured_report_preset'),
+        'worktree_task': stream_info.get('worktree_task'),
     }
 
 
-def _build_pending_queue_entry(prompt, plan_mode=False, attachments=None, structured_report_preset=None):
+def _build_pending_queue_entry(
+        prompt,
+        plan_mode=False,
+        attachments=None,
+        structured_report_preset=None,
+        worktree_mode=False):
     normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,
@@ -6468,11 +6914,18 @@ def _build_pending_queue_entry(prompt, plan_mode=False, attachments=None, struct
         'plan_mode': bool(plan_mode),
         'attachments': normalized_attachments,
         'structured_report_preset': normalize_structured_report_preset_id(structured_report_preset),
+        'worktree_mode': bool(worktree_mode),
         'created_at': normalize_timestamp(None),
     }
 
 
-def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachments=None, structured_report_preset=None):
+def _enqueue_pending_queue_entry(
+        session_id,
+        prompt,
+        plan_mode=False,
+        attachments=None,
+        structured_report_preset=None,
+        worktree_mode=False):
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -6485,6 +6938,7 @@ def _enqueue_pending_queue_entry(session_id, prompt, plan_mode=False, attachment
             plan_mode=plan_mode,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
+            worktree_mode=worktree_mode,
         )
         if not entry.get('prompt'):
             return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
@@ -6534,6 +6988,7 @@ def _start_next_queued_codex_stream_locked(session_id):
         structured_report_preset = normalize_structured_report_preset_id(
             pending_entry.get('structured_report_preset')
         )
+        worktree_mode = bool(pending_entry.get('worktree_mode')) and not structured_report_preset
         session = get_session(session_id)
         if not session:
             return {
@@ -6562,6 +7017,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             queued_execution=True,
             question_only=bool(structured_report_preset),
             structured_report_preset=structured_report_preset,
+            worktree_mode=worktree_mode,
         )
         if not start_result.get('ok'):
             return start_result
@@ -6587,7 +7043,8 @@ def start_codex_stream_for_session(
         plan_mode=False,
         attachments=None,
         question_only=False,
-        structured_report_preset=None):
+        structured_report_preset=None,
+        worktree_mode=False):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -6601,6 +7058,7 @@ def start_codex_stream_for_session(
             queued_execution=False,
             question_only=question_only,
             structured_report_preset=structured_report_preset,
+            worktree_mode=worktree_mode,
         )
 
 
@@ -6656,7 +7114,8 @@ def enqueue_codex_stream_for_session(
         prompt,
         plan_mode=False,
         attachments=None,
-        structured_report_preset=None):
+        structured_report_preset=None,
+        worktree_mode=False):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         queued = _enqueue_pending_queue_entry(
@@ -6665,6 +7124,7 @@ def enqueue_codex_stream_for_session(
             plan_mode=plan_mode,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
+            worktree_mode=worktree_mode,
         )
         if not queued.get('ok'):
             return queued
@@ -6771,6 +7231,7 @@ def list_codex_streams(include_done=False):
                 'execution_policy': stream.get('execution_policy') or 'standard',
                 'structured_report_preset': stream.get('structured_report_preset') or '',
                 'structured_report_label': stream.get('structured_report_label') or '',
+                'worktree_task': _normalize_worktree_task_payload(stream.get('worktree_task')),
                 'token_usage': usage,
                 'input_tokens': usage.get('input_tokens', 0),
                 'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6832,6 +7293,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'execution_policy': stream.get('execution_policy') or 'standard',
             'structured_report_preset': stream.get('structured_report_preset') or '',
             'structured_report_label': stream.get('structured_report_label') or '',
+            'worktree_task': _normalize_worktree_task_payload(stream.get('worktree_task')),
             'token_usage': usage,
             'input_tokens': usage.get('input_tokens', 0),
             'cached_input_tokens': usage.get('cached_input_tokens', 0),
@@ -6896,6 +7358,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             stream.get('structured_report_preset')
         )
         structured_report_label = str(stream.get('structured_report_label') or '').strip()
+        worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -6917,6 +7380,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['response_reasoning_effort'] = response_reasoning_effort
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
+    if worktree_task:
+        try:
+            metadata['worktree_task'] = get_git_worktree_task(worktree_task.get('id'))
+        except CodexWorktreeError:
+            metadata['worktree_task'] = worktree_task
     if codex_events:
         metadata['codex_events'] = codex_events
     if imagegen_workbench_outputs:
@@ -7031,6 +7499,7 @@ def stop_codex_stream(stream_id):
         )
         execution_policy = str(stream.get('execution_policy') or 'standard').strip() or 'standard'
         structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
+        worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -7073,6 +7542,11 @@ def stop_codex_stream(stream_id):
     metadata['streaming'] = False
     if structured_report_preset:
         metadata['structured_report_preset'] = structured_report_preset
+    if worktree_task:
+        try:
+            metadata['worktree_task'] = get_git_worktree_task(worktree_task.get('id'))
+        except CodexWorktreeError:
+            metadata['worktree_task'] = worktree_task
     if codex_events:
         metadata['codex_events'] = codex_events
     work_details = _build_work_details(output, output_last_message or output, error)

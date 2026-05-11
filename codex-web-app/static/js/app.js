@@ -18,6 +18,9 @@ const state = {
     statusMessage: 'Idle',
     statusIsError: false,
     pendingAttachments: [],
+    worktreeMode: false,
+    worktreeTasks: [],
+    worktreeTasksLoadedAt: 0,
     settings: {
         model: null,
         modelCatalog: [],
@@ -920,6 +923,10 @@ function syncActiveSessionControls() {
     if (imageAttachBtn && imageAttachBtn.getAttribute('aria-busy') !== 'true') {
         imageAttachBtn.disabled = remoteBusy && !localBusy;
     }
+    const worktreeToggle = document.getElementById('codex-worktree-mode-toggle');
+    if (worktreeToggle) {
+        worktreeToggle.disabled = remoteBusy && !localBusy;
+    }
     renderRunningJobsMonitor();
 }
 
@@ -1529,7 +1536,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
     const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
+    const chatToolsToggle = document.getElementById('codex-chat-tools-toggle');
+    const chatToolsOverlay = document.getElementById('codex-chat-tools-overlay');
+    const chatToolsOverlayClose = document.getElementById('codex-chat-tools-overlay-close');
+    const chatToolsOverlayCloseFooter = document.getElementById('codex-chat-tools-overlay-close-footer');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
+    const worktreeModeToggle = document.getElementById('codex-worktree-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const controlsToggle = document.getElementById('codex-controls-toggle');
@@ -1713,6 +1725,33 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     renderPendingAttachments();
+
+    if (chatToolsToggle) {
+        chatToolsToggle.addEventListener('click', event => {
+            event.preventDefault();
+            if (isChatToolsOverlayOpen()) {
+                closeChatToolsOverlay();
+            } else {
+                openChatToolsOverlay();
+            }
+        });
+    }
+
+    if (chatToolsOverlay) {
+        chatToolsOverlay.addEventListener('click', event => {
+            if (event.target instanceof Element && event.target.dataset.action === 'close') {
+                closeChatToolsOverlay();
+            }
+        });
+    }
+
+    if (chatToolsOverlayClose) {
+        chatToolsOverlayClose.addEventListener('click', closeChatToolsOverlay);
+    }
+
+    if (chatToolsOverlayCloseFooter) {
+        chatToolsOverlayCloseFooter.addEventListener('click', closeChatToolsOverlay);
+    }
 
     if (newSessionBtn) {
         newSessionBtn.addEventListener('click', async () => {
@@ -2543,6 +2582,10 @@ document.addEventListener('DOMContentLoaded', () => {
             closeUsageHistoryOverlay();
             return;
         }
+        if (isChatToolsOverlayOpen()) {
+            closeChatToolsOverlay();
+            return;
+        }
         if (isFileBrowserOverlayOpen()) {
             closeFileBrowserOverlay();
             return;
@@ -2830,6 +2873,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     setPlanModeToggleState(state.settings.planModeState);
+    if (worktreeModeToggle) {
+        worktreeModeToggle.addEventListener('click', () => {
+            setWorktreeModeToggleState(!getWorktreeModeState());
+        });
+    }
+    setWorktreeModeToggleState(state.worktreeMode);
+    void refreshWorktreeTasks({ silent: true });
 
     syncActiveSessionControls();
     syncActiveSessionStatus();
@@ -6499,6 +6549,9 @@ async function pollStreamMonitor() {
         }
         if (Number.isFinite(result?.idle_ms)) {
             current.idleMs = result.idle_ms;
+        }
+        if (result?.worktree_task) {
+            current.worktreeTask = normalizeWorktreeTask(result.worktree_task);
         }
         if (result?.token_usage && typeof result.token_usage === 'object') {
             current.tokenUsage = result.token_usage;
@@ -18507,10 +18560,255 @@ function getNextPlanModeState(currentState = getPlanModeState()) {
     return PLAN_MODE_STATE_OFF;
 }
 
+function getChatToolsOverlayElements() {
+    const overlay = document.getElementById('codex-chat-tools-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        trigger: document.getElementById('codex-chat-tools-toggle')
+    };
+}
+
+function isChatToolsOverlayOpen() {
+    const overlay = document.getElementById('codex-chat-tools-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function getActiveWorktreeTaskCount() {
+    return (Array.isArray(state.worktreeTasks) ? state.worktreeTasks : [])
+        .map(normalizeWorktreeTask)
+        .filter(task => task && task.status === 'active')
+        .length;
+}
+
+function syncChatToolsToggleState() {
+    const button = document.getElementById('codex-chat-tools-toggle');
+    if (!button) return;
+    const activeWorktreeCount = getActiveWorktreeTaskCount();
+    const hasActiveState = getWorktreeModeState() || activeWorktreeCount > 0;
+    const label = activeWorktreeCount > 0
+        ? `추가 도구 열기 (${activeWorktreeCount} worktree)`
+        : '추가 도구 열기';
+    button.classList.toggle('is-active', hasActiveState);
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+}
+
+function openChatToolsOverlay() {
+    const elements = getChatToolsOverlayElements();
+    if (!elements) return;
+    if (isGitBranchOverlayOpen()) {
+        closeGitBranchOverlay();
+    }
+    if (isGitSyncOverlayOpen()) {
+        closeGitSyncOverlay();
+    }
+    if (isMessageLogOverlayOpen()) {
+        closeMessageLogOverlay();
+    }
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
+    }
+    if (isMailComposeOverlayOpen()) {
+        closeMailComposeOverlay();
+    }
+    if (isMobileSessionOverlayOpen()) {
+        closeMobileSessionOverlay();
+    }
+    if (isUsageHistoryOverlayOpen()) {
+        closeUsageHistoryOverlay();
+    }
+    if (isTerminalOverlayOpen()) {
+        closeTerminalOverlay();
+    }
+    renderExecutionPolicyStrip();
+    renderStructuredReportBar();
+    renderWorktreeTaskBar();
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    if (elements.trigger) {
+        elements.trigger.setAttribute('aria-expanded', 'true');
+    }
+    document.body.classList.add('is-overlay-open');
+    syncChatToolsToggleState();
+}
+
+function closeChatToolsOverlay() {
+    const elements = getChatToolsOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (elements.trigger) {
+        elements.trigger.setAttribute('aria-expanded', 'false');
+    }
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+    syncChatToolsToggleState();
+}
+
+function getWorktreeModeState() {
+    return Boolean(state.worktreeMode);
+}
+
+function setWorktreeModeToggleState(nextState) {
+    const enabled = Boolean(nextState);
+    state.worktreeMode = enabled;
+    const button = document.getElementById('codex-worktree-mode-toggle');
+    if (!button) return;
+    const label = enabled ? 'Worktree mode on' : 'Worktree mode off';
+    button.classList.toggle('is-active', enabled);
+    button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+    syncChatToolsToggleState();
+}
+
+function normalizeWorktreeTask(task) {
+    if (!task || typeof task !== 'object') return null;
+    const id = typeof task.id === 'string' ? task.id.trim() : '';
+    const path = typeof task.path === 'string' ? task.path.trim() : '';
+    if (!id || !path) return null;
+    const changedCount = Number(task.changed_files_count);
+    return {
+        ...task,
+        id,
+        path,
+        branch: typeof task.branch === 'string' ? task.branch.trim() : '',
+        status: typeof task.status === 'string' ? task.status.trim() : 'active',
+        dirty: Boolean(task.dirty),
+        changed_files_count: Number.isFinite(changedCount) ? Math.max(0, changedCount) : 0
+    };
+}
+
+function renderWorktreeTaskBar() {
+    const bar = document.getElementById('codex-worktree-task-bar');
+    if (!bar) return;
+    const tasks = (Array.isArray(state.worktreeTasks) ? state.worktreeTasks : [])
+        .map(normalizeWorktreeTask)
+        .filter(task => task && task.status === 'active');
+    bar.innerHTML = '';
+    bar.classList.toggle('is-hidden', tasks.length === 0);
+    tasks.slice(0, 4).forEach(task => {
+        const item = document.createElement('div');
+        item.className = 'worktree-task-chip';
+        const text = document.createElement('span');
+        text.className = 'worktree-task-chip-text';
+        const count = Number(task.changed_files_count) || 0;
+        const branch = task.branch || task.id;
+        text.textContent = `${branch} · ${count} file${count === 1 ? '' : 's'}`;
+        text.title = task.path;
+        item.appendChild(text);
+
+        const handoff = document.createElement('button');
+        handoff.type = 'button';
+        handoff.className = 'worktree-task-action';
+        handoff.textContent = 'Handoff';
+        handoff.addEventListener('click', event => {
+            event.preventDefault();
+            void handoffWorktreeTask(task.id);
+        });
+        item.appendChild(handoff);
+
+        const cleanup = document.createElement('button');
+        cleanup.type = 'button';
+        cleanup.className = 'worktree-task-action';
+        cleanup.textContent = 'Cleanup';
+        cleanup.addEventListener('click', event => {
+            event.preventDefault();
+            void cleanupWorktreeTask(task.id, { force: false });
+        });
+        item.appendChild(cleanup);
+        bar.appendChild(item);
+    });
+    syncChatToolsToggleState();
+}
+
+async function refreshWorktreeTasks({ silent = false } = {}) {
+    try {
+        const result = await fetchJson('/api/codex/worktrees', {
+            timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
+        });
+        state.worktreeTasks = Array.isArray(result?.worktrees)
+            ? result.worktrees.map(normalizeWorktreeTask).filter(Boolean)
+            : [];
+        state.worktreeTasksLoadedAt = Date.now();
+        renderWorktreeTaskBar();
+        return state.worktreeTasks;
+    } catch (error) {
+        if (!silent) {
+            showToast(`worktree 목록 조회 실패: ${normalizeError(error, 'worktree list failed')}`, {
+                tone: 'error',
+                durationMs: 4200
+            });
+        }
+        renderWorktreeTaskBar();
+        return state.worktreeTasks;
+    }
+}
+
+async function handoffWorktreeTask(taskId) {
+    if (!taskId) return;
+    try {
+        const result = await fetchJson(`/api/codex/worktrees/${encodeURIComponent(taskId)}/handoff`, {
+            method: 'POST',
+            timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
+        });
+        const task = normalizeWorktreeTask(result?.task);
+        const changedCount = Number(task?.changed_files_count) || 0;
+        showToast(`worktree handoff: ${task?.branch || taskId} · ${changedCount} file${changedCount === 1 ? '' : 's'}`, {
+            tone: 'success',
+            durationMs: 4200
+        });
+        await refreshWorktreeTasks({ silent: true });
+    } catch (error) {
+        showToast(`worktree handoff 실패: ${normalizeError(error, 'handoff failed')}`, {
+            tone: 'error',
+            durationMs: 5200
+        });
+    }
+}
+
+async function cleanupWorktreeTask(taskId, { force = false } = {}) {
+    if (!taskId) return;
+    try {
+        await fetchJson(`/api/codex/worktrees/${encodeURIComponent(taskId)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({ force: Boolean(force) })
+        });
+        showToast('worktree cleanup 완료', { tone: 'success', durationMs: 2600 });
+        await refreshWorktreeTasks({ silent: true });
+    } catch (error) {
+        const payload = error?.payload || {};
+        if (!force && payload?.error_code === 'worktree_dirty') {
+            const confirmed = window.confirm('worktree에 변경사항이 있습니다. 변경을 버리고 cleanup할까요?');
+            if (confirmed) {
+                await cleanupWorktreeTask(taskId, { force: true });
+            }
+            return;
+        }
+        showToast(`worktree cleanup 실패: ${normalizeError(error, 'cleanup failed')}`, {
+            tone: 'error',
+            durationMs: 5200
+        });
+    }
+}
+
 async function queuePromptOnServer(
     sessionId,
     prompt,
-    { planMode = false, attachments = [], structuredReportPreset = '' } = {}
+    { planMode = false, attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
 ) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
@@ -18525,6 +18823,7 @@ async function queuePromptOnServer(
             prompt,
             plan_mode: Boolean(planMode),
             structured_report_preset: structuredReportPreset || '',
+            worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
             attachments: normalizedAttachments
         })
     });
@@ -18550,7 +18849,8 @@ async function queuePromptOnServer(
                 responseMode: result?.response_mode,
                 responseModel: result?.response_model,
                 responseReasoningEffort: result?.response_reasoning_effort,
-                structuredReportPreset
+                structuredReportPreset,
+                worktreeTask: result?.worktree_task || null
             })
         );
         return {
@@ -18569,7 +18869,12 @@ async function queuePromptOnServer(
     };
 }
 
-async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPlanModeState(), { attachments = [] } = {}) {
+async function queuePromptWithPlanMode(
+    sessionId,
+    prompt,
+    planModeState = getPlanModeState(),
+    { attachments = [], worktreeMode = getWorktreeModeState() } = {}
+) {
     const normalizedPrompt = String(prompt || '').trim();
     if (!sessionId || !normalizedPrompt) {
         return {
@@ -18596,7 +18901,8 @@ async function queuePromptWithPlanMode(sessionId, prompt, planModeState = getPla
     for (const item of queueItems) {
         lastResult = await queuePromptOnServer(sessionId, item.prompt, {
             planMode: item.planMode,
-            attachments: item.attachments || []
+            attachments: item.attachments || [],
+            worktreeMode
         });
         const queueCount = Number(lastResult?.queueCount);
         if (Number.isFinite(queueCount)) {
@@ -18644,8 +18950,9 @@ function renderExecutionPolicyStrip() {
     const strip = document.getElementById('codex-execution-policy-strip');
     if (!strip) return;
     const standard = getExecutionPolicyPreset('standard');
+    const worktree = getExecutionPolicyPreset('worktree_isolated');
     const report = getExecutionPolicyPreset('read_only_ephemeral');
-    const presets = [standard, report].filter(Boolean);
+    const presets = [standard, worktree, report].filter(Boolean);
     if (presets.length === 0) {
         strip.classList.add('is-hidden');
         strip.textContent = '';
@@ -18654,9 +18961,9 @@ function renderExecutionPolicyStrip() {
     strip.classList.remove('is-hidden');
     strip.innerHTML = '';
     presets.forEach(preset => {
-        const pill = document.createElement('button');
-        pill.type = 'button';
+        const pill = document.createElement('span');
         pill.className = 'execution-policy-pill';
+        pill.setAttribute('role', 'listitem');
         if (preset.id === 'standard') {
             pill.classList.add('is-active');
         }
@@ -18667,7 +18974,6 @@ function renderExecutionPolicyStrip() {
             preset.ephemeral ? 'ephemeral' : ''
         ].filter(Boolean);
         pill.textContent = parts.join(' · ');
-        pill.disabled = true;
         const risk = preset.risk ? `Risk ${preset.risk}. ` : '';
         const scope = preset.scope ? `Scope ${preset.scope}. ` : '';
         pill.setAttribute('title', `${risk}${scope}${preset.sandbox || ''}`.trim());
@@ -18704,6 +19010,7 @@ async function handleStructuredReportPreset(presetId) {
     const preset = (Array.isArray(state.settings.structuredReportPresets) ? state.settings.structuredReportPresets : [])
         .find(item => item.id === presetId);
     if (!preset) return;
+    closeChatToolsOverlay();
     const input = document.getElementById('codex-chat-input');
     const draftPrompt = input?.value || '';
     const prompt = draftPrompt.trim() || preset.defaultPrompt || `${preset.label} report`;
@@ -18766,7 +19073,8 @@ async function handleSubmit(event) {
             input.value = '';
             try {
                 const queueResult = await queuePromptWithPlanMode(activeSessionId, prompt, getPlanModeState(), {
-                    attachments
+                    attachments,
+                    worktreeMode: getWorktreeModeState()
                 });
                 clearPendingAttachments();
                 const queuedCount = Number(queueResult?.totalQueued) || 0;
@@ -18809,7 +19117,8 @@ async function handleSubmit(event) {
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
         planMode: shouldUsePlanModeForRequest(planModeState),
-        attachments
+        attachments,
+        worktreeMode: getWorktreeModeState()
     });
     if (
         sendResult?.ok
@@ -18911,7 +19220,8 @@ function processStartedStreamResponse(
             response_mode: responseMetadata?.response_mode,
             response_model: responseMetadata?.response_model,
             response_reasoning_effort: responseMetadata?.response_reasoning_effort,
-            structured_report_preset: responseMetadata?.structured_report_preset || ''
+            structured_report_preset: responseMetadata?.structured_report_preset || '',
+            worktree_task: responseMetadata?.worktree_task || null
         }, 'assistant');
     }
 
@@ -18925,6 +19235,9 @@ function processStartedStreamResponse(
     startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAtFallback, {
         messageId: assistantMessageId
     });
+    if (result?.worktree_task) {
+        void refreshWorktreeTasks({ silent: true });
+    }
 }
 
 async function sendPrompt(
@@ -18933,7 +19246,8 @@ async function sendPrompt(
         sessionId: sessionIdOverride = null,
         planMode = false,
         attachments = [],
-        structuredReportPreset = ''
+        structuredReportPreset = '',
+        worktreeMode = false
     } = {}
 ) {
     let sessionId = sessionIdOverride || state.activeSessionId;
@@ -18973,6 +19287,7 @@ async function sendPrompt(
                 prompt,
                 plan_mode: Boolean(planMode),
                 structured_report_preset: structuredReportPreset || '',
+                worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
                 attachments: normalizedAttachments
             }),
             signal: controller.signal
@@ -18995,7 +19310,8 @@ async function sendPrompt(
                 responseMode: result?.response_mode,
                 responseModel: result?.response_model,
                 responseReasoningEffort: result?.response_reasoning_effort,
-                structuredReportPreset
+                structuredReportPreset,
+                worktreeTask: result?.worktree_task || null
             })
         );
         return { ok: true, reason: 'started', sessionId };
@@ -19018,7 +19334,8 @@ async function sendPrompt(
                 const queueResult = await queuePromptOnServer(sessionId, prompt, {
                     planMode: Boolean(planMode),
                     attachments: normalizedAttachments,
-                    structuredReportPreset
+                    structuredReportPreset,
+                    worktreeMode
                 });
                 if (sessionState) {
                     sessionState.sending = false;
@@ -19188,6 +19505,7 @@ async function stopStream(sessionId) {
         }
         await loadSessions({ preserveActive: true, reloadActive: false });
         void refreshUsageSummary({ silent: true });
+        void refreshWorktreeTasks({ silent: true });
         void flushQueuedPrompts(sessionId);
     } catch (error) {
         setSessionStatus(sessionId, normalizeError(error, 'Failed to stop stream.'), true);
@@ -19388,6 +19706,7 @@ async function finishStream(streamId, result) {
     }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
     void refreshUsageSummary({ silent: true });
+    void refreshWorktreeTasks({ silent: true });
     void flushQueuedPrompts(sessionId);
 }
 
@@ -19607,7 +19926,8 @@ function resolveRequestResponseMetadata({
     responseMode = '',
     responseModel = '',
     responseReasoningEffort = '',
-    structuredReportPreset = ''
+    structuredReportPreset = '',
+    worktreeTask = null
 } = {}) {
     const normalizedMode = normalizeResponseModeLabel(
         responseMode || (structuredReportPreset ? 'report' : (planMode ? 'plan' : 'basic'))
@@ -19622,7 +19942,8 @@ function resolveRequestResponseMetadata({
         response_model: resolvedModel,
         response_reasoning_effort: normalizedReasoningEffort
             || resolveReasoningEffortForRequest(normalizedMode === 'plan', resolvedModel),
-        structured_report_preset: structuredReportPreset || ''
+        structured_report_preset: structuredReportPreset || '',
+        worktree_task: normalizeWorktreeTask(worktreeTask)
     };
 }
 
@@ -19648,6 +19969,10 @@ function buildMessageMetaText(role, timestampValue, message = null) {
             if (responseParts.length > 0) {
                 label = `${label} · ${responseParts.join(' · ')}`;
             }
+        }
+        const worktreeTask = normalizeWorktreeTask(message.worktree_task);
+        if (worktreeTask) {
+            label = `${label} · ${worktreeTask.branch || worktreeTask.id}`;
         }
     }
     const timestamp = formatTimestamp(timestampValue);

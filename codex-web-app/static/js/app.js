@@ -88,6 +88,10 @@ const MOBILE_PROMPT_ANDROID_BOTTOM_TARGET_GAP = 8;
 const MOBILE_PROMPT_MAX_SHIFT = 96;
 const MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS = Object.freeze([80, 160, 320]);
 const MOBILE_VIEWPORT_ANDROID_FOCUS_RESYNC_DELAYS = Object.freeze([480]);
+const MERMAID_DIAGRAM_VIEWER_MIN_ZOOM = 0.2;
+const MERMAID_DIAGRAM_VIEWER_MAX_ZOOM = 4;
+const MERMAID_DIAGRAM_VIEWER_ZOOM_STEP = 1.2;
+const MERMAID_DIAGRAM_VIEWER_FIT_PADDING = 48;
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const WORK_MODE_CLASS = 'is-work-mode';
 const WORK_MODE_PREVIEW_FULLSCREEN_CLASS = 'is-work-mode-fold-preview-fullscreen';
@@ -466,6 +470,7 @@ let liveWeatherCompactLowTemp = '--';
 let liveWeatherCompactHasWeather = false;
 let mermaidRenderSerial = 0;
 let mermaidLoadPromise = null;
+let mermaidDiagramViewerState = null;
 let xlsxLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
 let lastAppliedMobilePromptLift = null;
@@ -2486,6 +2491,10 @@ document.addEventListener('DOMContentLoaded', () => {
     syncTerminalOverlayState();
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape') return;
+        if (isMermaidDiagramViewerOpen()) {
+            closeMermaidDiagramViewer();
+            return;
+        }
         if (isTerminalOverlayOpen()) {
             closeTerminalOverlay();
             return;
@@ -12449,6 +12458,444 @@ function getFilePanelMarkdownPreviewPayload(variant) {
     };
 }
 
+function filePanelMarkdownPreviewRuntime() {
+    const MIN_ZOOM = 0.2;
+    const MAX_ZOOM = 4;
+    const ZOOM_STEP = 1.2;
+    const FIT_PADDING = 48;
+    let viewer = null;
+
+    const decodeSource = value => {
+        try {
+            return decodeURIComponent(String(value || ''));
+        } catch (error) {
+            return String(value || '');
+        }
+    };
+    const clamp = (value, min, max) => {
+        if (!Number.isFinite(value)) return min;
+        return Math.min(max, Math.max(min, value));
+    };
+    const loadScript = src => new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.defer = true;
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+    const parseSvgLength = value => {
+        const match = String(value || '').trim().match(/^(-?\d+(?:\.\d+)?)/);
+        if (!match) return NaN;
+        const parsed = Number(match[1]);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+    };
+    const getSvgSize = svg => {
+        const viewBox = svg?.viewBox?.baseVal;
+        if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+            return { width: viewBox.width, height: viewBox.height };
+        }
+        const width = parseSvgLength(svg?.getAttribute('width'));
+        const height = parseSvgLength(svg?.getAttribute('height'));
+        if (Number.isFinite(width) && Number.isFinite(height)) {
+            return { width, height };
+        }
+        const rect = svg?.getBoundingClientRect?.();
+        return {
+            width: Number.isFinite(rect?.width) && rect.width > 0 ? rect.width : 800,
+            height: Number.isFinite(rect?.height) && rect.height > 0 ? rect.height : 480
+        };
+    };
+    const prepareSvg = (svg, size) => {
+        const width = Math.max(1, Number(size?.width) || 800);
+        const height = Math.max(1, Number(size?.height) || 480);
+        if (!svg.getAttribute('viewBox')) {
+            svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+        }
+        svg.setAttribute('width', String(width));
+        svg.setAttribute('height', String(height));
+        svg.style.width = width + 'px';
+        svg.style.height = height + 'px';
+        svg.style.maxWidth = 'none';
+        svg.style.margin = '0';
+    };
+    const createButton = (className, label, text) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = className;
+        button.setAttribute('aria-label', label);
+        button.title = label;
+        if (text) {
+            button.textContent = text;
+        } else {
+            const srOnly = document.createElement('span');
+            srOnly.className = 'sr-only';
+            srOnly.textContent = label;
+            button.appendChild(srOnly);
+        }
+        return button;
+    };
+    const getTitle = node => {
+        const source = decodeSource(node?.dataset?.mermaidSource || '');
+        const firstLine = source.split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
+        if (/^(?:flowchart|graph)\b/i.test(firstLine)) return 'Flow diagram';
+        if (/^sequenceDiagram\b/i.test(firstLine)) return 'Sequence diagram';
+        if (/^classDiagram\b/i.test(firstLine)) return 'Class diagram';
+        if (/^stateDiagram(?:-v2)?\b/i.test(firstLine)) return 'State diagram';
+        if (/^gantt\b/i.test(firstLine)) return 'Gantt chart';
+        return 'Mermaid diagram';
+    };
+    const getSubtitle = size => {
+        const width = Math.round(Number(size?.width) || 0);
+        const height = Math.round(Number(size?.height) || 0);
+        return width > 0 && height > 0 ? width + ' x ' + height : '확대 보기';
+    };
+    const updateMinimap = () => {
+        if (!viewer?.minimap || !viewer?.minimapScene || !viewer?.minimapViewport || !viewer?.viewport) return;
+        const minimapRect = viewer.minimap.getBoundingClientRect();
+        const viewportRect = viewer.viewport.getBoundingClientRect();
+        const scale = Math.min(
+            minimapRect.width / Math.max(1, viewer.diagramWidth),
+            minimapRect.height / Math.max(1, viewer.diagramHeight)
+        );
+        viewer.minimapScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+        viewer.minimapScene.style.width = Math.max(1, viewer.diagramWidth * viewer.minimapScale) + 'px';
+        viewer.minimapScene.style.height = Math.max(1, viewer.diagramHeight * viewer.minimapScale) + 'px';
+        const visibleLeft = clamp(-viewer.translateX / viewer.scale, 0, viewer.diagramWidth);
+        const visibleTop = clamp(-viewer.translateY / viewer.scale, 0, viewer.diagramHeight);
+        const visibleRight = clamp((viewportRect.width - viewer.translateX) / viewer.scale, 0, viewer.diagramWidth);
+        const visibleBottom = clamp((viewportRect.height - viewer.translateY) / viewer.scale, 0, viewer.diagramHeight);
+        viewer.minimapViewport.style.width = Math.max(4, (visibleRight - visibleLeft) * viewer.minimapScale) + 'px';
+        viewer.minimapViewport.style.height = Math.max(4, (visibleBottom - visibleTop) * viewer.minimapScale) + 'px';
+        viewer.minimapViewport.style.left = visibleLeft * viewer.minimapScale + 'px';
+        viewer.minimapViewport.style.top = visibleTop * viewer.minimapScale + 'px';
+    };
+    const applyTransform = () => {
+        if (!viewer?.content) return;
+        viewer.content.style.transform = 'translate(' + viewer.translateX + 'px, ' + viewer.translateY + 'px) scale(' + viewer.scale + ')';
+        viewer.zoomStatus.textContent = Math.round(viewer.scale * 100) + '%';
+        viewer.zoomOutButton.disabled = viewer.scale <= MIN_ZOOM + 0.001;
+        viewer.zoomInButton.disabled = viewer.scale >= MAX_ZOOM - 0.001;
+        updateMinimap();
+    };
+    const getFitScale = () => {
+        if (!viewer?.viewport) return 1;
+        const rect = viewer.viewport.getBoundingClientRect();
+        return clamp(
+            Math.min(
+                Math.max(1, rect.width - FIT_PADDING) / Math.max(1, viewer.diagramWidth),
+                Math.max(1, rect.height - FIT_PADDING) / Math.max(1, viewer.diagramHeight)
+            ),
+            MIN_ZOOM,
+            MAX_ZOOM
+        );
+    };
+    const centerAtScale = scale => {
+        if (!viewer?.viewport) return;
+        const rect = viewer.viewport.getBoundingClientRect();
+        viewer.scale = clamp(scale, MIN_ZOOM, MAX_ZOOM);
+        viewer.translateX = (rect.width - viewer.diagramWidth * viewer.scale) / 2;
+        viewer.translateY = (rect.height - viewer.diagramHeight * viewer.scale) / 2;
+        applyTransform();
+    };
+    const setZoom = (nextScale, focus = {}) => {
+        if (!viewer?.viewport) return;
+        const previousScale = Number.isFinite(viewer.scale) && viewer.scale > 0 ? viewer.scale : 1;
+        const scale = clamp(nextScale, MIN_ZOOM, MAX_ZOOM);
+        const rect = viewer.viewport.getBoundingClientRect();
+        const focusX = Number.isFinite(focus.clientX) ? focus.clientX - rect.left : rect.width / 2;
+        const focusY = Number.isFinite(focus.clientY) ? focus.clientY - rect.top : rect.height / 2;
+        const diagramX = (focusX - viewer.translateX) / previousScale;
+        const diagramY = (focusY - viewer.translateY) / previousScale;
+        viewer.scale = scale;
+        viewer.translateX = focusX - diagramX * scale;
+        viewer.translateY = focusY - diagramY * scale;
+        applyTransform();
+    };
+    const closeViewer = () => {
+        if (!viewer?.overlay) return;
+        viewer.open = false;
+        viewer.panPointerId = null;
+        viewer.minimapPointerId = null;
+        viewer.overlay.classList.remove('is-visible');
+        viewer.overlay.setAttribute('aria-hidden', 'true');
+        viewer.content.innerHTML = '';
+        viewer.minimapScene.innerHTML = '';
+        document.body.classList.remove('is-overlay-open', 'is-mermaid-diagram-viewer-open');
+    };
+    const handleViewerClick = event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const action = target?.closest('[data-action]')?.dataset?.action || '';
+        if (action === 'close') closeViewer();
+        if (action === 'zoom-in') setZoom(viewer.scale * ZOOM_STEP);
+        if (action === 'zoom-out') setZoom(viewer.scale / ZOOM_STEP);
+        if (action === 'fit') centerAtScale(getFitScale());
+    };
+    const handleWheel = event => {
+        if (!viewer?.open) return;
+        event.preventDefault();
+        const multiplier = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+        setZoom(viewer.scale * multiplier, { clientX: event.clientX, clientY: event.clientY });
+    };
+    const startPan = event => {
+        if (!viewer?.viewport || event.button !== 0) return;
+        event.preventDefault();
+        viewer.panPointerId = event.pointerId;
+        viewer.panStartX = event.clientX;
+        viewer.panStartY = event.clientY;
+        viewer.panOriginX = viewer.translateX;
+        viewer.panOriginY = viewer.translateY;
+        viewer.viewport.classList.add('is-panning');
+        viewer.viewport.setPointerCapture(event.pointerId);
+    };
+    const movePan = event => {
+        if (!viewer || viewer.panPointerId !== event.pointerId) return;
+        viewer.translateX = viewer.panOriginX + event.clientX - viewer.panStartX;
+        viewer.translateY = viewer.panOriginY + event.clientY - viewer.panStartY;
+        applyTransform();
+    };
+    const stopPan = event => {
+        if (!viewer || viewer.panPointerId === null) return;
+        if (event?.pointerId !== undefined && viewer.panPointerId !== event.pointerId) return;
+        viewer.panPointerId = null;
+        viewer.viewport?.classList.remove('is-panning');
+    };
+    const updateFromMinimap = event => {
+        if (!viewer?.minimapScene || !viewer?.viewport || !viewer.minimapScale) return;
+        const sceneRect = viewer.minimapScene.getBoundingClientRect();
+        const viewportRect = viewer.viewport.getBoundingClientRect();
+        const diagramX = (event.clientX - sceneRect.left) / viewer.minimapScale;
+        const diagramY = (event.clientY - sceneRect.top) / viewer.minimapScale;
+        viewer.translateX = viewportRect.width / 2 - diagramX * viewer.scale;
+        viewer.translateY = viewportRect.height / 2 - diagramY * viewer.scale;
+        applyTransform();
+    };
+    const startMinimapPan = event => {
+        if (!viewer?.minimap || event.button !== 0) return;
+        event.preventDefault();
+        viewer.minimapPointerId = event.pointerId;
+        viewer.minimap.setPointerCapture(event.pointerId);
+        updateFromMinimap(event);
+    };
+    const moveMinimapPan = event => {
+        if (!viewer || viewer.minimapPointerId !== event.pointerId) return;
+        updateFromMinimap(event);
+    };
+    const stopMinimapPan = event => {
+        if (!viewer || viewer.minimapPointerId === null) return;
+        if (event?.pointerId !== undefined && viewer.minimapPointerId !== event.pointerId) return;
+        viewer.minimapPointerId = null;
+    };
+    const ensureViewer = () => {
+        if (viewer?.overlay && document.body.contains(viewer.overlay)) return viewer;
+        const overlay = document.createElement('div');
+        overlay.className = 'mermaid-diagram-overlay';
+        overlay.setAttribute('aria-hidden', 'true');
+        const backdrop = document.createElement('div');
+        backdrop.className = 'mermaid-diagram-overlay-backdrop';
+        backdrop.dataset.action = 'close';
+        overlay.appendChild(backdrop);
+        const card = document.createElement('div');
+        card.className = 'mermaid-diagram-overlay-card';
+        card.setAttribute('role', 'dialog');
+        card.setAttribute('aria-modal', 'true');
+        overlay.appendChild(card);
+        const header = document.createElement('div');
+        header.className = 'mermaid-diagram-overlay-header';
+        card.appendChild(header);
+        const heading = document.createElement('div');
+        heading.className = 'mermaid-diagram-overlay-heading';
+        header.appendChild(heading);
+        const title = document.createElement('div');
+        title.className = 'mermaid-diagram-overlay-title';
+        title.textContent = 'Mermaid diagram';
+        heading.appendChild(title);
+        const subtitle = document.createElement('div');
+        subtitle.className = 'mermaid-diagram-overlay-subtitle';
+        subtitle.textContent = '-';
+        heading.appendChild(subtitle);
+        const actions = document.createElement('div');
+        actions.className = 'mermaid-diagram-overlay-actions';
+        header.appendChild(actions);
+        const zoomOutButton = createButton('mermaid-diagram-tool mermaid-diagram-zoom-out', '축소', '-');
+        zoomOutButton.dataset.action = 'zoom-out';
+        const zoomStatus = document.createElement('span');
+        zoomStatus.className = 'mermaid-diagram-zoom-status';
+        zoomStatus.textContent = '100%';
+        const zoomInButton = createButton('mermaid-diagram-tool mermaid-diagram-zoom-in', '확대', '+');
+        zoomInButton.dataset.action = 'zoom-in';
+        const fitButton = createButton('mermaid-diagram-tool mermaid-diagram-fit', '화면에 맞춤', '맞춤');
+        fitButton.dataset.action = 'fit';
+        const closeButton = createButton('btn ghost icon-only mermaid-diagram-overlay-close', '닫기');
+        closeButton.dataset.action = 'close';
+        actions.append(zoomOutButton, zoomStatus, zoomInButton, fitButton, closeButton);
+        const body = document.createElement('div');
+        body.className = 'mermaid-diagram-overlay-body';
+        card.appendChild(body);
+        const viewport = document.createElement('div');
+        viewport.className = 'mermaid-diagram-viewport';
+        viewport.setAttribute('tabindex', '0');
+        body.appendChild(viewport);
+        const content = document.createElement('div');
+        content.className = 'mermaid-diagram-content';
+        viewport.appendChild(content);
+        const minimap = document.createElement('div');
+        minimap.className = 'mermaid-diagram-minimap';
+        body.appendChild(minimap);
+        const minimapScene = document.createElement('div');
+        minimapScene.className = 'mermaid-diagram-minimap-scene';
+        minimap.appendChild(minimapScene);
+        const minimapViewport = document.createElement('div');
+        minimapViewport.className = 'mermaid-diagram-minimap-viewport';
+        minimap.appendChild(minimapViewport);
+        document.body.appendChild(overlay);
+        viewer = {
+            overlay,
+            title,
+            subtitle,
+            viewport,
+            content,
+            minimap,
+            minimapScene,
+            minimapViewport,
+            zoomOutButton,
+            zoomInButton,
+            zoomStatus,
+            diagramWidth: 1,
+            diagramHeight: 1,
+            scale: 1,
+            translateX: 0,
+            translateY: 0,
+            minimapScale: 1,
+            panPointerId: null,
+            minimapPointerId: null,
+            open: false
+        };
+        overlay.addEventListener('click', handleViewerClick);
+        viewport.addEventListener('wheel', handleWheel, { passive: false });
+        viewport.addEventListener('pointerdown', startPan);
+        viewport.addEventListener('pointermove', movePan);
+        viewport.addEventListener('pointerup', stopPan);
+        viewport.addEventListener('pointercancel', stopPan);
+        viewport.addEventListener('lostpointercapture', stopPan);
+        minimap.addEventListener('pointerdown', startMinimapPan);
+        minimap.addEventListener('pointermove', moveMinimapPan);
+        minimap.addEventListener('pointerup', stopMinimapPan);
+        minimap.addEventListener('pointercancel', stopMinimapPan);
+        minimap.addEventListener('lostpointercapture', stopMinimapPan);
+        window.addEventListener('resize', () => {
+            if (viewer?.open) updateMinimap();
+        });
+        return viewer;
+    };
+    const openViewer = node => {
+        const sourceSvg = node?.querySelector?.('svg');
+        if (!(sourceSvg instanceof SVGSVGElement)) return;
+        const state = ensureViewer();
+        const size = getSvgSize(sourceSvg);
+        const viewerSvg = sourceSvg.cloneNode(true);
+        const minimapSvg = sourceSvg.cloneNode(true);
+        prepareSvg(viewerSvg, size);
+        prepareSvg(minimapSvg, size);
+        state.diagramWidth = Math.max(1, size.width);
+        state.diagramHeight = Math.max(1, size.height);
+        state.title.textContent = getTitle(node);
+        state.subtitle.textContent = getSubtitle(size);
+        state.content.innerHTML = '';
+        state.content.style.width = state.diagramWidth + 'px';
+        state.content.style.height = state.diagramHeight + 'px';
+        state.content.appendChild(viewerSvg);
+        state.minimapScene.innerHTML = '';
+        state.minimapScene.appendChild(minimapSvg);
+        state.overlay.classList.add('is-visible');
+        state.overlay.setAttribute('aria-hidden', 'false');
+        state.open = true;
+        document.body.classList.add('is-overlay-open', 'is-mermaid-diagram-viewer-open');
+        requestAnimationFrame(() => {
+            const fitScale = getFitScale();
+            centerAtScale(fitScale >= 1 ? clamp(fitScale, 1, Math.min(2, MAX_ZOOM)) : 1);
+            state.viewport.focus({ preventScroll: true });
+        });
+    };
+    const handleDiagramClick = event => {
+        const node = event.currentTarget;
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || target.closest('a')) return;
+        if (target.closest('.file-browser-mermaid-open') || target.closest('svg') || target === node) {
+            event.preventDefault();
+            event.stopPropagation();
+            openViewer(node);
+        }
+    };
+    const handleDiagramKeydown = event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openViewer(event.currentTarget);
+    };
+    const initializeDiagramInteractions = root => {
+        const diagrams = Array.from(root.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
+        for (const node of diagrams) {
+            if (!(node instanceof HTMLElement) || !node.querySelector('svg')) continue;
+            node.classList.add('is-interactive');
+            if (!node.querySelector('.file-browser-mermaid-open')) {
+                node.appendChild(createButton('file-browser-mermaid-open', '다이어그램 크게 보기'));
+            }
+            if (node.dataset.diagramViewerBound === '1') continue;
+            node.dataset.diagramViewerBound = '1';
+            node.setAttribute('tabindex', '0');
+            node.addEventListener('click', handleDiagramClick);
+            node.addEventListener('keydown', handleDiagramKeydown);
+        }
+    };
+    const hydrate = async () => {
+        const diagrams = Array.from(document.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
+        if (!diagrams.length) return;
+        try {
+            await loadScript(document.body.dataset.mermaidSrc || '/static/vendor/mermaid-11.13.0.min.js');
+        } catch (error) {
+            return;
+        }
+        const api = window.mermaid;
+        if (!api || typeof api.initialize !== 'function' || typeof api.render !== 'function') return;
+        api.initialize({
+            startOnLoad: false,
+            fontFamily: '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", sans-serif',
+            theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default'
+        });
+        let serial = 0;
+        for (const node of diagrams) {
+            const source = decodeSource(node.dataset.mermaidSource || '');
+            if (!source.trim()) continue;
+            try {
+                const result = await api.render('markdown-preview-mermaid-' + (serial += 1), source);
+                node.innerHTML = result?.svg || '';
+                node.dataset.mermaidRendered = '1';
+                if (typeof result?.bindFunctions === 'function') {
+                    result.bindFunctions(node);
+                }
+            } catch (error) {
+                node.classList.add('is-error');
+            }
+        }
+        initializeDiagramInteractions(document);
+    };
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && viewer?.open) {
+            closeViewer();
+        }
+    });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', hydrate, { once: true });
+    } else {
+        void hydrate();
+    }
+}
+
+function buildFilePanelMarkdownPreviewRuntimeScript() {
+    return `(${filePanelMarkdownPreviewRuntime.toString()})();`;
+}
+
 function buildFilePanelMarkdownPreviewDocument(payload) {
     const normalizedPath = normalizeFileBrowserRelativePath(payload?.path || '');
     const title = String(payload?.name || normalizedPath || 'Markdown preview');
@@ -12503,26 +12950,7 @@ function buildFilePanelMarkdownPreviewDocument(payload) {
         `<article class="file-browser-markdown">${renderedMarkdown}</article>`,
         '</main>',
         '<script>',
-        '(() => {',
-        'const decodeSource = value => { try { return decodeURIComponent(String(value || "")); } catch (error) { return String(value || ""); } };',
-        'const loadScript = src => new Promise((resolve, reject) => { const script = document.createElement("script"); script.src = src; script.onload = resolve; script.onerror = reject; document.head.appendChild(script); });',
-        'const hydrate = async () => {',
-        'const diagrams = Array.from(document.querySelectorAll(".file-browser-mermaid[data-mermaid-source]"));',
-        'if (!diagrams.length) return;',
-        'try { await loadScript(document.body.dataset.mermaidSrc || "/static/vendor/mermaid-11.13.0.min.js"); } catch (error) { return; }',
-        'const api = window.mermaid;',
-        'if (!api || typeof api.initialize !== "function" || typeof api.render !== "function") return;',
-        'api.initialize({ startOnLoad: false, theme: document.documentElement.dataset.theme === "dark" ? "dark" : "default" });',
-        'let serial = 0;',
-        'for (const node of diagrams) {',
-        'const source = decodeSource(node.dataset.mermaidSource || "");',
-        'if (!source.trim()) continue;',
-        'try { const result = await api.render(`markdown-preview-mermaid-${serial += 1}`, source); node.innerHTML = result && result.svg ? result.svg : ""; node.dataset.mermaidRendered = "1"; if (result && typeof result.bindFunctions === "function") result.bindFunctions(node); }',
-        'catch (error) { node.classList.add("is-error"); }',
-        '}',
-        '};',
-        'if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", hydrate, { once: true }); else void hydrate();',
-        '})();',
+        buildFilePanelMarkdownPreviewRuntimeScript(),
         '</script>',
         '</body>',
         '</html>'
@@ -20389,6 +20817,583 @@ async function hydrateMermaidDiagrams(container) {
                 `<pre class="file-browser-mermaid-source"><code>${escapeHtml(source)}</code></pre>`
             ].join('');
         }
+    }
+    initializeMermaidDiagramInteractions(container);
+}
+
+function parseSvgLengthValue(value) {
+    const match = String(value || '').trim().match(/^(-?\d+(?:\.\d+)?)/);
+    if (!match) return NaN;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+}
+
+function getMermaidSvgIntrinsicSize(svg) {
+    if (!(svg instanceof SVGSVGElement)) {
+        return { width: 800, height: 480 };
+    }
+    const viewBox = svg.viewBox?.baseVal;
+    if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+        return { width: viewBox.width, height: viewBox.height };
+    }
+    const width = parseSvgLengthValue(svg.getAttribute('width'));
+    const height = parseSvgLengthValue(svg.getAttribute('height'));
+    if (Number.isFinite(width) && Number.isFinite(height)) {
+        return { width, height };
+    }
+    const rect = svg.getBoundingClientRect();
+    return {
+        width: Number.isFinite(rect?.width) && rect.width > 0 ? rect.width : 800,
+        height: Number.isFinite(rect?.height) && rect.height > 0 ? rect.height : 480
+    };
+}
+
+function prepareMermaidDiagramViewerSvg(svg, size) {
+    if (!(svg instanceof SVGSVGElement)) return;
+    const width = Math.max(1, Number(size?.width) || 800);
+    const height = Math.max(1, Number(size?.height) || 480);
+    if (!svg.getAttribute('viewBox')) {
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    }
+    svg.setAttribute('width', String(width));
+    svg.setAttribute('height', String(height));
+    svg.style.width = `${width}px`;
+    svg.style.height = `${height}px`;
+    svg.style.maxWidth = 'none';
+    svg.style.margin = '0';
+}
+
+function getMermaidDiagramViewerTitle(node) {
+    const source = decodeMermaidDiagramSource(node?.dataset?.mermaidSource || '');
+    const firstLine = source.split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
+    if (/^(?:flowchart|graph)\b/i.test(firstLine)) return 'Flow diagram';
+    if (/^sequenceDiagram\b/i.test(firstLine)) return 'Sequence diagram';
+    if (/^classDiagram\b/i.test(firstLine)) return 'Class diagram';
+    if (/^stateDiagram(?:-v2)?\b/i.test(firstLine)) return 'State diagram';
+    if (/^gantt\b/i.test(firstLine)) return 'Gantt chart';
+    return 'Mermaid diagram';
+}
+
+function getMermaidDiagramViewerSubtitle(size) {
+    const width = Math.round(Number(size?.width) || 0);
+    const height = Math.round(Number(size?.height) || 0);
+    if (width > 0 && height > 0) {
+        return `${width} x ${height}`;
+    }
+    return '확대 보기';
+}
+
+function createMermaidDiagramViewerButton(className, label, text = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    if (text) {
+        button.textContent = text;
+    } else {
+        const srOnly = document.createElement('span');
+        srOnly.className = 'sr-only';
+        srOnly.textContent = label;
+        button.appendChild(srOnly);
+    }
+    return button;
+}
+
+function ensureMermaidDiagramViewer() {
+    if (mermaidDiagramViewerState?.overlay && document.body.contains(mermaidDiagramViewerState.overlay)) {
+        return mermaidDiagramViewerState;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'codex-mermaid-diagram-overlay';
+    overlay.className = 'mermaid-diagram-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+
+    const backdrop = document.createElement('div');
+    backdrop.className = 'mermaid-diagram-overlay-backdrop';
+    backdrop.dataset.action = 'close';
+    overlay.appendChild(backdrop);
+
+    const card = document.createElement('div');
+    card.className = 'mermaid-diagram-overlay-card';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-labelledby', 'codex-mermaid-diagram-overlay-title');
+    overlay.appendChild(card);
+
+    const header = document.createElement('div');
+    header.className = 'mermaid-diagram-overlay-header';
+    card.appendChild(header);
+
+    const heading = document.createElement('div');
+    heading.className = 'mermaid-diagram-overlay-heading';
+    header.appendChild(heading);
+
+    const title = document.createElement('div');
+    title.id = 'codex-mermaid-diagram-overlay-title';
+    title.className = 'mermaid-diagram-overlay-title';
+    title.textContent = 'Mermaid diagram';
+    heading.appendChild(title);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'mermaid-diagram-overlay-subtitle';
+    subtitle.textContent = '-';
+    heading.appendChild(subtitle);
+
+    const actions = document.createElement('div');
+    actions.className = 'mermaid-diagram-overlay-actions';
+    header.appendChild(actions);
+
+    const zoomOutButton = createMermaidDiagramViewerButton(
+        'mermaid-diagram-tool mermaid-diagram-zoom-out',
+        '축소',
+        '-'
+    );
+    zoomOutButton.dataset.action = 'zoom-out';
+    actions.appendChild(zoomOutButton);
+
+    const zoomStatus = document.createElement('span');
+    zoomStatus.className = 'mermaid-diagram-zoom-status';
+    zoomStatus.textContent = '100%';
+    actions.appendChild(zoomStatus);
+
+    const zoomInButton = createMermaidDiagramViewerButton(
+        'mermaid-diagram-tool mermaid-diagram-zoom-in',
+        '확대',
+        '+'
+    );
+    zoomInButton.dataset.action = 'zoom-in';
+    actions.appendChild(zoomInButton);
+
+    const fitButton = createMermaidDiagramViewerButton(
+        'mermaid-diagram-tool mermaid-diagram-fit',
+        '화면에 맞춤',
+        '맞춤'
+    );
+    fitButton.dataset.action = 'fit';
+    actions.appendChild(fitButton);
+
+    const closeButton = createMermaidDiagramViewerButton(
+        'btn ghost icon-only mermaid-diagram-overlay-close',
+        '닫기'
+    );
+    closeButton.dataset.action = 'close';
+    actions.appendChild(closeButton);
+
+    const body = document.createElement('div');
+    body.className = 'mermaid-diagram-overlay-body';
+    card.appendChild(body);
+
+    const viewport = document.createElement('div');
+    viewport.className = 'mermaid-diagram-viewport';
+    viewport.setAttribute('tabindex', '0');
+    body.appendChild(viewport);
+
+    const content = document.createElement('div');
+    content.className = 'mermaid-diagram-content';
+    viewport.appendChild(content);
+
+    const minimap = document.createElement('div');
+    minimap.className = 'mermaid-diagram-minimap';
+    body.appendChild(minimap);
+
+    const minimapScene = document.createElement('div');
+    minimapScene.className = 'mermaid-diagram-minimap-scene';
+    minimap.appendChild(minimapScene);
+
+    const minimapViewport = document.createElement('div');
+    minimapViewport.className = 'mermaid-diagram-minimap-viewport';
+    minimap.appendChild(minimapViewport);
+
+    document.body.appendChild(overlay);
+
+    mermaidDiagramViewerState = {
+        overlay,
+        card,
+        title,
+        subtitle,
+        closeButton,
+        zoomOutButton,
+        zoomInButton,
+        fitButton,
+        zoomStatus,
+        viewport,
+        content,
+        minimap,
+        minimapScene,
+        minimapViewport,
+        diagramWidth: 1,
+        diagramHeight: 1,
+        scale: 1,
+        translateX: 0,
+        translateY: 0,
+        minimapScale: 1,
+        panPointerId: null,
+        panStartX: 0,
+        panStartY: 0,
+        panOriginX: 0,
+        panOriginY: 0,
+        minimapPointerId: null,
+        open: false
+    };
+
+    overlay.addEventListener('click', handleMermaidDiagramViewerClick);
+    viewport.addEventListener('wheel', handleMermaidDiagramViewerWheel, { passive: false });
+    viewport.addEventListener('pointerdown', startMermaidDiagramViewerPan);
+    viewport.addEventListener('pointermove', moveMermaidDiagramViewerPan);
+    viewport.addEventListener('pointerup', stopMermaidDiagramViewerPan);
+    viewport.addEventListener('pointercancel', stopMermaidDiagramViewerPan);
+    viewport.addEventListener('lostpointercapture', stopMermaidDiagramViewerPan);
+    minimap.addEventListener('pointerdown', startMermaidDiagramViewerMinimapPan);
+    minimap.addEventListener('pointermove', moveMermaidDiagramViewerMinimapPan);
+    minimap.addEventListener('pointerup', stopMermaidDiagramViewerMinimapPan);
+    minimap.addEventListener('pointercancel', stopMermaidDiagramViewerMinimapPan);
+    minimap.addEventListener('lostpointercapture', stopMermaidDiagramViewerMinimapPan);
+    window.addEventListener('resize', handleMermaidDiagramViewerResize);
+
+    return mermaidDiagramViewerState;
+}
+
+function isMermaidDiagramViewerOpen() {
+    return Boolean(mermaidDiagramViewerState?.open);
+}
+
+function handleMermaidDiagramViewerClick(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    const actionElement = target?.closest('[data-action]');
+    const action = actionElement?.dataset?.action || '';
+    if (!action) return;
+    if (action === 'close') {
+        closeMermaidDiagramViewer();
+    } else if (action === 'zoom-in') {
+        zoomMermaidDiagramViewerBy(MERMAID_DIAGRAM_VIEWER_ZOOM_STEP);
+    } else if (action === 'zoom-out') {
+        zoomMermaidDiagramViewerBy(1 / MERMAID_DIAGRAM_VIEWER_ZOOM_STEP);
+    } else if (action === 'fit') {
+        fitMermaidDiagramViewerToViewport();
+    }
+}
+
+function handleMermaidDiagramViewerResize() {
+    if (!isMermaidDiagramViewerOpen()) return;
+    updateMermaidDiagramViewerMinimap();
+}
+
+function getMermaidDiagramViewerFitScale() {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.viewport) return 1;
+    const rect = stateRef.viewport.getBoundingClientRect();
+    const availableWidth = Math.max(1, rect.width - MERMAID_DIAGRAM_VIEWER_FIT_PADDING);
+    const availableHeight = Math.max(1, rect.height - MERMAID_DIAGRAM_VIEWER_FIT_PADDING);
+    return clampToRange(
+        Math.min(
+            availableWidth / Math.max(1, stateRef.diagramWidth),
+            availableHeight / Math.max(1, stateRef.diagramHeight)
+        ),
+        MERMAID_DIAGRAM_VIEWER_MIN_ZOOM,
+        MERMAID_DIAGRAM_VIEWER_MAX_ZOOM
+    );
+}
+
+function getMermaidDiagramViewerInitialScale() {
+    const fitScale = getMermaidDiagramViewerFitScale();
+    if (fitScale >= 1) {
+        return clampToRange(fitScale, 1, Math.min(2, MERMAID_DIAGRAM_VIEWER_MAX_ZOOM));
+    }
+    return 1;
+}
+
+function centerMermaidDiagramViewerAtScale(scale) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.viewport) return;
+    const rect = stateRef.viewport.getBoundingClientRect();
+    stateRef.scale = clampToRange(
+        scale,
+        MERMAID_DIAGRAM_VIEWER_MIN_ZOOM,
+        MERMAID_DIAGRAM_VIEWER_MAX_ZOOM
+    );
+    stateRef.translateX = (rect.width - stateRef.diagramWidth * stateRef.scale) / 2;
+    stateRef.translateY = (rect.height - stateRef.diagramHeight * stateRef.scale) / 2;
+    applyMermaidDiagramViewerTransform();
+}
+
+function applyMermaidDiagramViewerTransform() {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.content) return;
+    stateRef.content.style.transform = [
+        `translate(${stateRef.translateX}px, ${stateRef.translateY}px)`,
+        `scale(${stateRef.scale})`
+    ].join(' ');
+    stateRef.zoomStatus.textContent = `${Math.round(stateRef.scale * 100)}%`;
+    updateMermaidDiagramViewerButtons();
+    updateMermaidDiagramViewerMinimap();
+}
+
+function updateMermaidDiagramViewerButtons() {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef) return;
+    stateRef.zoomOutButton.disabled = stateRef.scale <= MERMAID_DIAGRAM_VIEWER_MIN_ZOOM + 0.001;
+    stateRef.zoomInButton.disabled = stateRef.scale >= MERMAID_DIAGRAM_VIEWER_MAX_ZOOM - 0.001;
+}
+
+function setMermaidDiagramViewerZoom(nextScale, focus = {}) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.viewport) return;
+    const previousScale = Number.isFinite(stateRef.scale) && stateRef.scale > 0 ? stateRef.scale : 1;
+    const scale = clampToRange(
+        nextScale,
+        MERMAID_DIAGRAM_VIEWER_MIN_ZOOM,
+        MERMAID_DIAGRAM_VIEWER_MAX_ZOOM
+    );
+    const rect = stateRef.viewport.getBoundingClientRect();
+    const focusX = Number.isFinite(focus.clientX)
+        ? focus.clientX - rect.left
+        : rect.width / 2;
+    const focusY = Number.isFinite(focus.clientY)
+        ? focus.clientY - rect.top
+        : rect.height / 2;
+    const diagramX = (focusX - stateRef.translateX) / previousScale;
+    const diagramY = (focusY - stateRef.translateY) / previousScale;
+    stateRef.scale = scale;
+    stateRef.translateX = focusX - diagramX * scale;
+    stateRef.translateY = focusY - diagramY * scale;
+    applyMermaidDiagramViewerTransform();
+}
+
+function zoomMermaidDiagramViewerBy(multiplier) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef) return;
+    setMermaidDiagramViewerZoom(stateRef.scale * multiplier);
+}
+
+function fitMermaidDiagramViewerToViewport() {
+    centerMermaidDiagramViewerAtScale(getMermaidDiagramViewerFitScale());
+}
+
+function handleMermaidDiagramViewerWheel(event) {
+    if (!isMermaidDiagramViewerOpen()) return;
+    event.preventDefault();
+    const multiplier = event.deltaY < 0
+        ? MERMAID_DIAGRAM_VIEWER_ZOOM_STEP
+        : 1 / MERMAID_DIAGRAM_VIEWER_ZOOM_STEP;
+    setMermaidDiagramViewerZoom(mermaidDiagramViewerState.scale * multiplier, {
+        clientX: event.clientX,
+        clientY: event.clientY
+    });
+}
+
+function startMermaidDiagramViewerPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.viewport || event.button !== 0) return;
+    event.preventDefault();
+    stateRef.panPointerId = event.pointerId;
+    stateRef.panStartX = event.clientX;
+    stateRef.panStartY = event.clientY;
+    stateRef.panOriginX = stateRef.translateX;
+    stateRef.panOriginY = stateRef.translateY;
+    stateRef.viewport.classList.add('is-panning');
+    stateRef.viewport.setPointerCapture(event.pointerId);
+}
+
+function moveMermaidDiagramViewerPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef || stateRef.panPointerId !== event.pointerId) return;
+    stateRef.translateX = stateRef.panOriginX + event.clientX - stateRef.panStartX;
+    stateRef.translateY = stateRef.panOriginY + event.clientY - stateRef.panStartY;
+    applyMermaidDiagramViewerTransform();
+}
+
+function stopMermaidDiagramViewerPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef || stateRef.panPointerId === null) return;
+    if (event?.pointerId !== undefined && stateRef.panPointerId !== event.pointerId) return;
+    stateRef.panPointerId = null;
+    stateRef.viewport?.classList.remove('is-panning');
+}
+
+function updateMermaidDiagramViewerFromMinimapPointer(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.minimapScene || !stateRef?.viewport || !stateRef.minimapScale) return;
+    const sceneRect = stateRef.minimapScene.getBoundingClientRect();
+    const viewportRect = stateRef.viewport.getBoundingClientRect();
+    const diagramX = (event.clientX - sceneRect.left) / stateRef.minimapScale;
+    const diagramY = (event.clientY - sceneRect.top) / stateRef.minimapScale;
+    stateRef.translateX = viewportRect.width / 2 - diagramX * stateRef.scale;
+    stateRef.translateY = viewportRect.height / 2 - diagramY * stateRef.scale;
+    applyMermaidDiagramViewerTransform();
+}
+
+function startMermaidDiagramViewerMinimapPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.minimap || event.button !== 0) return;
+    event.preventDefault();
+    stateRef.minimapPointerId = event.pointerId;
+    stateRef.minimap.setPointerCapture(event.pointerId);
+    updateMermaidDiagramViewerFromMinimapPointer(event);
+}
+
+function moveMermaidDiagramViewerMinimapPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef || stateRef.minimapPointerId !== event.pointerId) return;
+    updateMermaidDiagramViewerFromMinimapPointer(event);
+}
+
+function stopMermaidDiagramViewerMinimapPan(event) {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef || stateRef.minimapPointerId === null) return;
+    if (event?.pointerId !== undefined && stateRef.minimapPointerId !== event.pointerId) return;
+    stateRef.minimapPointerId = null;
+}
+
+function updateMermaidDiagramViewerMinimap() {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.minimap || !stateRef?.minimapScene || !stateRef?.minimapViewport || !stateRef?.viewport) {
+        return;
+    }
+    const minimapRect = stateRef.minimap.getBoundingClientRect();
+    const viewportRect = stateRef.viewport.getBoundingClientRect();
+    const scale = Math.min(
+        minimapRect.width / Math.max(1, stateRef.diagramWidth),
+        minimapRect.height / Math.max(1, stateRef.diagramHeight)
+    );
+    stateRef.minimapScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    const sceneWidth = Math.max(1, stateRef.diagramWidth * stateRef.minimapScale);
+    const sceneHeight = Math.max(1, stateRef.diagramHeight * stateRef.minimapScale);
+    stateRef.minimapScene.style.width = `${sceneWidth}px`;
+    stateRef.minimapScene.style.height = `${sceneHeight}px`;
+
+    const visibleLeft = clampToRange(
+        -stateRef.translateX / stateRef.scale,
+        0,
+        stateRef.diagramWidth
+    );
+    const visibleTop = clampToRange(
+        -stateRef.translateY / stateRef.scale,
+        0,
+        stateRef.diagramHeight
+    );
+    const visibleRight = clampToRange(
+        (viewportRect.width - stateRef.translateX) / stateRef.scale,
+        0,
+        stateRef.diagramWidth
+    );
+    const visibleBottom = clampToRange(
+        (viewportRect.height - stateRef.translateY) / stateRef.scale,
+        0,
+        stateRef.diagramHeight
+    );
+    const viewportWidth = Math.max(4, (visibleRight - visibleLeft) * stateRef.minimapScale);
+    const viewportHeight = Math.max(4, (visibleBottom - visibleTop) * stateRef.minimapScale);
+    stateRef.minimapViewport.style.width = `${viewportWidth}px`;
+    stateRef.minimapViewport.style.height = `${viewportHeight}px`;
+    stateRef.minimapViewport.style.left = `${visibleLeft * stateRef.minimapScale}px`;
+    stateRef.minimapViewport.style.top = `${visibleTop * stateRef.minimapScale}px`;
+}
+
+function openMermaidDiagramViewer(node) {
+    if (!(node instanceof HTMLElement)) return false;
+    const sourceSvg = node.querySelector('svg');
+    if (!(sourceSvg instanceof SVGSVGElement)) return false;
+
+    const stateRef = ensureMermaidDiagramViewer();
+    const size = getMermaidSvgIntrinsicSize(sourceSvg);
+    const viewerSvg = sourceSvg.cloneNode(true);
+    const minimapSvg = sourceSvg.cloneNode(true);
+    prepareMermaidDiagramViewerSvg(viewerSvg, size);
+    prepareMermaidDiagramViewerSvg(minimapSvg, size);
+
+    stateRef.diagramWidth = Math.max(1, size.width);
+    stateRef.diagramHeight = Math.max(1, size.height);
+    stateRef.title.textContent = getMermaidDiagramViewerTitle(node);
+    stateRef.subtitle.textContent = getMermaidDiagramViewerSubtitle(size);
+    stateRef.content.innerHTML = '';
+    stateRef.content.style.width = `${stateRef.diagramWidth}px`;
+    stateRef.content.style.height = `${stateRef.diagramHeight}px`;
+    stateRef.content.appendChild(viewerSvg);
+    stateRef.minimapScene.innerHTML = '';
+    stateRef.minimapScene.appendChild(minimapSvg);
+
+    stateRef.overlay.classList.add('is-visible');
+    stateRef.overlay.setAttribute('aria-hidden', 'false');
+    stateRef.open = true;
+    document.body.classList.add('is-overlay-open', 'is-mermaid-diagram-viewer-open');
+
+    requestAnimationFrame(() => {
+        centerMermaidDiagramViewerAtScale(getMermaidDiagramViewerInitialScale());
+        stateRef.viewport.focus({ preventScroll: true });
+    });
+    return true;
+}
+
+function releaseBodyOverlayClassAfterMermaidViewerClose() {
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isMailComposeOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function closeMermaidDiagramViewer() {
+    const stateRef = mermaidDiagramViewerState;
+    if (!stateRef?.overlay) return;
+    stateRef.open = false;
+    stateRef.panPointerId = null;
+    stateRef.minimapPointerId = null;
+    stateRef.overlay.classList.remove('is-visible');
+    stateRef.overlay.setAttribute('aria-hidden', 'true');
+    stateRef.content.innerHTML = '';
+    stateRef.minimapScene.innerHTML = '';
+    document.body.classList.remove('is-mermaid-diagram-viewer-open');
+    releaseBodyOverlayClassAfterMermaidViewerClose();
+}
+
+function handleMermaidDiagramInteractionClick(event) {
+    const node = event.currentTarget;
+    if (!(node instanceof HTMLElement)) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest('a')) return;
+    if (target.closest('.file-browser-mermaid-open') || target.closest('svg') || target === node) {
+        event.preventDefault();
+        event.stopPropagation();
+        openMermaidDiagramViewer(node);
+    }
+}
+
+function handleMermaidDiagramInteractionKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const node = event.currentTarget;
+    if (!(node instanceof HTMLElement)) return;
+    event.preventDefault();
+    openMermaidDiagramViewer(node);
+}
+
+function initializeMermaidDiagramInteractions(container) {
+    if (!container || !(container instanceof Element)) return;
+    const diagrams = Array.from(container.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
+    for (const node of diagrams) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (!node.querySelector('svg')) continue;
+        node.classList.add('is-interactive');
+        if (!node.querySelector('.file-browser-mermaid-open')) {
+            node.appendChild(createMermaidDiagramViewerButton(
+                'file-browser-mermaid-open',
+                '다이어그램 크게 보기'
+            ));
+        }
+        if (node.dataset.diagramViewerBound === '1') continue;
+        node.dataset.diagramViewerBound = '1';
+        node.setAttribute('tabindex', '0');
+        node.addEventListener('click', handleMermaidDiagramInteractionClick);
+        node.addEventListener('keydown', handleMermaidDiagramInteractionKeydown);
     }
 }
 

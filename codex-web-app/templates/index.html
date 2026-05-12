@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=157">
+    <link rel="stylesheet" href="/static/css/app.css?v=158">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -636,8 +636,27 @@
                                             <div class="app-server-panel-list" id="codex-app-server-features"></div>
                                         </div>
                                         <div class="app-server-panel app-server-panel-wide">
-                                            <div class="app-server-panel-title">Threads</div>
+                                            <div class="app-server-panel-header">
+                                                <div class="app-server-panel-title">Threads</div>
+                                                <div class="app-server-thread-pager">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-prev">Prev</button>
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-next">Next</button>
+                                                </div>
+                                            </div>
+                                            <div class="app-server-thread-search">
+                                                <input
+                                                    class="app-server-thread-search-input"
+                                                    type="search"
+                                                    id="codex-app-server-thread-search"
+                                                    autocomplete="off"
+                                                    spellcheck="false"
+                                                    placeholder="Search threads"
+                                                    aria-label="Search App Server threads"
+                                                >
+                                                <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-search-apply">Search</button>
+                                            </div>
                                             <div class="app-server-panel-list" id="codex-app-server-threads"></div>
+                                            <div class="app-server-thread-detail" id="codex-app-server-thread-detail"></div>
                                         </div>
                                     </div>
                                 </div>

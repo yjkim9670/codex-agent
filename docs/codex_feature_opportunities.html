@@ -450,7 +450,7 @@
         </article>
         <article class="card">
           <h3>중기 핵심</h3>
-          <p><code>codex remote-control</code>과 App Server는 feature flag 뒤의 별도 어댑터로 붙였고, thread list/read/resume/fork, model/list, feature flag 조회를 파일럿 검증 대상으로 둡니다.</p>
+          <p><code>codex remote-control</code>과 App Server는 feature flag 뒤의 별도 어댑터로 붙였고, thread 검색/read/turns/resume/fork UI까지 1차로 검증합니다.</p>
           <div class="metric"><strong>2</strong><span>기능 폭 확장</span></div>
         </article>
         <article class="card">
@@ -473,7 +473,7 @@
             <li>이미 JSONL 이벤트, 토큰 사용량, 원격 스트림 재연결, queue wait, runtime 상태를 수집합니다.</li>
             <li>브라우저 UI와 Git overlay, usage overlay가 있어 기능 추가 지점이 명확합니다.</li>
             <li><code>--full-auto</code> 없이 명시적 sandbox를 사용하고, queued Codex home을 준비하는 안전 장치가 있습니다.</li>
-            <li>structured report, worktree task mode, App Server 파일럿은 모두 기본 채팅 입력부가 아닌 추가 도구 오버레이 안에서 노출합니다.</li>
+            <li>structured report, worktree task mode, App Server 파일럿과 Thread lifecycle UI는 모두 기본 채팅 입력부가 아닌 추가 도구 오버레이 안에서 노출합니다.</li>
           </ul>
         </article>
         <article class="card">
@@ -660,10 +660,10 @@
           <tr>
             <td>Thread lifecycle UI</td>
             <td>archive, unarchive, fork, rollback, compact, turns pagination을 세션 패널에서 제공합니다.</td>
-            <td>App Server 어댑터 안정화 후 UI에 붙입니다.</td>
+            <td>1차는 추가 도구 오버레이 안에서 검색, 페이지 이동, read/turns 조회, resume/fork 확인 실행으로 제한합니다.</td>
             <td><span class="score high">높음</span></td>
             <td><span class="score low">높음</span></td>
-            <td>App Server 없이는 구현 가치가 제한됩니다.</td>
+            <td>1차 구현 완료. archive, compact, rollback은 preview/confirm 설계 후 별도 반영합니다.</td>
           </tr>
           <tr>
             <td>Subagent cockpit</td>
@@ -878,6 +878,15 @@
           </ul>
         </article>
         <article class="phase">
+          <h3>Phase 3.5: Thread lifecycle UI 1차 · 구현 완료</h3>
+          <ul>
+            <li>thread 검색과 cursor 기반 Prev/Next</li>
+            <li>thread read 상세와 turns pagination 조회</li>
+            <li>resume/fork 명시 확인 실행</li>
+            <li>archive, compact, rollback은 미리보기 설계 후 보류</li>
+          </ul>
+        </article>
+        <article class="phase">
           <h3>Phase 4: 팀 워크플로</h3>
           <ul>
             <li>subagent cockpit</li>
@@ -954,7 +963,7 @@
       <h2 class="section-title">결론</h2>
       <div class="card">
         <p>
-          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터로 붙였습니다. 다음 단계는 이 파일럿의 실제 계정/환경별 안정성을 검증한 뒤 thread lifecycle UI를 넓히는 것입니다.
+          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. 다음 단계는 실제 계정/환경별 App Server 안정성을 검증하면서 Phase 4의 subagent cockpit을 명시 실행 중심으로 시작하는 것입니다.
         </p>
       </div>
     </section>

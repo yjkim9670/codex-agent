@@ -26,6 +26,17 @@ const state = {
         models: [],
         features: [],
         threads: [],
+        threadCursor: '',
+        threadNextCursor: '',
+        threadCursorStack: [],
+        threadSearch: '',
+        selectedThreadId: '',
+        threadDetail: null,
+        threadDetailTurns: [],
+        threadDetailNextCursor: '',
+        threadDetailIncludeTurns: false,
+        threadDetailLoading: false,
+        threadDetailError: '',
         loading: false,
         error: ''
     },
@@ -1553,6 +1564,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const appServerStartBtn = document.getElementById('codex-app-server-start');
     const appServerStopBtn = document.getElementById('codex-app-server-stop');
     const appServerRefreshBtn = document.getElementById('codex-app-server-refresh');
+    const appServerThreadSearchInput = document.getElementById('codex-app-server-thread-search');
+    const appServerThreadSearchApply = document.getElementById('codex-app-server-thread-search-apply');
+    const appServerThreadPrevBtn = document.getElementById('codex-app-server-thread-prev');
+    const appServerThreadNextBtn = document.getElementById('codex-app-server-thread-next');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
     const worktreeModeToggle = document.getElementById('codex-worktree-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
@@ -1791,6 +1806,36 @@ document.addEventListener('DOMContentLoaded', () => {
         appServerRefreshBtn.addEventListener('click', event => {
             event.preventDefault();
             void refreshAppServerPilot({ loadDetails: true, showToastOnSuccess: true });
+        });
+    }
+
+    if (appServerThreadSearchInput) {
+        appServerThreadSearchInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                void applyAppServerThreadSearch(appServerThreadSearchInput.value);
+            }
+        });
+    }
+
+    if (appServerThreadSearchApply) {
+        appServerThreadSearchApply.addEventListener('click', event => {
+            event.preventDefault();
+            void applyAppServerThreadSearch(appServerThreadSearchInput?.value || '');
+        });
+    }
+
+    if (appServerThreadPrevBtn) {
+        appServerThreadPrevBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadPreviousAppServerThreads();
+        });
+    }
+
+    if (appServerThreadNextBtn) {
+        appServerThreadNextBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadNextAppServerThreads();
         });
     }
 
@@ -19094,6 +19139,74 @@ function normalizeAppServerList(value) {
     return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : [];
 }
 
+function getAppServerThreadId(thread) {
+    return String(thread?.id || thread?.threadId || thread?.thread_id || '').trim();
+}
+
+function getAppServerThreadTitle(thread) {
+    return thread?.name || thread?.title || thread?.preview || getAppServerThreadId(thread) || 'thread';
+}
+
+function getAppServerNextCursor(payload) {
+    return String(payload?.next_cursor || payload?.nextCursor || '').trim();
+}
+
+function resetAppServerThreadDetail() {
+    state.appServer.selectedThreadId = '';
+    state.appServer.threadDetail = null;
+    state.appServer.threadDetailTurns = [];
+    state.appServer.threadDetailNextCursor = '';
+    state.appServer.threadDetailIncludeTurns = false;
+    state.appServer.threadDetailLoading = false;
+    state.appServer.threadDetailError = '';
+}
+
+function buildAppServerThreadsUrl({ cursor = '', searchTerm = '' } = {}) {
+    const params = new URLSearchParams();
+    params.set('limit', '20');
+    params.set('include_exec', '1');
+    const normalizedCursor = String(cursor || '').trim();
+    if (normalizedCursor) {
+        params.set('cursor', normalizedCursor);
+    }
+    const normalizedSearch = String(searchTerm || '').trim();
+    if (normalizedSearch) {
+        params.set('search', normalizedSearch);
+    }
+    return `/api/codex/app-server/threads?${params.toString()}`;
+}
+
+function applyAppServerThreadsPayload(payload, cursor = '', { pushCursor = false, resetStack = false } = {}) {
+    if (resetStack) {
+        state.appServer.threadCursorStack = [];
+    } else if (pushCursor) {
+        state.appServer.threadCursorStack = [
+            ...state.appServer.threadCursorStack,
+            state.appServer.threadCursor || ''
+        ].slice(-20);
+    }
+    state.appServer.threadCursor = String(cursor || '').trim();
+    state.appServer.threadNextCursor = getAppServerNextCursor(payload);
+    state.appServer.threads = normalizeAppServerList(payload?.threads);
+    const selectedId = state.appServer.selectedThreadId;
+    if (selectedId && !state.appServer.threads.some(thread => getAppServerThreadId(thread) === selectedId)) {
+        resetAppServerThreadDetail();
+    }
+}
+
+function formatAppServerJson(value, maxChars = 7000) {
+    let text = '';
+    try {
+        text = JSON.stringify(value, null, 2);
+    } catch (error) {
+        text = String(value || '');
+    }
+    if (text.length <= maxChars) {
+        return text;
+    }
+    return `${text.slice(0, maxChars)}\n... truncated ...`;
+}
+
 function renderAppServerPilot() {
     const enabled = Boolean(state.settings.appServerPilotEnabled);
     const status = normalizeAppServerStatus(state.appServer.status);
@@ -19236,36 +19349,153 @@ function formatAppServerThreadTime(thread) {
     return '';
 }
 
+function renderAppServerThreadControls() {
+    const enabled = Boolean(state.settings.appServerPilotEnabled);
+    const busy = Boolean(state.appServer.loading);
+    const searchInput = document.getElementById('codex-app-server-thread-search');
+    const searchApply = document.getElementById('codex-app-server-thread-search-apply');
+    const prevBtn = document.getElementById('codex-app-server-thread-prev');
+    const nextBtn = document.getElementById('codex-app-server-thread-next');
+    if (searchInput && document.activeElement !== searchInput) {
+        searchInput.value = state.appServer.threadSearch || '';
+    }
+    if (searchInput) searchInput.disabled = !enabled || busy;
+    if (searchApply) searchApply.disabled = !enabled || busy;
+    if (prevBtn) prevBtn.disabled = !enabled || busy || state.appServer.threadCursorStack.length === 0;
+    if (nextBtn) nextBtn.disabled = !enabled || busy || !state.appServer.threadNextCursor;
+}
+
+function renderAppServerThreadDetail() {
+    const panel = document.getElementById('codex-app-server-thread-detail');
+    if (!panel) return;
+    panel.innerHTML = '';
+    if (!state.settings.appServerPilotEnabled || !state.appServer.selectedThreadId) {
+        return;
+    }
+    if (state.appServer.threadDetailLoading) {
+        const loading = document.createElement('div');
+        loading.className = 'app-server-empty';
+        loading.textContent = 'Loading thread...';
+        panel.appendChild(loading);
+        return;
+    }
+    if (state.appServer.threadDetailError) {
+        const error = document.createElement('div');
+        error.className = 'app-server-empty';
+        error.textContent = state.appServer.threadDetailError;
+        panel.appendChild(error);
+        return;
+    }
+    const thread = state.appServer.threadDetail;
+    if (!thread || typeof thread !== 'object') {
+        const empty = document.createElement('div');
+        empty.className = 'app-server-empty';
+        empty.textContent = 'No thread detail';
+        panel.appendChild(empty);
+        return;
+    }
+    const head = document.createElement('div');
+    head.className = 'app-server-thread-detail-head';
+    const title = document.createElement('div');
+    title.className = 'app-server-thread-detail-title';
+    title.textContent = getAppServerThreadTitle(thread);
+    title.title = title.textContent;
+    head.appendChild(title);
+
+    const actions = document.createElement('div');
+    actions.className = 'app-server-thread-detail-actions';
+    const turns = document.createElement('button');
+    turns.type = 'button';
+    turns.className = 'app-server-thread-action';
+    turns.textContent = state.appServer.threadDetailIncludeTurns ? 'Refresh turns' : 'Turns';
+    turns.disabled = state.appServer.threadDetailLoading;
+    turns.addEventListener('click', event => {
+        event.preventDefault();
+        void readAppServerThread(state.appServer.selectedThreadId, { includeTurns: true });
+    });
+    actions.appendChild(turns);
+    if (state.appServer.threadDetailNextCursor) {
+        const moreTurns = document.createElement('button');
+        moreTurns.type = 'button';
+        moreTurns.className = 'app-server-thread-action';
+        moreTurns.textContent = 'More';
+        moreTurns.disabled = state.appServer.threadDetailLoading;
+        moreTurns.addEventListener('click', event => {
+            event.preventDefault();
+            void loadMoreAppServerThreadTurns();
+        });
+        actions.appendChild(moreTurns);
+    }
+    head.appendChild(actions);
+    panel.appendChild(head);
+
+    const turnCount = state.appServer.threadDetailTurns.length;
+    const meta = document.createElement('div');
+    meta.className = 'app-server-thread-detail-meta';
+    meta.textContent = [
+        state.appServer.selectedThreadId,
+        turnCount > 0 ? `${turnCount} turns` : '',
+        state.appServer.threadDetailNextCursor ? 'more turns available' : '',
+    ].filter(Boolean).join(' · ');
+    panel.appendChild(meta);
+
+    const pre = document.createElement('pre');
+    pre.className = 'app-server-thread-detail-pre';
+    pre.textContent = formatAppServerJson({
+        thread,
+        turns: state.appServer.threadDetailTurns,
+    });
+    panel.appendChild(pre);
+}
+
 function renderAppServerThreads() {
     const panel = document.getElementById('codex-app-server-threads');
     if (!panel) return;
+    renderAppServerThreadControls();
     if (!state.settings.appServerPilotEnabled) {
         setAppServerPanelEmpty('codex-app-server-threads', 'Off');
+        renderAppServerThreadDetail();
         return;
     }
     if (state.appServer.loading && state.appServer.threads.length === 0) {
         setAppServerPanelEmpty('codex-app-server-threads', 'Loading...');
+        renderAppServerThreadDetail();
         return;
     }
-    const threads = normalizeAppServerList(state.appServer.threads).slice(0, 10);
+    const threads = normalizeAppServerList(state.appServer.threads).slice(0, 20);
     if (threads.length === 0) {
-        setAppServerPanelEmpty('codex-app-server-threads', 'No threads');
+        setAppServerPanelEmpty(
+            'codex-app-server-threads',
+            state.appServer.threadSearch ? 'No matching threads' : 'No threads'
+        );
+        renderAppServerThreadDetail();
         return;
     }
     panel.innerHTML = '';
     threads.forEach(thread => {
-        const threadId = thread.id || thread.threadId || '';
-        const title = thread.name || thread.preview || threadId || 'thread';
+        const threadId = getAppServerThreadId(thread);
+        const title = getAppServerThreadTitle(thread);
         const statusType = thread.status?.type || thread.status || '';
         const meta = [threadId, statusType, formatAppServerThreadTime(thread)].filter(Boolean).join(' · ');
         const { item } = createAppServerItem(title, meta);
+        item.classList.toggle('is-selected', Boolean(threadId && threadId === state.appServer.selectedThreadId));
         const actions = document.createElement('div');
         actions.className = 'app-server-item-actions';
+        const read = document.createElement('button');
+        read.type = 'button';
+        read.className = 'app-server-thread-action';
+        read.textContent = 'Read';
+        read.disabled = !threadId || state.appServer.threadDetailLoading;
+        read.addEventListener('click', event => {
+            event.preventDefault();
+            void readAppServerThread(threadId, { includeTurns: false });
+        });
+        actions.appendChild(read);
         const resume = document.createElement('button');
         resume.type = 'button';
         resume.className = 'app-server-thread-action';
         resume.textContent = 'Resume';
-        resume.disabled = !threadId;
+        resume.disabled = !threadId || state.appServer.loading;
         resume.addEventListener('click', event => {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'resume');
@@ -19275,7 +19505,7 @@ function renderAppServerThreads() {
         fork.type = 'button';
         fork.className = 'app-server-thread-action';
         fork.textContent = 'Fork';
-        fork.disabled = !threadId;
+        fork.disabled = !threadId || state.appServer.loading;
         fork.addEventListener('click', event => {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'fork');
@@ -19284,6 +19514,7 @@ function renderAppServerThreads() {
         item.appendChild(actions);
         panel.appendChild(item);
     });
+    renderAppServerThreadDetail();
 }
 
 async function setAppServerPilotEnabled(enabled) {
@@ -19302,6 +19533,11 @@ async function setAppServerPilotEnabled(enabled) {
             state.appServer.models = [];
             state.appServer.features = [];
             state.appServer.threads = [];
+            state.appServer.threadCursor = '';
+            state.appServer.threadNextCursor = '';
+            state.appServer.threadCursorStack = [];
+            state.appServer.threadSearch = '';
+            resetAppServerThreadDetail();
         }
         if (state.settings.appServerPilotEnabled) {
             await refreshAppServerPilot({ loadDetails: true });
@@ -19340,7 +19576,10 @@ async function loadAppServerPilotDetails() {
     const [modelsResult, featuresResult, threadsResult] = await Promise.allSettled([
         fetchJson('/api/codex/app-server/models?limit=20', { cache: 'no-store' }),
         fetchJson('/api/codex/app-server/features?limit=80', { cache: 'no-store' }),
-        fetchJson('/api/codex/app-server/threads?limit=20&include_exec=1', { cache: 'no-store' })
+        fetchJson(
+            buildAppServerThreadsUrl({ searchTerm: state.appServer.threadSearch }),
+            { cache: 'no-store' }
+        )
     ]);
     if (modelsResult.status === 'fulfilled') {
         state.appServer.models = normalizeAppServerList(modelsResult.value?.models);
@@ -19349,12 +19588,51 @@ async function loadAppServerPilotDetails() {
         state.appServer.features = normalizeAppServerList(featuresResult.value?.features);
     }
     if (threadsResult.status === 'fulfilled') {
-        state.appServer.threads = normalizeAppServerList(threadsResult.value?.threads);
+        applyAppServerThreadsPayload(threadsResult.value, '', { resetStack: true });
     }
     const firstFailure = [modelsResult, featuresResult, threadsResult].find(item => item.status === 'rejected');
     if (firstFailure) {
         state.appServer.error = normalizeError(firstFailure.reason, 'App Server detail load failed');
     }
+}
+
+async function loadAppServerThreads({ cursor = '', pushCursor = false, resetStack = false } = {}) {
+    if (!state.settings.appServerPilotEnabled) return;
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson(
+            buildAppServerThreadsUrl({ cursor, searchTerm: state.appServer.threadSearch }),
+            { cache: 'no-store' }
+        );
+        applyAppServerThreadsPayload(result, cursor, { pushCursor, resetStack });
+    } catch (error) {
+        state.appServer.error = normalizeError(error, 'thread list failed');
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function applyAppServerThreadSearch(searchTerm) {
+    state.appServer.threadSearch = String(searchTerm || '').trim();
+    resetAppServerThreadDetail();
+    await loadAppServerThreads({ cursor: '', resetStack: true });
+}
+
+async function loadNextAppServerThreads() {
+    const nextCursor = state.appServer.threadNextCursor;
+    if (!nextCursor) return;
+    await loadAppServerThreads({ cursor: nextCursor, pushCursor: true });
+}
+
+async function loadPreviousAppServerThreads() {
+    if (state.appServer.threadCursorStack.length === 0) return;
+    const stack = [...state.appServer.threadCursorStack];
+    const previousCursor = stack.pop() || '';
+    state.appServer.threadCursorStack = stack;
+    await loadAppServerThreads({ cursor: previousCursor });
 }
 
 async function startAppServerRemoteControl() {
@@ -19394,8 +19672,74 @@ async function stopAppServerRemoteControl() {
     }
 }
 
+async function readAppServerThread(threadId, { includeTurns = false } = {}) {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId) return;
+    state.appServer.selectedThreadId = normalizedThreadId;
+    state.appServer.threadDetailLoading = true;
+    state.appServer.threadDetailError = '';
+    state.appServer.threadDetailIncludeTurns = Boolean(includeTurns);
+    renderAppServerPilot();
+    try {
+        const params = new URLSearchParams();
+        if (includeTurns) {
+            params.set('include_turns', '1');
+        }
+        const suffix = params.toString() ? `?${params.toString()}` : '';
+        const result = await fetchJson(
+            `/api/codex/app-server/threads/${encodeURIComponent(normalizedThreadId)}${suffix}`,
+            { cache: 'no-store' }
+        );
+        state.appServer.threadDetail = result?.thread && typeof result.thread === 'object'
+            ? result.thread
+            : { id: normalizedThreadId };
+        state.appServer.threadDetailTurns = normalizeAppServerList(result?.turns);
+        state.appServer.threadDetailNextCursor = getAppServerNextCursor(result);
+    } catch (error) {
+        state.appServer.threadDetail = null;
+        state.appServer.threadDetailTurns = [];
+        state.appServer.threadDetailNextCursor = '';
+        state.appServer.threadDetailError = normalizeError(error, 'thread read failed');
+    } finally {
+        state.appServer.threadDetailLoading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function loadMoreAppServerThreadTurns() {
+    const threadId = state.appServer.selectedThreadId;
+    const cursor = state.appServer.threadDetailNextCursor;
+    if (!threadId || !cursor) return;
+    state.appServer.threadDetailLoading = true;
+    state.appServer.threadDetailError = '';
+    renderAppServerPilot();
+    try {
+        const params = new URLSearchParams();
+        params.set('limit', '20');
+        params.set('cursor', cursor);
+        const result = await fetchJson(
+            `/api/codex/app-server/threads/${encodeURIComponent(threadId)}/turns?${params.toString()}`,
+            { cache: 'no-store' }
+        );
+        state.appServer.threadDetailTurns = [
+            ...normalizeAppServerList(state.appServer.threadDetailTurns),
+            ...normalizeAppServerList(result?.turns)
+        ];
+        state.appServer.threadDetailNextCursor = getAppServerNextCursor(result);
+        state.appServer.threadDetailIncludeTurns = true;
+    } catch (error) {
+        state.appServer.threadDetailError = normalizeError(error, 'thread turns failed');
+    } finally {
+        state.appServer.threadDetailLoading = false;
+        renderAppServerPilot();
+    }
+}
+
 async function runAppServerThreadAction(threadId, action) {
     if (!threadId || (action !== 'resume' && action !== 'fork')) return;
+    const actionLabel = action === 'resume' ? 'resume' : 'fork';
+    const confirmed = window.confirm(`Thread ${threadId} ${actionLabel} 작업을 실행할까요?`);
+    if (!confirmed) return;
     state.appServer.loading = true;
     state.appServer.error = '';
     renderAppServerPilot();
@@ -19406,11 +19750,19 @@ async function runAppServerThreadAction(threadId, action) {
         );
         const nextThread = result?.thread;
         if (nextThread && typeof nextThread === 'object') {
+            const nextThreadId = getAppServerThreadId(nextThread);
             state.appServer.threads = [
                 nextThread,
                 ...normalizeAppServerList(state.appServer.threads)
-                    .filter(thread => thread.id !== nextThread.id)
+                    .filter(thread => getAppServerThreadId(thread) !== nextThreadId)
             ];
+            if (nextThreadId) {
+                state.appServer.selectedThreadId = nextThreadId;
+                state.appServer.threadDetail = nextThread;
+                state.appServer.threadDetailTurns = [];
+                state.appServer.threadDetailNextCursor = '';
+                state.appServer.threadDetailIncludeTurns = false;
+            }
         }
         showToast(`thread ${action} 완료`, { tone: 'success', durationMs: 2200 });
     } catch (error) {

@@ -2605,8 +2605,36 @@ def read_codex_app_server_thread(thread_id, include_turns=False):
         {'threadId': thread_id, 'includeTurns': bool(include_turns)},
     )
     result = response.get('result') if isinstance(response, dict) else {}
+    thread = result.get('thread') if isinstance(result.get('thread'), dict) else None
+    turns = result.get('turns') if isinstance(result.get('turns'), list) else []
+    if not turns and isinstance(thread, dict) and isinstance(thread.get('turns'), list):
+        turns = thread.get('turns')
     return {
-        'thread': result.get('thread') if isinstance(result.get('thread'), dict) else None,
+        'thread': thread,
+        'turns': turns,
+        'next_cursor': result.get('nextCursor'),
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def list_codex_app_server_thread_turns(thread_id, limit=20, cursor=None):
+    thread_id = _normalize_app_server_thread_id(thread_id)
+    params = {
+        'threadId': thread_id,
+        'limit': _normalize_app_server_limit(limit, default=20, maximum=100),
+    }
+    cursor = _normalize_app_server_cursor(cursor)
+    if cursor:
+        params['cursor'] = cursor
+    response = call_codex_app_server_method('thread/turns/list', params)
+    result = response.get('result') if isinstance(response, dict) else {}
+    turns = result.get('data') if isinstance(result.get('data'), list) else []
+    if not turns and isinstance(result.get('turns'), list):
+        turns = result.get('turns')
+    return {
+        'turns': turns,
+        'next_cursor': result.get('nextCursor'),
         'transport': response.get('transport'),
         'elapsed_ms': response.get('elapsed_ms'),
     }

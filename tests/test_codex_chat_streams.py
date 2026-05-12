@@ -629,6 +629,88 @@ def test_app_server_blocks_unallowlisted_methods(monkeypatch):
     assert exc_info.value.error_code == 'app_server_method_not_allowed'
 
 
+def test_app_server_thread_list_passes_pagination_filters(monkeypatch):
+    captured = {}
+
+    def fake_call(method, params):
+        captured['method'] = method
+        captured['params'] = params
+        return {
+            'result': {
+                'data': [{'id': 'thr_123', 'preview': 'hello'}],
+                'nextCursor': 'next-page',
+            },
+            'transport': 'stdio',
+            'elapsed_ms': 12,
+        }
+
+    monkeypatch.setattr(codex_chat, 'call_codex_app_server_method', fake_call)
+
+    result = codex_chat.list_codex_app_server_threads(
+        limit=250,
+        cursor='cursor-1',
+        search_term='repo fix',
+        cwd='/tmp/workspace',
+        include_exec=True,
+    )
+
+    assert captured['method'] == 'thread/list'
+    assert captured['params']['limit'] == 100
+    assert captured['params']['cursor'] == 'cursor-1'
+    assert captured['params']['searchTerm'] == 'repo fix'
+    assert captured['params']['cwd'] == '/tmp/workspace'
+    assert 'exec' in captured['params']['sourceKinds']
+    assert result['threads'][0]['id'] == 'thr_123'
+    assert result['next_cursor'] == 'next-page'
+
+
+def test_app_server_thread_read_preserves_turns(monkeypatch):
+    def fake_call(method, params):
+        assert method == 'thread/read'
+        assert params == {'threadId': 'thr_123', 'includeTurns': True}
+        return {
+            'result': {
+                'thread': {'id': 'thr_123', 'title': 'Thread'},
+                'turns': [{'id': 'turn_1'}],
+                'nextCursor': 'turn-page-2',
+            },
+            'transport': 'stdio',
+            'elapsed_ms': 7,
+        }
+
+    monkeypatch.setattr(codex_chat, 'call_codex_app_server_method', fake_call)
+
+    result = codex_chat.read_codex_app_server_thread('thr_123', include_turns=True)
+
+    assert result['thread']['id'] == 'thr_123'
+    assert result['turns'] == [{'id': 'turn_1'}]
+    assert result['next_cursor'] == 'turn-page-2'
+
+
+def test_app_server_thread_turns_list_uses_allowlisted_method(monkeypatch):
+    captured = {}
+
+    def fake_call(method, params):
+        captured['method'] = method
+        captured['params'] = params
+        return {
+            'result': {
+                'data': [{'id': 'turn_1'}],
+                'nextCursor': None,
+            },
+            'transport': 'stdio',
+            'elapsed_ms': 5,
+        }
+
+    monkeypatch.setattr(codex_chat, 'call_codex_app_server_method', fake_call)
+
+    result = codex_chat.list_codex_app_server_thread_turns('thr_123', limit=10, cursor='c2')
+
+    assert captured['method'] == 'thread/turns/list'
+    assert captured['params'] == {'threadId': 'thr_123', 'limit': 10, 'cursor': 'c2'}
+    assert result['turns'] == [{'id': 'turn_1'}]
+
+
 def test_parse_codex_features_list_output_handles_multi_word_stage():
     output = '\n'.join([
         'apply_patch_freeform                    under development  false',

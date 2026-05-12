@@ -64,6 +64,7 @@ from ..services.codex_chat import (
     list_codex_app_server_features,
     list_codex_app_server_models,
     list_codex_app_server_threads,
+    list_codex_app_server_thread_turns,
     list_structured_report_presets,
     list_codex_streams,
     list_git_worktree_tasks,
@@ -643,6 +644,19 @@ def codex_app_server_thread_detail(thread_id):
     include_turns = _parse_plan_mode(request.args.get('include_turns'))
     try:
         return jsonify(read_codex_app_server_thread(thread_id, include_turns=include_turns))
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads/<thread_id>/turns')
+def codex_app_server_thread_turns(thread_id):
+    cursor = request.args.get('cursor')
+    try:
+        return jsonify(list_codex_app_server_thread_turns(
+            thread_id,
+            limit=_parse_app_server_limit(default=20, maximum=100),
+            cursor=cursor,
+        ))
     except CodexAppServerError as exc:
         return _app_server_error_response(exc)
 

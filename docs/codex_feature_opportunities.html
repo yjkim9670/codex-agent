@@ -435,7 +435,7 @@
         <span class="pill">업데이트: 2026-05-12 KST</span>
         <span class="pill">대상: codex_workbench</span>
         <span class="pill">확인된 CLI: codex-cli 0.130.0</span>
-        <span class="pill">코드 기준: Phase 1-3 파일럿 반영</span>
+        <span class="pill">코드 기준: Phase 1-3.5 파일럿 반영</span>
         <span class="pill">근거: OpenAI 공식 Codex 문서</span>
       </div>
     </header>
@@ -445,7 +445,7 @@
       <div class="grid three">
         <article class="card">
           <h3>가장 먼저 할 일</h3>
-          <p>현재 <code>codex exec --json</code> 스트리밍 구조와 명시적 sandbox 기준선은 유지한 채 structured output, 실행 프리셋 UI, worktree 격리 작업을 먼저 붙였습니다.</p>
+          <p>Phase 4로 확장하기 전 structured output schema strict 호환성 문제를 먼저 막고, 현재 <code>codex exec --json</code> 스트리밍 기준선을 안정화합니다.</p>
           <div class="metric"><strong>1</strong><span>낮은 구조 변경</span></div>
         </article>
         <article class="card">
@@ -474,6 +474,7 @@
             <li>브라우저 UI와 Git overlay, usage overlay가 있어 기능 추가 지점이 명확합니다.</li>
             <li><code>--full-auto</code> 없이 명시적 sandbox를 사용하고, queued Codex home을 준비하는 안전 장치가 있습니다.</li>
             <li>structured report, worktree task mode, App Server 파일럿과 Thread lifecycle UI는 모두 기본 채팅 입력부가 아닌 추가 도구 오버레이 안에서 노출합니다.</li>
+            <li>추가 도구는 hover/focus/tap 설명 popover를 제공하되, 설명을 상시 노출하지 않아 입력부 공간을 차지하지 않습니다.</li>
           </ul>
         </article>
         <article class="card">
@@ -482,6 +483,7 @@
             <li>현재 thread store와 Codex 내부 thread lifecycle을 직접 읽는 구조는 아닙니다.</li>
             <li>subagent, model catalog, experimental feature flag, rollback/fork는 JSONL 이벤트만으로 표현하기 어렵습니다.</li>
             <li>실행 정책 프리셋은 현재 정보 표시 중심입니다. 실제 정책 선택이나 권한 확대는 별도 검증 없이는 추가하지 않습니다.</li>
+            <li>structured report schema는 strict structured output 규칙과 동기화되어야 합니다. object property를 추가할 때 <code>required</code> 누락이 있으면 Codex CLI 요청 자체가 400으로 거절될 수 있습니다.</li>
           </ul>
         </article>
       </div>
@@ -639,7 +641,7 @@
             <td><code>codex exec --output-schema</code>와 현재 JSONL stream parser를 함께 사용합니다.</td>
             <td><span class="score high">높음</span></td>
             <td><span class="score high">낮음</span></td>
-            <td>완료. 보고서 버튼은 추가 도구 오버레이 내부에 둡니다.</td>
+            <td>UI 구현 완료. strict schema 호환성 회귀가 확인되어 Phase 3.6에서 schema/test hardening을 먼저 진행합니다.</td>
           </tr>
           <tr>
             <td>Worktree task mode</td>
@@ -887,7 +889,16 @@
           </ul>
         </article>
         <article class="phase">
-          <h3>Phase 4: 팀 워크플로</h3>
+          <h3>Phase 3.6: Structured report 안정화 · 최우선</h3>
+          <ul>
+            <li><code>codex_output_schema</code>를 OpenAI strict structured output 규칙에 맞게 정규화</li>
+            <li><code>findings.items.required</code>에 <code>recommendation</code>을 포함하고, top-level <code>findings</code>도 필수화</li>
+            <li>선택값은 optional property 대신 빈 문자열, 빈 배열, 또는 명시적 nullable 타입으로 표현</li>
+            <li>preset schema 전체를 재귀 검사하는 회귀 테스트와 실제 Code Map 요청 재검증</li>
+          </ul>
+        </article>
+        <article class="phase">
+          <h3>Phase 4: 팀 워크플로 · Phase 3.6 이후</h3>
           <ul>
             <li>subagent cockpit</li>
             <li>skills/plugins authoring</li>
@@ -927,8 +938,8 @@
           </tr>
           <tr>
             <td>출력 파싱 불안정</td>
-            <td>structured report는 <code>--output-schema</code> 최종 응답만 엄격 검증하고, 중간 JSONL 이벤트 파서는 현재 tolerant parser를 유지합니다.</td>
-            <td>schema validation 실패가 전체 스트림 실패로 번지지 않고 사용자에게 재시도 가능한 오류로 표시됩니다.</td>
+            <td>structured report는 <code>--output-schema</code> 최종 응답만 엄격 검증하고, 중간 JSONL 이벤트 파서는 현재 tolerant parser를 유지합니다. 단, CLI에 넘기는 schema 자체는 OpenAI strict structured output subset에 맞게 모든 object property를 <code>required</code>에 포함해야 합니다.</td>
+            <td>invalid_json_schema 400이 사전 테스트에서 잡히고, schema validation 실패가 전체 스트림 실패로 번지지 않고 사용자에게 재시도 가능한 오류로 표시됩니다.</td>
           </tr>
           <tr>
             <td>운영 비용 증가</td>
@@ -956,6 +967,7 @@
         <li>Hooks, Rules, MCP config는 사용자의 Codex 전역 환경을 바꿀 수 있으므로 프로젝트 스코프 preview와 명시 적용 버튼으로 시작하는 것이 좋습니다.</li>
         <li>Git worktree는 branch checkout 제약과 ignored file handoff 제약이 있으므로 UI에서 “무엇이 이동하지 않는지”를 보여줘야 합니다.</li>
         <li>GitHub Action 템플릿은 secret, permissions, safety-strategy를 포함하므로 자동 커밋보다 preview 생성이 안전합니다.</li>
+        <li>structured output schema는 일반 JSON Schema보다 엄격하게 관리해야 합니다. <code>properties</code>에 필드를 추가하면 같은 object의 <code>required</code>에도 즉시 추가하고, 비어 있을 수 있는 값은 빈 값 규약으로 처리합니다.</li>
       </ul>
     </section>
 
@@ -963,7 +975,7 @@
       <h2 class="section-title">결론</h2>
       <div class="card">
         <p>
-          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. 다음 단계는 실제 계정/환경별 App Server 안정성을 검증하면서 Phase 4의 subagent cockpit을 명시 실행 중심으로 시작하는 것입니다.
+          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. 다음 단계는 Phase 3.6에서 structured report schema strict 호환성을 먼저 고정한 뒤, 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
         </p>
       </div>
     </section>

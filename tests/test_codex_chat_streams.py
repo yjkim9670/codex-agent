@@ -83,6 +83,7 @@ def _build_stream_state(stream_id, session_id, started_at, output_path):
             'total_tokens': 0,
         },
         'json_output': True,
+        'codex_error_seen': False,
         'output_length': 0,
         'error_length': 0,
         'created_at': started_at,
@@ -1160,6 +1161,48 @@ class _ExitedWithJsonFinalMessageProcess:
         return self._return_code
 
 
+class _ExitedWithJsonErrorProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 76543
+        self._return_code = 1
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'thread.started',
+                'payload': {'type': 'thread.started'},
+            }) + '\n',
+            json.dumps({
+                'type': 'error',
+                'message': 'Transport channel closed',
+                'details': (
+                    'UnexpectedContentType(text/plain; upstream connect error: '
+                    'Connection refused)'
+                ),
+            }) + '\n',
+            json.dumps({
+                'type': 'turn.failed',
+                'payload': {
+                    'type': 'turn.failed',
+                    'error': {'message': 'turn failed after MCP transport error'},
+                },
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 1
+
+    def kill(self):
+        self._return_code = 1
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatch, isolated_codex_workspace):
     monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithJsonFinalMessageProcess)
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
@@ -1196,6 +1239,52 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
         assert stream is not None
         assert stream.get('saved') is True
         assert stream.get('done') is True
+
+
+def test_run_codex_stream_surfaces_json_error_event(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithJsonErrorProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-error')
+    session_id = session['id']
+    stream_id = 'stream-json-error'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-error.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json error prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'process_exit_error'
+    assert 'Transport channel closed' in saved_message['content']
+    assert 'Connection refused' in saved_message['content']
+    assert '최종 응답을 받지 못해 종료합니다' not in saved_message['content']
+    assert any(
+        'Connection refused' in event.get('detail', '')
+        for event in saved_message.get('codex_events') or []
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('done') is True
+        assert stream.get('saved') is True
+        assert stream.get('exit_code') == 1
+        assert stream.get('codex_error_seen') is True
 
 
 def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isolated_codex_workspace):

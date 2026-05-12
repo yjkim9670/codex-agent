@@ -313,6 +313,7 @@ _IMAGE_ATTACHMENT_EXTENSIONS = {
 }
 _CODEX_EVENT_LOG_LIMIT = 200
 _CODEX_EVENT_DETAIL_MAX_CHARS = 900
+_CODEX_EVENT_ERROR_MAX_CHARS = 2400
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
@@ -5358,6 +5359,7 @@ def _extract_agent_text_from_exec_event(event):
 def _extract_exec_json_summary(raw_stdout):
     usage = None
     text_candidates = []
+    error_candidates = []
     raw_lines = []
     codex_session_id = ''
     saw_empty_final_answer = False
@@ -5376,6 +5378,9 @@ def _extract_exec_json_summary(raw_stdout):
             codex_session_id = event_session_id
         if _event_has_imagegen_workbench_activity(event):
             imagegen_workbench_detected = True
+        error_text = _extract_exec_error_text_from_event(event)
+        if error_text:
+            error_candidates.append(error_text)
         raw_lines.append(line.strip())
         if _event_is_empty_final_answer(event):
             saw_empty_final_answer = True
@@ -5393,6 +5398,7 @@ def _extract_exec_json_summary(raw_stdout):
     return {
         'usage': usage,
         'last_text': text_candidates[-1] if text_candidates else '',
+        'last_error': error_candidates[-1] if error_candidates else '',
         'event_count': len(raw_lines),
         'codex_session_id': codex_session_id,
         'saw_empty_final_answer': saw_empty_final_answer,
@@ -5499,7 +5505,8 @@ def execute_codex_prompt(
 
     if result.returncode != 0:
         error_text = (result.stderr or '').strip()
-        message_text = error_text or output_text or 'Codex 실행에 실패했습니다.'
+        event_error_text = json_summary.get('last_error') or ''
+        message_text = error_text or event_error_text or output_text or 'Codex 실행에 실패했습니다.'
         return None, _apply_auth_failure_guard(message_text), token_usage, timing
 
     return output_text, None, token_usage, timing
@@ -6064,6 +6071,103 @@ def _event_is_task_complete(event):
     return False
 
 
+def _normalize_exec_event_type(value):
+    return str(value or '').strip().lower().replace('_', '.')
+
+
+def _exec_event_type_is_failure(value):
+    normalized = _normalize_exec_event_type(value)
+    if not normalized:
+        return False
+    return normalized in {'error', 'failed', 'failure'} or normalized.endswith('.failed')
+
+
+def _container_status_is_failure(container):
+    if not isinstance(container, dict):
+        return False
+    status = str(container.get('status') or '').strip().lower()
+    return status in {'error', 'failed', 'failure'}
+
+
+def _exec_event_is_failure(event):
+    if not isinstance(event, dict):
+        return False
+    if _exec_event_type_is_failure(event.get('type')) or _container_status_is_failure(event):
+        return True
+    for key in ('payload', 'item'):
+        container = event.get(key)
+        if not isinstance(container, dict):
+            continue
+        if _exec_event_type_is_failure(container.get('type')) or _container_status_is_failure(container):
+            return True
+    return False
+
+
+def _stringify_exec_error_value(value, depth=0):
+    if value is None or depth > 4:
+        return ''
+    if isinstance(value, str):
+        return _single_line_text(value)
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            text = _stringify_exec_error_value(item, depth + 1)
+            if text:
+                parts.append(text)
+            if len(parts) >= 4:
+                break
+        return ' · '.join(parts)
+    if not isinstance(value, dict):
+        return _single_line_text(value)
+
+    parts = []
+    code = _stringify_exec_error_value(value.get('code'), depth + 1)
+    for key in ('message', 'error', 'detail', 'details', 'reason', 'description', 'cause', 'data'):
+        text = _stringify_exec_error_value(value.get(key), depth + 1)
+        if text and text not in parts:
+            parts.append(text)
+        if len(parts) >= 4:
+            break
+    if code:
+        if parts:
+            parts[0] = f'{code}: {parts[0]}'
+        else:
+            parts.append(code)
+    if parts:
+        return ' · '.join(parts)
+    return ''
+
+
+def _extract_exec_error_text_from_event(event):
+    if not _exec_event_is_failure(event):
+        return ''
+    containers = [event]
+    for key in ('payload', 'item'):
+        container = event.get(key)
+        if isinstance(container, dict):
+            containers.append(container)
+
+    parts = []
+    for container in containers:
+        text = _stringify_exec_error_value(container)
+        if text and text not in parts:
+            parts.append(text)
+        if len(parts) >= 3:
+            break
+
+    if not parts:
+        event_type = str(event.get('type') or '').strip()
+        payload = event.get('payload')
+        payload_type = str(payload.get('type') or '').strip() if isinstance(payload, dict) else ''
+        item = event.get('item')
+        item_type = str(item.get('type') or '').strip() if isinstance(item, dict) else ''
+        parts = [part for part in (event_type, payload_type, item_type) if part]
+
+    return _clip_text(' · '.join(parts), _CODEX_EVENT_ERROR_MAX_CHARS)
+
+
 def _is_imagegen_workbench_tool_name(value):
     normalized = str(value or '').strip().lower().replace('-', '_')
     if not normalized:
@@ -6620,6 +6724,28 @@ def _set_stream_token_usage(stream_id, usage):
         stream['updated_at'] = time.time()
 
 
+def _append_stream_exec_error(stream_id, text):
+    normalized = _normalize_stream_log_text(text)
+    if not normalized:
+        return False
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return False
+        stream['codex_error_seen'] = True
+        existing = stream.get('error') or ''
+        if normalized in existing:
+            stream['updated_at'] = time.time()
+            return False
+    _append_stream_chunk(stream_id, 'error', f'{normalized}\n')
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream and not stream.get('cancelled'):
+            stream['codex_error_seen'] = True
+            stream['updated_at'] = time.time()
+    return True
+
+
 def _record_stream_imagegen_workbench_filenames(stream_id, filenames):
     normalized = _copy_imagegen_workbench_preferred_filenames(filenames)
     if not normalized:
@@ -6659,6 +6785,9 @@ def _summarize_exec_event(event):
     payload_type = ''
     item_type = ''
     detail_candidates = []
+    error_text = _extract_exec_error_text_from_event(event)
+    if error_text:
+        detail_candidates.append(error_text)
     if isinstance(payload, dict):
         payload_type = str(payload.get('type') or '').strip()
         if payload_type in {'image_generation_call', 'image_generation_end'}:
@@ -6760,6 +6889,10 @@ def _handle_stream_json_output_line(stream_id, line):
     usage = _extract_usage_from_exec_event(event)
     if usage:
         _set_stream_token_usage(stream_id, usage)
+
+    error_text = _extract_exec_error_text_from_event(event)
+    if error_text:
+        _append_stream_exec_error(stream_id, error_text)
 
     if _event_is_empty_final_answer(event):
         _mark_stream_empty_final_answer(stream_id)
@@ -7028,7 +7161,7 @@ def _run_codex_stream(stream_id, prompt):
                             stream['done'] = True
                             stream['updated_at'] = done_now
                             if not stream.get('finalize_reason'):
-                                if stream.get('exit_code') == 0:
+                                if stream.get('exit_code') == 0 and not stream.get('codex_error_seen'):
                                     stream['finalize_reason'] = 'process_exit'
                                 else:
                                     stream['finalize_reason'] = 'process_exit_error'
@@ -7140,7 +7273,7 @@ def _run_codex_stream(stream_id, prompt):
                 if stream.get('done') and not stream.get('finalize_reason'):
                     if stream.get('cancelled'):
                         stream['finalize_reason'] = 'user_cancelled'
-                    elif stream.get('exit_code') == 0:
+                    elif stream.get('exit_code') == 0 and not stream.get('codex_error_seen'):
                         stream['finalize_reason'] = 'process_exit'
                     else:
                         stream['finalize_reason'] = 'process_exit_error'
@@ -7234,6 +7367,7 @@ def create_codex_stream(
         'json_output': True,
         'codex_events': [],
         'codex_event_count': 0,
+        'codex_error_seen': False,
         'codex_session_id': '',
         'codex_home': '',
         'assistant_final_empty': False,
@@ -7935,7 +8069,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         if not finalize_reason:
             if stream.get('cancelled'):
                 finalize_reason = 'user_cancelled'
-            elif stream.get('exit_code') == 0:
+            elif stream.get('exit_code') == 0 and not stream.get('codex_error_seen'):
                 finalize_reason = 'process_exit'
             else:
                 finalize_reason = 'process_exit_error'
@@ -7952,6 +8086,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         token_usage = _normalize_token_usage(stream.get('token_usage'))
         codex_events = _copy_codex_events(stream.get('codex_events'))
         assistant_final_empty = bool(stream.get('assistant_final_empty'))
+        codex_error_seen = bool(stream.get('codex_error_seen'))
         imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
@@ -8027,7 +8162,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     work_details = _build_work_details(output, final_output, error)
     if work_details:
         metadata['work_details'] = work_details
-    if exit_code == 0:
+    if exit_code == 0 and not codex_error_seen:
         message_role = 'assistant'
         message_content = format_assistant_response_content(
             final_output,

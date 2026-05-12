@@ -18662,6 +18662,89 @@ function getChatToolsOverlayElements() {
     };
 }
 
+const CHAT_TOOL_HELP_TEXT = Object.freeze({
+    overlayTitle: '추가 도구는 기본 채팅 입력부 밖에 숨겨 둔 고위험/보조 기능 모음입니다. 실행 정책, 보고서, worktree, App Server 파일럿을 여기에서만 조정합니다.',
+    executionSection: 'Codex가 어떤 격리 수준과 실행 경로로 동작하는지 보여줍니다. 일반 수정, 격리 worktree, 읽기 전용 보고서 경로를 구분합니다.',
+    reportSection: '현재 프롬프트와 세션 맥락을 구조화된 보고서로 실행합니다. 보고서 작업은 read-only ephemeral 정책을 사용해 영구 파일 수정을 피합니다.',
+    worktreeSection: '리스크 있는 구현을 현재 checkout과 분리된 Git worktree에서 실행합니다. 완료 후 handoff로 diff를 가져오거나 cleanup으로 폐기합니다.',
+    appServerSection: 'Codex App Server/remote-control 파일럿입니다. 모델, feature flag, thread 목록을 읽고 thread resume/fork를 명시적으로 실행합니다.',
+    modelsPanel: 'App Server가 노출하는 사용 가능한 모델 목록입니다. 표시 이름, 모델 id, 기본 reasoning effort를 빠르게 확인합니다.',
+    featuresPanel: 'App Server feature flag 상태입니다. 현재 계정/환경에서 켜진 파일럿 기능과 stage를 확인합니다.',
+    threadsPanel: 'App Server thread 목록입니다. 기존 thread를 읽고, turns를 조회하거나 resume/fork 작업을 명시적으로 시작합니다.',
+    appServerStatus: 'App Server pilot과 remote-control 상태입니다. 실행 중이면 pid를 표시하고, 실패하면 마지막 오류를 여기에 보여줍니다.',
+    appServerPilot: 'App Server 기능을 켜거나 끕니다. 꺼져 있으면 기존 codex exec --json 경로는 그대로 유지됩니다.',
+    appServerStart: 'remote-control 서버를 시작합니다. 모델/feature/thread를 더 빠르게 읽기 위한 파일럿 경로입니다.',
+    appServerStop: '실행 중인 remote-control 서버를 종료합니다. 파일럿을 끄거나 문제가 있을 때 사용합니다.',
+    appServerRefresh: 'App Server 상태, 모델, feature flag, thread 목록을 다시 읽습니다.',
+    threadSearchInput: 'thread 제목/id를 기준으로 목록을 필터링합니다. Enter로 검색을 실행할 수 있습니다.',
+    threadSearch: '검색어를 적용해 thread 목록을 다시 불러옵니다.',
+    threadPrev: '이전 thread 페이지로 돌아갑니다. cursor 기반 pagination stack이 있을 때만 활성화됩니다.',
+    threadNext: '다음 thread 페이지를 불러옵니다. App Server가 next cursor를 반환했을 때만 활성화됩니다.',
+    threadRead: '선택한 thread의 기본 상세 정보를 읽습니다. turns 전체를 즉시 불러오지는 않습니다.',
+    threadResume: '선택한 thread를 이어서 작업할 새 실행을 시작합니다. 실행 전 확인 창을 거칩니다.',
+    threadFork: '선택한 thread를 새 갈래로 복제해 실험합니다. 원본 thread를 바로 수정하지 않습니다.',
+    threadTurns: '선택한 thread의 turn 목록을 함께 읽습니다. 긴 thread는 More로 추가 조회합니다.',
+    threadMoreTurns: '아직 남아 있는 turn page를 이어서 불러옵니다.',
+    worktreeToggle: '켜면 다음 구현/수정 프롬프트가 새 Git worktree에서 실행됩니다. 보고서 preset과 함께 쓰면 보고서가 우선합니다.',
+    worktreeTask: '현재 활성 worktree 작업입니다. branch 이름, 변경 파일 수, 실제 worktree 경로를 확인합니다.',
+    worktreeHandoff: 'worktree 작업 결과를 현재 checkout 검토 흐름으로 넘깁니다. 변경 내용 확인 후 별도 커밋하는 용도입니다.',
+    worktreeCleanup: 'worktree 작업 공간을 정리합니다. 변경이 남아 있으면 확인 후 강제 cleanup을 선택할 수 있습니다.',
+    reportPrRisk: '변경 리스크, 회귀 가능성, 누락 테스트, rollback 포인트, 리뷰 체크리스트를 구조화합니다.',
+    reportTestPlan: '자동 테스트, 수동 검증, edge case, fixture, pass/fail 기준을 실행 가능한 순서로 정리합니다.',
+    reportReleaseNotes: '사용자에게 보이는 변경, 운영 참고사항, 마이그레이션, 알려진 제한, 후속 작업을 분리해 정리합니다.',
+    reportCodeMap: '관련 파일, 책임 경계, 데이터 흐름, 확장 지점, 주의해야 할 코드를 지도처럼 설명합니다.',
+    policyStandard: '기본 수정 모드입니다. 현재 workspace에서 파일을 읽고 쓸 수 있으며 일반 구현 작업에 사용합니다.',
+    policyWorktree: '격리 구현 모드입니다. 별도 Git worktree에서 실행해 현재 checkout의 미완성 변경과 충돌 위험을 줄입니다.',
+    policyReadOnly: '읽기 전용 임시 모드입니다. 분석/보고서 생성에 사용하며 영구 파일 수정 없이 낮은 리스크로 실행합니다.'
+});
+
+function getChatToolHelpText(key, fallback = '') {
+    if (!key) return String(fallback || '');
+    return CHAT_TOOL_HELP_TEXT[key] || String(fallback || '');
+}
+
+function setChatToolHelp(element, key, fallback = '', options = {}) {
+    if (!element) return;
+    const text = getChatToolHelpText(key, fallback);
+    setHoverTooltip(element, text, options);
+}
+
+function getExecutionPolicyHelpKey(presetId) {
+    if (presetId === 'standard') return 'policyStandard';
+    if (presetId === 'worktree_isolated') return 'policyWorktree';
+    if (presetId === 'read_only_ephemeral') return 'policyReadOnly';
+    return '';
+}
+
+function getStructuredReportHelpKey(presetId) {
+    if (presetId === 'pr_risk') return 'reportPrRisk';
+    if (presetId === 'test_plan') return 'reportTestPlan';
+    if (presetId === 'release_notes') return 'reportReleaseNotes';
+    if (presetId === 'codebase_explain') return 'reportCodeMap';
+    return '';
+}
+
+function initializeChatToolsHelp() {
+    setChatToolHelp(document.getElementById('codex-chat-tools-overlay-title'), 'overlayTitle');
+    setChatToolHelp(document.getElementById('codex-chat-tools-execution-title'), 'executionSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-report-title'), 'reportSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-worktree-title'), 'worktreeSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-app-server-title'), 'appServerSection');
+    setChatToolHelp(document.getElementById('codex-app-server-status'), 'appServerStatus');
+    setChatToolHelp(document.getElementById('codex-app-server-start'), 'appServerStart');
+    setChatToolHelp(document.getElementById('codex-app-server-stop'), 'appServerStop');
+    setChatToolHelp(document.getElementById('codex-app-server-refresh'), 'appServerRefresh');
+    setChatToolHelp(document.getElementById('codex-app-server-thread-search'), 'threadSearchInput');
+    setChatToolHelp(document.getElementById('codex-app-server-thread-search-apply'), 'threadSearch');
+    setChatToolHelp(document.getElementById('codex-app-server-thread-prev'), 'threadPrev');
+    setChatToolHelp(document.getElementById('codex-app-server-thread-next'), 'threadNext');
+
+    const panelTitles = Array.from(document.querySelectorAll('#codex-app-server-grid .app-server-panel-title'));
+    setChatToolHelp(panelTitles[0], 'modelsPanel');
+    setChatToolHelp(panelTitles[1], 'featuresPanel');
+    setChatToolHelp(panelTitles[2], 'threadsPanel');
+}
+
 function isChatToolsOverlayOpen() {
     const overlay = document.getElementById('codex-chat-tools-overlay');
     return overlay ? overlay.classList.contains('is-visible') : false;
@@ -18735,6 +18818,7 @@ function openChatToolsOverlay() {
         elements.trigger.setAttribute('aria-expanded', 'true');
     }
     document.body.classList.add('is-overlay-open');
+    initializeChatToolsHelp();
     syncChatToolsToggleState();
 }
 
@@ -18743,6 +18827,7 @@ function closeChatToolsOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
+    hideHoverTooltipLayer();
     if (elements.trigger) {
         elements.trigger.setAttribute('aria-expanded', 'false');
     }
@@ -18774,7 +18859,7 @@ function setWorktreeModeToggleState(nextState) {
     button.classList.toggle('is-active', enabled);
     button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
     button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
+    setChatToolHelp(button, 'worktreeToggle');
     syncChatToolsToggleState();
 }
 
@@ -18811,13 +18896,14 @@ function renderWorktreeTaskBar() {
         const count = Number(task.changed_files_count) || 0;
         const branch = task.branch || task.id;
         text.textContent = `${branch} · ${count} file${count === 1 ? '' : 's'}`;
-        text.title = task.path;
+        setHoverTooltip(text, `${CHAT_TOOL_HELP_TEXT.worktreeTask} 경로: ${task.path}`);
         item.appendChild(text);
 
         const handoff = document.createElement('button');
         handoff.type = 'button';
         handoff.className = 'worktree-task-action';
         handoff.textContent = 'Handoff';
+        setChatToolHelp(handoff, 'worktreeHandoff');
         handoff.addEventListener('click', event => {
             event.preventDefault();
             void handoffWorktreeTask(task.id);
@@ -18828,6 +18914,7 @@ function renderWorktreeTaskBar() {
         cleanup.type = 'button';
         cleanup.className = 'worktree-task-action';
         cleanup.textContent = 'Cleanup';
+        setChatToolHelp(cleanup, 'worktreeCleanup');
         cleanup.addEventListener('click', event => {
             event.preventDefault();
             void cleanupWorktreeTask(task.id, { force: false });
@@ -19081,7 +19168,8 @@ function renderExecutionPolicyStrip() {
         pill.textContent = parts.join(' · ');
         const risk = preset.risk ? `Risk ${preset.risk}. ` : '';
         const scope = preset.scope ? `Scope ${preset.scope}. ` : '';
-        pill.setAttribute('title', `${risk}${scope}${preset.sandbox || ''}`.trim());
+        const fallback = `${risk}${scope}${preset.sandbox || ''}`.trim();
+        setChatToolHelp(pill, getExecutionPolicyHelpKey(preset.id), fallback);
         strip.appendChild(pill);
     });
 }
@@ -19102,7 +19190,7 @@ function renderStructuredReportBar() {
         button.textContent = preset.label;
         const title = preset.description || preset.defaultPrompt || preset.label;
         button.setAttribute('aria-label', title);
-        button.setAttribute('title', title);
+        setChatToolHelp(button, getStructuredReportHelpKey(preset.id), title);
         button.addEventListener('click', event => {
             event.preventDefault();
             void handleStructuredReportPreset(preset.id);
@@ -19224,31 +19312,30 @@ function renderAppServerPilot() {
         toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
         const label = enabled ? 'App Server pilot on' : 'App Server pilot off';
         toggle.setAttribute('aria-label', label);
-        toggle.setAttribute('title', label);
+        setChatToolHelp(toggle, 'appServerPilot');
     }
     if (startBtn) startBtn.disabled = !enabled || busy || Boolean(remote.running);
     if (stopBtn) stopBtn.disabled = !enabled || busy || !remote.running;
     if (refreshBtn) refreshBtn.disabled = !enabled || busy;
+    setChatToolHelp(startBtn, 'appServerStart');
+    setChatToolHelp(stopBtn, 'appServerStop');
+    setChatToolHelp(refreshBtn, 'appServerRefresh');
 
     if (statusElement) {
         statusElement.classList.toggle('is-error', Boolean(errorText));
         if (errorText) {
             statusElement.textContent = errorText;
-            statusElement.title = errorText;
         } else if (!enabled) {
             statusElement.textContent = 'Pilot off';
-            statusElement.title = 'Pilot off';
         } else if (status?.codex_available === false) {
             statusElement.textContent = 'codex unavailable';
-            statusElement.title = 'codex unavailable';
         } else if (remote.running) {
             const pidText = remote.pid ? ` · pid ${remote.pid}` : '';
             statusElement.textContent = `remote-control running${pidText}`;
-            statusElement.title = statusElement.textContent;
         } else {
             statusElement.textContent = 'Pilot on · stdio';
-            statusElement.title = 'Pilot on · stdio';
         }
+        setChatToolHelp(statusElement, 'appServerStatus', errorText || statusElement.textContent);
     }
 
     renderAppServerModels();
@@ -19363,6 +19450,10 @@ function renderAppServerThreadControls() {
     if (searchApply) searchApply.disabled = !enabled || busy;
     if (prevBtn) prevBtn.disabled = !enabled || busy || state.appServer.threadCursorStack.length === 0;
     if (nextBtn) nextBtn.disabled = !enabled || busy || !state.appServer.threadNextCursor;
+    setChatToolHelp(searchInput, 'threadSearchInput');
+    setChatToolHelp(searchApply, 'threadSearch');
+    setChatToolHelp(prevBtn, 'threadPrev');
+    setChatToolHelp(nextBtn, 'threadNext');
 }
 
 function renderAppServerThreadDetail() {
@@ -19409,6 +19500,7 @@ function renderAppServerThreadDetail() {
     turns.className = 'app-server-thread-action';
     turns.textContent = state.appServer.threadDetailIncludeTurns ? 'Refresh turns' : 'Turns';
     turns.disabled = state.appServer.threadDetailLoading;
+    setChatToolHelp(turns, 'threadTurns');
     turns.addEventListener('click', event => {
         event.preventDefault();
         void readAppServerThread(state.appServer.selectedThreadId, { includeTurns: true });
@@ -19420,6 +19512,7 @@ function renderAppServerThreadDetail() {
         moreTurns.className = 'app-server-thread-action';
         moreTurns.textContent = 'More';
         moreTurns.disabled = state.appServer.threadDetailLoading;
+        setChatToolHelp(moreTurns, 'threadMoreTurns');
         moreTurns.addEventListener('click', event => {
             event.preventDefault();
             void loadMoreAppServerThreadTurns();
@@ -19486,6 +19579,7 @@ function renderAppServerThreads() {
         read.className = 'app-server-thread-action';
         read.textContent = 'Read';
         read.disabled = !threadId || state.appServer.threadDetailLoading;
+        setChatToolHelp(read, 'threadRead');
         read.addEventListener('click', event => {
             event.preventDefault();
             void readAppServerThread(threadId, { includeTurns: false });
@@ -19496,6 +19590,7 @@ function renderAppServerThreads() {
         resume.className = 'app-server-thread-action';
         resume.textContent = 'Resume';
         resume.disabled = !threadId || state.appServer.loading;
+        setChatToolHelp(resume, 'threadResume');
         resume.addEventListener('click', event => {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'resume');
@@ -19506,6 +19601,7 @@ function renderAppServerThreads() {
         fork.className = 'app-server-thread-action';
         fork.textContent = 'Fork';
         fork.disabled = !threadId || state.appServer.loading;
+        setChatToolHelp(fork, 'threadFork');
         fork.addEventListener('click', event => {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'fork');

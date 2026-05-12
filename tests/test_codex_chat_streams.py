@@ -377,6 +377,30 @@ def test_extract_exec_json_summary_parses_usage_and_last_agent_text():
     assert summary['usage']['total_tokens'] == 266
 
 
+def test_extract_exec_json_summary_ignores_completed_command_execution_as_fatal():
+    payload = '\n'.join([
+        json.dumps({
+            'type': 'item.completed',
+            'item': {
+                'type': 'command_execution',
+                'status': 'failed',
+                'command': 'pytest -q',
+                'exit_code': 1,
+            },
+        }),
+        json.dumps({
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': '테스트 실패 원인을 수정했습니다.'},
+        }),
+    ])
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['event_count'] == 2
+    assert summary['last_error'] == ''
+    assert summary['last_text'] == '테스트 실패 원인을 수정했습니다.'
+
+
 def test_extract_exec_json_summary_parses_response_item_and_task_complete():
     payload = '\n'.join([
         json.dumps({
@@ -458,6 +482,35 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
     assert token_usage['total_tokens'] == 120
 
 
+def test_execute_codex_prompt_does_not_surface_raw_json_events_as_response(
+        monkeypatch,
+        isolated_codex_workspace):
+    stdout_payload = json.dumps({
+        'type': 'item.completed',
+        'item': {
+            'type': 'command_execution',
+            'status': 'failed',
+            'command': 'pytest -q',
+            'exit_code': 1,
+        },
+    })
+
+    def _fake_run(cmd, **kwargs):
+        del cmd
+        del kwargs
+        return subprocess.CompletedProcess([], 0, stdout_payload, '')
+
+    monkeypatch.setattr(codex_chat.subprocess, 'run', _fake_run)
+
+    output, error, token_usage, timing = codex_chat.execute_codex_prompt('sync prompt')
+
+    assert error is None
+    assert output == 'Codex completed without a final response.'
+    assert 'item.completed' not in output
+    assert token_usage is None
+    assert isinstance(timing, dict)
+
+
 def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspace):
     cmd = codex_chat._build_codex_command('sync prompt')
 
@@ -520,6 +573,112 @@ def test_structured_report_preset_formats_valid_payload():
     assert output == '## Risk report\n\nNo critical risk.'
     assert metadata['preset'] == 'pr_risk'
     assert metadata['schema_valid'] is True
+
+
+def _assert_openai_strict_object_required(schema, path='schema'):
+    if not isinstance(schema, dict):
+        return
+
+    properties = schema.get('properties')
+    if isinstance(properties, dict):
+        required = schema.get('required')
+        assert isinstance(required, list), f'{path}.required must be an array'
+        missing = sorted(set(properties) - set(required))
+        extra = sorted(set(required) - set(properties))
+        assert not missing, f'{path}.required is missing: {missing}'
+        assert not extra, f'{path}.required has unknown fields: {extra}'
+        assert schema.get('additionalProperties') is False, (
+            f'{path}.additionalProperties must be false'
+        )
+        for key, child_schema in properties.items():
+            _assert_openai_strict_object_required(child_schema, f'{path}.properties.{key}')
+
+    items = schema.get('items')
+    if isinstance(items, dict):
+        _assert_openai_strict_object_required(items, f'{path}.items')
+
+    for keyword in ('anyOf', 'oneOf', 'allOf'):
+        children = schema.get(keyword)
+        if isinstance(children, list):
+            for index, child_schema in enumerate(children):
+                _assert_openai_strict_object_required(child_schema, f'{path}.{keyword}[{index}]')
+
+
+def test_structured_report_schemas_match_openai_strict_required_rules():
+    for preset_id in ('pr_risk', 'test_plan', 'release_notes', 'codebase_explain'):
+        preset = codex_chat.get_structured_report_preset(preset_id)
+        assert preset is not None
+
+        _assert_openai_strict_object_required(preset['schema'], f'{preset_id}.schema')
+
+
+def test_structured_report_preset_validates_findings_contract():
+    payload = {
+        'title': 'Risk report',
+        'summary': 'Needs one follow-up.',
+        'risk_level': 'medium',
+        'sections': [
+            {'heading': 'Checks', 'bullets': ['Inspect report schema']},
+        ],
+        'action_items': ['Run structured report request'],
+        'findings': [
+            {
+                'severity': 'info',
+                'title': 'Schema check',
+                'detail': 'All object properties are required.',
+                'recommendation': '',
+            },
+        ],
+        'report_markdown': '## Risk report\n\nNeeds one follow-up.',
+    }
+
+    output, metadata = codex_chat._format_structured_report_output(
+        json.dumps(payload),
+        'codebase_explain',
+    )
+
+    assert output == '## Risk report\n\nNeeds one follow-up.'
+    assert metadata['schema_valid'] is True
+
+
+def test_structured_report_preset_rejects_missing_findings():
+    payload = {
+        'title': 'Risk report',
+        'summary': 'No critical risk.',
+        'risk_level': 'low',
+        'sections': [],
+        'action_items': [],
+        'report_markdown': 'No critical risk.',
+    }
+
+    output, metadata = codex_chat._format_structured_report_output(
+        json.dumps(payload),
+        'pr_risk',
+    )
+
+    assert metadata['schema_valid'] is False
+    assert 'missing required field: findings' in output
+
+
+def test_structured_report_preset_rejects_unexpected_fields():
+    payload = {
+        'title': 'Risk report',
+        'summary': 'No critical risk.',
+        'risk_level': 'low',
+        'sections': [],
+        'action_items': [],
+        'findings': [],
+        'report_markdown': 'No critical risk.',
+        'extra': 'not allowed',
+    }
+
+    output, metadata = codex_chat._format_structured_report_output(
+        json.dumps(payload),
+        'pr_risk',
+    )
+
+    assert metadata['schema_valid'] is False
+    assert 'unexpected field(s): extra' in output
 
 
 def test_execution_policy_presets_keep_danger_access_hidden():
@@ -1161,6 +1320,45 @@ class _ExitedWithJsonFinalMessageProcess:
         return self._return_code
 
 
+class _ExitedWithCommandExecutionFailureAndFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 65433
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'command_execution',
+                    'status': 'failed',
+                    'command': 'pytest -q',
+                    'exit_code': 1,
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'agent_message',
+                    'text': '실패한 테스트를 확인하고 수정했습니다.',
+                },
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 class _ExitedWithJsonErrorProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -1239,6 +1437,56 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
         assert stream is not None
         assert stream.get('saved') is True
         assert stream.get('done') is True
+
+
+def test_run_codex_stream_keeps_command_execution_failure_as_nonfatal_event(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(
+        codex_chat.subprocess,
+        'Popen',
+        _ExitedWithCommandExecutionFailureAndFinalMessageProcess,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-command-execution')
+    session_id = session['id']
+    stream_id = 'stream-json-command-execution'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-command.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json stream prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'assistant'
+    assert saved_message['content'] == '실패한 테스트를 확인하고 수정했습니다.'
+    assert saved_message['finalize_reason'] == 'process_exit'
+    assert 'item.completed' not in saved_message['content']
+    assert any(
+        event.get('item_type') == 'command_execution'
+        for event in saved_message.get('codex_events') or []
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('saved') is True
+        assert stream.get('done') is True
+        assert stream.get('codex_error_seen') is False
 
 
 def test_run_codex_stream_surfaces_json_error_event(monkeypatch, isolated_codex_workspace):

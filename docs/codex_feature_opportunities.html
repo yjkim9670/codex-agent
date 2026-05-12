@@ -435,7 +435,7 @@
         <span class="pill">업데이트: 2026-05-12 KST</span>
         <span class="pill">대상: codex_workbench</span>
         <span class="pill">확인된 CLI: codex-cli 0.130.0</span>
-        <span class="pill">코드 기준: Phase 1-3.5 파일럿 반영</span>
+        <span class="pill">코드 기준: Phase 1-3.6 안정화 반영</span>
         <span class="pill">근거: OpenAI 공식 Codex 문서</span>
       </div>
     </header>
@@ -445,7 +445,7 @@
       <div class="grid three">
         <article class="card">
           <h3>가장 먼저 할 일</h3>
-          <p>Phase 4로 확장하기 전 structured output schema strict 호환성 문제를 먼저 막고, 현재 <code>codex exec --json</code> 스트리밍 기준선을 안정화합니다.</p>
+          <p>structured output schema strict 호환성은 Phase 3.6에서 고정했습니다. 다음은 실제 계정/환경별 App Server 파일럿 검증입니다.</p>
           <div class="metric"><strong>1</strong><span>낮은 구조 변경</span></div>
         </article>
         <article class="card">
@@ -483,7 +483,7 @@
             <li>현재 thread store와 Codex 내부 thread lifecycle을 직접 읽는 구조는 아닙니다.</li>
             <li>subagent, model catalog, experimental feature flag, rollback/fork는 JSONL 이벤트만으로 표현하기 어렵습니다.</li>
             <li>실행 정책 프리셋은 현재 정보 표시 중심입니다. 실제 정책 선택이나 권한 확대는 별도 검증 없이는 추가하지 않습니다.</li>
-            <li>structured report schema는 strict structured output 규칙과 동기화되어야 합니다. object property를 추가할 때 <code>required</code> 누락이 있으면 Codex CLI 요청 자체가 400으로 거절될 수 있습니다.</li>
+            <li>structured report schema는 strict structured output 규칙과 동기화되어야 합니다. 현재 Phase 3.6에서 모든 object property의 <code>required</code> 포함 여부를 회귀 테스트로 고정했습니다.</li>
           </ul>
         </article>
       </div>
@@ -641,7 +641,7 @@
             <td><code>codex exec --output-schema</code>와 현재 JSONL stream parser를 함께 사용합니다.</td>
             <td><span class="score high">높음</span></td>
             <td><span class="score high">낮음</span></td>
-            <td>UI 구현 완료. strict schema 호환성 회귀가 확인되어 Phase 3.6에서 schema/test hardening을 먼저 진행합니다.</td>
+            <td>완료. strict schema 호환성 회귀를 Phase 3.6에서 수정했고, preset schema 전체를 재귀 검사하는 테스트를 추가했습니다.</td>
           </tr>
           <tr>
             <td>Worktree task mode</td>
@@ -889,12 +889,14 @@
           </ul>
         </article>
         <article class="phase">
-          <h3>Phase 3.6: Structured report 안정화 · 최우선</h3>
+          <h3>Phase 3.6: Structured report 안정화 · 완료</h3>
           <ul>
-            <li><code>codex_output_schema</code>를 OpenAI strict structured output 규칙에 맞게 정규화</li>
-            <li><code>findings.items.required</code>에 <code>recommendation</code>을 포함하고, top-level <code>findings</code>도 필수화</li>
+            <li><code>codex_output_schema</code>를 OpenAI strict structured output 규칙에 맞게 정규화 완료</li>
+            <li><code>findings.items.required</code>에 <code>recommendation</code>을 포함하고, top-level <code>findings</code>도 필수화 완료</li>
             <li>선택값은 optional property 대신 빈 문자열, 빈 배열, 또는 명시적 nullable 타입으로 표현</li>
-            <li>preset schema 전체를 재귀 검사하는 회귀 테스트와 실제 Code Map 요청 재검증</li>
+            <li>preset schema 전체를 재귀 검사하는 회귀 테스트 추가</li>
+            <li><code>item.completed</code> + <code>command_execution</code>은 상세 이벤트로만 보존하고, 턴 전체 실패로 오판하지 않도록 회귀 테스트 추가</li>
+            <li>동기 실행에서도 agent final text가 없으면 raw JSON 이벤트를 답변 본문으로 노출하지 않고 명시적인 최종 응답 없음 메시지로 정규화</li>
           </ul>
         </article>
         <article class="phase">
@@ -975,7 +977,7 @@
       <h2 class="section-title">결론</h2>
       <div class="card">
         <p>
-          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. 다음 단계는 Phase 3.6에서 structured report schema strict 호환성을 먼저 고정한 뒤, 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
+          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. Phase 3.6에서 structured report schema strict 호환성을 고정했으므로, 다음 단계는 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
         </p>
       </div>
     </section>

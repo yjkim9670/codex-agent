@@ -353,7 +353,15 @@ _STRUCTURED_REPORT_SCHEMA = {
     '$schema': 'http://json-schema.org/draft-07/schema#',
     'type': 'object',
     'additionalProperties': False,
-    'required': ['title', 'summary', 'risk_level', 'sections', 'action_items', 'report_markdown'],
+    'required': [
+        'title',
+        'summary',
+        'risk_level',
+        'sections',
+        'action_items',
+        'findings',
+        'report_markdown',
+    ],
     'properties': {
         'title': {'type': 'string'},
         'summary': {'type': 'string'},
@@ -376,7 +384,7 @@ _STRUCTURED_REPORT_SCHEMA = {
             'items': {
                 'type': 'object',
                 'additionalProperties': False,
-                'required': ['severity', 'title', 'detail'],
+                'required': ['severity', 'title', 'detail', 'recommendation'],
                 'properties': {
                     'severity': {'type': 'string', 'enum': ['low', 'medium', 'high', 'info']},
                     'title': {'type': 'string'},
@@ -1628,7 +1636,8 @@ def build_structured_report_prompt(prompt_text, preset_id):
         '- Run in read-only mode. Do not modify files or git state.\n'
         '- The final answer must match the provided JSON Schema exactly.\n'
         '- Put the complete user-visible Markdown report in `report_markdown`.\n'
-        '- Also fill `title`, `summary`, `risk_level`, `sections`, `action_items`, and `findings`.'
+        '- Also fill `title`, `summary`, `risk_level`, `sections`, `action_items`, and `findings`.\n'
+        '- Use empty strings or empty arrays for fields that have no applicable content.'
     )
 
 
@@ -5500,6 +5509,8 @@ def execute_codex_prompt(
         output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
     elif not output_text and json_summary.get('saw_empty_final_answer'):
         output_text = 'Codex completed without a final response.'
+    if not output_text and json_summary.get('event_count'):
+        output_text = 'Codex completed without a final response.'
     if not output_text:
         output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
 
@@ -5834,10 +5845,21 @@ def _parse_json_response_text(text):
 def _validate_structured_report_payload(payload):
     if not isinstance(payload, dict):
         return False, 'final response is not a JSON object'
-    required = ('title', 'summary', 'risk_level', 'sections', 'action_items', 'report_markdown')
+    required = (
+        'title',
+        'summary',
+        'risk_level',
+        'sections',
+        'action_items',
+        'findings',
+        'report_markdown',
+    )
     for key in required:
         if key not in payload:
             return False, f'missing required field: {key}'
+    unexpected = sorted(set(payload) - set(required))
+    if unexpected:
+        return False, f'unexpected field(s): {", ".join(unexpected)}'
     if not isinstance(payload.get('title'), str) or not payload.get('title').strip():
         return False, 'title must be a non-empty string'
     if not isinstance(payload.get('summary'), str):
@@ -5849,6 +5871,9 @@ def _validate_structured_report_payload(payload):
     for section in payload.get('sections') or []:
         if not isinstance(section, dict):
             return False, 'each section must be an object'
+        section_unexpected = sorted(set(section) - {'heading', 'bullets'})
+        if section_unexpected:
+            return False, f'unexpected section field(s): {", ".join(section_unexpected)}'
         if not isinstance(section.get('heading'), str):
             return False, 'section.heading must be a string'
         if not isinstance(section.get('bullets'), list):
@@ -5859,6 +5884,19 @@ def _validate_structured_report_payload(payload):
         return False, 'action_items must be an array'
     if any(not isinstance(item, str) for item in payload.get('action_items') or []):
         return False, 'action_items must contain strings'
+    if not isinstance(payload.get('findings'), list):
+        return False, 'findings must be an array'
+    for finding in payload.get('findings') or []:
+        if not isinstance(finding, dict):
+            return False, 'each finding must be an object'
+        finding_unexpected = sorted(set(finding) - {'severity', 'title', 'detail', 'recommendation'})
+        if finding_unexpected:
+            return False, f'unexpected finding field(s): {", ".join(finding_unexpected)}'
+        if finding.get('severity') not in {'low', 'medium', 'high', 'info'}:
+            return False, 'finding.severity must be low, medium, high, or info'
+        for key in ('title', 'detail', 'recommendation'):
+            if not isinstance(finding.get(key), str):
+                return False, f'finding.{key} must be a string'
     if not isinstance(payload.get('report_markdown'), str):
         return False, 'report_markdown must be a string'
     return True, ''
@@ -6089,8 +6127,29 @@ def _container_status_is_failure(container):
     return status in {'error', 'failed', 'failure'}
 
 
+def _container_type_is_command_execution(container):
+    if not isinstance(container, dict):
+        return False
+    container_type = str(container.get('type') or '').strip().lower().replace('-', '_')
+    return container_type == 'command_execution'
+
+
+def _exec_event_is_completed_command_execution(event):
+    if not isinstance(event, dict):
+        return False
+    event_type = _normalize_exec_event_type(event.get('type'))
+    if event_type != 'item.completed':
+        return False
+    return (
+        _container_type_is_command_execution(event.get('item'))
+        or _container_type_is_command_execution(event.get('payload'))
+    )
+
+
 def _exec_event_is_failure(event):
     if not isinstance(event, dict):
+        return False
+    if _exec_event_is_completed_command_execution(event):
         return False
     if _exec_event_type_is_failure(event.get('type')) or _container_status_is_failure(event):
         return True

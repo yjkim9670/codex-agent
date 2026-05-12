@@ -16,7 +16,7 @@ _GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
 }
-_GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync', 'revert'}
+_GIT_MUTATION_ACTIONS = {'stage', 'commit', 'push', 'sync', 'sync-preflight', 'sync_preflight', 'revert'}
 _WINDOWS_INVALID_FILENAME_CHAR_ORDER = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
 _WINDOWS_INVALID_FILENAME_CHARS = set(_WINDOWS_INVALID_FILENAME_CHAR_ORDER)
 _WINDOWS_RESERVED_DEVICE_NAMES = {
@@ -330,25 +330,88 @@ def _list_remotes(repo_root, env):
     return [name.strip() for name in (result.stdout or '').splitlines() if name.strip()]
 
 
-def _pick_remote(repo_root, env):
+def _split_remote_ref(repo_root, env, ref_name, remotes=None):
+    ref = str(ref_name or '').strip()
+    if not ref:
+        return '', ''
+    remote_names = remotes if isinstance(remotes, list) else _list_remotes(repo_root, env)
+    for remote in sorted(remote_names, key=len, reverse=True):
+        prefix = f'{remote}/'
+        if ref.startswith(prefix):
+            return remote, ref[len(prefix):].strip()
+    if '/' in ref:
+        remote, branch = ref.split('/', 1)
+        return remote.strip(), branch.strip()
+    return '', ref
+
+
+def _resolve_remote_selection(repo_root, env, requested_remote=''):
+    requested = str(requested_remote or '').strip()
     remotes = _list_remotes(repo_root, env)
     if not remotes:
-        return ''
-    if 'origin' in remotes:
-        return 'origin'
-    return remotes[0]
+        return {
+            'remote_name': '',
+            'upstream_branch': '',
+            'upstream_remote': '',
+            'upstream_remote_branch': '',
+            'requested_remote': requested,
+            'fallback_used': False,
+            'available_remotes': [],
+            'error': '원격 저장소를 찾을 수 없습니다.',
+            'error_code': 'git_remote_missing'
+        }
+
+    upstream_branch = _read_upstream_branch(repo_root, env)
+    upstream_remote, upstream_remote_branch = _split_remote_ref(repo_root, env, upstream_branch, remotes)
+    remote_name = ''
+    resolution_source = ''
+    error = ''
+    error_code = ''
+
+    if upstream_remote and upstream_remote in remotes and (not requested or requested == 'origin' or requested == upstream_remote):
+        remote_name = upstream_remote
+        resolution_source = 'upstream'
+    elif requested and requested in remotes:
+        remote_name = requested
+        resolution_source = 'requested'
+    elif requested and requested != 'origin':
+        available = ', '.join(remotes)
+        error = f"요청한 원격 '{requested}'을 찾을 수 없습니다. 사용 가능한 원격: {available}"
+        error_code = 'git_remote_missing'
+    elif 'origin' in remotes:
+        remote_name = 'origin'
+        resolution_source = 'origin'
+    elif len(remotes) == 1:
+        remote_name = remotes[0]
+        resolution_source = 'single_remote'
+    else:
+        available = ', '.join(remotes)
+        if requested:
+            error = f"요청한 원격 '{requested}'을 찾을 수 없습니다. 사용 가능한 원격: {available}"
+        else:
+            error = f'사용할 원격 저장소를 선택할 수 없습니다. 사용 가능한 원격: {available}'
+        error_code = 'git_remote_ambiguous'
+
+    return {
+        'remote_name': remote_name,
+        'upstream_branch': upstream_branch,
+        'upstream_remote': upstream_remote,
+        'upstream_remote_branch': upstream_remote_branch,
+        'requested_remote': requested,
+        'fallback_used': bool(requested and remote_name and requested != remote_name),
+        'resolution_source': resolution_source,
+        'available_remotes': remotes,
+        'error': error,
+        'error_code': error_code
+    }
+
+
+def _pick_remote(repo_root, env):
+    return _resolve_remote_selection(repo_root, env).get('remote_name') or ''
 
 
 def _normalize_remote_name(repo_root, env, remote_name=''):
-    requested = str(remote_name or '').strip()
-    remotes = _list_remotes(repo_root, env)
-    if not remotes:
-        return ''
-    if requested and requested in remotes:
-        return requested
-    if requested and requested not in remotes:
-        return _pick_remote(repo_root, env)
-    return _pick_remote(repo_root, env)
+    return _resolve_remote_selection(repo_root, env, remote_name).get('remote_name') or ''
 
 
 def _ref_exists(repo_root, env, ref_name):
@@ -431,7 +494,8 @@ def _remote_branch_exists(repo_root, env, remote_name, branch_name):
 
 
 def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch='', allow_fallback=True):
-    remote = _normalize_remote_name(repo_root, env, remote_name)
+    remote_resolution = _resolve_remote_selection(repo_root, env, remote_name)
+    remote = remote_resolution.get('remote_name') or ''
     if not remote:
         return '', '', False
 
@@ -443,27 +507,94 @@ def _resolve_remote_branch(repo_root, env, remote_name, preferred_branch='', all
         if not allow_fallback:
             return remote, preferred, False
 
+    upstream_remote = remote_resolution.get('upstream_remote') or ''
+    upstream_remote_branch = remote_resolution.get('upstream_remote_branch') or ''
+    if upstream_remote == remote and upstream_remote_branch:
+        fallback_used = bool(preferred and upstream_remote_branch != preferred)
+        return remote, upstream_remote_branch, fallback_used or bool(remote_resolution.get('fallback_used'))
+
     local_head_branch = _read_local_remote_head_branch(repo_root, env, remote)
     if local_head_branch:
         fallback_used = bool(preferred and local_head_branch != preferred)
-        return remote, local_head_branch, fallback_used
+        return remote, local_head_branch, fallback_used or bool(remote_resolution.get('fallback_used'))
 
     network_head_branch = _read_network_remote_head_branch(repo_root, env, remote)
     if network_head_branch:
         fallback_used = bool(preferred and network_head_branch != preferred)
-        return remote, network_head_branch, fallback_used
+        return remote, network_head_branch, fallback_used or bool(remote_resolution.get('fallback_used'))
 
     # Common fallback when remote default is still "master".
     for candidate in ('main', 'master'):
         exists = _remote_branch_exists(repo_root, env, remote, candidate)
         if exists is True:
             fallback_used = bool(preferred and candidate != preferred)
-            return remote, candidate, fallback_used
+            return remote, candidate, fallback_used or bool(remote_resolution.get('fallback_used'))
 
     # If existence cannot be determined, keep caller preference.
     if preferred:
-        return remote, preferred, False
-    return remote, '', False
+        return remote, preferred, bool(remote_resolution.get('fallback_used'))
+    return remote, '', bool(remote_resolution.get('fallback_used'))
+
+
+def _resolve_remote_branch_details(repo_root, env, requested_remote='', requested_branch='', allow_fallback=True):
+    requested_branch_name = str(requested_branch or '').strip()
+    remote_resolution = _resolve_remote_selection(repo_root, env, requested_remote)
+    if remote_resolution.get('error'):
+        return {
+            **remote_resolution,
+            'branch_name': requested_branch_name,
+            'remote_ref': '',
+            'requested_branch': requested_branch_name
+        }
+
+    remote_name = remote_resolution.get('remote_name') or ''
+    preferred = requested_branch_name
+    branch_name = ''
+    branch_fallback_used = False
+
+    if preferred:
+        preferred_exists = _remote_branch_exists(repo_root, env, remote_name, preferred)
+        if preferred_exists is True or not allow_fallback:
+            branch_name = preferred
+
+    if not branch_name:
+        upstream_remote = remote_resolution.get('upstream_remote') or ''
+        upstream_remote_branch = remote_resolution.get('upstream_remote_branch') or ''
+        if upstream_remote == remote_name and upstream_remote_branch:
+            branch_name = upstream_remote_branch
+            branch_fallback_used = bool(preferred and branch_name != preferred)
+
+    if not branch_name:
+        local_head_branch = _read_local_remote_head_branch(repo_root, env, remote_name)
+        if local_head_branch:
+            branch_name = local_head_branch
+            branch_fallback_used = bool(preferred and branch_name != preferred)
+
+    if not branch_name:
+        network_head_branch = _read_network_remote_head_branch(repo_root, env, remote_name)
+        if network_head_branch:
+            branch_name = network_head_branch
+            branch_fallback_used = bool(preferred and branch_name != preferred)
+
+    if not branch_name:
+        for candidate in ('main', 'master'):
+            exists = _remote_branch_exists(repo_root, env, remote_name, candidate)
+            if exists is True:
+                branch_name = candidate
+                branch_fallback_used = bool(preferred and branch_name != preferred)
+                break
+
+    if not branch_name and preferred:
+        branch_name = preferred
+
+    remote_ref = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+    return {
+        **remote_resolution,
+        'branch_name': branch_name,
+        'remote_ref': remote_ref,
+        'requested_branch': requested_branch_name,
+        'fallback_used': bool(remote_resolution.get('fallback_used') or branch_fallback_used)
+    }
 
 
 def _read_commit_history(repo_root, env, ref_name='HEAD', max_count=20):
@@ -530,6 +661,151 @@ def _read_divergence_counts(repo_root, env, left_ref, right_ref):
     except ValueError:
         return None, None
     return ahead, behind
+
+
+def _read_merge_base(repo_root, env, left_ref, right_ref):
+    left = str(left_ref or '').strip()
+    right = str(right_ref or '').strip()
+    if not left or not right:
+        return ''
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'merge-base', left, right],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    return (result.stdout or '').strip()
+
+
+def _read_changed_files_between(repo_root, env, base_ref, target_ref):
+    base = str(base_ref or '').strip()
+    target = str(target_ref or '').strip()
+    if not base or not target:
+        return []
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'diff', '--name-only', f'{base}..{target}', '--'],
+        repo_root,
+        20,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return []
+    return sorted({
+        _decode_git_path(line.strip())
+        for line in (result.stdout or '').splitlines()
+        if line.strip()
+    })
+
+
+def _read_limited_commit_history(repo_root, env, range_expr, max_count=20):
+    history, error = _read_commit_history(repo_root, env, range_expr, max_count=max_count)
+    if error:
+        return []
+    return history
+
+
+def _build_sync_preflight(repo_root, env, remote_resolution, commit_limit=20):
+    remote_name = remote_resolution.get('remote_name') or ''
+    branch_name = remote_resolution.get('branch_name') or ''
+    remote_ref = remote_resolution.get('remote_ref') or ''
+    payload = {
+        'remote_name': remote_name,
+        'branch_name': branch_name,
+        'remote_ref': remote_ref,
+        'requested_remote': remote_resolution.get('requested_remote') or '',
+        'requested_branch': remote_resolution.get('requested_branch') or '',
+        'upstream_branch': remote_resolution.get('upstream_branch') or '',
+        'upstream_remote': remote_resolution.get('upstream_remote') or '',
+        'fallback_used': bool(remote_resolution.get('fallback_used')),
+        'available_remotes': remote_resolution.get('available_remotes') or [],
+        'ahead_count': None,
+        'behind_count': None,
+        'merge_base': '',
+        'state': 'unknown',
+        'is_up_to_date': False,
+        'is_fast_forward': False,
+        'is_local_ahead': False,
+        'is_diverged': False,
+        'local_only_commits': [],
+        'remote_only_commits': [],
+        'local_changed_files': [],
+        'remote_changed_files': [],
+        'overlap_files': [],
+        'working_tree_clean': False
+    }
+    if not remote_ref:
+        return payload, {'error': '동기화 대상 원격 브랜치를 확인할 수 없습니다.', 'error_code': 'git_sync_target_missing'}
+    if not _ref_exists(repo_root, env, remote_ref):
+        return payload, {
+            'error': f'{remote_ref} 레퍼런스를 찾을 수 없습니다. fetch 후 브랜치를 다시 확인해주세요.',
+            'error_code': 'git_remote_ref_missing'
+        }
+
+    ahead_count, behind_count = _read_divergence_counts(repo_root, env, 'HEAD', remote_ref)
+    merge_base = _read_merge_base(repo_root, env, 'HEAD', remote_ref)
+    changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+    staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
+    working_tree_clean = not changed_files_detail and not staged_files_detail
+    local_changed_files = _read_changed_files_between(repo_root, env, merge_base, 'HEAD') if merge_base else []
+    remote_changed_files = _read_changed_files_between(repo_root, env, merge_base, remote_ref) if merge_base else []
+    overlap_files = sorted(set(local_changed_files).intersection(remote_changed_files))
+
+    is_up_to_date = ahead_count == 0 and behind_count == 0
+    is_fast_forward = ahead_count == 0 and bool(behind_count and behind_count > 0)
+    is_local_ahead = bool(ahead_count and ahead_count > 0) and behind_count == 0
+    is_diverged = bool(ahead_count and ahead_count > 0) and bool(behind_count and behind_count > 0)
+    if is_up_to_date:
+        state = 'up_to_date'
+    elif is_fast_forward:
+        state = 'fast_forward'
+    elif is_local_ahead:
+        state = 'local_ahead'
+    elif is_diverged:
+        state = 'diverged'
+    else:
+        state = 'unknown'
+
+    payload.update({
+        'ahead_count': ahead_count,
+        'behind_count': behind_count,
+        'merge_base': merge_base,
+        'state': state,
+        'is_up_to_date': is_up_to_date,
+        'is_fast_forward': is_fast_forward,
+        'is_local_ahead': is_local_ahead,
+        'is_diverged': is_diverged,
+        'local_only_commits': _read_limited_commit_history(repo_root, env, f'{remote_ref}..HEAD', max_count=commit_limit),
+        'remote_only_commits': _read_limited_commit_history(repo_root, env, f'HEAD..{remote_ref}', max_count=commit_limit),
+        'local_changed_files': local_changed_files,
+        'remote_changed_files': remote_changed_files,
+        'overlap_files': overlap_files,
+        'working_tree_clean': working_tree_clean
+    })
+    return payload, None
+
+
+def _abort_merge_if_needed(repo_root, env):
+    result, error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-parse', '--verify', '--quiet', 'MERGE_HEAD'],
+        repo_root,
+        10,
+        env
+    )
+    if error or not result or result.returncode != 0:
+        return ''
+    abort_result, abort_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'merge', '--abort'],
+        repo_root,
+        GIT_TIMEOUT_SECONDS,
+        env
+    )
+    if abort_error:
+        return abort_error.get('error') or 'merge abort에 실패했습니다.'
+    if not abort_result or abort_result.returncode != 0:
+        return (abort_result.stderr or abort_result.stdout or '').strip() if abort_result else 'merge abort에 실패했습니다.'
+    return ''
 
 
 def get_current_branch_name():
@@ -1414,7 +1690,7 @@ def _to_bool(value):
 
 
 def _parse_history_request(payload):
-    requested_remote = str(payload.get('remote') or '').strip() or 'origin'
+    requested_remote = str(payload.get('remote') or '').strip()
     requested_branch = str(payload.get('branch') or '').strip()
     try:
         limit = int(payload.get('limit') or 20)
@@ -1427,14 +1703,14 @@ def _parse_history_request(payload):
 def _build_history_unavailable_result(
     repo_target,
     started_at,
-    requested_remote='origin',
+    requested_remote='',
     requested_branch='',
     limit=20,
     error_message=''
 ):
-    remote_name = str(requested_remote or '').strip() or 'origin'
+    remote_name = str(requested_remote or '').strip()
     branch_name = str(requested_branch or '').strip()
-    remote_ref = f'{remote_name}/{branch_name}' if branch_name else f'{remote_name}/(unknown)'
+    remote_ref = f'{remote_name}/{branch_name}' if remote_name and branch_name else '(unknown remote)'
     reason = str(error_message or '').strip() or 'git 저장소를 찾을 수 없습니다.'
     return {
         'ok': True,
@@ -1518,6 +1794,7 @@ def _build_result(
     )
     branch_name = _read_current_branch(repo_root, env)
     upstream_branch = _read_upstream_branch(repo_root, env)
+    upstream_remote, upstream_remote_branch = _split_remote_ref(repo_root, env, upstream_branch)
     ahead_count = None
     behind_count = None
     if upstream_branch and _ref_exists(repo_root, env, upstream_branch):
@@ -1529,6 +1806,9 @@ def _build_result(
         'stderr': (stderr or '').strip(),
         'branch': branch_name,
         'upstream_branch': upstream_branch,
+        'remote_name': upstream_remote,
+        'remote_branch': upstream_remote_branch,
+        'remote_ref': upstream_branch,
         'ahead_count': ahead_count,
         'behind_count': behind_count,
         'changed_files_count': len(changed_files),
@@ -1586,7 +1866,10 @@ def run_git_action(action, payload=None):
     try:
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
-        if action not in {'status', 'preview', 'history', 'stage', 'commit', 'push', 'sync', 'revert', 'cancel', 'submit'}:
+        if action not in {
+            'status', 'preview', 'history', 'stage', 'commit', 'push',
+            'sync', 'sync-preflight', 'sync_preflight', 'revert', 'cancel', 'submit'
+        }:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
             return {'error': 'submit 작업은 비활성화되었습니다. stage -> commit -> push 순서로 실행해주세요.'}
@@ -1705,18 +1988,41 @@ def run_git_action(action, payload=None):
                     }
                 )
 
-            if action == 'sync':
+            if action in {'sync', 'sync-preflight', 'sync_preflight'}:
                 requested_remote = str(payload.get('remote') or '').strip()
                 requested_branch = str(payload.get('branch') or '').strip()
                 explicit_branch_requested = bool(requested_branch)
+                sync_preflight_only = action in {'sync-preflight', 'sync_preflight'} or _to_bool(payload.get('preflight_only'))
                 sync_apply_requested = _to_bool(
                     payload.get('apply_after_fetch')
                     if 'apply_after_fetch' in payload
                     else payload.get('apply')
+                ) and not sync_preflight_only
+                apply_strategy = str(payload.get('apply_strategy') or 'auto').strip().lower() or 'auto'
+                if apply_strategy in {'ff', 'fast-forward', 'fast_forward'}:
+                    apply_strategy = 'ff-only'
+                if apply_strategy not in {'auto', 'ff-only', 'merge'}:
+                    return {
+                        'error': f'지원하지 않는 sync 적용 방식입니다: {apply_strategy}',
+                        'error_code': 'git_sync_strategy_invalid'
+                    }
+
+                remote_resolution = _resolve_remote_branch_details(
+                    repo_root,
+                    env,
+                    requested_remote,
+                    requested_branch,
+                    allow_fallback=not explicit_branch_requested
                 )
-                remote_name = _normalize_remote_name(repo_root, env, requested_remote)
-                if not remote_name:
-                    return {'error': '원격 저장소를 찾을 수 없습니다.'}
+                if remote_resolution.get('error'):
+                    return {
+                        'error': remote_resolution.get('error'),
+                        'error_code': remote_resolution.get('error_code') or 'git_remote_missing',
+                        'requested_sync_remote': requested_remote,
+                        'requested_sync_branch': requested_branch,
+                        'available_remotes': remote_resolution.get('available_remotes') or []
+                    }
+                remote_name = remote_resolution.get('remote_name') or ''
                 fetch_cmd = ['git', '-C', str(repo_root), 'fetch', '--prune', remote_name]
                 fetch_result, error = _run_checked(
                     fetch_cmd,
@@ -1730,24 +2036,60 @@ def run_git_action(action, payload=None):
                 if error:
                     return error
 
-                resolved_remote, resolved_branch, fallback_used = _resolve_remote_branch(
+                remote_resolution = _resolve_remote_branch_details(
                     repo_root,
                     env,
-                    remote_name,
+                    requested_remote,
                     requested_branch,
                     allow_fallback=not explicit_branch_requested
                 )
-                remote_name = resolved_remote or remote_name
-                branch_name = requested_branch if explicit_branch_requested else (resolved_branch or requested_branch)
-                sync_target = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+                remote_name = remote_resolution.get('remote_name') or remote_name
+                branch_name = requested_branch if explicit_branch_requested else (remote_resolution.get('branch_name') or requested_branch)
+                if branch_name != remote_resolution.get('branch_name'):
+                    remote_resolution['branch_name'] = branch_name
+                    remote_resolution['remote_ref'] = f'{remote_name}/{branch_name}' if remote_name and branch_name else ''
+                sync_target = remote_resolution.get('remote_ref') or ''
                 if explicit_branch_requested and sync_target and not _ref_exists(repo_root, env, sync_target):
-                    return {'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. 원격 브랜치 이름을 확인해주세요.'}
+                    return {
+                        'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. 원격 브랜치 이름을 확인해주세요.',
+                        'error_code': 'git_remote_ref_missing',
+                        'sync_remote': remote_name,
+                        'sync_branch': branch_name,
+                        'sync_target': sync_target,
+                        'requested_sync_remote': requested_remote,
+                        'requested_sync_branch': requested_branch,
+                        'sync_branch_fallback': bool(remote_resolution.get('fallback_used'))
+                    }
+
+                sync_preflight, preflight_error = _build_sync_preflight(repo_root, env, remote_resolution)
+                preflight_extra = {
+                    'sync_preflight': sync_preflight,
+                    'sync_state': sync_preflight.get('state') or 'unknown',
+                    'sync_ahead_count_before': sync_preflight.get('ahead_count'),
+                    'sync_behind_count_before': sync_preflight.get('behind_count'),
+                    'sync_merge_base': sync_preflight.get('merge_base') or '',
+                    'sync_overlap_files': sync_preflight.get('overlap_files') or [],
+                    'sync_working_tree_clean': bool(sync_preflight.get('working_tree_clean'))
+                }
+                if preflight_error:
+                    return {
+                        **preflight_error,
+                        'repo_target': repo_target,
+                        'sync_remote': remote_name,
+                        'sync_branch': branch_name,
+                        'sync_target': sync_target,
+                        'requested_sync_remote': requested_remote,
+                        'requested_sync_branch': requested_branch,
+                        'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                        **preflight_extra
+                    }
 
                 sync_apply_ok = False
                 sync_apply_exit_code = -1
                 sync_apply_stdout = ''
                 sync_apply_stderr = ''
                 sync_apply_error = ''
+                sync_apply_strategy = 'fetch-only' if not sync_apply_requested else ''
                 merge_cmd = []
                 merge_result = None
                 if sync_apply_requested:
@@ -1755,22 +2097,109 @@ def run_git_action(action, payload=None):
                         return {'error': '동기화 대상 원격 브랜치를 확인할 수 없습니다.'}
                     if not _ref_exists(repo_root, env, sync_target):
                         return {'error': f'{sync_target} 레퍼런스를 찾을 수 없습니다. fetch 후 브랜치를 다시 확인해주세요.'}
-                    merge_cmd = ['git', '-C', str(repo_root), 'merge', '--ff-only', '--autostash', sync_target]
-                    merge_result, merge_error = _run_checked(
-                        merge_cmd,
-                        repo_root,
-                        env,
-                        GIT_TIMEOUT_SECONDS,
-                        'git fast-forward 적용에 실패했습니다.',
-                        cancel_event=cancel_event,
-                        mutation_state=mutation_state
-                    )
-                    if merge_error:
-                        return merge_error
-                    sync_apply_ok = True
-                    sync_apply_exit_code = int(merge_result.returncode)
-                    sync_apply_stdout = (merge_result.stdout or '').strip()
-                    sync_apply_stderr = (merge_result.stderr or '').strip()
+                    sync_state = sync_preflight.get('state') or 'unknown'
+                    if sync_state in {'up_to_date', 'local_ahead'}:
+                        sync_apply_ok = True
+                        sync_apply_exit_code = 0
+                        sync_apply_strategy = 'noop'
+                    elif sync_state == 'fast_forward':
+                        sync_apply_strategy = 'ff-only'
+                        merge_cmd = ['git', '-C', str(repo_root), 'merge', '--ff-only', '--autostash', sync_target]
+                    elif sync_state == 'diverged':
+                        if apply_strategy == 'ff-only':
+                            return {
+                                'error': (
+                                    f'{sync_target}와 현재 브랜치가 갈라져 fast-forward로 적용할 수 없습니다. '
+                                    'fetch는 완료했습니다.'
+                                ),
+                                'error_code': 'git_sync_requires_merge',
+                                'repo_target': repo_target,
+                                'sync_remote': remote_name,
+                                'sync_branch': branch_name,
+                                'sync_target': sync_target,
+                                'requested_sync_remote': requested_remote,
+                                'requested_sync_branch': requested_branch,
+                                'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                                **preflight_extra
+                            }
+                        if not sync_preflight.get('working_tree_clean'):
+                            return {
+                                'error': (
+                                    f'{sync_target}와 현재 브랜치가 갈라져 merge가 필요하지만, '
+                                    '작업 트리에 커밋되지 않은 변경이 있어 자동 적용을 중단했습니다.'
+                                ),
+                                'error_code': 'git_sync_worktree_dirty',
+                                'repo_target': repo_target,
+                                'sync_remote': remote_name,
+                                'sync_branch': branch_name,
+                                'sync_target': sync_target,
+                                'requested_sync_remote': requested_remote,
+                                'requested_sync_branch': requested_branch,
+                                'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                                **preflight_extra
+                            }
+                        if sync_preflight.get('overlap_files'):
+                            return {
+                                'error': (
+                                    f'{sync_target}와 현재 브랜치가 같은 파일을 수정해 자동 merge를 중단했습니다. '
+                                    'fetch는 완료했습니다.'
+                                ),
+                                'error_code': 'git_sync_overlap',
+                                'repo_target': repo_target,
+                                'sync_remote': remote_name,
+                                'sync_branch': branch_name,
+                                'sync_target': sync_target,
+                                'requested_sync_remote': requested_remote,
+                                'requested_sync_branch': requested_branch,
+                                'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                                **preflight_extra
+                            }
+                        sync_apply_strategy = 'merge'
+                        merge_cmd = ['git', '-C', str(repo_root), 'merge', '--no-edit', '--autostash', sync_target]
+                    else:
+                        return {
+                            'error': f'{sync_target}와 현재 브랜치의 동기화 상태를 확인할 수 없어 자동 적용을 중단했습니다.',
+                            'error_code': 'git_sync_preflight_unknown',
+                            'repo_target': repo_target,
+                            'sync_remote': remote_name,
+                            'sync_branch': branch_name,
+                            'sync_target': sync_target,
+                            'requested_sync_remote': requested_remote,
+                            'requested_sync_branch': requested_branch,
+                            'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                            **preflight_extra
+                        }
+
+                    if merge_cmd:
+                        merge_result, merge_error = _run_checked(
+                            merge_cmd,
+                            repo_root,
+                            env,
+                            GIT_TIMEOUT_SECONDS,
+                            'git sync 적용에 실패했습니다.',
+                            cancel_event=cancel_event,
+                            mutation_state=mutation_state
+                        )
+                        if merge_error:
+                            abort_error = _abort_merge_if_needed(repo_root, env)
+                            return {
+                                **merge_error,
+                                'error_code': merge_error.get('error_code') or 'git_sync_apply_failed',
+                                'merge_abort_error': abort_error,
+                                'repo_target': repo_target,
+                                'sync_remote': remote_name,
+                                'sync_branch': branch_name,
+                                'sync_target': sync_target,
+                                'requested_sync_remote': requested_remote,
+                                'requested_sync_branch': requested_branch,
+                                'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
+                                'sync_apply_strategy': sync_apply_strategy,
+                                **preflight_extra
+                            }
+                        sync_apply_ok = True
+                        sync_apply_exit_code = int(merge_result.returncode)
+                        sync_apply_stdout = (merge_result.stdout or '').strip()
+                        sync_apply_stderr = (merge_result.stderr or '').strip()
 
                 fetch_stdout = (fetch_result.stdout or '').strip()
                 fetch_stderr = (fetch_result.stderr or '').strip()
@@ -1797,14 +2226,20 @@ def run_git_action(action, payload=None):
                         'sync_branch': branch_name,
                         'requested_sync_remote': requested_remote,
                         'requested_sync_branch': requested_branch,
-                        'sync_branch_fallback': fallback_used,
+                        'sync_branch_fallback': bool(remote_resolution.get('fallback_used')),
                         'sync_target': sync_target,
+                        'remote_name': remote_name,
+                        'remote_ref': sync_target,
+                        'requested_remote': requested_remote,
+                        'fallback_used': bool(remote_resolution.get('fallback_used')),
                         'sync_apply_requested': sync_apply_requested,
                         'sync_apply_ok': sync_apply_ok,
                         'sync_apply_exit_code': sync_apply_exit_code,
                         'sync_apply_stdout': sync_apply_stdout,
                         'sync_apply_stderr': sync_apply_stderr,
-                        'sync_apply_error': sync_apply_error
+                        'sync_apply_error': sync_apply_error,
+                        'sync_apply_strategy': sync_apply_strategy,
+                        **preflight_extra
                     }
                 )
 

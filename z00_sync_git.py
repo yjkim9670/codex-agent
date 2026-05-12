@@ -79,6 +79,7 @@ REPO_CHOICES = [
 GIT_BRANCH_TIMEOUT = 90   # Branch list fetch (avg 30s, 3x buffer)
 GIT_FETCH_TIMEOUT = 120   # Metadata fetch (avg 45s, ~2.7x buffer)
 GIT_CLONE_TIMEOUT = 240   # Clone/sync operation (avg 35s, generous buffer for network issues)
+SYNC_REMOTE_NAME = "codex-sync"
 
 # Timezone Configuration
 KST = timezone(timedelta(hours=9))  # Korea Standard Time (GMT+9)
@@ -481,7 +482,7 @@ class GitManager:
                 timeout=GIT_BRANCH_TIMEOUT,
             )
             subprocess.run(
-                ["git", "remote", "add", "origin", repo],
+                ["git", "remote", "add", SYNC_REMOTE_NAME, repo],
                 cwd=tmp_dir,
                 check=True,
                 env=env,
@@ -489,7 +490,11 @@ class GitManager:
             )
             # Fetch only head information (lightweight as possible for dates)
             subprocess.run(
-                ["git", "fetch", "--no-tags", "--depth", "1", "origin", "+refs/heads/*:refs/remotes/origin/*"],
+                [
+                    "git", "fetch", "--no-tags", "--depth", "1",
+                    SYNC_REMOTE_NAME,
+                    f"+refs/heads/*:refs/remotes/{SYNC_REMOTE_NAME}/*",
+                ],
                 cwd=tmp_dir,
                 check=True,
                 capture_output=True,
@@ -497,7 +502,11 @@ class GitManager:
                 timeout=GIT_FETCH_TIMEOUT,
             )
             output = subprocess.check_output(
-                ["git", "for-each-ref", "refs/remotes/origin", "--format", "%(refname:short)\t%(committerdate:iso8601)"],
+                [
+                    "git", "for-each-ref",
+                    f"refs/remotes/{SYNC_REMOTE_NAME}",
+                    "--format", "%(refname:short)\t%(committerdate:iso8601)",
+                ],
                 text=True,
                 encoding=SUBPROCESS_TEXT_ENCODING,
                 errors=SUBPROCESS_TEXT_ERRORS,
@@ -508,7 +517,7 @@ class GitManager:
             for line in output.splitlines():
                 parts = line.split("\t", 1)
                 if len(parts) == 2:
-                    branch_name = parts[0].replace("origin/", "")
+                    branch_name = parts[0].replace(f"{SYNC_REMOTE_NAME}/", "", 1)
                     # Convert to KST format
                     updates[branch_name] = _convert_to_kst_string(parts[1])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -591,7 +600,63 @@ class GitManager:
             detail = stderr or stdout or "No additional details."
             raise RuntimeError(f"Git command failed: {' '.join(command)}\n{detail}") from e
 
-    def _ensure_incremental_repo(self, repo: str, log_fn: Callable[[str], None]) -> None:
+    def _list_incremental_remotes(self) -> Dict[str, str]:
+        try:
+            raw = self._run_git_checked(["git", "remote"], timeout=GIT_BRANCH_TIMEOUT)
+        except RuntimeError:
+            return {}
+        remotes: Dict[str, str] = {}
+        for line in raw.splitlines():
+            name = _strip_text(line)
+            if not name:
+                continue
+            try:
+                remotes[name] = self._run_git_checked(
+                    ["git", "remote", "get-url", name],
+                    timeout=GIT_BRANCH_TIMEOUT,
+                )
+            except RuntimeError:
+                remotes[name] = ""
+        return remotes
+
+    def _read_incremental_upstream_remote(self) -> str:
+        try:
+            upstream = self._run_git_checked(
+                ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+                timeout=GIT_BRANCH_TIMEOUT,
+            )
+        except RuntimeError:
+            return ""
+        if "/" not in upstream:
+            return ""
+        return upstream.split("/", 1)[0].strip()
+
+    def _select_incremental_remote(self, repo: str, log_fn: Callable[[str], None]) -> str:
+        remotes = self._list_incremental_remotes()
+        upstream_remote = self._read_incremental_upstream_remote()
+        if upstream_remote and remotes.get(upstream_remote) == repo:
+            log_fn(f"Using upstream remote '{upstream_remote}' for incremental sync.")
+            return upstream_remote
+
+        for name, url in remotes.items():
+            if url == repo:
+                log_fn(f"Using existing remote '{name}' for incremental sync.")
+                return name
+
+        if SYNC_REMOTE_NAME in remotes:
+            if remotes.get(SYNC_REMOTE_NAME) != repo:
+                self._run_git_checked(
+                    ["git", "remote", "set-url", SYNC_REMOTE_NAME, repo],
+                    timeout=GIT_BRANCH_TIMEOUT,
+                )
+                log_fn(f"Updated remote '{SYNC_REMOTE_NAME}' URL.")
+            return SYNC_REMOTE_NAME
+
+        self._run_git_checked(["git", "remote", "add", SYNC_REMOTE_NAME, repo], timeout=GIT_BRANCH_TIMEOUT)
+        log_fn(f"Configured remote '{SYNC_REMOTE_NAME}'.")
+        return SYNC_REMOTE_NAME
+
+    def _ensure_incremental_repo(self, repo: str, log_fn: Callable[[str], None]) -> str:
         git_dir = self.cwd / ".git"
         if git_dir.exists():
             try:
@@ -604,21 +669,7 @@ class GitManager:
             log_fn("Initializing local git repository for incremental sync...")
             self._run_git_checked(["git", "init", "-q"], timeout=GIT_BRANCH_TIMEOUT)
 
-        try:
-            current_remote = self._run_git_checked(
-                ["git", "remote", "get-url", "origin"],
-                timeout=GIT_BRANCH_TIMEOUT,
-            )
-        except RuntimeError:
-            self._run_git_checked(["git", "remote", "add", "origin", repo], timeout=GIT_BRANCH_TIMEOUT)
-            log_fn("Configured remote 'origin'.")
-        else:
-            if current_remote != repo:
-                self._run_git_checked(
-                    ["git", "remote", "set-url", "origin", repo],
-                    timeout=GIT_BRANCH_TIMEOUT,
-                )
-                log_fn("Updated remote 'origin' URL.")
+        return self._select_incremental_remote(repo, log_fn)
 
     def _normalize_rel_path(self, rel_path: object) -> str:
         return _as_text(rel_path).replace("\\", "/").strip("/")
@@ -708,20 +759,21 @@ class GitManager:
     def _sync_git_incremental(self, repo: str, branch: str, mirror: bool, log_fn: Callable[[str], None]) -> None:
         io_lock = self.io_semaphore.acquire(log_fn, f"{self.cwd.name}:{branch}:git")
         try:
-            self._ensure_incremental_repo(repo, log_fn)
+            remote_name = self._ensure_incremental_repo(repo, log_fn)
+            remote_ref = f"{remote_name}/{branch}"
 
             log_fn("Running incremental sync: fetch -> checkout -> reset -> mirror-clean")
-            refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+            refspec = f"+refs/heads/{branch}:refs/remotes/{remote_name}/{branch}"
             self._run_git_checked(
-                ["git", "fetch", "--depth", "1", "--prune", "origin", refspec],
+                ["git", "fetch", "--depth", "1", "--prune", remote_name, refspec],
                 timeout=GIT_FETCH_TIMEOUT,
             )
             self._run_git_checked(
-                ["git", "checkout", "-f", "-B", "__sync_work", f"origin/{branch}"],
+                ["git", "checkout", "-f", "-B", "__sync_work", remote_ref],
                 timeout=GIT_CLONE_TIMEOUT,
             )
             self._run_git_checked(
-                ["git", "reset", "--hard", f"origin/{branch}"],
+                ["git", "reset", "--hard", remote_ref],
                 timeout=GIT_CLONE_TIMEOUT,
             )
 

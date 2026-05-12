@@ -353,6 +353,8 @@ let hasManualTheme = false;
 let gitBranchStatusCache = {
     count: null,
     branch: '',
+    remoteName: '',
+    remoteRef: '',
     aheadCount: null,
     behindCount: null,
     windowsInvalidFiles: [],
@@ -10319,11 +10321,11 @@ function createGitSyncHistoryCache(repoTarget = GIT_SYNC_TARGET_WORKSPACE) {
         repoMissing: false,
         currentBranch: '',
         currentBranchHistory: [],
-        requestedMainBranch: 'main',
-        mainBranch: 'main',
+        requestedMainBranch: '',
+        mainBranch: '',
         mainBranchFallback: false,
-        remoteName: 'origin',
-        remoteMainRef: 'origin/(unknown)',
+        remoteName: '',
+        remoteMainRef: '(unknown remote)',
         remoteMainHistory: [],
         remoteMainHistoryError: '',
         windowsInvalidFiles: [],
@@ -10527,7 +10529,7 @@ function setGitSyncOverlayRepoTarget(repoTarget) {
         syncHoverTooltipFromLabel(elements.fetchBtn, fetchLabel);
     }
     if (elements.syncBtn) {
-        const syncLabel = 'Fetch + fast-forward';
+        const syncLabel = 'Fetch + sync';
         elements.syncBtn.textContent = syncLabel;
         elements.syncBtn.dataset.label = syncLabel;
         syncHoverTooltipFromLabel(elements.syncBtn, syncLabel);
@@ -10602,10 +10604,10 @@ function renderGitSyncOverlay(history) {
     const currentBranch = typeof history?.currentBranch === 'string' ? history.currentBranch.trim() : '';
     const remoteMainRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
         ? history.remoteMainRef.trim()
-        : 'origin/(unknown)';
+        : '(unknown remote)';
     const requestedMainBranch = typeof history?.requestedMainBranch === 'string'
         ? history.requestedMainBranch.trim()
-        : 'main';
+        : '';
     const mainBranch = typeof history?.mainBranch === 'string' && history.mainBranch.trim()
         ? history.mainBranch.trim()
         : requestedMainBranch;
@@ -17169,7 +17171,7 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     const requestedBranch = resolveGitSyncRequestBranch(
         target,
         options && typeof options === 'object' ? options.branch : ''
-    ) || 'main';
+    ) || '';
     const now = Date.now();
     if (!force && cache.fetchedAt) {
         const delta = now - cache.fetchedAt;
@@ -17182,13 +17184,14 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     }
     gitSyncHistoryInFlightByTarget[target] = true;
     try {
+        const requestedRemote = typeof cache?.remoteName === 'string' ? cache.remoteName.trim() : '';
         const result = await fetchJson('/api/codex/git/history', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_HISTORY_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
                 repo_target: target,
-                remote: 'origin',
+                remote: requestedRemote,
                 branch: requestedBranch,
                 limit: 10
             })
@@ -17214,11 +17217,11 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
             currentBranchHistory: Array.isArray(result?.current_branch_history) ? result.current_branch_history : [],
             requestedMainBranch: typeof result?.requested_main_branch === 'string'
                 ? result.requested_main_branch
-                : 'main',
-            mainBranch: typeof result?.main_branch === 'string' ? result.main_branch : 'main',
+                : '',
+            mainBranch: typeof result?.main_branch === 'string' ? result.main_branch : '',
             mainBranchFallback: Boolean(result?.main_branch_fallback),
-            remoteName: typeof result?.remote_name === 'string' ? result.remote_name : 'origin',
-            remoteMainRef: typeof result?.remote_main_ref === 'string' ? result.remote_main_ref : 'origin/main',
+            remoteName: typeof result?.remote_name === 'string' ? result.remote_name : '',
+            remoteMainRef: typeof result?.remote_main_ref === 'string' ? result.remote_main_ref : '(unknown remote)',
             remoteMainHistory: Array.isArray(result?.remote_main_history) ? result.remote_main_history : [],
             remoteMainHistoryError: typeof result?.remote_main_history_error === 'string'
                 ? result.remote_main_history_error
@@ -17343,6 +17346,8 @@ async function fetchGitStatus(force = false) {
         });
         const count = normalizeGitChangedFilesCount(result?.changed_files_count);
         const branch = typeof result?.branch === 'string' ? result.branch : '';
+        const remoteName = typeof result?.remote_name === 'string' ? result.remote_name : '';
+        const remoteRef = typeof result?.remote_ref === 'string' ? result.remote_ref : '';
         const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
         const changedFiles = detailedFiles.length
             ? detailedFiles
@@ -17361,6 +17366,8 @@ async function fetchGitStatus(force = false) {
         gitBranchStatusCache = {
             count,
             branch,
+            remoteName,
+            remoteRef,
             aheadCount,
             behindCount,
             windowsInvalidFiles,
@@ -17375,6 +17382,8 @@ async function fetchGitStatus(force = false) {
         gitBranchStatusCache = {
             count: null,
             branch: gitBranchStatusCache.branch || '',
+            remoteName: gitBranchStatusCache.remoteName || '',
+            remoteRef: gitBranchStatusCache.remoteRef || '',
             aheadCount: null,
             behindCount: null,
             windowsInvalidFiles: [],
@@ -17406,6 +17415,8 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     updateGitPushButtonState(status);
     if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
         const mergedWorkspaceSync = setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
+            remoteName: typeof status?.remoteName === 'string' ? status.remoteName : '',
+            remoteMainRef: typeof status?.remoteRef === 'string' ? status.remoteRef : '',
             changedCount: getGitChangedFilesCountFromStatus(status),
             changedFiles: normalizeGitChangedFiles(status?.changedFiles),
             aheadCount: Number.isFinite(status?.aheadCount) ? status.aheadCount : null,
@@ -17501,6 +17512,8 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     });
     const count = normalizeGitChangedFilesCount(result?.changed_files_count);
     const branch = typeof result?.branch === 'string' ? result.branch : '';
+    const remoteName = typeof result?.remote_name === 'string' ? result.remote_name : '';
+    const remoteRef = typeof result?.remote_ref === 'string' ? result.remote_ref : '';
     const aheadCount = normalizeGitDivergenceCount(result?.ahead_count);
     const behindCount = normalizeGitDivergenceCount(result?.behind_count);
     const detailedFiles = Array.isArray(result?.changed_files_detail) ? result.changed_files_detail : [];
@@ -17519,6 +17532,8 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
     return {
         count,
         branch,
+        remoteName,
+        remoteRef,
         aheadCount,
         behindCount,
         windowsInvalidFiles,
@@ -17878,15 +17893,19 @@ async function handleGitSync(button, options = {}) {
         );
     }
     if (!branchName && applyAfterFetch) {
-        showToast(`${repoLabel} · 현재 브랜치를 확인할 수 없어 fast-forward를 적용할 수 없습니다.`, {
+        showToast(`${repoLabel} · 현재 브랜치를 확인할 수 없어 sync를 적용할 수 없습니다.`, {
             tone: 'error',
             durationMs: 4200
         });
         return;
     }
+    const cachedHistory = getGitSyncHistoryCache(repoTarget);
+    const remoteName = typeof syncStatus?.remoteName === 'string' && syncStatus.remoteName.trim()
+        ? syncStatus.remoteName.trim()
+        : (typeof cachedHistory?.remoteName === 'string' ? cachedHistory.remoteName.trim() : '');
 
     gitMutationInFlight = true;
-    setGitButtonBusy(button, true, applyAfterFetch ? 'Fetch + fast-forward...' : 'Fetching...');
+    setGitButtonBusy(button, true, applyAfterFetch ? 'Fetch + sync...' : 'Fetching...');
     try {
         const result = await fetchJson('/api/codex/git/sync', {
             method: 'POST',
@@ -17894,18 +17913,23 @@ async function handleGitSync(button, options = {}) {
             timeoutMs: requestTimeoutMs,
             body: JSON.stringify({
                 repo_target: repoTarget,
-                remote: 'origin',
+                remote: remoteName,
                 branch: branchName || '',
-                apply_after_fetch: applyAfterFetch
+                apply_after_fetch: applyAfterFetch,
+                apply_strategy: 'auto'
             })
         });
         const summary = summarizeGitOutput(result?.stdout || result?.stderr);
         const suffix = summary ? `: ${summary}` : '';
         const syncTarget = typeof result?.sync_target === 'string' && result.sync_target.trim()
             ? result.sync_target.trim()
-            : (branchName ? `origin/${branchName}` : 'origin/(unknown)');
+            : (branchName ? `${remoteName || 'remote'}/${branchName}` : '(unknown remote)');
+        const applyStrategy = typeof result?.sync_apply_strategy === 'string' ? result.sync_apply_strategy : '';
+        const strategySuffix = applyAfterFetch && applyStrategy && applyStrategy !== 'fetch-only'
+            ? ` (${applyStrategy})`
+            : '';
         if (applyAfterFetch) {
-            showToast(`${repoLabel} · ${syncTarget} fetch + fast-forward 완료${suffix}`, {
+            showToast(`${repoLabel} · ${syncTarget} fetch + sync 완료${strategySuffix}${suffix}`, {
                 tone: 'success',
                 durationMs: 3600
             });
@@ -17918,14 +17942,14 @@ async function handleGitSync(button, options = {}) {
         }
     } catch (error) {
         const fallbackMessage = applyAfterFetch
-            ? 'git fetch + fast-forward 작업에 실패했습니다.'
+            ? 'git fetch + sync 작업에 실패했습니다.'
             : 'git fetch 작업에 실패했습니다.';
         let message = normalizeGitActionError(error, fallbackMessage);
         const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
         if (cancelNotice) {
             message = `${message} · ${cancelNotice}`;
         }
-        const actionLabel = applyAfterFetch ? 'fetch + fast-forward' : 'fetch';
+        const actionLabel = applyAfterFetch ? 'fetch + sync' : 'fetch';
         showToast(`${repoLabel} · ${actionLabel} 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;

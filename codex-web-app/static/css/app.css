@@ -6988,6 +6988,166 @@ body.is-work-mode-resizing * {
     background: var(--icon-button-hover-bg);
 }
 
+.app-server-pilot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.app-server-pilot-toggle {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.app-server-pilot-toggle.is-active {
+    color: #23704f;
+    border-color: color-mix(in srgb, #23704f 42%, var(--border));
+    background: color-mix(in srgb, #23704f 9%, var(--surface-muted));
+}
+
+.app-server-status {
+    min-width: 0;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-server-status.is-error {
+    color: var(--danger);
+}
+
+.app-server-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+}
+
+.app-server-action {
+    min-height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.app-server-action:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.app-server-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-width: 0;
+}
+
+.app-server-panel {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    padding: 8px;
+}
+
+.app-server-panel-wide {
+    grid-column: 1 / -1;
+}
+
+.app-server-panel-title {
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.app-server-panel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-height: 24px;
+    max-height: 138px;
+    overflow: auto;
+}
+
+.app-server-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    padding: 5px 6px;
+}
+
+.app-server-item-main {
+    min-width: 0;
+    overflow: hidden;
+}
+
+.app-server-item-title {
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-server-item-meta {
+    margin-top: 2px;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.app-server-item-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+}
+
+.app-server-thread-action {
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--accent);
+    min-height: 20px;
+    padding: 2px 5px;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.app-server-thread-action:hover {
+    background: var(--icon-button-hover-bg);
+}
+
+.app-server-empty {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
 .chat-tools-overlay {
     position: fixed;
     inset: 0;
@@ -7198,7 +7358,7 @@ body.is-work-mode-resizing * {
     height: var(--chat-action-short-height);
     min-height: var(--chat-action-short-height);
     padding: 0 4px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 700;
     line-height: 1;
@@ -9040,6 +9200,14 @@ label.hover-tooltip,
         display: none;
     }
 
+    .app-server-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .app-server-panel-list {
+        max-height: 112px;
+    }
+
     .chat-input .chat-attach-image,
     .chat-input .chat-plan-mode-toggle,
     .chat-input #codex-chat-send {
@@ -9645,7 +9813,6 @@ label.hover-tooltip,
     .chat-meta,
     .controls-summary,
     .usage-reset,
-    .chat-plan-mode-toggle,
     .chat-worktree-toggle,
     .chat-job-monitor-summary,
     .chat-job-monitor-item,
@@ -9833,6 +10000,12 @@ label.hover-tooltip,
     .message-stream-indicator,
     .message-footer {
         font-size: 11.5px;
+    }
+
+    .chat-submit-column .chat-plan-mode-toggle {
+        padding: 0 2px;
+        font-size: 13px;
+        font-weight: 800;
     }
 
     .sessions-header,

@@ -21,11 +21,20 @@ const state = {
     worktreeMode: false,
     worktreeTasks: [],
     worktreeTasksLoadedAt: 0,
+    appServer: {
+        status: null,
+        models: [],
+        features: [],
+        threads: [],
+        loading: false,
+        error: ''
+    },
     settings: {
         model: null,
         modelCatalog: [],
         modelOptions: [],
         executionPolicyPresets: [],
+        appServerPilotEnabled: false,
         planModeModel: null,
         planModeReasoningEffort: null,
         planModeState: 'off',
@@ -1540,6 +1549,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatToolsOverlay = document.getElementById('codex-chat-tools-overlay');
     const chatToolsOverlayClose = document.getElementById('codex-chat-tools-overlay-close');
     const chatToolsOverlayCloseFooter = document.getElementById('codex-chat-tools-overlay-close-footer');
+    const appServerPilotToggle = document.getElementById('codex-app-server-pilot-toggle');
+    const appServerStartBtn = document.getElementById('codex-app-server-start');
+    const appServerStopBtn = document.getElementById('codex-app-server-stop');
+    const appServerRefreshBtn = document.getElementById('codex-app-server-refresh');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
     const worktreeModeToggle = document.getElementById('codex-worktree-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
@@ -1751,6 +1764,34 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (chatToolsOverlayCloseFooter) {
         chatToolsOverlayCloseFooter.addEventListener('click', closeChatToolsOverlay);
+    }
+
+    if (appServerPilotToggle) {
+        appServerPilotToggle.addEventListener('click', event => {
+            event.preventDefault();
+            void setAppServerPilotEnabled(!state.settings.appServerPilotEnabled);
+        });
+    }
+
+    if (appServerStartBtn) {
+        appServerStartBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void startAppServerRemoteControl();
+        });
+    }
+
+    if (appServerStopBtn) {
+        appServerStopBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void stopAppServerRemoteControl();
+        });
+    }
+
+    if (appServerRefreshBtn) {
+        appServerRefreshBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void refreshAppServerPilot({ loadDetails: true, showToastOnSuccess: true });
+        });
     }
 
     if (newSessionBtn) {
@@ -6673,6 +6714,7 @@ async function loadSettings({ silent = true } = {}) {
             modelCatalog,
             modelOptions,
             executionPolicyPresets,
+            appServerPilotEnabled: Boolean(result?.settings?.app_server_pilot_enabled),
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeState: normalizePlanModeState(state.settings?.planModeState),
@@ -6683,6 +6725,7 @@ async function loadSettings({ silent = true } = {}) {
             usageHistory: state.settings?.usageHistory || null,
             loaded: true
         };
+        state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
         if (result?.session_storage) {
             state.sessionStorage = result.session_storage;
             updateSessionStorageSummary(state.sessionStorage);
@@ -6694,6 +6737,7 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
+        renderAppServerPilot();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
     } catch (error) {
         updateUsageSummary(null);
@@ -6703,6 +6747,7 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
+        renderAppServerPilot();
         setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
@@ -7039,9 +7084,11 @@ async function updateSettings() {
         const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
         state.settings.model = result?.settings?.model || null;
         state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
+        state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
+        state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
         state.settings.modelOptions = catalogModelOptions.length > 0
             ? catalogModelOptions
             : (Array.isArray(result?.model_options)
@@ -7075,6 +7122,7 @@ async function updateSettings() {
         );
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
+        renderAppServerPilot();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         if (status) status.textContent = 'Saved';
     } catch (error) {
@@ -18585,9 +18633,20 @@ function syncChatToolsToggleState() {
     const button = document.getElementById('codex-chat-tools-toggle');
     if (!button) return;
     const activeWorktreeCount = getActiveWorktreeTaskCount();
-    const hasActiveState = getWorktreeModeState() || activeWorktreeCount > 0;
-    const label = activeWorktreeCount > 0
-        ? `추가 도구 열기 (${activeWorktreeCount} worktree)`
+    const appServerActive = Boolean(
+        state.settings.appServerPilotEnabled
+        || state.appServer.status?.remote_control?.running
+    );
+    const hasActiveState = getWorktreeModeState() || activeWorktreeCount > 0 || appServerActive;
+    const labelParts = [];
+    if (activeWorktreeCount > 0) {
+        labelParts.push(`${activeWorktreeCount} worktree`);
+    }
+    if (appServerActive) {
+        labelParts.push('App Server');
+    }
+    const label = labelParts.length > 0
+        ? `추가 도구 열기 (${labelParts.join(', ')})`
         : '추가 도구 열기';
     button.classList.toggle('is-active', hasActiveState);
     button.setAttribute('aria-label', label);
@@ -18624,6 +18683,7 @@ function openChatToolsOverlay() {
     renderExecutionPolicyStrip();
     renderStructuredReportBar();
     renderWorktreeTaskBar();
+    renderAppServerPilot();
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     if (elements.trigger) {
@@ -19004,6 +19064,361 @@ function renderStructuredReportBar() {
         });
         bar.appendChild(button);
     });
+}
+
+function normalizeAppServerStatus(status) {
+    if (!status || typeof status !== 'object') {
+        return null;
+    }
+    const remote = status.remote_control && typeof status.remote_control === 'object'
+        ? status.remote_control
+        : {};
+    return {
+        pilot_enabled: Boolean(status.pilot_enabled),
+        codex_available: status.codex_available !== false,
+        remote_control: {
+            running: Boolean(remote.running),
+            pid: Number.isFinite(Number(remote.pid)) ? Number(remote.pid) : null,
+            started_at: remote.started_at || null,
+            stopped_at: remote.stopped_at || null,
+            last_error: typeof remote.last_error === 'string' ? remote.last_error : '',
+            last_exit_code: Number.isFinite(Number(remote.last_exit_code)) ? Number(remote.last_exit_code) : null
+        },
+        allowed_methods: Array.isArray(status.allowed_methods) ? status.allowed_methods : [],
+        read_methods: Array.isArray(status.read_methods) ? status.read_methods : [],
+        poc_methods: Array.isArray(status.poc_methods) ? status.poc_methods : []
+    };
+}
+
+function normalizeAppServerList(value) {
+    return Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : [];
+}
+
+function renderAppServerPilot() {
+    const enabled = Boolean(state.settings.appServerPilotEnabled);
+    const status = normalizeAppServerStatus(state.appServer.status);
+    const remote = status?.remote_control || {};
+    const toggle = document.getElementById('codex-app-server-pilot-toggle');
+    const statusElement = document.getElementById('codex-app-server-status');
+    const startBtn = document.getElementById('codex-app-server-start');
+    const stopBtn = document.getElementById('codex-app-server-stop');
+    const refreshBtn = document.getElementById('codex-app-server-refresh');
+    const busy = Boolean(state.appServer.loading);
+    const errorText = typeof state.appServer.error === 'string' ? state.appServer.error.trim() : '';
+
+    if (toggle) {
+        toggle.classList.toggle('is-active', enabled);
+        toggle.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+        const label = enabled ? 'App Server pilot on' : 'App Server pilot off';
+        toggle.setAttribute('aria-label', label);
+        toggle.setAttribute('title', label);
+    }
+    if (startBtn) startBtn.disabled = !enabled || busy || Boolean(remote.running);
+    if (stopBtn) stopBtn.disabled = !enabled || busy || !remote.running;
+    if (refreshBtn) refreshBtn.disabled = !enabled || busy;
+
+    if (statusElement) {
+        statusElement.classList.toggle('is-error', Boolean(errorText));
+        if (errorText) {
+            statusElement.textContent = errorText;
+            statusElement.title = errorText;
+        } else if (!enabled) {
+            statusElement.textContent = 'Pilot off';
+            statusElement.title = 'Pilot off';
+        } else if (status?.codex_available === false) {
+            statusElement.textContent = 'codex unavailable';
+            statusElement.title = 'codex unavailable';
+        } else if (remote.running) {
+            const pidText = remote.pid ? ` · pid ${remote.pid}` : '';
+            statusElement.textContent = `remote-control running${pidText}`;
+            statusElement.title = statusElement.textContent;
+        } else {
+            statusElement.textContent = 'Pilot on · stdio';
+            statusElement.title = 'Pilot on · stdio';
+        }
+    }
+
+    renderAppServerModels();
+    renderAppServerFeatures();
+    renderAppServerThreads();
+    syncChatToolsToggleState();
+}
+
+function setAppServerPanelEmpty(id, text) {
+    const panel = document.getElementById(id);
+    if (!panel) return;
+    panel.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'app-server-empty';
+    empty.textContent = text;
+    panel.appendChild(empty);
+}
+
+function createAppServerItem(title, meta = '') {
+    const item = document.createElement('div');
+    item.className = 'app-server-item';
+    const main = document.createElement('div');
+    main.className = 'app-server-item-main';
+    const titleElement = document.createElement('div');
+    titleElement.className = 'app-server-item-title';
+    titleElement.textContent = title || 'Untitled';
+    titleElement.title = title || 'Untitled';
+    main.appendChild(titleElement);
+    if (meta) {
+        const metaElement = document.createElement('div');
+        metaElement.className = 'app-server-item-meta';
+        metaElement.textContent = meta;
+        metaElement.title = meta;
+        main.appendChild(metaElement);
+    }
+    item.appendChild(main);
+    return { item, main };
+}
+
+function renderAppServerModels() {
+    const panel = document.getElementById('codex-app-server-models');
+    if (!panel) return;
+    if (!state.settings.appServerPilotEnabled) {
+        setAppServerPanelEmpty('codex-app-server-models', 'Off');
+        return;
+    }
+    if (state.appServer.loading && state.appServer.models.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-models', 'Loading...');
+        return;
+    }
+    const models = normalizeAppServerList(state.appServer.models).slice(0, 8);
+    if (models.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-models', 'No models');
+        return;
+    }
+    panel.innerHTML = '';
+    models.forEach(model => {
+        const title = model.displayName || model.display_name || model.model || model.id || 'model';
+        const effort = model.defaultReasoningEffort || model.default_reasoning_effort || '';
+        const hidden = model.hidden ? 'hidden' : '';
+        const meta = [model.model || model.id || '', effort, hidden].filter(Boolean).join(' · ');
+        panel.appendChild(createAppServerItem(title, meta).item);
+    });
+}
+
+function renderAppServerFeatures() {
+    const panel = document.getElementById('codex-app-server-features');
+    if (!panel) return;
+    if (!state.settings.appServerPilotEnabled) {
+        setAppServerPanelEmpty('codex-app-server-features', 'Off');
+        return;
+    }
+    if (state.appServer.loading && state.appServer.features.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-features', 'Loading...');
+        return;
+    }
+    const features = normalizeAppServerList(state.appServer.features).slice(0, 12);
+    if (features.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-features', 'No flags');
+        return;
+    }
+    panel.innerHTML = '';
+    features.forEach(feature => {
+        const title = feature.displayName || feature.display_name || feature.name || 'feature';
+        const enabled = feature.enabled === true ? 'on' : 'off';
+        const stage = feature.stage || '';
+        panel.appendChild(createAppServerItem(title, [stage, enabled].filter(Boolean).join(' · ')).item);
+    });
+}
+
+function formatAppServerThreadTime(thread) {
+    const raw = thread?.updatedAt ?? thread?.updated_at ?? thread?.createdAt ?? thread?.created_at;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && numeric > 0) {
+        const millis = numeric < 1000000000000 ? numeric * 1000 : numeric;
+        return formatTimestamp(new Date(millis).toISOString());
+    }
+    return '';
+}
+
+function renderAppServerThreads() {
+    const panel = document.getElementById('codex-app-server-threads');
+    if (!panel) return;
+    if (!state.settings.appServerPilotEnabled) {
+        setAppServerPanelEmpty('codex-app-server-threads', 'Off');
+        return;
+    }
+    if (state.appServer.loading && state.appServer.threads.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-threads', 'Loading...');
+        return;
+    }
+    const threads = normalizeAppServerList(state.appServer.threads).slice(0, 10);
+    if (threads.length === 0) {
+        setAppServerPanelEmpty('codex-app-server-threads', 'No threads');
+        return;
+    }
+    panel.innerHTML = '';
+    threads.forEach(thread => {
+        const threadId = thread.id || thread.threadId || '';
+        const title = thread.name || thread.preview || threadId || 'thread';
+        const statusType = thread.status?.type || thread.status || '';
+        const meta = [threadId, statusType, formatAppServerThreadTime(thread)].filter(Boolean).join(' · ');
+        const { item } = createAppServerItem(title, meta);
+        const actions = document.createElement('div');
+        actions.className = 'app-server-item-actions';
+        const resume = document.createElement('button');
+        resume.type = 'button';
+        resume.className = 'app-server-thread-action';
+        resume.textContent = 'Resume';
+        resume.disabled = !threadId;
+        resume.addEventListener('click', event => {
+            event.preventDefault();
+            void runAppServerThreadAction(threadId, 'resume');
+        });
+        actions.appendChild(resume);
+        const fork = document.createElement('button');
+        fork.type = 'button';
+        fork.className = 'app-server-thread-action';
+        fork.textContent = 'Fork';
+        fork.disabled = !threadId;
+        fork.addEventListener('click', event => {
+            event.preventDefault();
+            void runAppServerThreadAction(threadId, 'fork');
+        });
+        actions.appendChild(fork);
+        item.appendChild(actions);
+        panel.appendChild(item);
+    });
+}
+
+async function setAppServerPilotEnabled(enabled) {
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson('/api/codex/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ app_server_pilot_enabled: Boolean(enabled) })
+        });
+        state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
+        state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
+        if (!state.settings.appServerPilotEnabled) {
+            state.appServer.models = [];
+            state.appServer.features = [];
+            state.appServer.threads = [];
+        }
+        if (state.settings.appServerPilotEnabled) {
+            await refreshAppServerPilot({ loadDetails: true });
+        }
+    } catch (error) {
+        state.appServer.error = normalizeError(error, 'App Server pilot update failed');
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function refreshAppServerPilot({ loadDetails = false, showToastOnSuccess = false } = {}) {
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const statusResult = await fetchJson('/api/codex/app-server/status', { cache: 'no-store' });
+        state.appServer.status = normalizeAppServerStatus(statusResult?.status);
+        state.settings.appServerPilotEnabled = Boolean(state.appServer.status?.pilot_enabled);
+        if (loadDetails && state.settings.appServerPilotEnabled) {
+            await loadAppServerPilotDetails();
+        }
+        if (showToastOnSuccess) {
+            showToast('App Server 상태를 갱신했습니다.', { tone: 'success', durationMs: 2200 });
+        }
+    } catch (error) {
+        state.appServer.error = normalizeError(error, 'App Server status failed');
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function loadAppServerPilotDetails() {
+    const [modelsResult, featuresResult, threadsResult] = await Promise.allSettled([
+        fetchJson('/api/codex/app-server/models?limit=20', { cache: 'no-store' }),
+        fetchJson('/api/codex/app-server/features?limit=80', { cache: 'no-store' }),
+        fetchJson('/api/codex/app-server/threads?limit=20&include_exec=1', { cache: 'no-store' })
+    ]);
+    if (modelsResult.status === 'fulfilled') {
+        state.appServer.models = normalizeAppServerList(modelsResult.value?.models);
+    }
+    if (featuresResult.status === 'fulfilled') {
+        state.appServer.features = normalizeAppServerList(featuresResult.value?.features);
+    }
+    if (threadsResult.status === 'fulfilled') {
+        state.appServer.threads = normalizeAppServerList(threadsResult.value?.threads);
+    }
+    const firstFailure = [modelsResult, featuresResult, threadsResult].find(item => item.status === 'rejected');
+    if (firstFailure) {
+        state.appServer.error = normalizeError(firstFailure.reason, 'App Server detail load failed');
+    }
+}
+
+async function startAppServerRemoteControl() {
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson('/api/codex/app-server/remote-control/start', {
+            method: 'POST',
+            cache: 'no-store'
+        });
+        state.appServer.status = normalizeAppServerStatus(result?.status);
+        await refreshAppServerPilot({ loadDetails: true });
+    } catch (error) {
+        state.appServer.error = normalizeError(error, 'remote-control start failed');
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function stopAppServerRemoteControl() {
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson('/api/codex/app-server/remote-control/stop', {
+            method: 'POST',
+            cache: 'no-store'
+        });
+        state.appServer.status = normalizeAppServerStatus(result?.status);
+    } catch (error) {
+        state.appServer.error = normalizeError(error, 'remote-control stop failed');
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
+}
+
+async function runAppServerThreadAction(threadId, action) {
+    if (!threadId || (action !== 'resume' && action !== 'fork')) return;
+    state.appServer.loading = true;
+    state.appServer.error = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson(
+            `/api/codex/app-server/threads/${encodeURIComponent(threadId)}/${action}`,
+            { method: 'POST', cache: 'no-store' }
+        );
+        const nextThread = result?.thread;
+        if (nextThread && typeof nextThread === 'object') {
+            state.appServer.threads = [
+                nextThread,
+                ...normalizeAppServerList(state.appServer.threads)
+                    .filter(thread => thread.id !== nextThread.id)
+            ];
+        }
+        showToast(`thread ${action} 완료`, { tone: 'success', durationMs: 2200 });
+    } catch (error) {
+        state.appServer.error = normalizeError(error, `thread ${action} failed`);
+    } finally {
+        state.appServer.loading = false;
+        renderAppServerPilot();
+    }
 }
 
 async function handleStructuredReportPreset(presetId) {

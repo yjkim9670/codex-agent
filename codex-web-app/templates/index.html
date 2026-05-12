@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=154">
+    <link rel="stylesheet" href="/static/css/app.css?v=157">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
@@ -614,6 +614,34 @@
                                 </div>
                                 <div id="codex-worktree-task-bar" class="worktree-task-bar is-hidden" aria-live="polite"></div>
                             </section>
+                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-app-server-title">
+                                <div class="chat-tools-section-header">
+                                    <div class="chat-tools-section-title" id="codex-chat-tools-app-server-title">App Server</div>
+                                    <button class="btn ghost app-server-pilot-toggle" type="button" id="codex-app-server-pilot-toggle" aria-pressed="false" aria-label="App Server pilot off" title="App Server pilot off">Pilot</button>
+                                </div>
+                                <div class="app-server-pilot">
+                                    <div class="app-server-status" id="codex-app-server-status" aria-live="polite">Pilot off</div>
+                                    <div class="app-server-actions">
+                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-start">Start</button>
+                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-stop">Stop</button>
+                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-refresh">Refresh</button>
+                                    </div>
+                                    <div class="app-server-grid" id="codex-app-server-grid">
+                                        <div class="app-server-panel">
+                                            <div class="app-server-panel-title">Models</div>
+                                            <div class="app-server-panel-list" id="codex-app-server-models"></div>
+                                        </div>
+                                        <div class="app-server-panel">
+                                            <div class="app-server-panel-title">Features</div>
+                                            <div class="app-server-panel-list" id="codex-app-server-features"></div>
+                                        </div>
+                                        <div class="app-server-panel app-server-panel-wide">
+                                            <div class="app-server-panel-title">Threads</div>
+                                            <div class="app-server-panel-list" id="codex-app-server-threads"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
                         </div>
                         <div class="chat-tools-overlay-footer">
                             <button class="btn ghost" type="button" id="codex-chat-tools-overlay-close-footer">닫기</button>
@@ -1136,6 +1164,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=152"></script>
+    <script src="/static/js/app.js?v=153"></script>
 </body>
 </html>

@@ -439,6 +439,7 @@ CODEX_ENABLE_LEGACY_STATE_IMPORT = _parse_bool_env(
 )
 CODEX_SKIP_GIT_REPO_CHECK = _parse_bool_env('CODEX_SKIP_GIT_REPO_CHECK', default=False)
 CODEX_CLI_SELF_PROTECT = _parse_bool_env('CODEX_CLI_SELF_PROTECT', default=False)
+CODEX_CLI_SELF_PROTECT_GIT_RW = _parse_bool_env('CODEX_CLI_SELF_PROTECT_GIT_RW', default=False)
 CODEX_CLI_PROTECTED_PATHS = _parse_path_list_env('CODEX_CLI_PROTECTED_PATHS')
 
 CODEX_MAIL_SMTP_HOST = os.environ.get('CODEX_MAIL_SMTP_HOST', 'smtp.naver.com').strip() or 'smtp.naver.com'

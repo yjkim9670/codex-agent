@@ -530,6 +530,120 @@ def test_execution_policy_presets_keep_danger_access_hidden():
     assert all(item['sandbox'] != 'danger-full-access' for item in presets)
 
 
+def test_self_protect_git_rw_rebinds_git_after_ro_parent(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'codex_workbench'
+    git_dir = repo_root / '.git'
+    git_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(codex_chat, 'REPO_ROOT', repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT_GIT_RW', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROTECTED_PATHS', tuple())
+    monkeypatch.setattr(
+        codex_chat.shutil,
+        'which',
+        lambda name: '/usr/bin/bwrap' if name == 'bwrap' else None,
+    )
+
+    wrapped = codex_chat._wrap_codex_cli_command(['codex', 'exec'])
+    ro_bind = ['--ro-bind-try', str(repo_root.resolve()), str(repo_root.resolve())]
+    rw_bind = ['--bind-try', str(git_dir.resolve()), str(git_dir.resolve())]
+    ro_index = next(
+        idx for idx in range(len(wrapped) - 2) if wrapped[idx:idx + 3] == ro_bind
+    )
+    rw_index = next(
+        idx for idx in range(len(wrapped) - 2) if wrapped[idx:idx + 3] == rw_bind
+    )
+
+    assert rw_index > ro_index
+
+
+def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+    monkeypatch.delenv('CODEX_APP_SERVER_PILOT_ENABLED', raising=False)
+
+    assert codex_chat.get_settings()['app_server_pilot_enabled'] is False
+
+    updated = codex_chat.update_settings(app_server_pilot_enabled=True)
+
+    assert updated['app_server_pilot_enabled'] is True
+    assert codex_chat.get_settings()['app_server_pilot_enabled'] is True
+
+    disabled = codex_chat.update_settings(app_server_pilot_enabled=False)
+    assert disabled['app_server_pilot_enabled'] is False
+
+
+def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakePopen:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            captured['command'] = command
+            captured['kwargs'] = kwargs
+
+        def communicate(self, input=None, timeout=None):
+            captured['input'] = input
+            captured['timeout'] = timeout
+            stdout = '\n'.join([
+                json.dumps({'id': 1, 'result': {'protocolVersion': 'v2'}}),
+                json.dumps({
+                    'id': 2,
+                    'result': {
+                        'data': [
+                            {
+                                'id': 'gpt-5.4',
+                                'model': 'gpt-5.4',
+                                'defaultReasoningEffort': 'medium',
+                            }
+                        ],
+                        'nextCursor': None,
+                    },
+                }),
+            ])
+            return stdout, ''
+
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
+    monkeypatch.setattr(codex_chat, '_read_app_server_remote_control_running', lambda: False)
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', FakePopen)
+
+    result = codex_chat.list_codex_app_server_models(limit=5)
+
+    assert captured['command'] == ['codex', 'app-server']
+    assert '"method": "initialize"' in captured['input']
+    assert '"method": "model/list"' in captured['input']
+    assert result['transport'] == 'stdio'
+    assert result['models'][0]['id'] == 'gpt-5.4'
+
+
+def test_app_server_blocks_unallowlisted_methods(monkeypatch):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
+
+    with pytest.raises(codex_chat.CodexAppServerError) as exc_info:
+        codex_chat.call_codex_app_server_method('thread/shellCommand', {})
+
+    assert exc_info.value.error_code == 'app_server_method_not_allowed'
+
+
+def test_parse_codex_features_list_output_handles_multi_word_stage():
+    output = '\n'.join([
+        'apply_patch_freeform                    under development  false',
+        'apps                                    stable             true',
+    ])
+
+    parsed = codex_chat._parse_codex_features_list_output(output)
+
+    assert parsed[0]['name'] == 'apply_patch_freeform'
+    assert parsed[0]['stage'] == 'under development'
+    assert parsed[0]['enabled'] is False
+    assert parsed[1]['name'] == 'apps'
+    assert parsed[1]['enabled'] is True
+
+
 def _init_git_repo(repo_root):
     repo_root.mkdir(parents=True, exist_ok=True)
     subprocess.run(['git', '-C', str(repo_root), 'init'], check=True, capture_output=True, text=True)

@@ -36,6 +36,7 @@ from ..services.codex_chat import (
     branch_session_from_message,
     build_codex_prompt,
     build_structured_report_prompt,
+    CodexAppServerError,
     CodexAttachmentError,
     CodexWorktreeError,
     cleanup_git_worktree_task,
@@ -50,6 +51,7 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
+    get_codex_app_server_status,
     get_execution_policy_presets,
     get_usage_history_summary,
     get_session,
@@ -58,6 +60,10 @@ from ..services.codex_chat import (
     get_git_worktree_task,
     get_usage_summary,
     handoff_git_worktree_task,
+    fork_codex_app_server_thread,
+    list_codex_app_server_features,
+    list_codex_app_server_models,
+    list_codex_app_server_threads,
     list_structured_report_presets,
     list_codex_streams,
     list_git_worktree_tasks,
@@ -65,11 +71,14 @@ from ..services.codex_chat import (
     list_sessions,
     normalize_codex_attachments,
     normalize_structured_report_preset_id,
+    read_codex_app_server_thread,
     rename_session,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
+    resume_codex_app_server_thread,
     save_codex_attachment,
     start_codex_stream_for_session,
+    start_codex_app_server_remote_control,
     start_codex_subjob_for_session,
     enqueue_codex_stream_for_session,
     format_assistant_response_content,
@@ -77,6 +86,7 @@ from ..services.codex_chat import (
     resolve_response_mode_label,
     resolve_response_model_name,
     resolve_response_reasoning_effort,
+    stop_codex_app_server_remote_control,
     stop_codex_stream,
 )
 from ..services.file_browser import (
@@ -448,6 +458,7 @@ def codex_settings():
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
+        'app_server_status': get_codex_app_server_status(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
@@ -494,6 +505,11 @@ def codex_settings_update():
     reasoning = payload.get('reasoning_effort')
     plan_mode_model = payload.get('plan_mode_model')
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
+    app_server_pilot_enabled = None
+    if 'app_server_pilot_enabled' in payload:
+        app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
+        if app_server_pilot_enabled is None:
+            return jsonify({'error': 'app_server_pilot_enabled 값이 올바르지 않습니다.'}), 400
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
@@ -515,6 +531,7 @@ def codex_settings_update():
         reasoning_effort=reasoning,
         plan_mode_model=plan_mode_model,
         plan_mode_reasoning_effort=plan_mode_reasoning,
+        app_server_pilot_enabled=app_server_pilot_enabled,
     )
     snapshot = record_usage_snapshot_if_due()
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
@@ -527,9 +544,123 @@ def codex_settings_update():
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
+        'app_server_status': get_codex_app_server_status(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
     })
+
+
+def _app_server_error_response(error):
+    status_code = getattr(error, 'status_code', 400)
+    payload = {
+        'error': str(error),
+        'error_code': getattr(error, 'error_code', 'app_server_error'),
+    }
+    details = getattr(error, 'details', None)
+    if isinstance(details, dict) and details:
+        payload['details'] = details
+    return jsonify(payload), status_code
+
+
+def _parse_app_server_limit(default=20, maximum=100):
+    try:
+        limit = int(request.args.get('limit', default))
+    except (TypeError, ValueError):
+        limit = default
+    return max(1, min(int(maximum), limit))
+
+
+@bp.route('/api/codex/app-server/status')
+def codex_app_server_status():
+    return jsonify({'status': get_codex_app_server_status()})
+
+
+@bp.route('/api/codex/app-server/remote-control/start', methods=['POST'])
+def codex_app_server_remote_control_start():
+    try:
+        return jsonify({'ok': True, 'status': start_codex_app_server_remote_control()})
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/remote-control/stop', methods=['POST'])
+def codex_app_server_remote_control_stop():
+    try:
+        return jsonify({'ok': True, 'status': stop_codex_app_server_remote_control()})
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/models')
+def codex_app_server_models():
+    include_hidden = _parse_plan_mode(request.args.get('include_hidden'))
+    cursor = request.args.get('cursor')
+    try:
+        payload = list_codex_app_server_models(
+            limit=_parse_app_server_limit(default=20, maximum=100),
+            include_hidden=include_hidden,
+            cursor=cursor,
+        )
+        return jsonify(payload)
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/features')
+def codex_app_server_features():
+    cursor = request.args.get('cursor')
+    try:
+        payload = list_codex_app_server_features(
+            limit=_parse_app_server_limit(default=50, maximum=200),
+            cursor=cursor,
+        )
+        return jsonify(payload)
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads')
+def codex_app_server_threads():
+    cursor = request.args.get('cursor')
+    search_term = request.args.get('search', '')
+    cwd = request.args.get('cwd', '')
+    include_exec = request.args.get('include_exec', '1') != '0'
+    try:
+        payload = list_codex_app_server_threads(
+            limit=_parse_app_server_limit(default=20, maximum=100),
+            cursor=cursor,
+            search_term=search_term,
+            cwd=cwd,
+            include_exec=include_exec,
+        )
+        return jsonify(payload)
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads/<thread_id>')
+def codex_app_server_thread_detail(thread_id):
+    include_turns = _parse_plan_mode(request.args.get('include_turns'))
+    try:
+        return jsonify(read_codex_app_server_thread(thread_id, include_turns=include_turns))
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads/<thread_id>/resume', methods=['POST'])
+def codex_app_server_thread_resume(thread_id):
+    try:
+        return jsonify({'ok': True, **resume_codex_app_server_thread(thread_id)})
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads/<thread_id>/fork', methods=['POST'])
+def codex_app_server_thread_fork(thread_id):
+    try:
+        return jsonify({'ok': True, **fork_codex_app_server_thread(thread_id)})
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
 
 
 @bp.route('/api/codex/sessions')

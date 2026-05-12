@@ -25,6 +25,7 @@ from ..config import (
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_CLI_PROTECTED_PATHS,
     CODEX_CLI_SELF_PROTECT,
+    CODEX_CLI_SELF_PROTECT_GIT_RW,
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_ENABLE_LEGACY_STATE_IMPORT,
@@ -66,6 +67,7 @@ _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
 _USAGE_HISTORY_LOCK = threading.Lock()
 _WORKTREE_TASKS_LOCK = threading.Lock()
+_APP_SERVER_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _AUTH_STATE_LOCK = threading.Lock()
@@ -314,6 +316,37 @@ _CODEX_EVENT_DETAIL_MAX_CHARS = 900
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
+_APP_SERVER_PILOT_ENV = 'CODEX_APP_SERVER_PILOT_ENABLED'
+_APP_SERVER_RPC_TIMEOUT_SECONDS = float(os.environ.get('CODEX_APP_SERVER_RPC_TIMEOUT_SECONDS', '8'))
+_APP_SERVER_REMOTE_START_GRACE_SECONDS = float(os.environ.get('CODEX_APP_SERVER_REMOTE_START_GRACE_SECONDS', '0.35'))
+_APP_SERVER_CLIENT_INFO = {
+    'name': 'codex_workbench',
+    'title': 'Codex Workbench',
+    'version': '0.1.0',
+}
+_APP_SERVER_READ_METHODS = {
+    'model/list',
+    'experimentalFeature/list',
+    'thread/list',
+    'thread/read',
+    'thread/turns/list',
+    'thread/loaded/list',
+}
+_APP_SERVER_POC_METHODS = {
+    'thread/resume',
+    'thread/fork',
+}
+_APP_SERVER_ALLOWED_METHODS = _APP_SERVER_READ_METHODS | _APP_SERVER_POC_METHODS
+_APP_SERVER_REMOTE_CONTROL_STATE = {
+    'process': None,
+    'pid': None,
+    'started_at': None,
+    'stopped_at': None,
+    'last_error': '',
+    'last_exit_code': None,
+}
+_BOOL_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
+_BOOL_FALSY_VALUES = {'0', 'false', 'no', 'off'}
 
 _STRUCTURED_REPORT_SCHEMA = {
     '$schema': 'http://json-schema.org/draft-07/schema#',
@@ -448,6 +481,16 @@ class CodexWorktreeError(ValueError):
         super().__init__(str(message))
         self.status_code = int(status_code)
         self.error_code = str(error_code or 'worktree_error')
+
+
+class CodexAppServerError(ValueError):
+    """Controlled validation error for Codex App Server pilot operations."""
+
+    def __init__(self, message, *, status_code=400, error_code='app_server_error', details=None):
+        super().__init__(str(message))
+        self.status_code = int(status_code)
+        self.error_code = str(error_code or 'app_server_error')
+        self.details = details if isinstance(details, dict) else {}
 
 
 def _is_supported_image_path(path):
@@ -1152,6 +1195,31 @@ def _normalize_model_setting(value):
     return normalized or None
 
 
+def _coerce_optional_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value != 0
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _BOOL_TRUTHY_VALUES:
+            return True
+        if token in _BOOL_FALSY_VALUES:
+            return False
+    return None
+
+
+def _default_app_server_pilot_enabled():
+    return bool(_coerce_optional_bool(os.environ.get(_APP_SERVER_PILOT_ENV)))
+
+
+def _normalize_app_server_pilot_enabled(value):
+    parsed = _coerce_optional_bool(value)
+    if parsed is None:
+        return _default_app_server_pilot_enabled()
+    return bool(parsed)
+
+
 def _normalize_response_mode_label(mode_label):
     value = str(mode_label or '').strip().lower()
     if value == _RESPONSE_MODE_PLAN:
@@ -1619,11 +1687,15 @@ def _read_workspace_settings():
     reasoning = data.get('reasoning_effort')
     plan_mode_model = _normalize_model_setting(data.get('plan_mode_model'))
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
+    app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
+        data.get('app_server_pilot_enabled')
+    )
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
         'plan_mode_model': plan_mode_model or None,
         'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
+        'app_server_pilot_enabled': app_server_pilot_enabled,
     }
 
 
@@ -1633,6 +1705,9 @@ def _write_workspace_settings(settings):
         'reasoning_effort': settings.get('reasoning_effort') or None,
         'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
+        'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
+            settings.get('app_server_pilot_enabled')
+        ),
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CODEX_SETTINGS_PATH.write_text(
@@ -2028,6 +2103,7 @@ def get_settings():
             or workspace_settings.get('reasoning_effort')
             or workspace_settings.get('plan_mode_model')
             or workspace_settings.get('plan_mode_reasoning_effort')
+            or workspace_settings.get('app_server_pilot_enabled')
         ):
             _write_workspace_settings(workspace_settings)
             return workspace_settings
@@ -2036,17 +2112,24 @@ def get_settings():
         if fallback.get('model') or fallback.get('reasoning_effort'):
             fallback['plan_mode_model'] = None
             fallback['plan_mode_reasoning_effort'] = None
+            fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             _write_workspace_settings(fallback)
             return _read_workspace_settings()
     return {
         'model': None,
         'reasoning_effort': None,
         'plan_mode_model': None,
-        'plan_mode_reasoning_effort': None
+        'plan_mode_reasoning_effort': None,
+        'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
     }
 
 
-def update_settings(model=None, reasoning_effort=None, plan_mode_model=None, plan_mode_reasoning_effort=None):
+def update_settings(
+        model=None,
+        reasoning_effort=None,
+        plan_mode_model=None,
+        plan_mode_reasoning_effort=None,
+        app_server_pilot_enabled=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         if not current and not CODEX_SETTINGS_PATH.exists():
@@ -2054,11 +2137,15 @@ def update_settings(model=None, reasoning_effort=None, plan_mode_model=None, pla
             current = _parse_top_level_config(text)
             current['plan_mode_model'] = None
             current['plan_mode_reasoning_effort'] = None
+            current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
             'plan_mode_model': current.get('plan_mode_model'),
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
+            'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
+                current.get('app_server_pilot_enabled')
+            ),
         }
         if model is not None:
             next_settings['model'] = _normalize_model_setting(model)
@@ -2070,8 +2157,481 @@ def update_settings(model=None, reasoning_effort=None, plan_mode_model=None, pla
         if plan_mode_reasoning_effort is not None:
             plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
             next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None
+        if app_server_pilot_enabled is not None:
+            next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         _write_workspace_settings(next_settings)
         return next_settings
+
+
+def is_codex_app_server_pilot_enabled():
+    return bool(get_settings().get('app_server_pilot_enabled'))
+
+
+def _require_codex_app_server_pilot_enabled():
+    if not is_codex_app_server_pilot_enabled():
+        raise CodexAppServerError(
+            'App Server 파일럿이 꺼져 있습니다.',
+            status_code=403,
+            error_code='app_server_disabled',
+        )
+
+
+def _normalize_app_server_limit(value, default=20, maximum=100):
+    parsed = _coerce_non_negative_int(value)
+    if parsed is None or parsed <= 0:
+        parsed = int(default)
+    return max(1, min(int(maximum), parsed))
+
+
+def _normalize_app_server_cursor(value):
+    text = str(value or '').strip()
+    if len(text) > 512:
+        return text[:512]
+    return text
+
+
+def _normalize_app_server_thread_id(value):
+    text = str(value or '').strip()
+    if not text or len(text) > 160 or any(char in text for char in '\r\n\t/\\'):
+        raise CodexAppServerError(
+            'thread id가 올바르지 않습니다.',
+            status_code=400,
+            error_code='invalid_thread_id',
+        )
+    return text
+
+
+def _sanitize_app_server_text(value, max_chars=240):
+    text = str(value or '').strip()
+    if len(text) > max_chars:
+        text = text[:max_chars]
+    return text
+
+
+def _app_server_remote_control_running_locked(now=None):
+    process = _APP_SERVER_REMOTE_CONTROL_STATE.get('process')
+    if process is None:
+        return False
+    poll_result = process.poll()
+    if poll_result is None:
+        return True
+    stopped_at = now if isinstance(now, (int, float)) else time.time()
+    _APP_SERVER_REMOTE_CONTROL_STATE['process'] = None
+    _APP_SERVER_REMOTE_CONTROL_STATE['stopped_at'] = stopped_at
+    _APP_SERVER_REMOTE_CONTROL_STATE['last_exit_code'] = poll_result
+    _APP_SERVER_REMOTE_CONTROL_STATE['last_error'] = (
+        f'remote-control exited with code {poll_result}'
+        if poll_result not in (0, None)
+        else ''
+    )
+    return False
+
+
+def get_codex_app_server_status():
+    with _APP_SERVER_LOCK:
+        running = _app_server_remote_control_running_locked()
+        pid = _APP_SERVER_REMOTE_CONTROL_STATE.get('pid') if running else None
+        remote_control = {
+            'running': running,
+            'pid': pid,
+            'started_at': _APP_SERVER_REMOTE_CONTROL_STATE.get('started_at') if running else None,
+            'stopped_at': _APP_SERVER_REMOTE_CONTROL_STATE.get('stopped_at'),
+            'last_error': _APP_SERVER_REMOTE_CONTROL_STATE.get('last_error') or '',
+            'last_exit_code': _APP_SERVER_REMOTE_CONTROL_STATE.get('last_exit_code'),
+        }
+    return {
+        'pilot_enabled': is_codex_app_server_pilot_enabled(),
+        'codex_available': shutil.which('codex') is not None,
+        'remote_control': remote_control,
+        'allowed_methods': sorted(_APP_SERVER_ALLOWED_METHODS),
+        'read_methods': sorted(_APP_SERVER_READ_METHODS),
+        'poc_methods': sorted(_APP_SERVER_POC_METHODS),
+    }
+
+
+def start_codex_app_server_remote_control():
+    _require_codex_app_server_pilot_enabled()
+    if shutil.which('codex') is None:
+        raise CodexAppServerError(
+            'codex 명령을 찾을 수 없습니다.',
+            status_code=503,
+            error_code='codex_not_found',
+        )
+    already_running = False
+    with _APP_SERVER_LOCK:
+        if _app_server_remote_control_running_locked():
+            already_running = True
+        else:
+            command = ['codex', 'remote-control', '--enable', 'remote_control']
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(WORKSPACE_DIR),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=os.environ.copy(),
+                    text=True,
+                    start_new_session=True,
+                )
+            except FileNotFoundError as exc:
+                raise CodexAppServerError(
+                    'codex 명령을 찾을 수 없습니다.',
+                    status_code=503,
+                    error_code='codex_not_found',
+                ) from exc
+            except Exception as exc:
+                raise CodexAppServerError(
+                    f'remote-control 시작에 실패했습니다: {exc}',
+                    status_code=500,
+                    error_code='remote_control_start_failed',
+                ) from exc
+            started_at = time.time()
+            _APP_SERVER_REMOTE_CONTROL_STATE.update({
+                'process': process,
+                'pid': process.pid,
+                'started_at': started_at,
+                'stopped_at': None,
+                'last_error': '',
+                'last_exit_code': None,
+            })
+            grace = max(0.05, min(2.0, float(_APP_SERVER_REMOTE_START_GRACE_SECONDS)))
+            time.sleep(grace)
+            if not _app_server_remote_control_running_locked(now=time.time()):
+                raise CodexAppServerError(
+                    _APP_SERVER_REMOTE_CONTROL_STATE.get('last_error') or 'remote-control이 바로 종료되었습니다.',
+                    status_code=500,
+                    error_code='remote_control_start_failed',
+                )
+    if already_running:
+        return get_codex_app_server_status()
+    return get_codex_app_server_status()
+
+
+def stop_codex_app_server_remote_control():
+    with _APP_SERVER_LOCK:
+        process = _APP_SERVER_REMOTE_CONTROL_STATE.get('process')
+        if process is None or process.poll() is not None:
+            _app_server_remote_control_running_locked()
+            process = None
+        else:
+            try:
+                process.terminate()
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+            except Exception as exc:
+                _APP_SERVER_REMOTE_CONTROL_STATE['last_error'] = str(exc)
+                raise CodexAppServerError(
+                    f'remote-control 종료에 실패했습니다: {exc}',
+                    status_code=500,
+                    error_code='remote_control_stop_failed',
+                ) from exc
+            finally:
+                _APP_SERVER_REMOTE_CONTROL_STATE['process'] = None
+                _APP_SERVER_REMOTE_CONTROL_STATE['stopped_at'] = time.time()
+                _APP_SERVER_REMOTE_CONTROL_STATE['last_exit_code'] = process.poll()
+    return get_codex_app_server_status()
+
+
+def _read_app_server_remote_control_running():
+    with _APP_SERVER_LOCK:
+        return _app_server_remote_control_running_locked()
+
+
+def _build_app_server_messages(method, params):
+    return [
+        {
+            'method': 'initialize',
+            'id': 1,
+            'params': {
+                'clientInfo': _APP_SERVER_CLIENT_INFO,
+                'capabilities': {
+                    'experimentalApi': True,
+                    'optOutNotificationMethods': [],
+                },
+            },
+        },
+        {'method': 'initialized', 'params': {}},
+        {'method': method, 'id': 2, 'params': params or {}},
+    ]
+
+
+def _parse_app_server_rpc_result(stdout_text, response_id=2):
+    notifications = []
+    for line in str(stdout_text or '').splitlines():
+        parsed = _parse_json_object(line)
+        if not parsed:
+            continue
+        if parsed.get('id') == response_id:
+            if isinstance(parsed.get('error'), dict):
+                error = parsed['error']
+                raise CodexAppServerError(
+                    error.get('message') or 'App Server 요청이 실패했습니다.',
+                    status_code=502,
+                    error_code='app_server_rpc_error',
+                    details={'code': error.get('code'), 'data': error.get('data')},
+                )
+            result = parsed.get('result')
+            return result if isinstance(result, dict) else {}
+        if 'id' not in parsed and parsed.get('method'):
+            notifications.append(parsed)
+    raise CodexAppServerError(
+        'App Server 응답을 찾을 수 없습니다.',
+        status_code=502,
+        error_code='app_server_response_missing',
+        details={'notifications': notifications[-5:]},
+    )
+
+
+def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
+    messages = _build_app_server_messages(method, params)
+    request_body = '\n'.join(json.dumps(message, ensure_ascii=False) for message in messages) + '\n'
+    started_at = time.time()
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(WORKSPACE_DIR),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=os.environ.copy(),
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise CodexAppServerError(
+            'codex 명령을 찾을 수 없습니다.',
+            status_code=503,
+            error_code='codex_not_found',
+        ) from exc
+    except Exception as exc:
+        raise CodexAppServerError(
+            f'App Server 시작에 실패했습니다: {exc}',
+            status_code=500,
+            error_code='app_server_start_failed',
+        ) from exc
+    try:
+        stdout_text, stderr_text = process.communicate(request_body, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        stdout_text, stderr_text = process.communicate()
+        raise CodexAppServerError(
+            'App Server 요청 시간이 초과되었습니다.',
+            status_code=504,
+            error_code='app_server_timeout',
+            details={'stderr': _sanitize_app_server_text(stderr_text, 1000)},
+        ) from exc
+    result = _parse_app_server_rpc_result(stdout_text, response_id=2)
+    elapsed_ms = max(0, int((time.time() - started_at) * 1000))
+    return {
+        'result': result,
+        'elapsed_ms': elapsed_ms,
+        'exit_code': process.returncode,
+        'stderr': _sanitize_app_server_text(stderr_text, 1000),
+    }
+
+
+def call_codex_app_server_method(method, params=None, *, timeout_seconds=None):
+    _require_codex_app_server_pilot_enabled()
+    method = str(method or '').strip()
+    if method not in _APP_SERVER_ALLOWED_METHODS:
+        raise CodexAppServerError(
+            '허용되지 않은 App Server 메서드입니다.',
+            status_code=400,
+            error_code='app_server_method_not_allowed',
+        )
+    timeout_seconds = max(1.0, float(timeout_seconds or _APP_SERVER_RPC_TIMEOUT_SECONDS))
+    attempts = []
+    if _read_app_server_remote_control_running():
+        attempts.append(('remote_control_proxy', ['codex', 'app-server', 'proxy']))
+    attempts.append(('stdio', ['codex', 'app-server']))
+
+    last_error = None
+    for transport, command in attempts:
+        try:
+            payload = _call_codex_app_server_process(
+                command,
+                method,
+                params or {},
+                timeout_seconds=timeout_seconds,
+            )
+            payload['transport'] = transport
+            return payload
+        except CodexAppServerError as exc:
+            last_error = exc
+            if transport == 'remote_control_proxy':
+                continue
+            raise
+    if last_error:
+        raise last_error
+    raise CodexAppServerError('App Server transport를 사용할 수 없습니다.', status_code=503)
+
+
+def list_codex_app_server_models(limit=20, include_hidden=False, cursor=None):
+    params = {
+        'limit': _normalize_app_server_limit(limit, default=20, maximum=100),
+        'includeHidden': bool(include_hidden),
+    }
+    cursor = _normalize_app_server_cursor(cursor)
+    if cursor:
+        params['cursor'] = cursor
+    response = call_codex_app_server_method('model/list', params)
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'models': result.get('data') if isinstance(result.get('data'), list) else [],
+        'next_cursor': result.get('nextCursor'),
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def _parse_codex_features_list_output(output_text):
+    features = []
+    for line in str(output_text or '').splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        enabled_token = parts[-1].strip().lower()
+        if enabled_token not in _BOOL_TRUTHY_VALUES | _BOOL_FALSY_VALUES:
+            continue
+        name = parts[0]
+        stage = ' '.join(parts[1:-1])
+        features.append({
+            'name': name,
+            'stage': stage,
+            'enabled': enabled_token in _BOOL_TRUTHY_VALUES,
+            'defaultEnabled': None,
+            'displayName': None,
+            'description': None,
+        })
+    return features
+
+
+def list_codex_cli_features():
+    try:
+        result = subprocess.run(
+            ['codex', 'features', 'list'],
+            cwd=str(WORKSPACE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=max(3.0, float(_APP_SERVER_RPC_TIMEOUT_SECONDS)),
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise CodexAppServerError(
+            'codex 명령을 찾을 수 없습니다.',
+            status_code=503,
+            error_code='codex_not_found',
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CodexAppServerError(
+            'feature flag 조회 시간이 초과되었습니다.',
+            status_code=504,
+            error_code='features_timeout',
+        ) from exc
+    except Exception as exc:
+        raise CodexAppServerError(
+            f'feature flag 조회에 실패했습니다: {exc}',
+            status_code=500,
+            error_code='features_failed',
+        ) from exc
+    if result.returncode != 0:
+        raise CodexAppServerError(
+            (result.stderr or result.stdout or 'feature flag 조회에 실패했습니다.').strip(),
+            status_code=502,
+            error_code='features_failed',
+        )
+    return {
+        'features': _parse_codex_features_list_output(result.stdout),
+        'source': 'codex_features_cli',
+    }
+
+
+def list_codex_app_server_features(limit=50, cursor=None):
+    params = {'limit': _normalize_app_server_limit(limit, default=50, maximum=200)}
+    cursor = _normalize_app_server_cursor(cursor)
+    if cursor:
+        params['cursor'] = cursor
+    try:
+        response = call_codex_app_server_method('experimentalFeature/list', params)
+    except CodexAppServerError as exc:
+        if exc.error_code == 'app_server_disabled':
+            raise
+        fallback = list_codex_cli_features()
+        fallback['app_server_error'] = str(exc)
+        fallback['source'] = 'codex_features_cli_fallback'
+        return fallback
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'features': result.get('data') if isinstance(result.get('data'), list) else [],
+        'next_cursor': result.get('nextCursor'),
+        'source': 'app_server',
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def list_codex_app_server_threads(limit=20, cursor=None, search_term='', cwd='', include_exec=True):
+    params = {
+        'limit': _normalize_app_server_limit(limit, default=20, maximum=100),
+        'sortKey': 'updated_at',
+    }
+    cursor = _normalize_app_server_cursor(cursor)
+    if cursor:
+        params['cursor'] = cursor
+    search_term = _sanitize_app_server_text(search_term, 120)
+    if search_term:
+        params['searchTerm'] = search_term
+    cwd = _sanitize_app_server_text(cwd, 512)
+    if cwd:
+        params['cwd'] = cwd
+    if include_exec:
+        params['sourceKinds'] = ['cli', 'vscode', 'exec', 'appServer']
+    response = call_codex_app_server_method('thread/list', params)
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'threads': result.get('data') if isinstance(result.get('data'), list) else [],
+        'next_cursor': result.get('nextCursor'),
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def read_codex_app_server_thread(thread_id, include_turns=False):
+    thread_id = _normalize_app_server_thread_id(thread_id)
+    response = call_codex_app_server_method(
+        'thread/read',
+        {'threadId': thread_id, 'includeTurns': bool(include_turns)},
+    )
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'thread': result.get('thread') if isinstance(result.get('thread'), dict) else None,
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def resume_codex_app_server_thread(thread_id):
+    thread_id = _normalize_app_server_thread_id(thread_id)
+    response = call_codex_app_server_method('thread/resume', {'threadId': thread_id})
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'thread': result.get('thread') if isinstance(result.get('thread'), dict) else None,
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
+
+
+def fork_codex_app_server_thread(thread_id):
+    thread_id = _normalize_app_server_thread_id(thread_id)
+    response = call_codex_app_server_method('thread/fork', {'threadId': thread_id})
+    result = response.get('result') if isinstance(response, dict) else {}
+    return {
+        'thread': result.get('thread') if isinstance(result.get('thread'), dict) else None,
+        'transport': response.get('transport'),
+        'elapsed_ms': response.get('elapsed_ms'),
+    }
 
 
 def _coerce_non_negative_int(value):
@@ -4322,6 +4882,26 @@ def _codex_cli_protected_paths():
     return protected_paths
 
 
+def _append_codex_cli_bind_path(paths, path, require_exists=False):
+    bind_path = _safe_resolve_path(path)
+    if require_exists and not bind_path.exists():
+        return
+    if bind_path not in paths:
+        paths.append(bind_path)
+
+
+def _codex_cli_git_rw_bind_paths(protected_paths):
+    if not CODEX_CLI_SELF_PROTECT_GIT_RW:
+        return []
+    bind_paths = []
+    for protected_path in protected_paths:
+        if protected_path.name == '.git':
+            _append_codex_cli_bind_path(bind_paths, protected_path, require_exists=True)
+            continue
+        _append_codex_cli_bind_path(bind_paths, protected_path / '.git', require_exists=True)
+    return bind_paths
+
+
 def _path_is_under_codex_cli_protection(path):
     return any(_path_contains(protected_path, path) for protected_path in _codex_cli_protected_paths())
 
@@ -4397,6 +4977,8 @@ def _wrap_codex_cli_command(cmd):
     ]
     for protected_path in protected_paths:
         wrapped_cmd.extend(['--ro-bind-try', str(protected_path), str(protected_path)])
+    for bind_path in _codex_cli_git_rw_bind_paths(protected_paths):
+        wrapped_cmd.extend(['--bind-try', str(bind_path), str(bind_path)])
     wrapped_cmd.append('--')
     wrapped_cmd.extend(cmd)
     return wrapped_cmd

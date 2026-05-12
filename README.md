@@ -39,6 +39,8 @@ Workbench/agent paths mounted read-only. Other Workbench APIs remain unchanged.
 On Linux this uses `bwrap`. By default it protects this Workbench checkout and
 an adjacent `codex_agent` directory when present. Add comma-separated extra
 paths with `CODEX_CLI_PROTECTED_PATHS=/path/to/codex_agent,/path/to/other`.
+Set `CODEX_CLI_SELF_PROTECT_GIT_RW=1` to keep those protections but re-bind
+protected `.git` directories read-write for Codex CLI git operations.
 
 ## Git Sync Script
 `z00_sync_git.py` is included for branch sync/mirror workflows.

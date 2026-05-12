@@ -1115,6 +1115,35 @@ def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatc
     assert env.get('CODEX_HOME') == str(explicit_home)
 
 
+def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_execution(
+        monkeypatch,
+        tmp_path):
+    source_home = tmp_path / 'source-codex-home'
+    source_home.mkdir()
+    (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+    (source_home / 'config.toml').write_text('model = "test"\n', encoding='utf-8')
+    storage_dir = tmp_path / 'agent-state'
+
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', storage_dir)
+
+    original_probe = codex_chat._path_is_writable_directory
+
+    def fake_writable_directory(path):
+        if Path(path).expanduser() == source_home:
+            return False
+        return original_probe(path)
+
+    monkeypatch.setattr(codex_chat, '_path_is_writable_directory', fake_writable_directory)
+
+    env = codex_chat._build_codex_exec_env()
+
+    queued_home = storage_dir / 'queued_codex_home'
+    assert env.get('CODEX_HOME') == str(queued_home)
+    assert (queued_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
+    assert (queued_home / 'config.toml').read_text(encoding='utf-8') == 'model = "test"\n'
+
+
 def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch, tmp_path):
     source_home = tmp_path / 'source-codex-home'
     source_home.mkdir()
@@ -1320,6 +1349,36 @@ class _ExitedWithJsonFinalMessageProcess:
         return self._return_code
 
 
+class _ExitedWithBenignStderrAndFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 65431
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {'last_agent_message': '정상 최종 응답'},
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([
+            'Reading additional input from stdin...\n',
+            'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
+        ])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 class _ExitedWithCommandExecutionFailureAndFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -1437,6 +1496,49 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
         assert stream is not None
         assert stream.get('saved') is True
         assert stream.get('done') is True
+
+
+def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithBenignStderrAndFinalMessageProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-benign-stderr')
+    session_id = session['id']
+    stream_id = 'stream-json-benign-stderr'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-benign-stderr.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json stream prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'assistant'
+    assert saved_message['content'] == '정상 최종 응답'
+    assert saved_message['finalize_reason'] == 'process_exit'
+    assert 'Reading additional input' not in saved_message['content']
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('saved') is True
+        assert stream.get('done') is True
+        assert stream.get('error') == ''
+        assert stream.get('codex_error_seen') is False
 
 
 def test_run_codex_stream_keeps_command_execution_failure_as_nonfatal_event(

@@ -897,6 +897,7 @@
             <li>preset schema 전체를 재귀 검사하는 회귀 테스트 추가</li>
             <li><code>item.completed</code> + <code>command_execution</code>은 상세 이벤트로만 보존하고, 턴 전체 실패로 오판하지 않도록 회귀 테스트 추가</li>
             <li>동기 실행에서도 agent final text가 없으면 raw JSON 이벤트를 답변 본문으로 노출하지 않고 명시적인 최종 응답 없음 메시지로 정규화</li>
+            <li>read-only/ephemeral structured report live smoke에서 CLI 자식 프로세스의 writable <code>CODEX_HOME</code> 보장과 benign stderr 필터링을 검증 완료</li>
           </ul>
         </article>
         <article class="phase">
@@ -940,8 +941,8 @@
           </tr>
           <tr>
             <td>출력 파싱 불안정</td>
-            <td>structured report는 <code>--output-schema</code> 최종 응답만 엄격 검증하고, 중간 JSONL 이벤트 파서는 현재 tolerant parser를 유지합니다. 단, CLI에 넘기는 schema 자체는 OpenAI strict structured output subset에 맞게 모든 object property를 <code>required</code>에 포함해야 합니다.</td>
-            <td>invalid_json_schema 400이 사전 테스트에서 잡히고, schema validation 실패가 전체 스트림 실패로 번지지 않고 사용자에게 재시도 가능한 오류로 표시됩니다.</td>
+            <td>structured report는 <code>--output-schema</code> 최종 응답만 엄격 검증하고, 중간 JSONL 이벤트 파서는 현재 tolerant parser를 유지합니다. 단, CLI에 넘기는 schema 자체는 OpenAI strict structured output subset에 맞게 모든 object property를 <code>required</code>에 포함해야 하며, CLI의 정보성 stderr는 실패 신호와 분리합니다.</td>
+            <td>invalid_json_schema 400이 사전 테스트에서 잡히고, schema validation 실패가 전체 스트림 실패로 번지지 않습니다. 실제 <code>Code Map</code> smoke도 read-only/ephemeral 경로에서 완료됩니다.</td>
           </tr>
           <tr>
             <td>운영 비용 증가</td>
@@ -977,7 +978,7 @@
       <h2 class="section-title">결론</h2>
       <div class="card">
         <p>
-          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. Phase 3.6에서 structured report schema strict 호환성을 고정했으므로, 다음 단계는 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
+          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. Phase 3.6에서 structured report schema strict 호환성과 live read-only 실행 경로를 고정했으므로, 다음 단계는 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
         </p>
       </div>
     </section>

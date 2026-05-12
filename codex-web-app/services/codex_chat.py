@@ -314,6 +314,12 @@ _IMAGE_ATTACHMENT_EXTENSIONS = {
 _CODEX_EVENT_LOG_LIMIT = 200
 _CODEX_EVENT_DETAIL_MAX_CHARS = 900
 _CODEX_EVENT_ERROR_MAX_CHARS = 2400
+_BENIGN_CODEX_STDERR_EXACT_LINES = {
+    'Reading additional input from stdin...',
+}
+_BENIGN_CODEX_STDERR_PREFIXES = (
+    'WARNING: proceeding, even though we could not update PATH:',
+)
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
@@ -4845,6 +4851,16 @@ def _home_needs_queued_redirect(env):
     return not _path_is_writable_directory(home_value)
 
 
+def _codex_home_needs_queued_redirect(env):
+    codex_home_value = str(env.get('CODEX_HOME') or _CODEX_HOME).strip()
+    if not codex_home_value:
+        return True
+    codex_home = Path(codex_home_value).expanduser()
+    if codex_home.exists():
+        return not _path_is_writable_directory(codex_home)
+    return not _path_is_writable_directory(codex_home.parent)
+
+
 def _prepare_queued_codex_runtime_env(env, queued_home):
     queued_home = Path(queued_home).expanduser()
     for env_name, child_name in _QUEUED_CODEX_RUNTIME_DIRS.items():
@@ -5026,7 +5042,7 @@ def _build_codex_exec_env(queued_execution=False):
     env = os.environ.copy()
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
-    if queued_execution:
+    if queued_execution or _codex_home_needs_queued_redirect(env):
         queued_home = _prepare_queued_codex_home(env)
         env['CODEX_HOME'] = str(queued_home)
         _prepare_queued_codex_runtime_env(env, queued_home)
@@ -6726,6 +6742,18 @@ def _append_stream_chunk(stream_id, key, chunk):
     _persist_stream_progress(stream_id, force=False)
 
 
+def _is_benign_codex_stderr_line(line):
+    normalized = str(line or '').strip()
+    if not normalized:
+        return True
+    if normalized in _BENIGN_CODEX_STDERR_EXACT_LINES:
+        return True
+    return any(
+        normalized.startswith(prefix)
+        for prefix in _BENIGN_CODEX_STDERR_PREFIXES
+    )
+
+
 def _snapshot_stream_runtime_locked(stream):
     now = time.time()
     process = stream.get('process')
@@ -6976,6 +7004,8 @@ def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
             _apply_auth_failure_guard(line)
+            if key == 'error' and _is_benign_codex_stderr_line(line):
+                continue
             if key == 'output':
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)

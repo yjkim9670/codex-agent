@@ -168,6 +168,10 @@ const REMOTE_STREAM_POLL_MS = 2500;
 const STREAM_IDLE_WARNING_MS = 15000;
 const MERMAID_VENDOR_SRC = '/static/vendor/mermaid-11.13.0.min.js';
 const XLSX_VENDOR_SRC = '/static/vendor/xlsx-0.18.5.full.min.js';
+const PDFJS_VENDOR_SRC = '/static/vendor/pdfjs-3.11.174/pdf.min.js';
+const PDFJS_WORKER_SRC = '/static/vendor/pdfjs-3.11.174/pdf.worker.min.js';
+const PDFJS_CMAP_URL = '/static/vendor/pdfjs-3.11.174/cmaps/';
+const PDFJS_STANDARD_FONT_DATA_URL = '/static/vendor/pdfjs-3.11.174/standard_fonts/';
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -234,6 +238,9 @@ const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
 const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 64 * 1024;
 const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 1200;
 const FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES = 60;
+const FILE_BROWSER_PDF_PREVIEW_MAX_PAGES = 24;
+const FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH = 1120;
+const FILE_BROWSER_PDF_PREVIEW_MIN_PAGE_WIDTH = 320;
 const FILE_BROWSER_SPREADSHEET_EXTENSIONS = new Set([
     '.xls',
     '.xlsb',
@@ -509,6 +516,7 @@ let mermaidRenderSerial = 0;
 let mermaidLoadPromise = null;
 let mermaidDiagramViewerState = null;
 let xlsxLoadPromise = null;
+let pdfJsLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
 let lastAppliedMobilePromptLift = null;
 let lastStableMobileViewportHeight = null;
@@ -597,6 +605,38 @@ function ensureXlsxApiLoaded() {
             });
     }
     return xlsxLoadPromise;
+}
+
+function configurePdfJsApi(pdfjsApi) {
+    if (!pdfjsApi || typeof pdfjsApi.getDocument !== 'function') {
+        return null;
+    }
+    if (pdfjsApi.GlobalWorkerOptions) {
+        pdfjsApi.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
+    }
+    return pdfjsApi;
+}
+
+function ensurePdfJsApiLoaded() {
+    const pdfjsApi = configurePdfJsApi(window.pdfjsLib);
+    if (pdfjsApi) {
+        return Promise.resolve(pdfjsApi);
+    }
+    if (!pdfJsLoadPromise) {
+        pdfJsLoadPromise = loadVendorScript(PDFJS_VENDOR_SRC)
+            .then(() => {
+                const loadedApi = configurePdfJsApi(window.pdfjsLib);
+                if (!loadedApi) {
+                    throw new Error('PDF 미리보기 라이브러리를 사용할 수 없습니다.');
+                }
+                return loadedApi;
+            })
+            .catch(error => {
+                pdfJsLoadPromise = null;
+                throw error;
+            });
+    }
+    return pdfJsLoadPromise;
 }
 
 function scheduleSessionsRender() {
@@ -16663,6 +16703,208 @@ async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, rend
     }
 }
 
+function renderNativePdfPreviewIntoContainer(container, previewUrl, path = '', message = '') {
+    if (!(container instanceof HTMLElement)) return false;
+    container.innerHTML = '';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'file-browser-pdf-preview-wrap';
+
+    if (message) {
+        const note = document.createElement('div');
+        note.className = 'file-browser-pdf-fallback-note';
+        note.textContent = message;
+        wrapper.appendChild(note);
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.className = 'file-browser-pdf-preview';
+    iframe.src = previewUrl;
+    iframe.title = path || 'PDF preview';
+    wrapper.appendChild(iframe);
+    container.appendChild(wrapper);
+    return true;
+}
+
+function buildPdfPreviewSourceUrl(url) {
+    const source = String(url || '').trim();
+    if (!source) return '';
+    try {
+        return new URL(source, window.location.href).href;
+    } catch (error) {
+        void error;
+        return source;
+    }
+}
+
+function buildPdfJsResourceUrl(path) {
+    try {
+        return new URL(path, window.location.href).href;
+    } catch (error) {
+        void error;
+        return path;
+    }
+}
+
+function getPdfPreviewAvailablePageWidth(container) {
+    const rectWidth = Number(container?.getBoundingClientRect?.().width);
+    const containerWidth = Number.isFinite(rectWidth) && rectWidth > 0
+        ? rectWidth
+        : Number(container?.clientWidth || 0);
+    const availableWidth = Math.max(
+        FILE_BROWSER_PDF_PREVIEW_MIN_PAGE_WIDTH,
+        Math.floor((containerWidth || FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH) - 48)
+    );
+    return clampToRange(
+        availableWidth,
+        FILE_BROWSER_PDF_PREVIEW_MIN_PAGE_WIDTH,
+        FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH
+    );
+}
+
+async function renderPdfPageIntoCanvas(page, canvas, maxPageWidth) {
+    const initialViewport = page.getViewport({ scale: 1 });
+    const pageWidth = Math.max(1, Number(initialViewport.width) || 1);
+    const cssScale = Math.min(maxPageWidth / pageWidth, 1.75);
+    const viewport = page.getViewport({ scale: cssScale });
+    const pixelRatio = clampToRange(Number(window.devicePixelRatio) || 1, 1, 2);
+    const outputWidth = Math.max(1, Math.floor(viewport.width * pixelRatio));
+    const outputHeight = Math.max(1, Math.floor(viewport.height * pixelRatio));
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+        throw new Error('PDF 페이지를 그릴 수 없습니다.');
+    }
+    context.save();
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, outputWidth, outputHeight);
+    context.restore();
+
+    const renderTask = page.render({
+        canvasContext: context,
+        viewport,
+        transform: pixelRatio === 1 ? null : [pixelRatio, 0, 0, pixelRatio, 0, 0]
+    });
+    await renderTask.promise;
+}
+
+async function renderPdfPreviewIntoContainer(container, previewUrl, renderToken, path = '') {
+    if (!(container instanceof HTMLElement)) return false;
+    const currentToken = String(renderToken || '');
+
+    container.innerHTML = '';
+    const loadingState = document.createElement('div');
+    loadingState.className = 'file-browser-placeholder';
+    loadingState.textContent = 'PDF 미리보기를 준비하는 중...';
+    container.appendChild(loadingState);
+
+    if (!previewUrl) {
+        loadingState.textContent = 'PDF 파일 주소를 만들지 못했습니다.';
+        return false;
+    }
+
+    let pdfjsApi = null;
+    try {
+        pdfjsApi = await ensurePdfJsApiLoaded();
+    } catch (error) {
+        void error;
+    }
+    if (!pdfjsApi || typeof pdfjsApi.getDocument !== 'function') {
+        return renderNativePdfPreviewIntoContainer(
+            container,
+            previewUrl,
+            path,
+            'PDF.js 렌더러를 불러오지 못해 브라우저 기본 미리보기로 표시합니다.'
+        );
+    }
+
+    let loadingTask = null;
+    try {
+        loadingTask = pdfjsApi.getDocument({
+            url: buildPdfPreviewSourceUrl(previewUrl),
+            cMapUrl: buildPdfJsResourceUrl(PDFJS_CMAP_URL),
+            cMapPacked: true,
+            standardFontDataUrl: buildPdfJsResourceUrl(PDFJS_STANDARD_FONT_DATA_URL),
+            disableFontFace: false,
+            useSystemFonts: true
+        });
+        const pdfDocument = await loadingTask.promise;
+        if (container.dataset.renderToken !== currentToken) {
+            await pdfDocument.destroy();
+            return false;
+        }
+
+        const totalPages = Math.max(0, Number(pdfDocument.numPages) || 0);
+        const visiblePages = Math.min(totalPages, FILE_BROWSER_PDF_PREVIEW_MAX_PAGES);
+        const shell = document.createElement('section');
+        shell.className = 'file-browser-pdf-preview-shell';
+
+        const header = document.createElement('div');
+        header.className = 'file-browser-pdf-preview-header';
+        const summary = [`PDF.js 렌더링`, `${totalPages || 0}쪽`];
+        if (visiblePages < totalPages) {
+            summary.push(`앞 ${visiblePages}쪽만 표시`);
+        }
+        header.textContent = summary.join(' · ');
+        shell.appendChild(header);
+
+        const pages = document.createElement('div');
+        pages.className = 'file-browser-pdf-pages';
+        shell.appendChild(pages);
+
+        container.innerHTML = '';
+        container.appendChild(shell);
+
+        const maxPageWidth = getPdfPreviewAvailablePageWidth(container);
+        for (let pageNumber = 1; pageNumber <= visiblePages; pageNumber += 1) {
+            if (container.dataset.renderToken !== currentToken) {
+                await pdfDocument.destroy();
+                return false;
+            }
+            const page = await pdfDocument.getPage(pageNumber);
+            const pageFrame = document.createElement('article');
+            pageFrame.className = 'file-browser-pdf-page';
+            pageFrame.setAttribute('aria-label', `PDF page ${pageNumber}`);
+
+            const pageLabel = document.createElement('div');
+            pageLabel.className = 'file-browser-pdf-page-label';
+            pageLabel.textContent = `${pageNumber} / ${totalPages || visiblePages}`;
+            pageFrame.appendChild(pageLabel);
+
+            const canvas = document.createElement('canvas');
+            canvas.className = 'file-browser-pdf-page-canvas';
+            pageFrame.appendChild(canvas);
+            pages.appendChild(pageFrame);
+
+            await renderPdfPageIntoCanvas(page, canvas, maxPageWidth);
+            page.cleanup();
+        }
+        await pdfDocument.destroy();
+        return true;
+    } catch (error) {
+        try {
+            if (loadingTask && typeof loadingTask.destroy === 'function') {
+                await loadingTask.destroy();
+            }
+        } catch (destroyError) {
+            void destroyError;
+        }
+        if (container.dataset.renderToken !== currentToken) {
+            return false;
+        }
+        return renderNativePdfPreviewIntoContainer(
+            container,
+            previewUrl,
+            path,
+            normalizeError(error, 'PDF.js 렌더링에 실패해 브라우저 기본 미리보기로 표시합니다.')
+        );
+    }
+}
+
 function getFilePanelVariantFromElements(elements) {
     return elements?.viewerContent?.id === 'codex-work-mode-file-viewer-content'
         ? FILE_PANEL_VARIANT_WORK_MODE
@@ -16907,14 +17149,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
             elements.viewerContent.appendChild(placeholder);
             return;
         }
-        const wrapper = document.createElement('div');
-        wrapper.className = 'file-browser-pdf-preview-wrap';
-        const iframe = document.createElement('iframe');
-        iframe.className = 'file-browser-pdf-preview';
-        iframe.src = previewUrl;
-        iframe.title = normalizedPath || 'PDF preview';
-        wrapper.appendChild(iframe);
-        elements.viewerContent.appendChild(wrapper);
+        await renderPdfPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken, normalizedPath);
         return;
     }
 

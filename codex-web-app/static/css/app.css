@@ -112,7 +112,7 @@
     --chat-compose-min-height: calc((var(--chat-action-short-height) * 2) + var(--chat-action-send-height) + (var(--chat-action-gap) * 2));
     --mobile-viewport-height: 100dvh;
     --mobile-viewport-top: 0px;
-    --mobile-terminal-viewport-bottom: 0px;
+    --mobile-terminal-viewport-height: 100dvh;
     --mobile-prompt-lift: 0px;
     --app-max-width: 1200px;
     --radius-lg: 13px;
@@ -2830,18 +2830,28 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .file-browser-spreadsheet-table {
-    width: max-content;
-    min-width: 100%;
+    width: max(100%, var(--spreadsheet-preview-table-width, 100%));
+    min-width: var(--spreadsheet-preview-table-width, 100%);
     border-collapse: separate;
     border-spacing: 0;
     table-layout: fixed;
     font-size: 12px;
 }
 
+.file-browser-spreadsheet-row-header-col {
+    width: var(--spreadsheet-row-header-width, 60px);
+}
+
+.file-browser-spreadsheet-data-col {
+    width: var(--spreadsheet-data-column-width, 144px);
+}
+
 .file-browser-spreadsheet-table th,
 .file-browser-spreadsheet-table td {
-    min-width: 96px;
-    max-width: 240px;
+    box-sizing: border-box;
+    width: var(--spreadsheet-data-column-width, 144px);
+    min-width: var(--spreadsheet-data-column-width, 144px);
+    max-width: var(--spreadsheet-data-column-width, 144px);
     padding: 7px 9px;
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
@@ -2866,8 +2876,9 @@ body.is-mermaid-diagram-viewer-open {
     position: sticky;
     left: 0;
     z-index: 1;
-    min-width: 60px;
-    max-width: 60px;
+    width: var(--spreadsheet-row-header-width, 60px);
+    min-width: var(--spreadsheet-row-header-width, 60px);
+    max-width: var(--spreadsheet-row-header-width, 60px);
     text-align: right;
     font-variant-numeric: tabular-nums;
     background: var(--surface-raised);
@@ -3495,6 +3506,12 @@ body.is-mermaid-diagram-viewer-open {
     background: var(--code-bg);
     overflow: hidden;
     position: relative;
+}
+
+.terminal-overlay-terminal-shell.has-mobile-viewport-limit {
+    flex: 0 1 auto;
+    height: var(--terminal-mobile-shell-height);
+    max-height: var(--terminal-mobile-shell-height);
 }
 
 .terminal-overlay-terminal-shell.is-loading::after {
@@ -9088,8 +9105,8 @@ label.hover-tooltip,
     }
 
     .terminal-overlay {
-        inset: var(--mobile-viewport-top) 0 var(--mobile-terminal-viewport-bottom) 0;
-        height: auto;
+        inset: var(--mobile-viewport-top) 0 auto 0;
+        height: var(--mobile-terminal-viewport-height);
         align-items: stretch;
         padding: 6px;
     }

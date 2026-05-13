@@ -114,7 +114,7 @@ const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_VIEWPORT_TOP_VAR = '--mobile-viewport-top';
-const MOBILE_TERMINAL_VIEWPORT_BOTTOM_VAR = '--mobile-terminal-viewport-bottom';
+const MOBILE_TERMINAL_VIEWPORT_HEIGHT_VAR = '--mobile-terminal-viewport-height';
 const MOBILE_PROMPT_LIFT_VAR = '--mobile-prompt-lift';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
@@ -227,6 +227,8 @@ const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
+const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
+const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
 const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 96 * 1024;
 const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 96 * 1024;
 const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 1800;
@@ -275,6 +277,8 @@ const TERMINAL_SHIFT_TAB_SEQUENCE = '\x1b[Z';
 const TERMINAL_FONT_SIZE_PHONE = 12.5;
 const TERMINAL_FONT_SIZE_COMPACT = 13;
 const TERMINAL_FONT_SIZE_DESKTOP = 14;
+const TERMINAL_MOBILE_SHELL_HEIGHT_VAR = '--terminal-mobile-shell-height';
+const TERMINAL_MOBILE_SHELL_LIMIT_CLASS = 'has-mobile-viewport-limit';
 const NAVER_UI_FONT_FAMILY = '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", "Noto Sans CJK KR", "Apple SD Gothic Neo", sans-serif';
 const NAVER_CODE_FONT_FAMILY = '"D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace';
 const TERMINAL_FONT_FAMILY = NAVER_CODE_FONT_FAMILY;
@@ -521,7 +525,7 @@ let xlsxLoadPromise = null;
 let pdfJsLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
 let lastAppliedMobileViewportTop = null;
-let lastAppliedMobileTerminalViewportBottom = null;
+let lastAppliedMobileTerminalViewportHeight = null;
 let lastAppliedMobilePromptLift = null;
 let lastStableMobileViewportHeight = null;
 let lastStableMobileViewportWidth = null;
@@ -6034,6 +6038,7 @@ function syncMobileKeyboardState(isMobile = isMobileViewportBehaviorActive()) {
     applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen, metrics });
     if (isTerminalUiOpen()) {
         syncTerminalExtraKeysState();
+        syncTerminalMobileShellHeightLimit({ isMobile, keyboardOpen: isKeyboardOpen });
         scheduleTerminalViewportRefresh({ fit: true });
     }
     return isKeyboardOpen;
@@ -6086,9 +6091,20 @@ function applyMobileViewportHeight() {
     const terminalBottom = metrics.hasVisualHeight && metrics.hasLayoutHeight
         ? Math.max(0, Math.round(metrics.layoutHeight - (metrics.visualHeight + metrics.offsetTop)))
         : 0;
-    if (lastAppliedMobileTerminalViewportBottom !== terminalBottom) {
-        lastAppliedMobileTerminalViewportBottom = terminalBottom;
-        root.style.setProperty(MOBILE_TERMINAL_VIEWPORT_BOTTOM_VAR, `${terminalBottom}px`);
+
+    const terminalHeightSource = metrics.hasVisualHeight
+        ? metrics.visualHeight
+        : (
+            metrics.hasLayoutHeight
+                ? Math.max(0, metrics.layoutHeight - terminalBottom - nextTop)
+                : NaN
+        );
+    if (Number.isFinite(terminalHeightSource) && terminalHeightSource > 0) {
+        const terminalHeight = Math.round(terminalHeightSource);
+        if (lastAppliedMobileTerminalViewportHeight !== terminalHeight) {
+            lastAppliedMobileTerminalViewportHeight = terminalHeight;
+            root.style.setProperty(MOBILE_TERMINAL_VIEWPORT_HEIGHT_VAR, `${terminalHeight}px`);
+        }
     }
 }
 
@@ -7754,6 +7770,96 @@ function cancelTerminalViewportRefresh() {
     terminalState.viewportRefreshNeedsFit = false;
 }
 
+function clearTerminalMobileShellHeightLimitForSurface(elements) {
+    const shell = elements?.shell;
+    if (!(shell instanceof HTMLElement)) return false;
+    let changed = false;
+    if (shell.classList.contains(TERMINAL_MOBILE_SHELL_LIMIT_CLASS)) {
+        shell.classList.remove(TERMINAL_MOBILE_SHELL_LIMIT_CLASS);
+        changed = true;
+    }
+    if (shell.style.getPropertyValue(TERMINAL_MOBILE_SHELL_HEIGHT_VAR)) {
+        shell.style.removeProperty(TERMINAL_MOBILE_SHELL_HEIGHT_VAR);
+        changed = true;
+    }
+    return changed;
+}
+
+function clearTerminalMobileShellHeightLimitsExcept(activeSurface = '') {
+    const normalizedActiveSurface = normalizeTerminalSurface(activeSurface);
+    let changed = false;
+    [TERMINAL_SURFACE_OVERLAY, TERMINAL_SURFACE_WORK_MODE].forEach(surface => {
+        if (surface === normalizedActiveSurface) return;
+        const elements = getTerminalSurfaceElements(surface);
+        if (!elements) return;
+        changed = clearTerminalMobileShellHeightLimitForSurface(elements) || changed;
+    });
+    return changed;
+}
+
+function syncTerminalMobileShellHeightLimit({ isMobile = isMobileViewportBehaviorActive(), keyboardOpen = isMobileKeyboardOpen(isMobile) } = {}) {
+    const activeSurface = resolveActiveTerminalSurface();
+    const elements = getTerminalSurfaceElements(activeSurface);
+    const shell = elements?.shell;
+    clearTerminalMobileShellHeightLimitsExcept(activeSurface);
+    if (!(shell instanceof HTMLElement)) return false;
+
+    if (!isTerminalUiOpen() || !isMobile || !keyboardOpen) {
+        return clearTerminalMobileShellHeightLimitForSurface(elements);
+    }
+
+    const shellRect = shell.getBoundingClientRect();
+    if (!Number.isFinite(shellRect.top)) {
+        return false;
+    }
+
+    const metrics = getVisualViewportMetrics();
+    const layoutBottom = Number(window.innerHeight);
+    const visualBottom = metrics.hasVisualHeight
+        ? metrics.visualHeight + metrics.offsetTop
+        : NaN;
+    let visibleBottom = Number.isFinite(visualBottom) && visualBottom > 0
+        ? visualBottom
+        : layoutBottom;
+
+    [elements.overlay, elements.card, elements.body].forEach(element => {
+        if (!(element instanceof Element)) return;
+        const rect = element.getBoundingClientRect();
+        if (Number.isFinite(rect.bottom) && rect.bottom > shellRect.top) {
+            visibleBottom = Math.min(visibleBottom, rect.bottom);
+        }
+    });
+
+    const extraKeys = elements.extraKeys;
+    if (
+        extraKeys instanceof HTMLElement
+        && extraKeys.classList.contains('is-mobile-visible')
+        && !extraKeys.classList.contains('is-hidden')
+    ) {
+        const extraKeysRect = extraKeys.getBoundingClientRect();
+        if (Number.isFinite(extraKeysRect.top) && extraKeysRect.top > shellRect.top) {
+            visibleBottom = Math.min(visibleBottom, extraKeysRect.top - 8);
+        }
+    }
+
+    const availableHeight = Math.floor(visibleBottom - shellRect.top);
+    if (!Number.isFinite(availableHeight) || availableHeight <= 0) {
+        return false;
+    }
+
+    const nextHeightValue = `${Math.max(1, availableHeight)}px`;
+    let changed = false;
+    if (!shell.classList.contains(TERMINAL_MOBILE_SHELL_LIMIT_CLASS)) {
+        shell.classList.add(TERMINAL_MOBILE_SHELL_LIMIT_CLASS);
+        changed = true;
+    }
+    if (shell.style.getPropertyValue(TERMINAL_MOBILE_SHELL_HEIGHT_VAR) !== nextHeightValue) {
+        shell.style.setProperty(TERMINAL_MOBILE_SHELL_HEIGHT_VAR, nextHeightValue);
+        changed = true;
+    }
+    return changed;
+}
+
 function getTerminalVisibleRowMetrics() {
     const terminal = terminalState.terminal;
     const elements = getTerminalOverlayElements();
@@ -8601,7 +8707,7 @@ async function ensureTerminalInstance() {
     });
     terminal.onCursorMove(() => {
         if (!isMobileKeyboardOpen()) return;
-        scheduleTerminalViewportRefresh();
+        scheduleTerminalViewportRefresh({ fit: true });
     });
     terminal.onResize(size => {
         const activeSession = getTerminalSessionById(terminalState.activeSessionId);
@@ -8623,6 +8729,7 @@ function scheduleTerminalFit() {
     if (!terminalState.fitAddon || !isTerminalUiOpen()) return;
     requestAnimationFrame(() => {
         if (!terminalState.fitAddon || !isTerminalUiOpen()) return;
+        syncTerminalMobileShellHeightLimit();
         if (terminalState.terminal) {
             terminalState.terminal.options.fontSize = getTerminalFontSize();
             terminalState.terminal.options.fontFamily = TERMINAL_FONT_FAMILY;
@@ -8910,6 +9017,7 @@ function closeTerminalOverlay() {
         document.body.classList.remove('is-overlay-open');
     }
     hideTerminalExtraKeysForSurface(elements);
+    clearTerminalMobileShellHeightLimitForSurface(elements);
     if (isWorkModeTerminalPanelOpen()) {
         terminalState.surface = TERMINAL_SURFACE_WORK_MODE;
         void attachActiveTerminalSession({
@@ -16589,6 +16697,7 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
 
     const previewEndRow = Math.min(range.e.r, range.s.r + FILE_BROWSER_SPREADSHEET_MAX_ROWS - 1);
     const previewEndCol = Math.min(range.e.c, range.s.c + FILE_BROWSER_SPREADSHEET_MAX_COLS - 1);
+    const visibleColCount = (previewEndCol - range.s.c) + 1;
     const isRowTruncated = previewEndRow < range.e.r;
     const isColTruncated = previewEndCol < range.e.c;
 
@@ -16606,6 +16715,20 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
 
     const table = document.createElement('table');
     table.className = 'file-browser-spreadsheet-table';
+    table.style.setProperty('--spreadsheet-preview-table-width', `${FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX + (visibleColCount * FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX)}px`);
+    table.style.setProperty('--spreadsheet-row-header-width', `${FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX}px`);
+    table.style.setProperty('--spreadsheet-data-column-width', `${FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX}px`);
+
+    const colgroup = document.createElement('colgroup');
+    const rowHeaderCol = document.createElement('col');
+    rowHeaderCol.className = 'file-browser-spreadsheet-row-header-col';
+    colgroup.appendChild(rowHeaderCol);
+    for (let colIndex = range.s.c; colIndex <= previewEndCol; colIndex += 1) {
+        const dataCol = document.createElement('col');
+        dataCol.className = 'file-browser-spreadsheet-data-col';
+        colgroup.appendChild(dataCol);
+    }
+    table.appendChild(colgroup);
 
     const thead = document.createElement('thead');
     const headerRow = document.createElement('tr');

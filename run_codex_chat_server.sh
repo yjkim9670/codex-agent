@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
-VENV_DIR="${PARENT_DIR}/.venv"
+DEFAULT_VENV_DIR="${PARENT_DIR}/.venv"
+VENV_DIR="${CODEX_COMMON_VENV_DIR:-${COMMON_PYTHON_VENV:-${VIRTUAL_ENV:-${DEFAULT_VENV_DIR}}}}"
 
 resolve_host_python() {
     if command -v python3 >/dev/null 2>&1; then

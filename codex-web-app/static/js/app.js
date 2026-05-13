@@ -113,6 +113,8 @@ const PHONE_MEDIA_QUERY = '(max-width: 599px)';
 const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
+const MOBILE_VIEWPORT_TOP_VAR = '--mobile-viewport-top';
+const MOBILE_TERMINAL_VIEWPORT_BOTTOM_VAR = '--mobile-terminal-viewport-bottom';
 const MOBILE_PROMPT_LIFT_VAR = '--mobile-prompt-lift';
 const MOBILE_SETTINGS_FOCUS_CLASS = 'is-settings-input-focused';
 const MOBILE_KEYBOARD_OPEN_CLASS = 'is-mobile-keyboard-open';
@@ -518,8 +520,11 @@ let mermaidDiagramViewerState = null;
 let xlsxLoadPromise = null;
 let pdfJsLoadPromise = null;
 let lastAppliedMobileViewportHeight = null;
+let lastAppliedMobileViewportTop = null;
+let lastAppliedMobileTerminalViewportBottom = null;
 let lastAppliedMobilePromptLift = null;
 let lastStableMobileViewportHeight = null;
+let lastStableMobileViewportWidth = null;
 let sessionsRenderFrameId = 0;
 
 function runAfterAnimationFrame(callback) {
@@ -5924,6 +5929,10 @@ function isEditableElement(element) {
     return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type);
 }
 
+function isTerminalFocusElement(element = document.activeElement) {
+    return element instanceof Element && Boolean(element.closest('.terminal-overlay-terminal-shell'));
+}
+
 function getVisualViewportMetrics() {
     const viewport = window.visualViewport;
     const scale = Number(viewport?.scale);
@@ -5952,10 +5961,23 @@ function getUsableMobileViewportHeight(metrics = getVisualViewportMetrics()) {
     return Number.isFinite(nextHeight) && nextHeight > 0 ? nextHeight : NaN;
 }
 
+function getMobileViewportWidthForStability() {
+    const visualWidth = Number(window.visualViewport?.width);
+    if (Number.isFinite(visualWidth) && visualWidth > 0) {
+        return Math.round(visualWidth);
+    }
+    const layoutWidth = Number(window.innerWidth);
+    return Number.isFinite(layoutWidth) && layoutWidth > 0 ? Math.round(layoutWidth) : NaN;
+}
+
 function rememberStableMobileViewportHeight(metrics = getVisualViewportMetrics()) {
     const nextHeight = getUsableMobileViewportHeight(metrics);
     if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
     lastStableMobileViewportHeight = Math.round(nextHeight);
+    const nextWidth = getMobileViewportWidthForStability();
+    if (Number.isFinite(nextWidth) && nextWidth > 0) {
+        lastStableMobileViewportWidth = nextWidth;
+    }
 }
 
 function isMobileKeyboardOpen(isMobile = isMobileViewportBehaviorActive(), metrics = getVisualViewportMetrics()) {
@@ -5990,8 +6012,9 @@ function setMobileKeyboardOpen(open) {
     const root = document.documentElement;
     const body = document.body;
     const isOpen = Boolean(open);
+    const shouldCompressAppLayout = isOpen && !isTerminalFocusElement();
     if (app) {
-        app.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
+        app.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, shouldCompressAppLayout);
     }
     if (root) {
         root.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
@@ -6003,17 +6026,15 @@ function setMobileKeyboardOpen(open) {
 
 function syncMobileKeyboardState(isMobile = isMobileViewportBehaviorActive()) {
     const metrics = getVisualViewportMetrics();
-    if (isMobile && !isEditableElement(document.activeElement)) {
+    const isKeyboardOpen = isMobileKeyboardOpen(isMobile, metrics);
+    if (isMobile && !isKeyboardOpen) {
         rememberStableMobileViewportHeight(metrics);
     }
-    const isKeyboardOpen = isMobileKeyboardOpen(isMobile, metrics);
     setMobileKeyboardOpen(isKeyboardOpen);
     applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen, metrics });
     if (isTerminalUiOpen()) {
         syncTerminalExtraKeysState();
-        if (isKeyboardOpen) {
-            scheduleTerminalViewportRefresh();
-        }
+        scheduleTerminalViewportRefresh({ fit: true });
     }
     return isKeyboardOpen;
 }
@@ -6023,13 +6044,52 @@ function applyMobileViewportHeight() {
     if (!root) return;
     const metrics = getVisualViewportMetrics();
     const nextHeight = getUsableMobileViewportHeight(metrics);
-    if (!Number.isFinite(nextHeight) || nextHeight <= 0) return;
-    const clamped = Math.max(320, Math.round(nextHeight));
-    if (lastAppliedMobileViewportHeight === clamped) {
-        return;
+    const keyboardOpen = isMobileKeyboardOpen(isMobileViewportBehaviorActive(), metrics);
+    let appHeightSource = nextHeight;
+    if (keyboardOpen) {
+        const currentWidth = getMobileViewportWidthForStability();
+        const stableHeight = Number(lastStableMobileViewportHeight);
+        const stableWidth = Number(lastStableMobileViewportWidth);
+        const stableWidthMatches = !Number.isFinite(stableWidth)
+            || !Number.isFinite(currentWidth)
+            || Math.abs(stableWidth - currentWidth) <= 24;
+        if (
+            Number.isFinite(stableHeight)
+            && stableHeight > 0
+            && (!Number.isFinite(appHeightSource) || stableHeight > appHeightSource)
+            && stableWidthMatches
+        ) {
+            appHeightSource = stableHeight;
+        } else if (
+            metrics.hasLayoutHeight
+            && (!Number.isFinite(appHeightSource) || metrics.layoutHeight > appHeightSource)
+        ) {
+            appHeightSource = metrics.layoutHeight;
+        }
     }
-    lastAppliedMobileViewportHeight = clamped;
-    root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
+    if (Number.isFinite(appHeightSource) && appHeightSource > 0) {
+        const clamped = Math.max(320, Math.round(appHeightSource));
+        if (lastAppliedMobileViewportHeight !== clamped) {
+            lastAppliedMobileViewportHeight = clamped;
+            root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
+        }
+    }
+
+    const nextTop = metrics.hasVisualHeight
+        ? Math.max(0, Math.round(metrics.offsetTop || 0))
+        : 0;
+    if (lastAppliedMobileViewportTop !== nextTop) {
+        lastAppliedMobileViewportTop = nextTop;
+        root.style.setProperty(MOBILE_VIEWPORT_TOP_VAR, `${nextTop}px`);
+    }
+
+    const terminalBottom = metrics.hasVisualHeight && metrics.hasLayoutHeight
+        ? Math.max(0, Math.round(metrics.layoutHeight - (metrics.visualHeight + metrics.offsetTop)))
+        : 0;
+    if (lastAppliedMobileTerminalViewportBottom !== terminalBottom) {
+        lastAppliedMobileTerminalViewportBottom = terminalBottom;
+        root.style.setProperty(MOBILE_TERMINAL_VIEWPORT_BOTTOM_VAR, `${terminalBottom}px`);
+    }
 }
 
 function getPromptViewportBottom(metrics = getVisualViewportMetrics()) {
@@ -7710,6 +7770,13 @@ function getTerminalVisibleRowMetrics() {
     let visibleBottom = Number.isFinite(visualBottom) && visualBottom > 0
         ? visualBottom
         : layoutBottom;
+    [elements.overlay, elements.card, elements.body].forEach(element => {
+        if (!(element instanceof Element)) return;
+        const rect = element.getBoundingClientRect();
+        if (Number.isFinite(rect.bottom) && rect.bottom > shellRect.top) {
+            visibleBottom = Math.min(visibleBottom, rect.bottom);
+        }
+    });
 
     const extraKeys = elements.extraKeys;
     if (
@@ -8882,6 +8949,7 @@ function writeTerminalOutput(output, { reset = false } = {}) {
     }
     if (typeof output === 'string' && output) {
         terminal.write(output);
+        scheduleTerminalViewportRefresh();
     }
 }
 

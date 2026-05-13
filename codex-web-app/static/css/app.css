@@ -111,6 +111,8 @@
     --chat-action-send-height: 42px;
     --chat-compose-min-height: calc((var(--chat-action-short-height) * 2) + var(--chat-action-send-height) + (var(--chat-action-gap) * 2));
     --mobile-viewport-height: 100dvh;
+    --mobile-viewport-top: 0px;
+    --mobile-terminal-viewport-bottom: 0px;
     --mobile-prompt-lift: 0px;
     --app-max-width: 1200px;
     --radius-lg: 13px;
@@ -3263,6 +3265,7 @@ body.is-mermaid-diagram-viewer-open {
     align-items: center;
     justify-content: center;
     padding: 8px;
+    box-sizing: border-box;
     z-index: 2520;
 }
 
@@ -3353,16 +3356,24 @@ body.is-mermaid-diagram-viewer-open {
 
 .terminal-overlay-tabs-wrap {
     display: flex;
+    align-items: center;
+    gap: 8px;
     min-height: 0;
 }
 
 .terminal-overlay-tabs {
+    flex: 1 1 auto;
     display: flex;
     align-items: stretch;
     gap: 8px;
     overflow-x: auto;
     padding-bottom: 2px;
     min-height: 42px;
+    min-width: 0;
+}
+
+.terminal-overlay-tabs-wrap .terminal-overlay-session-actions {
+    flex: 0 0 auto;
 }
 
 .terminal-overlay-tab {
@@ -3463,34 +3474,6 @@ body.is-mermaid-diagram-viewer-open {
     box-shadow: var(--focus-ring);
 }
 
-.terminal-overlay-session-bar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    gap: 10px;
-    align-items: center;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-muted);
-}
-
-.terminal-overlay-path {
-    min-width: 0;
-    font-size: 12px;
-    color: var(--text-secondary);
-    font-family: var(--font-sans);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.terminal-overlay-status {
-    min-width: 0;
-    font-size: 11px;
-    color: var(--text-tertiary);
-    white-space: nowrap;
-}
-
 .terminal-overlay-empty {
     flex: 1;
     border: 1px dashed var(--border);
@@ -3528,6 +3511,8 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .terminal-overlay-terminal-shell .xterm {
+    box-sizing: border-box;
+    max-height: 100%;
     height: 100%;
     padding: 10px 12px;
     text-rendering: optimizeLegibility;
@@ -5299,10 +5284,6 @@ body.is-work-mode-resizing .work-mode-divider::before {
 
 .work-mode-terminal-tabs {
     min-height: 40px;
-}
-
-.work-mode-terminal-session-bar {
-    flex: 0 0 auto;
 }
 
 .work-mode-terminal-shell {
@@ -9107,14 +9088,19 @@ label.hover-tooltip,
     }
 
     .terminal-overlay {
+        inset: var(--mobile-viewport-top) 0 var(--mobile-terminal-viewport-bottom) 0;
+        height: auto;
+        align-items: stretch;
         padding: 6px;
     }
 
     .terminal-overlay-card {
         width: min(var(--app-max-width), calc(100vw - 12px));
         max-width: var(--app-max-width);
-        height: calc(100dvh - 12px);
-        max-height: calc(100dvh - 12px);
+        height: calc(100% - 12px);
+        max-height: calc(100% - 12px);
+        min-height: 0;
+        margin: auto 0;
     }
 
     .file-browser-overlay {
@@ -9205,15 +9191,6 @@ label.hover-tooltip,
         padding-right: 12px;
     }
 
-    .terminal-overlay-session-bar {
-        grid-template-columns: minmax(0, 1fr) auto;
-    }
-
-    .terminal-overlay-status {
-        grid-column: 1 / -1;
-        white-space: normal;
-    }
-
     .terminal-overlay-extra-keys {
         --terminal-extra-keys-edge-gap: 10px;
     }
@@ -9225,6 +9202,58 @@ label.hover-tooltip,
 
     .terminal-overlay-tab {
         max-width: min(240px, 74vw);
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay {
+        padding: 4px 6px;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-card {
+        height: calc(100% - 8px);
+        max-height: calc(100% - 8px);
+        margin: 0;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-header {
+        align-items: center;
+        padding-top: 6px;
+        padding-bottom: 6px;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-heading {
+        gap: 0;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-subtitle,
+    body.is-mobile-keyboard-open .terminal-overlay-footer,
+    body.is-mobile-keyboard-open .terminal-overlay-tab-subtitle {
+        display: none;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-body {
+        gap: 6px;
+        padding-top: 8px;
+        padding-bottom: calc(8px + env(safe-area-inset-bottom) + var(--terminal-overlay-extra-keys-reserved-space, 0px));
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-tabs {
+        min-height: 34px;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-tab {
+        max-width: min(180px, 58vw);
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-tab-button {
+        padding: 6px 0;
+    }
+
+    body.is-mobile-keyboard-open .terminal-overlay-terminal-shell .xterm {
+        padding: 8px 10px;
+    }
+
+    body.is-mobile-keyboard-open .work-mode-terminal-shell {
+        min-height: 0;
     }
 
     .usage-history-chart-wrap {
@@ -10238,13 +10267,11 @@ label.hover-tooltip,
     }
 
     .terminal-overlay-title,
-    .terminal-overlay-path,
     .terminal-overlay-tab-title {
         font-size: 11px;
     }
 
     .terminal-overlay-subtitle,
-    .terminal-overlay-status,
     .terminal-overlay-tab-subtitle,
     .terminal-overlay-empty {
         font-size: 9.5px;

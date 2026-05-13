@@ -176,12 +176,14 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
+    --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
     --icon-copy-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='8' y='8' width='10' height='11' rx='1.8'/><path d='M6 15.5V6.8A1.8 1.8 0 0 1 7.8 5h7.7'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
     --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
     --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-terminal: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='m8.3 10.1 3 2.9-3 2.9'/><path d='M13.1 15.9h3.8'/></svg>");
     --icon-file-preview: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.7 13.3s1.3-2.2 3.3-2.2 3.3 2.2 3.3 2.2-1.3 2.2-3.3 2.2-3.3-2.2-3.3-2.2z'/><circle cx='12' cy='13.3' r='0.9'/></svg>");
+    --icon-file-preview-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M14.8 14H8.6'/><path d='m10.9 11.7-2.3 2.3 2.3 2.3'/></svg>");
     --icon-select-all: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='M8.5 12.1 10.9 14.5 15.8 9.6'/></svg>");
     --icon-clear-selection: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='m9 9 6 6'/><path d='m15 9-6 6'/></svg>");
     --icon-trash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d92d4c' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 6.7h14.4'/><path d='M9.2 6.7V5.3A1.3 1.3 0 0 1 10.5 4h3a1.3 1.3 0 0 1 1.3 1.3v1.4'/><path d='m7 6.7.8 11.1A1.5 1.5 0 0 0 9.3 19h5.4a1.5 1.5 0 0 0 1.5-1.2L17 6.7'/><path d='M10.2 10.1v5.4'/><path d='M13.8 10.1v5.4'/></svg>");
@@ -275,12 +277,14 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
+    --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
     --icon-copy-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='8' y='8' width='10' height='11' rx='1.8'/><path d='M6 15.5V6.8A1.8 1.8 0 0 1 7.8 5h7.7'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
     --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
     --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-terminal: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='m8.3 10.1 3 2.9-3 2.9'/><path d='M13.1 15.9h3.8'/></svg>");
     --icon-file-preview: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.7 13.3s1.3-2.2 3.3-2.2 3.3 2.2 3.3 2.2-1.3 2.2-3.3 2.2-3.3-2.2-3.3-2.2z'/><circle cx='12' cy='13.3' r='0.9'/></svg>");
+    --icon-file-preview-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M14.8 14H8.6'/><path d='m10.9 11.7-2.3 2.3 2.3 2.3'/></svg>");
     --icon-select-all: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='M8.5 12.1 10.9 14.5 15.8 9.6'/></svg>");
     --icon-clear-selection: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='4.5' width='15' height='15' rx='2.5'/><path d='m9 9 6 6'/><path d='m15 9-6 6'/></svg>");
     --icon-trash: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8977f' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 6.7h14.4'/><path d='M9.2 6.7V5.3A1.3 1.3 0 0 1 10.5 4h3a1.3 1.3 0 0 1 1.3 1.3v1.4'/><path d='m7 6.7.8 11.1A1.5 1.5 0 0 0 9.3 19h5.4a1.5 1.5 0 0 0 1.5-1.2L17 6.7'/><path d='M10.2 10.1v5.4'/><path d='M13.8 10.1v5.4'/></svg>");
@@ -1627,7 +1631,7 @@ textarea {
 }
 
 .work-mode-preview-terminal.is-file-toggle {
-    background-image: var(--icon-file-preview);
+    background-image: var(--icon-file-preview-return);
     border-color: color-mix(in srgb, var(--accent) 46%, var(--icon-button-border));
     background-color: color-mix(in srgb, var(--accent) 12%, var(--icon-button-bg));
 }
@@ -3707,6 +3711,7 @@ body.is-mermaid-diagram-viewer-open {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
 }
 
 .message-log-overlay-title {
@@ -3718,6 +3723,26 @@ body.is-mermaid-diagram-viewer-open {
 .message-log-overlay-subtitle {
     font-size: 12px;
     color: var(--text-tertiary);
+}
+
+.message-log-overlay-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.message-log-overlay-copy {
+    background-image: var(--icon-copy-file);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.message-log-overlay-copy.is-copied {
+    background-image: var(--icon-check-ready);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background-color: color-mix(in srgb, var(--accent) 12%, var(--surface));
 }
 
 .message-log-overlay-close {
@@ -5243,7 +5268,7 @@ body.is-work-mode-resizing .work-mode-divider::before {
     border: 1px solid var(--icon-button-border);
     border-radius: var(--icon-button-radius);
     background-color: var(--icon-button-bg);
-    background-image: var(--icon-chat-return);
+    background-image: var(--icon-chat-switch);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
@@ -8072,6 +8097,75 @@ body.is-work-mode-resizing * {
 
 .message.is-streaming .message-stream-indicator {
     display: inline-flex;
+}
+
+.message-queued-prompts {
+    width: 100%;
+    max-width: 100%;
+    padding: 8px 10px;
+    border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--border));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised));
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.message-queued-prompts-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 6px;
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.message-queued-prompts-title::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.message-queued-prompt-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.message-queued-prompt {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 7px;
+    align-items: start;
+}
+
+.message-queued-prompt-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.message-queued-prompt-text {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
 }
 
 .message-stream-indicator-bar {

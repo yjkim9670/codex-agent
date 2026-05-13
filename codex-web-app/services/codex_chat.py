@@ -40,6 +40,7 @@ from ..config import (
     CODEX_USAGE_HISTORY_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
     CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
+    CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS,
     CODEX_STREAM_POLL_INTERVAL_SECONDS,
     CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS,
     CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -6438,6 +6439,33 @@ def _coerce_positive_seconds(value, default_value, minimum=0.01):
     return float(numeric)
 
 
+def _stream_uses_imagegen_workbench(stream):
+    if not isinstance(stream, dict):
+        return False
+    return bool(
+        stream.get('imagegen_workbench_requested')
+        or stream.get('imagegen_workbench_detected')
+        or stream.get('imagegen_workbench_filenames')
+        or stream.get('imagegen_workbench_outputs')
+    )
+
+
+def _final_response_timeout_seconds_for_stream(stream, base_timeout_seconds):
+    base_timeout = _coerce_positive_seconds(
+        base_timeout_seconds,
+        default_value=60,
+        minimum=1,
+    )
+    if not _stream_uses_imagegen_workbench(stream):
+        return base_timeout
+    imagegen_timeout = _coerce_positive_seconds(
+        CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS,
+        default_value=180,
+        minimum=base_timeout,
+    )
+    return max(base_timeout, imagegen_timeout)
+
+
 def _iso_timestamp_from_epoch(value):
     numeric = _coerce_float(value)
     if numeric is None:
@@ -7433,6 +7461,7 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
         stream = state.codex_streams.get(stream_id)
         if not stream:
             return []
+        stream_done = bool(stream.get('done'))
         codex_session_id = str(stream.get('codex_session_id') or '').strip()
         codex_home = str(stream.get('codex_home') or '').strip() or None
         prompt_text = str(stream.get('user_prompt') or '').strip()
@@ -7451,6 +7480,8 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
         )
         imagegen_workbench_requested = bool(stream.get('imagegen_workbench_requested'))
         imagegen_workbench_detected = bool(stream.get('imagegen_workbench_detected'))
+        if not stream_done and _stream_uses_imagegen_workbench(stream):
+            completed_at = time.time()
     if not (
             existing_outputs
             or imagegen_workbench_requested
@@ -7464,7 +7495,11 @@ def _copy_imagegen_workbench_outputs_for_stream(stream_id):
         until=completed_at,
         prompt_text=prompt_text,
         preferred_filenames=preferred_filenames,
-        allow_time_window_fallback=imagegen_workbench_detected or bool(preferred_filenames),
+        allow_time_window_fallback=(
+            imagegen_workbench_requested
+            or imagegen_workbench_detected
+            or bool(preferred_filenames)
+        ),
     )
     merged_outputs = _copy_imagegen_workbench_outputs(existing_outputs + copied_outputs)
     if merged_outputs != existing_outputs:
@@ -7929,7 +7964,7 @@ def _run_codex_stream(stream_id, prompt):
         default_value=3,
         minimum=0.5
     )
-    final_response_timeout_seconds = _coerce_positive_seconds(
+    base_final_response_timeout_seconds = _coerce_positive_seconds(
         CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
         default_value=60,
         minimum=1
@@ -8076,6 +8111,10 @@ def _run_codex_stream(stream_id, prompt):
                 )
                 process_exited_at = stream.get('process_exited_at')
                 is_cancelled = bool(stream.get('cancelled'))
+                final_response_timeout_seconds = _final_response_timeout_seconds_for_stream(
+                    stream,
+                    base_final_response_timeout_seconds,
+                )
 
             if is_cancelled:
                 _terminate_stream_process(process, terminate_grace_seconds)
@@ -8411,12 +8450,11 @@ def _find_active_stream_id_locked(session_id):
 
 def _mark_stale_finalizing_streams_done_locked(session_id):
     now = time.time()
-    timeout_seconds = _coerce_positive_seconds(
+    base_timeout_seconds = _coerce_positive_seconds(
         CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
         default_value=60,
         minimum=1
     )
-    stale_after_seconds = timeout_seconds + 1
     stale_stream_ids = []
 
     for stream_id, stream in state.codex_streams.items():
@@ -8431,6 +8469,8 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
         if not isinstance(process_exited_at, (int, float)):
             continue
 
+        timeout_seconds = _final_response_timeout_seconds_for_stream(stream, base_timeout_seconds)
+        stale_after_seconds = timeout_seconds + 1
         has_response = bool(
             (stream.get('output') or '').strip()
             or (stream.get('output_last_message') or '').strip()

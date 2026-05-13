@@ -1204,6 +1204,9 @@ def codex_session_message_queue(session_id):
         'started': bool(result.get('started')),
         'queue_count': int(result.get('queue_count') or 0),
     }
+    session_payload = get_session(session_id) or {}
+    pending_queue = session_payload.get('pending_queue')
+    response['pending_queue'] = pending_queue if isinstance(pending_queue, list) else []
     if result.get('active_stream_id'):
         response['active_stream_id'] = result.get('active_stream_id')
     if result.get('stream_id'):

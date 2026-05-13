@@ -664,6 +664,7 @@ function ensureSessionState(sessionId) {
             pendingSend: null,
             streamId: null,
             queuedPrompts: [],
+            pendingQueue: [],
             queueFlushing: false,
             status: 'Idle',
             statusIsError: false,
@@ -702,8 +703,42 @@ function isSessionBusy(sessionId) {
 function getQueuedPromptCount(sessionId) {
     const sessionState = getSessionState(sessionId);
     const queued = sessionState?.queuedPrompts;
-    if (!Array.isArray(queued)) return 0;
-    return queued.length;
+    const localCount = Array.isArray(queued) ? queued.length : 0;
+    const pendingQueue = sessionState?.pendingQueue;
+    const serverCount = Array.isArray(pendingQueue) ? pendingQueue.length : 0;
+    return localCount + serverCount;
+}
+
+function normalizePendingQueueEntries(queue) {
+    if (!Array.isArray(queue)) return [];
+    return queue.map((item, index) => {
+        if (!item || typeof item !== 'object') return null;
+        const prompt = String(item.prompt || '').trim();
+        if (!prompt) return null;
+        return {
+            id: String(item.id || `pending-${index}`),
+            prompt,
+            planMode: Boolean(item.plan_mode || item.planMode),
+            structuredReportPreset: String(item.structured_report_preset || item.structuredReportPreset || '').trim(),
+            createdAt: String(item.created_at || item.createdAt || '').trim()
+        };
+    }).filter(Boolean);
+}
+
+function getSessionPendingQueue(sessionId) {
+    const sessionState = getSessionState(sessionId);
+    return Array.isArray(sessionState?.pendingQueue) ? sessionState.pendingQueue : [];
+}
+
+function syncSessionPendingQueue(sessionId, queue, { render = true } = {}) {
+    const sessionState = ensureSessionState(sessionId);
+    if (!sessionState) return [];
+    sessionState.pendingQueue = normalizePendingQueueEntries(queue);
+    if (render && sessionId === state.activeSessionId) {
+        renderActiveQueuedPromptWaitlist();
+        syncActiveSessionControls();
+    }
+    return sessionState.pendingQueue;
 }
 
 function enqueuePrompt(sessionId, prompt, { planMode = false } = {}) {
@@ -1347,6 +1382,7 @@ function attachSessionStreamEntry(sessionId) {
         );
     }
     updateStreamEntry(stream);
+    renderActiveQueuedPromptWaitlist();
 }
 
 function createStreamState({
@@ -1700,6 +1736,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
     const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
+    const messageLogOverlayCopy = document.getElementById('codex-message-log-overlay-copy');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
     const messageLogOverlayCloseFooter = document.getElementById('codex-message-log-overlay-close-footer');
     const mobileSessionOverlay = document.getElementById('codex-mobile-session-overlay');
@@ -2461,6 +2498,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (messageLogOverlayClose) {
         messageLogOverlayClose.addEventListener('click', closeMessageLogOverlay);
+    }
+    if (messageLogOverlayCopy) {
+        messageLogOverlayCopy.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            copyMessageLogOverlayContent();
+        });
     }
     if (messageLogOverlayCloseFooter) {
         messageLogOverlayCloseFooter.addEventListener('click', closeMessageLogOverlay);
@@ -12465,6 +12509,7 @@ function getMessageLogOverlayElements() {
         overlay,
         title: document.getElementById('codex-message-log-overlay-title'),
         subtitle: document.getElementById('codex-message-log-overlay-subtitle'),
+        copyButton: document.getElementById('codex-message-log-overlay-copy'),
         content: document.getElementById('codex-message-log-overlay-content')
     };
 }
@@ -12479,6 +12524,58 @@ function normalizeMessageLogOverlayMode(value) {
         return MESSAGE_LOG_OVERLAY_MODE_PREVIEW;
     }
     return MESSAGE_LOG_OVERLAY_MODE_DETAIL;
+}
+
+function resetMessageLogOverlayCopyButton(button) {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove('is-copied', 'is-loading');
+    button.setAttribute('title', '전체 내용 복사');
+    button.setAttribute('aria-label', '전체 내용 복사');
+}
+
+function showMessageLogOverlayCopyFeedback(button) {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove('is-loading');
+    button.classList.add('is-copied');
+    button.setAttribute('title', '전체 내용 복사됨');
+    button.setAttribute('aria-label', '전체 내용 복사됨');
+    window.setTimeout(() => {
+        resetMessageLogOverlayCopyButton(button);
+    }, 1500);
+}
+
+async function copyMessageLogOverlayContent() {
+    const elements = getMessageLogOverlayElements();
+    if (!elements?.overlay) return;
+    const text = normalizeDetailText(elements.overlay.dataset.copyText);
+    if (!text) {
+        showToast('복사할 내용이 없습니다.', {
+            tone: 'warning',
+            durationMs: 2400
+        });
+        return;
+    }
+    const button = elements.copyButton;
+    if (button) {
+        button.disabled = true;
+        button.classList.add('is-loading');
+    }
+    try {
+        await writeTextToClipboard(text);
+        showMessageLogOverlayCopyFeedback(button);
+        showToast('전체 내용을 복사했습니다.', {
+            tone: 'success',
+            durationMs: 2200
+        });
+    } catch (error) {
+        resetMessageLogOverlayCopyButton(button);
+        showToast(normalizeError(error, '전체 내용을 복사하지 못했습니다.'), {
+            tone: 'error',
+            durationMs: 3200
+        });
+    }
 }
 
 function normalizeFilesystemPath(value) {
@@ -12677,7 +12774,9 @@ function openMessageLogOverlay(title, detailText, subtitleText = '', options = {
                 : MESSAGE_LOG_OVERLAY_CLASS_DETAIL
         );
         elements.overlay.dataset.viewMode = overlayMode;
+        elements.overlay.dataset.copyText = normalizedText;
     }
+    resetMessageLogOverlayCopyButton(elements.copyButton);
     if (elements.title) {
         elements.title.textContent = normalizedTitle || '상세 로그';
     }
@@ -12705,6 +12804,8 @@ function closeMessageLogOverlay() {
     elements.overlay.classList.remove('is-visible');
     elements.overlay.classList.remove(MESSAGE_LOG_OVERLAY_CLASS_PREVIEW, MESSAGE_LOG_OVERLAY_CLASS_DETAIL);
     delete elements.overlay.dataset.viewMode;
+    delete elements.overlay.dataset.copyText;
+    resetMessageLogOverlayCopyButton(elements.copyButton);
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
         !isGitBranchOverlayOpen()
@@ -18719,6 +18820,7 @@ async function syncActiveSessionMessagesFromServer(sessionId) {
         if (session?.id) {
             upsertSessionSummary(session);
         }
+        syncSessionPendingQueue(sessionId, session?.pending_queue || [], { render: false });
         renderSessions();
         renderMessages(session?.messages || []);
         updateHeader(session || null);
@@ -19056,6 +19158,7 @@ async function loadSession(sessionId) {
         if (session?.id) {
             upsertSessionSummary(session);
         }
+        syncSessionPendingQueue(state.activeSessionId, session?.pending_queue || [], { render: false });
         if (previousSessionId && previousSessionId !== state.activeSessionId) {
             detachSessionStreamEntry(previousSessionId);
         }
@@ -19121,6 +19224,7 @@ function renderMessages(messages) {
         container.appendChild(wrapper);
     });
 
+    renderActiveQueuedPromptWaitlist();
     scrollToBottom(true);
 }
 
@@ -19139,6 +19243,86 @@ function createMessageStreamIndicatorElement() {
     indicator.appendChild(bar);
     indicator.appendChild(text);
     return indicator;
+}
+
+function removeQueuedPromptWaitlist(wrapper) {
+    const existing = wrapper?.querySelector?.(':scope > .message-queued-prompts');
+    if (existing) {
+        existing.remove();
+    }
+}
+
+function findActiveStreamingMessageWrapper() {
+    const stream = getSessionStream(state.activeSessionId);
+    if (stream?.entry?.wrapper?.isConnected) {
+        return stream.entry.wrapper;
+    }
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return null;
+    const wrappers = Array.from(container.querySelectorAll('.message.assistant.is-streaming'));
+    return wrappers.length > 0 ? wrappers[wrappers.length - 1] : null;
+}
+
+function buildQueuedPromptWaitlist(queue) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message-queued-prompts';
+    wrapper.setAttribute('aria-live', 'polite');
+
+    const title = document.createElement('div');
+    title.className = 'message-queued-prompts-title';
+    title.textContent = `대기 중인 질문 ${queue.length}개`;
+    wrapper.appendChild(title);
+
+    const list = document.createElement('ol');
+    list.className = 'message-queued-prompt-list';
+    queue.forEach((item, index) => {
+        const row = document.createElement('li');
+        row.className = 'message-queued-prompt';
+
+        const marker = document.createElement('span');
+        marker.className = 'message-queued-prompt-index';
+        marker.textContent = String(index + 1);
+
+        const text = document.createElement('span');
+        text.className = 'message-queued-prompt-text';
+        text.textContent = item.prompt;
+        text.title = item.prompt;
+
+        row.appendChild(marker);
+        row.appendChild(text);
+        list.appendChild(row);
+    });
+    wrapper.appendChild(list);
+    return wrapper;
+}
+
+function renderActiveQueuedPromptWaitlist() {
+    const sessionId = state.activeSessionId;
+    const queue = getSessionPendingQueue(sessionId);
+    const activeWrapper = findActiveStreamingMessageWrapper();
+    const container = document.getElementById('codex-chat-messages');
+    if (!container) return;
+
+    container.querySelectorAll('.message-queued-prompts').forEach(element => {
+        const owner = element.closest('.message');
+        if (!activeWrapper || owner !== activeWrapper || queue.length === 0) {
+            element.remove();
+        }
+    });
+
+    if (!activeWrapper || queue.length === 0) return;
+    const nextWaitlist = buildQueuedPromptWaitlist(queue);
+    const existing = activeWrapper.querySelector(':scope > .message-queued-prompts');
+    if (existing) {
+        existing.replaceWith(nextWaitlist);
+    } else {
+        const footer = activeWrapper.querySelector(':scope > .message-footer');
+        if (footer) {
+            activeWrapper.insertBefore(nextWaitlist, footer);
+        } else {
+            activeWrapper.appendChild(nextWaitlist);
+        }
+    }
 }
 
 function appendMessageToDOM(message, roleOverride = null) {
@@ -19670,6 +19854,9 @@ async function queuePromptOnServer(
     const queueCount = Number.isFinite(Number(result?.queue_count))
         ? Math.max(0, Number(result.queue_count))
         : 0;
+    if (Array.isArray(result?.pending_queue)) {
+        syncSessionPendingQueue(sessionId, result.pending_queue);
+    }
     if (result?.started && result?.stream_id) {
         processStartedStreamResponse(
             sessionId,
@@ -21395,6 +21582,7 @@ function startStream(streamId, sessionId, assistantEntry, startedAt, options = {
     beginStreamPolling(stream.id);
     setSessionStatus(sessionId, buildActiveStreamStatus(true));
     if (sessionId === state.activeSessionId) {
+        renderActiveQueuedPromptWaitlist();
         syncActiveSessionControls();
     }
 }
@@ -21650,6 +21838,9 @@ async function finishStream(streamId, result) {
     const sessionState = getSessionState(sessionId);
     if (sessionState) {
         sessionState.sending = false;
+    }
+    if (sessionId === state.activeSessionId) {
+        renderActiveQueuedPromptWaitlist();
     }
     unpinAutoScrollForSession(sessionId);
     setSessionStatus(sessionId, exitCode === 0 ? 'Idle' : 'Failed', exitCode !== 0);
@@ -23165,6 +23356,9 @@ function buildTokenUsageEntry(entry, label) {
 function setMessageStreaming(wrapper, isStreaming) {
     if (!wrapper) return;
     wrapper.classList.toggle('is-streaming', Boolean(isStreaming));
+    if (!isStreaming) {
+        removeQueuedPromptWaitlist(wrapper);
+    }
 }
 
 function getStreamDuration(stream) {

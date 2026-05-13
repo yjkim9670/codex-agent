@@ -1122,6 +1122,61 @@ def test_execute_codex_prompt_prepares_imagegen_dirs_and_env(monkeypatch, isolat
     )
 
 
+def test_imagegen_stream_uses_extended_final_response_timeout(monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS', 180)
+
+    base_timeout = 15
+
+    assert codex_chat._final_response_timeout_seconds_for_stream({}, base_timeout) == base_timeout
+    assert codex_chat._final_response_timeout_seconds_for_stream(
+        {'imagegen_workbench_requested': True},
+        base_timeout,
+    ) == 180
+
+
+def test_copy_imagegen_outputs_for_requested_stream_uses_time_window_fallback_while_finalizing(
+        isolated_codex_workspace,
+        tmp_path):
+    workspace_dir = isolated_codex_workspace['workspace_dir']
+    fake_codex_home = tmp_path / 'codex_home'
+    source_dir = fake_codex_home / 'generated_images' / 'detached-image-session'
+    source_dir.mkdir(parents=True)
+    source_path = source_dir / 'ig_delayed.png'
+    source_path.write_bytes(b'fake png bytes')
+
+    session = codex_chat.create_session('imagegen-copy-fallback')
+    session_id = session['id']
+    stream_id = 'stream-imagegen-copy-fallback'
+    now = time.time()
+    process_exited_at = now - 120
+
+    stream = _build_stream_state(
+        stream_id,
+        session_id,
+        started_at=now - 180,
+        output_path=workspace_dir / 'stream-imagegen-copy-fallback.txt',
+    )
+    stream.update({
+        'cli_started_at': now - 180,
+        'process_exited_at': process_exited_at,
+        'completed_at': process_exited_at,
+        'codex_home': str(fake_codex_home),
+        'imagegen_workbench_requested': True,
+        'user_prompt': '$imagegen 네이버 뉴스 화면을 만들어줘',
+    })
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = stream
+
+    copied = codex_chat._copy_imagegen_workbench_outputs_for_stream(stream_id)
+
+    assert len(copied) == 1
+    copied_path = Path(copied[0])
+    assert copied_path.is_file()
+    assert copied_path.parent == workspace_dir / 'output' / 'imagegen'
+    assert copied_path.read_bytes() == b'fake png bytes'
+
+
 def test_build_work_details_keeps_key_parts_for_long_code_logs():
     code_lines = [f'line_{idx} = {idx}' for idx in range(140)]
     code_lines[0] = 'def important_entry():'

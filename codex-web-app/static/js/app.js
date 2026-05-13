@@ -1675,6 +1675,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileAddContextBtn = document.getElementById('codex-work-mode-file-add-context');
     const workModeFileMoveBtn = document.getElementById('codex-work-mode-file-move');
     const workModeFileSelectAllBtn = document.getElementById('codex-work-mode-file-select-all');
+    const workModeFileSelectVisibleCheckbox = document.getElementById('codex-work-mode-file-select-visible');
     const workModeFileClearSelectionBtn = document.getElementById('codex-work-mode-file-clear-selection');
     const workModeFileDownloadBtn = document.getElementById('codex-work-mode-file-download');
     const workModeFileMailBtn = document.getElementById('codex-work-mode-file-mail');
@@ -1728,6 +1729,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserAddContextBtn = document.getElementById('codex-file-browser-add-context');
     const fileBrowserMoveBtn = document.getElementById('codex-file-browser-move');
     const fileBrowserSelectAllBtn = document.getElementById('codex-file-browser-select-all');
+    const fileBrowserSelectVisibleCheckbox = document.getElementById('codex-file-browser-select-visible');
     const fileBrowserClearSelectionBtn = document.getElementById('codex-file-browser-clear-selection');
     const fileBrowserDownloadBtn = document.getElementById('codex-file-browser-download');
     const fileBrowserMailBtn = document.getElementById('codex-file-browser-mail');
@@ -2116,6 +2118,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileSelectAllBtn) {
         workModeFileSelectAllBtn.addEventListener('click', () => {
             handleFilePanelSelectionButtonClick(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileSelectVisibleCheckbox) {
+        workModeFileSelectVisibleCheckbox.addEventListener('change', () => {
+            setFilePanelVisibleSelectionChecked(
+                FILE_PANEL_VARIANT_WORK_MODE,
+                workModeFileSelectVisibleCheckbox.checked
+            );
         });
     }
     if (workModeFileClearSelectionBtn) {
@@ -2566,6 +2576,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserSelectAllBtn) {
         fileBrowserSelectAllBtn.addEventListener('click', () => {
             handleFilePanelSelectionButtonClick(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserSelectVisibleCheckbox) {
+        fileBrowserSelectVisibleCheckbox.addEventListener('change', () => {
+            setFilePanelVisibleSelectionChecked(
+                FILE_PANEL_VARIANT_OVERLAY,
+                fileBrowserSelectVisibleCheckbox.checked
+            );
         });
     }
     if (fileBrowserClearSelectionBtn) {
@@ -4259,6 +4277,7 @@ function getFilePanelElementsByPrefix({
         addContextBtn: byId('add-context'),
         moveBtn: byId('move'),
         selectAllBtn: byId('select-all'),
+        selectVisibleCheckbox: byId('select-visible'),
         clearSelectionBtn: byId('clear-selection'),
         downloadBtn: byId('download'),
         mailBtn: byId('mail'),
@@ -14109,6 +14128,29 @@ function getFilePanelChatContextTargetPaths(variant) {
     return previewPath ? [previewPath] : [];
 }
 
+function getFilePanelActionTargetPaths(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const selectedPaths = Array.from(getFilePanelSelectedPaths(normalizedVariant));
+    if (selectedPaths.length > 0) {
+        return selectedPaths;
+    }
+    const previewPath = getFilePanelPreviewContextPath(normalizedVariant);
+    return previewPath ? [previewPath] : [];
+}
+
+function isFilePanelUsingPreviewActionTarget(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    return getFilePanelSelectedPaths(normalizedVariant).size <= 0
+        && Boolean(getFilePanelPreviewContextPath(normalizedVariant));
+}
+
+function getFilePanelActionTargetRoot(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    return isFilePanelUsingPreviewActionTarget(normalizedVariant)
+        ? getFilePanelPreviewContextRoot(normalizedVariant)
+        : getFilePanelCurrentRoot(normalizedVariant);
+}
+
 function isFilePanelBulkActionInFlight(variant) {
     return normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY
         ? fileBrowserBulkActionInFlight
@@ -14171,6 +14213,18 @@ function getFilePanelSelectedEntrySummary(variant) {
     };
 }
 
+function getFilePanelActionTargetEntrySummary(variant) {
+    if (isFilePanelUsingPreviewActionTarget(variant)) {
+        return {
+            fileCount: 1,
+            directoryCount: 0,
+            hasDirectories: false,
+            hasFiles: true
+        };
+    }
+    return getFilePanelSelectedEntrySummary(variant);
+}
+
 function isFilePanelLoading(elements) {
     return Boolean(elements?.loading && !elements.loading.classList.contains('is-hidden'));
 }
@@ -14187,6 +14241,8 @@ function syncFilePanelSelectionBar(variant) {
     const contextTargetPaths = getFilePanelChatContextTargetPaths(variant);
     const contextTargetCount = contextTargetPaths.length;
     const usingPreviewContext = selectedCount <= 0 && contextTargetCount > 0;
+    const actionTargetPaths = getFilePanelActionTargetPaths(variant);
+    const actionTargetCount = actionTargetPaths.length;
     const visibleFilePaths = getFilePanelVisibleFilePaths(variant);
     const visibleFileCount = visibleFilePaths.length;
     const selectionModeActive = syncFilePanelSelectionModeClass(elements, variant, selectedCount);
@@ -14196,9 +14252,11 @@ function syncFilePanelSelectionBar(variant) {
     }
     const allVisibleFilesSelected = visibleFileCount > 0
         && visibleFilePaths.every(path => selectedPaths.has(path));
+    const visibleSelectedCount = visibleFilePaths.filter(path => selectedPaths.has(path)).length;
     const entryMap = getFilePanelFileEntryMap(variant);
     const selectedEntrySummary = getFilePanelSelectedEntrySummary(variant);
-    const hasSelectedDirectories = selectedEntrySummary.hasDirectories;
+    const actionEntrySummary = getFilePanelActionTargetEntrySummary(variant);
+    const hasActionDirectories = actionEntrySummary.hasDirectories;
     let totalSelectedSize = 0;
     selectedPaths.forEach(path => {
         const numeric = Number(entryMap.get(path)?.size);
@@ -14261,7 +14319,7 @@ function syncFilePanelSelectionBar(variant) {
         syncHoverTooltipFromLabel(elements.addContextBtn);
     }
     if (elements.moveBtn) {
-        elements.moveBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
+        elements.moveBtn.disabled = isBusy || actionTargetCount <= 0 || hasActionDirectories;
     }
     if (elements.selectAllBtn) {
         const selectAllLabel = !selectionModeActive
@@ -14274,6 +14332,16 @@ function syncFilePanelSelectionBar(variant) {
         elements.selectAllBtn.disabled = isBusy || visibleFileCount <= 0;
         syncHoverTooltipFromLabel(elements.selectAllBtn);
     }
+    if (elements.selectVisibleCheckbox) {
+        const checkboxLabel = allVisibleFilesSelected
+            ? '현재 목록의 항목 선택 해제'
+            : '현재 목록의 항목 전체 선택';
+        elements.selectVisibleCheckbox.checked = allVisibleFilesSelected;
+        elements.selectVisibleCheckbox.indeterminate = visibleSelectedCount > 0 && !allVisibleFilesSelected;
+        elements.selectVisibleCheckbox.disabled = isBusy || !selectionModeActive || visibleFileCount <= 0;
+        elements.selectVisibleCheckbox.setAttribute('aria-label', checkboxLabel);
+        elements.selectVisibleCheckbox.setAttribute('title', checkboxLabel);
+    }
     if (elements.clearSelectionBtn) {
         updateFilePanelActionButtonLabel(
             elements.clearSelectionBtn,
@@ -14283,13 +14351,13 @@ function syncFilePanelSelectionBar(variant) {
         syncHoverTooltipFromLabel(elements.clearSelectionBtn);
     }
     if (elements.downloadBtn) {
-        elements.downloadBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
+        elements.downloadBtn.disabled = isBusy || actionTargetCount <= 0 || hasActionDirectories;
     }
     if (elements.mailBtn) {
-        elements.mailBtn.disabled = isBusy || selectedCount <= 0;
+        elements.mailBtn.disabled = isBusy || actionTargetCount <= 0;
     }
     if (elements.deleteBtn) {
-        elements.deleteBtn.disabled = isBusy || selectedCount <= 0 || hasSelectedDirectories;
+        elements.deleteBtn.disabled = isBusy || actionTargetCount <= 0;
     }
     syncFilePanelFolderContextButton(variant);
 }
@@ -14319,6 +14387,17 @@ function setFilePanelSelectionToVisibleFiles(variant) {
     setFilePanelSelectionMode(variant, true, { sync: false });
     setFilePanelSelectedPaths(variant, visiblePaths);
     setFilePanelSelectionAnchorPath(variant, visiblePaths[visiblePaths.length - 1] || '');
+    applyFilePanelSelectionStateForVariant(variant);
+}
+
+function setFilePanelVisibleSelectionChecked(variant, checked) {
+    if (checked) {
+        setFilePanelSelectionToVisibleFiles(variant);
+        return;
+    }
+    setFilePanelSelectionMode(variant, true, { sync: false });
+    setFilePanelSelectedPaths(variant, []);
+    setFilePanelSelectionAnchorPath(variant, '');
     applyFilePanelSelectionStateForVariant(variant);
 }
 
@@ -15661,9 +15740,9 @@ function buildFilePanelMailSubject(paths) {
 
 function buildFilePanelMailSummary(root, paths, variant) {
     const normalizedPaths = Array.from(createNormalizedRelativePathSet(paths));
-    const selectedEntrySummary = getFilePanelSelectedEntrySummary(variant);
-    const countText = selectedEntrySummary.directoryCount > 0
-        ? `선택 ${normalizedPaths.length}개 · 폴더 ${selectedEntrySummary.directoryCount}개`
+    const actionEntrySummary = getFilePanelActionTargetEntrySummary(variant);
+    const countText = actionEntrySummary.directoryCount > 0
+        ? `선택 ${normalizedPaths.length}개 · 폴더 ${actionEntrySummary.directoryCount}개`
         : `선택 ${normalizedPaths.length}개`;
     const pathText = normalizedPaths.length === 1
         ? formatFileBrowserDisplayPath(root, normalizedPaths[0])
@@ -15673,8 +15752,8 @@ function buildFilePanelMailSummary(root, paths, variant) {
 
 function openMailComposeFromFilePanel(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
-    const selectedPaths = Array.from(getFilePanelSelectedPaths(normalizedVariant));
-    if (!selectedPaths.length) {
+    const targetPaths = getFilePanelActionTargetPaths(normalizedVariant);
+    if (!targetPaths.length) {
         showToast('메일로 보낼 파일 또는 폴더를 선택하세요.', {
             tone: 'error',
             durationMs: 3200
@@ -15682,11 +15761,11 @@ function openMailComposeFromFilePanel(variant) {
         return false;
     }
 
-    const root = getFilePanelCurrentRoot(normalizedVariant);
+    const root = getFilePanelActionTargetRoot(normalizedVariant);
     filePanelMailComposeState = {
         variant: normalizedVariant,
         root,
-        paths: selectedPaths
+        paths: targetPaths
     };
 
     const elements = getMailComposeElements();
@@ -15700,13 +15779,13 @@ function openMailComposeFromFilePanel(variant) {
 
     elements.form.reset();
     if (elements.subject) {
-        elements.subject.value = buildFilePanelMailSubject(selectedPaths);
+        elements.subject.value = buildFilePanelMailSubject(targetPaths);
     }
     if (elements.body) {
         elements.body.value = '';
     }
     if (elements.summary) {
-        elements.summary.textContent = buildFilePanelMailSummary(root, selectedPaths, normalizedVariant);
+        elements.summary.textContent = buildFilePanelMailSummary(root, targetPaths, normalizedVariant);
     }
     setMailComposeStatus('');
     setMailComposeSubmitting(false);
@@ -15802,18 +15881,19 @@ async function submitMailComposeForm() {
 }
 
 async function downloadSelectedFilesFromFilePanel(variant) {
-    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
     if (!selectedPaths.length) return false;
-    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
+    if (getFilePanelActionTargetEntrySummary(normalizedVariant).hasDirectories) {
         showToast('다운로드는 파일 선택만 지원합니다. 폴더는 메일 전송에서 압축 첨부할 수 있습니다.', {
             tone: 'error',
             durationMs: 3600
         });
         return false;
     }
-    setFilePanelBulkActionInFlight(variant, true);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
-        const result = await fetchFilePanelDownload(getFilePanelCurrentRoot(variant), selectedPaths);
+        const result = await fetchFilePanelDownload(getFilePanelActionTargetRoot(normalizedVariant), selectedPaths);
         const filename = extractFilenameFromContentDisposition(result?.contentDisposition)
             || (selectedPaths.length === 1
                 ? selectedPaths[0].split('/').pop()
@@ -15833,7 +15913,7 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         });
         return false;
     } finally {
-        setFilePanelBulkActionInFlight(variant, false);
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }
 
@@ -16034,61 +16114,63 @@ async function renameCurrentFileInFilePanel(variant) {
 }
 
 async function deleteSelectedFilesFromFilePanel(variant) {
-    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
     if (!selectedPaths.length) return false;
-    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
-        showToast('선택 삭제는 파일만 지원합니다.', {
-            tone: 'error',
-            durationMs: 3200
-        });
-        return false;
-    }
-    const confirmed = window.confirm(`선택한 ${selectedPaths.length}개 파일을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
+    const actionEntrySummary = getFilePanelActionTargetEntrySummary(normalizedVariant);
+    const targetLabel = actionEntrySummary.directoryCount > 0
+        ? `선택한 ${selectedPaths.length}개 항목(폴더 ${actionEntrySummary.directoryCount}개 포함)`
+        : `선택한 ${selectedPaths.length}개 파일`;
+    const confirmed = window.confirm(`${targetLabel}을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`);
     if (!confirmed) return false;
 
-    const root = getFilePanelCurrentRoot(variant);
-    const currentPath = getFilePanelCurrentPath(variant);
-    const previewPath = getFilePanelPreviewPath(variant);
-    const previewDeleted = Boolean(previewPath) && selectedPaths.includes(previewPath);
-    const scrollSnapshot = captureFilePanelListScrollSnapshot(variant);
+    const root = getFilePanelActionTargetRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    const previewPath = getFilePanelPreviewPath(normalizedVariant);
+    const previewDeleted = Boolean(previewPath) && selectedPaths.some(path => (
+        previewPath === path || previewPath.startsWith(`${path}/`)
+    ));
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
 
-    setFilePanelBulkActionInFlight(variant, true);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
         await deleteFilePanelFiles(root, selectedPaths);
-        clearFilePanelSelection(variant);
+        clearFilePanelSelection(normalizedVariant);
         if (previewDeleted) {
-            setFilePanelPreviewPath(variant, '');
-            clearFilePanelViewerForVariant(variant, '삭제한 파일입니다. 다른 파일을 선택하세요.');
+            setFilePanelPreviewPath(normalizedVariant, '');
+            clearFilePanelViewerForVariant(normalizedVariant, '삭제한 항목입니다. 다른 파일을 선택하세요.');
         }
-        const listed = await refreshFilePanelDirectoryForVariant(variant, {
+        const listed = await refreshFilePanelDirectoryForVariant(normalizedVariant, {
             root,
             path: currentPath,
             force: true,
             restoreScrollSnapshot: scrollSnapshot
         });
         if (listed && previewPath && !previewDeleted) {
-            await refreshFilePanelPreviewSelectionForVariant(variant);
+            await refreshFilePanelPreviewSelectionForVariant(normalizedVariant);
         }
-        showToast(`선택 파일 ${selectedPaths.length}개를 삭제했습니다.`, {
+        showToast(`선택 항목 ${selectedPaths.length}개를 삭제했습니다.`, {
             tone: 'success',
             durationMs: 2600
         });
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일 삭제에 실패했습니다.'), {
+        showToast(normalizeError(error, '항목 삭제에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });
         return false;
     } finally {
-        setFilePanelBulkActionInFlight(variant, false);
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }
 
 async function moveSelectedFilesFromFilePanel(variant) {
-    const selectedPaths = Array.from(getFilePanelSelectedPaths(variant));
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
+    const usingPreviewAction = isFilePanelUsingPreviewActionTarget(normalizedVariant);
     if (!selectedPaths.length) return false;
-    if (getFilePanelSelectedEntrySummary(variant).hasDirectories) {
+    if (getFilePanelActionTargetEntrySummary(normalizedVariant).hasDirectories) {
         showToast('선택 이동은 파일만 지원합니다.', {
             tone: 'error',
             durationMs: 3200
@@ -16106,7 +16188,7 @@ async function moveSelectedFilesFromFilePanel(variant) {
     } else {
         const nextDirectory = window.prompt(
             `선택한 ${selectedPaths.length}개 파일을 옮길 대상 폴더 경로를 입력하세요.`,
-            getFilePanelCurrentPath(variant)
+            getFilePanelCurrentPath(normalizedVariant)
         );
         if (nextDirectory === null) return false;
         payload = {
@@ -16114,12 +16196,12 @@ async function moveSelectedFilesFromFilePanel(variant) {
         };
     }
 
-    const root = getFilePanelCurrentRoot(variant);
-    const currentPath = getFilePanelCurrentPath(variant);
-    const previewPath = getFilePanelPreviewPath(variant);
-    const scrollSnapshot = captureFilePanelListScrollSnapshot(variant);
+    const root = getFilePanelActionTargetRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    const previewPath = getFilePanelPreviewPath(normalizedVariant);
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
 
-    setFilePanelBulkActionInFlight(variant, true);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
         const result = await moveFilePanelFiles(root, selectedPaths, payload);
         const moved = Array.isArray(result?.moved) ? result.moved : [];
@@ -16132,8 +16214,13 @@ async function moveSelectedFilesFromFilePanel(variant) {
         const nextSelection = moved
             .map(entry => normalizeFileBrowserRelativePath(entry?.destination_path || ''))
             .filter(path => getFileBrowserParentPath(path) === currentPath);
-        setFilePanelSelectedPaths(variant, nextSelection);
-        setFilePanelSelectionAnchorPath(variant, nextSelection[nextSelection.length - 1] || '');
+        if (usingPreviewAction) {
+            setFilePanelSelectedPaths(normalizedVariant, []);
+            setFilePanelSelectionAnchorPath(normalizedVariant, '');
+        } else {
+            setFilePanelSelectedPaths(normalizedVariant, nextSelection);
+            setFilePanelSelectionAnchorPath(normalizedVariant, nextSelection[nextSelection.length - 1] || '');
+        }
 
         let nextPreviewPath = previewPath;
         if (previewPath && movedMap.has(previewPath)) {
@@ -16141,27 +16228,27 @@ async function moveSelectedFilesFromFilePanel(variant) {
             nextPreviewPath = getFileBrowserParentPath(movedPreviewPath) === currentPath
                 ? movedPreviewPath
                 : '';
-            setFilePanelPreviewPath(variant, nextPreviewPath);
+            setFilePanelPreviewPath(normalizedVariant, nextPreviewPath);
             if (!nextPreviewPath) {
-                clearFilePanelViewerForVariant(variant, '이동한 파일은 현재 폴더에 없습니다.');
+                clearFilePanelViewerForVariant(normalizedVariant, '이동한 파일은 현재 폴더에 없습니다.');
             }
         }
 
-        const listed = await refreshFilePanelDirectoryForVariant(variant, {
+        const listed = await refreshFilePanelDirectoryForVariant(normalizedVariant, {
             root,
             path: currentPath,
             force: true,
             restoreScrollSnapshot: scrollSnapshot
         });
-        applyFilePanelSelectionStateForVariant(variant);
+        applyFilePanelSelectionStateForVariant(normalizedVariant);
         if (listed) {
             if (nextPreviewPath) {
-                await openFileInPanelVariant(variant, nextPreviewPath, {
+                await openFileInPanelVariant(normalizedVariant, nextPreviewPath, {
                     root,
                     showViewerOnSuccess: false
                 });
             } else if (previewPath && !movedMap.has(previewPath)) {
-                await refreshFilePanelPreviewSelectionForVariant(variant);
+                await refreshFilePanelPreviewSelectionForVariant(normalizedVariant);
             }
         }
         showToast(
@@ -16179,7 +16266,7 @@ async function moveSelectedFilesFromFilePanel(variant) {
         });
         return false;
     } finally {
-        setFilePanelBulkActionInFlight(variant, false);
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }
 

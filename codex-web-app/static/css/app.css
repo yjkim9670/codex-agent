@@ -162,6 +162,7 @@
     --icon-sync-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23188a42' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
+    --icon-open-new-window: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='7.5' width='12' height='12' rx='2.1'/><path d='M13.5 4.5h6v6'/><path d='m11.5 12.5 8-8'/></svg>");
     --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
     --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 7.4a2.2 2.2 0 0 1 2.2-2.2h4l1.7 2h6.1a2.2 2.2 0 0 1 2.2 2.2v7.5a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M8.5 12.3h7'/><path d='M8.5 15.2h4.6'/></svg>");
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
@@ -260,6 +261,7 @@
     --icon-sync-ready: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23cfe2d6' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h14'/><path d='m17 3 4 4-4 4'/><path d='M17 17H3'/><path d='m7 21-4-4 4-4'/></svg>");
     --icon-fetch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v11'/><path d='m8.5 10.5 3.5 3.5 3.5-3.5'/><path d='M5 17v3h14v-3'/></svg>");
     --icon-overlay-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='M9 5.1v13.8'/><path d='M13.3 12h4'/><path d='M15.3 10v4'/></svg>");
+    --icon-open-new-window: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='4.5' y='7.5' width='12' height='12' rx='2.1'/><path d='M13.5 4.5h6v6'/><path d='m11.5 12.5 8-8'/></svg>");
     --icon-repo-sync-open: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.4 2.4 0 0 1 6.2 5.8h3.9l1.7 1.9h5.8A2.4 2.4 0 0 1 20 10.1V17a2.4 2.4 0 0 1-2.4 2.4H6.2A2.4 2.4 0 0 1 3.8 17z'/><path d='M11.2 11.3a2.8 2.8 0 0 1 4 0'/><path d='m15.7 10.8-.4 1.8-1.8-.4'/><path d='M15.2 14.7a2.8 2.8 0 0 1-4 0'/><path d='m10.7 15.2.4-1.8 1.8.4'/></svg>");
     --icon-browse: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 7.4a2.2 2.2 0 0 1 2.2-2.2h4l1.7 2h6.1a2.2 2.2 0 0 1 2.2 2.2v7.5a2.2 2.2 0 0 1-2.2 2.2H6a2.2 2.2 0 0 1-2.2-2.2z'/><path d='M8.5 12.3h7'/><path d='M8.5 15.2h4.6'/></svg>");
     --icon-work-mode: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='3.4' y='4.4' width='17.2' height='15.2' rx='2.2'/><path d='M10.2 4.4v15.2'/><path d='M13.5 9.1h4.9'/><path d='M13.5 12h4.9'/><path d='M13.5 14.9h3.2'/><circle cx='6.9' cy='9.6' r='0.9'/><circle cx='6.9' cy='14.2' r='0.9'/></svg>");
@@ -1626,6 +1628,14 @@ textarea {
 
 .work-mode-preview-terminal.is-file-toggle {
     background-image: var(--icon-file-preview);
+    border-color: color-mix(in srgb, var(--accent) 46%, var(--icon-button-border));
+    background-color: color-mix(in srgb, var(--accent) 12%, var(--icon-button-bg));
+}
+
+.work-mode-preview-terminal.is-file-toggle:hover,
+.work-mode-preview-terminal.is-file-toggle:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 68%, var(--icon-button-border));
+    background-color: color-mix(in srgb, var(--accent) 18%, var(--icon-button-hover-bg));
 }
 
 .file-browser-up,
@@ -1752,7 +1762,8 @@ textarea {
 }
 
 .file-browser-viewer-open-new {
-    background-image: var(--icon-overlay-open);
+    background-image: var(--icon-open-new-window);
+    background-size: 16px 16px;
 }
 
 .file-browser-viewer-add-context {
@@ -5229,10 +5240,20 @@ body.is-work-mode-resizing .work-mode-divider::before {
     font-size: 0;
     line-height: 1;
     overflow: hidden;
+    border: 1px solid var(--icon-button-border);
+    border-radius: var(--icon-button-radius);
+    background-color: var(--icon-button-bg);
     background-image: var(--icon-chat-return);
     background-repeat: no-repeat;
     background-position: center;
     background-size: 16px 16px;
+    box-shadow: var(--icon-button-shadow);
+}
+
+.work-mode-preview-chat:hover,
+.work-mode-preview-chat:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 56%, var(--icon-button-border));
+    background-color: var(--icon-button-hover-bg);
 }
 
 .work-mode-preview-refresh {
@@ -5512,6 +5533,18 @@ body.is-work-mode-resizing .work-mode-file-divider::before {
 
 .work-mode-file-layout.is-file-selection-mode .work-mode-file-col-select {
     display: flex;
+}
+
+.work-mode-file-select-all-checkbox {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.work-mode-file-select-all-checkbox:disabled {
+    cursor: not-allowed;
 }
 
 .work-mode-file-col-size {
@@ -8909,17 +8942,18 @@ label.hover-tooltip,
         line-height: 1;
         text-indent: -999px;
         overflow: hidden;
-        border-radius: var(--radius-sm);
-        border: 1px solid var(--border);
-        background-color: var(--surface-muted);
+        border-radius: var(--icon-button-radius);
+        border: 1px solid var(--icon-button-border);
+        background-color: var(--icon-button-bg);
         background-position: center;
         background-repeat: no-repeat;
         background-size: 16px 16px;
+        box-shadow: var(--icon-button-shadow);
     }
 
     .app.is-work-mode .work-mode-preview-switch-slot .work-mode-preview-chat:hover {
-        border-color: var(--accent);
-        background-color: var(--surface-raised);
+        border-color: color-mix(in srgb, var(--accent) 56%, var(--icon-button-border));
+        background-color: var(--icon-button-hover-bg);
     }
 
     .app.is-work-mode .work-mode-preview-fullscreen {

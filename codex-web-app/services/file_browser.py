@@ -313,6 +313,58 @@ def _resolve_file_targets(root_key=None, relative_paths=None):
     return normalized_root, root_path, targets
 
 
+def _resolve_delete_targets(root_key=None, relative_paths=None):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_paths = _normalize_relative_paths(relative_paths)
+    raw_targets = []
+    for relative_path in normalized_paths:
+        target_path = _resolve_target_path(root_path, relative_path)
+        if not target_path.exists():
+            raise FileBrowserError(
+                f'삭제 대상을 찾을 수 없습니다: {relative_path}',
+                error_code='path_not_found',
+                status_code=404,
+            )
+        if target_path.is_dir():
+            target_type = 'dir'
+            size = 0
+        elif target_path.is_file():
+            target_type = 'file'
+            try:
+                size = int(target_path.stat().st_size)
+            except OSError:
+                size = None
+        else:
+            raise FileBrowserError(
+                f'파일 또는 폴더만 삭제할 수 있습니다: {relative_path}',
+                error_code='invalid_target',
+                status_code=400,
+            )
+        raw_targets.append({
+            'relative_path': relative_path,
+            'target_path': target_path,
+            'name': target_path.name,
+            'size': size,
+            'type': target_type,
+        })
+
+    directory_paths = {
+        target['relative_path']
+        for target in raw_targets
+        if target.get('type') == 'dir'
+    }
+    targets = [
+        target
+        for target in raw_targets
+        if not any(
+            target['relative_path'] != directory_path
+            and target['relative_path'].startswith(f'{directory_path}/')
+            for directory_path in directory_paths
+        )
+    ]
+    return normalized_root, root_path, targets
+
+
 def _ensure_existing_directory(root_path, relative_path):
     normalized_directory = _normalize_relative_path(relative_path)
     target_directory = _resolve_target_path(root_path, normalized_directory)
@@ -1306,7 +1358,7 @@ def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=
 
 
 def delete_files(root_key=None, relative_paths=None):
-    normalized_root, root_path, targets = _resolve_file_targets(root_key, relative_paths)
+    normalized_root, root_path, targets = _resolve_delete_targets(root_key, relative_paths)
     quarantine_directory = Path(tempfile.mkdtemp(prefix=_DELETE_QUARANTINE_PREFIX, dir=root_path))
     moved_targets = []
 
@@ -1328,7 +1380,7 @@ def delete_files(root_key=None, relative_paths=None):
                 rollback_errors.append(str(rollback_exc))
         if quarantine_directory.exists():
             shutil.rmtree(quarantine_directory, ignore_errors=True)
-        message = f'파일을 삭제하지 못했습니다: {exc}'
+        message = f'항목을 삭제하지 못했습니다: {exc}'
         if rollback_errors:
             message = f'{message} (일부 롤백 실패)'
         raise FileBrowserError(
@@ -1342,6 +1394,8 @@ def delete_files(root_key=None, relative_paths=None):
         'root_path': str(root_path),
         'deleted_paths': [item['relative_path'] for item in targets],
         'count': len(targets),
+        'file_count': sum(1 for item in targets if item.get('type') == 'file'),
+        'directory_count': sum(1 for item in targets if item.get('type') == 'dir'),
     }
 
 

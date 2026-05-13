@@ -767,6 +767,7 @@ def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):
             return stdout, ''
 
     monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
     monkeypatch.setattr(codex_chat, '_read_app_server_remote_control_running', lambda: False)
     monkeypatch.setattr(codex_chat.subprocess, 'Popen', FakePopen)
@@ -774,10 +775,32 @@ def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):
     result = codex_chat.list_codex_app_server_models(limit=5)
 
     assert captured['command'] == ['codex', 'app-server']
+    assert captured['kwargs']['env']['CODEX_HOME'] == str(tmp_path / 'state' / 'app_server_codex_home')
     assert '"method": "initialize"' in captured['input']
     assert '"method": "model/list"' in captured['input']
     assert result['transport'] == 'stdio'
     assert result['models'][0]['id'] == 'gpt-5.4'
+
+
+def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(monkeypatch, tmp_path):
+    source_home = tmp_path / 'source-codex-home'
+    source_home.mkdir()
+    (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+    (source_home / 'skills').mkdir()
+    storage_dir = tmp_path / 'state'
+
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setenv('HOME', str(tmp_path / 'read-only-home'))
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', storage_dir)
+
+    env = codex_chat._build_codex_app_server_env()
+
+    app_server_home = storage_dir / 'app_server_codex_home'
+    assert env['CODEX_HOME'] == str(app_server_home)
+    assert env['HOME'] == str(app_server_home)
+    assert (app_server_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
+    assert (app_server_home / 'skills').is_dir()
+    assert not (app_server_home / 'skills').is_symlink()
 
 
 def test_app_server_blocks_unallowlisted_methods(monkeypatch):
@@ -869,6 +892,125 @@ def test_app_server_thread_turns_list_uses_allowlisted_method(monkeypatch):
     assert captured['method'] == 'thread/turns/list'
     assert captured['params'] == {'threadId': 'thr_123', 'limit': 10, 'cursor': 'c2'}
     assert result['turns'] == [{'id': 'turn_1'}]
+
+
+def test_app_server_lifecycle_preview_does_not_allow_execution_methods():
+    preview = codex_chat.build_codex_app_server_thread_lifecycle_preview('thr_123', 'rollback')
+
+    assert preview['action'] == 'rollback'
+    assert preview['method'] == 'thread/rollback'
+    assert preview['preview_only'] is True
+    assert preview['executable'] is False
+    assert preview['params']['turnId'] == '<select-turn-id>'
+    assert 'thread/rollback' not in codex_chat._APP_SERVER_ALLOWED_METHODS
+    assert 'thread/compact' not in codex_chat._APP_SERVER_ALLOWED_METHODS
+
+
+def test_subagent_cockpit_preview_formats_lanes_without_starting_jobs():
+    preview = codex_chat.build_subagent_cockpit_preview('explore_three', 'Phase 4 구현')
+
+    assert preview['preset']['id'] == 'explore_three'
+    assert preview['auto_fan_out'] is False
+    assert preview['execution_policy'] == 'read_only_ephemeral'
+    assert len(preview['lanes']) == 3
+    assert all('Phase 4 구현' in lane['prompt'] for lane in preview['lanes'])
+
+
+def test_subagent_cockpit_run_starts_explicit_lane_subjobs(monkeypatch, isolated_codex_workspace):
+    session = codex_chat.create_session('parent')
+    calls = []
+
+    def fake_start(parent_session_id, prompt, attachments=None):
+        calls.append((parent_session_id, prompt, attachments))
+        return {
+            'ok': True,
+            'child_session': {'id': f'child-{len(calls)}'},
+            'stream_id': f'stream-{len(calls)}',
+            'started_at': 123,
+        }
+
+    monkeypatch.setattr(codex_chat, 'start_codex_subjob_for_session', fake_start)
+
+    result = codex_chat.start_subagent_cockpit_preset_for_session(
+        session['id'],
+        'review_tripwire',
+        base_prompt='검증',
+        attachments=[{'id': 'att-1'}],
+    )
+
+    assert result['ok'] is True
+    assert result['requested_count'] == 3
+    assert result['started_count'] == 3
+    assert len(calls) == 3
+    assert all(call[0] == session['id'] for call in calls)
+    assert all(call[2] == [{'id': 'att-1'}] for call in calls)
+
+
+def test_repo_skill_preview_and_create_are_workspace_scoped(isolated_codex_workspace):
+    workspace_dir = isolated_codex_workspace['workspace_dir']
+
+    preview = codex_chat.build_repo_skill_preview(
+        'Review Helper',
+        trigger='Use for reviews.',
+        description='Review workflow.',
+    )
+
+    assert preview['slug'] == 'review-helper'
+    assert preview['root'] == '.agents/skills/review-helper'
+    assert any(item['path'].endswith('SKILL.md') for item in preview['files'])
+
+    result = codex_chat.create_repo_skill_from_preview(
+        'Review Helper',
+        trigger='Use for reviews.',
+        description='Review workflow.',
+    )
+
+    skill_path = workspace_dir / '.agents' / 'skills' / 'review-helper' / 'SKILL.md'
+    assert result['ok'] is True
+    assert skill_path.exists()
+    assert 'Review workflow.' in skill_path.read_text(encoding='utf-8')
+
+    with pytest.raises(codex_chat.CodexToolingError) as exc_info:
+        codex_chat.create_repo_skill_from_preview('Review Helper')
+
+    assert exc_info.value.error_code == 'skill_exists'
+
+
+def test_project_safety_mcp_and_github_templates_save_only_preview_files(isolated_codex_workspace):
+    workspace_dir = isolated_codex_workspace['workspace_dir']
+
+    safety = codex_chat.save_codex_project_safety_template('hooks_preview')
+    mcp = codex_chat.save_mcp_setup_preview()
+    github = codex_chat.save_github_action_template_preview('pr_review')
+
+    assert safety['path'] == '.codex/hooks.preview.json'
+    assert mcp['path'] == '.codex/mcp.preview.toml'
+    assert '.agents/github-action-templates/codex-pr-review.yml' in github['paths']
+    assert (workspace_dir / '.codex' / 'hooks.preview.json').exists()
+    assert (workspace_dir / '.codex' / 'mcp.preview.toml').exists()
+    assert (workspace_dir / '.agents' / 'github-action-templates' / 'codex-pr-review.yml').exists()
+    assert not (workspace_dir / '.codex' / 'hooks.json').exists()
+    assert not (workspace_dir / '.github' / 'workflows' / 'codex-pr-review.yml').exists()
+
+
+def test_project_preview_paths_fall_back_when_preferred_roots_are_unusable(isolated_codex_workspace):
+    workspace_dir = isolated_codex_workspace['workspace_dir']
+    (workspace_dir / '.codex').write_text('', encoding='utf-8')
+    (workspace_dir / '.agents').mkdir()
+    (workspace_dir / '.agents').chmod(0o555)
+
+    try:
+        skill = codex_chat.build_repo_skill_preview('Fallback Skill')
+        safety = codex_chat.get_codex_project_safety_preview()
+        mcp = codex_chat.get_mcp_setup_preview()
+        github = codex_chat.get_github_action_template_preview('pr_review')
+    finally:
+        (workspace_dir / '.agents').chmod(0o755)
+
+    assert skill['root'] == '.codex-workbench-previews/skills/fallback-skill'
+    assert safety['templates'][0]['path'].startswith('.codex-workbench-previews/')
+    assert mcp['path'] == '.codex-workbench-previews/codex/mcp.preview.toml'
+    assert github['workflow_path'].startswith('.codex-workbench-previews/')
 
 
 def test_parse_codex_features_list_output_handles_multi_word_stage():

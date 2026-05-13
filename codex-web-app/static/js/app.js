@@ -35,8 +35,18 @@ const state = {
         threadDetailTurns: [],
         threadDetailNextCursor: '',
         threadDetailIncludeTurns: false,
+        threadLifecyclePreview: null,
         threadDetailLoading: false,
         threadDetailError: '',
+        loading: false,
+        error: ''
+    },
+    tooling: {
+        subagentPresets: [],
+        subagentPreview: null,
+        safetyPreview: null,
+        mcpPreview: null,
+        githubPreview: null,
         loading: false,
         error: ''
     },
@@ -1570,6 +1580,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const appServerThreadSearchApply = document.getElementById('codex-app-server-thread-search-apply');
     const appServerThreadPrevBtn = document.getElementById('codex-app-server-thread-prev');
     const appServerThreadNextBtn = document.getElementById('codex-app-server-thread-next');
+    const subagentRefreshBtn = document.getElementById('codex-subagent-refresh');
+    const skillPreviewBtn = document.getElementById('codex-skill-preview');
+    const skillCreateBtn = document.getElementById('codex-skill-create');
+    const safetyPreviewRefreshBtn = document.getElementById('codex-safety-preview-refresh');
+    const mcpPreviewRefreshBtn = document.getElementById('codex-mcp-preview-refresh');
+    const mcpSavePreviewBtn = document.getElementById('codex-mcp-save-preview');
+    const githubTemplateKindSelect = document.getElementById('codex-github-template-kind');
+    const githubPreviewRefreshBtn = document.getElementById('codex-github-preview-refresh');
+    const githubSavePreviewBtn = document.getElementById('codex-github-save-preview');
     const planModeToggle = document.getElementById('codex-plan-mode-toggle');
     const worktreeModeToggle = document.getElementById('codex-worktree-mode-toggle');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
@@ -1838,6 +1857,69 @@ document.addEventListener('DOMContentLoaded', () => {
         appServerThreadNextBtn.addEventListener('click', event => {
             event.preventDefault();
             void loadNextAppServerThreads();
+        });
+    }
+
+    if (subagentRefreshBtn) {
+        subagentRefreshBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadSubagentPresets({ force: true });
+        });
+    }
+
+    if (skillPreviewBtn) {
+        skillPreviewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void previewRepoSkill();
+        });
+    }
+
+    if (skillCreateBtn) {
+        skillCreateBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void createRepoSkill();
+        });
+    }
+
+    if (safetyPreviewRefreshBtn) {
+        safetyPreviewRefreshBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadSafetyPreview({ force: true });
+        });
+    }
+
+    if (mcpPreviewRefreshBtn) {
+        mcpPreviewRefreshBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadMcpPreview({ force: true });
+        });
+    }
+
+    if (mcpSavePreviewBtn) {
+        mcpSavePreviewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void saveMcpPreview();
+        });
+    }
+
+    if (githubTemplateKindSelect) {
+        githubTemplateKindSelect.addEventListener('change', event => {
+            event.preventDefault();
+            void loadGithubActionPreview({ force: true });
+        });
+    }
+
+    if (githubPreviewRefreshBtn) {
+        githubPreviewRefreshBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void loadGithubActionPreview({ force: true });
+        });
+    }
+
+    if (githubSavePreviewBtn) {
+        githubSavePreviewBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void saveGithubActionPreview();
         });
     }
 
@@ -18692,6 +18774,11 @@ const CHAT_TOOL_HELP_TEXT = Object.freeze({
     reportSection: '현재 프롬프트와 세션 맥락을 구조화된 보고서로 실행합니다. 보고서 작업은 read-only ephemeral 정책을 사용해 영구 파일 수정을 피합니다.',
     worktreeSection: '리스크 있는 구현을 현재 checkout과 분리된 Git worktree에서 실행합니다. 완료 후 handoff로 diff를 가져오거나 cleanup으로 폐기합니다.',
     appServerSection: 'Codex App Server/remote-control 파일럿입니다. 모델, feature flag, thread 목록을 읽고 thread resume/fork를 명시적으로 실행합니다.',
+    subagentsSection: '명시적으로 선택한 preset만 병렬 subjob을 시작합니다. 자동 fan-out은 하지 않고 각 lane은 read-only ephemeral 실행으로 시작합니다.',
+    skillsSection: 'repo-local .agents/skills 아래에 SKILL.md skeleton과 보조 폴더를 preview한 뒤 생성합니다. 선호 경로가 쓰기 불가면 .codex-workbench-previews로 우회합니다.',
+    safetySection: 'hooks/rules 후보를 읽고 .preview 템플릿만 생성합니다. 활성 hooks.json이나 config.toml은 자동으로 바꾸지 않습니다.',
+    mcpSection: 'MCP 설정 초안을 비활성 preview 파일로 저장할 수 있습니다. 실제 server command는 공식 문서 확인 후 활성 config에 옮기는 흐름입니다.',
+    githubSection: 'GitHub Action YAML과 prompt 초안을 preview 경로에 저장합니다. .github/workflows에 바로 넣지 않아 CI가 자동으로 켜지지 않습니다.',
     modelsPanel: 'App Server가 노출하는 사용 가능한 모델 목록입니다. 표시 이름, 모델 id, 기본 reasoning effort를 빠르게 확인합니다.',
     featuresPanel: 'App Server feature flag 상태입니다. 현재 계정/환경에서 켜진 파일럿 기능과 stage를 확인합니다.',
     threadsPanel: 'App Server thread 목록입니다. 기존 thread를 읽고, turns를 조회하거나 resume/fork 작업을 명시적으로 시작합니다.',
@@ -18709,6 +18796,15 @@ const CHAT_TOOL_HELP_TEXT = Object.freeze({
     threadFork: '선택한 thread를 새 갈래로 복제해 실험합니다. 원본 thread를 바로 수정하지 않습니다.',
     threadTurns: '선택한 thread의 turn 목록을 함께 읽습니다. 긴 thread는 More로 추가 조회합니다.',
     threadMoreTurns: '아직 남아 있는 turn page를 이어서 불러옵니다.',
+    threadLifecyclePreview: 'archive, compact, rollback 같은 thread 상태 변경 action의 payload와 리스크만 미리 봅니다. 이 버튼은 실제 App Server action을 실행하지 않습니다.',
+    subagentPreset: 'preset lane별 prompt를 preview하거나 명시적으로 subjob을 시작합니다. 시작 전 현재 입력 내용을 기준 prompt로 사용합니다.',
+    skillPreview: '입력한 skill 이름/trigger/description으로 생성될 파일 목록과 SKILL.md 내용을 미리 봅니다.',
+    skillCreate: 'repo-local skill 파일을 생성합니다. .agents가 쓰기 불가면 fallback preview 경로를 사용하고, 기존 파일은 기본적으로 덮어쓰지 않습니다.',
+    safetyTemplate: 'hooks/rules/config 후보를 .preview 파일로 저장합니다. 활성 설정 파일은 변경하지 않습니다.',
+    mcpPreview: '비활성 MCP 설정 초안을 조회합니다.',
+    mcpSave: '비활성 MCP preview 파일을 저장합니다. .codex가 쓰기 불가면 fallback 경로를 사용합니다.',
+    githubPreview: 'GitHub Action workflow/prompt preview를 조회합니다.',
+    githubSave: 'GitHub Action workflow/prompt preview를 저장합니다. .agents가 쓰기 불가면 fallback 경로를 사용합니다.',
     worktreeToggle: '켜면 다음 구현/수정 프롬프트가 새 Git worktree에서 실행됩니다. 보고서 preset과 함께 쓰면 보고서가 우선합니다.',
     worktreeTask: '현재 활성 worktree 작업입니다. branch 이름, 변경 파일 수, 실제 worktree 경로를 확인합니다.',
     worktreeHandoff: 'worktree 작업 결과를 현재 checkout 검토 흐름으로 넘깁니다. 변경 내용 확인 후 별도 커밋하는 용도입니다.',
@@ -18754,6 +18850,11 @@ function initializeChatToolsHelp() {
     setChatToolHelp(document.getElementById('codex-chat-tools-report-title'), 'reportSection');
     setChatToolHelp(document.getElementById('codex-chat-tools-worktree-title'), 'worktreeSection');
     setChatToolHelp(document.getElementById('codex-chat-tools-app-server-title'), 'appServerSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-subagents-title'), 'subagentsSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-skills-title'), 'skillsSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-safety-title'), 'safetySection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-mcp-title'), 'mcpSection');
+    setChatToolHelp(document.getElementById('codex-chat-tools-github-title'), 'githubSection');
     setChatToolHelp(document.getElementById('codex-app-server-status'), 'appServerStatus');
     setChatToolHelp(document.getElementById('codex-app-server-start'), 'appServerStart');
     setChatToolHelp(document.getElementById('codex-app-server-stop'), 'appServerStop');
@@ -18836,6 +18937,8 @@ function openChatToolsOverlay() {
     renderStructuredReportBar();
     renderWorktreeTaskBar();
     renderAppServerPilot();
+    renderToolingPanels();
+    void ensureToolingPreviewData();
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     if (elements.trigger) {
@@ -19269,6 +19372,7 @@ function resetAppServerThreadDetail() {
     state.appServer.threadDetailTurns = [];
     state.appServer.threadDetailNextCursor = '';
     state.appServer.threadDetailIncludeTurns = false;
+    state.appServer.threadLifecyclePreview = null;
     state.appServer.threadDetailLoading = false;
     state.appServer.threadDetailError = '';
 }
@@ -19543,6 +19647,19 @@ function renderAppServerThreadDetail() {
         });
         actions.appendChild(moreTurns);
     }
+    ['archive', 'compact', 'rollback'].forEach(actionId => {
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.className = 'app-server-thread-action';
+        preview.textContent = `${actionId} preview`;
+        preview.disabled = state.appServer.threadDetailLoading;
+        setChatToolHelp(preview, 'threadLifecyclePreview');
+        preview.addEventListener('click', event => {
+            event.preventDefault();
+            void previewAppServerThreadLifecycle(state.appServer.selectedThreadId, actionId);
+        });
+        actions.appendChild(preview);
+    });
     head.appendChild(actions);
     panel.appendChild(head);
 
@@ -19563,6 +19680,15 @@ function renderAppServerThreadDetail() {
         turns: state.appServer.threadDetailTurns,
     });
     panel.appendChild(pre);
+
+    if (state.appServer.threadLifecyclePreview) {
+        const lifecycle = document.createElement('pre');
+        lifecycle.className = 'app-server-thread-detail-pre';
+        lifecycle.textContent = formatAppServerJson({
+            lifecycle_preview: state.appServer.threadLifecyclePreview
+        }, 5000);
+        panel.appendChild(lifecycle);
+    }
 }
 
 function renderAppServerThreads() {
@@ -19890,6 +20016,436 @@ async function runAppServerThreadAction(threadId, action) {
     } finally {
         state.appServer.loading = false;
         renderAppServerPilot();
+    }
+}
+
+async function previewAppServerThreadLifecycle(threadId, action) {
+    const normalizedThreadId = String(threadId || '').trim();
+    const normalizedAction = String(action || '').trim();
+    if (!normalizedThreadId || !normalizedAction) return;
+    state.appServer.threadDetailLoading = true;
+    state.appServer.threadDetailError = '';
+    renderAppServerPilot();
+    try {
+        const result = await fetchJson(
+            `/api/codex/app-server/threads/${encodeURIComponent(normalizedThreadId)}/lifecycle-preview`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                body: JSON.stringify({ action: normalizedAction })
+            }
+        );
+        const preview = result?.preview || {};
+        state.appServer.threadLifecyclePreview = preview;
+        showToast(`${preview.label || normalizedAction} preview ready`, {
+            tone: 'success',
+            durationMs: 2200
+        });
+    } catch (error) {
+        state.appServer.threadDetailError = normalizeError(error, 'lifecycle preview failed');
+    } finally {
+        state.appServer.threadDetailLoading = false;
+        renderAppServerPilot();
+    }
+}
+
+function formatToolingJson(value, maxChars = 9000) {
+    let text = '';
+    try {
+        text = JSON.stringify(value, null, 2);
+    } catch (error) {
+        text = String(value || '');
+    }
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}\n... truncated ...`;
+}
+
+function setToolingPreviewText(elementId, value) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    const text = typeof value === 'string' ? value : formatToolingJson(value);
+    element.textContent = text;
+    element.classList.toggle('is-hidden', !text);
+}
+
+function createToolingCard(title, meta = '') {
+    const card = document.createElement('div');
+    card.className = 'tooling-card';
+    const main = document.createElement('div');
+    main.className = 'tooling-card-main';
+    const titleElement = document.createElement('div');
+    titleElement.className = 'tooling-card-title';
+    titleElement.textContent = title || 'Untitled';
+    main.appendChild(titleElement);
+    if (meta) {
+        const metaElement = document.createElement('div');
+        metaElement.className = 'tooling-card-meta';
+        metaElement.textContent = meta;
+        main.appendChild(metaElement);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'tooling-card-actions';
+    card.appendChild(main);
+    card.appendChild(actions);
+    return { card, actions };
+}
+
+function getCurrentPromptForTooling() {
+    const input = document.getElementById('codex-chat-input');
+    return String(input?.value || '').trim();
+}
+
+function renderToolingPanels() {
+    renderSubagentPresets();
+    renderSafetyPreview();
+    renderMcpPreview();
+    renderGithubActionPreview();
+    setChatToolHelp(document.getElementById('codex-subagent-refresh'), 'subagentsSection');
+    setChatToolHelp(document.getElementById('codex-skill-preview'), 'skillPreview');
+    setChatToolHelp(document.getElementById('codex-skill-create'), 'skillCreate');
+    setChatToolHelp(document.getElementById('codex-safety-preview-refresh'), 'safetySection');
+    setChatToolHelp(document.getElementById('codex-mcp-preview-refresh'), 'mcpPreview');
+    setChatToolHelp(document.getElementById('codex-mcp-save-preview'), 'mcpSave');
+    setChatToolHelp(document.getElementById('codex-github-preview-refresh'), 'githubPreview');
+    setChatToolHelp(document.getElementById('codex-github-save-preview'), 'githubSave');
+}
+
+async function ensureToolingPreviewData() {
+    await Promise.allSettled([
+        loadSubagentPresets(),
+        loadSafetyPreview(),
+        loadMcpPreview(),
+        loadGithubActionPreview()
+    ]);
+}
+
+async function loadSubagentPresets({ force = false } = {}) {
+    if (!force && Array.isArray(state.tooling.subagentPresets) && state.tooling.subagentPresets.length > 0) {
+        renderSubagentPresets();
+        return state.tooling.subagentPresets;
+    }
+    try {
+        const result = await fetchJson('/api/codex/tooling/subagents/presets', { cache: 'no-store' });
+        state.tooling.subagentPresets = Array.isArray(result?.presets) ? result.presets : [];
+        state.tooling.error = '';
+    } catch (error) {
+        state.tooling.error = normalizeError(error, 'subagent preset load failed');
+    } finally {
+        renderSubagentPresets();
+    }
+    return state.tooling.subagentPresets;
+}
+
+function renderSubagentPresets() {
+    const panel = document.getElementById('codex-subagent-presets');
+    if (!panel) return;
+    panel.innerHTML = '';
+    const presets = Array.isArray(state.tooling.subagentPresets) ? state.tooling.subagentPresets : [];
+    if (presets.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'app-server-empty';
+        empty.textContent = state.tooling.error || 'No subagent presets';
+        panel.appendChild(empty);
+        return;
+    }
+    presets.forEach(preset => {
+        const lanes = Array.isArray(preset.lanes) ? preset.lanes.length : Number(preset.max_parallel) || 0;
+        const { card, actions } = createToolingCard(
+            preset.label,
+            [preset.description, `${lanes} lanes`, preset.estimated_cost].filter(Boolean).join(' · ')
+        );
+        const preview = document.createElement('button');
+        preview.type = 'button';
+        preview.className = 'app-server-thread-action';
+        preview.textContent = 'Preview';
+        setChatToolHelp(preview, 'subagentPreset');
+        preview.addEventListener('click', event => {
+            event.preventDefault();
+            void previewSubagentPreset(preset.id);
+        });
+        actions.appendChild(preview);
+
+        const run = document.createElement('button');
+        run.type = 'button';
+        run.className = 'app-server-thread-action';
+        run.textContent = 'Run';
+        setChatToolHelp(run, 'subagentPreset');
+        run.addEventListener('click', event => {
+            event.preventDefault();
+            void runSubagentPreset(preset.id);
+        });
+        actions.appendChild(run);
+        panel.appendChild(card);
+    });
+}
+
+async function ensureActiveSessionForTooling() {
+    if (state.activeSessionId) return state.activeSessionId;
+    const session = await createSession(true);
+    return session?.id || state.activeSessionId || '';
+}
+
+async function previewSubagentPreset(presetId) {
+    try {
+        const sessionId = await ensureActiveSessionForTooling();
+        if (!sessionId) throw new Error('세션을 만들 수 없습니다.');
+        const result = await fetchJson(
+            `/api/codex/sessions/${encodeURIComponent(sessionId)}/subagent-presets/${encodeURIComponent(presetId)}/preview`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                body: JSON.stringify({ prompt: getCurrentPromptForTooling() })
+            }
+        );
+        state.tooling.subagentPreview = result?.preview || null;
+        setToolingPreviewText('codex-subagent-preview', state.tooling.subagentPreview);
+    } catch (error) {
+        setToolingPreviewText('codex-subagent-preview', normalizeError(error, 'subagent preview failed'));
+    }
+}
+
+async function runSubagentPreset(presetId) {
+    try {
+        const sessionId = await ensureActiveSessionForTooling();
+        if (!sessionId) throw new Error('세션을 만들 수 없습니다.');
+        const prompt = getCurrentPromptForTooling();
+        const confirmed = window.confirm('선택한 preset의 subjob들을 병렬로 시작할까요? 각 lane은 별도 Codex 실행 비용이 발생합니다.');
+        if (!confirmed) return;
+        const result = await fetchJson(
+            `/api/codex/sessions/${encodeURIComponent(sessionId)}/subagent-presets/${encodeURIComponent(presetId)}/run`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                body: JSON.stringify({
+                    prompt,
+                    attachments: getPendingAttachmentPayload()
+                })
+            }
+        );
+        state.tooling.subagentPreview = result;
+        setToolingPreviewText('codex-subagent-preview', result);
+        showToast(`subagent ${Number(result?.started_count) || 0}개 시작`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        await loadSessions({ preserveActive: true, reloadActive: true });
+    } catch (error) {
+        setToolingPreviewText('codex-subagent-preview', normalizeError(error, 'subagent run failed'));
+    }
+}
+
+function readSkillFormPayload() {
+    return {
+        name: String(document.getElementById('codex-skill-name')?.value || '').trim(),
+        trigger: String(document.getElementById('codex-skill-trigger')?.value || '').trim(),
+        description: String(document.getElementById('codex-skill-description')?.value || '').trim(),
+        include_references: true,
+        include_scripts: true,
+        include_assets: true
+    };
+}
+
+async function previewRepoSkill() {
+    try {
+        const result = await fetchJson('/api/codex/tooling/skills/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify(readSkillFormPayload())
+        });
+        setToolingPreviewText('codex-skill-preview-output', result?.preview || result);
+    } catch (error) {
+        setToolingPreviewText('codex-skill-preview-output', normalizeError(error, 'skill preview failed'));
+    }
+}
+
+async function createRepoSkill() {
+    try {
+        const payload = readSkillFormPayload();
+        const confirmed = window.confirm('repo-local skill 파일을 생성할까요? 선호 경로가 쓰기 불가면 fallback preview 경로를 사용합니다.');
+        if (!confirmed) return;
+        const result = await fetchJson('/api/codex/tooling/skills', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify(payload)
+        });
+        setToolingPreviewText('codex-skill-preview-output', result);
+        showToast('repo skill 생성 완료', { tone: 'success', durationMs: 2400 });
+    } catch (error) {
+        setToolingPreviewText('codex-skill-preview-output', normalizeError(error, 'skill create failed'));
+    }
+}
+
+async function loadSafetyPreview({ force = false } = {}) {
+    if (!force && state.tooling.safetyPreview) {
+        renderSafetyPreview();
+        return state.tooling.safetyPreview;
+    }
+    try {
+        state.tooling.safetyPreview = await fetchJson('/api/codex/tooling/project-safety/preview', {
+            cache: 'no-store'
+        });
+    } catch (error) {
+        state.tooling.safetyPreview = { error: normalizeError(error, 'safety preview failed') };
+    } finally {
+        renderSafetyPreview();
+    }
+    return state.tooling.safetyPreview;
+}
+
+function renderSafetyPreview() {
+    const list = document.getElementById('codex-safety-template-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const preview = state.tooling.safetyPreview;
+    if (!preview) {
+        const empty = document.createElement('div');
+        empty.className = 'app-server-empty';
+        empty.textContent = 'Preview not loaded';
+        list.appendChild(empty);
+        return;
+    }
+    if (preview.error) {
+        const error = document.createElement('div');
+        error.className = 'app-server-empty';
+        error.textContent = preview.error;
+        list.appendChild(error);
+        return;
+    }
+    (Array.isArray(preview.templates) ? preview.templates : []).forEach(template => {
+        const { card, actions } = createToolingCard(
+            template.label || template.id,
+            [template.path, template.exists ? 'exists' : 'new preview file'].filter(Boolean).join(' · ')
+        );
+        const view = document.createElement('button');
+        view.type = 'button';
+        view.className = 'app-server-thread-action';
+        view.textContent = 'View';
+        setChatToolHelp(view, 'safetyTemplate');
+        view.addEventListener('click', event => {
+            event.preventDefault();
+            setToolingPreviewText('codex-safety-preview-output', template);
+        });
+        actions.appendChild(view);
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.className = 'app-server-thread-action';
+        save.textContent = 'Save';
+        save.disabled = Boolean(template.exists);
+        setChatToolHelp(save, 'safetyTemplate');
+        save.addEventListener('click', event => {
+            event.preventDefault();
+            void saveSafetyTemplate(template.id);
+        });
+        actions.appendChild(save);
+        list.appendChild(card);
+    });
+    setToolingPreviewText('codex-safety-preview-output', preview);
+}
+
+async function saveSafetyTemplate(templateId) {
+    try {
+        const result = await fetchJson(
+            `/api/codex/tooling/project-safety/templates/${encodeURIComponent(templateId)}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-store',
+                body: JSON.stringify({ overwrite: false })
+            }
+        );
+        setToolingPreviewText('codex-safety-preview-output', result);
+        showToast('safety preview 저장 완료', { tone: 'success', durationMs: 2200 });
+        await loadSafetyPreview({ force: true });
+    } catch (error) {
+        setToolingPreviewText('codex-safety-preview-output', normalizeError(error, 'safety template save failed'));
+    }
+}
+
+async function loadMcpPreview({ force = false } = {}) {
+    if (!force && state.tooling.mcpPreview) {
+        renderMcpPreview();
+        return state.tooling.mcpPreview;
+    }
+    try {
+        state.tooling.mcpPreview = await fetchJson('/api/codex/tooling/mcp/preview', { cache: 'no-store' });
+    } catch (error) {
+        state.tooling.mcpPreview = { error: normalizeError(error, 'MCP preview failed') };
+    } finally {
+        renderMcpPreview();
+    }
+    return state.tooling.mcpPreview;
+}
+
+function renderMcpPreview() {
+    const preview = state.tooling.mcpPreview;
+    if (!preview) return;
+    setToolingPreviewText('codex-mcp-preview-output', preview);
+}
+
+async function saveMcpPreview() {
+    try {
+        const result = await fetchJson('/api/codex/tooling/mcp/save-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify({ overwrite: false })
+        });
+        setToolingPreviewText('codex-mcp-preview-output', result);
+        showToast('MCP preview 저장 완료', { tone: 'success', durationMs: 2200 });
+        await loadMcpPreview({ force: true });
+    } catch (error) {
+        setToolingPreviewText('codex-mcp-preview-output', normalizeError(error, 'MCP preview save failed'));
+    }
+}
+
+function getGithubTemplateKind() {
+    return String(document.getElementById('codex-github-template-kind')?.value || 'pr_review').trim() || 'pr_review';
+}
+
+async function loadGithubActionPreview({ force = false } = {}) {
+    const kind = getGithubTemplateKind();
+    if (!force && state.tooling.githubPreview?.kind === kind) {
+        renderGithubActionPreview();
+        return state.tooling.githubPreview;
+    }
+    try {
+        state.tooling.githubPreview = await fetchJson(
+            `/api/codex/tooling/github-actions/preview?kind=${encodeURIComponent(kind)}`,
+            { cache: 'no-store' }
+        );
+    } catch (error) {
+        state.tooling.githubPreview = { kind, error: normalizeError(error, 'GitHub Action preview failed') };
+    } finally {
+        renderGithubActionPreview();
+    }
+    return state.tooling.githubPreview;
+}
+
+function renderGithubActionPreview() {
+    const preview = state.tooling.githubPreview;
+    if (!preview) return;
+    setToolingPreviewText('codex-github-preview-output', preview);
+}
+
+async function saveGithubActionPreview() {
+    try {
+        const kind = getGithubTemplateKind();
+        const result = await fetchJson('/api/codex/tooling/github-actions/save-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify({ kind, overwrite: false })
+        });
+        setToolingPreviewText('codex-github-preview-output', result);
+        showToast('GitHub Action preview 저장 완료', { tone: 'success', durationMs: 2200 });
+        await loadGithubActionPreview({ force: true });
+    } catch (error) {
+        setToolingPreviewText('codex-github-preview-output', normalizeError(error, 'GitHub Action preview save failed'));
     }
 }
 

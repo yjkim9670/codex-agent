@@ -472,7 +472,7 @@
         <span class="pill">업데이트: 2026-05-12 KST</span>
         <span class="pill">대상: codex_workbench</span>
         <span class="pill">확인된 CLI: codex-cli 0.130.0</span>
-        <span class="pill">코드 기준: Phase 1-3.6 완료, Phase 4 예정</span>
+        <span class="pill">코드 기준: Phase 1-4 preview MVP 완료</span>
         <span class="pill">근거: OpenAI 공식 Codex 문서</span>
       </div>
     </header>
@@ -482,13 +482,13 @@
       <div class="grid three">
         <article class="card">
           <h3>완료된 범위</h3>
-          <p>실행 프리셋, worktree 격리, App Server 파일럿, Thread UI 1차, structured report 안정화는 완료 상태입니다.</p>
-          <div class="metric"><strong>1-3.6</strong><span>완료</span></div>
+          <p>실행 프리셋, worktree 격리, App Server 파일럿, Thread UI, structured report 안정화, Phase 4 preview 도구 패널은 완료 상태입니다.</p>
+          <div class="metric"><strong>1-4</strong><span>preview MVP 완료</span></div>
         </article>
         <article class="card">
           <h3>다음 검증</h3>
-          <p><code>codex remote-control</code>과 App Server는 feature flag 뒤의 파일럿 구현까지 끝났습니다. 다음은 실제 계정/환경별 안정성 검증입니다.</p>
-          <div class="metric"><strong>4</strong><span>파일럿 확대 전 확인</span></div>
+          <p><code>codex remote-control</code>, App Server, subagent preset, repo-local template 생성은 코드/테스트 기준 검증됐습니다. 다음은 실제 계정/환경별 운영 smoke입니다.</p>
+          <div class="metric"><strong>Live</strong><span>운영 계정 검증</span></div>
         </article>
         <article class="card">
           <h3>보류할 일</h3>
@@ -533,7 +533,7 @@
             <td>Phase 3.5: Thread lifecycle UI 1차</td>
             <td><span class="status-badge done">1차 완료</span></td>
             <td>thread 검색, cursor 기반 Prev/Next, read 상세, turns pagination, resume/fork 명시 확인 실행 반영.</td>
-            <td>archive, compact, rollback은 preview/confirm 설계 후 별도 구현합니다.</td>
+          <td>archive, compact, rollback은 실제 실행 없이 preview-only payload로 노출합니다. 실행 allowlist 확대는 별도 판단합니다.</td>
           </tr>
           <tr>
             <td>Phase 3.6: Structured report 안정화</td>
@@ -542,10 +542,10 @@
             <td>새 report preset을 추가할 때 같은 strict schema 테스트를 필수로 통과시킵니다.</td>
           </tr>
           <tr>
-            <td>Phase 4: 팀 워크플로</td>
-            <td><span class="status-badge next">다음 예정</span></td>
-            <td>아직 본 구현 전입니다. Phase 1-3.6 안정화 결과를 바탕으로 시작합니다.</td>
-            <td>subagent cockpit, skills/plugins authoring, MCP setup wizard, GitHub Action 템플릿을 명시 실행 중심으로 설계합니다.</td>
+            <td>Phase 4: 팀 워크플로 preview MVP</td>
+            <td><span class="status-badge done">구현 완료</span></td>
+            <td>Subagent preset cockpit, repo-scoped skill authoring, hooks/rules preview, MCP preview, GitHub Action preview API/UI와 회귀 테스트 반영.</td>
+            <td>preview 파일을 실제 활성 설정으로 승격할지는 운영 검증과 사용자 확인 후 결정합니다.</td>
           </tr>
         </tbody>
       </table>
@@ -755,7 +755,7 @@
             <td>1차는 추가 도구 오버레이 안에서 검색, 페이지 이동, read/turns 조회, resume/fork 확인 실행으로 제한합니다.</td>
             <td><span class="score high">높음</span></td>
             <td><span class="score low">높음</span></td>
-            <td>1차 구현 완료. archive, compact, rollback은 preview/confirm 설계 후 별도 반영합니다.</td>
+            <td>preview-only 구현 완료. archive, compact, rollback은 App Server 실행 없이 method/params/risk만 표시합니다.</td>
           </tr>
           <tr>
             <td>Subagent cockpit</td>
@@ -763,7 +763,7 @@
             <td>초기에는 프롬프트 템플릿과 JSONL event 표시로 시작하고, 이후 App Server event와 연결합니다.</td>
             <td><span class="score mid">중간</span></td>
             <td><span class="score mid">중간</span></td>
-            <td>명시 실행만 허용하고 token cost 표시가 필요합니다.</td>
+            <td>구현 완료. 추가 도구 오버레이에서 preset preview 후 사용자가 명시 실행할 때만 lane별 subjob을 시작합니다.</td>
           </tr>
           <tr>
             <td>Skills authoring panel</td>
@@ -771,7 +771,7 @@
             <td><code>.agents/skills</code> 파일 생성과 preview 위주로 구현합니다.</td>
             <td><span class="score mid">중간</span></td>
             <td><span class="score high">낮음</span></td>
-            <td>반복 작업이 많아질수록 가치가 큽니다.</td>
+            <td>구현 완료. <code>.agents/skills</code> 아래 repo-local skeleton을 preview/create하며, 선호 경로가 쓰기 불가이면 <code>.codex-workbench-previews</code>로 우회합니다.</td>
           </tr>
           <tr>
             <td>Hooks/Rules 안전 패널</td>
@@ -779,7 +779,7 @@
             <td>처음에는 read-only preview와 템플릿 생성만 제공합니다.</td>
             <td><span class="score mid">중간</span></td>
             <td><span class="score mid">중간</span></td>
-            <td>안전성과 운영성을 높이지만 hooks/rules 변경은 신중해야 합니다.</td>
+            <td>preview 구현 완료. 활성 파일은 읽기만 하고 <code>.preview</code> 템플릿만 저장해 즉시 hooks/rules가 켜지지 않게 했습니다. 쓰기 불가 선호 경로는 fallback preview 경로를 사용합니다.</td>
           </tr>
           <tr>
             <td>MCP setup wizard</td>
@@ -787,7 +787,7 @@
             <td><code>.codex/config.toml</code> preview, required/enabled_tools/disabled_tools 관리, restart 안내.</td>
             <td><span class="score mid">중간</span></td>
             <td><span class="score mid">중간</span></td>
-            <td>외부 도구 연동을 자주 쓰면 가치가 큽니다.</td>
+            <td>preview 구현 완료. MCP 초안 저장만 제공하고 활성 config는 자동 수정하지 않습니다. <code>.codex</code>가 디렉터리가 아니면 fallback preview 경로를 사용합니다.</td>
           </tr>
           <tr>
             <td>GitHub Action template</td>
@@ -795,7 +795,7 @@
             <td>워크벤치에서 prompt-file과 workflow YAML을 preview로 만들고 사용자가 적용합니다.</td>
             <td><span class="score mid">중간</span></td>
             <td><span class="score high">낮음</span></td>
-            <td>로컬 워크벤치 밖 자동화까지 확장할 때 유용합니다.</td>
+            <td>preview 구현 완료. 템플릿은 비활성 preview 경로에 저장하며 <code>.github/workflows</code>는 자동 수정하지 않습니다.</td>
           </tr>
         </tbody>
       </table>
@@ -975,7 +975,7 @@
             <li>thread 검색과 cursor 기반 Prev/Next</li>
             <li>thread read 상세와 turns pagination 조회</li>
             <li>resume/fork 명시 확인 실행</li>
-            <li>archive, compact, rollback은 미리보기 설계 후 보류</li>
+            <li>archive, compact, rollback preview-only payload 표시</li>
           </ul>
         </article>
         <article class="phase">
@@ -991,12 +991,12 @@
           </ul>
         </article>
         <article class="phase">
-          <h3>Phase 4: 팀 워크플로 <span class="status-badge next">다음 예정</span></h3>
+          <h3>Phase 4: 팀 워크플로 <span class="status-badge done">preview MVP 완료</span></h3>
           <ul>
-            <li>subagent cockpit</li>
-            <li>skills/plugins authoring</li>
-            <li>MCP setup wizard</li>
-            <li>GitHub Action 템플릿</li>
+            <li>Subagent cockpit preset preview/명시 실행</li>
+            <li>repo-local skill skeleton preview/create</li>
+            <li>Hooks/Rules, MCP preview-only 템플릿 저장</li>
+            <li>GitHub Action 템플릿을 비활성 preview 경로에 저장</li>
           </ul>
         </article>
       </div>
@@ -1068,7 +1068,7 @@
       <h2 class="section-title">결론</h2>
       <div class="card">
         <p>
-          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle UI 1차까지 붙였습니다. Phase 3.6에서 structured report schema strict 호환성과 live read-only 실행 경로를 고정했으므로, 다음 단계는 실제 계정/환경별 App Server 안정성 검증과 Phase 4 subagent cockpit을 명시 실행 중심으로 진행하는 것입니다.
+          워크벤치는 현재 “기존 exec 기반 안정화 + worktree 격리 + structured reports”를 먼저 반영했고, App Server는 feature flag 뒤의 파일럿 어댑터와 Thread lifecycle preview까지 붙였습니다. Phase 4는 subagent preset, repo-local skill 생성, hooks/rules/MCP/GitHub Action preview를 추가 도구 오버레이 안에 구현했습니다. 다음 단계는 실제 계정/환경별 App Server와 subagent 운영 smoke를 반복하고, preview 파일을 활성 설정으로 승격할지 별도 승인 기준을 정하는 것입니다.
         </p>
       </div>
     </section>

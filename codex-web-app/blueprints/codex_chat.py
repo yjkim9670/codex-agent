@@ -35,12 +35,18 @@ from ..services.codex_chat import (
     append_message,
     branch_session_from_message,
     build_codex_prompt,
+    build_codex_app_server_thread_lifecycle_preview,
+    build_repo_skill_preview,
+    build_subagent_cockpit_preview,
     build_structured_report_prompt,
     CodexAppServerError,
     CodexAttachmentError,
+    CodexToolingError,
     CodexWorktreeError,
     cleanup_git_worktree_task,
+    create_repo_skill_from_preview,
     create_git_worktree_task,
+    get_codex_project_safety_preview,
     get_session_storage_summary,
     create_session,
     cleanup_codex_streams,
@@ -58,6 +64,8 @@ from ..services.codex_chat import (
     get_settings,
     get_structured_report_preset,
     get_git_worktree_task,
+    get_github_action_template_preview,
+    get_mcp_setup_preview,
     get_usage_summary,
     handoff_git_worktree_task,
     fork_codex_app_server_thread,
@@ -66,6 +74,7 @@ from ..services.codex_chat import (
     list_codex_app_server_threads,
     list_codex_app_server_thread_turns,
     list_structured_report_presets,
+    list_subagent_cockpit_presets,
     list_codex_streams,
     list_git_worktree_tasks,
     read_codex_stream,
@@ -78,8 +87,12 @@ from ..services.codex_chat import (
     record_token_usage_for_message,
     resume_codex_app_server_thread,
     save_codex_attachment,
+    save_codex_project_safety_template,
+    save_github_action_template_preview,
+    save_mcp_setup_preview,
     start_codex_stream_for_session,
     start_codex_app_server_remote_control,
+    start_subagent_cockpit_preset_for_session,
     start_codex_subjob_for_session,
     enqueue_codex_stream_for_session,
     format_assistant_response_content,
@@ -563,6 +576,18 @@ def _app_server_error_response(error):
     return jsonify(payload), status_code
 
 
+def _tooling_error_response(error):
+    status_code = getattr(error, 'status_code', 400)
+    payload = {
+        'error': str(error),
+        'error_code': getattr(error, 'error_code', 'tooling_error'),
+    }
+    details = getattr(error, 'details', None)
+    if isinstance(details, dict) and details:
+        payload['details'] = details
+    return jsonify(payload), status_code
+
+
 def _parse_app_server_limit(default=20, maximum=100):
     try:
         limit = int(request.args.get('limit', default))
@@ -675,6 +700,165 @@ def codex_app_server_thread_fork(thread_id):
         return jsonify({'ok': True, **fork_codex_app_server_thread(thread_id)})
     except CodexAppServerError as exc:
         return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/app-server/threads/<thread_id>/lifecycle-preview', methods=['POST'])
+def codex_app_server_thread_lifecycle_preview(thread_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    action = payload.get('action') or request.args.get('action')
+    turn_id = payload.get('turn_id') or payload.get('turnId') or request.args.get('turn_id')
+    try:
+        preview = build_codex_app_server_thread_lifecycle_preview(thread_id, action, turn_id=turn_id)
+        return jsonify({'ok': True, 'preview': preview})
+    except CodexAppServerError as exc:
+        return _app_server_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/subagents/presets')
+def codex_tooling_subagent_presets():
+    return jsonify({'presets': list_subagent_cockpit_presets()})
+
+
+@bp.route('/api/codex/sessions/<session_id>/subagent-presets/<preset_id>/preview', methods=['POST'])
+def codex_session_subagent_preset_preview(session_id, preset_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    prompt = str(payload.get('prompt') or '').strip()
+    try:
+        preview = build_subagent_cockpit_preview(preset_id, prompt)
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+    return jsonify({'ok': True, 'parent_session_id': session_id, 'preview': preview})
+
+
+@bp.route('/api/codex/sessions/<session_id>/subagent-presets/<preset_id>/run', methods=['POST'])
+def codex_session_subagent_preset_run(session_id, preset_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    prompt = str(payload.get('prompt') or '').strip()
+    try:
+        attachments = _parse_attachments(payload)
+        result = start_subagent_cockpit_preset_for_session(
+            session_id,
+            preset_id,
+            base_prompt=prompt,
+            attachments=attachments,
+        )
+    except CodexAttachmentError as exc:
+        return _attachment_error_response(exc)
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+    if not result.get('ok') and int(result.get('started_count') or 0) <= 0:
+        return jsonify(result), 400
+    result['session_storage'] = get_session_storage_summary()
+    return jsonify(result)
+
+
+@bp.route('/api/codex/tooling/skills/preview', methods=['POST'])
+def codex_tooling_skill_preview():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        preview = build_repo_skill_preview(
+            payload.get('name'),
+            trigger=payload.get('trigger') or '',
+            description=payload.get('description') or '',
+            include_references=payload.get('include_references', True) is not False,
+            include_scripts=payload.get('include_scripts', True) is not False,
+            include_assets=payload.get('include_assets', True) is not False,
+        )
+        return jsonify({'ok': True, 'preview': preview})
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/skills', methods=['POST'])
+def codex_tooling_skill_create():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = create_repo_skill_from_preview(
+            payload.get('name'),
+            trigger=payload.get('trigger') or '',
+            description=payload.get('description') or '',
+            include_references=payload.get('include_references', True) is not False,
+            include_scripts=payload.get('include_scripts', True) is not False,
+            include_assets=payload.get('include_assets', True) is not False,
+            overwrite=_parse_plan_mode(payload.get('overwrite')),
+        )
+        return jsonify(result)
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/project-safety/preview')
+def codex_tooling_project_safety_preview():
+    try:
+        return jsonify(get_codex_project_safety_preview())
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/project-safety/templates/<template_id>', methods=['POST'])
+def codex_tooling_project_safety_template_save(template_id):
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        return jsonify(save_codex_project_safety_template(
+            template_id,
+            overwrite=_parse_plan_mode(payload.get('overwrite')),
+        ))
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/mcp/preview')
+def codex_tooling_mcp_preview():
+    try:
+        return jsonify(get_mcp_setup_preview())
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/mcp/save-preview', methods=['POST'])
+def codex_tooling_mcp_save_preview():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        return jsonify(save_mcp_setup_preview(overwrite=_parse_plan_mode(payload.get('overwrite'))))
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/github-actions/preview')
+def codex_tooling_github_actions_preview():
+    kind = request.args.get('kind', 'pr_review')
+    try:
+        return jsonify(get_github_action_template_preview(kind))
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
+
+
+@bp.route('/api/codex/tooling/github-actions/save-preview', methods=['POST'])
+def codex_tooling_github_actions_save_preview():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        return jsonify(save_github_action_template_preview(
+            kind=payload.get('kind') or 'pr_review',
+            overwrite=_parse_plan_mode(payload.get('overwrite')),
+        ))
+    except CodexToolingError as exc:
+        return _tooling_error_response(exc)
 
 
 @bp.route('/api/codex/sessions')

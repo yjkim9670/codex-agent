@@ -58,6 +58,11 @@ except ImportError:  # pragma: no cover - Windows fallback
     fcntl = None
 
 try:
+    import select
+except ImportError:  # pragma: no cover - Windows fallback
+    select = None
+
+try:
     import msvcrt
 except ImportError:  # pragma: no cover - POSIX fallback
     msvcrt = None
@@ -344,6 +349,40 @@ _APP_SERVER_POC_METHODS = {
     'thread/fork',
 }
 _APP_SERVER_ALLOWED_METHODS = _APP_SERVER_READ_METHODS | _APP_SERVER_POC_METHODS
+_APP_SERVER_LIFECYCLE_PREVIEW_ACTIONS = {
+    'archive': {
+        'method': 'thread/archive',
+        'label': 'Archive thread',
+        'risk': 'medium',
+        'reversible': True,
+        'requires_turn_id': False,
+        'summary': 'Hide the thread from the active list without deleting local session data.',
+    },
+    'unarchive': {
+        'method': 'thread/unarchive',
+        'label': 'Unarchive thread',
+        'risk': 'low',
+        'reversible': True,
+        'requires_turn_id': False,
+        'summary': 'Move an archived thread back to the active list.',
+    },
+    'compact': {
+        'method': 'thread/compact',
+        'label': 'Compact thread',
+        'risk': 'high',
+        'reversible': False,
+        'requires_turn_id': False,
+        'summary': 'Condense thread history. This can change future context reconstruction.',
+    },
+    'rollback': {
+        'method': 'thread/rollback',
+        'label': 'Rollback thread',
+        'risk': 'high',
+        'reversible': False,
+        'requires_turn_id': True,
+        'summary': 'Return a thread to a selected turn. This can discard later context.',
+    },
+}
 _APP_SERVER_REMOTE_CONTROL_STATE = {
     'process': None,
     'pid': None,
@@ -354,6 +393,119 @@ _APP_SERVER_REMOTE_CONTROL_STATE = {
 }
 _BOOL_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
 _BOOL_FALSY_VALUES = {'0', 'false', 'no', 'off'}
+_TOOLING_PREVIEW_MAX_CHARS = 20000
+_SAFE_PROJECT_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9_-]{1,63}$')
+_SUBAGENT_COCKPIT_PRESETS = (
+    {
+        'id': 'explore_three',
+        'label': '탐색 3개 병렬',
+        'description': '코드 경로, 테스트 표면, 문서/운영 리스크를 분리해서 읽기 전용으로 조사합니다.',
+        'max_parallel': 3,
+        'estimated_cost': 'single prompt 대비 약 2.5-3.5x token',
+        'lanes': (
+            {
+                'id': 'code_paths',
+                'label': '코드 경로',
+                'role': 'explorer',
+                'prompt': (
+                    'Read-only exploration. Find the code paths, modules, and data flow relevant to: '
+                    '{prompt}\nReturn concise file references, ownership boundaries, and open questions. '
+                    'Do not edit files.'
+                ),
+            },
+            {
+                'id': 'tests',
+                'label': '테스트 표면',
+                'role': 'explorer',
+                'prompt': (
+                    'Read-only exploration. Identify existing tests, likely regression points, fixtures, '
+                    'and missing coverage for: {prompt}\nDo not edit files.'
+                ),
+            },
+            {
+                'id': 'docs_risk',
+                'label': '문서/리스크',
+                'role': 'explorer',
+                'prompt': (
+                    'Read-only exploration. Check docs, configuration, operational risks, and rollout concerns '
+                    'for: {prompt}\nDo not edit files.'
+                ),
+            },
+        ),
+    },
+    {
+        'id': 'review_tripwire',
+        'label': '테스트/버그/보안 검토',
+        'description': '변경 후 검증 관점에서 테스트, 버그 가능성, 보안/권한 위험을 따로 점검합니다.',
+        'max_parallel': 3,
+        'estimated_cost': 'single prompt 대비 약 2.5-3.5x token',
+        'lanes': (
+            {
+                'id': 'test_review',
+                'label': '테스트 검토',
+                'role': 'reviewer',
+                'prompt': (
+                    'Review the workspace for test adequacy related to: {prompt}\n'
+                    'Return concrete missing tests and commands to run. Do not edit files.'
+                ),
+            },
+            {
+                'id': 'bug_review',
+                'label': '버그 검토',
+                'role': 'reviewer',
+                'prompt': (
+                    'Review the workspace for likely bugs, edge cases, and behavioral regressions related to: '
+                    '{prompt}\nReturn findings with file references. Do not edit files.'
+                ),
+            },
+            {
+                'id': 'security_review',
+                'label': '보안 검토',
+                'role': 'reviewer',
+                'prompt': (
+                    'Review the workspace for permissions, sandbox, path traversal, command execution, and data exposure '
+                    'risks related to: {prompt}\nReturn only actionable risks. Do not edit files.'
+                ),
+            },
+        ),
+    },
+    {
+        'id': 'delivery_split',
+        'label': '문서/코드/리스크 분리 분석',
+        'description': '릴리즈 전 코드 영향, 문서 변경, 배포 리스크를 병렬로 정리합니다.',
+        'max_parallel': 3,
+        'estimated_cost': 'single prompt 대비 약 2.5-3.5x token',
+        'lanes': (
+            {
+                'id': 'code_impact',
+                'label': '코드 영향',
+                'role': 'explorer',
+                'prompt': (
+                    'Analyze implementation impact for: {prompt}\n'
+                    'Summarize touched modules, integration points, and compatibility risks. Do not edit files.'
+                ),
+            },
+            {
+                'id': 'documentation',
+                'label': '문서',
+                'role': 'explorer',
+                'prompt': (
+                    'Analyze documentation needs for: {prompt}\n'
+                    'List user-facing docs, internal notes, and release note updates. Do not edit files.'
+                ),
+            },
+            {
+                'id': 'rollout',
+                'label': '롤아웃',
+                'role': 'reviewer',
+                'prompt': (
+                    'Analyze rollout, rollback, monitoring, and migration concerns for: {prompt}\n'
+                    'Return a concise readiness checklist. Do not edit files.'
+                ),
+            },
+        ),
+    },
+)
 
 _STRUCTURED_REPORT_SCHEMA = {
     '$schema': 'http://json-schema.org/draft-07/schema#',
@@ -505,6 +657,16 @@ class CodexAppServerError(ValueError):
         super().__init__(str(message))
         self.status_code = int(status_code)
         self.error_code = str(error_code or 'app_server_error')
+        self.details = details if isinstance(details, dict) else {}
+
+
+class CodexToolingError(ValueError):
+    """Controlled validation error for repo-local tool preview/generation."""
+
+    def __init__(self, message, *, status_code=400, error_code='tooling_error', details=None):
+        super().__init__(str(message))
+        self.status_code = int(status_code)
+        self.error_code = str(error_code or 'tooling_error')
         self.details = details if isinstance(details, dict) else {}
 
 
@@ -2286,7 +2448,7 @@ def start_codex_app_server_remote_control():
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    env=os.environ.copy(),
+                    env=_build_codex_app_server_env(),
                     text=True,
                     start_new_session=True,
                 )
@@ -2401,6 +2563,90 @@ def _parse_app_server_rpc_result(stdout_text, response_id=2):
     )
 
 
+def _app_server_process_supports_incremental_io(process):
+    if select is None:
+        return False
+    stdin = getattr(process, 'stdin', None)
+    stdout = getattr(process, 'stdout', None)
+    if stdin is None or stdout is None:
+        return False
+    return hasattr(stdout, 'fileno') and hasattr(stdout, 'readline') and hasattr(stdin, 'write')
+
+
+def _write_app_server_message(process, message):
+    process.stdin.write(json.dumps(message, ensure_ascii=False) + '\n')
+    process.stdin.flush()
+
+
+def _read_app_server_stdout_line(process, deadline):
+    stdout = process.stdout
+    try:
+        fileno = stdout.fileno()
+    except Exception:
+        return None
+    while time.time() < deadline:
+        if process.poll() is not None:
+            line = stdout.readline()
+            return line or ''
+        timeout = max(0.01, min(0.1, deadline - time.time()))
+        try:
+            ready, _, _ = select.select([fileno], [], [], timeout)
+        except Exception:
+            return None
+        if not ready:
+            continue
+        line = stdout.readline()
+        return line or ''
+    return ''
+
+
+def _read_app_server_response(process, response_id, stdout_lines, deadline):
+    while time.time() < deadline:
+        line = _read_app_server_stdout_line(process, deadline)
+        if line is None:
+            return None
+        if not line:
+            if process.poll() is not None:
+                break
+            continue
+        stdout_lines.append(line)
+        parsed = _parse_json_object(line)
+        if not parsed:
+            continue
+        if parsed.get('id') == response_id:
+            return parsed
+    return None
+
+
+def _finish_app_server_process(process):
+    try:
+        if getattr(process, 'stdin', None) and not process.stdin.closed:
+            process.stdin.close()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            process.terminate()
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+    except Exception:
+        pass
+
+
+def _read_app_server_stderr(process):
+    try:
+        stderr = getattr(process, 'stderr', None)
+        if stderr is None:
+            return ''
+        return stderr.read() or ''
+    except Exception:
+        return ''
+
+
 def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
     messages = _build_app_server_messages(method, params)
     request_body = '\n'.join(json.dumps(message, ensure_ascii=False) for message in messages) + '\n'
@@ -2412,7 +2658,7 @@ def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=os.environ.copy(),
+            env=_build_codex_app_server_env(),
             text=True,
         )
     except FileNotFoundError as exc:
@@ -2427,6 +2673,43 @@ def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
             status_code=500,
             error_code='app_server_start_failed',
         ) from exc
+    if _app_server_process_supports_incremental_io(process):
+        stdout_lines = []
+        deadline = time.time() + timeout_seconds
+        try:
+            _write_app_server_message(process, messages[0])
+            initialize_response = _read_app_server_response(process, 1, stdout_lines, deadline)
+            if initialize_response is None:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            _write_app_server_message(process, messages[1])
+            _write_app_server_message(process, messages[2])
+            method_response = _read_app_server_response(process, 2, stdout_lines, deadline)
+            if method_response is None:
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            stderr_text = _read_app_server_stderr(process)
+            raise CodexAppServerError(
+                'App Server 요청 시간이 초과되었습니다.',
+                status_code=504,
+                error_code='app_server_timeout',
+                details={'stderr': _sanitize_app_server_text(stderr_text, 1000)},
+            ) from exc
+        finally:
+            _finish_app_server_process(process)
+        stdout_text = ''.join(stdout_lines)
+        stderr_text = _read_app_server_stderr(process)
+        result = _parse_app_server_rpc_result(stdout_text, response_id=2)
+        elapsed_ms = max(0, int((time.time() - started_at) * 1000))
+        return {
+            'result': result,
+            'elapsed_ms': elapsed_ms,
+            'exit_code': process.returncode,
+            'stderr': _sanitize_app_server_text(stderr_text, 1000),
+        }
     try:
         stdout_text, stderr_text = process.communicate(request_body, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
@@ -2533,6 +2816,7 @@ def list_codex_cli_features():
             text=True,
             timeout=max(3.0, float(_APP_SERVER_RPC_TIMEOUT_SECONDS)),
             check=False,
+            env=_build_codex_app_server_env(),
         )
     except FileNotFoundError as exc:
         raise CodexAppServerError(
@@ -2676,6 +2960,577 @@ def fork_codex_app_server_thread(thread_id):
         'transport': response.get('transport'),
         'elapsed_ms': response.get('elapsed_ms'),
     }
+
+
+def build_codex_app_server_thread_lifecycle_preview(thread_id, action, turn_id=None):
+    thread_id = _normalize_app_server_thread_id(thread_id)
+    action_id = str(action or '').strip().lower().replace('-', '_')
+    config = _APP_SERVER_LIFECYCLE_PREVIEW_ACTIONS.get(action_id)
+    if not config:
+        raise CodexAppServerError(
+            '지원하지 않는 thread lifecycle action입니다.',
+            status_code=400,
+            error_code='invalid_lifecycle_action',
+        )
+    params = {'threadId': thread_id}
+    normalized_turn_id = ''
+    if config.get('requires_turn_id'):
+        normalized_turn_id = _sanitize_app_server_text(turn_id, 160)
+        if normalized_turn_id:
+            params['turnId'] = normalized_turn_id
+        else:
+            params['turnId'] = '<select-turn-id>'
+    return {
+        'action': action_id,
+        'label': config.get('label'),
+        'method': config.get('method'),
+        'params': params,
+        'thread_id': thread_id,
+        'turn_id': normalized_turn_id,
+        'risk': config.get('risk'),
+        'summary': config.get('summary'),
+        'reversible': bool(config.get('reversible')),
+        'requires_turn_id': bool(config.get('requires_turn_id')),
+        'requires_confirmation': True,
+        'preview_only': True,
+        'executable': False,
+        'blocked_reason': (
+            '현재 워크벤치는 archive/compact/rollback 계열을 실제 실행하지 않고 '
+            'App Server에 보낼 payload만 미리 보여줍니다.'
+        ),
+        'side_effects': [
+            'App Server action은 Codex thread 상태를 바꿀 수 있습니다.',
+            'compact/rollback은 이후 context 재구성에 영향을 줄 수 있습니다.',
+            '현재 API는 preview만 제공하므로 이 호출 자체는 thread를 변경하지 않습니다.',
+        ],
+    }
+
+
+def _normalize_subagent_preset_id(value):
+    return str(value or '').strip().lower().replace('-', '_')
+
+
+def list_subagent_cockpit_presets():
+    return deepcopy(list(_SUBAGENT_COCKPIT_PRESETS))
+
+
+def get_subagent_cockpit_preset(preset_id):
+    normalized = _normalize_subagent_preset_id(preset_id)
+    for preset in _SUBAGENT_COCKPIT_PRESETS:
+        if preset.get('id') == normalized:
+            return deepcopy(preset)
+    return None
+
+
+def _format_subagent_lane_prompt(template, base_prompt):
+    prompt = str(base_prompt or '').strip() or '현재 세션과 워크스페이스를 기준으로 조사해줘.'
+    return str(template or '').replace('{prompt}', prompt)
+
+
+def build_subagent_cockpit_preview(preset_id, base_prompt=''):
+    preset = get_subagent_cockpit_preset(preset_id)
+    if not preset:
+        raise CodexToolingError(
+            '지원하지 않는 subagent preset입니다.',
+            status_code=400,
+            error_code='invalid_subagent_preset',
+        )
+    prompt = str(base_prompt or '').strip()
+    lanes = []
+    for lane in preset.get('lanes') or ():
+        lane_prompt = _format_subagent_lane_prompt(lane.get('prompt'), prompt)
+        lanes.append({
+            'id': lane.get('id'),
+            'label': lane.get('label'),
+            'role': lane.get('role'),
+            'prompt': lane_prompt,
+            'question_only': True,
+        })
+    preview = {
+        'preset': {
+            'id': preset.get('id'),
+            'label': preset.get('label'),
+            'description': preset.get('description'),
+            'max_parallel': preset.get('max_parallel'),
+            'estimated_cost': preset.get('estimated_cost'),
+        },
+        'base_prompt': prompt,
+        'lanes': lanes,
+        'requires_confirmation': True,
+        'auto_fan_out': False,
+        'execution_policy': 'read_only_ephemeral',
+    }
+    return preview
+
+
+def start_subagent_cockpit_preset_for_session(parent_session_id, preset_id, base_prompt='', attachments=None):
+    parent_key = str(parent_session_id or '').strip()
+    if not parent_key:
+        return {'ok': False, 'error': '부모 세션을 찾을 수 없습니다.'}
+    preview = build_subagent_cockpit_preview(preset_id, base_prompt)
+    jobs = []
+    started_count = 0
+    for lane in preview.get('lanes') or []:
+        result = start_codex_subjob_for_session(
+            parent_key,
+            lane.get('prompt') or '',
+            attachments=attachments or [],
+        )
+        if result.get('ok'):
+            started_count += 1
+        jobs.append({
+            'lane': {
+                'id': lane.get('id'),
+                'label': lane.get('label'),
+                'role': lane.get('role'),
+            },
+            'ok': bool(result.get('ok')),
+            'error': result.get('error'),
+            'child_session': result.get('child_session'),
+            'stream_id': result.get('stream_id'),
+            'started_at': result.get('started_at'),
+        })
+    return {
+        'ok': started_count == len(jobs) and started_count > 0,
+        'preset': preview.get('preset'),
+        'parent_session_id': parent_key,
+        'jobs': jobs,
+        'started_count': started_count,
+        'requested_count': len(jobs),
+        'auto_fan_out': False,
+    }
+
+
+def _slugify_project_name(value, fallback='codex-tool'):
+    text = str(value or '').strip().lower()
+    text = re.sub(r'[^a-z0-9_-]+', '-', text)
+    text = re.sub(r'-{2,}', '-', text).strip('-_')
+    if not text:
+        text = fallback
+    if len(text) > 64:
+        text = text[:64].strip('-_') or fallback
+    if not _SAFE_PROJECT_NAME_RE.match(text):
+        raise CodexToolingError(
+            '이름은 영문 소문자, 숫자, 하이픈, 밑줄로 시작/구성해야 합니다.',
+            status_code=400,
+            error_code='invalid_project_name',
+        )
+    return text
+
+
+def _resolve_workspace_child(*parts):
+    root = Path(WORKSPACE_DIR).expanduser().resolve()
+    target = root.joinpath(*[str(part).strip('/\\') for part in parts if str(part or '').strip()]).resolve()
+    if target != root and root not in target.parents:
+        raise CodexToolingError(
+            '워크스페이스 밖 경로는 사용할 수 없습니다.',
+            status_code=400,
+            error_code='path_outside_workspace',
+        )
+    return target
+
+
+def _target_parent_is_writable(target):
+    root = Path(WORKSPACE_DIR).expanduser().resolve()
+    current = Path(target).resolve().parent
+    while current != root and not current.exists():
+        current = current.parent
+    if not current.exists() or not current.is_dir():
+        return False
+    return os.access(current, os.W_OK | os.X_OK)
+
+
+def _resolve_project_preview_target(preferred, fallback):
+    preferred_target = _resolve_workspace_child(preferred)
+    if _target_parent_is_writable(preferred_target):
+        return preferred_target
+    return _resolve_workspace_child(fallback)
+
+
+def _workspace_relative_path(path):
+    try:
+        return str(Path(path).resolve().relative_to(Path(WORKSPACE_DIR).expanduser().resolve()))
+    except Exception:  # noqa: BLE001
+        return str(path)
+
+
+def _clip_tooling_content(value):
+    text = str(value or '')
+    if len(text) <= _TOOLING_PREVIEW_MAX_CHARS:
+        return text
+    return f'{text[:_TOOLING_PREVIEW_MAX_CHARS]}\n... truncated ...'
+
+
+def _read_optional_text(path, max_chars=8000):
+    try:
+        if not Path(path).is_file():
+            return ''
+        return _clip_tooling_content(Path(path).read_text(encoding='utf-8')[:max_chars])
+    except UnicodeDecodeError:
+        return '<binary or non-utf8 file>'
+    except OSError:
+        return ''
+
+
+def _file_preview_entry(path, content):
+    target = Path(path)
+    return {
+        'path': _workspace_relative_path(target),
+        'exists': target.exists(),
+        'content': _clip_tooling_content(content),
+    }
+
+
+def build_repo_skill_preview(
+        name,
+        trigger='',
+        description='',
+        include_references=True,
+        include_scripts=True,
+        include_assets=True):
+    skill_name = str(name or '').strip()
+    if not skill_name:
+        raise CodexToolingError('skill 이름이 필요합니다.', error_code='missing_skill_name')
+    slug = _slugify_project_name(skill_name, fallback='codex-skill')
+    skill_dir = _resolve_project_preview_target(
+        f'.agents/skills/{slug}/SKILL.md',
+        f'.codex-workbench-previews/skills/{slug}/SKILL.md',
+    ).parent
+    trigger_text = str(trigger or '').strip() or f'Use when work matches {skill_name}.'
+    description_text = str(description or '').strip() or 'Repo-scoped Codex workflow skill.'
+    body = '\n'.join([
+        f'# {skill_name}',
+        '',
+        '## Purpose',
+        description_text,
+        '',
+        '## Trigger',
+        trigger_text,
+        '',
+        '## Workflow',
+        '1. Read the relevant repository files before acting.',
+        '2. Keep edits scoped to the requested workflow.',
+        '3. Run the smallest meaningful verification command before reporting completion.',
+        '',
+        '## Safety',
+        '- Prefer repo-local files and avoid global Codex configuration changes.',
+        '- Do not run destructive commands unless the user explicitly asks.',
+        '',
+    ])
+    files = [_file_preview_entry(skill_dir / 'SKILL.md', body)]
+    if include_references:
+        files.append(_file_preview_entry(skill_dir / 'references' / '.gitkeep', ''))
+    if include_scripts:
+        files.append(_file_preview_entry(skill_dir / 'scripts' / '.gitkeep', ''))
+    if include_assets:
+        files.append(_file_preview_entry(skill_dir / 'assets' / '.gitkeep', ''))
+    return {
+        'slug': slug,
+        'root': _workspace_relative_path(skill_dir),
+        'files': files,
+        'warnings': [
+            'repo-local .agents/skills 경로에만 생성됩니다.',
+            '기존 파일은 overwrite=true가 아니면 덮어쓰지 않습니다.',
+        ],
+    }
+
+
+def create_repo_skill_from_preview(
+        name,
+        trigger='',
+        description='',
+        include_references=True,
+        include_scripts=True,
+        include_assets=True,
+        overwrite=False):
+    preview = build_repo_skill_preview(
+        name,
+        trigger=trigger,
+        description=description,
+        include_references=include_references,
+        include_scripts=include_scripts,
+        include_assets=include_assets,
+    )
+    created = []
+    skipped = []
+    for file_info in preview.get('files') or []:
+        target = _resolve_workspace_child(file_info.get('path'))
+        content = str(file_info.get('content') or '')
+        if target.exists() and not overwrite:
+            skipped.append(_workspace_relative_path(target))
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding='utf-8')
+        created.append(_workspace_relative_path(target))
+    if skipped and not created:
+        raise CodexToolingError(
+            '생성할 skill 파일이 이미 존재합니다.',
+            status_code=409,
+            error_code='skill_exists',
+            details={'paths': skipped},
+        )
+    return {
+        'ok': True,
+        'preview': preview,
+        'created': created,
+        'skipped': skipped,
+    }
+
+
+def _codex_project_safety_templates():
+    return {
+        'hooks_preview': {
+            'label': 'hooks preview',
+            'path': '.codex/hooks.preview.json',
+            'fallback_path': '.codex-workbench-previews/codex/hooks.preview.json',
+            'content': json.dumps({
+                'hooks': [
+                    {
+                        'event': 'before_command',
+                        'enabled': False,
+                        'command': 'echo "Inspect this hook before renaming to hooks.json"',
+                    }
+                ]
+            }, indent=2) + '\n',
+        },
+        'rules_preview': {
+            'label': 'rules preview',
+            'path': '.codex/rules/default.preview.rules',
+            'fallback_path': '.codex-workbench-previews/codex/rules/default.preview.rules',
+            'content': '\n'.join([
+                '# Codex rules preview.',
+                '# Review and rename deliberately before enabling as an active rules file.',
+                'prompt git push',
+                'forbid rm -rf',
+                '',
+            ]),
+        },
+        'config_hooks_preview': {
+            'label': 'config hooks preview',
+            'path': '.codex/config.hooks.preview.toml',
+            'fallback_path': '.codex-workbench-previews/codex/config.hooks.preview.toml',
+            'content': '\n'.join([
+                '# Codex project hooks preview.',
+                '# Copy into .codex/config.toml only after review.',
+                '',
+                '[[hooks]]',
+                'event = "before_command"',
+                'enabled = false',
+                'command = "echo inspect hook before enabling"',
+                '',
+            ]),
+        },
+    }
+
+
+def get_codex_project_safety_preview():
+    active_paths = (
+        '.codex/hooks.json',
+        '.codex/config.toml',
+        '.codex/rules/default.rules',
+    )
+    active_files = []
+    for relative in active_paths:
+        target = _resolve_workspace_child(relative)
+        active_files.append({
+            'path': relative,
+            'exists': target.exists(),
+            'content': _read_optional_text(target),
+        })
+    templates = []
+    for template_id, template in _codex_project_safety_templates().items():
+        target = _resolve_project_preview_target(template.get('path'), template.get('fallback_path'))
+        templates.append({
+            'id': template_id,
+            'label': template.get('label'),
+            'path': _workspace_relative_path(target),
+            'preferred_path': template.get('path'),
+            'exists': target.exists(),
+            'content': template.get('content'),
+        })
+    return {
+        'active_files': active_files,
+        'templates': templates,
+        'preview_only': True,
+        'warnings': [
+            '전역 Codex 설정은 읽거나 쓰지 않습니다.',
+            '템플릿 저장은 .preview 파일만 생성하므로 hooks/rules가 즉시 활성화되지 않습니다.',
+        ],
+    }
+
+
+def save_codex_project_safety_template(template_id, overwrite=False):
+    templates = _codex_project_safety_templates()
+    template_key = str(template_id or '').strip()
+    template = templates.get(template_key)
+    if not template:
+        raise CodexToolingError(
+            '지원하지 않는 safety template입니다.',
+            status_code=400,
+            error_code='invalid_safety_template',
+        )
+    target = _resolve_project_preview_target(template.get('path'), template.get('fallback_path'))
+    if target.exists() and not overwrite:
+        raise CodexToolingError(
+            '템플릿 파일이 이미 존재합니다.',
+            status_code=409,
+            error_code='template_exists',
+            details={'path': _workspace_relative_path(target)},
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(str(template.get('content') or ''), encoding='utf-8')
+    return {'ok': True, 'path': _workspace_relative_path(target), 'template': template_key}
+
+
+def get_mcp_setup_preview():
+    content = '\n'.join([
+        '# MCP setup preview for Codex Workbench.',
+        '# This file is intentionally inert. Review official server commands before copying into config.toml.',
+        '',
+        '[mcp_servers.openai_docs]',
+        'command = "REPLACE_WITH_OFFICIAL_COMMAND"',
+        'args = ["REPLACE_WITH_OFFICIAL_ARGS"]',
+        'enabled = false',
+        '',
+        '[mcp_servers.playwright]',
+        'command = "REPLACE_WITH_OFFICIAL_COMMAND"',
+        'args = ["REPLACE_WITH_OFFICIAL_ARGS"]',
+        'enabled = false',
+        '',
+        '[mcp_servers.github]',
+        'command = "REPLACE_WITH_OFFICIAL_COMMAND"',
+        'args = ["REPLACE_WITH_OFFICIAL_ARGS"]',
+        'enabled = false',
+        '',
+    ])
+    target = _resolve_project_preview_target(
+        '.codex/mcp.preview.toml',
+        '.codex-workbench-previews/codex/mcp.preview.toml',
+    )
+    return {
+        'path': _workspace_relative_path(target),
+        'preferred_path': '.codex/mcp.preview.toml',
+        'exists': target.exists(),
+        'content': content,
+        'preview_only': True,
+        'warnings': [
+            '이 preview는 활성 config.toml을 수정하지 않습니다.',
+            'MCP server command는 환경마다 달라질 수 있으므로 공식 문서 확인 후 활성화해야 합니다.',
+        ],
+    }
+
+
+def save_mcp_setup_preview(overwrite=False):
+    preview = get_mcp_setup_preview()
+    target = _resolve_workspace_child(preview.get('path'))
+    if target.exists() and not overwrite:
+        raise CodexToolingError(
+            'MCP preview 파일이 이미 존재합니다.',
+            status_code=409,
+            error_code='mcp_preview_exists',
+            details={'path': _workspace_relative_path(target)},
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(str(preview.get('content') or ''), encoding='utf-8')
+    return {'ok': True, 'path': _workspace_relative_path(target)}
+
+
+def get_github_action_template_preview(kind='pr_review'):
+    kind_id = str(kind or 'pr_review').strip().lower().replace('-', '_')
+    if kind_id not in {'pr_review', 'ci_fix', 'release_prep'}:
+        raise CodexToolingError(
+            '지원하지 않는 GitHub Action template입니다.',
+            status_code=400,
+            error_code='invalid_github_action_template',
+        )
+    workflow_name = {
+        'pr_review': 'codex-pr-review',
+        'ci_fix': 'codex-ci-fix',
+        'release_prep': 'codex-release-prep',
+    }[kind_id]
+    workflow = '\n'.join([
+        f'name: {workflow_name}',
+        '',
+        'on:',
+        '  workflow_dispatch:',
+        '    inputs:',
+        '      prompt_file:',
+        '        description: Prompt file to pass to Codex',
+        '        required: true',
+        f'        default: .github/prompts/{workflow_name}.md',
+        '',
+        'permissions:',
+        '  contents: read',
+        '  pull-requests: read',
+        '',
+        'jobs:',
+        '  preview:',
+        '    runs-on: ubuntu-latest',
+        '    steps:',
+        '      - uses: actions/checkout@v4',
+        '      - name: Show prompt',
+        '        run: cat "${{ inputs.prompt_file }}"',
+        '',
+    ])
+    prompt = '\n'.join([
+        f'# {workflow_name}',
+        '',
+        'Run Codex in a controlled CI workflow.',
+        'Keep repository writes disabled unless a maintainer explicitly changes this template.',
+        '',
+        '## Task',
+        'Summarize relevant findings and recommended next steps.',
+        '',
+    ])
+    workflow_target = _resolve_project_preview_target(
+        f'.agents/github-action-templates/{workflow_name}.yml',
+        f'.codex-workbench-previews/github-action-templates/{workflow_name}.yml',
+    )
+    prompt_target = _resolve_project_preview_target(
+        f'.agents/github-action-templates/{workflow_name}.prompt.md',
+        f'.codex-workbench-previews/github-action-templates/{workflow_name}.prompt.md',
+    )
+    return {
+        'kind': kind_id,
+        'workflow_path': _workspace_relative_path(workflow_target),
+        'prompt_path': _workspace_relative_path(prompt_target),
+        'preferred_workflow_path': f'.agents/github-action-templates/{workflow_name}.yml',
+        'preferred_prompt_path': f'.agents/github-action-templates/{workflow_name}.prompt.md',
+        'workflow': workflow,
+        'prompt': prompt,
+        'preview_only': True,
+        'warnings': [
+            '템플릿은 .agents 아래에 저장되며 GitHub Actions에서 자동 실행되지 않습니다.',
+            '활성화하려면 사용자가 내용을 검토한 뒤 .github/workflows로 직접 옮겨야 합니다.',
+        ],
+    }
+
+
+def save_github_action_template_preview(kind='pr_review', overwrite=False):
+    preview = get_github_action_template_preview(kind)
+    targets = [
+        (preview.get('workflow_path'), preview.get('workflow')),
+        (preview.get('prompt_path'), preview.get('prompt')),
+    ]
+    existing = []
+    for relative, _ in targets:
+        target = _resolve_workspace_child(relative)
+        if target.exists():
+            existing.append(_workspace_relative_path(target))
+    if existing and not overwrite:
+        raise CodexToolingError(
+            'GitHub Action preview 파일이 이미 존재합니다.',
+            status_code=409,
+            error_code='github_action_preview_exists',
+            details={'paths': existing},
+        )
+    written = []
+    for relative, content in targets:
+        target = _resolve_workspace_child(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(content or ''), encoding='utf-8')
+        written.append(_workspace_relative_path(target))
+    return {'ok': True, 'paths': written, 'kind': preview.get('kind')}
 
 
 def _coerce_non_negative_int(value):
@@ -4827,6 +5682,33 @@ def _prepare_queued_codex_home(env):
     return queued_home
 
 
+def _prepare_app_server_codex_home(env):
+    app_server_home = CODEX_STORAGE_DIR / 'app_server_codex_home'
+    app_server_home.mkdir(parents=True, exist_ok=True)
+    try:
+        app_server_home.chmod(0o700)
+    except Exception:
+        _LOGGER.debug('Failed to chmod App Server Codex home', exc_info=True)
+    for child_name in ('sessions', 'tmp', 'shell_snapshots', 'skills'):
+        child_path = app_server_home / child_name
+        if child_path.is_symlink():
+            try:
+                child_path.unlink()
+            except Exception:
+                _LOGGER.debug('Failed to unlink App Server Codex home symlink: %s', child_path, exc_info=True)
+        child_path.mkdir(parents=True, exist_ok=True)
+
+    source_home = Path(str(env.get('CODEX_HOME') or _CODEX_HOME)).expanduser()
+    try:
+        same_home = app_server_home.resolve() == source_home.resolve()
+    except Exception:
+        same_home = False
+    if not same_home:
+        for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+            _copy_codex_home_file_if_available(source_home, app_server_home, filename)
+    return app_server_home
+
+
 def _path_is_writable_directory(path):
     try:
         candidate = Path(path).expanduser()
@@ -5046,6 +5928,14 @@ def _build_codex_exec_env(queued_execution=False):
         queued_home = _prepare_queued_codex_home(env)
         env['CODEX_HOME'] = str(queued_home)
         _prepare_queued_codex_runtime_env(env, queued_home)
+    return env
+
+
+def _build_codex_app_server_env():
+    env = os.environ.copy()
+    app_server_home = _prepare_app_server_codex_home(env)
+    env['CODEX_HOME'] = str(app_server_home)
+    _prepare_queued_codex_runtime_env(env, app_server_home)
     return env
 
 

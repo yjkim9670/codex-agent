@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1546,6 +1547,119 @@ class _ExitedWithJsonFinalMessageProcess:
         return self._return_code
 
 
+_IMAGEGEN_DELAYED_TEST_CODEX_SESSION_ID = 'abcdef1234567890abcdef12'
+_IMAGEGEN_MISSING_TEST_CODEX_SESSION_ID = 'abcdef1234567890abcdef13'
+
+
+class _ExitedWithDelayedImagegenOutputProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        self.pid = 65434
+        self._started_at = time.time()
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'session_meta',
+                'payload': {'id': _IMAGEGEN_DELAYED_TEST_CODEX_SESSION_ID},
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'image_generation_call',
+                    'status': 'completed',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {
+                    'last_agent_message': (
+                        '<!-- codex-workbench:imagegen-filename: delayed-news.png -->'
+                        '이미지 생성 완료'
+                    ),
+                },
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+        codex_home = Path(kwargs.get('env', {}).get('CODEX_HOME') or '')
+        source_path = (
+            codex_home
+            / 'generated_images'
+            / _IMAGEGEN_DELAYED_TEST_CODEX_SESSION_ID
+            / 'generated.png'
+        )
+        threading.Thread(
+            target=self._write_delayed_image,
+            args=(source_path,),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _write_delayed_image(source_path):
+        time.sleep(0.15)
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_bytes(b'fake delayed png bytes')
+
+    def poll(self):
+        if time.time() - self._started_at < 0.03:
+            return None
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
+class _ExitedWithImagegenFinalMessageNoOutputProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 65435
+        self._started_at = time.time()
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'session_meta',
+                'payload': {'id': _IMAGEGEN_MISSING_TEST_CODEX_SESSION_ID},
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'image_generation_call',
+                    'status': 'completed',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {
+                    'last_agent_message': (
+                        '<!-- codex-workbench:imagegen-filename: missing-news.png -->'
+                        '이미지 생성 완료'
+                    ),
+                },
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        if time.time() - self._started_at < 0.03:
+            return None
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 class _ExitedWithBenignStderrAndFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -1693,6 +1807,65 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
         assert stream is not None
         assert stream.get('saved') is True
         assert stream.get('done') is True
+
+
+def test_run_codex_stream_waits_for_delayed_imagegen_output_after_final_text(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setenv(
+        'CODEX_QUEUE_CODEX_HOME',
+        str(isolated_codex_workspace['workspace_dir'] / 'queued-codex-home'),
+    )
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithDelayedImagegenOutputProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(
+        codex_chat,
+        '_final_response_timeout_seconds_for_stream',
+        lambda stream, base_timeout: 1,
+    )
+
+    session = codex_chat.create_session('imagegen-delayed-output')
+    session_id = session['id']
+    stream_id = 'stream-imagegen-delayed-output'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        stream = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-imagegen-delayed.txt',
+        )
+        stream['user_prompt'] = '$imagegen 뉴스 이미지'
+        stream['imagegen_workbench_requested'] = True
+        stream['queued_execution'] = True
+        state.codex_streams[stream_id] = stream
+
+    codex_chat._run_codex_stream(stream_id, '$imagegen 뉴스 이미지')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'assistant'
+    assert saved_message['finalize_reason'] == 'process_exit'
+    assert '이미지 생성 완료' in saved_message['content']
+    assert 'Generated image saved:' in saved_message['content']
+    assert 'delayed-news.png' in saved_message['content']
+
+    output_path = isolated_codex_workspace['workspace_dir'] / 'output' / 'imagegen' / 'delayed-news.png'
+    assert output_path.read_bytes() == b'fake delayed png bytes'
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('saved') is True
+        assert stream.get('done') is True
+        assert stream.get('imagegen_workbench_outputs') == [str(output_path)]
+        assert stream.get('imagegen_workbench_waiting_for_output') is False
 
 
 def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
@@ -1872,3 +2045,58 @@ def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isol
         assert stream.get('done') is True
         assert stream.get('saved') is True
         assert stream.get('exit_code') == 124
+
+
+def test_run_codex_stream_times_out_waiting_for_imagegen_output_after_final_text(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setenv(
+        'CODEX_QUEUE_CODEX_HOME',
+        str(isolated_codex_workspace['workspace_dir'] / 'queued-codex-home'),
+    )
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithImagegenFinalMessageNoOutputProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(
+        codex_chat,
+        '_final_response_timeout_seconds_for_stream',
+        lambda stream, base_timeout: 0.05,
+    )
+
+    session = codex_chat.create_session('imagegen-output-timeout')
+    session_id = session['id']
+    stream_id = 'stream-imagegen-output-timeout'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        stream = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-imagegen-timeout.txt',
+        )
+        stream['user_prompt'] = '$imagegen 뉴스 이미지'
+        stream['imagegen_workbench_requested'] = True
+        stream['queued_execution'] = True
+        state.codex_streams[stream_id] = stream
+
+    codex_chat._run_codex_stream(stream_id, '$imagegen 뉴스 이미지')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'imagegen_output_timeout'
+    assert '이미지 생성 결과를 회수하지 못해 종료합니다' in saved_message['content']
+    assert '최종 응답을 받지 못해' not in saved_message['content']
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('done') is True
+        assert stream.get('saved') is True
+        assert stream.get('exit_code') == 124
+        assert not stream.get('imagegen_workbench_outputs')

@@ -6450,6 +6450,23 @@ def _stream_uses_imagegen_workbench(stream):
     )
 
 
+def _stream_expects_imagegen_workbench_output(stream):
+    if not isinstance(stream, dict):
+        return False
+    return bool(
+        stream.get('imagegen_workbench_detected')
+        or stream.get('imagegen_workbench_filenames')
+    )
+
+
+def _stream_is_waiting_for_imagegen_workbench_output(stream, copied_outputs=None):
+    if not _stream_expects_imagegen_workbench_output(stream):
+        return False
+    if copied_outputs is None:
+        copied_outputs = stream.get('imagegen_workbench_outputs')
+    return not bool(_copy_imagegen_workbench_outputs(copied_outputs))
+
+
 def _final_response_timeout_seconds_for_stream(stream, base_timeout_seconds):
     base_timeout = _coerce_positive_seconds(
         base_timeout_seconds,
@@ -6464,6 +6481,19 @@ def _final_response_timeout_seconds_for_stream(stream, base_timeout_seconds):
         minimum=base_timeout,
     )
     return max(base_timeout, imagegen_timeout)
+
+
+def _stream_timeout_message(timeout_seconds, waiting_for_imagegen_output=False, stale=False):
+    if waiting_for_imagegen_output:
+        subject = '이미지 생성 결과를 회수하지 못해'
+    else:
+        subject = '최종 응답을 받지 못해'
+    if stale:
+        return (
+            f'CLI 종료 후 {int(timeout_seconds)}초 동안 {subject} '
+            '대기열 진행을 위해 스트림을 종료 처리했습니다.\n'
+        )
+    return f'CLI 종료 후 {int(timeout_seconds)}초 동안 {subject} 종료합니다.\n'
 
 
 def _iso_timestamp_from_epoch(value):
@@ -8153,6 +8183,18 @@ def _run_codex_stream(stream_id, prompt):
                 _record_stream_imagegen_workbench_filenames(stream_id, output_imagegen_filenames)
                 copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
                 imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    imagegen_output_waiting = _stream_is_waiting_for_imagegen_workbench_output(
+                        stream,
+                        copied_image_outputs,
+                    )
+                    if stream:
+                        stream['imagegen_workbench_waiting_for_output'] = imagegen_output_waiting
+                        final_response_timeout_seconds = _final_response_timeout_seconds_for_stream(
+                            stream,
+                            base_final_response_timeout_seconds,
+                        )
                 selected_output_text = _append_imagegen_workbench_output_message(
                     output_text or current_output_last_message,
                     copied_image_outputs,
@@ -8164,12 +8206,15 @@ def _run_codex_stream(stream_id, prompt):
                     or bool(current_output)
                     or bool(current_error)
                 )
+                if imagegen_output_waiting and not imagegen_output_text:
+                    has_final_response = False
 
                 if has_final_response:
                     with state.codex_streams_lock:
                         stream = state.codex_streams.get(stream_id)
                         if stream:
                             done_now = time.time()
+                            stream['imagegen_workbench_waiting_for_output'] = False
                             if selected_output_text:
                                 stream['output_last_message'] = selected_output_text
                             if selected_output_text and not (stream.get('output') or '').strip():
@@ -8188,9 +8233,9 @@ def _run_codex_stream(stream_id, prompt):
                 if not isinstance(process_exited_at, (int, float)):
                     process_exited_at = now
                 if now - process_exited_at >= final_response_timeout_seconds:
-                    timeout_message = (
-                        f'CLI 종료 후 {int(final_response_timeout_seconds)}초 동안 '
-                        '최종 응답을 받지 못해 종료합니다.\n'
+                    timeout_message = _stream_timeout_message(
+                        final_response_timeout_seconds,
+                        waiting_for_imagegen_output=imagegen_output_waiting,
                     )
                     _append_stream_chunk(stream_id, 'error', timeout_message)
                     timeout_now = time.time()
@@ -8211,7 +8256,11 @@ def _run_codex_stream(stream_id, prompt):
                                 )
                             stream['updated_at'] = timeout_now
                             stream['process'] = None
-                            stream['finalize_reason'] = 'final_response_timeout'
+                            stream['finalize_reason'] = (
+                                'imagegen_output_timeout'
+                                if imagegen_output_waiting
+                                else 'final_response_timeout'
+                            )
                     break
 
                 time.sleep(poll_interval_seconds)
@@ -8257,12 +8306,24 @@ def _run_codex_stream(stream_id, prompt):
         )
         _record_stream_imagegen_workbench_filenames(stream_id, output_imagegen_filenames)
         copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
-        selected_output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            current_output_last_message = (stream.get('output_last_message') or '').strip() if stream else ''
+        selected_output_text = _append_imagegen_workbench_output_message(
+            output_text or current_output_last_message,
+            copied_image_outputs,
+        )
         if selected_output_text:
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
                     now = time.time()
+                    stream['imagegen_workbench_waiting_for_output'] = (
+                        _stream_is_waiting_for_imagegen_workbench_output(
+                            stream,
+                            copied_image_outputs,
+                        )
+                    )
                     stream['output_last_message'] = selected_output_text
                     if not (stream.get('output') or '').strip():
                         stream['output'] = selected_output_text
@@ -8393,6 +8454,7 @@ def create_codex_stream(
         'imagegen_workbench_detected': False,
         'imagegen_workbench_outputs': [],
         'imagegen_workbench_filenames': [],
+        'imagegen_workbench_waiting_for_output': False,
         'output_length': 0,
         'error_length': 0,
         'created_at': created_at,
@@ -8476,6 +8538,9 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
             or (stream.get('output_last_message') or '').strip()
             or (stream.get('error') or '').strip()
         )
+        waiting_for_imagegen_output = _stream_is_waiting_for_imagegen_workbench_output(stream)
+        if waiting_for_imagegen_output:
+            has_response = False
         recovery_after_seconds = 1 if has_response else stale_after_seconds
         if now - process_exited_at < recovery_after_seconds:
             continue
@@ -8485,14 +8550,19 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
         stream['updated_at'] = now
         stream['process'] = None
         if not has_response:
-            message = (
-                f'CLI 종료 후 {int(timeout_seconds)}초 동안 최종 응답을 받지 못해 '
-                '대기열 진행을 위해 스트림을 종료 처리했습니다.\n'
+            message = _stream_timeout_message(
+                timeout_seconds,
+                waiting_for_imagegen_output=waiting_for_imagegen_output,
+                stale=True,
             )
             stream['error'] = (stream.get('error') or '') + message
             stream['error_length'] = len(stream.get('error') or '')
             stream['exit_code'] = 124
-            stream['finalize_reason'] = 'stale_final_response_timeout'
+            stream['finalize_reason'] = (
+                'stale_imagegen_output_timeout'
+                if waiting_for_imagegen_output
+                else 'stale_final_response_timeout'
+            )
         elif not stream.get('finalize_reason'):
             stream['finalize_reason'] = 'stale_finalizing_recovered'
         stale_stream_ids.append(stream_id)

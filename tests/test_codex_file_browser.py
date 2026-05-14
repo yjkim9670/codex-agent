@@ -144,6 +144,25 @@ def test_write_file_updates_content_and_returns_latest_metadata(isolated_browser
     assert str(updated['modified_ns']).isdigit()
 
 
+def test_tpl_files_are_editable_from_preview(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'email.tpl'
+    target.write_text('Hello, {{ name }}\n', encoding='utf-8')
+
+    original = file_browser.read_file(root_key='server', relative_path='email.tpl')
+    updated = file_browser.write_file(
+        root_key='server',
+        relative_path='email.tpl',
+        content='Hi, {{ name }}\n',
+        expected_modified_ns=original['modified_ns'],
+    )
+
+    assert original['editable'] is True
+    assert updated['editable'] is True
+    assert updated['saved'] is True
+    assert target.read_text(encoding='utf-8') == 'Hi, {{ name }}\n'
+
+
 def test_write_file_rejects_non_editable_extension(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'diagram.svg').write_text('<svg></svg>', encoding='utf-8')

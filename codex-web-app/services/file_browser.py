@@ -123,6 +123,7 @@ _EDITABLE_TEXT_SUFFIXES = {
     '.sql',
     '.swift',
     '.toml',
+    '.tpl',
     '.ts',
     '.tsx',
     '.txt',

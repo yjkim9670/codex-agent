@@ -1379,6 +1379,36 @@ def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch
     assert (queued_home / 'skills').resolve() == source_home / 'skills'
 
 
+def test_build_codex_exec_env_copies_memories_for_queued_execution(monkeypatch, tmp_path):
+    source_home = tmp_path / 'source-codex-home'
+    source_home.mkdir()
+    memories_dir = source_home / 'memories'
+    (memories_dir / '.git').mkdir(parents=True)
+    (memories_dir / '.git' / 'config').write_text('[core]\n', encoding='utf-8')
+    (memories_dir / '.codex').mkdir()
+    (memories_dir / '.codex' / 'notes.md').write_text('queued memory\n', encoding='utf-8')
+    (source_home / 'skills').mkdir()
+    storage_dir = tmp_path / 'agent-state'
+    queued_home = storage_dir / 'queued_codex_home'
+    queued_home.mkdir(parents=True)
+    (queued_home / 'memories').symlink_to(memories_dir, target_is_directory=True)
+
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', storage_dir)
+
+    env = codex_chat._build_codex_exec_env(queued_execution=True)
+
+    copied_memories = queued_home / 'memories'
+    assert env.get('CODEX_HOME') == str(queued_home)
+    assert copied_memories.is_dir()
+    assert not copied_memories.is_symlink()
+    assert (copied_memories / '.git').is_dir()
+    assert (copied_memories / '.git' / 'config').read_text(encoding='utf-8') == '[core]\n'
+    assert (copied_memories / '.codex' / 'notes.md').read_text(encoding='utf-8') == 'queued memory\n'
+    assert (queued_home / 'skills').is_symlink()
+    assert (queued_home / 'skills').resolve() == source_home / 'skills'
+
+
 def test_build_codex_exec_env_preserves_writable_home_for_queued_execution(monkeypatch, tmp_path):
     source_home = tmp_path / 'source-codex-home'
     source_home.mkdir()

@@ -23166,6 +23166,14 @@ function formatUsagePercent(value) {
     return floored % 1 === 0 ? String(Math.trunc(floored)) : floored.toFixed(1);
 }
 
+function formatProjectedUsagePercent(value) {
+    if (!Number.isFinite(value)) return '--';
+    const normalized = Math.max(0, value);
+    const floored = Math.floor(normalized * 10) / 10;
+    if (!Number.isFinite(floored)) return '--';
+    return floored % 1 === 0 ? String(Math.trunc(floored)) : floored.toFixed(1);
+}
+
 function formatRemainingPercent(usedPercent) {
     const normalizedUsed = normalizeUsedPercent(usedPercent);
     if (!Number.isFinite(normalizedUsed)) return '--';
@@ -23173,17 +23181,41 @@ function formatRemainingPercent(usedPercent) {
     return formatUsagePercent(remaining);
 }
 
-function formatResetTimestamp(value) {
+function parseUsageTimestamp(value) {
     if (!value) return '';
-    let date = null;
+    let date;
     if (typeof value === 'number') {
         const ms = value < 1000000000000 ? value * 1000 : value;
         date = new Date(ms);
     } else {
         date = new Date(value);
     }
-    if (Number.isNaN(date.getTime())) return '';
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatResetTimestamp(value) {
+    const date = parseUsageTimestamp(value);
+    if (!date) return '';
     return date.toLocaleString('ko-KR', { timeZone: KST_TIME_ZONE });
+}
+
+function formatWeeklyUsageProjection(entry, normalizedUsed) {
+    const windowMinutes = Number(entry?.window_minutes);
+    if (windowMinutes !== 10080 || !Number.isFinite(normalizedUsed)) return '';
+    const resetDate = parseUsageTimestamp(entry?.resets_at);
+    if (!resetDate) return '';
+    const resetAt = resetDate.getTime();
+    const now = Date.now();
+    if (!Number.isFinite(resetAt) || resetAt <= now) return '';
+    const windowMs = windowMinutes * 60 * 1000;
+    const windowStart = resetAt - windowMs;
+    const elapsedMs = now - windowStart;
+    if (elapsedMs < 60 * 60 * 1000 || elapsedMs >= windowMs) return '';
+    const elapsedHours = elapsedMs / (60 * 60 * 1000);
+    const windowHours = windowMinutes / 60;
+    const projectedUsed = normalizedUsed * (windowHours / elapsedHours);
+    if (!Number.isFinite(projectedUsed)) return '';
+    return `${elapsedHours.toFixed(1)}h since reset · Pace ${formatProjectedUsagePercent(projectedUsed)}% by reset`;
 }
 
 function formatLimitUsage(entry, label) {
@@ -23193,14 +23225,16 @@ function formatLimitUsage(entry, label) {
         return {
             label,
             remainingText: '--',
-            resetText
+            resetText,
+            projectionText: ''
         };
     }
     const remaining = formatRemainingPercent(normalizedUsed);
     return {
         label,
         remainingText: `${remaining}% left`,
-        resetText
+        resetText,
+        projectionText: formatWeeklyUsageProjection(entry, normalizedUsed)
     };
 }
 
@@ -23291,6 +23325,12 @@ function buildUsageEntry(entry, label) {
     reset.className = 'usage-reset';
     reset.textContent = details.resetText ? `Reset ${details.resetText}` : 'Reset --';
     wrapper.appendChild(reset);
+    if (details.projectionText) {
+        const projection = document.createElement('div');
+        projection.className = 'usage-reset';
+        projection.textContent = details.projectionText;
+        wrapper.appendChild(projection);
+    }
     return wrapper;
 }
 

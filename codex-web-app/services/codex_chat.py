@@ -83,7 +83,8 @@ _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
 _QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
-_QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules', 'memories')
+_QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
+_QUEUED_CODEX_HOME_COPY_ENTRIES = ('memories',)
 _QUEUED_CODEX_RUNTIME_DIRS = {
     'XDG_CACHE_HOME': 'cache',
     'XDG_STATE_HOME': 'state',
@@ -5643,17 +5644,56 @@ def _copy_codex_home_file_if_available(source_home, target_home, filename):
         _LOGGER.debug('Failed to sync queued Codex home file: %s', filename, exc_info=True)
 
 
+def _remove_codex_home_entry(target_path):
+    try:
+        if target_path.is_symlink() or target_path.is_file():
+            target_path.unlink()
+            return
+        if target_path.is_dir():
+            shutil.rmtree(target_path)
+            return
+        target_path.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:
+        _LOGGER.debug('Failed to remove queued Codex home entry: %s', target_path, exc_info=True)
+
+
 def _link_codex_home_entry_if_available(source_home, target_home, entry_name):
     try:
         source_path = Path(source_home) / entry_name
         if not source_path.exists():
             return
         target_path = Path(target_home) / entry_name
-        if target_path.exists() or target_path.is_symlink():
-            return
+        if target_path.is_symlink():
+            try:
+                if target_path.resolve() == source_path.resolve():
+                    return
+            except Exception:
+                pass
+            _remove_codex_home_entry(target_path)
+        elif target_path.exists():
+            _remove_codex_home_entry(target_path)
         target_path.symlink_to(source_path, target_is_directory=source_path.is_dir())
     except Exception:
         _LOGGER.debug('Failed to link queued Codex home entry: %s', entry_name, exc_info=True)
+
+
+def _copy_codex_home_entry_if_available(source_home, target_home, entry_name):
+    try:
+        source_path = Path(source_home) / entry_name
+        if not source_path.exists():
+            return
+        target_path = Path(target_home) / entry_name
+        if target_path.exists() or target_path.is_symlink():
+            _remove_codex_home_entry(target_path)
+        if source_path.is_dir():
+            shutil.copytree(source_path, target_path, symlinks=True)
+            return
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+    except Exception:
+        _LOGGER.debug('Failed to copy queued Codex home entry: %s', entry_name, exc_info=True)
 
 
 def _prepare_queued_codex_home(env):
@@ -5680,6 +5720,8 @@ def _prepare_queued_codex_home(env):
             _copy_codex_home_file_if_available(source_home, queued_home, filename)
         for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
             _link_codex_home_entry_if_available(source_home, queued_home, entry_name)
+        for entry_name in _QUEUED_CODEX_HOME_COPY_ENTRIES:
+            _copy_codex_home_entry_if_available(source_home, queued_home, entry_name)
     return queued_home
 
 

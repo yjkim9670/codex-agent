@@ -143,6 +143,14 @@ const WORK_MODE_FILE_VIEW_STATE_KEY = 'codexWorkModeFileViewState';
 const WORK_MODE_FILE_STATE_PERSIST_DEBOUNCE_MS = 140;
 const FILE_BROWSER_SPLIT_KEY = 'codexFileBrowserSplit';
 const FILE_BROWSER_COLUMNS_KEY = 'codexFileBrowserColumns';
+const FILE_PANEL_EDITOR_MODE_KEY = 'codexFilePanelEditorMode';
+const FILE_PANEL_EDITOR_MODE_TEXT = 'text';
+const FILE_PANEL_EDITOR_MODE_FIXED = 'fixed';
+const FILE_PANEL_VIM_MODE_INSERT = 'insert';
+const FILE_PANEL_VIM_MODE_NORMAL = 'normal';
+const FILE_PANEL_VIM_MODE_VISUAL = 'visual';
+const FILE_PANEL_VIM_MODE_VISUAL_LINE = 'visual-line';
+const FILE_PANEL_VIM_MAX_UNDO_STACK = 80;
 const WORK_MODE_FILE_LEGACY_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.44;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 300;
@@ -484,7 +492,20 @@ let fileBrowserEditState = {
     saving: false,
     modifiedNs: '',
     previewResult: null,
-    editBuffer: ''
+    editBuffer: '',
+    editorMode: loadFilePanelEditorModePreference(),
+    vimMode: FILE_PANEL_VIM_MODE_INSERT,
+    vimPending: '',
+    vimCount: '',
+    vimClipboard: {
+        text: '',
+        linewise: false
+    },
+    vimUndoStack: [],
+    vimRedoStack: [],
+    vimComposing: false,
+    vimVisualAnchor: 0,
+    vimVisualHead: 0
 };
 let workModeFileEditState = {
     root: FILE_BROWSER_ROOT_WORKSPACE,
@@ -495,7 +516,20 @@ let workModeFileEditState = {
     saving: false,
     modifiedNs: '',
     previewResult: null,
-    editBuffer: ''
+    editBuffer: '',
+    editorMode: loadFilePanelEditorModePreference(),
+    vimMode: FILE_PANEL_VIM_MODE_INSERT,
+    vimPending: '',
+    vimCount: '',
+    vimClipboard: {
+        text: '',
+        linewise: false
+    },
+    vimUndoStack: [],
+    vimRedoStack: [],
+    vimComposing: false,
+    vimVisualAnchor: 0,
+    vimVisualHead: 0
 };
 let remoteStreamStatusCache = {
     streams: [],
@@ -5208,6 +5242,59 @@ function getFilePanelEditState(variant) {
         : workModeFileEditState;
 }
 
+function normalizeFilePanelEditorMode(value) {
+    return value === FILE_PANEL_EDITOR_MODE_FIXED
+        ? FILE_PANEL_EDITOR_MODE_FIXED
+        : FILE_PANEL_EDITOR_MODE_TEXT;
+}
+
+function loadFilePanelEditorModePreference() {
+    try {
+        return normalizeFilePanelEditorMode(window.localStorage?.getItem(FILE_PANEL_EDITOR_MODE_KEY));
+    } catch (error) {
+        void error;
+        return FILE_PANEL_EDITOR_MODE_TEXT;
+    }
+}
+
+function persistFilePanelEditorModePreference(mode) {
+    try {
+        window.localStorage?.setItem(FILE_PANEL_EDITOR_MODE_KEY, normalizeFilePanelEditorMode(mode));
+    } catch (error) {
+        void error;
+    }
+}
+
+function getDefaultFilePanelVimMode(editorMode) {
+    return normalizeFilePanelEditorMode(editorMode) === FILE_PANEL_EDITOR_MODE_FIXED
+        ? FILE_PANEL_VIM_MODE_NORMAL
+        : FILE_PANEL_VIM_MODE_INSERT;
+}
+
+function resetFilePanelVimInteractionState(state, { editorMode = null, preserveClipboard = true } = {}) {
+    if (!state) return;
+    const normalizedMode = normalizeFilePanelEditorMode(editorMode || state.editorMode);
+    state.vimMode = getDefaultFilePanelVimMode(normalizedMode);
+    state.vimPending = '';
+    state.vimCount = '';
+    if (!preserveClipboard) {
+        state.vimClipboard = {
+            text: '',
+            linewise: false
+        };
+    } else if (!state.vimClipboard || typeof state.vimClipboard !== 'object') {
+        state.vimClipboard = {
+            text: '',
+            linewise: false
+        };
+    }
+    state.vimUndoStack = [];
+    state.vimRedoStack = [];
+    state.vimComposing = false;
+    state.vimVisualAnchor = 0;
+    state.vimVisualHead = 0;
+}
+
 function updateFilePanelActionButtonLabel(button, label) {
     if (!(button instanceof HTMLButtonElement)) return;
     const normalizedLabel = String(label || '').trim();
@@ -5239,6 +5326,8 @@ function resetFilePanelEditState(variant, { root = null } = {}) {
     state.modifiedNs = '';
     state.previewResult = null;
     state.editBuffer = '';
+    state.editorMode = loadFilePanelEditorModePreference();
+    resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
     syncFilePanelSelectionBar(normalizedVariant);
 }
@@ -5255,6 +5344,8 @@ function hydrateFilePanelEditStateFromResult(variant, result, { root = null } = 
     state.modifiedNs = String(result?.modified_ns || '').trim();
     state.previewResult = result && typeof result === 'object' ? { ...result } : null;
     state.editBuffer = state.editable && typeof result?.content === 'string' ? result.content : '';
+    state.editorMode = loadFilePanelEditorModePreference();
+    resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
     syncFilePanelSelectionBar(normalizedVariant);
 }
@@ -5266,6 +5357,7 @@ function discardFilePanelEditChanges(variant) {
     state.dirty = false;
     state.saving = false;
     state.editBuffer = typeof state.previewResult?.content === 'string' ? state.previewResult.content : '';
+    resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
 }
 
@@ -17293,10 +17385,952 @@ function getFilePanelVariantFromElements(elements) {
 function buildFilePanelEditorStatusText(variant) {
     const state = getFilePanelEditState(variant);
     const dirtyLabel = state.dirty ? '변경 사항 있음' : '변경 사항 없음';
-    return `${dirtyLabel} · Ctrl/Cmd+S로 저장`;
+    const modeLabel = normalizeFilePanelEditorMode(state.editorMode) === FILE_PANEL_EDITOR_MODE_FIXED
+        ? 'Fixed/GVim'
+        : 'Text';
+    return `${dirtyLabel} · ${modeLabel} · Ctrl/Cmd+S로 저장`;
 }
 
-function renderFilePanelEditor(variant) {
+function getFilePanelVimModeLabel(state) {
+    switch (state?.vimMode) {
+        case FILE_PANEL_VIM_MODE_NORMAL:
+            return 'NORMAL';
+        case FILE_PANEL_VIM_MODE_VISUAL:
+            return 'VISUAL';
+        case FILE_PANEL_VIM_MODE_VISUAL_LINE:
+            return 'V-LINE';
+        case FILE_PANEL_VIM_MODE_INSERT:
+        default:
+            return 'INSERT';
+    }
+}
+
+function getFilePanelVimBadgeText(state) {
+    if (normalizeFilePanelEditorMode(state?.editorMode) !== FILE_PANEL_EDITOR_MODE_FIXED) {
+        return '';
+    }
+    const parts = [getFilePanelVimModeLabel(state)];
+    if (state.vimCount) {
+        parts.push(String(state.vimCount));
+    }
+    if (state.vimPending) {
+        parts.push(String(state.vimPending));
+    }
+    return parts.join(' ');
+}
+
+function captureFilePanelTextareaSelection(textarea) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return null;
+    return {
+        start: textarea.selectionStart,
+        end: textarea.selectionEnd
+    };
+}
+
+function restoreFilePanelTextareaSelection(textarea, selection) {
+    if (!(textarea instanceof HTMLTextAreaElement) || !selection) return;
+    const length = textarea.value.length;
+    const start = Math.max(0, Math.min(length, Number(selection.start) || 0));
+    const end = Math.max(0, Math.min(length, Number(selection.end) || start));
+    textarea.setSelectionRange(start, end);
+}
+
+function syncFilePanelEditorStatusElements(variant, statusText, vimBadge, modeToggle) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    if (statusText) {
+        statusText.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+    }
+    if (vimBadge) {
+        const badgeText = getFilePanelVimBadgeText(state);
+        vimBadge.textContent = badgeText;
+        vimBadge.classList.toggle('is-hidden', !badgeText);
+    }
+    if (modeToggle) {
+        modeToggle.querySelectorAll('[data-editor-mode]').forEach(button => {
+            const isActive = button.dataset.editorMode === normalizeFilePanelEditorMode(state.editorMode);
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        });
+    }
+}
+
+function getFilePanelEditorLineCount(value) {
+    const text = String(value ?? '');
+    if (!text) return 1;
+    return text.split('\n').length;
+}
+
+function updateFilePanelEditorGutter(gutter, textarea) {
+    if (!(gutter instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement)) return;
+    const lineCount = getFilePanelEditorLineCount(textarea.value);
+    const digits = Math.max(2, String(lineCount).length);
+    const wrapper = textarea.closest('.file-browser-editor');
+    if (wrapper) {
+        wrapper.style.setProperty('--file-browser-editor-line-digit-width', String(digits));
+    }
+    let lines = '';
+    for (let index = 1; index <= lineCount; index += 1) {
+        lines += index === lineCount ? String(index) : `${index}\n`;
+    }
+    gutter.textContent = lines;
+    gutter.scrollTop = textarea.scrollTop;
+}
+
+function setFilePanelEditorMode(variant, mode, textarea) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const normalizedMode = normalizeFilePanelEditorMode(mode);
+    const state = getFilePanelEditState(normalizedVariant);
+    const selection = captureFilePanelTextareaSelection(textarea);
+    if (textarea instanceof HTMLTextAreaElement) {
+        state.editBuffer = textarea.value;
+        state.dirty = textarea.value !== String(state.previewResult?.content || '');
+    }
+    fileBrowserEditState.editorMode = normalizedMode;
+    workModeFileEditState.editorMode = normalizedMode;
+    persistFilePanelEditorModePreference(normalizedMode);
+    resetFilePanelVimInteractionState(state, {
+        editorMode: normalizedMode,
+        preserveClipboard: true
+    });
+    renderFilePanelEditor(normalizedVariant, { selection });
+}
+
+function buildFilePanelEditorModeToggle(variant, textarea) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const toggle = document.createElement('div');
+    toggle.className = 'file-browser-editor-mode-toggle';
+    toggle.setAttribute('role', 'group');
+    toggle.setAttribute('aria-label', 'Editor mode');
+
+    [
+        [FILE_PANEL_EDITOR_MODE_TEXT, 'Text'],
+        [FILE_PANEL_EDITOR_MODE_FIXED, 'Fixed']
+    ].forEach(([mode, label]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'file-browser-editor-mode-button';
+        button.dataset.editorMode = mode;
+        button.textContent = label;
+        const isActive = mode === normalizeFilePanelEditorMode(state.editorMode);
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        button.addEventListener('click', () => {
+            if (mode === normalizeFilePanelEditorMode(getFilePanelEditState(normalizedVariant).editorMode)) {
+                textarea.focus();
+                return;
+            }
+            setFilePanelEditorMode(normalizedVariant, mode, textarea);
+        });
+        toggle.appendChild(button);
+    });
+
+    return toggle;
+}
+
+function clampFilePanelEditorPosition(textarea, position) {
+    const length = textarea instanceof HTMLTextAreaElement ? textarea.value.length : 0;
+    const numeric = Number(position);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(length, Math.floor(numeric)));
+}
+
+function dispatchFilePanelEditorInput(textarea) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function captureFilePanelVimSnapshot(textarea) {
+    return {
+        value: textarea.value,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd
+    };
+}
+
+function restoreFilePanelVimSnapshot(textarea, snapshot) {
+    if (!(textarea instanceof HTMLTextAreaElement) || !snapshot) return;
+    textarea.value = String(snapshot.value || '');
+    const start = clampFilePanelEditorPosition(textarea, snapshot.selectionStart);
+    const end = clampFilePanelEditorPosition(textarea, snapshot.selectionEnd);
+    textarea.setSelectionRange(start, end);
+    dispatchFilePanelEditorInput(textarea);
+}
+
+function pushFilePanelVimUndoState(state, textarea) {
+    if (!state || !(textarea instanceof HTMLTextAreaElement)) return;
+    const snapshot = captureFilePanelVimSnapshot(textarea);
+    const last = state.vimUndoStack[state.vimUndoStack.length - 1];
+    if (
+        last
+        && last.value === snapshot.value
+        && last.selectionStart === snapshot.selectionStart
+        && last.selectionEnd === snapshot.selectionEnd
+    ) {
+        return;
+    }
+    state.vimUndoStack.push(snapshot);
+    if (state.vimUndoStack.length > FILE_PANEL_VIM_MAX_UNDO_STACK) {
+        state.vimUndoStack.shift();
+    }
+    state.vimRedoStack = [];
+}
+
+function undoFilePanelVimEdit(state, textarea) {
+    if (!state?.vimUndoStack?.length) {
+        try {
+            document.execCommand('undo');
+        } catch (error) {
+            void error;
+        }
+        return;
+    }
+    const current = captureFilePanelVimSnapshot(textarea);
+    const snapshot = state.vimUndoStack.pop();
+    state.vimRedoStack.push(current);
+    restoreFilePanelVimSnapshot(textarea, snapshot);
+}
+
+function redoFilePanelVimEdit(state, textarea) {
+    if (!state?.vimRedoStack?.length) {
+        try {
+            document.execCommand('redo');
+        } catch (error) {
+            void error;
+        }
+        return;
+    }
+    const current = captureFilePanelVimSnapshot(textarea);
+    const snapshot = state.vimRedoStack.pop();
+    state.vimUndoStack.push(current);
+    restoreFilePanelVimSnapshot(textarea, snapshot);
+}
+
+function replaceFilePanelTextareaRange(textarea, state, start, end, replacement, selectionStart = null, selectionEnd = null) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+    const normalizedStart = clampFilePanelEditorPosition(textarea, start);
+    const normalizedEnd = clampFilePanelEditorPosition(textarea, end);
+    const rangeStart = Math.min(normalizedStart, normalizedEnd);
+    const rangeEnd = Math.max(normalizedStart, normalizedEnd);
+    const nextText = `${textarea.value.slice(0, rangeStart)}${replacement}${textarea.value.slice(rangeEnd)}`;
+    pushFilePanelVimUndoState(state, textarea);
+    textarea.value = nextText;
+    const fallbackCursor = rangeStart + String(replacement).length;
+    const nextStart = selectionStart == null ? fallbackCursor : selectionStart;
+    const nextEnd = selectionEnd == null ? nextStart : selectionEnd;
+    textarea.setSelectionRange(
+        clampFilePanelEditorPosition(textarea, nextStart),
+        clampFilePanelEditorPosition(textarea, nextEnd)
+    );
+    dispatchFilePanelEditorInput(textarea);
+}
+
+function getFilePanelLineStart(text, position) {
+    const source = String(text ?? '');
+    const pos = Math.max(0, Math.min(source.length, Number(position) || 0));
+    if (pos <= 0) return 0;
+    return source.lastIndexOf('\n', pos - 1) + 1;
+}
+
+function getFilePanelLineEnd(text, position) {
+    const source = String(text ?? '');
+    const pos = Math.max(0, Math.min(source.length, Number(position) || 0));
+    const end = source.indexOf('\n', pos);
+    return end < 0 ? source.length : end;
+}
+
+function getFilePanelLineRange(text, position, count = 1) {
+    const source = String(text ?? '');
+    const lineCount = Math.max(1, Number(count) || 1);
+    const start = getFilePanelLineStart(source, position);
+    let end = start;
+    for (let index = 0; index < lineCount; index += 1) {
+        if (end >= source.length) {
+            end = source.length;
+            break;
+        }
+        const nextBreak = source.indexOf('\n', end);
+        if (nextBreak < 0) {
+            end = source.length;
+            break;
+        }
+        end = nextBreak + 1;
+    }
+    return { start, end };
+}
+
+function getFilePanelLineIndent(text, position) {
+    const source = String(text ?? '');
+    const start = getFilePanelLineStart(source, position);
+    const end = getFilePanelLineEnd(source, start);
+    const match = source.slice(start, end).match(/^[\t ]*/u);
+    return match ? match[0] : '';
+}
+
+function getFilePanelLineNumberPosition(text, lineNumber) {
+    const source = String(text ?? '');
+    const targetLine = Math.max(1, Number(lineNumber) || 1);
+    let position = 0;
+    for (let line = 1; line < targetLine; line += 1) {
+        const nextBreak = source.indexOf('\n', position);
+        if (nextBreak < 0) return source.length;
+        position = nextBreak + 1;
+    }
+    return position;
+}
+
+function isFilePanelVimWordChar(char) {
+    return /[A-Za-z0-9_]/u.test(String(char || ''));
+}
+
+function moveFilePanelVimVertical(text, position, delta) {
+    const source = String(text ?? '');
+    let lineStart = getFilePanelLineStart(source, position);
+    const column = Math.max(0, position - lineStart);
+    const steps = Math.abs(Number(delta) || 0);
+    const direction = delta < 0 ? -1 : 1;
+    for (let index = 0; index < steps; index += 1) {
+        if (direction > 0) {
+            const lineEnd = source.indexOf('\n', lineStart);
+            if (lineEnd < 0) break;
+            lineStart = lineEnd + 1;
+        } else {
+            if (lineStart <= 0) break;
+            lineStart = getFilePanelLineStart(source, lineStart - 1);
+        }
+    }
+    const lineEnd = getFilePanelLineEnd(source, lineStart);
+    return lineStart + Math.min(column, Math.max(0, lineEnd - lineStart));
+}
+
+function moveFilePanelVimWord(text, position, count, direction) {
+    const source = String(text ?? '');
+    let cursor = Math.max(0, Math.min(source.length, Number(position) || 0));
+    const repeat = Math.max(1, Number(count) || 1);
+    for (let step = 0; step < repeat; step += 1) {
+        if (direction === 'backward') {
+            cursor = Math.max(0, cursor - 1);
+            while (cursor > 0 && !isFilePanelVimWordChar(source[cursor])) cursor -= 1;
+            while (cursor > 0 && isFilePanelVimWordChar(source[cursor - 1])) cursor -= 1;
+        } else if (direction === 'end') {
+            if (cursor < source.length - 1) cursor += 1;
+            while (cursor < source.length && !isFilePanelVimWordChar(source[cursor])) cursor += 1;
+            while (cursor < source.length - 1 && isFilePanelVimWordChar(source[cursor + 1])) cursor += 1;
+        } else {
+            while (cursor < source.length && isFilePanelVimWordChar(source[cursor])) cursor += 1;
+            while (cursor < source.length && !isFilePanelVimWordChar(source[cursor])) cursor += 1;
+        }
+    }
+    return Math.max(0, Math.min(source.length, cursor));
+}
+
+function getFilePanelVimCount(state, fallback = 1) {
+    const raw = String(state?.vimCount || '');
+    state.vimCount = '';
+    if (!raw) return fallback;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function clearFilePanelVimPending(state) {
+    if (!state) return;
+    state.vimPending = '';
+    state.vimCount = '';
+}
+
+function setFilePanelVimMode(state, mode, textarea = null) {
+    if (!state) return;
+    state.vimMode = mode;
+    state.vimPending = '';
+    state.vimCount = '';
+    if (mode !== FILE_PANEL_VIM_MODE_VISUAL && mode !== FILE_PANEL_VIM_MODE_VISUAL_LINE) {
+        state.vimVisualAnchor = 0;
+        state.vimVisualHead = 0;
+    }
+    if (mode === FILE_PANEL_VIM_MODE_NORMAL && textarea instanceof HTMLTextAreaElement) {
+        const cursor = Math.min(textarea.selectionStart, textarea.selectionEnd);
+        textarea.setSelectionRange(cursor, cursor);
+    }
+}
+
+function updateFilePanelVisualSelection(textarea, state, headPosition) {
+    if (!(textarea instanceof HTMLTextAreaElement) || !state) return;
+    const text = textarea.value;
+    const anchor = clampFilePanelEditorPosition(textarea, state.vimVisualAnchor);
+    const head = clampFilePanelEditorPosition(textarea, headPosition);
+    state.vimVisualHead = head;
+    if (state.vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE) {
+        const anchorLine = getFilePanelLineStart(text, anchor);
+        const headLine = getFilePanelLineStart(text, head);
+        const start = Math.min(anchorLine, headLine);
+        const endLineStart = Math.max(anchorLine, headLine);
+        const end = getFilePanelLineRange(text, endLineStart, 1).end;
+        textarea.setSelectionRange(start, Math.max(start, end));
+        return;
+    }
+    const start = Math.min(anchor, head);
+    const end = Math.max(anchor, head);
+    textarea.setSelectionRange(start, end === start ? Math.min(textarea.value.length, end + 1) : end);
+}
+
+function applyFilePanelVimMotion(textarea, state, motion, count = 1, options = {}) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return;
+    const text = textarea.value;
+    const repeat = Math.max(1, Number(count) || 1);
+    const visual = state.vimMode === FILE_PANEL_VIM_MODE_VISUAL || state.vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE;
+    const current = visual ? state.vimVisualHead : textarea.selectionStart;
+    let next = current;
+    switch (motion) {
+        case 'left':
+            next = current - repeat;
+            break;
+        case 'right':
+            next = current + repeat;
+            break;
+        case 'down':
+            next = moveFilePanelVimVertical(text, current, repeat);
+            break;
+        case 'up':
+            next = moveFilePanelVimVertical(text, current, -repeat);
+            break;
+        case 'line-start':
+            next = getFilePanelLineStart(text, current);
+            break;
+        case 'first-nonblank': {
+            const start = getFilePanelLineStart(text, current);
+            const end = getFilePanelLineEnd(text, start);
+            const match = text.slice(start, end).match(/[^\t ]/u);
+            next = match ? start + match.index : start;
+            break;
+        }
+        case 'line-end':
+            next = getFilePanelLineEnd(text, current);
+            break;
+        case 'next-word':
+            next = moveFilePanelVimWord(text, current, repeat, 'forward');
+            break;
+        case 'prev-word':
+            next = moveFilePanelVimWord(text, current, repeat, 'backward');
+            break;
+        case 'word-end':
+            next = moveFilePanelVimWord(text, current, repeat, 'end');
+            break;
+        case 'line-number':
+            next = getFilePanelLineNumberPosition(text, options.lineNumber || 1);
+            break;
+        case 'last-line':
+            next = getFilePanelLineStart(text, text.length);
+            break;
+        default:
+            break;
+    }
+    next = clampFilePanelEditorPosition(textarea, next);
+    if (visual) {
+        updateFilePanelVisualSelection(textarea, state, next);
+        return;
+    }
+    textarea.setSelectionRange(next, next);
+}
+
+function handleFilePanelEditorTabKey(event, state, textarea) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const value = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const hasMultiLineSelection = start !== end && value.slice(start, end).includes('\n');
+    if (!hasMultiLineSelection) {
+        if (event.shiftKey) {
+            const lineStart = getFilePanelLineStart(value, start);
+            const beforeCursor = value.slice(lineStart, start);
+            const removable = beforeCursor.match(/(?: {1,4}|\t)$/u)?.[0] || '';
+            if (removable) {
+                replaceFilePanelTextareaRange(textarea, state, start - removable.length, start, '', start - removable.length);
+            }
+            return true;
+        }
+        replaceFilePanelTextareaRange(textarea, state, start, end, '    ');
+        return true;
+    }
+
+    const blockStart = getFilePanelLineStart(value, start);
+    const blockEnd = getFilePanelLineEnd(value, Math.max(start, end - 1));
+    const block = value.slice(blockStart, blockEnd);
+    const lines = block.split('\n');
+    let startDelta = 0;
+    let endDelta = 0;
+    const nextLines = lines.map((line, index) => {
+        if (!event.shiftKey) {
+            if (blockStart + endDelta <= start && index === 0) startDelta += 4;
+            endDelta += 4;
+            return `    ${line}`;
+        }
+        const removed = line.startsWith('\t')
+            ? '\t'
+            : (line.match(/^ {1,4}/u)?.[0] || '');
+        if (removed && blockStart + endDelta < start) startDelta -= removed.length;
+        endDelta -= removed.length;
+        return removed ? line.slice(removed.length) : line;
+    });
+    const replacement = nextLines.join('\n');
+    replaceFilePanelTextareaRange(
+        textarea,
+        state,
+        blockStart,
+        blockEnd,
+        replacement,
+        Math.max(blockStart, start + startDelta),
+        Math.max(blockStart, end + endDelta)
+    );
+    return true;
+}
+
+function yankFilePanelVimLines(textarea, state, count = 1) {
+    const range = getFilePanelLineRange(textarea.value, textarea.selectionStart, count);
+    const text = textarea.value.slice(range.start, range.end);
+    state.vimClipboard = {
+        text: text.endsWith('\n') ? text : `${text}\n`,
+        linewise: true
+    };
+    textarea.setSelectionRange(range.start, range.start);
+}
+
+function deleteFilePanelVimLines(textarea, state, count = 1) {
+    const range = getFilePanelLineRange(textarea.value, textarea.selectionStart, count);
+    const text = textarea.value.slice(range.start, range.end);
+    state.vimClipboard = {
+        text: text.endsWith('\n') ? text : `${text}\n`,
+        linewise: true
+    };
+    replaceFilePanelTextareaRange(textarea, state, range.start, range.end, '', range.start);
+}
+
+function deleteFilePanelVimChars(textarea, state, count = 1) {
+    const start = textarea.selectionStart;
+    const end = Math.min(textarea.value.length, start + Math.max(1, Number(count) || 1));
+    if (end <= start) return;
+    state.vimClipboard = {
+        text: textarea.value.slice(start, end),
+        linewise: false
+    };
+    replaceFilePanelTextareaRange(textarea, state, start, end, '', start);
+}
+
+function copyOrDeleteFilePanelVimSelection(textarea, state, { deleteSelection = false } = {}) {
+    const start = Math.min(textarea.selectionStart, textarea.selectionEnd);
+    const end = Math.max(textarea.selectionStart, textarea.selectionEnd);
+    if (end <= start) {
+        setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL, textarea);
+        return;
+    }
+    state.vimClipboard = {
+        text: textarea.value.slice(start, end),
+        linewise: state.vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE
+    };
+    if (deleteSelection) {
+        replaceFilePanelTextareaRange(textarea, state, start, end, '', start);
+    } else {
+        textarea.setSelectionRange(start, start);
+    }
+    setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL, textarea);
+}
+
+function pasteFilePanelVimClipboard(textarea, state) {
+    const clipboard = state?.vimClipboard;
+    if (!clipboard?.text) return;
+    if (clipboard.linewise) {
+        const range = getFilePanelLineRange(textarea.value, textarea.selectionStart, 1);
+        const insertAt = range.end;
+        const needsLineBreak = insertAt === textarea.value.length
+            && textarea.value.length > 0
+            && textarea.value[insertAt - 1] !== '\n';
+        const pastedText = needsLineBreak ? `\n${clipboard.text}` : clipboard.text;
+        replaceFilePanelTextareaRange(
+            textarea,
+            state,
+            insertAt,
+            insertAt,
+            pastedText,
+            insertAt + (needsLineBreak ? 1 : 0)
+        );
+        return;
+    }
+    const insertAt = Math.min(textarea.value.length, textarea.selectionStart + 1);
+    replaceFilePanelTextareaRange(textarea, state, insertAt, insertAt, clipboard.text, insertAt + clipboard.text.length);
+}
+
+function openFilePanelVimLine(textarea, state, { above = false } = {}) {
+    const value = textarea.value;
+    const cursor = textarea.selectionStart;
+    const lineStart = getFilePanelLineStart(value, cursor);
+    const lineEnd = getFilePanelLineEnd(value, cursor);
+    const indent = getFilePanelLineIndent(value, cursor);
+    if (above) {
+        replaceFilePanelTextareaRange(textarea, state, lineStart, lineStart, `${indent}\n`, lineStart + indent.length);
+    } else {
+        replaceFilePanelTextareaRange(textarea, state, lineEnd, lineEnd, `\n${indent}`, lineEnd + 1 + indent.length);
+    }
+    setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_INSERT);
+}
+
+async function runFilePanelVimCommand(variant, command, options = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const normalizedCommand = String(command || '').trim().toLowerCase();
+    if (!normalizedCommand) return;
+    if (normalizedCommand === 'w') {
+        if (!state.dirty) {
+            showToast('저장할 변경 사항이 없습니다.', { durationMs: 2200 });
+            return;
+        }
+        await saveFilePanelEdits(normalizedVariant, {
+            stayEditing: true,
+            selection: captureFilePanelTextareaSelection(options.textarea)
+        });
+        return;
+    }
+    if (normalizedCommand === 'q') {
+        if (state.dirty) {
+            showToast('변경 사항이 있습니다. :q! 또는 :wq를 사용하세요.', {
+                tone: 'error',
+                durationMs: 3200
+            });
+            return;
+        }
+        await rerenderFilePanelPreviewFromState(normalizedVariant);
+        return;
+    }
+    if (normalizedCommand === 'q!') {
+        discardFilePanelEditChanges(normalizedVariant);
+        await rerenderFilePanelPreviewFromState(normalizedVariant);
+        return;
+    }
+    if (normalizedCommand === 'wq' || normalizedCommand === 'x') {
+        if (state.dirty) {
+            await saveFilePanelEdits(normalizedVariant);
+        } else {
+            await rerenderFilePanelPreviewFromState(normalizedVariant);
+        }
+        return;
+    }
+    showToast(`지원하지 않는 Vim 명령입니다: :${normalizedCommand}`, {
+        tone: 'error',
+        durationMs: 2600
+    });
+}
+
+function promptFilePanelVimCommand(variant, textarea) {
+    const command = window.prompt(':', '');
+    if (command == null) return;
+    void runFilePanelVimCommand(variant, command, { textarea });
+}
+
+function promptFilePanelVimSearch(textarea, state) {
+    const query = window.prompt('/', '');
+    if (!query) return;
+    const text = textarea.value;
+    const start = Math.max(textarea.selectionEnd, textarea.selectionStart + 1);
+    let index = text.indexOf(query, start);
+    if (index < 0) {
+        index = text.indexOf(query, 0);
+    }
+    if (index < 0) {
+        showToast('검색 결과가 없습니다.', { tone: 'error', durationMs: 2200 });
+        return;
+    }
+    setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL);
+    textarea.setSelectionRange(index, index + query.length);
+}
+
+function handleFilePanelVimPendingKey(key, lowerKey, textarea, state) {
+    if (state.vimPending === 'g') {
+        if (lowerKey === 'g') {
+            const hasCount = Boolean(state.vimCount);
+            const lineNumber = hasCount ? getFilePanelVimCount(state, 1) : 1;
+            state.vimPending = '';
+            applyFilePanelVimMotion(textarea, state, 'line-number', 1, { lineNumber });
+            return true;
+        }
+        clearFilePanelVimPending(state);
+        return true;
+    }
+    if (state.vimPending === 'd' || state.vimPending === 'y') {
+        const operator = state.vimPending;
+        if (lowerKey === operator) {
+            const count = getFilePanelVimCount(state, 1);
+            state.vimPending = '';
+            if (operator === 'd') {
+                deleteFilePanelVimLines(textarea, state, count);
+            } else {
+                yankFilePanelVimLines(textarea, state, count);
+            }
+            return true;
+        }
+        clearFilePanelVimPending(state);
+        return true;
+    }
+    void key;
+    return false;
+}
+
+function handleFilePanelVimNormalKey(key, lowerKey, variant, textarea, state) {
+    if (/^\d$/u.test(key) && (state.vimCount || key !== '0')) {
+        state.vimCount = `${state.vimCount || ''}${key}`;
+        return true;
+    }
+
+    if (handleFilePanelVimPendingKey(key, lowerKey, textarea, state)) {
+        return true;
+    }
+
+    if (key === ':') {
+        clearFilePanelVimPending(state);
+        promptFilePanelVimCommand(variant, textarea);
+        return true;
+    }
+    if (key === '/') {
+        clearFilePanelVimPending(state);
+        promptFilePanelVimSearch(textarea, state);
+        return true;
+    }
+    if (key === 'G') {
+        const hasCount = Boolean(state.vimCount);
+        const lineNumber = hasCount ? getFilePanelVimCount(state, 1) : null;
+        clearFilePanelVimPending(state);
+        if (lineNumber) {
+            applyFilePanelVimMotion(textarea, state, 'line-number', 1, { lineNumber });
+        } else {
+            applyFilePanelVimMotion(textarea, state, 'last-line');
+        }
+        return true;
+    }
+    if (key === 'I') {
+        clearFilePanelVimPending(state);
+        applyFilePanelVimMotion(textarea, state, 'first-nonblank');
+        setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_INSERT);
+        return true;
+    }
+    if (key === 'A') {
+        clearFilePanelVimPending(state);
+        applyFilePanelVimMotion(textarea, state, 'line-end');
+        setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_INSERT);
+        return true;
+    }
+    if (key === 'O') {
+        clearFilePanelVimPending(state);
+        openFilePanelVimLine(textarea, state, { above: true });
+        return true;
+    }
+    if (key === 'V') {
+        clearFilePanelVimPending(state);
+        state.vimMode = FILE_PANEL_VIM_MODE_VISUAL_LINE;
+        state.vimVisualAnchor = textarea.selectionStart;
+        updateFilePanelVisualSelection(textarea, state, textarea.selectionStart);
+        return true;
+    }
+
+    const count = () => getFilePanelVimCount(state, 1);
+    switch (lowerKey) {
+        case 'h':
+        case 'arrowleft':
+            applyFilePanelVimMotion(textarea, state, 'left', count());
+            return true;
+        case 'l':
+        case 'arrowright':
+            applyFilePanelVimMotion(textarea, state, 'right', count());
+            return true;
+        case 'j':
+        case 'arrowdown':
+            applyFilePanelVimMotion(textarea, state, 'down', count());
+            return true;
+        case 'k':
+        case 'arrowup':
+            applyFilePanelVimMotion(textarea, state, 'up', count());
+            return true;
+        case '0':
+            clearFilePanelVimPending(state);
+            applyFilePanelVimMotion(textarea, state, 'line-start');
+            return true;
+        case '^':
+            clearFilePanelVimPending(state);
+            applyFilePanelVimMotion(textarea, state, 'first-nonblank');
+            return true;
+        case '$':
+            clearFilePanelVimPending(state);
+            applyFilePanelVimMotion(textarea, state, 'line-end');
+            return true;
+        case 'w':
+            applyFilePanelVimMotion(textarea, state, 'next-word', count());
+            return true;
+        case 'b':
+            applyFilePanelVimMotion(textarea, state, 'prev-word', count());
+            return true;
+        case 'e':
+            applyFilePanelVimMotion(textarea, state, 'word-end', count());
+            return true;
+        case 'g':
+            state.vimPending = 'g';
+            return true;
+        case 'd':
+            state.vimPending = 'd';
+            return true;
+        case 'y':
+            state.vimPending = 'y';
+            return true;
+        case 'x':
+            deleteFilePanelVimChars(textarea, state, count());
+            return true;
+        case 'p':
+            clearFilePanelVimPending(state);
+            pasteFilePanelVimClipboard(textarea, state);
+            return true;
+        case 'u':
+            clearFilePanelVimPending(state);
+            undoFilePanelVimEdit(state, textarea);
+            return true;
+        case 'i':
+            clearFilePanelVimPending(state);
+            setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_INSERT);
+            return true;
+        case 'a':
+            clearFilePanelVimPending(state);
+            applyFilePanelVimMotion(textarea, state, 'right');
+            setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_INSERT);
+            return true;
+        case 'o':
+            clearFilePanelVimPending(state);
+            openFilePanelVimLine(textarea, state, { above: key === 'O' });
+            return true;
+        case 'v':
+            clearFilePanelVimPending(state);
+            state.vimMode = FILE_PANEL_VIM_MODE_VISUAL;
+            state.vimVisualAnchor = textarea.selectionStart;
+            updateFilePanelVisualSelection(textarea, state, textarea.selectionStart + 1);
+            return true;
+        default:
+            break;
+    }
+    return false;
+}
+
+function handleFilePanelVimVisualKey(key, lowerKey, textarea, state) {
+    if (lowerKey === 'y') {
+        copyOrDeleteFilePanelVimSelection(textarea, state, { deleteSelection: false });
+        return true;
+    }
+    if (lowerKey === 'd' || lowerKey === 'x') {
+        copyOrDeleteFilePanelVimSelection(textarea, state, { deleteSelection: true });
+        return true;
+    }
+    if (lowerKey === 'v' || key === 'V') {
+        setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL, textarea);
+        return true;
+    }
+    switch (lowerKey) {
+        case 'h':
+        case 'arrowleft':
+            applyFilePanelVimMotion(textarea, state, 'left');
+            return true;
+        case 'l':
+        case 'arrowright':
+            applyFilePanelVimMotion(textarea, state, 'right');
+            return true;
+        case 'j':
+        case 'arrowdown':
+            applyFilePanelVimMotion(textarea, state, 'down');
+            return true;
+        case 'k':
+        case 'arrowup':
+            applyFilePanelVimMotion(textarea, state, 'up');
+            return true;
+        case '0':
+            applyFilePanelVimMotion(textarea, state, 'line-start');
+            return true;
+        case '^':
+            applyFilePanelVimMotion(textarea, state, 'first-nonblank');
+            return true;
+        case '$':
+            applyFilePanelVimMotion(textarea, state, 'line-end');
+            return true;
+        case 'w':
+            applyFilePanelVimMotion(textarea, state, 'next-word');
+            return true;
+        case 'b':
+            applyFilePanelVimMotion(textarea, state, 'prev-word');
+            return true;
+        case 'e':
+            applyFilePanelVimMotion(textarea, state, 'word-end');
+            return true;
+        default:
+            break;
+    }
+    return false;
+}
+
+function handleFilePanelEditorKeydown(event, variant, textarea) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const key = String(event.key || '');
+    const lowerKey = key.toLowerCase();
+
+    if ((event.metaKey || event.ctrlKey) && lowerKey === 's') {
+        event.preventDefault();
+        event.stopPropagation();
+        void saveFilePanelEdits(normalizedVariant);
+        return true;
+    }
+
+    if (normalizeFilePanelEditorMode(state.editorMode) !== FILE_PANEL_EDITOR_MODE_FIXED) {
+        return false;
+    }
+    if (state.vimComposing) {
+        return false;
+    }
+    if ((event.metaKey || event.ctrlKey) && lowerKey === 'r') {
+        event.preventDefault();
+        event.stopPropagation();
+        redoFilePanelVimEdit(state, textarea);
+        return true;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) {
+        return false;
+    }
+
+    if (state.vimMode === FILE_PANEL_VIM_MODE_INSERT) {
+        if (key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL, textarea);
+            return true;
+        }
+        if (key === 'Tab') {
+            return handleFilePanelEditorTabKey(event, state, textarea);
+        }
+        return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (key === 'Escape') {
+        setFilePanelVimMode(state, FILE_PANEL_VIM_MODE_NORMAL, textarea);
+        return true;
+    }
+
+    if (state.vimMode === FILE_PANEL_VIM_MODE_VISUAL || state.vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE) {
+        return handleFilePanelVimVisualKey(key, lowerKey, textarea, state);
+    }
+
+    const handled = handleFilePanelVimNormalKey(key, lowerKey, normalizedVariant, textarea, state);
+    if (!handled && key.length === 1) {
+        clearFilePanelVimPending(state);
+    }
+    return true;
+}
+
+function renderFilePanelEditor(variant, options = {}) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const config = getFilePanelVariantConfig(normalizedVariant);
     const elements = config.getElements();
@@ -17310,6 +18344,9 @@ function renderFilePanelEditor(variant) {
     elements.viewerContent.innerHTML = '';
     const wrapper = document.createElement('div');
     wrapper.className = 'file-browser-editor';
+    const editorMode = normalizeFilePanelEditorMode(state.editorMode);
+    const isFixedMode = editorMode === FILE_PANEL_EDITOR_MODE_FIXED;
+    wrapper.classList.toggle('is-fixed-mode', isFixedMode);
 
     const textarea = document.createElement('textarea');
     textarea.className = 'file-browser-editor-input';
@@ -17317,36 +18354,84 @@ function renderFilePanelEditor(variant) {
     textarea.autocapitalize = 'off';
     textarea.autocomplete = 'off';
     textarea.autocorrect = 'off';
+    textarea.wrap = isFixedMode ? 'off' : 'soft';
     textarea.value = typeof state.editBuffer === 'string'
         ? state.editBuffer
         : String(state.previewResult?.content || '');
 
     const status = document.createElement('div');
     status.className = 'file-browser-editor-status';
-    status.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+    const statusText = document.createElement('span');
+    statusText.className = 'file-browser-editor-status-text';
+    statusText.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+    const statusActions = document.createElement('div');
+    statusActions.className = 'file-browser-editor-status-actions';
+    const vimBadge = document.createElement('span');
+    vimBadge.className = 'file-browser-editor-vim-badge';
+    const modeToggle = buildFilePanelEditorModeToggle(normalizedVariant, textarea);
+    statusActions.appendChild(vimBadge);
+    statusActions.appendChild(modeToggle);
+    status.appendChild(statusText);
+    status.appendChild(statusActions);
+
+    const body = document.createElement('div');
+    body.className = 'file-browser-editor-body';
+    let gutter = null;
+    if (isFixedMode) {
+        gutter = document.createElement('pre');
+        gutter.className = 'file-browser-editor-gutter';
+        gutter.setAttribute('aria-hidden', 'true');
+        body.appendChild(gutter);
+    }
+    body.appendChild(textarea);
+
+    const syncEditorChrome = () => {
+        syncFilePanelEditorStatusElements(normalizedVariant, statusText, vimBadge, modeToggle);
+        if (gutter) {
+            updateFilePanelEditorGutter(gutter, textarea);
+        }
+    };
+    syncEditorChrome();
 
     textarea.addEventListener('input', () => {
         state.editBuffer = textarea.value;
         state.dirty = textarea.value !== String(state.previewResult?.content || '');
-        status.textContent = buildFilePanelEditorStatusText(normalizedVariant);
+        syncEditorChrome();
         syncFilePanelViewerActionState(normalizedVariant);
     });
+    textarea.addEventListener('scroll', () => {
+        if (gutter) {
+            gutter.scrollTop = textarea.scrollTop;
+        }
+    });
+    textarea.addEventListener('compositionstart', () => {
+        state.vimComposing = true;
+    });
+    textarea.addEventListener('compositionend', () => {
+        state.vimComposing = false;
+    });
     textarea.addEventListener('keydown', event => {
-        const key = String(event.key || '').toLowerCase();
-        if ((event.metaKey || event.ctrlKey) && key === 's') {
-            event.preventDefault();
-            void saveFilePanelEdits(normalizedVariant);
+        if (handleFilePanelEditorKeydown(event, normalizedVariant, textarea)) {
+            syncEditorChrome();
         }
     });
 
-    wrapper.appendChild(textarea);
+    wrapper.appendChild(body);
     wrapper.appendChild(status);
     elements.viewerContent.appendChild(wrapper);
     syncFilePanelViewerActionState(normalizedVariant);
     requestAnimationFrame(() => {
         textarea.focus();
-        const end = textarea.value.length;
-        textarea.setSelectionRange(end, end);
+        if (options.selection) {
+            restoreFilePanelTextareaSelection(textarea, options.selection);
+        } else {
+            const end = textarea.value.length;
+            textarea.setSelectionRange(end, end);
+        }
+        if (isFixedMode && state.vimMode === FILE_PANEL_VIM_MODE_NORMAL) {
+            const cursor = textarea.selectionStart;
+            textarea.setSelectionRange(cursor, cursor);
+        }
     });
     return true;
 }
@@ -17379,6 +18464,11 @@ async function toggleFilePanelEditMode(variant) {
         state.dirty = false;
         state.saving = false;
         state.editBuffer = String(state.previewResult?.content || '');
+        state.editorMode = loadFilePanelEditorModePreference();
+        resetFilePanelVimInteractionState(state, {
+            editorMode: state.editorMode,
+            preserveClipboard: true
+        });
         return renderFilePanelEditor(normalizedVariant);
     }
 
@@ -17388,11 +18478,12 @@ async function toggleFilePanelEditMode(variant) {
     return rerenderFilePanelPreviewFromState(normalizedVariant);
 }
 
-async function saveFilePanelEdits(variant) {
+async function saveFilePanelEdits(variant, options = {}) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const state = getFilePanelEditState(normalizedVariant);
     if (!state.editing || !state.dirty || state.saving || !state.path) return false;
 
+    const stayEditing = Boolean(options.stayEditing);
     state.saving = true;
     syncFilePanelViewerActionState(normalizedVariant);
     try {
@@ -17403,13 +18494,33 @@ async function saveFilePanelEdits(variant) {
             state.modifiedNs
         );
         setFilePanelPreviewPath(normalizedVariant, result?.path || state.path);
-        await renderFileBrowserViewerIntoElements(
-            getFilePanelVariantConfig(normalizedVariant).getElements(),
-            result,
-            {
-                root: state.root || result?.root || getFilePanelCurrentRoot(normalizedVariant)
-            }
-        );
+        if (stayEditing) {
+            const nextRoot = normalizeFileBrowserRoot(
+                result?.root || state.root || getFilePanelCurrentRoot(normalizedVariant)
+            );
+            const nextPath = normalizeFileBrowserRelativePath(result?.path || state.path);
+            const nextContent = typeof result?.content === 'string' ? result.content : state.editBuffer;
+            state.root = nextRoot;
+            state.path = nextPath;
+            state.editable = result?.editable == null ? state.editable : Boolean(result.editable);
+            state.editing = true;
+            state.dirty = false;
+            state.saving = false;
+            state.modifiedNs = String(result?.modified_ns || state.modifiedNs || '').trim();
+            state.previewResult = result && typeof result === 'object'
+                ? { ...result, content: nextContent }
+                : { ...(state.previewResult || {}), content: nextContent };
+            state.editBuffer = nextContent;
+            renderFilePanelEditor(normalizedVariant, { selection: options.selection });
+        } else {
+            await renderFileBrowserViewerIntoElements(
+                getFilePanelVariantConfig(normalizedVariant).getElements(),
+                result,
+                {
+                    root: state.root || result?.root || getFilePanelCurrentRoot(normalizedVariant)
+                }
+            );
+        }
         if (normalizedVariant === FILE_PANEL_VARIANT_OVERLAY) {
             applyFileBrowserSelectionState();
         } else {

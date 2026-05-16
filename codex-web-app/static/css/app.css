@@ -2246,8 +2246,32 @@ textarea {
     background: var(--surface);
 }
 
+.file-browser-editor-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.file-browser-editor-gutter {
+    flex: 0 0 calc((var(--file-browser-editor-line-digit-width, 2) * 1ch) + 20px);
+    min-height: 260px;
+    margin: 0;
+    padding: 12px 8px 12px 10px;
+    border-right: 1px solid var(--border);
+    background: var(--surface-muted);
+    color: var(--text-tertiary);
+    font-family: var(--font-code-block);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow: hidden;
+    text-align: right;
+    user-select: none;
+}
+
 .file-browser-editor-input {
     flex: 1 1 auto;
+    min-width: 0;
     min-height: 260px;
     resize: none;
     border: 0;
@@ -2260,6 +2284,12 @@ textarea {
     font-size: 12px;
     line-height: 1.6;
     tab-size: 4;
+}
+
+.file-browser-editor.is-fixed-mode .file-browser-editor-input {
+    overflow: auto;
+    white-space: pre;
+    overflow-wrap: normal;
 }
 
 .file-browser-editor-input::placeholder {
@@ -2276,6 +2306,70 @@ textarea {
     background: var(--surface-muted);
     font-size: 11px;
     color: var(--text-tertiary);
+}
+
+.file-browser-editor-status-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-browser-editor-status-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+}
+
+.file-browser-editor-vim-badge {
+    min-width: 62px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-family: var(--font-code-block);
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: center;
+}
+
+.file-browser-editor-vim-badge.is-hidden {
+    display: none;
+}
+
+.file-browser-editor-mode-toggle {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.file-browser-editor-mode-button {
+    min-width: 48px;
+    height: 24px;
+    padding: 0 8px;
+    border: 0;
+    border-right: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.file-browser-editor-mode-button:last-child {
+    border-right: 0;
+}
+
+.file-browser-editor-mode-button:hover {
+    background: var(--button-secondary-bg);
+    color: var(--text-primary);
+}
+
+.file-browser-editor-mode-button.is-active {
+    background: var(--accent);
+    color: #ffffff;
 }
 
 .file-browser-markdown {
@@ -10397,8 +10491,28 @@ label.hover-tooltip,
         font-size: 10px;
     }
 
+    .file-browser-editor-gutter {
+        font-size: 10px;
+    }
+
     .file-browser-editor-status {
+        flex-wrap: wrap;
         font-size: 9px;
+    }
+
+    .file-browser-editor-status-actions {
+        gap: 4px;
+    }
+
+    .file-browser-editor-vim-badge {
+        min-width: 54px;
+        font-size: 9px;
+    }
+
+    .file-browser-editor-mode-button {
+        min-width: 42px;
+        height: 22px;
+        padding: 0 6px;
     }
 
     .file-browser-markdown {

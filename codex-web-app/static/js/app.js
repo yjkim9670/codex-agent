@@ -17435,6 +17435,21 @@ function restoreFilePanelTextareaSelection(textarea, selection) {
     textarea.setSelectionRange(start, end);
 }
 
+function syncFilePanelEditorVimModeClasses(wrapper, state) {
+    if (!(wrapper instanceof HTMLElement)) return;
+    const isFixedMode = normalizeFilePanelEditorMode(state?.editorMode) === FILE_PANEL_EDITOR_MODE_FIXED;
+    const vimMode = isFixedMode ? state?.vimMode : '';
+    wrapper.classList.toggle('is-vim-insert', vimMode === FILE_PANEL_VIM_MODE_INSERT);
+    wrapper.classList.toggle('is-vim-normal', vimMode === FILE_PANEL_VIM_MODE_NORMAL);
+    wrapper.classList.toggle('is-vim-visual', vimMode === FILE_PANEL_VIM_MODE_VISUAL);
+    wrapper.classList.toggle('is-vim-visual-line', vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE);
+    if (vimMode) {
+        wrapper.dataset.vimMode = vimMode;
+    } else {
+        delete wrapper.dataset.vimMode;
+    }
+}
+
 function syncFilePanelEditorStatusElements(variant, statusText, vimBadge, modeToggle) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const state = getFilePanelEditState(normalizedVariant);
@@ -17527,6 +17542,116 @@ function buildFilePanelEditorModeToggle(variant, textarea) {
     });
 
     return toggle;
+}
+
+function copyFilePanelTextareaMeasureStyles(mirror, textarea) {
+    const style = window.getComputedStyle(textarea);
+    [
+        'boxSizing',
+        'fontFamily',
+        'fontSize',
+        'fontStyle',
+        'fontVariant',
+        'fontWeight',
+        'letterSpacing',
+        'lineHeight',
+        'paddingTop',
+        'paddingRight',
+        'paddingBottom',
+        'paddingLeft',
+        'borderTopWidth',
+        'borderRightWidth',
+        'borderBottomWidth',
+        'borderLeftWidth',
+        'textIndent',
+        'textRendering',
+        'textTransform',
+        'tabSize',
+        'direction'
+    ].forEach(property => {
+        mirror.style[property] = style[property];
+    });
+    mirror.style.position = 'absolute';
+    mirror.style.left = '0';
+    mirror.style.top = '0';
+    mirror.style.visibility = 'hidden';
+    mirror.style.pointerEvents = 'none';
+    mirror.style.whiteSpace = textarea.wrap === 'off' ? 'pre' : 'pre-wrap';
+    mirror.style.overflowWrap = 'normal';
+    mirror.style.wordBreak = 'normal';
+    mirror.style.overflow = 'hidden';
+    mirror.style.width = `${Math.max(textarea.scrollWidth, textarea.clientWidth)}px`;
+    mirror.style.minHeight = `${textarea.clientHeight}px`;
+}
+
+function measureFilePanelTextareaCaret(textarea) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return null;
+    const body = textarea.closest('.file-browser-editor-body');
+    if (!(body instanceof HTMLElement)) return null;
+    const position = clampFilePanelEditorPosition(textarea, textarea.selectionStart);
+    const value = textarea.value;
+    const currentChar = value[position];
+    const mirror = document.createElement('div');
+    copyFilePanelTextareaMeasureStyles(mirror, textarea);
+    mirror.textContent = value.slice(0, position);
+
+    const marker = document.createElement('span');
+    marker.textContent = currentChar && currentChar !== '\n' && currentChar !== '\r'
+        ? currentChar
+        : '\u00a0';
+    marker.style.display = 'inline-block';
+    marker.style.minWidth = '1ch';
+    mirror.appendChild(marker);
+    body.appendChild(mirror);
+
+    const style = window.getComputedStyle(textarea);
+    const fontSize = Number.parseFloat(style.fontSize) || 12;
+    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.6;
+    const markerRect = marker.getBoundingClientRect();
+    const left = textarea.offsetLeft + marker.offsetLeft - textarea.scrollLeft;
+    const top = textarea.offsetTop + marker.offsetTop - textarea.scrollTop;
+    const width = Math.max(2, markerRect.width || fontSize * 0.62);
+    mirror.remove();
+    return {
+        left,
+        top,
+        width,
+        height: lineHeight
+    };
+}
+
+function syncFilePanelEditorVimCursor(cursor, textarea, state) {
+    if (!(cursor instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement) || !state) return;
+    const mode = state.vimMode;
+    const showBlockCursor = normalizeFilePanelEditorMode(state.editorMode) === FILE_PANEL_EDITOR_MODE_FIXED
+        && (mode === FILE_PANEL_VIM_MODE_NORMAL || mode === FILE_PANEL_VIM_MODE_VISUAL || mode === FILE_PANEL_VIM_MODE_VISUAL_LINE)
+        && document.activeElement === textarea;
+    if (!showBlockCursor) {
+        cursor.classList.remove('is-visible', 'is-visual');
+        return;
+    }
+    const metrics = measureFilePanelTextareaCaret(textarea);
+    if (!metrics) {
+        cursor.classList.remove('is-visible', 'is-visual');
+        return;
+    }
+    const viewportLeft = textarea.offsetLeft;
+    const viewportTop = textarea.offsetTop;
+    const viewportRight = viewportLeft + textarea.clientWidth;
+    const viewportBottom = viewportTop + textarea.clientHeight;
+    const isOutside = metrics.left + metrics.width < viewportLeft
+        || metrics.left > viewportRight
+        || metrics.top + metrics.height < viewportTop
+        || metrics.top > viewportBottom;
+    if (isOutside) {
+        cursor.classList.remove('is-visible', 'is-visual');
+        return;
+    }
+    cursor.style.transform = `translate(${Math.round(metrics.left)}px, ${Math.round(metrics.top)}px)`;
+    cursor.style.width = `${Math.ceil(metrics.width)}px`;
+    cursor.style.height = `${Math.ceil(metrics.height)}px`;
+    cursor.classList.add('is-visible');
+    cursor.classList.toggle('is-visual', mode === FILE_PANEL_VIM_MODE_VISUAL || mode === FILE_PANEL_VIM_MODE_VISUAL_LINE);
 }
 
 function clampFilePanelEditorPosition(textarea, position) {
@@ -18347,6 +18472,7 @@ function renderFilePanelEditor(variant, options = {}) {
     const editorMode = normalizeFilePanelEditorMode(state.editorMode);
     const isFixedMode = editorMode === FILE_PANEL_EDITOR_MODE_FIXED;
     wrapper.classList.toggle('is-fixed-mode', isFixedMode);
+    syncFilePanelEditorVimModeClasses(wrapper, state);
 
     const textarea = document.createElement('textarea');
     textarea.className = 'file-browser-editor-input';
@@ -18384,11 +18510,22 @@ function renderFilePanelEditor(variant, options = {}) {
         body.appendChild(gutter);
     }
     body.appendChild(textarea);
+    let vimCursor = null;
+    if (isFixedMode) {
+        vimCursor = document.createElement('div');
+        vimCursor.className = 'file-browser-editor-cursor';
+        vimCursor.setAttribute('aria-hidden', 'true');
+        body.appendChild(vimCursor);
+    }
 
     const syncEditorChrome = () => {
+        syncFilePanelEditorVimModeClasses(wrapper, state);
         syncFilePanelEditorStatusElements(normalizedVariant, statusText, vimBadge, modeToggle);
         if (gutter) {
             updateFilePanelEditorGutter(gutter, textarea);
+        }
+        if (vimCursor) {
+            syncFilePanelEditorVimCursor(vimCursor, textarea, state);
         }
     };
     syncEditorChrome();
@@ -18403,6 +18540,12 @@ function renderFilePanelEditor(variant, options = {}) {
         if (gutter) {
             gutter.scrollTop = textarea.scrollTop;
         }
+        if (vimCursor) {
+            syncFilePanelEditorVimCursor(vimCursor, textarea, state);
+        }
+    });
+    ['focus', 'blur', 'keyup', 'mouseup', 'select'].forEach(eventName => {
+        textarea.addEventListener(eventName, syncEditorChrome);
     });
     textarea.addEventListener('compositionstart', () => {
         state.vimComposing = true;
@@ -18432,6 +18575,7 @@ function renderFilePanelEditor(variant, options = {}) {
             const cursor = textarea.selectionStart;
             textarea.setSelectionRange(cursor, cursor);
         }
+        syncEditorChrome();
     });
     return true;
 }
@@ -20577,7 +20721,7 @@ function getChatToolsOverlayElements() {
 }
 
 const CHAT_TOOL_HELP_TEXT = Object.freeze({
-    overlayTitle: '추가 도구는 기본 채팅 입력부 밖에 숨겨 둔 고위험/보조 기능 모음입니다. 실행 정책, 보고서, worktree, App Server 파일럿을 여기에서만 조정합니다.',
+    overlayTitle: '추가 도구는 기본 채팅 입력부 밖에 숨겨 둔 보조 실행 기능입니다. 기본 화면은 보고서와 worktree에 집중하고 고급/설정 기능은 접어서 둡니다.',
     executionSection: 'Codex가 어떤 격리 수준과 실행 경로로 동작하는지 보여줍니다. 일반 수정, 격리 worktree, 읽기 전용 보고서 경로를 구분합니다.',
     reportSection: '현재 프롬프트와 세션 맥락을 구조화된 보고서로 실행합니다. 보고서 작업은 read-only ephemeral 정책을 사용해 영구 파일 수정을 피합니다.',
     worktreeSection: '리스크 있는 구현을 현재 checkout과 분리된 Git worktree에서 실행합니다. 완료 후 handoff로 diff를 가져오거나 cleanup으로 폐기합니다.',
@@ -20637,6 +20781,57 @@ function setChatToolHelp(element, key, fallback = '', options = {}) {
     setHoverTooltip(element, text, options);
 }
 
+function configureChatToolHelpBadge(badge, key, fallback = '') {
+    if (!badge) return;
+    const text = getChatToolHelpText(key, fallback);
+    setHoverTooltip(badge, text);
+    badge.setAttribute('aria-label', text ? `도움말: ${text}` : '도움말');
+    if (badge.dataset.chatToolHelpBound === '1') return;
+    badge.dataset.chatToolHelpBound = '1';
+    badge.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!getHoverTooltipText(badge)) return;
+        const willOpen = !badge.classList.contains('is-open');
+        closeOpenHoverTooltips(badge);
+        badge.classList.toggle('is-open', willOpen);
+        if (willOpen) {
+            scheduleHoverTooltipRender(badge);
+        } else {
+            hideHoverTooltipLayer();
+        }
+    });
+}
+
+function initializeChatToolHelpBadges(root = document) {
+    const targetRoot = root || document;
+    targetRoot.querySelectorAll('[data-chat-tool-help-key]').forEach(badge => {
+        configureChatToolHelpBadge(badge, badge.getAttribute('data-chat-tool-help-key') || '');
+    });
+}
+
+function createChatToolHelpBadge(key, fallback = '') {
+    const badge = document.createElement('button');
+    badge.type = 'button';
+    badge.className = 'chat-tools-help-badge';
+    badge.textContent = '?';
+    if (key) {
+        badge.dataset.chatToolHelpKey = key;
+    }
+    configureChatToolHelpBadge(badge, key, fallback);
+    return badge;
+}
+
+function createChatToolActionGroup(control, helpKey, fallback = '') {
+    const group = document.createElement('span');
+    group.className = 'chat-tools-action-group';
+    if (control) {
+        group.appendChild(control);
+    }
+    group.appendChild(createChatToolHelpBadge(helpKey, fallback));
+    return group;
+}
+
 function getExecutionPolicyHelpKey(presetId) {
     if (presetId === 'standard') return 'policyStandard';
     if (presetId === 'worktree_isolated') return 'policyWorktree';
@@ -20653,8 +20848,8 @@ function getStructuredReportHelpKey(presetId) {
 }
 
 function initializeChatToolsHelp() {
+    const overlay = document.getElementById('codex-chat-tools-overlay');
     setChatToolHelp(document.getElementById('codex-chat-tools-overlay-title'), 'overlayTitle');
-    setChatToolHelp(document.getElementById('codex-chat-tools-execution-title'), 'executionSection');
     setChatToolHelp(document.getElementById('codex-chat-tools-report-title'), 'reportSection');
     setChatToolHelp(document.getElementById('codex-chat-tools-worktree-title'), 'worktreeSection');
     setChatToolHelp(document.getElementById('codex-chat-tools-app-server-title'), 'appServerSection');
@@ -20676,6 +20871,7 @@ function initializeChatToolsHelp() {
     setChatToolHelp(panelTitles[0], 'modelsPanel');
     setChatToolHelp(panelTitles[1], 'featuresPanel');
     setChatToolHelp(panelTitles[2], 'threadsPanel');
+    initializeChatToolHelpBadges(overlay || document);
 }
 
 function isChatToolsOverlayOpen() {
@@ -20843,7 +21039,7 @@ function renderWorktreeTaskBar() {
             event.preventDefault();
             void handoffWorktreeTask(task.id);
         });
-        item.appendChild(handoff);
+        item.appendChild(createChatToolActionGroup(handoff, 'worktreeHandoff'));
 
         const cleanup = document.createElement('button');
         cleanup.type = 'button';
@@ -20854,7 +21050,7 @@ function renderWorktreeTaskBar() {
             event.preventDefault();
             void cleanupWorktreeTask(task.id, { force: false });
         });
-        item.appendChild(cleanup);
+        item.appendChild(createChatToolActionGroup(cleanup, 'worktreeCleanup'));
         bar.appendChild(item);
     });
     syncChatToolsToggleState();
@@ -21133,7 +21329,9 @@ function renderStructuredReportBar() {
             event.preventDefault();
             void handleStructuredReportPreset(preset.id);
         });
-        bar.appendChild(button);
+        const group = createChatToolActionGroup(button, getStructuredReportHelpKey(preset.id), title);
+        group.classList.add('structured-report-action');
+        bar.appendChild(group);
     });
 }
 
@@ -21444,7 +21642,7 @@ function renderAppServerThreadDetail() {
         event.preventDefault();
         void readAppServerThread(state.appServer.selectedThreadId, { includeTurns: true });
     });
-    actions.appendChild(turns);
+    actions.appendChild(createChatToolActionGroup(turns, 'threadTurns'));
     if (state.appServer.threadDetailNextCursor) {
         const moreTurns = document.createElement('button');
         moreTurns.type = 'button';
@@ -21456,7 +21654,7 @@ function renderAppServerThreadDetail() {
             event.preventDefault();
             void loadMoreAppServerThreadTurns();
         });
-        actions.appendChild(moreTurns);
+        actions.appendChild(createChatToolActionGroup(moreTurns, 'threadMoreTurns'));
     }
     ['archive', 'compact', 'rollback'].forEach(actionId => {
         const preview = document.createElement('button');
@@ -21469,7 +21667,7 @@ function renderAppServerThreadDetail() {
             event.preventDefault();
             void previewAppServerThreadLifecycle(state.appServer.selectedThreadId, actionId);
         });
-        actions.appendChild(preview);
+        actions.appendChild(createChatToolActionGroup(preview, 'threadLifecyclePreview'));
     });
     head.appendChild(actions);
     panel.appendChild(head);
@@ -21545,7 +21743,7 @@ function renderAppServerThreads() {
             event.preventDefault();
             void readAppServerThread(threadId, { includeTurns: false });
         });
-        actions.appendChild(read);
+        actions.appendChild(createChatToolActionGroup(read, 'threadRead'));
         const resume = document.createElement('button');
         resume.type = 'button';
         resume.className = 'app-server-thread-action';
@@ -21556,7 +21754,7 @@ function renderAppServerThreads() {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'resume');
         });
-        actions.appendChild(resume);
+        actions.appendChild(createChatToolActionGroup(resume, 'threadResume'));
         const fork = document.createElement('button');
         fork.type = 'button';
         fork.className = 'app-server-thread-action';
@@ -21567,7 +21765,7 @@ function renderAppServerThreads() {
             event.preventDefault();
             void runAppServerThreadAction(threadId, 'fork');
         });
-        actions.appendChild(fork);
+        actions.appendChild(createChatToolActionGroup(fork, 'threadFork'));
         item.appendChild(actions);
         panel.appendChild(item);
     });
@@ -21975,7 +22173,7 @@ function renderSubagentPresets() {
             event.preventDefault();
             void previewSubagentPreset(preset.id);
         });
-        actions.appendChild(preview);
+        actions.appendChild(createChatToolActionGroup(preview, 'subagentPreset'));
 
         const run = document.createElement('button');
         run.type = 'button';
@@ -21986,7 +22184,7 @@ function renderSubagentPresets() {
             event.preventDefault();
             void runSubagentPreset(preset.id);
         });
-        actions.appendChild(run);
+        actions.appendChild(createChatToolActionGroup(run, 'subagentPreset'));
         panel.appendChild(card);
     });
 }
@@ -22141,7 +22339,7 @@ function renderSafetyPreview() {
             event.preventDefault();
             setToolingPreviewText('codex-safety-preview-output', template);
         });
-        actions.appendChild(view);
+        actions.appendChild(createChatToolActionGroup(view, 'safetyTemplate'));
         const save = document.createElement('button');
         save.type = 'button';
         save.className = 'app-server-thread-action';
@@ -22152,7 +22350,7 @@ function renderSafetyPreview() {
             event.preventDefault();
             void saveSafetyTemplate(template.id);
         });
-        actions.appendChild(save);
+        actions.appendChild(createChatToolActionGroup(save, 'safetyTemplate'));
         list.appendChild(card);
     });
     setToolingPreviewText('codex-safety-preview-output', preview);

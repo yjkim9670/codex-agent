@@ -598,137 +598,245 @@
                         <div class="chat-tools-overlay-header">
                             <div class="chat-tools-overlay-heading">
                                 <div class="chat-tools-overlay-title" id="codex-chat-tools-overlay-title">추가 도구</div>
-                                <div class="chat-tools-overlay-subtitle">Execution · Reports · Worktree · Team tools</div>
+                                <div class="chat-tools-overlay-subtitle">Reports · Worktree · Advanced</div>
                             </div>
                             <button class="btn ghost icon-only chat-tools-overlay-close" type="button" id="codex-chat-tools-overlay-close" aria-label="닫기">
                                 <span class="sr-only">닫기</span>
                             </button>
                         </div>
                         <div class="chat-tools-overlay-body">
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-execution-title">
-                                <div class="chat-tools-section-title" id="codex-chat-tools-execution-title">실행 정책</div>
-                                <div id="codex-execution-policy-strip" class="execution-policy-strip" role="list" aria-live="polite"></div>
-                            </section>
                             <section class="chat-tools-section" aria-labelledby="codex-chat-tools-report-title">
-                                <div class="chat-tools-section-title" id="codex-chat-tools-report-title">Reports</div>
+                                <div class="chat-tools-section-header">
+                                    <div class="chat-tools-title-row">
+                                        <div class="chat-tools-section-title" id="codex-chat-tools-report-title">Reports</div>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="reportSection" aria-label="Reports 도움말">?</button>
+                                    </div>
+                                </div>
                                 <div id="codex-structured-report-bar" class="structured-report-bar" aria-label="Structured report presets"></div>
                             </section>
                             <section class="chat-tools-section" aria-labelledby="codex-chat-tools-worktree-title">
                                 <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-worktree-title">Worktree</div>
-                                    <button class="btn ghost chat-worktree-toggle" type="button" id="codex-worktree-mode-toggle" aria-pressed="false" aria-label="Worktree mode off" title="Worktree mode off">Worktree</button>
+                                    <div class="chat-tools-title-row">
+                                        <div class="chat-tools-section-title" id="codex-chat-tools-worktree-title">Worktree</div>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="worktreeSection" aria-label="Worktree 도움말">?</button>
+                                    </div>
+                                    <div class="chat-tools-action-group">
+                                        <button class="btn ghost chat-worktree-toggle" type="button" id="codex-worktree-mode-toggle" aria-pressed="false" aria-label="Worktree mode off" title="Worktree mode off">Worktree</button>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="worktreeToggle" aria-label="Worktree mode 도움말">?</button>
+                                    </div>
                                 </div>
                                 <div id="codex-worktree-task-bar" class="worktree-task-bar is-hidden" aria-live="polite"></div>
                             </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-app-server-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-app-server-title">App Server</div>
-                                    <button class="btn ghost app-server-pilot-toggle" type="button" id="codex-app-server-pilot-toggle" aria-pressed="false" aria-label="App Server pilot off" title="App Server pilot off">Pilot</button>
-                                </div>
-                                <div class="app-server-pilot">
-                                    <div class="app-server-status" id="codex-app-server-status" aria-live="polite">Pilot off</div>
-                                    <div class="app-server-actions">
-                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-start">Start</button>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-stop">Stop</button>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-refresh">Refresh</button>
+                            <details class="chat-tools-section chat-tools-disclosure" aria-labelledby="codex-chat-tools-subagents-title">
+                                <summary class="chat-tools-disclosure-summary">
+                                    <span class="chat-tools-title-row">
+                                        <span class="chat-tools-section-title" id="codex-chat-tools-subagents-title">고급 실행</span>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="subagentsSection" aria-label="Subagents 도움말">?</button>
+                                    </span>
+                                    <span class="chat-tools-disclosure-meta">Subagents</span>
+                                </summary>
+                                <div class="chat-tools-disclosure-content">
+                                    <div class="chat-tools-section-header">
+                                        <div class="chat-tools-title-row">
+                                            <div class="chat-tools-section-title">Subagents</div>
+                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="subagentsSection" aria-label="Subagents 도움말">?</button>
+                                        </div>
+                                        <div class="chat-tools-action-group">
+                                            <button class="btn ghost app-server-action" type="button" id="codex-subagent-refresh">Refresh</button>
+                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="subagentsSection" aria-label="Subagents refresh 도움말">?</button>
+                                        </div>
                                     </div>
-                                    <div class="app-server-grid" id="codex-app-server-grid">
-                                        <div class="app-server-panel">
-                                            <div class="app-server-panel-title">Models</div>
-                                            <div class="app-server-panel-list" id="codex-app-server-models"></div>
+                                    <div class="tooling-panel">
+                                        <div class="tooling-panel-list" id="codex-subagent-presets"></div>
+                                        <pre class="tooling-preview is-hidden" id="codex-subagent-preview"></pre>
+                                    </div>
+                                </div>
+                            </details>
+                            <details class="chat-tools-section chat-tools-disclosure" aria-labelledby="codex-chat-tools-app-server-title">
+                                <summary class="chat-tools-disclosure-summary">
+                                    <span class="chat-tools-title-row">
+                                        <span class="chat-tools-section-title" id="codex-chat-tools-app-server-title">실험 기능</span>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerSection" aria-label="App Server 도움말">?</button>
+                                    </span>
+                                    <span class="chat-tools-disclosure-meta">App Server</span>
+                                </summary>
+                                <div class="chat-tools-disclosure-content">
+                                    <div class="chat-tools-section-header">
+                                        <div class="chat-tools-title-row">
+                                            <div class="chat-tools-section-title">App Server</div>
+                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerSection" aria-label="App Server 도움말">?</button>
                                         </div>
-                                        <div class="app-server-panel">
-                                            <div class="app-server-panel-title">Features</div>
-                                            <div class="app-server-panel-list" id="codex-app-server-features"></div>
+                                        <div class="chat-tools-action-group">
+                                            <button class="btn ghost app-server-pilot-toggle" type="button" id="codex-app-server-pilot-toggle" aria-pressed="false" aria-label="App Server pilot off" title="App Server pilot off">Pilot</button>
+                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerPilot" aria-label="App Server pilot 도움말">?</button>
                                         </div>
-                                        <div class="app-server-panel app-server-panel-wide">
-                                            <div class="app-server-panel-header">
-                                                <div class="app-server-panel-title">Threads</div>
-                                                <div class="app-server-thread-pager">
-                                                    <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-prev">Prev</button>
-                                                    <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-next">Next</button>
+                                    </div>
+                                    <div class="app-server-pilot">
+                                        <div class="app-server-status" id="codex-app-server-status" aria-live="polite">Pilot off</div>
+                                        <div class="app-server-actions">
+                                            <div class="chat-tools-action-group">
+                                                <button class="btn ghost app-server-action" type="button" id="codex-app-server-start">Start</button>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerStart" aria-label="App Server start 도움말">?</button>
+                                            </div>
+                                            <div class="chat-tools-action-group">
+                                                <button class="btn ghost app-server-action" type="button" id="codex-app-server-stop">Stop</button>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerStop" aria-label="App Server stop 도움말">?</button>
+                                            </div>
+                                            <div class="chat-tools-action-group">
+                                                <button class="btn ghost app-server-action" type="button" id="codex-app-server-refresh">Refresh</button>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="appServerRefresh" aria-label="App Server refresh 도움말">?</button>
+                                            </div>
+                                        </div>
+                                        <div class="app-server-grid" id="codex-app-server-grid">
+                                            <div class="app-server-panel">
+                                                <div class="chat-tools-title-row">
+                                                    <div class="app-server-panel-title">Models</div>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="modelsPanel" aria-label="Models 도움말">?</button>
+                                                </div>
+                                                <div class="app-server-panel-list" id="codex-app-server-models"></div>
+                                            </div>
+                                            <div class="app-server-panel">
+                                                <div class="chat-tools-title-row">
+                                                    <div class="app-server-panel-title">Features</div>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="featuresPanel" aria-label="Features 도움말">?</button>
+                                                </div>
+                                                <div class="app-server-panel-list" id="codex-app-server-features"></div>
+                                            </div>
+                                            <div class="app-server-panel app-server-panel-wide">
+                                                <div class="app-server-panel-header">
+                                                    <div class="chat-tools-title-row">
+                                                        <div class="app-server-panel-title">Threads</div>
+                                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="threadsPanel" aria-label="Threads 도움말">?</button>
+                                                    </div>
+                                                    <div class="app-server-thread-pager">
+                                                        <div class="chat-tools-action-group">
+                                                            <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-prev">Prev</button>
+                                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="threadPrev" aria-label="Prev 도움말">?</button>
+                                                        </div>
+                                                        <div class="chat-tools-action-group">
+                                                            <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-next">Next</button>
+                                                            <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="threadNext" aria-label="Next 도움말">?</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="app-server-thread-search">
+                                                    <input
+                                                        class="app-server-thread-search-input"
+                                                        type="search"
+                                                        id="codex-app-server-thread-search"
+                                                        autocomplete="off"
+                                                        spellcheck="false"
+                                                        placeholder="Search threads"
+                                                        aria-label="Search App Server threads"
+                                                    >
+                                                    <div class="chat-tools-action-group">
+                                                        <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-search-apply">Search</button>
+                                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="threadSearch" aria-label="Thread search 도움말">?</button>
+                                                    </div>
+                                                </div>
+                                                <div class="app-server-panel-list" id="codex-app-server-threads"></div>
+                                                <div class="app-server-thread-detail" id="codex-app-server-thread-detail"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+                            <details class="chat-tools-section chat-tools-disclosure" aria-labelledby="codex-chat-tools-setup-title">
+                                <summary class="chat-tools-disclosure-summary">
+                                    <span class="chat-tools-title-row">
+                                        <span class="chat-tools-section-title" id="codex-chat-tools-setup-title">Setup / Authoring</span>
+                                        <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="skillsSection" aria-label="Setup / Authoring 도움말">?</button>
+                                    </span>
+                                    <span class="chat-tools-disclosure-meta">Skills · Hooks · MCP · GitHub</span>
+                                </summary>
+                                <div class="chat-tools-disclosure-content">
+                                    <section class="chat-tools-nested-section" aria-labelledby="codex-chat-tools-skills-title">
+                                        <div class="chat-tools-section-header">
+                                            <div class="chat-tools-title-row">
+                                                <div class="chat-tools-section-title" id="codex-chat-tools-skills-title">Skills / Plugins authoring</div>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="skillsSection" aria-label="Skills authoring 도움말">?</button>
+                                            </div>
+                                        </div>
+                                        <div class="tooling-panel">
+                                            <div class="tooling-form-grid">
+                                                <input class="tooling-input" type="text" id="codex-skill-name" placeholder="repo skill name" aria-label="Repo skill name">
+                                                <input class="tooling-input" type="text" id="codex-skill-trigger" placeholder="trigger condition" aria-label="Skill trigger">
+                                            </div>
+                                            <textarea class="tooling-textarea" id="codex-skill-description" rows="3" placeholder="short workflow description" aria-label="Skill description"></textarea>
+                                            <div class="app-server-actions">
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-skill-preview">Preview</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="skillPreview" aria-label="Skill preview 도움말">?</button>
+                                                </div>
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-skill-create">Create repo skill</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="skillCreate" aria-label="Skill create 도움말">?</button>
                                                 </div>
                                             </div>
-                                            <div class="app-server-thread-search">
-                                                <input
-                                                    class="app-server-thread-search-input"
-                                                    type="search"
-                                                    id="codex-app-server-thread-search"
-                                                    autocomplete="off"
-                                                    spellcheck="false"
-                                                    placeholder="Search threads"
-                                                    aria-label="Search App Server threads"
-                                                >
-                                                <button class="btn ghost app-server-action" type="button" id="codex-app-server-thread-search-apply">Search</button>
-                                            </div>
-                                            <div class="app-server-panel-list" id="codex-app-server-threads"></div>
-                                            <div class="app-server-thread-detail" id="codex-app-server-thread-detail"></div>
+                                            <pre class="tooling-preview is-hidden" id="codex-skill-preview-output"></pre>
                                         </div>
-                                    </div>
+                                    </section>
+                                    <section class="chat-tools-nested-section" aria-labelledby="codex-chat-tools-safety-title">
+                                        <div class="chat-tools-section-header">
+                                            <div class="chat-tools-title-row">
+                                                <div class="chat-tools-section-title" id="codex-chat-tools-safety-title">Hooks / Rules safety</div>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="safetySection" aria-label="Hooks / Rules safety 도움말">?</button>
+                                            </div>
+                                            <div class="chat-tools-action-group">
+                                                <button class="btn ghost app-server-action" type="button" id="codex-safety-preview-refresh">Preview</button>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="safetySection" aria-label="Hooks preview 도움말">?</button>
+                                            </div>
+                                        </div>
+                                        <div class="tooling-panel">
+                                            <div class="tooling-panel-list" id="codex-safety-template-list"></div>
+                                            <pre class="tooling-preview is-hidden" id="codex-safety-preview-output"></pre>
+                                        </div>
+                                    </section>
+                                    <section class="chat-tools-nested-section" aria-labelledby="codex-chat-tools-mcp-title">
+                                        <div class="chat-tools-section-header">
+                                            <div class="chat-tools-title-row">
+                                                <div class="chat-tools-section-title" id="codex-chat-tools-mcp-title">MCP setup wizard</div>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="mcpSection" aria-label="MCP setup 도움말">?</button>
+                                            </div>
+                                            <div class="app-server-actions">
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-mcp-preview-refresh">Preview</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="mcpPreview" aria-label="MCP preview 도움말">?</button>
+                                                </div>
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-mcp-save-preview">Save preview</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="mcpSave" aria-label="MCP save 도움말">?</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <pre class="tooling-preview is-hidden" id="codex-mcp-preview-output"></pre>
+                                    </section>
+                                    <section class="chat-tools-nested-section" aria-labelledby="codex-chat-tools-github-title">
+                                        <div class="chat-tools-section-header">
+                                            <div class="chat-tools-title-row">
+                                                <div class="chat-tools-section-title" id="codex-chat-tools-github-title">GitHub Action templates</div>
+                                                <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="githubSection" aria-label="GitHub Action templates 도움말">?</button>
+                                            </div>
+                                            <div class="app-server-actions">
+                                                <select class="tooling-select" id="codex-github-template-kind" aria-label="GitHub Action template kind">
+                                                    <option value="pr_review">PR review</option>
+                                                    <option value="ci_fix">CI fix</option>
+                                                    <option value="release_prep">Release prep</option>
+                                                </select>
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-github-preview-refresh">Preview</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="githubPreview" aria-label="GitHub preview 도움말">?</button>
+                                                </div>
+                                                <div class="chat-tools-action-group">
+                                                    <button class="btn ghost app-server-action" type="button" id="codex-github-save-preview">Save preview</button>
+                                                    <button class="chat-tools-help-badge" type="button" data-chat-tool-help-key="githubSave" aria-label="GitHub save 도움말">?</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <pre class="tooling-preview is-hidden" id="codex-github-preview-output"></pre>
+                                    </section>
                                 </div>
-                            </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-subagents-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-subagents-title">Subagents</div>
-                                    <button class="btn ghost app-server-action" type="button" id="codex-subagent-refresh">Refresh</button>
-                                </div>
-                                <div class="tooling-panel">
-                                    <div class="tooling-panel-list" id="codex-subagent-presets"></div>
-                                    <pre class="tooling-preview is-hidden" id="codex-subagent-preview"></pre>
-                                </div>
-                            </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-skills-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-skills-title">Skills / Plugins authoring</div>
-                                </div>
-                                <div class="tooling-panel">
-                                    <div class="tooling-form-grid">
-                                        <input class="tooling-input" type="text" id="codex-skill-name" placeholder="repo skill name" aria-label="Repo skill name">
-                                        <input class="tooling-input" type="text" id="codex-skill-trigger" placeholder="trigger condition" aria-label="Skill trigger">
-                                    </div>
-                                    <textarea class="tooling-textarea" id="codex-skill-description" rows="3" placeholder="short workflow description" aria-label="Skill description"></textarea>
-                                    <div class="app-server-actions">
-                                        <button class="btn ghost app-server-action" type="button" id="codex-skill-preview">Preview</button>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-skill-create">Create repo skill</button>
-                                    </div>
-                                    <pre class="tooling-preview is-hidden" id="codex-skill-preview-output"></pre>
-                                </div>
-                            </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-safety-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-safety-title">Hooks / Rules safety</div>
-                                    <button class="btn ghost app-server-action" type="button" id="codex-safety-preview-refresh">Preview</button>
-                                </div>
-                                <div class="tooling-panel">
-                                    <div class="tooling-panel-list" id="codex-safety-template-list"></div>
-                                    <pre class="tooling-preview is-hidden" id="codex-safety-preview-output"></pre>
-                                </div>
-                            </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-mcp-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-mcp-title">MCP setup wizard</div>
-                                    <div class="app-server-actions">
-                                        <button class="btn ghost app-server-action" type="button" id="codex-mcp-preview-refresh">Preview</button>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-mcp-save-preview">Save preview</button>
-                                    </div>
-                                </div>
-                                <pre class="tooling-preview is-hidden" id="codex-mcp-preview-output"></pre>
-                            </section>
-                            <section class="chat-tools-section" aria-labelledby="codex-chat-tools-github-title">
-                                <div class="chat-tools-section-header">
-                                    <div class="chat-tools-section-title" id="codex-chat-tools-github-title">GitHub Action templates</div>
-                                    <div class="app-server-actions">
-                                        <select class="tooling-select" id="codex-github-template-kind" aria-label="GitHub Action template kind">
-                                            <option value="pr_review">PR review</option>
-                                            <option value="ci_fix">CI fix</option>
-                                            <option value="release_prep">Release prep</option>
-                                        </select>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-github-preview-refresh">Preview</button>
-                                        <button class="btn ghost app-server-action" type="button" id="codex-github-save-preview">Save preview</button>
-                                    </div>
-                                </div>
-                                <pre class="tooling-preview is-hidden" id="codex-github-preview-output"></pre>
-                            </section>
+                            </details>
                         </div>
                         <div class="chat-tools-overlay-footer">
                             <button class="btn ghost" type="button" id="codex-chat-tools-overlay-close-footer">닫기</button>

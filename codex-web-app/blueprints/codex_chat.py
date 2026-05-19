@@ -1,5 +1,7 @@
 """Codex chat routes."""
 
+from fnmatch import fnmatchcase
+from ipaddress import ip_address, ip_network
 import json
 import re
 import time
@@ -9,9 +11,13 @@ from urllib.parse import quote
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from ..config import (
+    CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK,
     CODEX_API_ONLY_MODE,
     CODEX_ENABLE_FILES_API,
     CODEX_ENABLE_GIT_API,
+    CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
+    CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
+    CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS,
     CODEX_MAIL_FROM,
     CODEX_MAIL_MAX_ARCHIVE_BYTES,
     CODEX_MAIL_MAX_ARCHIVE_ENTRIES,
@@ -116,6 +122,18 @@ from ..services.file_browser import (
     read_file_raw,
     upload_files,
     write_file,
+    write_file_patch,
+)
+from ..services.file_crypto import (
+    FileCryptoError,
+    create_chat_crypto_session,
+    create_file_crypto_session,
+    decrypt_chat_payload,
+    decrypt_file_payload,
+    encrypt_chat_payload,
+    encrypt_file_payload,
+    is_encrypted_chat_payload,
+    is_encrypted_file_payload,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
 from ..services.mail_sender import MailSendError, send_mail_with_archive
@@ -149,6 +167,7 @@ _CODEX_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
+_TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback'
 
 
 def _format_sse_payload(data, *, event=None):
@@ -204,6 +223,102 @@ def _attachment_error_response(error):
         'error': str(error),
         'error_code': 'invalid_attachment',
     }), status_code
+
+
+def _file_crypto_error_response(error):
+    status_code = getattr(error, 'status_code', 400)
+    return jsonify({
+        'error': str(error),
+        'error_code': getattr(error, 'error_code', 'file_crypto_error'),
+    }), status_code
+
+
+def _normalize_http_host(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    if text.startswith('['):
+        closing_bracket = text.find(']')
+        if closing_bracket > 0:
+            text = text[1:closing_bracket]
+        else:
+            text = text.strip('[]')
+    elif text.count(':') == 1:
+        text = text.rsplit(':', 1)[0]
+    return text.strip().strip('.').lower()
+
+
+def _trusted_http_fallback_host_matches(host):
+    normalized_host = _normalize_http_host(host)
+    if not normalized_host:
+        return False
+    for raw_pattern in CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS:
+        pattern = _normalize_http_host(raw_pattern)
+        if not pattern:
+            continue
+        if '/' in pattern:
+            try:
+                if ip_address(normalized_host) in ip_network(pattern, strict=False):
+                    return True
+            except ValueError:
+                pass
+        if normalized_host == pattern or fnmatchcase(normalized_host, pattern):
+            return True
+    return False
+
+
+def _is_http_request_context():
+    forwarded_proto = str(request.headers.get('X-Forwarded-Proto') or '')
+    proto = forwarded_proto.split(',', 1)[0].strip().lower()
+    if not proto:
+        proto = str(request.scheme or '').strip().lower()
+    return proto == 'http'
+
+
+def _is_trusted_http_crypto_fallback_allowed():
+    if not CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK:
+        return False
+    if request.headers.get(_TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER) != '1':
+        return False
+    if not _is_http_request_context():
+        return False
+
+    forwarded_host = str(request.headers.get('X-Forwarded-Host') or '')
+    host_candidates = [
+        forwarded_host.split(',', 1)[0].strip(),
+        request.host,
+    ]
+    return any(_trusted_http_fallback_host_matches(host) for host in host_candidates)
+
+
+def _decrypt_optional_file_payload(payload):
+    if is_encrypted_file_payload(payload):
+        return decrypt_file_payload(payload)
+    return payload if isinstance(payload, dict) else {}, ''
+
+
+def _jsonify_file_payload(result, crypto_session_id=''):
+    if crypto_session_id:
+        return jsonify(encrypt_file_payload(crypto_session_id, result))
+    return jsonify(result)
+
+
+def _decrypt_chat_prompt_payload(payload):
+    if is_encrypted_chat_payload(payload):
+        return decrypt_chat_payload(payload)
+    if CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS and not _is_trusted_http_crypto_fallback_allowed():
+        raise FileCryptoError(
+            '채팅 프롬프트 요청은 암호화되어야 합니다.',
+            error_code='encrypted_chat_prompt_required',
+            status_code=400,
+        )
+    return payload if isinstance(payload, dict) else {}, ''
+
+
+def _jsonify_chat_payload(result, crypto_session_id=''):
+    if crypto_session_id:
+        return jsonify(encrypt_chat_payload(crypto_session_id, result))
+    return jsonify(result)
 
 
 def _append_plan_mode_guardrails(prompt_text):
@@ -723,22 +838,33 @@ def codex_tooling_subagent_presets():
 
 @bp.route('/api/codex/sessions/<session_id>/subagent-presets/<preset_id>/preview', methods=['POST'])
 def codex_session_subagent_preset_preview(session_id, preset_id):
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = str(payload.get('prompt') or '').strip()
     try:
         preview = build_subagent_cockpit_preview(preset_id, prompt)
     except CodexToolingError as exc:
         return _tooling_error_response(exc)
-    return jsonify({'ok': True, 'parent_session_id': session_id, 'preview': preview})
+    return _jsonify_chat_payload(
+        {'ok': True, 'parent_session_id': session_id, 'preview': preview},
+        crypto_session_id,
+    )
 
 
 @bp.route('/api/codex/sessions/<session_id>/subagent-presets/<preset_id>/run', methods=['POST'])
 def codex_session_subagent_preset_run(session_id, preset_id):
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = str(payload.get('prompt') or '').strip()
     try:
         attachments = _parse_attachments(payload)
@@ -755,7 +881,7 @@ def codex_session_subagent_preset_run(session_id, preset_id):
     if not result.get('ok') and int(result.get('started_count') or 0) <= 0:
         return jsonify(result), 400
     result['session_storage'] = get_session_storage_summary()
-    return jsonify(result)
+    return _jsonify_chat_payload(result, crypto_session_id)
 
 
 @bp.route('/api/codex/tooling/skills/preview', methods=['POST'])
@@ -869,6 +995,18 @@ def codex_sessions():
     })
 
 
+@bp.route('/api/codex/chat/crypto-session', methods=['POST'])
+def codex_chat_crypto_session():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = create_chat_crypto_session(payload.get('client_public_key'))
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    return jsonify(result)
+
+
 @bp.route('/api/codex/sessions', methods=['POST'])
 def codex_sessions_create():
     payload = request.get_json(silent=True) or {}
@@ -975,7 +1113,13 @@ def codex_session_message_branch(session_id, message_id):
 
 @bp.route('/api/codex/sessions/<session_id>/message', methods=['POST'])
 def codex_session_message(session_id):
-    payload = request.get_json(silent=True) or {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
     try:
@@ -1059,19 +1203,25 @@ def codex_session_message(session_id):
         )
 
     session = get_session(session_id)
-    return jsonify({
+    return _jsonify_chat_payload({
         'session': session,
         'user_message': user_message,
         'assistant_message': assistant_message,
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>/message/stream', methods=['POST'])
 def codex_session_message_stream(session_id):
-    payload = request.get_json(silent=True) or {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
     worktree_mode = _parse_worktree_mode(payload)
@@ -1143,7 +1293,7 @@ def codex_session_message_stream(session_id):
             payload['error_code'] = start_result.get('error_code')
         return jsonify(payload), status_code
 
-    return jsonify({
+    return _jsonify_chat_payload({
         'stream_id': start_result.get('stream_id'),
         'started_at': start_result.get('started_at'),
         'user_message': start_result.get('user_message'),
@@ -1155,12 +1305,18 @@ def codex_session_message_stream(session_id):
         'execution_policy': start_result.get('execution_policy'),
         'structured_report_preset': start_result.get('structured_report_preset'),
         'worktree_task': start_result.get('worktree_task'),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>/message/queue', methods=['POST'])
 def codex_session_message_queue(session_id):
-    payload = request.get_json(silent=True) or {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
     worktree_mode = _parse_worktree_mode(payload)
@@ -1221,12 +1377,18 @@ def codex_session_message_queue(session_id):
         response['execution_policy'] = result.get('execution_policy')
         response['structured_report_preset'] = result.get('structured_report_preset')
         response['worktree_task'] = result.get('worktree_task')
-    return jsonify(response)
+    return _jsonify_chat_payload(response, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>/subjobs', methods=['POST'])
 def codex_session_subjob_create(session_id):
-    payload = request.get_json(silent=True) or {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_chat_prompt_payload(raw_payload)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     try:
         attachments = _parse_attachments(payload)
@@ -1249,7 +1411,7 @@ def codex_session_subjob_create(session_id):
         return jsonify({'error': error}), status_code
 
     child_session = result.get('child_session') or {}
-    return jsonify({
+    return _jsonify_chat_payload({
         'subjob': True,
         'parent_session_id': result.get('parent_session_id') or session_id,
         'child_session': child_session,
@@ -1262,7 +1424,7 @@ def codex_session_subjob_create(session_id):
         'response_model': result.get('response_model'),
         'response_reasoning_effort': result.get('response_reasoning_effort'),
         'session_storage': get_session_storage_summary(),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/streams/<stream_id>')
@@ -1334,41 +1496,81 @@ def codex_files_list():
     return jsonify(result)
 
 
-@bp.route('/api/codex/files/read', methods=['POST'])
-def codex_files_read():
+@bp.route('/api/codex/files/crypto-session', methods=['POST'])
+def codex_files_crypto_session():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
     payload = request.get_json(silent=True) or {}
     if not isinstance(payload, dict):
         payload = {}
     try:
+        result = create_file_crypto_session(payload.get('client_public_key'))
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/read', methods=['POST'])
+def codex_files_read():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
+    try:
+        payload, crypto_session_id = _decrypt_optional_file_payload(raw_payload)
         result = read_file(
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
             preview_max_bytes=payload.get('preview_max_bytes'),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/write', methods=['POST'])
 def codex_files_write():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
+    raw_payload = request.get_json(silent=True) or {}
+    if not isinstance(raw_payload, dict):
+        raw_payload = {}
     try:
-        result = write_file(
-            root_key=payload.get('root'),
-            relative_path=payload.get('path', ''),
-            content=payload.get('content', ''),
-            expected_modified_ns=payload.get('expected_modified_ns'),
-        )
+        payload, crypto_session_id = _decrypt_optional_file_payload(raw_payload)
+        if (
+            CODEX_REQUIRE_ENCRYPTED_FILE_WRITES
+            and not crypto_session_id
+            and not _is_trusted_http_crypto_fallback_allowed()
+        ):
+            raise FileBrowserError(
+                '파일 저장 요청은 암호화되어야 합니다.',
+                error_code='encrypted_file_write_required',
+                status_code=400,
+            )
+        if payload.get('mode') == 'patch':
+            result = write_file_patch(
+                root_key=payload.get('root'),
+                relative_path=payload.get('path', ''),
+                patch=payload.get('patch'),
+                expected_modified_ns=payload.get('expected_modified_ns'),
+                include_content=False,
+            )
+        else:
+            result = write_file(
+                root_key=payload.get('root'),
+                relative_path=payload.get('path', ''),
+                content=payload.get('content', ''),
+                expected_modified_ns=payload.get('expected_modified_ns'),
+                include_content=not bool(crypto_session_id),
+            )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/create', methods=['POST'])

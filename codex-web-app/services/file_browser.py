@@ -589,6 +589,44 @@ def _normalize_expected_modified_ns(value):
     return text
 
 
+def _apply_text_patch(content, patch):
+    if not isinstance(content, str):
+        raise FileBrowserError(
+            '패치를 적용할 파일 내용이 올바르지 않습니다.',
+            error_code='invalid_content',
+            status_code=400,
+        )
+    if not isinstance(patch, dict):
+        raise FileBrowserError(
+            '저장 패치가 올바르지 않습니다.',
+            error_code='invalid_patch',
+            status_code=400,
+        )
+    try:
+        start = int(patch.get('start'))
+        delete_count = int(patch.get('delete_count'))
+    except (TypeError, ValueError) as exc:
+        raise FileBrowserError(
+            '저장 패치 범위가 올바르지 않습니다.',
+            error_code='invalid_patch',
+            status_code=400,
+        ) from exc
+    insert = patch.get('insert', '')
+    if not isinstance(insert, str):
+        raise FileBrowserError(
+            '저장 패치 내용이 올바르지 않습니다.',
+            error_code='invalid_patch',
+            status_code=400,
+        )
+    if start < 0 or delete_count < 0 or start > len(content) or start + delete_count > len(content):
+        raise FileBrowserError(
+            '저장 패치 범위가 파일 내용과 맞지 않습니다.',
+            error_code='invalid_patch',
+            status_code=400,
+        )
+    return f'{content[:start]}{insert}{content[start + delete_count:]}'
+
+
 def _build_move_operations(root_path, targets, *, destination_path=None, destination_directory=None):
     operations = []
     source_relative_paths = {item['relative_path'] for item in targets}
@@ -868,22 +906,7 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
     }
 
 
-def write_file(root_key=None, relative_path='', content='', expected_modified_ns=None):
-    normalized_root, root_path = _normalize_root_key(root_key)
-    normalized_path = _normalize_relative_path(relative_path)
-    if not normalized_path:
-        raise FileBrowserError(
-            '파일 경로를 입력해주세요.',
-            error_code='invalid_path',
-            status_code=400,
-        )
-    if not isinstance(content, str):
-        raise FileBrowserError(
-            '저장할 파일 내용이 올바르지 않습니다.',
-            error_code='invalid_content',
-            status_code=400,
-        )
-
+def _require_editable_current_state(normalized_root, normalized_path, expected_modified_ns=None):
     current_state = read_file(
         root_key=normalized_root,
         relative_path=normalized_path,
@@ -902,6 +925,16 @@ def write_file(root_key=None, relative_path='', content='', expected_modified_ns
             '파일이 다른 변경으로 업데이트되었습니다. 다시 열어 최신 내용을 확인해주세요.',
             error_code='modified_conflict',
             status_code=409,
+        )
+    return current_state
+
+
+def _write_file_content(normalized_root, root_path, normalized_path, content, *, include_content=True):
+    if not isinstance(content, str):
+        raise FileBrowserError(
+            '저장할 파일 내용이 올바르지 않습니다.',
+            error_code='invalid_content',
+            status_code=400,
         )
 
     encoded = content.encode('utf-8')
@@ -970,7 +1003,52 @@ def write_file(root_key=None, relative_path='', content='', expected_modified_ns
         relative_path=normalized_path,
     )
     saved_state['saved'] = True
+    if not include_content:
+        saved_state.pop('content', None)
     return saved_state
+
+
+def write_file(root_key=None, relative_path='', content='', expected_modified_ns=None, *, include_content=True):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '파일 경로를 입력해주세요.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+    _require_editable_current_state(normalized_root, normalized_path, expected_modified_ns)
+    return _write_file_content(
+        normalized_root,
+        root_path,
+        normalized_path,
+        content,
+        include_content=include_content,
+    )
+
+
+def write_file_patch(root_key=None, relative_path='', patch=None, expected_modified_ns=None, *, include_content=False):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '파일 경로를 입력해주세요.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+    current_state = _require_editable_current_state(
+        normalized_root,
+        normalized_path,
+        expected_modified_ns,
+    )
+    next_content = _apply_text_patch(str(current_state.get('content') or ''), patch or {})
+    return _write_file_content(
+        normalized_root,
+        root_path,
+        normalized_path,
+        next_content,
+        include_content=include_content,
+    )
 
 
 def create_file(root_key=None, relative_path='', content=''):

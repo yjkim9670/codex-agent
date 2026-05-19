@@ -1,3 +1,25 @@
+const CODEX_PUBLIC_PREVIEW_CONFIG = (() => {
+    const raw = window.__CODEX_PUBLIC_PREVIEW_CONFIG__;
+    return raw && typeof raw === 'object' ? raw : {};
+})();
+
+function getPublicPreviewConfigValue(key, fallback = '') {
+    const value = CODEX_PUBLIC_PREVIEW_CONFIG && CODEX_PUBLIC_PREVIEW_CONFIG[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeStaticAssetBase(value) {
+    const text = String(value || '').trim().replace(/\/+$/g, '');
+    return text || '/static';
+}
+
+function buildStaticAssetPath(path) {
+    const normalizedPath = String(path || '').startsWith('/')
+        ? String(path || '')
+        : `/${String(path || '')}`;
+    return `${normalizeStaticAssetBase(getPublicPreviewConfigValue('staticBase', '/static'))}${normalizedPath}`;
+}
+
 const state = {
     sessions: [],
     activeSessionId: null,
@@ -151,6 +173,7 @@ const FILE_PANEL_VIM_MODE_NORMAL = 'normal';
 const FILE_PANEL_VIM_MODE_VISUAL = 'visual';
 const FILE_PANEL_VIM_MODE_VISUAL_LINE = 'visual-line';
 const FILE_PANEL_VIM_MAX_UNDO_STACK = 80;
+const FILE_PANEL_EDITOR_CARET_SCROLL_MARGIN_PX = 28;
 const WORK_MODE_FILE_LEGACY_DEFAULT_SPLIT = 0.36;
 const WORK_MODE_FILE_DEFAULT_SPLIT = 0.44;
 const WORK_MODE_FILE_MIN_LIST_WIDTH_PX = 300;
@@ -176,12 +199,12 @@ const STREAM_POLL_BASE_MS = 800;
 const STREAM_POLL_MAX_MS = 5000;
 const REMOTE_STREAM_POLL_MS = 2500;
 const STREAM_IDLE_WARNING_MS = 15000;
-const MERMAID_VENDOR_SRC = '/static/vendor/mermaid-11.13.0.min.js';
-const XLSX_VENDOR_SRC = '/static/vendor/xlsx-0.18.5.full.min.js';
-const PDFJS_VENDOR_SRC = '/static/vendor/pdfjs-3.11.174/pdf.min.js';
-const PDFJS_WORKER_SRC = '/static/vendor/pdfjs-3.11.174/pdf.worker.min.js';
-const PDFJS_CMAP_URL = '/static/vendor/pdfjs-3.11.174/cmaps/';
-const PDFJS_STANDARD_FONT_DATA_URL = '/static/vendor/pdfjs-3.11.174/standard_fonts/';
+const MERMAID_VENDOR_SRC = buildStaticAssetPath('/vendor/mermaid-11.13.0.min.js');
+const XLSX_VENDOR_SRC = buildStaticAssetPath('/vendor/xlsx-0.18.5.full.min.js');
+const PDFJS_VENDOR_SRC = buildStaticAssetPath('/vendor/pdfjs-3.11.174/pdf.min.js');
+const PDFJS_WORKER_SRC = buildStaticAssetPath('/vendor/pdfjs-3.11.174/pdf.worker.min.js');
+const PDFJS_CMAP_URL = `${buildStaticAssetPath('/vendor/pdfjs-3.11.174/cmaps')}/`;
+const PDFJS_STANDARD_FONT_DATA_URL = `${buildStaticAssetPath('/vendor/pdfjs-3.11.174/standard_fonts')}/`;
 const MESSAGE_COLLAPSE_LINES = 12;
 const MESSAGE_COLLAPSE_CHARS = 1200;
 const KST_TIME_ZONE = 'Asia/Seoul';
@@ -229,7 +252,15 @@ const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
 const FILE_BROWSER_MAIL_TIMEOUT_MS = 180000;
 const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 120000;
-const FILE_BROWSER_RAW_FILE_ENDPOINT = '/api/codex/files/raw';
+const FILE_BROWSER_READ_FILE_ENDPOINT = getPublicPreviewConfigValue('readEndpoint', '/api/codex/files/read');
+const FILE_BROWSER_RAW_FILE_ENDPOINT = getPublicPreviewConfigValue('rawEndpoint', '/api/codex/files/raw');
+const FILE_BROWSER_CRYPTO_SESSION_ENDPOINT = '/api/codex/files/crypto-session';
+const FILE_BROWSER_CRYPTO_INFO = 'codex-workbench-file-browser-v1';
+const FILE_BROWSER_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
+const CHAT_PROMPT_CRYPTO_SESSION_ENDPOINT = '/api/codex/chat/crypto-session';
+const CHAT_PROMPT_CRYPTO_INFO = 'codex-workbench-chat-prompt-v1';
+const CHAT_PROMPT_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
+const TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
 const FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20;
@@ -311,15 +342,16 @@ const TERMINAL_EXTRA_KEY_ROWS = Object.freeze([
         Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
     ])
 ]);
-const XTERM_VENDOR_SRC = '/static/vendor/xterm-5.5.0.js';
-const XTERM_VENDOR_CSS_HREF = '/static/vendor/xterm-5.5.0.css';
-const XTERM_FIT_VENDOR_SRC = '/static/vendor/xterm-addon-fit-0.10.0.js';
+const XTERM_VENDOR_SRC = buildStaticAssetPath('/vendor/xterm-5.5.0.js');
+const XTERM_VENDOR_CSS_HREF = buildStaticAssetPath('/vendor/xterm-5.5.0.css');
+const XTERM_FIT_VENDOR_SRC = buildStaticAssetPath('/vendor/xterm-addon-fit-0.10.0.js');
 const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
     [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
 });
+const CODEX_PUBLIC_PREVIEW_HTML_EXTENSIONS = new Set(['.html', '.htm', '.xhtml']);
 const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
     '/home/',
     '/Users/',
@@ -439,6 +471,10 @@ let fileBrowserSelectionAnchorPath = '';
 let fileBrowserSelectionMode = false;
 let fileBrowserBulkActionInFlight = false;
 let filePanelMailComposeState = null;
+let fileBrowserCryptoSession = null;
+let fileBrowserCryptoSessionPromise = null;
+let chatPromptCryptoSession = null;
+let chatPromptCryptoSessionPromise = null;
 let fileBrowserSplitRatio = WORK_MODE_FILE_DEFAULT_SPLIT;
 let fileBrowserResizePointerId = null;
 let fileBrowserColumnResizeState = null;
@@ -1658,6 +1694,11 @@ function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModel
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
+        void initializePublicFilePreview();
+        return;
+    }
+
     const form = document.getElementById('codex-chat-form');
     const input = document.getElementById('codex-chat-input');
     const imageAttachBtn = document.getElementById('codex-chat-image-attach');
@@ -3218,6 +3259,61 @@ async function initializeApp() {
         await resumeStreamsFromStorage(pendingStreams);
     }
     startRemoteStreamPolling();
+}
+
+async function initializePublicFilePreview() {
+    const elements = getFileBrowserElements();
+    if (!elements?.viewerContent) return;
+    const root = normalizeFileBrowserRoot(CODEX_PUBLIC_PREVIEW_CONFIG.root || FILE_BROWSER_ROOT_WORKSPACE);
+    const path = normalizeFileBrowserRelativePath(CODEX_PUBLIC_PREVIEW_CONFIG.path || '');
+    const title = getPublicPreviewConfigValue('title', path || 'Public Preview');
+    document.title = `${title} · Public Preview`;
+    resetFilePanelEditState(FILE_PANEL_VARIANT_OVERLAY, { root });
+    setFilePanelViewerMetaText(elements, `${path || title} · loading`);
+    elements.viewerContent.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'file-browser-placeholder';
+    loading.textContent = '파일을 불러오는 중...';
+    elements.viewerContent.appendChild(loading);
+
+    try {
+        if (isPublicPreviewHtmlPath(path)) {
+            renderPublicHtmlPreviewIntoElements(elements, root, path);
+            return;
+        }
+        const result = await fetchFileBrowserFile(root, path);
+        if (result && typeof result === 'object') {
+            result.editable = false;
+        }
+        await renderFileBrowserViewerIntoElements(elements, result, {
+            root,
+            line: CODEX_PUBLIC_PREVIEW_CONFIG.line,
+            column: CODEX_PUBLIC_PREVIEW_CONFIG.column
+        });
+    } catch (error) {
+        setFilePanelViewerMetaText(elements, path || title);
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = normalizeError(error, '공개 미리보기를 열지 못했습니다.');
+        elements.viewerContent.appendChild(placeholder);
+    }
+}
+
+function renderPublicHtmlPreviewIntoElements(elements, root, path) {
+    if (!elements?.viewerContent) return false;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const previewUrl = buildFileBrowserRawFileUrl(normalizedRoot, normalizedPath);
+    if (!previewUrl) return false;
+    setFilePanelViewerMetaText(elements, `${normalizedPath || 'HTML'} · html · public raw preview`);
+    elements.viewerContent.innerHTML = '';
+    const iframe = document.createElement('iframe');
+    iframe.className = 'file-browser-html-preview';
+    iframe.setAttribute('sandbox', 'allow-scripts allow-forms');
+    iframe.src = previewUrl;
+    elements.viewerContent.appendChild(iframe);
+    return true;
 }
 
 function initializeLiveWeatherPanel(mobileMedia) {
@@ -12913,7 +13009,10 @@ function closeMessageLogOverlay() {
 }
 
 function normalizeFileBrowserRoot(value) {
-    void value;
+    if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
+        const normalized = String(value || CODEX_PUBLIC_PREVIEW_CONFIG.root || '').trim().toLowerCase();
+        if (normalized === 'server') return 'server';
+    }
     return FILE_BROWSER_ROOT_WORKSPACE;
 }
 
@@ -12924,6 +13023,18 @@ function normalizeFileBrowserRelativePath(value) {
         .replace(/^\/+/g, '')
         .replace(/\/+/g, '/')
         .replace(/\/+$/g, '');
+}
+
+function getFileBrowserPathExtension(value) {
+    const normalizedPath = normalizeFileBrowserRelativePath(value).toLowerCase();
+    const name = normalizedPath.split('/').filter(Boolean).pop() || '';
+    const dotIndex = name.lastIndexOf('.');
+    return dotIndex >= 0 ? name.slice(dotIndex) : '';
+}
+
+function isPublicPreviewHtmlPath(value) {
+    return Boolean(CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview)
+        && CODEX_PUBLIC_PREVIEW_HTML_EXTENSIONS.has(getFileBrowserPathExtension(value));
 }
 
 function buildFileBrowserRawFileUrl(root, relativePath) {
@@ -15419,6 +15530,498 @@ function renderFileBrowserList(entries, { includeParentEntry = false, parentEntr
     });
 }
 
+function isFileBrowserCryptoSupported() {
+    return Boolean(
+        window.isSecureContext
+        && window.crypto?.subtle
+        && window.crypto?.getRandomValues
+        && window.TextEncoder
+        && window.TextDecoder
+        && window.btoa
+        && window.atob
+    );
+}
+
+function getNormalizedLocationHostname() {
+    return String(window.location?.hostname || '')
+        .trim()
+        .replace(/^\[|\]$/g, '')
+        .replace(/\.$/g, '')
+        .toLowerCase();
+}
+
+function isTailscaleCgnatIPv4Host(hostname) {
+    const parts = String(hostname || '').split('.');
+    if (parts.length !== 4) return false;
+    const octets = parts.map(part => Number(part));
+    if (!octets.every(octet => Number.isInteger(octet) && octet >= 0 && octet <= 255)) return false;
+    return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+}
+
+function isTrustedHttpCryptoFallbackHost() {
+    const hostname = getNormalizedLocationHostname();
+    if (!hostname) return false;
+    if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
+    if (hostname === '::1' || hostname.startsWith('127.')) return true;
+    if (hostname.endsWith('.ts.net')) return true;
+    if (hostname.startsWith('fd7a:115c:a1e0:')) return true;
+    return isTailscaleCgnatIPv4Host(hostname);
+}
+
+function canUseTrustedHttpCryptoFallback() {
+    return window.location?.protocol === 'http:' && isTrustedHttpCryptoFallbackHost();
+}
+
+function buildTrustedHttpCryptoFallbackHeaders(headers = {}) {
+    return {
+        ...(headers || {}),
+        [TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER]: '1',
+        'Content-Type': 'application/json'
+    };
+}
+
+function createCryptoUnsupportedError(scopeLabel) {
+    const label = String(scopeLabel || '요청').trim() || '요청';
+    return new Error(
+        `이 브라우저 컨텍스트는 ${label} 암호화를 지원하지 않습니다. HTTPS/localhost 또는 Tailscale 100.x/ts.net 주소에서 다시 시도해주세요.`
+    );
+}
+
+function fileBrowserBytesToBase64(value) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value || []);
+    const chunkSize = 0x8000;
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        const chunk = bytes.subarray(offset, offset + chunkSize);
+        binary += String.fromCharCode(...chunk);
+    }
+    return window.btoa(binary);
+}
+
+function fileBrowserBase64ToBytes(value) {
+    const binary = window.atob(String(value || ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+}
+
+function resetFileBrowserCryptoSession() {
+    fileBrowserCryptoSession = null;
+    fileBrowserCryptoSessionPromise = null;
+}
+
+function isFileBrowserCryptoSessionUsable(session) {
+    if (!session?.id || !session?.requestKey || !session?.responseKey) return false;
+    const expiresAtMs = Number(session.expiresAtMs || 0);
+    return Number.isFinite(expiresAtMs)
+        && expiresAtMs - Date.now() > FILE_BROWSER_CRYPTO_SESSION_REFRESH_SKEW_MS;
+}
+
+async function createFileBrowserCryptoSession() {
+    if (!isFileBrowserCryptoSupported()) {
+        throw createCryptoUnsupportedError('파일 요청');
+    }
+
+    const encoder = new TextEncoder();
+    const keyPair = await window.crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        ['deriveBits']
+    );
+    const clientPublicKey = await window.crypto.subtle.exportKey('raw', keyPair.publicKey);
+    const handshake = await fetchJson(FILE_BROWSER_CRYPTO_SESSION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+            client_public_key: fileBrowserBytesToBase64(clientPublicKey)
+        })
+    });
+    const sessionId = String(handshake?.crypto_session_id || '').trim();
+    if (!sessionId) {
+        throw new Error('파일 암호화 세션을 만들지 못했습니다.');
+    }
+
+    const serverPublicKey = await window.crypto.subtle.importKey(
+        'raw',
+        fileBrowserBase64ToBytes(handshake.server_public_key),
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+    );
+    const sharedBits = await window.crypto.subtle.deriveBits(
+        { name: 'ECDH', public: serverPublicKey },
+        keyPair.privateKey,
+        256
+    );
+    const hkdfBaseKey = await window.crypto.subtle.importKey(
+        'raw',
+        sharedBits,
+        'HKDF',
+        false,
+        ['deriveBits']
+    );
+    const keyMaterial = await window.crypto.subtle.deriveBits(
+        {
+            name: 'HKDF',
+            hash: 'SHA-256',
+            salt: fileBrowserBase64ToBytes(handshake.salt),
+            info: encoder.encode(FILE_BROWSER_CRYPTO_INFO)
+        },
+        hkdfBaseKey,
+        512
+    );
+    const keyBytes = new Uint8Array(keyMaterial);
+    const requestKey = await window.crypto.subtle.importKey(
+        'raw',
+        keyBytes.slice(0, 32),
+        'AES-GCM',
+        false,
+        ['encrypt']
+    );
+    const responseKey = await window.crypto.subtle.importKey(
+        'raw',
+        keyBytes.slice(32, 64),
+        'AES-GCM',
+        false,
+        ['decrypt']
+    );
+    return {
+        id: sessionId,
+        requestKey,
+        responseKey,
+        expiresAtMs: Number(handshake.expires_at || 0) * 1000
+    };
+}
+
+async function getFileBrowserCryptoSession() {
+    if (isFileBrowserCryptoSessionUsable(fileBrowserCryptoSession)) {
+        return fileBrowserCryptoSession;
+    }
+    if (!fileBrowserCryptoSessionPromise) {
+        fileBrowserCryptoSessionPromise = createFileBrowserCryptoSession()
+            .then(session => {
+                fileBrowserCryptoSession = session;
+                return session;
+            })
+            .finally(() => {
+                fileBrowserCryptoSessionPromise = null;
+            });
+    }
+    return fileBrowserCryptoSessionPromise;
+}
+
+async function encryptFileBrowserRequestPayload(payload) {
+    const session = await getFileBrowserCryptoSession();
+    const encoder = new TextEncoder();
+    const iv = new Uint8Array(12);
+    window.crypto.getRandomValues(iv);
+    const ciphertext = await window.crypto.subtle.encrypt(
+        {
+            name: 'AES-GCM',
+            iv,
+            additionalData: encoder.encode(session.id)
+        },
+        session.requestKey,
+        encoder.encode(JSON.stringify(payload && typeof payload === 'object' ? payload : {}))
+    );
+    return {
+        encrypted: true,
+        crypto_session_id: session.id,
+        iv: fileBrowserBytesToBase64(iv),
+        ciphertext: fileBrowserBytesToBase64(ciphertext)
+    };
+}
+
+async function decryptFileBrowserResponsePayload(payload) {
+    if (!payload?.encrypted) return payload;
+    const sessionId = String(payload.crypto_session_id || '').trim();
+    const session = fileBrowserCryptoSession;
+    if (!isFileBrowserCryptoSessionUsable(session) || session.id !== sessionId) {
+        throw new Error('파일 암호화 응답 세션이 일치하지 않습니다. 파일을 다시 열어주세요.');
+    }
+    const decoder = new TextDecoder();
+    const raw = await window.crypto.subtle.decrypt(
+        {
+            name: 'AES-GCM',
+            iv: fileBrowserBase64ToBytes(payload.iv),
+            additionalData: new TextEncoder().encode(session.id)
+        },
+        session.responseKey,
+        fileBrowserBase64ToBytes(payload.ciphertext)
+    );
+    return JSON.parse(decoder.decode(raw));
+}
+
+function isRecoverableFileBrowserCryptoError(error) {
+    const errorCode = error?.payload?.error_code;
+    return errorCode === 'crypto_session_not_found'
+        || errorCode === 'crypto_session_expired'
+        || errorCode === 'crypto_session_required';
+}
+
+async function fetchEncryptedFileBrowserJson(url, payload, { timeoutMs = FILE_BROWSER_REQUEST_TIMEOUT_MS } = {}) {
+    if (!isFileBrowserCryptoSupported()) {
+        if (!canUseTrustedHttpCryptoFallback()) {
+            throw createCryptoUnsupportedError('파일 요청');
+        }
+        return fetchJson(url, {
+            method: 'POST',
+            headers: buildTrustedHttpCryptoFallbackHeaders(),
+            timeoutMs,
+            body: JSON.stringify(payload && typeof payload === 'object' ? payload : {})
+        });
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const encryptedPayload = await encryptFileBrowserRequestPayload(payload);
+            const response = await fetchJson(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                timeoutMs,
+                body: JSON.stringify(encryptedPayload)
+            });
+            return await decryptFileBrowserResponsePayload(response);
+        } catch (error) {
+            lastError = error;
+            if (!isRecoverableFileBrowserCryptoError(error) || attempt > 0) {
+                throw error;
+            }
+            resetFileBrowserCryptoSession();
+        }
+    }
+    throw lastError || new Error('파일 암호화 요청에 실패했습니다.');
+}
+
+function resetChatPromptCryptoSession() {
+    chatPromptCryptoSession = null;
+    chatPromptCryptoSessionPromise = null;
+}
+
+function isChatPromptCryptoSessionUsable(session) {
+    if (!session?.id || !session?.requestKey || !session?.responseKey) return false;
+    const expiresAtMs = Number(session.expiresAtMs || 0);
+    return Number.isFinite(expiresAtMs)
+        && expiresAtMs - Date.now() > CHAT_PROMPT_CRYPTO_SESSION_REFRESH_SKEW_MS;
+}
+
+async function createChatPromptCryptoSession() {
+    if (!isFileBrowserCryptoSupported()) {
+        throw createCryptoUnsupportedError('채팅 프롬프트');
+    }
+
+    const encoder = new TextEncoder();
+    const keyPair = await window.crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        ['deriveBits']
+    );
+    const clientPublicKey = await window.crypto.subtle.exportKey('raw', keyPair.publicKey);
+    const handshake = await fetchJson(CHAT_PROMPT_CRYPTO_SESSION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            client_public_key: fileBrowserBytesToBase64(clientPublicKey)
+        })
+    });
+    const sessionId = String(handshake?.crypto_session_id || '').trim();
+    if (!sessionId) {
+        throw new Error('채팅 프롬프트 암호화 세션을 만들지 못했습니다.');
+    }
+
+    const serverPublicKey = await window.crypto.subtle.importKey(
+        'raw',
+        fileBrowserBase64ToBytes(handshake.server_public_key),
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        []
+    );
+    const sharedBits = await window.crypto.subtle.deriveBits(
+        { name: 'ECDH', public: serverPublicKey },
+        keyPair.privateKey,
+        256
+    );
+    const hkdfBaseKey = await window.crypto.subtle.importKey(
+        'raw',
+        sharedBits,
+        'HKDF',
+        false,
+        ['deriveBits']
+    );
+    const keyMaterial = await window.crypto.subtle.deriveBits(
+        {
+            name: 'HKDF',
+            hash: 'SHA-256',
+            salt: fileBrowserBase64ToBytes(handshake.salt),
+            info: encoder.encode(CHAT_PROMPT_CRYPTO_INFO)
+        },
+        hkdfBaseKey,
+        512
+    );
+    const keyBytes = new Uint8Array(keyMaterial);
+    const requestKey = await window.crypto.subtle.importKey(
+        'raw',
+        keyBytes.slice(0, 32),
+        'AES-GCM',
+        false,
+        ['encrypt']
+    );
+    const responseKey = await window.crypto.subtle.importKey(
+        'raw',
+        keyBytes.slice(32, 64),
+        'AES-GCM',
+        false,
+        ['decrypt']
+    );
+    return {
+        id: sessionId,
+        requestKey,
+        responseKey,
+        expiresAtMs: Number(handshake.expires_at || 0) * 1000
+    };
+}
+
+async function getChatPromptCryptoSession() {
+    if (isChatPromptCryptoSessionUsable(chatPromptCryptoSession)) {
+        return chatPromptCryptoSession;
+    }
+    if (!chatPromptCryptoSessionPromise) {
+        chatPromptCryptoSessionPromise = createChatPromptCryptoSession()
+            .then(session => {
+                chatPromptCryptoSession = session;
+                return session;
+            })
+            .finally(() => {
+                chatPromptCryptoSessionPromise = null;
+            });
+    }
+    return chatPromptCryptoSessionPromise;
+}
+
+async function encryptChatPromptRequestPayload(payload) {
+    const session = await getChatPromptCryptoSession();
+    const encoder = new TextEncoder();
+    const iv = new Uint8Array(12);
+    window.crypto.getRandomValues(iv);
+    const ciphertext = await window.crypto.subtle.encrypt(
+        {
+            name: 'AES-GCM',
+            iv,
+            additionalData: encoder.encode(session.id)
+        },
+        session.requestKey,
+        encoder.encode(JSON.stringify(payload && typeof payload === 'object' ? payload : {}))
+    );
+    return {
+        encrypted: true,
+        crypto_session_id: session.id,
+        iv: fileBrowserBytesToBase64(iv),
+        ciphertext: fileBrowserBytesToBase64(ciphertext)
+    };
+}
+
+async function decryptChatPromptResponsePayload(payload) {
+    if (!payload?.encrypted) return payload;
+    const sessionId = String(payload.crypto_session_id || '').trim();
+    const session = chatPromptCryptoSession;
+    if (!isChatPromptCryptoSessionUsable(session) || session.id !== sessionId) {
+        throw new Error('채팅 프롬프트 암호화 응답 세션이 일치하지 않습니다. 요청을 다시 보내주세요.');
+    }
+    const raw = await window.crypto.subtle.decrypt(
+        {
+            name: 'AES-GCM',
+            iv: fileBrowserBase64ToBytes(payload.iv),
+            additionalData: new TextEncoder().encode(session.id)
+        },
+        session.responseKey,
+        fileBrowserBase64ToBytes(payload.ciphertext)
+    );
+    return JSON.parse(new TextDecoder().decode(raw));
+}
+
+function isRecoverableChatPromptCryptoError(error) {
+    const errorCode = error?.payload?.error_code;
+    return errorCode === 'crypto_session_not_found'
+        || errorCode === 'crypto_session_expired'
+        || errorCode === 'crypto_session_required';
+}
+
+async function fetchEncryptedChatPromptJson(url, payload, options = {}) {
+    const requestOptions = options && typeof options === 'object' ? { ...options } : {};
+    if (!isFileBrowserCryptoSupported()) {
+        if (!canUseTrustedHttpCryptoFallback()) {
+            throw createCryptoUnsupportedError('채팅 프롬프트');
+        }
+        return fetchJson(url, {
+            ...requestOptions,
+            method: 'POST',
+            headers: buildTrustedHttpCryptoFallbackHeaders(requestOptions.headers),
+            body: JSON.stringify(payload && typeof payload === 'object' ? payload : {})
+        });
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const encryptedPayload = await encryptChatPromptRequestPayload(payload);
+            const response = await fetchJson(url, {
+                ...requestOptions,
+                method: 'POST',
+                headers: {
+                    ...(requestOptions.headers || {}),
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(encryptedPayload)
+            });
+            return await decryptChatPromptResponsePayload(response);
+        } catch (error) {
+            lastError = error;
+            if (error?.name === 'AbortError') {
+                throw error;
+            }
+            if (!isRecoverableChatPromptCryptoError(error) || attempt > 0) {
+                throw error;
+            }
+            resetChatPromptCryptoSession();
+        }
+    }
+    throw lastError || new Error('채팅 프롬프트 암호화 요청에 실패했습니다.');
+}
+
+function buildFilePanelEditPatch(originalContent, nextContent) {
+    const originalChars = Array.from(typeof originalContent === 'string' ? originalContent : '');
+    const nextChars = Array.from(typeof nextContent === 'string' ? nextContent : '');
+    let start = 0;
+    while (
+        start < originalChars.length
+        && start < nextChars.length
+        && originalChars[start] === nextChars[start]
+    ) {
+        start += 1;
+    }
+
+    let originalEnd = originalChars.length;
+    let nextEnd = nextChars.length;
+    while (
+        originalEnd > start
+        && nextEnd > start
+        && originalChars[originalEnd - 1] === nextChars[nextEnd - 1]
+    ) {
+        originalEnd -= 1;
+        nextEnd -= 1;
+    }
+
+    return {
+        start,
+        delete_count: originalEnd - start,
+        insert: nextChars.slice(start, nextEnd).join('')
+    };
+}
+
 async function fetchFileBrowserDirectory(root, path = '') {
     return fetchJson('/api/codex/files/list', {
         method: 'POST',
@@ -15432,29 +16035,32 @@ async function fetchFileBrowserDirectory(root, path = '') {
 }
 
 async function fetchFileBrowserFile(root, path) {
-    return fetchJson('/api/codex/files/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path),
-            preview_max_bytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
-        })
+    if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
+        return fetchJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
+            method: 'GET',
+            timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
+        });
+    }
+    return fetchEncryptedFileBrowserJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path),
+        preview_max_bytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
+    }, {
+        timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
     });
 }
 
-async function writeFilePanelFile(root, path, content, expectedModifiedNs = '') {
-    return fetchJson('/api/codex/files/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path),
-            content: typeof content === 'string' ? content : '',
-            expected_modified_ns: String(expectedModifiedNs || '').trim()
-        })
+async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', originalContent = '') {
+    const nextContent = typeof content === 'string' ? content : '';
+    const baseContent = typeof originalContent === 'string' ? originalContent : '';
+    return fetchEncryptedFileBrowserJson('/api/codex/files/write', {
+        mode: 'patch',
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path),
+        expected_modified_ns: String(expectedModifiedNs || '').trim(),
+        patch: buildFilePanelEditPatch(baseContent, nextContent)
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
@@ -17584,11 +18190,23 @@ function copyFilePanelTextareaMeasureStyles(mirror, textarea) {
     mirror.style.minHeight = `${textarea.clientHeight}px`;
 }
 
-function measureFilePanelTextareaCaret(textarea) {
+function getFilePanelEditorCaretPosition(textarea, state = null) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return 0;
+    const visual = state?.vimMode === FILE_PANEL_VIM_MODE_VISUAL
+        || state?.vimMode === FILE_PANEL_VIM_MODE_VISUAL_LINE;
+    return visual
+        ? clampFilePanelEditorPosition(textarea, state.vimVisualHead)
+        : clampFilePanelEditorPosition(textarea, textarea.selectionStart);
+}
+
+function measureFilePanelTextareaCaret(textarea, positionOverride = null) {
     if (!(textarea instanceof HTMLTextAreaElement)) return null;
     const body = textarea.closest('.file-browser-editor-body');
     if (!(body instanceof HTMLElement)) return null;
-    const position = clampFilePanelEditorPosition(textarea, textarea.selectionStart);
+    const position = clampFilePanelEditorPosition(
+        textarea,
+        positionOverride == null ? textarea.selectionStart : positionOverride
+    );
     const value = textarea.value;
     const currentChar = value[position];
     const mirror = document.createElement('div');
@@ -17611,13 +18229,60 @@ function measureFilePanelTextareaCaret(textarea) {
     const left = textarea.offsetLeft + marker.offsetLeft - textarea.scrollLeft;
     const top = textarea.offsetTop + marker.offsetTop - textarea.scrollTop;
     const width = Math.max(2, markerRect.width || fontSize * 0.62);
+    const contentLeft = marker.offsetLeft;
+    const contentTop = marker.offsetTop;
     mirror.remove();
     return {
         left,
         top,
         width,
-        height: lineHeight
+        height: lineHeight,
+        contentLeft,
+        contentTop
     };
+}
+
+function ensureFilePanelTextareaCaretVisible(textarea, state = null) {
+    if (!(textarea instanceof HTMLTextAreaElement)) return false;
+    const position = getFilePanelEditorCaretPosition(textarea, state);
+    const metrics = measureFilePanelTextareaCaret(textarea, position);
+    if (!metrics) return false;
+
+    const margin = FILE_PANEL_EDITOR_CARET_SCROLL_MARGIN_PX;
+    const viewportWidth = textarea.clientWidth;
+    const viewportHeight = textarea.clientHeight;
+    if (viewportWidth <= 0 || viewportHeight <= 0) return false;
+
+    const maxScrollLeft = Math.max(0, textarea.scrollWidth - viewportWidth);
+    const maxScrollTop = Math.max(0, textarea.scrollHeight - viewportHeight);
+    let nextScrollLeft = textarea.scrollLeft;
+    let nextScrollTop = textarea.scrollTop;
+    const caretLeft = metrics.contentLeft;
+    const caretRight = metrics.contentLeft + metrics.width;
+    const caretTop = metrics.contentTop;
+    const caretBottom = metrics.contentTop + metrics.height;
+    const horizontalMargin = Math.min(margin, Math.floor(viewportWidth / 3));
+    const verticalMargin = Math.min(margin, Math.floor(viewportHeight / 3));
+
+    if (caretLeft < nextScrollLeft + horizontalMargin) {
+        nextScrollLeft = caretLeft - horizontalMargin;
+    } else if (caretRight > nextScrollLeft + viewportWidth - horizontalMargin) {
+        nextScrollLeft = caretRight - viewportWidth + horizontalMargin;
+    }
+    if (caretTop < nextScrollTop + verticalMargin) {
+        nextScrollTop = caretTop - verticalMargin;
+    } else if (caretBottom > nextScrollTop + viewportHeight - verticalMargin) {
+        nextScrollTop = caretBottom - viewportHeight + verticalMargin;
+    }
+
+    nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, Math.round(nextScrollLeft)));
+    nextScrollTop = Math.max(0, Math.min(maxScrollTop, Math.round(nextScrollTop)));
+    const changed = nextScrollLeft !== textarea.scrollLeft || nextScrollTop !== textarea.scrollTop;
+    if (changed) {
+        textarea.scrollLeft = nextScrollLeft;
+        textarea.scrollTop = nextScrollTop;
+    }
+    return changed;
 }
 
 function syncFilePanelEditorVimCursor(cursor, textarea, state) {
@@ -17630,7 +18295,7 @@ function syncFilePanelEditorVimCursor(cursor, textarea, state) {
         cursor.classList.remove('is-visible', 'is-visual');
         return;
     }
-    const metrics = measureFilePanelTextareaCaret(textarea);
+    const metrics = measureFilePanelTextareaCaret(textarea, getFilePanelEditorCaretPosition(textarea, state));
     if (!metrics) {
         cursor.classList.remove('is-visible', 'is-visual');
         return;
@@ -18555,6 +19220,9 @@ function renderFilePanelEditor(variant, options = {}) {
     });
     textarea.addEventListener('keydown', event => {
         if (handleFilePanelEditorKeydown(event, normalizedVariant, textarea)) {
+            if (isFixedMode) {
+                ensureFilePanelTextareaCaretVisible(textarea, state);
+            }
             syncEditorChrome();
         }
     });
@@ -18574,6 +19242,9 @@ function renderFilePanelEditor(variant, options = {}) {
         if (isFixedMode && state.vimMode === FILE_PANEL_VIM_MODE_NORMAL) {
             const cursor = textarea.selectionStart;
             textarea.setSelectionRange(cursor, cursor);
+        }
+        if (isFixedMode) {
+            ensureFilePanelTextareaCaretVisible(textarea, state);
         }
         syncEditorChrome();
     });
@@ -18628,40 +19299,44 @@ async function saveFilePanelEdits(variant, options = {}) {
     if (!state.editing || !state.dirty || state.saving || !state.path) return false;
 
     const stayEditing = Boolean(options.stayEditing);
+    const contentToSave = String(state.editBuffer || '');
+    const originalContent = String(state.previewResult?.content || '');
     state.saving = true;
     syncFilePanelViewerActionState(normalizedVariant);
     try {
         const result = await writeFilePanelFile(
             state.root || getFilePanelCurrentRoot(normalizedVariant),
             state.path,
-            state.editBuffer,
-            state.modifiedNs
+            contentToSave,
+            state.modifiedNs,
+            originalContent
         );
-        setFilePanelPreviewPath(normalizedVariant, result?.path || state.path);
+        const savedResult = result && typeof result === 'object'
+            ? { ...(state.previewResult || {}), ...result, content: contentToSave }
+            : { ...(state.previewResult || {}), content: contentToSave, saved: true };
+        setFilePanelPreviewPath(normalizedVariant, savedResult?.path || state.path);
         if (stayEditing) {
             const nextRoot = normalizeFileBrowserRoot(
-                result?.root || state.root || getFilePanelCurrentRoot(normalizedVariant)
+                savedResult?.root || state.root || getFilePanelCurrentRoot(normalizedVariant)
             );
-            const nextPath = normalizeFileBrowserRelativePath(result?.path || state.path);
-            const nextContent = typeof result?.content === 'string' ? result.content : state.editBuffer;
+            const nextPath = normalizeFileBrowserRelativePath(savedResult?.path || state.path);
+            const nextContent = typeof savedResult?.content === 'string' ? savedResult.content : contentToSave;
             state.root = nextRoot;
             state.path = nextPath;
-            state.editable = result?.editable == null ? state.editable : Boolean(result.editable);
+            state.editable = savedResult?.editable == null ? state.editable : Boolean(savedResult.editable);
             state.editing = true;
             state.dirty = false;
             state.saving = false;
-            state.modifiedNs = String(result?.modified_ns || state.modifiedNs || '').trim();
-            state.previewResult = result && typeof result === 'object'
-                ? { ...result, content: nextContent }
-                : { ...(state.previewResult || {}), content: nextContent };
+            state.modifiedNs = String(savedResult?.modified_ns || state.modifiedNs || '').trim();
+            state.previewResult = { ...savedResult, content: nextContent };
             state.editBuffer = nextContent;
             renderFilePanelEditor(normalizedVariant, { selection: options.selection });
         } else {
             await renderFileBrowserViewerIntoElements(
                 getFilePanelVariantConfig(normalizedVariant).getElements(),
-                result,
+                savedResult,
                 {
-                    root: state.root || result?.root || getFilePanelCurrentRoot(normalizedVariant)
+                    root: state.root || savedResult?.root || getFilePanelCurrentRoot(normalizedVariant)
                 }
             );
         }
@@ -18803,6 +19478,11 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
+    if (isHtml && !requestedLine && isPublicPreviewHtmlPath(normalizedPath)) {
+        renderPublicHtmlPreviewIntoElements(elements, previewRoot, normalizedPath);
+        return;
+    }
+
     if (useLargeTextPreview) {
         const largeTextView = buildFileBrowserLargeTextViewer(text, {
             language,
@@ -18841,7 +19521,12 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         }
         const iframe = document.createElement('iframe');
         iframe.className = 'file-browser-html-preview';
-        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms');
+        iframe.setAttribute(
+            'sandbox',
+            CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview
+                ? 'allow-scripts allow-forms'
+                : 'allow-same-origin allow-scripts allow-forms'
+        );
         if (previewUrl) {
             iframe.src = previewUrl;
         } else {
@@ -21139,24 +21824,16 @@ async function queuePromptOnServer(
     const normalizedAttachments = Array.isArray(attachments)
         ? attachments.map(normalizeChatAttachment).filter(Boolean)
         : [];
-    const response = await fetch(`/api/codex/sessions/${sessionId}/message/queue`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    const result = await fetchEncryptedChatPromptJson(
+        `/api/codex/sessions/${sessionId}/message/queue`,
+        {
             prompt,
             plan_mode: Boolean(planMode),
             structured_report_preset: structuredReportPreset || '',
             worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
             attachments: normalizedAttachments
-        })
-    });
-    const result = await response.json();
-    if (!response.ok) {
-        const err = new Error(result?.error || 'Failed to queue message.');
-        err.status = response.status;
-        err.payload = result;
-        throw err;
-    }
+        }
+    );
 
     const queueCount = Number.isFinite(Number(result?.queue_count))
         ? Math.max(0, Number(result.queue_count))
@@ -22199,14 +22876,10 @@ async function previewSubagentPreset(presetId) {
     try {
         const sessionId = await ensureActiveSessionForTooling();
         if (!sessionId) throw new Error('세션을 만들 수 없습니다.');
-        const result = await fetchJson(
+        const result = await fetchEncryptedChatPromptJson(
             `/api/codex/sessions/${encodeURIComponent(sessionId)}/subagent-presets/${encodeURIComponent(presetId)}/preview`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                cache: 'no-store',
-                body: JSON.stringify({ prompt: getCurrentPromptForTooling() })
-            }
+            { prompt: getCurrentPromptForTooling() },
+            { cache: 'no-store' }
         );
         state.tooling.subagentPreview = result?.preview || null;
         setToolingPreviewText('codex-subagent-preview', state.tooling.subagentPreview);
@@ -22222,17 +22895,13 @@ async function runSubagentPreset(presetId) {
         const prompt = getCurrentPromptForTooling();
         const confirmed = window.confirm('선택한 preset의 subjob들을 병렬로 시작할까요? 각 lane은 별도 Codex 실행 비용이 발생합니다.');
         if (!confirmed) return;
-        const result = await fetchJson(
+        const result = await fetchEncryptedChatPromptJson(
             `/api/codex/sessions/${encodeURIComponent(sessionId)}/subagent-presets/${encodeURIComponent(presetId)}/run`,
             {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                cache: 'no-store',
-                body: JSON.stringify({
-                    prompt,
-                    attachments: getPendingAttachmentPayload()
-                })
-            }
+                prompt,
+                attachments: getPendingAttachmentPayload()
+            },
+            { cache: 'no-store' }
         );
         state.tooling.subagentPreview = result;
         setToolingPreviewText('codex-subagent-preview', result);
@@ -22732,26 +23401,18 @@ async function sendPrompt(
     const startedAt = Date.now();
     try {
         const controller = beginPendingSend(sessionId);
-        const response = await fetch(`/api/codex/sessions/${sessionId}/message/stream`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        const result = await fetchEncryptedChatPromptJson(
+            `/api/codex/sessions/${sessionId}/message/stream`,
+            {
                 prompt,
                 plan_mode: Boolean(planMode),
                 structured_report_preset: structuredReportPreset || '',
                 worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
                 attachments: normalizedAttachments
-            }),
-            signal: controller.signal
-        });
+            },
+            { signal: controller.signal }
+        );
         clearPendingSend(sessionId, controller);
-        const result = await response.json();
-        if (!response.ok) {
-            const err = new Error(result?.error || 'Failed to send message.');
-            err.status = response.status;
-            err.payload = result;
-            throw err;
-        }
         processStartedStreamResponse(
             sessionId,
             prompt,

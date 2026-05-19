@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -10,13 +12,21 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from codex_agent import codex_app
 from codex_agent import state
+from codex_agent.blueprints import codex_chat as codex_chat_blueprint
 from codex_agent.services import codex_chat
+
+CHAT_CRYPTO_INFO = b'codex-workbench-chat-prompt-v1'
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +65,81 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         'usage_history_path': usage_history_path,
         'workspace_dir': workspace_dir,
     }
+
+
+@pytest.fixture
+def chat_route_client(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_app, 'ensure_usage_snapshot_background_worker', lambda: None)
+    monkeypatch.setattr(codex_app, 'ensure_pending_queue_background_worker', lambda: None)
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', True)
+    app = codex_app.create_codex_app()
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        yield client
+
+
+def _b64encode(raw: bytes) -> str:
+    return base64.b64encode(raw).decode('ascii')
+
+
+def _b64decode(text: str) -> bytes:
+    return base64.b64decode(text.encode('ascii'), validate=True)
+
+
+def _open_test_chat_crypto_session(client):
+    client_private = ec.generate_private_key(ec.SECP256R1())
+    client_public_key = client_private.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    response = client.post(
+        '/api/codex/chat/crypto-session',
+        json={'client_public_key': _b64encode(client_public_key)},
+    )
+    assert response.status_code == 200
+    handshake = response.get_json()
+    server_public = ec.EllipticCurvePublicKey.from_encoded_point(
+        ec.SECP256R1(),
+        _b64decode(handshake['server_public_key']),
+    )
+    shared_secret = client_private.exchange(ec.ECDH(), server_public)
+    key_material = HKDF(
+        algorithm=hashes.SHA256(),
+        length=64,
+        salt=_b64decode(handshake['salt']),
+        info=CHAT_CRYPTO_INFO,
+    ).derive(shared_secret)
+    return {
+        'id': handshake['crypto_session_id'],
+        'request_key': key_material[:32],
+        'response_key': key_material[32:],
+    }
+
+
+def _encrypt_test_chat_payload(session, payload):
+    iv = os.urandom(12)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ciphertext = AESGCM(session['request_key']).encrypt(
+        iv,
+        raw,
+        session['id'].encode('ascii'),
+    )
+    return {
+        'encrypted': True,
+        'crypto_session_id': session['id'],
+        'iv': _b64encode(iv),
+        'ciphertext': _b64encode(ciphertext),
+    }
+
+
+def _decrypt_test_chat_payload(session, envelope):
+    assert envelope['encrypted'] is True
+    raw = AESGCM(session['response_key']).decrypt(
+        _b64decode(envelope['iv']),
+        _b64decode(envelope['ciphertext']),
+        session['id'].encode('ascii'),
+    )
+    return json.loads(raw.decode('utf-8'))
 
 
 def _build_stream_state(stream_id, session_id, started_at, output_path):
@@ -1302,6 +1387,103 @@ def test_enqueue_codex_queue_persists_and_starts_when_triggered(monkeypatch, iso
     assert updated['messages'][-2]['role'] == 'user'
     assert updated['messages'][-2]['content'] == '다음 작업을 진행해줘'
     assert updated['messages'][-1]['role'] == 'assistant'
+
+
+def test_chat_queue_route_rejects_plain_prompt_when_encryption_required(chat_route_client):
+    session = codex_chat.create_session('encrypted-route-reject')
+
+    response = chat_route_client.post(
+        f"/api/codex/sessions/{session['id']}/message/queue",
+        json={'prompt': 'plain prompt'},
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload['error_code'] == 'encrypted_chat_prompt_required'
+
+
+def test_chat_queue_route_accepts_trusted_tailscale_http_fallback(
+        chat_route_client,
+        isolated_codex_workspace,
+        monkeypatch):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK', True)
+    session = codex_chat.create_session('trusted-http-route-queue')
+    session_id = session['id']
+    with state.codex_streams_lock:
+        active_stream = _build_stream_state(
+            'active-trusted-http-stream',
+            session_id,
+            started_at=time.time(),
+            output_path=isolated_codex_workspace['workspace_dir'] / 'active-trusted-http-stream.txt',
+        )
+        active_stream['done'] = False
+        state.codex_streams['active-trusted-http-stream'] = active_stream
+
+    response = chat_route_client.post(
+        f'/api/codex/sessions/{session_id}/message/queue',
+        base_url='http://100.64.12.34',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
+        json={
+            'prompt': 'Tailscale HTTP fallback prompt',
+            'plan_mode': True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['queued'] is True
+    assert payload['queue_count'] == 1
+    assert payload['pending_queue'][0]['prompt'] == 'Tailscale HTTP fallback prompt'
+    assert payload.get('encrypted') is None
+
+
+def test_chat_queue_route_rejects_untrusted_http_fallback_header(chat_route_client):
+    session = codex_chat.create_session('untrusted-http-route-reject')
+
+    response = chat_route_client.post(
+        f'/api/codex/sessions/{session["id"]}/message/queue',
+        base_url='http://example.com',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
+        json={'prompt': 'plain prompt'},
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload['error_code'] == 'encrypted_chat_prompt_required'
+
+
+def test_encrypted_chat_queue_route_accepts_prompt_and_encrypts_response(
+        chat_route_client,
+        isolated_codex_workspace):
+    session = codex_chat.create_session('encrypted-route-queue')
+    session_id = session['id']
+    with state.codex_streams_lock:
+        active_stream = _build_stream_state(
+            'active-route-stream',
+            session_id,
+            started_at=time.time(),
+            output_path=isolated_codex_workspace['workspace_dir'] / 'active-route-stream.txt',
+        )
+        active_stream['done'] = False
+        state.codex_streams['active-route-stream'] = active_stream
+
+    crypto_session = _open_test_chat_crypto_session(chat_route_client)
+    response = chat_route_client.post(
+        f'/api/codex/sessions/{session_id}/message/queue',
+        json=_encrypt_test_chat_payload(crypto_session, {
+            'prompt': '암호화된 다음 작업',
+            'plan_mode': True,
+        }),
+    )
+
+    assert response.status_code == 200
+    envelope = response.get_json()
+    payload = _decrypt_test_chat_payload(crypto_session, envelope)
+    assert payload['queued'] is True
+    assert payload['queue_count'] == 1
+    assert payload['pending_queue'][0]['prompt'] == '암호화된 다음 작업'
+    updated = codex_chat.get_session(session_id)
+    assert updated['pending_queue'][0]['prompt'] == '암호화된 다음 작업'
 
 
 def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatch, tmp_path):

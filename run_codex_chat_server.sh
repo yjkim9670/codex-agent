@@ -48,7 +48,7 @@ ensure_requirements() {
         return 0
     fi
 
-    if "${venv_python}" -c "import flask" >/dev/null 2>&1; then
+    if "${venv_python}" -c "import flask, cryptography" >/dev/null 2>&1; then
         return 0
     fi
 

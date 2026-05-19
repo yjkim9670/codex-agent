@@ -435,6 +435,24 @@ CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
 )
 CODEX_API_ONLY_MODE = _parse_bool_env('CODEX_API_ONLY_MODE', default=False)
 CODEX_ENABLE_FILES_API = _parse_bool_env('CODEX_ENABLE_FILES_API', default=True)
+CODEX_REQUIRE_ENCRYPTED_FILE_WRITES = _parse_bool_env(
+    'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES',
+    default=True,
+)
+CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS = _parse_bool_env(
+    'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS',
+    default=True,
+)
+CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK = _parse_bool_env(
+    'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK',
+    default=True,
+)
+CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS = _parse_allowed_origins(
+    os.environ.get(
+        'CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS',
+        'localhost,*.localhost,127.0.0.1,127.0.0.0/8,::1,100.64.0.0/10,fd7a:115c:a1e0::/48,*.ts.net',
+    )
+)
 CODEX_ENABLE_GIT_API = _parse_bool_env('CODEX_ENABLE_GIT_API', default=True)
 CODEX_ENABLE_LEGACY_STATE_IMPORT = _parse_bool_env(
     'CODEX_ENABLE_LEGACY_STATE_IMPORT',

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import errno
 import io
+import json
 import os
 import sys
 import time
@@ -9,6 +11,10 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,6 +25,7 @@ from codex_agent.blueprints import codex_chat as codex_chat_blueprint
 from codex_agent.services import file_browser, terminal_sessions
 
 CODEX_APP_ROOT = Path(codex_app.__file__).resolve().parent
+FILE_CRYPTO_INFO = b'codex-workbench-file-browser-v1'
 
 
 @pytest.fixture(autouse=True)
@@ -49,10 +56,75 @@ def browser_test_client(isolated_browser_roots, monkeypatch):
     monkeypatch.setattr(codex_app, 'ensure_usage_snapshot_background_worker', lambda: None)
     monkeypatch.setattr(codex_app, 'ensure_pending_queue_background_worker', lambda: None)
     monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ENABLE_FILES_API', True)
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES', False)
     app = codex_app.create_codex_app()
     app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
+
+
+def _b64encode(raw: bytes) -> str:
+    return base64.b64encode(raw).decode('ascii')
+
+
+def _b64decode(text: str) -> bytes:
+    return base64.b64decode(text.encode('ascii'), validate=True)
+
+
+def _open_test_crypto_session(client):
+    client_private = ec.generate_private_key(ec.SECP256R1())
+    client_public_key = client_private.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    response = client.post(
+        '/api/codex/files/crypto-session',
+        json={'client_public_key': _b64encode(client_public_key)},
+    )
+    assert response.status_code == 200
+    handshake = response.get_json()
+    server_public = ec.EllipticCurvePublicKey.from_encoded_point(
+        ec.SECP256R1(),
+        _b64decode(handshake['server_public_key']),
+    )
+    shared_secret = client_private.exchange(ec.ECDH(), server_public)
+    key_material = HKDF(
+        algorithm=hashes.SHA256(),
+        length=64,
+        salt=_b64decode(handshake['salt']),
+        info=FILE_CRYPTO_INFO,
+    ).derive(shared_secret)
+    return {
+        'id': handshake['crypto_session_id'],
+        'request_key': key_material[:32],
+        'response_key': key_material[32:],
+    }
+
+
+def _encrypt_test_file_payload(session, payload):
+    iv = os.urandom(12)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ciphertext = AESGCM(session['request_key']).encrypt(
+        iv,
+        raw,
+        session['id'].encode('ascii'),
+    )
+    return {
+        'encrypted': True,
+        'crypto_session_id': session['id'],
+        'iv': _b64encode(iv),
+        'ciphertext': _b64encode(ciphertext),
+    }
+
+
+def _decrypt_test_file_payload(session, envelope):
+    assert envelope['encrypted'] is True
+    raw = AESGCM(session['response_key']).decrypt(
+        _b64decode(envelope['iv']),
+        _b64decode(envelope['ciphertext']),
+        session['id'].encode('ascii'),
+    )
+    return json.loads(raw.decode('utf-8'))
 
 
 def _wait_for_terminal_snapshot(fetch_snapshot, predicate, timeout_seconds=6.0):
@@ -142,6 +214,29 @@ def test_write_file_updates_content_and_returns_latest_metadata(isolated_browser
     assert 'after' in updated['content']
     assert target.read_text(encoding='utf-8') == 'print("after")\n'
     assert str(updated['modified_ns']).isdigit()
+
+
+def test_write_file_patch_updates_content_without_returning_body(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'script.py'
+    target.write_text('alpha beta gamma\n', encoding='utf-8')
+
+    original = file_browser.read_file(root_key='server', relative_path='script.py')
+    updated = file_browser.write_file_patch(
+        root_key='server',
+        relative_path='script.py',
+        patch={
+            'start': 6,
+            'delete_count': 4,
+            'insert': 'BETA',
+        },
+        expected_modified_ns=original['modified_ns'],
+        include_content=False,
+    )
+
+    assert updated['saved'] is True
+    assert 'content' not in updated
+    assert target.read_text(encoding='utf-8') == 'alpha BETA gamma\n'
 
 
 def test_tpl_files_are_editable_from_preview(isolated_browser_roots):
@@ -397,6 +492,126 @@ def test_write_route_returns_conflict_when_file_changed(browser_test_client, iso
     assert write_response.status_code == 409
     payload = write_response.get_json()
     assert payload['error_code'] == 'modified_conflict'
+
+
+def test_encrypted_read_route_returns_encrypted_payload(browser_test_client, isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'notes.txt').write_text('secret preview', encoding='utf-8')
+    session = _open_test_crypto_session(browser_test_client)
+
+    response = browser_test_client.post(
+        '/api/codex/files/read',
+        json=_encrypt_test_file_payload(session, {
+            'root': 'server',
+            'path': 'notes.txt',
+        }),
+    )
+
+    assert response.status_code == 200
+    envelope = response.get_json()
+    assert envelope['encrypted'] is True
+    payload = _decrypt_test_file_payload(session, envelope)
+    assert payload['content'] == 'secret preview'
+    assert payload['path'] == 'notes.txt'
+
+
+def test_encrypted_write_route_accepts_patch_and_omits_content(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES', True)
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'notes.txt'
+    target.write_text('before secret', encoding='utf-8')
+    original = file_browser.read_file(root_key='server', relative_path='notes.txt')
+    session = _open_test_crypto_session(browser_test_client)
+
+    response = browser_test_client.post(
+        '/api/codex/files/write',
+        json=_encrypt_test_file_payload(session, {
+            'mode': 'patch',
+            'root': 'server',
+            'path': 'notes.txt',
+            'expected_modified_ns': original['modified_ns'],
+            'patch': {
+                'start': 7,
+                'delete_count': 6,
+                'insert': 'encrypted',
+            },
+        }),
+    )
+
+    assert response.status_code == 200
+    envelope = response.get_json()
+    assert envelope['encrypted'] is True
+    payload = _decrypt_test_file_payload(session, envelope)
+    assert payload['saved'] is True
+    assert 'content' not in payload
+    assert target.read_text(encoding='utf-8') == 'before encrypted'
+
+
+def test_plain_write_route_rejected_when_encryption_required(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES', True)
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'notes.txt'
+    target.write_text('before', encoding='utf-8')
+    original = file_browser.read_file(root_key='server', relative_path='notes.txt')
+
+    response = browser_test_client.post(
+        '/api/codex/files/write',
+        json={
+            'root': 'server',
+            'path': 'notes.txt',
+            'content': 'after',
+            'expected_modified_ns': original['modified_ns'],
+        },
+    )
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload['error_code'] == 'encrypted_file_write_required'
+    assert target.read_text(encoding='utf-8') == 'before'
+
+
+def test_plain_write_route_accepts_trusted_tailscale_http_fallback(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES', True)
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK', True)
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'notes.txt'
+    target.write_text('before secret', encoding='utf-8')
+    original = file_browser.read_file(root_key='server', relative_path='notes.txt')
+
+    response = browser_test_client.post(
+        '/api/codex/files/write',
+        base_url='http://100.64.12.34',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
+        json={
+            'mode': 'patch',
+            'root': 'server',
+            'path': 'notes.txt',
+            'expected_modified_ns': original['modified_ns'],
+            'patch': {
+                'start': 7,
+                'delete_count': 6,
+                'insert': 'trusted-http',
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['saved'] is True
+    assert 'content' not in payload
+    assert target.read_text(encoding='utf-8') == 'before trusted-http'
 
 
 def test_create_file_creates_blank_text_file(isolated_browser_roots):
@@ -880,9 +1095,9 @@ def test_terminal_events_route_streams_sse_payload(browser_test_client):
 def test_terminal_vendor_assets_are_available_locally(browser_test_client):
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
 
-    assert "/static/vendor/xterm-5.5.0.js" in app_js
-    assert "/static/vendor/xterm-5.5.0.css" in app_js
-    assert "/static/vendor/xterm-addon-fit-0.10.0.js" in app_js
+    assert "vendor/xterm-5.5.0.js" in app_js
+    assert "vendor/xterm-5.5.0.css" in app_js
+    assert "vendor/xterm-addon-fit-0.10.0.js" in app_js
 
     for asset_path in (
         '/static/vendor/xterm-5.5.0.js',

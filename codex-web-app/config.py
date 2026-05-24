@@ -79,6 +79,15 @@ def _parse_path_list_env(name):
     return tuple(paths)
 
 
+def _parse_cli_text_env(name, max_chars=120):
+    token = str(os.environ.get(name) or '').strip()
+    if not token or '\x00' in token:
+        return ''
+    if len(token) > max_chars:
+        return ''
+    return token
+
+
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 _workspace_override = os.environ.get('CODEX_WORKSPACE_DIR')
@@ -157,6 +166,8 @@ CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
+CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
+CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
 
 
 def _normalize_reasoning_options(options):

@@ -638,6 +638,35 @@ def test_build_codex_command_supports_read_only_output_schema(isolated_codex_wor
     assert cmd[cmd.index('--output-schema') + 1] == str(schema_path)
 
 
+def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROFILE', 'dtgpt_linux')
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_MODEL_PROVIDER', 'dtgpt_linux')
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {
+        'model': None,
+        'reasoning_effort': None,
+        'plan_mode_model': None,
+        'plan_mode_reasoning_effort': None,
+        'app_server_pilot_enabled': False,
+    })
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[:10] == [
+        'codex',
+        '--ask-for-approval',
+        'never',
+        '--profile',
+        'dtgpt_linux',
+        'exec',
+        '--sandbox',
+        'workspace-write',
+        '--color',
+        'never',
+    ]
+    provider_index = cmd.index('model_provider="dtgpt_linux"')
+    assert cmd[provider_index - 1] == '--config'
+
+
 def test_structured_report_preset_formats_valid_payload():
     payload = {
         'title': 'Risk report',
@@ -873,6 +902,22 @@ def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
 
     disabled = codex_chat.update_settings(app_server_pilot_enabled=False)
     assert disabled['app_server_pilot_enabled'] is False
+
+
+def test_cli_routing_settings_are_runtime_only(tmp_path, monkeypatch):
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROFILE', 'dtgpt_linux')
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_MODEL_PROVIDER', 'dtgpt_linux')
+
+    updated = codex_chat.update_settings(model='DeepSeek-V4-Pro')
+
+    assert updated['cli_profile'] == 'dtgpt_linux'
+    assert updated['model_provider'] == 'dtgpt_linux'
+    stored = json.loads(settings_path.read_text(encoding='utf-8'))
+    assert 'cli_profile' not in stored
+    assert 'model_provider' not in stored
 
 
 def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):

@@ -2036,6 +2036,10 @@ textarea {
     --file-panel-action-icon: var(--icon-clear-selection);
 }
 
+.file-panel-selection-btn-clear.is-selection-mode-entry {
+    --file-panel-action-icon: var(--icon-select-all);
+}
+
 .file-panel-selection-btn-download {
     --file-panel-action-icon: var(--icon-fetch);
     --file-panel-action-icon-size: 16px;
@@ -2550,7 +2554,7 @@ textarea {
     width: 100%;
     border-collapse: collapse;
     margin: 10px 0 12px;
-    table-layout: fixed;
+    table-layout: auto;
 }
 
 .file-browser-markdown th,
@@ -2558,13 +2562,15 @@ textarea {
     border: 1px solid var(--border);
     padding: 7px 9px;
     vertical-align: top;
-    word-break: break-word;
-    overflow-wrap: anywhere;
+    word-break: normal;
+    overflow-wrap: break-word;
 }
 
 .file-browser-markdown th {
     background: var(--surface-raised);
     font-weight: 700;
+    word-break: keep-all;
+    overflow-wrap: normal;
 }
 
 .file-browser-mermaid {
@@ -3998,7 +4004,7 @@ body.is-mermaid-diagram-viewer-open {
     width: 100%;
     border-collapse: collapse;
     margin: 10px 0 12px;
-    table-layout: fixed;
+    table-layout: auto;
 }
 
 .message-log-overlay-content th,
@@ -4006,13 +4012,15 @@ body.is-mermaid-diagram-viewer-open {
     border: 1px solid var(--border);
     padding: 7px 9px;
     vertical-align: top;
-    word-break: break-word;
-    overflow-wrap: anywhere;
+    word-break: normal;
+    overflow-wrap: break-word;
 }
 
 .message-log-overlay-content th {
     background: var(--surface-raised);
     font-weight: 700;
+    word-break: keep-all;
+    overflow-wrap: normal;
 }
 
 .message-log-overlay.is-preview-mode .message-log-overlay-header {
@@ -8702,7 +8710,7 @@ body.is-work-mode-resizing * {
     width: 100%;
     border-collapse: collapse;
     margin: 8px 0 0;
-    table-layout: fixed;
+    table-layout: auto;
     white-space: normal;
 }
 
@@ -8711,13 +8719,15 @@ body.is-work-mode-resizing * {
     border: 1px solid var(--border);
     padding: 6px 8px;
     vertical-align: top;
-    word-break: break-word;
-    overflow-wrap: anywhere;
+    word-break: normal;
+    overflow-wrap: break-word;
 }
 
 .message-bubble th {
     background: var(--surface-raised);
     font-weight: 700;
+    word-break: keep-all;
+    overflow-wrap: normal;
 }
 
 .message.user .message-bubble th,

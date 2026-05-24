@@ -53,8 +53,14 @@ ensure_requirements() {
     fi
 
     echo "[INFO] Installing Python dependencies from ${requirements_path}..."
-    "${venv_python}" -m pip install --upgrade pip
-    "${venv_python}" -m pip install -r "${requirements_path}"
+    local wheelhouse_path
+    wheelhouse_path="$(dirname "${requirements_path}")/wheelhouse"
+    if [[ -d "${wheelhouse_path}" ]]; then
+        "${venv_python}" -m pip install --no-index --find-links "${wheelhouse_path}" -r "${requirements_path}"
+    else
+        "${venv_python}" -m pip install --upgrade pip
+        "${venv_python}" -m pip install -r "${requirements_path}"
+    fi
 }
 
 PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"

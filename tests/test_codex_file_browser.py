@@ -1106,3 +1106,48 @@ def test_terminal_vendor_assets_are_available_locally(browser_test_client):
     ):
         response = browser_test_client.get(asset_path)
         assert response.status_code == 200
+
+
+def test_file_preview_context_can_enter_file_selection_mode():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'handleFilePanelClearSelectionButtonClick(FILE_PANEL_VARIANT_WORK_MODE)' in app_js
+    assert 'handleFilePanelClearSelectionButtonClick(FILE_PANEL_VARIANT_OVERLAY)' in app_js
+    assert 'function handleFilePanelClearSelectionButtonClick(variant)' in app_js
+    assert 'isFilePanelUsingPreviewActionTarget(normalizedVariant)' in app_js
+    assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
+    assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
+    assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
+    assert '/static/js/app.js?v=164' in template
+    assert '/static/css/app.css?v=172' in template
+
+
+def test_markdown_new_window_uses_loaded_app_stylesheet():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert 'function getCodexAppStylesheetUrl()' in app_js
+    assert 'document.querySelectorAll(\'link[rel="stylesheet"]\')' in app_js
+    assert '/\\/static\\/css\\/app\\.css(?:[?#]|$)/.test(href)' in app_js
+    assert 'const stylesheetUrl = getCodexAppStylesheetUrl();' in app_js
+
+
+def test_markdown_tables_use_content_based_column_widths():
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+
+    markdown_table_rules = (
+        '.file-browser-markdown .markdown-table',
+        '.message-log-overlay-content table',
+        '.message-bubble .markdown-table',
+    )
+    for selector in markdown_table_rules:
+        start = app_css.index(selector)
+        rule = app_css[start:app_css.index('}', start)]
+        assert 'table-layout: auto;' in rule
+        assert 'table-layout: fixed;' not in rule
+
+    assert app_css.count('overflow-wrap: break-word;') >= 3
+    assert app_css.count('word-break: normal;') >= 3
+    assert app_css.count('word-break: keep-all;') >= 3
+    assert app_css.count('overflow-wrap: normal;') >= 3

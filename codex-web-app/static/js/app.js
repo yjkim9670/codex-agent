@@ -76,8 +76,10 @@ const state = {
         model: null,
         modelCatalog: [],
         modelOptions: [],
+        cliProfile: null,
         executionPolicyPresets: [],
         appServerPilotEnabled: false,
+        modelProvider: null,
         planModeModel: null,
         planModeReasoningEffort: null,
         planModeState: 'off',
@@ -2242,7 +2244,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileClearSelectionBtn) {
         workModeFileClearSelectionBtn.addEventListener('click', () => {
-            clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
+            handleFilePanelClearSelectionButtonClick(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileDownloadBtn) {
@@ -2707,7 +2709,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (fileBrowserClearSelectionBtn) {
         fileBrowserClearSelectionBtn.addEventListener('click', () => {
-            clearFilePanelSelection(FILE_PANEL_VARIANT_OVERLAY);
+            handleFilePanelClearSelectionButtonClick(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserDownloadBtn) {
@@ -7214,8 +7216,10 @@ async function loadSettings({ silent = true } = {}) {
             model: result?.settings?.model || null,
             modelCatalog,
             modelOptions,
+            cliProfile: result?.settings?.cli_profile || null,
             executionPolicyPresets,
             appServerPilotEnabled: Boolean(result?.settings?.app_server_pilot_enabled),
+            modelProvider: result?.settings?.model_provider || null,
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeState: normalizePlanModeState(state.settings?.planModeState),
@@ -7525,7 +7529,11 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     );
-    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}`;
+    const routingParts = [];
+    if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
+    if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
+    const routingText = routingParts.length > 0 ? ` · ${routingParts.join(' · ')}` : '';
+    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}${routingText}`;
     const compactToken = value => {
         if (value === 'default') return 'def';
         return value.replace(' (default)', '*');
@@ -7539,6 +7547,12 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
+    }
+    if (state.settings.modelProvider) {
+        compactSummaryParts.push(`Provider:${compactToken(state.settings.modelProvider)}`);
+    }
+    if (state.settings.cliProfile) {
+        compactSummaryParts.push(`Profile:${compactToken(state.settings.cliProfile)}`);
     }
     const compactSummary = compactSummaryParts.join(' · ');
 
@@ -7585,7 +7599,9 @@ async function updateSettings() {
         const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
         state.settings.model = result?.settings?.model || null;
         state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
+        state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
+        state.settings.modelProvider = result?.settings?.model_provider || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
@@ -13772,6 +13788,18 @@ function buildFilePanelMarkdownPreviewRuntimeScript() {
     return `(${filePanelMarkdownPreviewRuntime.toString()})();`;
 }
 
+function getCodexAppStylesheetUrl() {
+    const stylesheet = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+        .find(link => {
+            const href = String(link?.getAttribute?.('href') || '');
+            return /\/static\/css\/app\.css(?:[?#]|$)/.test(href);
+        });
+    if (stylesheet instanceof HTMLLinkElement && stylesheet.href) {
+        return stylesheet.href;
+    }
+    return new URL('/static/css/app.css', window.location.href).href;
+}
+
 function buildFilePanelMarkdownPreviewDocument(payload) {
     const normalizedPath = normalizeFileBrowserRelativePath(payload?.path || '');
     const title = String(payload?.name || normalizedPath || 'Markdown preview');
@@ -13780,7 +13808,7 @@ function buildFilePanelMarkdownPreviewDocument(payload) {
         showCodeLineNumbers: true
     });
     const theme = document.documentElement?.dataset?.theme === 'dark' ? 'dark' : 'light';
-    const stylesheetUrl = new URL('/static/css/app.css', window.location.href).href;
+    const stylesheetUrl = getCodexAppStylesheetUrl();
     const mermaidUrl = new URL(MERMAID_VENDOR_SRC, window.location.href).href;
     const sizeText = formatFileBrowserSize(payload?.size);
     const modifiedText = payload?.modifiedAt
@@ -14456,6 +14484,9 @@ function getFilePanelChatContextTargetPaths(variant) {
     if (selectedPaths.length > 0) {
         return selectedPaths;
     }
+    if (isFilePanelSelectionMode(normalizedVariant)) {
+        return [];
+    }
     const previewPath = getFilePanelPreviewContextPath(normalizedVariant);
     return previewPath ? [previewPath] : [];
 }
@@ -14466,6 +14497,9 @@ function getFilePanelActionTargetPaths(variant) {
     if (selectedPaths.length > 0) {
         return selectedPaths;
     }
+    if (isFilePanelSelectionMode(normalizedVariant)) {
+        return [];
+    }
     const previewPath = getFilePanelPreviewContextPath(normalizedVariant);
     return previewPath ? [previewPath] : [];
 }
@@ -14473,6 +14507,7 @@ function getFilePanelActionTargetPaths(variant) {
 function isFilePanelUsingPreviewActionTarget(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     return getFilePanelSelectedPaths(normalizedVariant).size <= 0
+        && !isFilePanelSelectionMode(normalizedVariant)
         && Boolean(getFilePanelPreviewContextPath(normalizedVariant));
 }
 
@@ -14675,11 +14710,18 @@ function syncFilePanelSelectionBar(variant) {
         elements.selectVisibleCheckbox.setAttribute('title', checkboxLabel);
     }
     if (elements.clearSelectionBtn) {
+        const clearButtonStartsSelectionMode = usingPreviewContext && !selectionModeActive;
         updateFilePanelActionButtonLabel(
             elements.clearSelectionBtn,
-            selectedCount > 0 ? '파일 선택 해제' : '파일 선택 모드 끄기'
+            clearButtonStartsSelectionMode
+                ? '항목 선택 모드 켜기'
+                : (selectedCount > 0 ? '파일 선택 해제' : '파일 선택 모드 끄기')
         );
-        elements.clearSelectionBtn.disabled = isBusy || !selectionModeActive;
+        elements.clearSelectionBtn.disabled = isBusy || (!selectionModeActive && !clearButtonStartsSelectionMode);
+        elements.clearSelectionBtn.classList.toggle(
+            'is-selection-mode-entry',
+            clearButtonStartsSelectionMode
+        );
         syncHoverTooltipFromLabel(elements.clearSelectionBtn);
     }
     if (elements.downloadBtn) {
@@ -14754,6 +14796,15 @@ function handleFilePanelSelectionButtonClick(variant) {
         return;
     }
     toggleFilePanelVisibleFileSelection(variant);
+}
+
+function handleFilePanelClearSelectionButtonClick(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (isFilePanelUsingPreviewActionTarget(normalizedVariant)) {
+        setFilePanelSelectionMode(normalizedVariant, true);
+        return;
+    }
+    clearFilePanelSelection(normalizedVariant);
 }
 
 function pruneFilePanelSelectionToEntries(variant, entries) {

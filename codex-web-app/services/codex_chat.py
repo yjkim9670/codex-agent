@@ -23,7 +23,9 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
+    CODEX_CLI_PROFILE,
     CODEX_CLI_SELF_PROTECT,
     CODEX_CLI_SELF_PROTECT_GIT_RW,
     CODEX_MAX_ATTACHMENT_BYTES,
@@ -2215,6 +2217,7 @@ def _build_duration_breakdown(started_at, cli_started_at=None, completed_at=None
 def _parse_top_level_config(text):
     model = None
     reasoning = None
+    model_provider = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith('#'):
@@ -2230,14 +2233,32 @@ def _parse_top_level_config(text):
             model = value
         elif key == 'model_reasoning_effort':
             reasoning = value
+        elif key == 'model_provider':
+            model_provider = value
     return {
         'model': _normalize_model_setting(model),
-        'reasoning_effort': reasoning or None
+        'reasoning_effort': reasoning or None,
+        'model_provider': str(model_provider or '').strip() or None,
     }
 
 
 def _escape_toml_string(value):
     return str(value).replace('\\', '\\\\').replace('"', '\\"')
+
+
+def _get_effective_cli_model_provider():
+    env_provider = str(CODEX_CLI_MODEL_PROVIDER or '').strip()
+    if env_provider:
+        return env_provider
+    parsed_config = _parse_top_level_config(_read_codex_config_text())
+    return parsed_config.get('model_provider') or None
+
+
+def _merge_runtime_cli_settings(settings):
+    payload = dict(settings or {})
+    payload['cli_profile'] = str(CODEX_CLI_PROFILE or '').strip() or None
+    payload['model_provider'] = _get_effective_cli_model_provider()
+    return payload
 
 
 def _update_top_level_config(text, updates):
@@ -2282,7 +2303,7 @@ def _update_top_level_config(text, updates):
 def get_settings():
     with _CONFIG_LOCK:
         if CODEX_SETTINGS_PATH.exists():
-            return _read_workspace_settings()
+            return _merge_runtime_cli_settings(_read_workspace_settings())
         workspace_settings = _read_workspace_settings()
         if (
             workspace_settings.get('model')
@@ -2292,7 +2313,7 @@ def get_settings():
             or workspace_settings.get('app_server_pilot_enabled')
         ):
             _write_workspace_settings(workspace_settings)
-            return workspace_settings
+            return _merge_runtime_cli_settings(workspace_settings)
         text = _read_codex_config_text()
         fallback = _parse_top_level_config(text)
         if fallback.get('model') or fallback.get('reasoning_effort'):
@@ -2300,14 +2321,14 @@ def get_settings():
             fallback['plan_mode_reasoning_effort'] = None
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             _write_workspace_settings(fallback)
-            return _read_workspace_settings()
-    return {
+            return _merge_runtime_cli_settings(_read_workspace_settings())
+    return _merge_runtime_cli_settings({
         'model': None,
         'reasoning_effort': None,
         'plan_mode_model': None,
         'plan_mode_reasoning_effort': None,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
-    }
+    })
 
 
 def update_settings(
@@ -2346,7 +2367,7 @@ def update_settings(
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         _write_workspace_settings(next_settings)
-        return next_settings
+        return _merge_runtime_cli_settings(next_settings)
 
 
 def is_codex_app_server_pilot_enabled():
@@ -6132,11 +6153,16 @@ def _build_codex_command(
         attachments=None,
         question_only=False,
         execution_cwd=None):
+    base_cmd = [
+        'codex',
+        '--ask-for-approval',
+        'never',
+    ]
+    if CODEX_CLI_PROFILE:
+        base_cmd.extend(['--profile', CODEX_CLI_PROFILE])
     if question_only:
         cmd = [
-            'codex',
-            '--ask-for-approval',
-            'never',
+            *base_cmd,
             'exec',
             '--sandbox',
             'read-only',
@@ -6146,9 +6172,7 @@ def _build_codex_command(
         ]
     else:
         cmd = [
-            'codex',
-            '--ask-for-approval',
-            'never',
+            *base_cmd,
             'exec',
             '--sandbox',
             'workspace-write',
@@ -6173,6 +6197,10 @@ def _build_codex_command(
     if reasoning_effort:
         escaped_reasoning = _escape_toml_string(reasoning_effort)
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
+    model_provider = str(CODEX_CLI_MODEL_PROVIDER or '').strip()
+    if model_provider:
+        escaped_provider = _escape_toml_string(model_provider)
+        cmd.extend(['--config', f'model_provider="{escaped_provider}"'])
     if output_path:
         cmd.extend(['--output-last-message', str(output_path)])
     if output_schema_path:

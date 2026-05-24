@@ -60,6 +60,12 @@ hash -r 2>/dev/null || true
 echo "Activated venv: ${VENV_DIR}"
 
 if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
-    "${VENV_PYTHON}" -m pip install --upgrade pip
-    "${VENV_PYTHON}" -m pip install -r "${SCRIPT_DIR}/requirements.txt"
+    if ! "${VENV_PYTHON}" -c "import flask, cryptography" >/dev/null 2>&1; then
+        if [[ -d "${SCRIPT_DIR}/wheelhouse" ]]; then
+            "${VENV_PYTHON}" -m pip install --no-index --find-links "${SCRIPT_DIR}/wheelhouse" -r "${SCRIPT_DIR}/requirements.txt"
+        else
+            "${VENV_PYTHON}" -m pip install --upgrade pip
+            "${VENV_PYTHON}" -m pip install -r "${SCRIPT_DIR}/requirements.txt"
+        fi
+    fi
 fi

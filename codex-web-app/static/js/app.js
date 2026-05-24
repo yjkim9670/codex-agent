@@ -14725,7 +14725,14 @@ function syncFilePanelSelectionBar(variant) {
         syncHoverTooltipFromLabel(elements.clearSelectionBtn);
     }
     if (elements.downloadBtn) {
-        elements.downloadBtn.disabled = isBusy || actionTargetCount <= 0 || hasActionDirectories;
+        updateFilePanelActionButtonLabel(
+            elements.downloadBtn,
+            hasActionDirectories || actionTargetCount > 1
+                ? '선택 파일 또는 폴더를 압축해서 다운로드'
+                : '선택 파일 다운로드'
+        );
+        elements.downloadBtn.disabled = isBusy || actionTargetCount <= 0;
+        syncHoverTooltipFromLabel(elements.downloadBtn);
     }
     if (elements.mailBtn) {
         elements.mailBtn.disabled = isBusy || actionTargetCount <= 0;
@@ -16762,24 +16769,21 @@ async function downloadSelectedFilesFromFilePanel(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
     if (!selectedPaths.length) return false;
-    if (getFilePanelActionTargetEntrySummary(normalizedVariant).hasDirectories) {
-        showToast('다운로드는 파일 선택만 지원합니다. 폴더는 메일 전송에서 압축 첨부할 수 있습니다.', {
-            tone: 'error',
-            durationMs: 3600
-        });
-        return false;
-    }
+    const actionEntrySummary = getFilePanelActionTargetEntrySummary(normalizedVariant);
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
         const result = await fetchFilePanelDownload(getFilePanelActionTargetRoot(normalizedVariant), selectedPaths);
         const filename = extractFilenameFromContentDisposition(result?.contentDisposition)
-            || (selectedPaths.length === 1
+            || (selectedPaths.length === 1 && !actionEntrySummary.hasDirectories
                 ? selectedPaths[0].split('/').pop()
                 : 'codex-files.zip');
         if (!saveBlobAsFile(result?.blob, filename)) {
             throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
         }
-        showToast(`선택 파일 ${selectedPaths.length}개 다운로드를 시작했습니다.`, {
+        const targetLabel = actionEntrySummary.hasDirectories || selectedPaths.length > 1
+            ? `선택 항목 ${selectedPaths.length}개 압축 다운로드`
+            : '선택 파일 다운로드';
+        showToast(`${targetLabel}를 시작했습니다.`, {
             tone: 'success',
             durationMs: 2600
         });

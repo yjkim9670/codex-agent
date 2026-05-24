@@ -298,6 +298,32 @@ def test_build_download_payload_returns_zip_for_multiple_files(isolated_browser_
         assert archive.read('docs/guide.txt').decode('utf-8') == 'guide'
 
 
+def test_build_download_payload_includes_selected_directories(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs' / 'nested').mkdir(parents=True, exist_ok=True)
+    (server_root / 'docs' / 'guide.txt').write_text('guide', encoding='utf-8')
+    (server_root / 'docs' / 'nested' / 'deep.txt').write_text('deep', encoding='utf-8')
+    (server_root / 'README.md').write_text('# hello', encoding='utf-8')
+
+    result = file_browser.build_download_payload(
+        root_key='server',
+        relative_paths=['docs', 'README.md'],
+    )
+
+    assert result['is_archive'] is True
+    assert result['mime_type'] == 'application/zip'
+    assert result['target_count'] == 2
+    assert result['file_count'] == 3
+    assert result['directory_count'] >= 1
+    with ZipFile(io.BytesIO(result['content'])) as archive:
+        names = sorted(archive.namelist())
+        assert 'README.md' in names
+        assert 'docs/' in names
+        assert 'docs/guide.txt' in names
+        assert 'docs/nested/deep.txt' in names
+        assert archive.read('docs/guide.txt').decode('utf-8') == 'guide'
+
+
 def test_build_mail_archive_payload_includes_selected_directories(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'docs' / 'nested').mkdir(parents=True, exist_ok=True)
@@ -392,6 +418,23 @@ def test_download_route_returns_attachment(browser_test_client, isolated_browser
     assert response.headers['Content-Type'].startswith('text/plain')
     assert 'attachment;' in response.headers['Content-Disposition']
     assert response.data == b'report body'
+
+
+def test_download_route_returns_archive_for_selected_directories(browser_test_client, isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'bundle').mkdir(parents=True, exist_ok=True)
+    (server_root / 'bundle' / 'report.txt').write_text('report body', encoding='utf-8')
+
+    response = browser_test_client.post(
+        '/api/codex/files/download',
+        json={'root': 'server', 'paths': ['bundle']},
+    )
+
+    assert response.status_code == 200
+    assert response.headers['Content-Type'].startswith('application/zip')
+    assert 'attachment;' in response.headers['Content-Disposition']
+    with ZipFile(io.BytesIO(response.data)) as archive:
+        assert archive.read('bundle/report.txt').decode('utf-8') == 'report body'
 
 
 def test_mail_route_builds_archive_and_calls_sender(browser_test_client, isolated_browser_roots, monkeypatch):
@@ -1120,8 +1163,18 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=164' in template
+    assert '/static/js/app.js?v=165' in template
     assert '/static/css/app.css?v=172' in template
+
+
+def test_file_preview_download_supports_selected_directories():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert '다운로드는 파일 선택만 지원합니다' not in app_js
+    assert 'elements.downloadBtn.disabled = isBusy || actionTargetCount <= 0;' in app_js
+    assert '선택 파일 또는 폴더를 압축해서 다운로드' in app_js
+    assert 'aria-label="선택 파일 또는 폴더 다운로드"' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

@@ -471,7 +471,7 @@ def _resolve_archive_targets(root_key=None, relative_paths=None):
     return normalized_root, root_path, targets
 
 
-def _iter_mail_archive_entries(root_path, targets):
+def _iter_archive_entries(root_path, targets):
     seen = set()
     for target in targets:
         target_path = target['target_path']
@@ -1293,23 +1293,28 @@ def read_file_raw(root_key=None, relative_path=''):
 
 
 def build_download_payload(root_key=None, relative_paths=None):
-    normalized_root, root_path, targets = _resolve_file_targets(root_key, relative_paths)
+    normalized_root, root_path, targets = _resolve_archive_targets(root_key, relative_paths)
 
-    total_bytes = sum(max(0, int(item.get('size') or 0)) for item in targets)
-    if len(targets) == 1 and total_bytes > _MAX_FILE_DOWNLOAD_BYTES:
+    contains_directories = any(item.get('type') == 'dir' for item in targets)
+    total_bytes = sum(
+        max(0, int(item.get('size') or 0))
+        for item in targets
+        if item.get('type') == 'file'
+    )
+    if len(targets) == 1 and not contains_directories and total_bytes > _MAX_FILE_DOWNLOAD_BYTES:
         raise FileBrowserError(
             '단일 파일 다운로드 크기 제한(64MB)을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )
-    if len(targets) > 1 and total_bytes > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
+    if len(targets) > 1 and not contains_directories and total_bytes > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
         raise FileBrowserError(
             '선택한 파일의 전체 다운로드 크기 제한(128MB)을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )
 
-    if len(targets) == 1:
+    if len(targets) == 1 and not contains_directories:
         target = targets[0]
         try:
             content = target['target_path'].read_bytes()
@@ -1332,10 +1337,37 @@ def build_download_payload(root_key=None, relative_paths=None):
         }
 
     buffer = io.BytesIO()
+    archive_paths = []
+    file_count = 0
+    directory_count = 0
+    total_source_bytes = 0
     try:
         with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
-            for target in targets:
-                archive.write(target['target_path'], arcname=target['relative_path'])
+            for entry_path, archive_name, is_directory in _iter_archive_entries(root_path, targets):
+                archive_paths.append(archive_name)
+                if is_directory:
+                    archive.write(entry_path, arcname=archive_name)
+                    directory_count += 1
+                    continue
+                try:
+                    source_size = int(entry_path.stat().st_size)
+                except OSError as exc:
+                    raise FileBrowserError(
+                        f'파일 정보를 확인할 수 없습니다: {archive_name}: {exc}',
+                        error_code='read_error',
+                        status_code=500,
+                    ) from exc
+                total_source_bytes += max(0, source_size)
+                if total_source_bytes > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
+                    raise FileBrowserError(
+                        '선택한 파일과 폴더의 전체 다운로드 크기 제한(128MB)을 초과했습니다.',
+                        error_code='file_too_large',
+                        status_code=413,
+                    )
+                archive.write(entry_path, arcname=archive_name)
+                file_count += 1
+    except FileBrowserError:
+        raise
     except OSError as exc:
         raise FileBrowserError(
             f'압축 파일을 만들지 못했습니다: {exc}',
@@ -1343,14 +1375,21 @@ def build_download_payload(root_key=None, relative_paths=None):
             status_code=500,
         ) from exc
 
+    content = buffer.getvalue()
     return {
         'root': normalized_root,
         'root_path': str(root_path),
         'paths': [item['relative_path'] for item in targets],
         'count': len(targets),
+        'target_count': len(targets),
+        'file_count': file_count,
+        'directory_count': directory_count,
+        'entry_count': len(archive_paths),
+        'source_size': total_source_bytes,
+        'archive_size': len(content),
         'mime_type': 'application/zip',
         'download_name': _build_download_archive_name(),
-        'content': buffer.getvalue(),
+        'content': content,
         'is_archive': True,
     }
 
@@ -1367,7 +1406,7 @@ def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=
 
     try:
         with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
-            for entry_path, archive_name, is_directory in _iter_mail_archive_entries(root_path, targets):
+            for entry_path, archive_name, is_directory in _iter_archive_entries(root_path, targets):
                 if len(archive_paths) >= entry_limit:
                     raise FileBrowserError(
                         f'메일 첨부 항목 수 제한({entry_limit}개)을 초과했습니다.',

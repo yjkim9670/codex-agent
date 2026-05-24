@@ -805,6 +805,60 @@ def test_self_protect_git_rw_rebinds_git_after_ro_parent(tmp_path, monkeypatch):
     assert rw_index > ro_index
 
 
+def test_self_protect_rebinds_runtime_paths_after_ro_parent(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'codex_workbench'
+    queued_home = repo_root / 'workspace' / '.agent_state' / 'queued_codex_home'
+    queued_home.mkdir(parents=True)
+    (queued_home / 'cache').mkdir()
+    (queued_home / 'state').mkdir()
+    (queued_home / 'config').mkdir()
+    (queued_home / 'tmp').mkdir()
+    external_home = tmp_path / 'home'
+    external_home.mkdir()
+
+    monkeypatch.setattr(codex_chat, 'REPO_ROOT', repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT_GIT_RW', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROTECTED_PATHS', tuple())
+    monkeypatch.setattr(
+        codex_chat.shutil,
+        'which',
+        lambda name: '/usr/bin/bwrap' if name == 'bwrap' else None,
+    )
+
+    wrapped = codex_chat._wrap_codex_cli_command(
+        ['codex', 'exec'],
+        env={
+            'CODEX_HOME': str(queued_home),
+            'HOME': str(external_home),
+            'XDG_CACHE_HOME': str(queued_home / 'cache'),
+            'XDG_STATE_HOME': str(queued_home / 'state'),
+            'XDG_CONFIG_HOME': str(queued_home / 'config'),
+            'TMPDIR': str(queued_home / 'tmp'),
+        },
+    )
+    ro_bind = ['--ro-bind-try', str(repo_root.resolve()), str(repo_root.resolve())]
+    queued_home_bind = ['--bind-try', str(queued_home.resolve()), str(queued_home.resolve())]
+    cache_bind = [
+        '--bind-try',
+        str((queued_home / 'cache').resolve()),
+        str((queued_home / 'cache').resolve()),
+    ]
+    home_bind = ['--bind-try', str(external_home.resolve()), str(external_home.resolve())]
+
+    ro_index = next(
+        idx for idx in range(len(wrapped) - 2) if wrapped[idx:idx + 3] == ro_bind
+    )
+    queued_home_index = next(
+        idx for idx in range(len(wrapped) - 2) if wrapped[idx:idx + 3] == queued_home_bind
+    )
+
+    assert queued_home_index > ro_index
+    assert any(wrapped[idx:idx + 3] == cache_bind for idx in range(len(wrapped) - 2))
+    assert not any(wrapped[idx:idx + 3] == home_bind for idx in range(len(wrapped) - 2))
+
+
 def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')

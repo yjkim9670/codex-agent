@@ -176,6 +176,12 @@ _SESSION_METADATA_RESERVED_KEYS = {
 }
 _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
+_CODEX_CLI_RUNTIME_RW_ENV_PATHS = (
+    'CODEX_HOME',
+    *tuple(_QUEUED_CODEX_RUNTIME_DIRS.keys()),
+    _IMAGEGEN_WORKBENCH_OUTPUT_ENV,
+    _IMAGEGEN_WORKBENCH_TMP_ENV,
+)
 _IMAGEGEN_WORKBENCH_OUTPUT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp'}
 _IMAGEGEN_WORKBENCH_FILENAME_STEM_MAX_CHARS = 72
 _IMAGEGEN_WORKBENCH_EVENT_TYPES = {'image_generation_call', 'image_generation_end'}
@@ -5881,6 +5887,22 @@ def _codex_cli_git_rw_bind_paths(protected_paths):
     return bind_paths
 
 
+def _codex_cli_runtime_rw_bind_paths(env, protected_paths):
+    if not env or not protected_paths:
+        return []
+    bind_paths = []
+    for env_name in _CODEX_CLI_RUNTIME_RW_ENV_PATHS:
+        raw_path = str(env.get(env_name) or '').strip()
+        if not raw_path:
+            continue
+        runtime_path = _safe_resolve_path(raw_path)
+        if not runtime_path.exists():
+            continue
+        if any(_path_contains(protected_path, runtime_path) for protected_path in protected_paths):
+            _append_codex_cli_bind_path(bind_paths, runtime_path)
+    return bind_paths
+
+
 def _path_is_under_codex_cli_protection(path):
     return any(_path_contains(protected_path, path) for protected_path in _codex_cli_protected_paths())
 
@@ -5938,7 +5960,7 @@ def _cleanup_output_schema(path):
         pass
 
 
-def _wrap_codex_cli_command(cmd):
+def _wrap_codex_cli_command(cmd, env=None):
     protected_paths = _codex_cli_protected_paths()
     if not protected_paths:
         return cmd
@@ -5957,6 +5979,8 @@ def _wrap_codex_cli_command(cmd):
     for protected_path in protected_paths:
         wrapped_cmd.extend(['--ro-bind-try', str(protected_path), str(protected_path)])
     for bind_path in _codex_cli_git_rw_bind_paths(protected_paths):
+        wrapped_cmd.extend(['--bind-try', str(bind_path), str(bind_path)])
+    for bind_path in _codex_cli_runtime_rw_bind_paths(env or {}, protected_paths):
         wrapped_cmd.extend(['--bind-try', str(bind_path), str(bind_path)])
     wrapped_cmd.append('--')
     wrapped_cmd.extend(cmd)
@@ -6387,16 +6411,17 @@ def execute_codex_prompt(
     cli_started_at = None
     completed_at = None
     try:
-        cmd = _wrap_codex_cli_command(cmd)
+        exec_env = _build_codex_exec_env()
+        _prepare_imagegen_workbench_dirs(prompt)
+        cmd = _wrap_codex_cli_command(cmd, env=exec_env)
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
-            _prepare_imagegen_workbench_dirs(prompt)
             result = subprocess.run(
                 cmd,
                 cwd=str(WORKSPACE_DIR),
                 capture_output=True,
                 text=True,
-                env=_build_codex_exec_env(),
+                env=exec_env,
                 check=False
             )
             completed_at = time.time()
@@ -8108,8 +8133,8 @@ def _run_codex_stream(stream_id, prompt):
                 stream['updated_at'] = cli_started_at
 
         try:
-            cmd = _wrap_codex_cli_command(cmd)
             _prepare_imagegen_workbench_dirs(prompt)
+            cmd = _wrap_codex_cli_command(cmd, env=exec_env)
             process = subprocess.Popen(
                 cmd,
                 cwd=str(execution_cwd),

@@ -1740,7 +1740,11 @@ textarea {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    overflow-wrap: normal;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: normal;
 }
 
 .file-browser-viewer-actions {
@@ -1751,6 +1755,10 @@ textarea {
     flex: 0 0 calc((var(--icon-button-size) * 7) + 24px);
     width: calc((var(--icon-button-size) * 7) + 24px);
     min-width: calc((var(--icon-button-size) * 7) + 24px);
+}
+
+.file-browser-viewer-panel:not(.has-preview) .file-browser-viewer-actions {
+    display: none;
 }
 
 .file-browser-viewer-action {
@@ -10537,6 +10545,38 @@ label.hover-tooltip,
     .app.is-work-mode .work-mode-preview {
         padding: 12px;
         gap: 10px;
+    }
+
+    .app.is-work-mode .work-mode-preview-header {
+        grid-template-areas:
+            "nav title actions"
+            "path path path";
+        row-gap: 4px;
+    }
+
+    .app.is-work-mode .work-mode-preview-nav {
+        grid-area: nav;
+    }
+
+    .app.is-work-mode .work-mode-preview-heading {
+        display: contents;
+    }
+
+    .app.is-work-mode .work-mode-preview-title {
+        grid-area: title;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .app.is-work-mode .work-mode-preview-actions {
+        grid-area: actions;
+    }
+
+    .app.is-work-mode .work-mode-preview-path {
+        grid-area: path;
+        max-width: 100%;
     }
 
     .app.is-work-mode .work-mode-preview-title {

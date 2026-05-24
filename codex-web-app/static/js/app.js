@@ -4592,9 +4592,13 @@ function syncWorkModePanelModeState() {
             const launchContext = getTerminalLaunchContext();
             const displayPath = activeSession?.displayPath || buildTerminalLaunchContextDisplayPath(launchContext);
             path.textContent = displayPath;
+            path.dataset.fullPath = displayPath;
+            path.classList.remove('is-compact-path');
             setHoverTooltip(path, activeSession?.cwd || displayPath);
         } else {
-            setFilePanelPathLabel(path, workModeFilePath);
+            setFilePanelPathLabel(path, workModeFilePath, '', {
+                compact: isCompactLayout()
+            });
         }
     }
     if (terminalToggle) {
@@ -5478,6 +5482,7 @@ function syncFilePanelViewerActionState(variant) {
     const canEdit = hasPreview && Boolean(state.editable);
     const canCopy = hasPreview && !state.previewResult?.is_binary;
     if (elements.viewerPanel) {
+        elements.viewerPanel.classList.toggle('has-preview', hasPreview);
         elements.viewerPanel.classList.toggle('is-editing', Boolean(state.editing));
     }
     if (elements.openNewBtn) {
@@ -13080,6 +13085,22 @@ function formatFileBrowserDisplayPath(root, relativePath = '') {
     return normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
 }
 
+function formatFileBrowserCompactDisplayPath(root, relativePath = '', { keepTail = 2 } = {}) {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
+    const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
+        ? '$workspace'
+        : getFileBrowserRootLabel(normalizedRoot);
+    if (!normalizedPath) return displayPrefix;
+
+    const segments = normalizedPath.split('/').filter(Boolean);
+    const tailCount = Math.max(1, Number(keepTail) || 2);
+    if (segments.length <= tailCount + 1) {
+        return `${displayPrefix}/${normalizedPath}`;
+    }
+    return `${displayPrefix}/.../${segments.slice(-tailCount).join('/')}`;
+}
+
 function getFileBrowserAbsoluteRoots() {
     if (typeof document === 'undefined' || !document.body) {
         return [];
@@ -13171,16 +13192,21 @@ function updateFileBrowserRootButtons() {
     });
 }
 
-function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '') {
+function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '', options = {}) {
     if (!pathElement) return;
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const display = formatFileBrowserDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath);
+    const fullDisplay = formatFileBrowserDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath);
+    const display = options?.compact
+        ? formatFileBrowserCompactDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath)
+        : fullDisplay;
     pathElement.textContent = display;
+    pathElement.dataset.fullPath = fullDisplay;
+    pathElement.classList.toggle('is-compact-path', display !== fullDisplay);
 
     const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
     const absolutePath = absoluteRoot
         ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
-        : display;
+        : fullDisplay;
     setHoverTooltip(pathElement, absolutePath);
 }
 
@@ -13197,7 +13223,9 @@ function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = ''
         syncWorkModePanelModeState();
         return;
     }
-    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
+    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath, {
+        compact: isCompactLayout()
+    });
 }
 
 function syncWorkModeHtmlPreviewViewerScrollSnapshot(viewerSnapshot = null) {

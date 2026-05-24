@@ -4015,14 +4015,20 @@ function getDefaultWeatherPosition() {
     };
 }
 
-function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
+function createToast(message, {
+    tone = 'error',
+    durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS,
+    persistent = false
+} = {}) {
     const text = String(message || '').trim();
-    if (!text) return;
+    if (!text) return null;
     const layer = ensureToastLayer();
-    if (!layer) return;
+    if (!layer) return null;
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${tone}`;
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
     toast.textContent = text;
     layer.appendChild(toast);
 
@@ -4030,17 +4036,59 @@ function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAIL
         toast.classList.add('is-visible');
     });
 
-    const visibleMs = Number.isFinite(Number(durationMs))
-        ? Math.max(1200, Number(durationMs))
-        : WEATHER_LOCATION_FAILURE_TOAST_MS;
-    window.setTimeout(() => {
+    let hidden = false;
+    let autoHideId = null;
+    let removeId = null;
+    const dismiss = ({ immediate = false } = {}) => {
+        if (hidden) return;
+        hidden = true;
+        if (autoHideId !== null) {
+            window.clearTimeout(autoHideId);
+            autoHideId = null;
+        }
+        if (removeId !== null) {
+            window.clearTimeout(removeId);
+            removeId = null;
+        }
+        if (immediate) {
+            toast.remove();
+            return;
+        }
         toast.classList.remove('is-visible');
-        window.setTimeout(() => {
+        removeId = window.setTimeout(() => {
             if (toast.parentNode) {
                 toast.parentNode.removeChild(toast);
             }
         }, 180);
-    }, visibleMs);
+    };
+    const update = (nextMessage, { tone: nextTone = null } = {}) => {
+        if (hidden) return;
+        const nextText = String(nextMessage || '').trim();
+        if (nextText) {
+            toast.textContent = nextText;
+        }
+        if (nextTone) {
+            toast.className = `toast toast-${nextTone}`;
+            toast.setAttribute('aria-live', nextTone === 'error' ? 'assertive' : 'polite');
+        }
+    };
+
+    if (!persistent) {
+        const visibleMs = Number.isFinite(Number(durationMs))
+            ? Math.max(1200, Number(durationMs))
+            : WEATHER_LOCATION_FAILURE_TOAST_MS;
+        autoHideId = window.setTimeout(dismiss, visibleMs);
+    }
+
+    return { element: toast, update, dismiss };
+}
+
+function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
+    return createToast(message, { tone, durationMs });
+}
+
+function showPersistentToast(message, { tone = 'default' } = {}) {
+    return createToast(message, { tone, persistent: true });
 }
 
 function hideAnswerCompleteNotice({ immediate = false } = {}) {
@@ -7794,7 +7842,11 @@ async function fetchBlob(url, options = {}) {
         ? { ...options }
         : {};
     const timeoutMs = requestOptions.timeoutMs;
+    const onDownloadProgress = typeof requestOptions.onDownloadProgress === 'function'
+        ? requestOptions.onDownloadProgress
+        : null;
     delete requestOptions.timeoutMs;
+    delete requestOptions.onDownloadProgress;
     const timeoutController = createFetchTimeoutController(timeoutMs, requestOptions.signal);
     if (timeoutController.signal) {
         requestOptions.signal = timeoutController.signal;
@@ -7835,8 +7887,43 @@ async function fetchBlob(url, options = {}) {
     return {
         contentType,
         contentDisposition: response.headers.get('content-disposition') || '',
-        blob: await response.blob()
+        blob: await readResponseBlob(response, contentType, onDownloadProgress)
     };
+}
+
+async function readResponseBlob(response, contentType = '', onDownloadProgress = null) {
+    if (!onDownloadProgress || !response.body?.getReader) {
+        const blob = await response.blob();
+        if (onDownloadProgress) {
+            onDownloadProgress({
+                loadedBytes: blob.size,
+                totalBytes: blob.size,
+                done: true
+            });
+        }
+        return blob;
+    }
+
+    const contentLength = Number(response.headers.get('content-length'));
+    const totalBytes = Number.isFinite(contentLength) && contentLength > 0
+        ? contentLength
+        : null;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let loadedBytes = 0;
+    onDownloadProgress({ loadedBytes, totalBytes, done: false });
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunks.push(value);
+        loadedBytes += value.byteLength;
+        onDownloadProgress({ loadedBytes, totalBytes, done: false });
+    }
+
+    onDownloadProgress({ loadedBytes, totalBytes, done: true });
+    return new Blob(chunks, { type: contentType || undefined });
 }
 
 function extractFilenameFromContentDisposition(value = '') {
@@ -16179,11 +16266,12 @@ async function uploadFilePanelFiles(root, path, fileList) {
     });
 }
 
-async function fetchFilePanelDownload(root, paths) {
+async function fetchFilePanelDownload(root, paths, { onDownloadProgress = null } = {}) {
     return fetchBlob('/api/codex/files/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        onDownloadProgress,
         body: JSON.stringify({
             root: normalizeFileBrowserRoot(root),
             paths: Array.from(createNormalizedRelativePathSet(paths))
@@ -16770,9 +16858,47 @@ async function downloadSelectedFilesFromFilePanel(variant) {
     const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
     if (!selectedPaths.length) return false;
     const actionEntrySummary = getFilePanelActionTargetEntrySummary(normalizedVariant);
+    const isArchiveDownload = actionEntrySummary.hasDirectories || selectedPaths.length > 1;
+    const targetLabel = isArchiveDownload
+        ? `선택 항목 ${selectedPaths.length}개 압축 다운로드`
+        : '선택 파일 다운로드';
+    const startedAt = Date.now();
+    const progressToast = showPersistentToast(`${targetLabel} 준비 중 · 00:00`, { tone: 'default' });
+    const updateProgressToast = (message, { tone = 'default' } = {}) => {
+        const elapsedText = formatElapsedTime(Date.now() - startedAt);
+        progressToast?.update(`${message} · ${elapsedText}`, { tone });
+    };
+    const progressIntervalId = window.setInterval(() => {
+        updateProgressToast(isArchiveDownload
+            ? `${targetLabel} 압축 파일 준비 중`
+            : `${targetLabel} 준비 중`);
+    }, 1000);
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
-        const result = await fetchFilePanelDownload(getFilePanelActionTargetRoot(normalizedVariant), selectedPaths);
+        const result = await fetchFilePanelDownload(
+            getFilePanelActionTargetRoot(normalizedVariant),
+            selectedPaths,
+            {
+                onDownloadProgress: progress => {
+                    const loadedBytes = Number(progress?.loadedBytes);
+                    const totalBytes = Number(progress?.totalBytes);
+                    const loadedText = Number.isFinite(loadedBytes) && loadedBytes > 0
+                        ? formatFileBrowserSize(loadedBytes)
+                        : '';
+                    if (Number.isFinite(totalBytes) && totalBytes > 0) {
+                        const percent = Math.min(100, Math.max(0, Math.round((loadedBytes / totalBytes) * 100)));
+                        updateProgressToast(
+                            `${targetLabel} 수신 중 · ${percent}% · ${loadedText || '0 B'} / ${formatFileBrowserSize(totalBytes)}`
+                        );
+                        return;
+                    }
+                    updateProgressToast(loadedText
+                        ? `${targetLabel} 수신 중 · ${loadedText}`
+                        : `${targetLabel} 수신 시작`);
+                }
+            }
+        );
+        updateProgressToast(`${targetLabel} 저장 시작 중`);
         const filename = extractFilenameFromContentDisposition(result?.contentDisposition)
             || (selectedPaths.length === 1 && !actionEntrySummary.hasDirectories
                 ? selectedPaths[0].split('/').pop()
@@ -16780,21 +16906,19 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         if (!saveBlobAsFile(result?.blob, filename)) {
             throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
         }
-        const targetLabel = actionEntrySummary.hasDirectories || selectedPaths.length > 1
-            ? `선택 항목 ${selectedPaths.length}개 압축 다운로드`
-            : '선택 파일 다운로드';
-        showToast(`${targetLabel}를 시작했습니다.`, {
-            tone: 'success',
-            durationMs: 2600
-        });
+        progressToast?.update(`${targetLabel}를 시작했습니다.`, { tone: 'success' });
+        window.setTimeout(() => {
+            progressToast?.dismiss();
+        }, 2600);
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일 다운로드에 실패했습니다.'), {
-            tone: 'error',
-            durationMs: 4200
-        });
+        progressToast?.update(normalizeError(error, '파일 다운로드에 실패했습니다.'), { tone: 'error' });
+        window.setTimeout(() => {
+            progressToast?.dismiss();
+        }, 4200);
         return false;
     } finally {
+        window.clearInterval(progressIntervalId);
         setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }

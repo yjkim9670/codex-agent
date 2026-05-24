@@ -1163,7 +1163,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=165' in template
+    assert '/static/js/app.js?v=166' in template
     assert '/static/css/app.css?v=172' in template
 
 
@@ -1175,6 +1175,18 @@ def test_file_preview_download_supports_selected_directories():
     assert 'elements.downloadBtn.disabled = isBusy || actionTargetCount <= 0;' in app_js
     assert '선택 파일 또는 폴더를 압축해서 다운로드' in app_js
     assert 'aria-label="선택 파일 또는 폴더 다운로드"' in template
+
+
+def test_file_preview_download_shows_progress_toast():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'function showPersistentToast(' in app_js
+    assert 'onDownloadProgress' in app_js
+    assert '압축 파일 준비 중' in app_js
+    assert '수신 중' in app_js
+    assert '저장 시작 중' in app_js
+    assert '/static/js/app.js?v=166' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

@@ -667,6 +667,22 @@ def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspa
     assert cmd[provider_index - 1] == '--config'
 
 
+def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {
+        'model': None,
+        'reasoning_effort': None,
+        'plan_mode_model': None,
+        'plan_mode_reasoning_effort': None,
+        'service_tier': 'priority',
+        'app_server_pilot_enabled': False,
+    })
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    service_tier_index = cmd.index('service_tier="priority"')
+    assert cmd[service_tier_index - 1] == '--config'
+
+
 def test_structured_report_preset_formats_valid_payload():
     payload = {
         'title': 'Risk report',
@@ -902,6 +918,23 @@ def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
 
     disabled = codex_chat.update_settings(app_server_pilot_enabled=False)
     assert disabled['app_server_pilot_enabled'] is False
+
+
+def test_service_tier_setting_round_trips(tmp_path, monkeypatch):
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+
+    updated = codex_chat.update_settings(service_tier='fast')
+
+    assert updated['service_tier'] == 'priority'
+    assert codex_chat.get_settings()['service_tier'] == 'priority'
+    stored = json.loads(settings_path.read_text(encoding='utf-8'))
+    assert stored['service_tier'] == 'priority'
+
+    disabled = codex_chat.update_settings(service_tier='')
+
+    assert disabled['service_tier'] is None
 
 
 def test_cli_routing_settings_are_runtime_only(tmp_path, monkeypatch):

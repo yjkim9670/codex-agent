@@ -545,6 +545,15 @@
                                     <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
+                            <label class="model-sub-label" for="codex-service-tier-select">Speed mode</label>
+                            <div class="model-row model-row-single">
+                                <div class="model-field model-field-service-tier">
+                                    <select id="codex-service-tier-select" class="model-select" aria-label="Select Codex service tier" data-options='{{ service_tier_options|default([], true)|tojson }}'>
+                                        <option value="">Standard</option>
+                                        <option value="priority">Fast · 1.5x</option>
+                                    </select>
+                                </div>
+                            </div>
                             <div class="model-footer-row">
                                 <div class="model-status" id="codex-model-status">Refresh to load</div>
                                 <button
@@ -1354,6 +1363,6 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
-    <script src="/static/js/app.js?v=166"></script>
+    <script src="/static/js/app.js?v=167"></script>
 </body>
 </html>

@@ -51,6 +51,7 @@ from ..config import (
     REPO_ROOT,
     WORKSPACE_DIR,
     normalize_codex_model_name,
+    normalize_codex_service_tier,
     resolve_codex_reasoning_effort,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
@@ -1875,6 +1876,7 @@ def _read_workspace_settings():
     reasoning = data.get('reasoning_effort')
     plan_mode_model = _normalize_model_setting(data.get('plan_mode_model'))
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
+    service_tier = normalize_codex_service_tier(data.get('service_tier'))
     app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
         data.get('app_server_pilot_enabled')
     )
@@ -1883,6 +1885,7 @@ def _read_workspace_settings():
         'reasoning_effort': reasoning or None,
         'plan_mode_model': plan_mode_model or None,
         'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
+        'service_tier': service_tier or None,
         'app_server_pilot_enabled': app_server_pilot_enabled,
     }
 
@@ -1893,6 +1896,7 @@ def _write_workspace_settings(settings):
         'reasoning_effort': settings.get('reasoning_effort') or None,
         'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
+        'service_tier': normalize_codex_service_tier(settings.get('service_tier')) or None,
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
@@ -2218,6 +2222,7 @@ def _parse_top_level_config(text):
     model = None
     reasoning = None
     model_provider = None
+    service_tier = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith('#'):
@@ -2235,10 +2240,13 @@ def _parse_top_level_config(text):
             reasoning = value
         elif key == 'model_provider':
             model_provider = value
+        elif key == 'service_tier':
+            service_tier = value
     return {
         'model': _normalize_model_setting(model),
         'reasoning_effort': reasoning or None,
         'model_provider': str(model_provider or '').strip() or None,
+        'service_tier': normalize_codex_service_tier(service_tier) or None,
     }
 
 
@@ -2310,13 +2318,14 @@ def get_settings():
             or workspace_settings.get('reasoning_effort')
             or workspace_settings.get('plan_mode_model')
             or workspace_settings.get('plan_mode_reasoning_effort')
+            or workspace_settings.get('service_tier')
             or workspace_settings.get('app_server_pilot_enabled')
         ):
             _write_workspace_settings(workspace_settings)
             return _merge_runtime_cli_settings(workspace_settings)
         text = _read_codex_config_text()
         fallback = _parse_top_level_config(text)
-        if fallback.get('model') or fallback.get('reasoning_effort'):
+        if fallback.get('model') or fallback.get('reasoning_effort') or fallback.get('service_tier'):
             fallback['plan_mode_model'] = None
             fallback['plan_mode_reasoning_effort'] = None
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
@@ -2327,6 +2336,7 @@ def get_settings():
         'reasoning_effort': None,
         'plan_mode_model': None,
         'plan_mode_reasoning_effort': None,
+        'service_tier': None,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
     })
 
@@ -2336,6 +2346,7 @@ def update_settings(
         reasoning_effort=None,
         plan_mode_model=None,
         plan_mode_reasoning_effort=None,
+        service_tier=None,
         app_server_pilot_enabled=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
@@ -2350,6 +2361,7 @@ def update_settings(
             'reasoning_effort': current.get('reasoning_effort'),
             'plan_mode_model': current.get('plan_mode_model'),
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
+            'service_tier': normalize_codex_service_tier(current.get('service_tier')) or None,
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
@@ -2364,6 +2376,8 @@ def update_settings(
         if plan_mode_reasoning_effort is not None:
             plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
             next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None
+        if service_tier is not None:
+            next_settings['service_tier'] = normalize_codex_service_tier(service_tier) or None
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         _write_workspace_settings(next_settings)
@@ -6197,6 +6211,10 @@ def _build_codex_command(
     if reasoning_effort:
         escaped_reasoning = _escape_toml_string(reasoning_effort)
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
+    service_tier = normalize_codex_service_tier(settings.get('service_tier'))
+    if service_tier:
+        escaped_service_tier = _escape_toml_string(service_tier)
+        cmd.extend(['--config', f'service_tier="{escaped_service_tier}"'])
     model_provider = str(CODEX_CLI_MODEL_PROVIDER or '').strip()
     if model_provider:
         escaped_provider = _escape_toml_string(model_provider)

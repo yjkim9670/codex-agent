@@ -30,12 +30,15 @@ from ..config import (
     CODEX_MAX_MODEL_CHARS,
     CODEX_MAX_PROMPT_CHARS,
     CODEX_MAX_REASONING_CHARS,
+    CODEX_MAX_SERVICE_TIER_CHARS,
     CODEX_MAX_TITLE_CHARS,
     CODEX_REASONING_OPTIONS,
+    CODEX_SERVICE_TIER_OPTIONS,
     REPO_ROOT,
     WORKSPACE_DIR,
     get_codex_model_catalog,
     get_codex_model_options,
+    normalize_codex_service_tier,
 )
 from ..services.codex_chat import (
     append_message,
@@ -527,6 +530,7 @@ def _build_runtime_info():
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
+        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
@@ -585,6 +589,7 @@ def codex_settings():
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
+        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),
@@ -634,6 +639,7 @@ def codex_settings_update():
     reasoning = payload.get('reasoning_effort')
     plan_mode_model = payload.get('plan_mode_model')
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
+    service_tier = payload.get('service_tier')
     app_server_pilot_enabled = None
     if 'app_server_pilot_enabled' in payload:
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
@@ -655,11 +661,25 @@ def codex_settings_update():
         plan_mode_reasoning = str(plan_mode_reasoning).strip()
         if len(plan_mode_reasoning) > CODEX_MAX_REASONING_CHARS:
             return jsonify({'error': 'plan_mode_reasoning_effort가 너무 깁니다.'}), 400
+    if service_tier is not None:
+        service_tier = str(service_tier).strip()
+        if len(service_tier) > CODEX_MAX_SERVICE_TIER_CHARS:
+            return jsonify({'error': 'service_tier가 너무 깁니다.'}), 400
+        normalized_service_tier = normalize_codex_service_tier(service_tier)
+        supported_service_tiers = {
+            item.get('id')
+            for item in CODEX_SERVICE_TIER_OPTIONS
+            if isinstance(item, dict) and item.get('id')
+        }
+        if normalized_service_tier and normalized_service_tier not in supported_service_tiers:
+            return jsonify({'error': 'service_tier 값이 올바르지 않습니다.'}), 400
+        service_tier = normalized_service_tier or ''
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
         plan_mode_model=plan_mode_model,
         plan_mode_reasoning_effort=plan_mode_reasoning,
+        service_tier=service_tier,
         app_server_pilot_enabled=app_server_pilot_enabled,
     )
     snapshot = record_usage_snapshot_if_due()
@@ -671,6 +691,7 @@ def codex_settings_update():
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
+        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),

@@ -85,6 +85,8 @@ const state = {
         planModeState: 'off',
         reasoningEffort: null,
         reasoningOptions: [],
+        serviceTier: null,
+        serviceTierOptions: [],
         structuredReportPresets: [],
         usage: null,
         usageHistory: null,
@@ -1548,6 +1550,50 @@ function normalizeOptionList(options) {
     return normalized;
 }
 
+function normalizeServiceTierValue(value) {
+    const token = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!token || token === 'standard' || token === 'default' || token === 'auto') return '';
+    if (token === 'fast') return 'priority';
+    return token;
+}
+
+function normalizeServiceTierOptions(options) {
+    const normalized = [{ id: '', name: 'Standard', description: 'Default service tier' }];
+    const seen = new Set(['']);
+    if (!Array.isArray(options)) return normalized;
+    options.forEach(item => {
+        const rawId = typeof item?.id === 'string' ? item.id : (typeof item === 'string' ? item : '');
+        const id = normalizeServiceTierValue(rawId);
+        if (!id || seen.has(id)) return;
+        const name = typeof item?.name === 'string'
+            ? item.name.trim()
+            : (typeof item?.label === 'string' ? item.label.trim() : id);
+        const description = typeof item?.description === 'string' ? item.description.trim() : '';
+        normalized.push({
+            id,
+            name: name || id,
+            description
+        });
+        seen.add(id);
+    });
+    return normalized;
+}
+
+function collectServiceTierOptionsFromDom(select) {
+    const dataOptions = normalizeServiceTierOptions(readOptionsFromData(select));
+    if (!select) return dataOptions;
+    const domOptions = Array.from(select.options || []).map(option => ({
+        id: option.value,
+        name: option.textContent || option.value,
+        description: option.title || ''
+    }));
+    const merged = normalizeServiceTierOptions([
+        ...dataOptions,
+        ...domOptions
+    ]);
+    return merged;
+}
+
 function normalizeModelCatalog(catalog) {
     if (!Array.isArray(catalog)) return [];
     const normalized = [];
@@ -1667,11 +1713,18 @@ function formatReasoningStatus(model, reasoning) {
         : `${profile.effectiveReasoning} (default)`;
 }
 
-function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect) {
+function primeSettingsOptionsFromDom(
+    modelSelect,
+    reasoningSelect,
+    planModeModelSelect,
+    planModeReasoningSelect,
+    serviceTierSelect
+) {
     const modelOptions = readOptionsFromData(modelSelect);
     const planModeModelOptions = readOptionsFromData(planModeModelSelect);
     const reasoningOptions = readOptionsFromData(reasoningSelect);
     const planModeReasoningOptions = readOptionsFromData(planModeReasoningSelect);
+    const serviceTierOptions = collectServiceTierOptionsFromDom(serviceTierSelect);
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
     } else if (planModeModelOptions.length > 0) {
@@ -1682,16 +1735,21 @@ function primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModel
     } else if (planModeReasoningOptions.length > 0) {
         state.settings.reasoningOptions = planModeReasoningOptions;
     }
+    if (serviceTierOptions.length > 0) {
+        state.settings.serviceTierOptions = serviceTierOptions;
+    }
     if (
         modelOptions.length > 0
         || planModeModelOptions.length > 0
         || reasoningOptions.length > 0
         || planModeReasoningOptions.length > 0
+        || serviceTierOptions.length > 0
     ) {
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
     }
 }
 
@@ -1730,6 +1788,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
     const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
+    const serviceTierSelect = document.getElementById('codex-service-tier-select');
     const chatToolsToggle = document.getElementById('codex-chat-tools-toggle');
     const chatToolsOverlay = document.getElementById('codex-chat-tools-overlay');
     const chatToolsOverlayClose = document.getElementById('codex-chat-tools-overlay-close');
@@ -3049,7 +3108,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    primeSettingsOptionsFromDom(modelSelect, reasoningSelect, planModeModelSelect, planModeReasoningSelect);
+    primeSettingsOptionsFromDom(
+        modelSelect,
+        reasoningSelect,
+        planModeModelSelect,
+        planModeReasoningSelect,
+        serviceTierSelect
+    );
 
     syncSessionsLayout(compactMedia.matches);
     syncControlsLayout();
@@ -3125,7 +3190,8 @@ document.addEventListener('DOMContentLoaded', () => {
             modelSelect,
             planModeModelSelect,
             planModeReasoningSelect,
-            reasoningSelect
+            reasoningSelect,
+            serviceTierSelect
         ],
     );
 
@@ -7258,6 +7324,7 @@ async function loadSettings({ silent = true } = {}) {
             ? catalogModelOptions
             : normalizeOptionList(result?.model_options);
         const reasoningOptions = normalizeOptionList(result?.reasoning_options);
+        const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
         const executionPolicyPresets = normalizeExecutionPolicyPresets(result?.execution_policy_presets);
         const structuredReportPresets = normalizeStructuredReportPresets(result?.structured_report_presets);
         state.settings = {
@@ -7273,6 +7340,8 @@ async function loadSettings({ silent = true } = {}) {
             planModeState: normalizePlanModeState(state.settings?.planModeState),
             reasoningEffort: result?.settings?.reasoning_effort || null,
             reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
+            serviceTier: normalizeServiceTierValue(result?.settings?.service_tier) || null,
+            serviceTierOptions,
             structuredReportPresets,
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
@@ -7288,6 +7357,7 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -7298,6 +7368,7 @@ async function loadSettings({ silent = true } = {}) {
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -7550,6 +7621,40 @@ function updatePlanModeReasoningControls(
     }
 }
 
+function getServiceTierOption(serviceTier) {
+    const normalized = normalizeServiceTierValue(serviceTier);
+    const options = normalizeServiceTierOptions(state.settings.serviceTierOptions);
+    return options.find(option => option.id === normalized) || null;
+}
+
+function formatServiceTierStatus(serviceTier) {
+    const normalized = normalizeServiceTierValue(serviceTier);
+    if (!normalized) return 'standard';
+    const option = getServiceTierOption(normalized);
+    if (!option) return normalized;
+    if (option.description) return `${option.name} (${option.description})`;
+    return option.name;
+}
+
+function updateServiceTierControls(serviceTier, options) {
+    const select = document.getElementById('codex-service-tier-select');
+    if (!select) return;
+    const normalizedOptions = normalizeServiceTierOptions(options);
+    const normalizedServiceTier = normalizeServiceTierValue(serviceTier);
+    const optionIds = new Set(normalizedOptions.map(option => option.id));
+    select.innerHTML = '';
+    normalizedOptions.forEach(item => {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.id ? `${item.name}${item.description ? ` · ${item.description}` : ''}` : item.name;
+        if (item.description) {
+            option.title = item.description;
+        }
+        select.appendChild(option);
+    });
+    select.value = optionIds.has(normalizedServiceTier) ? normalizedServiceTier : '';
+}
+
 function setSettingsStatus(model, reasoning, overrideText = null) {
     const status = document.getElementById('codex-model-status');
     const summary = document.getElementById('codex-controls-summary');
@@ -7562,7 +7667,13 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         }
         return;
     }
-    if (!state.settings.loaded && !model && !reasoning && !state.settings.planModeReasoningEffort) {
+    if (
+        !state.settings.loaded
+        && !model
+        && !reasoning
+        && !state.settings.planModeReasoningEffort
+        && !state.settings.serviceTier
+    ) {
         status.textContent = 'Refresh to load';
         if (summary) {
             summary.textContent = 'Refresh to load';
@@ -7577,11 +7688,12 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     );
+    const speedText = formatServiceTierStatus(state.settings.serviceTier);
     const routingParts = [];
     if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
     if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
     const routingText = routingParts.length > 0 ? ` · ${routingParts.join(' · ')}` : '';
-    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}${routingText}`;
+    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText} · Speed: ${speedText}${routingText}`;
     const compactToken = value => {
         if (value === 'default') return 'def';
         return value.replace(' (default)', '*');
@@ -7595,6 +7707,9 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
+    }
+    if (state.settings.serviceTier) {
+        compactSummaryParts.push(`Speed:${compactToken(speedText)}`);
     }
     if (state.settings.modelProvider) {
         compactSummaryParts.push(`Provider:${compactToken(state.settings.modelProvider)}`);
@@ -7622,6 +7737,7 @@ async function updateSettings() {
     const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
+    const serviceTierSelect = document.getElementById('codex-service-tier-select');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
         ? modelSelect.value.trim()
         : (input ? input.value.trim() : '');
@@ -7634,17 +7750,19 @@ async function updateSettings() {
     const plan_mode_reasoning_effort = planModeReasoningSelect && !planModeReasoningSelect.classList.contains('is-hidden')
         ? planModeReasoningSelect.value.trim()
         : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
+    const service_tier = serviceTierSelect ? normalizeServiceTierValue(serviceTierSelect.value) : '';
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort })
+            body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
         const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
+        const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
         state.settings.model = result?.settings?.model || null;
         state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
         state.settings.cliProfile = result?.settings?.cli_profile || null;
@@ -7653,6 +7771,10 @@ async function updateSettings() {
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
+        state.settings.serviceTier = normalizeServiceTierValue(result?.settings?.service_tier) || null;
+        state.settings.serviceTierOptions = serviceTierOptions.length > 0
+            ? serviceTierOptions
+            : state.settings.serviceTierOptions;
         state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
         state.settings.modelOptions = catalogModelOptions.length > 0
             ? catalogModelOptions
@@ -7685,6 +7807,7 @@ async function updateSettings() {
             state.settings.reasoningOptions,
             state.settings.planModeModel || state.settings.model
         );
+        updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();

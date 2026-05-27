@@ -166,6 +166,7 @@ CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
+CODEX_MAX_SERVICE_TIER_CHARS = 40
 CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
 CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
 
@@ -182,11 +183,41 @@ def _normalize_reasoning_options(options):
     return normalized_options
 
 
+def _normalize_service_tier_options(options):
+    normalized_options = []
+    seen = set()
+    for item in options:
+        if isinstance(item, dict):
+            tier_id = str(item.get('id') or '').strip()
+            name = str(item.get('name') or item.get('label') or tier_id).strip()
+            description = str(item.get('description') or '').strip()
+        else:
+            tier_id = str(item or '').strip()
+            name = tier_id
+            description = ''
+        if not tier_id or tier_id in seen:
+            continue
+        normalized_options.append({
+            'id': tier_id,
+            'name': name or tier_id,
+            'description': description,
+        })
+        seen.add(tier_id)
+    return normalized_options
+
+
 _DEFAULT_REASONING_OPTIONS = _normalize_reasoning_options(
     item.strip()
     for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
     if item.strip()
 )
+_DEFAULT_SERVICE_TIER_OPTIONS = _normalize_service_tier_options([
+    {
+        'id': 'priority',
+        'name': 'Fast',
+        'description': '1.5x speed, increased usage',
+    },
+])
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
     'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
@@ -425,6 +456,22 @@ def get_codex_reasoning_options(model_name=None):
     return list(_DEFAULT_REASONING_OPTIONS)
 
 
+def get_codex_service_tier_options():
+    return [dict(item) for item in _DEFAULT_SERVICE_TIER_OPTIONS]
+
+
+def normalize_codex_service_tier(service_tier):
+    normalized = str(service_tier or '').strip().lower()
+    if normalized in {'', 'standard', 'default', 'auto'}:
+        return None
+    if normalized == 'fast':
+        normalized = 'priority'
+    allowed_ids = {item['id'] for item in _DEFAULT_SERVICE_TIER_OPTIONS}
+    if normalized not in allowed_ids:
+        return normalized
+    return normalized
+
+
 def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
     normalized_reasoning = str(reasoning_effort or '').strip()
     supported_reasoning = get_codex_reasoning_options(model_name=model_name)
@@ -437,6 +484,7 @@ def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
 
 CODEX_MODEL_OPTIONS = get_codex_model_options()
 CODEX_REASONING_OPTIONS = get_codex_reasoning_options()
+CODEX_SERVICE_TIER_OPTIONS = get_codex_service_tier_options()
 
 CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
     os.environ.get(

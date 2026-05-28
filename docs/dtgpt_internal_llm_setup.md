@@ -27,6 +27,7 @@
 
 - `CODEX_CLI_MODEL_PROVIDER`: `_build_codex_command()`가 `--config 'model_provider="..."'`로 Codex CLI에 전달
 - `CODEX_CLI_PROFILE`: 값이 있으면 `_build_codex_command()`가 `--profile ...`로 Codex CLI에 전달
+- `CODEX_CLI_BIN`: Codex CLI 실행 파일 경로를 강제한다. 회사망 launcher는 PATH, npm prefix, Windows `%APPDATA%\npm`, macOS Codex 앱 번들 경로를 순서대로 확인한다.
 - provider URL, API key, 추가 header, SSO command는 계속 `~/.codex/config.toml` 또는 환경변수에만 둔다.
 
 반드시 확인할 조건:
@@ -494,11 +495,13 @@ codex.cmd exec `
 
 - `codex-web-app/services/codex_chat.py`가 `CODEX_CLI_MODEL_PROVIDER`를 `model_provider` config override로 전달
 - `codex-web-app/services/codex_chat.py`가 `CODEX_CLI_PROFILE`을 `--profile` 인자로 전달
+- `codex-web-app/services/codex_chat.py`가 `CODEX_CLI_BIN` 또는 Windows `codex.cmd`를 Codex CLI 실행 파일로 사용
 - `/api/codex/settings` 응답과 UI status에 현재 CLI profile/provider id를 읽기 전용으로 표시
 - `run_codex_chat_server_company.sh`의 Linux 기본 모델 목록을 폐쇄망 모델 순위로 정렬
 - `run_codex_chat_server_company.sh`가 기본 `CODEX_CLI_MODEL_PROVIDER=dtgpt_linux`를 설정
 - `run_codex_chat_server_company.ps1` 추가: Windows PowerShell 전용 회사망 실행 스크립트
 - `run_codex_chat_server_company.ps1`이 기본 `CODEX_CLI_MODEL_PROVIDER=dtgpt_oa`를 설정
+- 회사망 launcher가 `codex`/`codex.cmd`를 찾아 `CODEX_CLI_BIN`에 설정
 - `activate_venv.sh`, `run_codex_chat_server.sh`가 `wheelhouse/`가 있으면 `pip --no-index --find-links`로 오프라인 설치하도록 수정
 
 선택적으로 사용할 수 있는 추가 전환 방식:
@@ -521,7 +524,7 @@ codex.cmd exec `
 - `company_codex_offline.md` 기준으로 Codex CLI 설치와 사내 LLM 단독 smoke test가 먼저 성공했다.
 - Linux 폐쇄망에는 Workbench source archive와 wheelhouse를 추가 반입했다.
 - Linux 폐쇄망에서 `codex --version`이 user-space PATH로 잡힌다.
-- Windows OA 망에서는 PowerShell에서 `codex.cmd --version` 또는 `& "$NPM_PREFIX\codex.cmd" --version`이 동작한다.
+- Windows OA 망에서는 PowerShell에서 `codex.cmd --version` 또는 `& "$NPM_PREFIX\codex.cmd" --version`이 동작한다. PATH가 불안정하면 `CODEX_CLI_BIN="$NPM_PREFIX\codex.cmd"`를 지정한다. macOS에서 앱 번들로만 설치된 경우 `/Applications/Codex.app/Contents/Resources/codex`를 자동 탐색한다.
 - Windows OA 모델 목록은 `Qwen3.6-27B,Gemma-4-31B-IT` 순서다.
 - Linux 폐쇄망 모델 목록은 `DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT` 순서다.
 - 회사망 실행 스크립트가 `CODEX_CLI_MODEL_PROVIDER`를 각각 `dtgpt_linux`, `dtgpt_oa`로 설정한다.

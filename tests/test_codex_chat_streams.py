@@ -58,6 +58,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         hashlib.sha1(str(workspace_dir).encode('utf-8')).hexdigest()[:12],
     )
     monkeypatch.setattr(codex_chat, 'CODEX_SKIP_GIT_REPO_CHECK', True)
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
 
     return {
         'store_path': store_path,
@@ -665,6 +666,43 @@ def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspa
     ]
     provider_index = cmd.index('model_provider="dtgpt_linux"')
     assert cmd[provider_index - 1] == '--config'
+
+
+def test_build_codex_command_uses_configured_cli_bin(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_CLI_BIN', '/opt/codex/bin/codex')
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[0] == '/opt/codex/bin/codex'
+
+
+def test_build_codex_command_prefers_windows_cmd_launcher(isolated_codex_workspace, monkeypatch):
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'win32')
+    monkeypatch.setattr(
+        codex_chat.shutil,
+        'which',
+        lambda name: r'C:\offline_codex\npm-prefix\codex.cmd' if name == 'codex.cmd' else None,
+    )
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[0] == r'C:\offline_codex\npm-prefix\codex.cmd'
+
+
+def test_build_codex_command_uses_app_bundle_cli_fallback(isolated_codex_workspace, tmp_path, monkeypatch):
+    bundle_bin = tmp_path / 'Codex.app' / 'Contents' / 'Resources' / 'codex'
+    bundle_bin.parent.mkdir(parents=True)
+    bundle_bin.write_text('#!/usr/bin/env bash\n', encoding='utf-8')
+    bundle_bin.chmod(0o755)
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'darwin')
+    monkeypatch.setattr(codex_chat.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(codex_chat, '_codex_cli_file_candidates', lambda: (str(bundle_bin),))
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[0] == str(bundle_bin)
 
 
 def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, monkeypatch):

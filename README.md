@@ -4,7 +4,11 @@ Codex Workbench server for Codex chat sessions, workspace files, terminal sessio
 
 ## Requirements
 - Python 3.10+
-- Codex CLI available on PATH (`codex`)
+- Codex CLI available on PATH (`codex` on macOS/Linux, `codex.cmd` on Windows)
+
+Set `CODEX_CLI_BIN=/absolute/path/to/codex` when the CLI is installed outside
+`PATH`. The company launchers also probe common npm prefix paths, Windows
+`%APPDATA%\npm\codex.cmd`, and the macOS Codex app bundle path.
 
 ## Setup
 ```bash

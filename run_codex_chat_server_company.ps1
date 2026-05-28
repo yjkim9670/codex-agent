@@ -23,6 +23,38 @@ if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
 if (-not $env:CODEX_STORAGE_SUBDIR) {
     $env:CODEX_STORAGE_SUBDIR = ".agent_state_company"
 }
+if (-not $env:CODEX_CLI_BIN) {
+    $CodexCommand = Get-Command codex.cmd -ErrorAction SilentlyContinue
+    if (-not $CodexCommand) {
+        $CodexCommand = Get-Command codex.exe -ErrorAction SilentlyContinue
+    }
+    if (-not $CodexCommand) {
+        $CodexCommand = Get-Command codex -ErrorAction SilentlyContinue
+    }
+    if ($CodexCommand) {
+        $env:CODEX_CLI_BIN = $CodexCommand.Source
+    }
+}
+if (-not $env:CODEX_CLI_BIN) {
+    $CandidatePaths = @()
+    foreach ($Prefix in @($env:NPM_PREFIX, $env:npm_config_prefix, $env:NPM_CONFIG_PREFIX)) {
+        if ($Prefix) {
+            $CandidatePaths += Join-Path $Prefix "codex.cmd"
+            $CandidatePaths += Join-Path $Prefix "codex.exe"
+        }
+    }
+    if ($env:APPDATA) {
+        $NpmAppData = Join-Path $env:APPDATA "npm"
+        $CandidatePaths += Join-Path $NpmAppData "codex.cmd"
+        $CandidatePaths += Join-Path $NpmAppData "codex.exe"
+    }
+    foreach ($CandidatePath in $CandidatePaths) {
+        if ($CandidatePath -and (Test-Path $CandidatePath)) {
+            $env:CODEX_CLI_BIN = $CandidatePath
+            break
+        }
+    }
+}
 
 $DefaultVenvDir = Join-Path $ParentDir ".venv"
 if ($env:CODEX_COMMON_VENV_DIR) {

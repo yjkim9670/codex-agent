@@ -105,6 +105,7 @@ _STRICT_COMPETING_PROCESSES = str(
     os.environ.get('CODEX_STRICT_COMPETING_PROCESSES') or ''
 ).strip().lower() in ('1', 'true', 'yes', 'on')
 _LOGGER = logging.getLogger(__name__)
+_CODEX_CLI_BIN_ENV = 'CODEX_CLI_BIN'
 _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -1371,6 +1372,100 @@ def _acquire_path_file_lock(path):
 _TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
 
 
+def _configured_codex_cli_bin():
+    configured_bin = str(os.environ.get(_CODEX_CLI_BIN_ENV) or '').strip()
+    if not configured_bin or '\x00' in configured_bin:
+        return ''
+    return configured_bin
+
+
+def _codex_cli_windows_candidates():
+    return ('codex.cmd', 'codex.exe', 'codex')
+
+
+def _codex_cli_file_available(path_text):
+    try:
+        path = Path(path_text).expanduser()
+        if not path.is_file():
+            return False
+        return sys.platform == 'win32' or os.access(str(path), os.X_OK)
+    except Exception:
+        return False
+
+
+def _codex_cli_file_candidates():
+    candidates = []
+    for env_name in ('NPM_PREFIX', 'npm_config_prefix', 'NPM_CONFIG_PREFIX'):
+        prefix = str(os.environ.get(env_name) or '').strip()
+        if not prefix or '\x00' in prefix:
+            continue
+        prefix_path = Path(prefix).expanduser()
+        if sys.platform == 'win32':
+            candidates.extend((
+                prefix_path / 'codex.cmd',
+                prefix_path / 'codex.exe',
+            ))
+        else:
+            candidates.extend((
+                prefix_path / 'bin' / 'codex',
+                prefix_path / 'codex',
+            ))
+    if sys.platform == 'win32':
+        appdata = str(os.environ.get('APPDATA') or '').strip()
+        if appdata and '\x00' not in appdata:
+            candidates.extend((
+                Path(appdata).expanduser() / 'npm' / 'codex.cmd',
+                Path(appdata).expanduser() / 'npm' / 'codex.exe',
+            ))
+    elif sys.platform == 'darwin':
+        candidates.extend((
+            Path('/Applications/Codex.app/Contents/Resources/codex'),
+            Path.home() / 'Applications' / 'Codex.app' / 'Contents' / 'Resources' / 'codex',
+        ))
+    return tuple(str(candidate) for candidate in candidates)
+
+
+def _codex_cli_command():
+    configured_bin = _configured_codex_cli_bin()
+    if configured_bin:
+        return configured_bin
+    if sys.platform == 'win32':
+        for candidate in _codex_cli_windows_candidates():
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+        for candidate in _codex_cli_file_candidates():
+            if _codex_cli_file_available(candidate):
+                return candidate
+        return 'codex.cmd'
+    if shutil.which('codex') is not None:
+        return 'codex'
+    for candidate in _codex_cli_file_candidates():
+        if _codex_cli_file_available(candidate):
+            return candidate
+    return 'codex'
+
+
+def _codex_cli_available():
+    configured_bin = _configured_codex_cli_bin()
+    if configured_bin:
+        if shutil.which(configured_bin):
+            return True
+        try:
+            return Path(configured_bin).expanduser().is_file()
+        except Exception:
+            return False
+    if sys.platform == 'win32':
+        return (
+            any(shutil.which(candidate) for candidate in _codex_cli_windows_candidates()) or
+            any(_codex_cli_file_available(candidate) for candidate in _codex_cli_file_candidates())
+        )
+    return (
+        shutil.which('codex') is not None or
+        any(_codex_cli_file_available(candidate) for candidate in _codex_cli_file_candidates())
+    )
+
+
 def _read_codex_config_text():
     try:
         return CODEX_CONFIG_PATH.read_text(encoding='utf-8')
@@ -2464,7 +2559,7 @@ def get_codex_app_server_status():
         }
     return {
         'pilot_enabled': is_codex_app_server_pilot_enabled(),
-        'codex_available': shutil.which('codex') is not None,
+        'codex_available': _codex_cli_available(),
         'remote_control': remote_control,
         'allowed_methods': sorted(_APP_SERVER_ALLOWED_METHODS),
         'read_methods': sorted(_APP_SERVER_READ_METHODS),
@@ -2474,7 +2569,7 @@ def get_codex_app_server_status():
 
 def start_codex_app_server_remote_control():
     _require_codex_app_server_pilot_enabled()
-    if shutil.which('codex') is None:
+    if not _codex_cli_available():
         raise CodexAppServerError(
             'codex 명령을 찾을 수 없습니다.',
             status_code=503,
@@ -2485,7 +2580,7 @@ def start_codex_app_server_remote_control():
         if _app_server_remote_control_running_locked():
             already_running = True
         else:
-            command = ['codex', 'remote-control', '--enable', 'remote_control']
+            command = [_codex_cli_command(), 'remote-control', '--enable', 'remote_control']
             try:
                 process = subprocess.Popen(
                     command,
@@ -2788,8 +2883,8 @@ def call_codex_app_server_method(method, params=None, *, timeout_seconds=None):
     timeout_seconds = max(1.0, float(timeout_seconds or _APP_SERVER_RPC_TIMEOUT_SECONDS))
     attempts = []
     if _read_app_server_remote_control_running():
-        attempts.append(('remote_control_proxy', ['codex', 'app-server', 'proxy']))
-    attempts.append(('stdio', ['codex', 'app-server']))
+        attempts.append(('remote_control_proxy', [_codex_cli_command(), 'app-server', 'proxy']))
+    attempts.append(('stdio', [_codex_cli_command(), 'app-server']))
 
     last_error = None
     for transport, command in attempts:
@@ -2855,7 +2950,7 @@ def _parse_codex_features_list_output(output_text):
 def list_codex_cli_features():
     try:
         result = subprocess.run(
-            ['codex', 'features', 'list'],
+            [_codex_cli_command(), 'features', 'list'],
             cwd=str(WORKSPACE_DIR),
             capture_output=True,
             text=True,
@@ -6224,7 +6319,7 @@ def _build_codex_command(
         question_only=False,
         execution_cwd=None):
     base_cmd = [
-        'codex',
+        _codex_cli_command(),
         '--ask-for-approval',
         'never',
     ]

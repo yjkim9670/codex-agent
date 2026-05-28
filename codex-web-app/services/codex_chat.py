@@ -339,6 +339,10 @@ _BENIGN_CODEX_STDERR_EXACT_LINES = {
 _BENIGN_CODEX_STDERR_PREFIXES = (
     'WARNING: proceeding, even though we could not update PATH:',
 )
+_BENIGN_CODEX_STDERR_FRAGMENTS = (
+    "WARN codex_core_skills::loader: ignoring interface.icon_",
+    "icon path must not contain '..'",
+)
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
@@ -6686,7 +6690,7 @@ def execute_codex_prompt(
         output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
 
     if result.returncode != 0:
-        error_text = (result.stderr or '').strip()
+        error_text = _filter_benign_codex_stderr(result.stderr or '')
         event_error_text = json_summary.get('last_error') or ''
         message_text = error_text or event_error_text or output_text or 'Codex 실행에 실패했습니다.'
         return None, _apply_auth_failure_guard(message_text), token_usage, timing
@@ -7967,10 +7971,21 @@ def _is_benign_codex_stderr_line(line):
         return True
     if normalized in _BENIGN_CODEX_STDERR_EXACT_LINES:
         return True
-    return any(
+    if any(
         normalized.startswith(prefix)
         for prefix in _BENIGN_CODEX_STDERR_PREFIXES
-    )
+    ):
+        return True
+    return all(fragment in normalized for fragment in _BENIGN_CODEX_STDERR_FRAGMENTS)
+
+
+def _filter_benign_codex_stderr(text):
+    lines = []
+    for line in str(text or '').splitlines():
+        if _is_benign_codex_stderr_line(line):
+            continue
+        lines.append(line)
+    return '\n'.join(lines).strip()
 
 
 def _snapshot_stream_runtime_locked(stream):

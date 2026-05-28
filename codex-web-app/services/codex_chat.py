@@ -339,9 +339,21 @@ _BENIGN_CODEX_STDERR_EXACT_LINES = {
 _BENIGN_CODEX_STDERR_PREFIXES = (
     'WARNING: proceeding, even though we could not update PATH:',
 )
+<<<<<<< Updated upstream
 _BENIGN_CODEX_STDERR_FRAGMENTS = (
     "WARN codex_core_skills::loader: ignoring interface.icon_",
     "icon path must not contain '..'",
+=======
+_BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
+    (
+        "WARN codex_core_skills::loader: ignoring interface.icon_",
+        "icon path must not contain '..'",
+    ),
+    (
+        "WARN codex_otel::events::session_telemetry: metrics counter [codex.skill.injected] failed:",
+        "tag value contains invalid characters:",
+    ),
+>>>>>>> Stashed changes
 )
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
@@ -7976,7 +7988,23 @@ def _is_benign_codex_stderr_line(line):
         for prefix in _BENIGN_CODEX_STDERR_PREFIXES
     ):
         return True
+<<<<<<< Updated upstream
     return all(fragment in normalized for fragment in _BENIGN_CODEX_STDERR_FRAGMENTS)
+
+
+def _filter_benign_codex_stderr(text):
+    lines = []
+    for line in str(text or '').splitlines():
+        if _is_benign_codex_stderr_line(line):
+            continue
+        lines.append(line)
+    return '\n'.join(lines).strip()
+=======
+    return any(
+        all(fragment in normalized for fragment in fragment_group)
+        for fragment_group in _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS
+    )
+>>>>>>> Stashed changes
 
 
 def _filter_benign_codex_stderr(text):

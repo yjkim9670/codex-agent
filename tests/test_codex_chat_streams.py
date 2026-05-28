@@ -1620,11 +1620,29 @@ def test_encrypted_chat_queue_route_accepts_prompt_and_encrypts_response(
 
 def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatch, tmp_path):
     explicit_home = tmp_path / 'explicit-codex-home'
+    default_home = tmp_path / 'default-codex-home'
+    default_home.mkdir()
     monkeypatch.setenv('CODEX_HOME', str(explicit_home))
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', default_home)
 
     env = codex_chat._build_codex_exec_env()
 
     assert env.get('CODEX_HOME') == str(explicit_home)
+
+
+def test_build_codex_exec_env_uses_authenticated_default_home(monkeypatch, tmp_path):
+    explicit_home = tmp_path / 'explicit-codex-home'
+    explicit_home.mkdir()
+    default_home = tmp_path / 'default-codex-home'
+    default_home.mkdir()
+    (default_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+
+    monkeypatch.setenv('CODEX_HOME', str(explicit_home))
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', default_home)
+
+    env = codex_chat._build_codex_exec_env()
+
+    assert env.get('CODEX_HOME') == str(default_home)
 
 
 def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_execution(

@@ -5,6 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
 DEFAULT_VENV_DIR="${PARENT_DIR}/.venv"
 VENV_DIR="${CODEX_COMMON_VENV_DIR:-${COMMON_PYTHON_VENV:-${VIRTUAL_ENV:-${DEFAULT_VENV_DIR}}}}"
+CODEX_APP_RESOURCES_DIR="${CODEX_APP_RESOURCES_DIR:-/Applications/Codex.app/Contents/Resources}"
+
+if [[ -x "${CODEX_APP_RESOURCES_DIR}/codex" ]]; then
+    case ":${PATH}:" in
+        *":${CODEX_APP_RESOURCES_DIR}:"*) ;;
+        *) export PATH="${CODEX_APP_RESOURCES_DIR}:${PATH}" ;;
+    esac
+fi
 
 resolve_host_python() {
     if command -v python3 >/dev/null 2>&1; then
@@ -194,4 +202,8 @@ while true; do
     final_port="${next_port}"
 done
 
-exec "${PYTHON_BIN}" "${SCRIPT_DIR}/run_codex_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"
+if ((${#passthrough_args[@]})); then
+    exec "${PYTHON_BIN}" "${SCRIPT_DIR}/run_codex_chat_server.py" "${passthrough_args[@]}" --port "${final_port}"
+else
+    exec "${PYTHON_BIN}" "${SCRIPT_DIR}/run_codex_chat_server.py" --port "${final_port}"
+fi

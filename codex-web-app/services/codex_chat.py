@@ -5766,6 +5766,45 @@ def _prepare_queued_codex_home(env):
     return queued_home
 
 
+def _codex_home_has_auth(codex_home):
+    try:
+        return (Path(codex_home).expanduser() / 'auth.json').is_file()
+    except Exception:
+        return False
+
+
+def _resolve_authenticated_codex_home(env):
+    configured_value = str(env.get('CODEX_HOME') or _CODEX_HOME).strip()
+    configured_home = Path(configured_value).expanduser() if configured_value else _CODEX_HOME
+    if _codex_home_has_auth(configured_home):
+        return configured_home
+
+    # If an API key/token is injected explicitly, keep the caller's isolated home.
+    if str(env.get('OPENAI_API_KEY') or '').strip() or str(env.get('CODEX_ACCESS_TOKEN') or '').strip():
+        return configured_home
+
+    candidates = []
+    auth_home_value = str(env.get('CODEX_WORKBENCH_AUTH_HOME') or '').strip()
+    if auth_home_value:
+        candidates.append(Path(auth_home_value).expanduser())
+    candidates.append(_CODEX_HOME)
+
+    home_value = str(env.get('HOME') or '').strip()
+    if home_value:
+        candidates.append(Path(home_value).expanduser() / '.codex')
+
+    seen = set()
+    for candidate in candidates:
+        candidate = Path(candidate).expanduser()
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _codex_home_has_auth(candidate):
+            return candidate
+    return configured_home
+
+
 def _prepare_app_server_codex_home(env):
     app_server_home = CODEX_STORAGE_DIR / 'app_server_codex_home'
     app_server_home.mkdir(parents=True, exist_ok=True)
@@ -6026,6 +6065,7 @@ def _build_codex_exec_env(queued_execution=False):
     env = os.environ.copy()
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     if queued_execution or _codex_home_needs_queued_redirect(env):
         queued_home = _prepare_queued_codex_home(env)
         env['CODEX_HOME'] = str(queued_home)
@@ -6035,6 +6075,7 @@ def _build_codex_exec_env(queued_execution=False):
 
 def _build_codex_app_server_env():
     env = os.environ.copy()
+    env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     app_server_home = _prepare_app_server_codex_home(env)
     env['CODEX_HOME'] = str(app_server_home)
     _prepare_queued_codex_runtime_env(env, app_server_home)

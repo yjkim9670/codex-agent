@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -104,6 +105,7 @@ _STRICT_COMPETING_PROCESSES = str(
     os.environ.get('CODEX_STRICT_COMPETING_PROCESSES') or ''
 ).strip().lower() in ('1', 'true', 'yes', 'on')
 _LOGGER = logging.getLogger(__name__)
+_CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
 _WORK_DETAILS_SECTION_MAX_CHARS = 7200
@@ -6040,7 +6042,20 @@ def _wrap_codex_cli_command(cmd, env=None):
         return cmd
     bwrap_path = shutil.which('bwrap')
     if not bwrap_path:
-        raise RuntimeError('CODEX_CLI_SELF_PROTECT=1 requires bubblewrap (`bwrap`) on this host.')
+        if not sys.platform.startswith('linux'):
+            global _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED
+            if not _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED:
+                _LOGGER.warning(
+                    'CODEX_CLI_SELF_PROTECT=1 ignored on %s because bubblewrap '
+                    '(`bwrap`) is only available on Linux hosts.',
+                    sys.platform,
+                )
+                _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = True
+            return cmd
+        raise RuntimeError(
+            'CODEX_CLI_SELF_PROTECT=1 requires bubblewrap (`bwrap`) on Linux hosts. '
+            'Install bubblewrap or unset CODEX_CLI_SELF_PROTECT.'
+        )
     wrapped_cmd = [
         bwrap_path,
         '--dev-bind',

@@ -36,10 +36,14 @@ The helper launcher also uses `../.venv`.
 Set `CODEX_CLI_SELF_PROTECT=1` to run only the Codex CLI child process with
 Workbench/agent paths mounted read-only. Other Workbench APIs remain unchanged.
 
-On Linux this uses `bwrap`. By default it protects this Workbench checkout and
-an adjacent `codex_agent` directory when present. Add comma-separated extra
-paths with `CODEX_CLI_PROTECTED_PATHS=/path/to/codex_agent,/path/to/other`.
-Set `CODEX_CLI_SELF_PROTECT_GIT_RW=1` to keep those protections but re-bind
+On Linux this uses `bwrap`. Linux hosts must have bubblewrap installed or
+available on `PATH`; otherwise Codex CLI startup fails fast. On non-Linux hosts
+the flag is ignored with a warning because bubblewrap is Linux-only.
+
+By default it protects this Workbench checkout and an adjacent `codex_agent`
+directory when present. Add comma-separated extra paths with
+`CODEX_CLI_PROTECTED_PATHS=/path/to/codex_agent,/path/to/other`. Set
+`CODEX_CLI_SELF_PROTECT_GIT_RW=1` to keep those protections but re-bind
 protected `.git` directories read-write for Codex CLI git operations.
 
 ## Git Sync Script

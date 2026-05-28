@@ -904,6 +904,41 @@ def test_self_protect_rebinds_runtime_paths_after_ro_parent(tmp_path, monkeypatc
     assert not any(wrapped[idx:idx + 3] == home_bind for idx in range(len(wrapped) - 2))
 
 
+def test_self_protect_is_ignored_on_non_linux_without_bwrap(tmp_path, monkeypatch, caplog):
+    repo_root = tmp_path / 'codex_workbench'
+    repo_root.mkdir()
+
+    monkeypatch.setattr(codex_chat, 'REPO_ROOT', repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT_GIT_RW', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROTECTED_PATHS', tuple())
+    monkeypatch.setattr(codex_chat, '_CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED', False)
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'darwin')
+    monkeypatch.setattr(codex_chat.shutil, 'which', lambda name: None)
+
+    wrapped = codex_chat._wrap_codex_cli_command(['codex', 'exec'])
+
+    assert wrapped == ['codex', 'exec']
+    assert 'CODEX_CLI_SELF_PROTECT=1 ignored on darwin' in caplog.text
+
+
+def test_self_protect_requires_bwrap_on_linux(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'codex_workbench'
+    repo_root.mkdir()
+
+    monkeypatch.setattr(codex_chat, 'REPO_ROOT', repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT_GIT_RW', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROTECTED_PATHS', tuple())
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'linux')
+    monkeypatch.setattr(codex_chat.shutil, 'which', lambda name: None)
+
+    with pytest.raises(RuntimeError, match='requires bubblewrap'):
+        codex_chat._wrap_codex_cli_command(['codex', 'exec'])
+
+
 def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')

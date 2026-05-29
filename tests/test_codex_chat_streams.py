@@ -2137,6 +2137,13 @@ class _ExitedWithImagegenFinalMessageNoOutputProcess:
         return self._return_code
 
 
+_STDIN_CLOSED_BENIGN_STDERR_LINE = (
+    '2026-05-29T02:24:04.249616Z ERROR codex_core::tools::router: '
+    'error=write_stdin failed: stdin is closed for this session; '
+    'rerun exec_command with tty=true to keep stdin open'
+)
+
+
 class _ExitedWithBenignStderrAndFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -2152,6 +2159,7 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
         self.stderr = _FakePipe([
             'Reading additional input from stdin...\n',
             'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
+            _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
         ])
 
     def poll(self):
@@ -2407,6 +2415,10 @@ def test_run_codex_stream_waits_for_delayed_imagegen_output_after_final_text(
         assert stream.get('imagegen_workbench_waiting_for_output') is False
 
 
+def test_benign_stderr_filter_ignores_closed_stdin_tool_router_log():
+    assert codex_chat._is_benign_codex_stderr_line(_STDIN_CLOSED_BENIGN_STDERR_LINE) is True
+
+
 def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
         monkeypatch,
         isolated_codex_workspace):
@@ -2440,6 +2452,8 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
     assert saved_message['content'] == '정상 최종 응답'
     assert saved_message['finalize_reason'] == 'process_exit'
     assert 'Reading additional input' not in saved_message['content']
+    assert 'write_stdin failed' not in saved_message['content']
+    assert 'write_stdin failed' not in (saved_message.get('work_details') or '')
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)

@@ -348,6 +348,12 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "WARN codex_otel::events::session_telemetry: metrics counter [codex.skill.injected] failed:",
         "tag value contains invalid characters:",
     ),
+    (
+        "ERROR codex_core::tools::router:",
+        "write_stdin failed:",
+        "stdin is closed for this session",
+        "rerun exec_command with tty=true",
+    ),
 )
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'

@@ -523,6 +523,18 @@ CODEX_CLI_SELF_PROTECT = _parse_bool_env('CODEX_CLI_SELF_PROTECT', default=False
 CODEX_CLI_SELF_PROTECT_GIT_RW = _parse_bool_env('CODEX_CLI_SELF_PROTECT_GIT_RW', default=False)
 CODEX_CLI_PROTECTED_PATHS = _parse_path_list_env('CODEX_CLI_PROTECTED_PATHS')
 
+CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES = _parse_int_env(
+    'CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES',
+    64 * 1024 * 1024,
+    minimum=1024,
+    maximum=512 * 1024 * 1024,
+)
+CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES = _parse_int_env(
+    'CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES',
+    128 * 1024 * 1024,
+    minimum=1024,
+    maximum=512 * 1024 * 1024,
+)
 CODEX_MAIL_SMTP_HOST = os.environ.get('CODEX_MAIL_SMTP_HOST', 'smtp.naver.com').strip() or 'smtp.naver.com'
 CODEX_MAIL_SMTP_PORT = _parse_int_env('CODEX_MAIL_SMTP_PORT', 465, minimum=1, maximum=65535)
 CODEX_MAIL_SMTP_SSL = _parse_bool_env('CODEX_MAIL_SMTP_SSL', default=True)

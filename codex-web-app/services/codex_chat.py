@@ -364,6 +364,10 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "WARN codex_core::session::turn:",
         "stream disconnected - retrying sampling request",
     ),
+    (
+        "WARN codex_core_plugins::manager:",
+        "ignoring remote plugins missing from local marketplace during sync",
+    ),
 )
 _APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
     r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
@@ -7464,7 +7468,14 @@ def _container_type_is_command_execution(container):
     return container_type == 'command_execution'
 
 
-def _exec_event_is_completed_command_execution(event):
+def _container_type_is_mcp_tool_call(container):
+    if not isinstance(container, dict):
+        return False
+    container_type = str(container.get('type') or '').strip().lower().replace('-', '_')
+    return container_type == 'mcp_tool_call'
+
+
+def _exec_event_is_completed_nonfatal_work_item(event):
     if not isinstance(event, dict):
         return False
     event_type = _normalize_exec_event_type(event.get('type'))
@@ -7473,13 +7484,15 @@ def _exec_event_is_completed_command_execution(event):
     return (
         _container_type_is_command_execution(event.get('item'))
         or _container_type_is_command_execution(event.get('payload'))
+        or _container_type_is_mcp_tool_call(event.get('item'))
+        or _container_type_is_mcp_tool_call(event.get('payload'))
     )
 
 
 def _exec_event_is_failure(event):
     if not isinstance(event, dict):
         return False
-    if _exec_event_is_completed_command_execution(event):
+    if _exec_event_is_completed_nonfatal_work_item(event):
         return False
     if _exec_event_type_is_failure(event.get('type')) or _container_status_is_failure(event):
         return True

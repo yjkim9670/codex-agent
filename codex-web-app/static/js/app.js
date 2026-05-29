@@ -254,6 +254,7 @@ const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
+const FILE_BROWSER_DOWNLOAD_TIMEOUT_MS = 300000;
 const FILE_BROWSER_MAIL_TIMEOUT_MS = 180000;
 const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 120000;
 const FILE_BROWSER_READ_FILE_ENDPOINT = getPublicPreviewConfigValue('readEndpoint', '/api/codex/files/read');
@@ -16393,7 +16394,7 @@ async function fetchFilePanelDownload(root, paths, { onDownloadProgress = null }
     return fetchBlob('/api/codex/files/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        timeoutMs: FILE_BROWSER_DOWNLOAD_TIMEOUT_MS,
         onDownloadProgress,
         body: JSON.stringify({
             root: normalizeFileBrowserRoot(root),
@@ -16949,7 +16950,18 @@ async function submitMailComposeForm() {
     setMailComposeSubmitting(true);
     setFilePanelBulkActionInFlight(composeState.variant, true);
     setMailComposeStatus('압축 파일을 만들고 메일을 전송하는 중입니다.');
+    const startedAt = Date.now();
+    const progressToast = showPersistentToast('메일 첨부 압축 및 전송 준비 중 · 00:00', { tone: 'default' });
+    let progressMessage = '메일 첨부 압축 및 전송 준비 중';
+    const updateProgressToast = (message = progressMessage, { tone = 'default' } = {}) => {
+        progressMessage = String(message || progressMessage || '').trim() || '메일 첨부 압축 및 전송 준비 중';
+        progressToast?.update(`${progressMessage} · ${formatElapsedTime(Date.now() - startedAt)}`, { tone });
+    };
+    const progressIntervalId = window.setInterval(() => {
+        updateProgressToast();
+    }, 1000);
     try {
+        updateProgressToast('메일 첨부 압축 파일 생성 중');
         const result = await sendFilePanelMail(composeState.root, composeState.paths, mailPayload);
         const archive = result?.archive || {};
         const archiveSize = Number(archive.size);
@@ -16957,20 +16969,21 @@ async function submitMailComposeForm() {
             ? ` · ${formatFileBrowserSize(archiveSize)}`
             : '';
         closeMailComposeOverlay();
-        showToast(`메일을 전송했습니다${sizeText}.`, {
-            tone: 'success',
-            durationMs: 3200
-        });
+        progressToast?.update(`메일을 전송했습니다${sizeText}.`, { tone: 'success' });
+        window.setTimeout(() => {
+            progressToast?.dismiss();
+        }, 3200);
         return true;
     } catch (error) {
         const message = normalizeError(error, '메일 전송에 실패했습니다.');
         setMailComposeStatus(message, { error: true });
-        showToast(message, {
-            tone: 'error',
-            durationMs: 5200
-        });
+        progressToast?.update(message, { tone: 'error' });
+        window.setTimeout(() => {
+            progressToast?.dismiss();
+        }, 5200);
         return false;
     } finally {
+        window.clearInterval(progressIntervalId);
         setFilePanelBulkActionInFlight(composeState.variant, false);
         setMailComposeSubmitting(false);
     }
@@ -16986,18 +16999,24 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         ? `선택 항목 ${selectedPaths.length}개 압축 다운로드`
         : '선택 파일 다운로드';
     const startedAt = Date.now();
-    const progressToast = showPersistentToast(`${targetLabel} 준비 중 · 00:00`, { tone: 'default' });
-    const updateProgressToast = (message, { tone = 'default' } = {}) => {
+    const initialProgressMessage = isArchiveDownload
+        ? `${targetLabel} 서버 압축 준비 중`
+        : `${targetLabel} 서버 응답 준비 중`;
+    const progressToast = showPersistentToast(`${initialProgressMessage} · 00:00`, { tone: 'default' });
+    let progressMessage = initialProgressMessage;
+    const updateProgressToast = (message = progressMessage, { tone = 'default' } = {}) => {
+        progressMessage = String(message || progressMessage || '').trim() || initialProgressMessage;
         const elapsedText = formatElapsedTime(Date.now() - startedAt);
-        progressToast?.update(`${message} · ${elapsedText}`, { tone });
+        progressToast?.update(`${progressMessage} · ${elapsedText}`, { tone });
     };
     const progressIntervalId = window.setInterval(() => {
-        updateProgressToast(isArchiveDownload
-            ? `${targetLabel} 압축 파일 준비 중`
-            : `${targetLabel} 준비 중`);
+        updateProgressToast();
     }, 1000);
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
+        updateProgressToast(isArchiveDownload
+            ? `${targetLabel} 서버 압축 준비 중`
+            : `${targetLabel} 서버 응답 준비 중`);
         const result = await fetchFilePanelDownload(
             getFilePanelActionTargetRoot(normalizedVariant),
             selectedPaths,
@@ -17021,7 +17040,7 @@ async function downloadSelectedFilesFromFilePanel(variant) {
                 }
             }
         );
-        updateProgressToast(`${targetLabel} 저장 시작 중`);
+        updateProgressToast(`${targetLabel} 다운로드 버튼 여는 중`);
         const filename = extractFilenameFromContentDisposition(result?.contentDisposition)
             || (selectedPaths.length === 1 && !actionEntrySummary.hasDirectories
                 ? selectedPaths[0].split('/').pop()
@@ -17029,7 +17048,7 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         if (!saveBlobAsFile(result?.blob, filename)) {
             throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
         }
-        progressToast?.update(`${targetLabel}를 시작했습니다.`, { tone: 'success' });
+        progressToast?.update(`${targetLabel} 다운로드 버튼을 열었습니다.`, { tone: 'success' });
         window.setTimeout(() => {
             progressToast?.dismiss();
         }, 2600);

@@ -489,6 +489,29 @@ def test_extract_exec_json_summary_ignores_completed_command_execution_as_fatal(
     assert summary['last_text'] == '테스트 실패 원인을 수정했습니다.'
 
 
+def test_extract_exec_json_summary_ignores_completed_mcp_tool_call_as_fatal():
+    payload = '\n'.join([
+        json.dumps({
+            'type': 'item.completed',
+            'item': {
+                'type': 'mcp_tool_call',
+                'status': 'failed',
+                'name': 'browser',
+            },
+        }),
+        json.dumps({
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': '검증 불가 사유를 정리했습니다.'},
+        }),
+    ])
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['event_count'] == 2
+    assert summary['last_error'] == ''
+    assert summary['last_text'] == '검증 불가 사유를 정리했습니다.'
+
+
 def test_extract_exec_json_summary_identifies_mcp_tool_call_cancel_error():
     payload = json.dumps({
         'type': 'error',
@@ -2171,6 +2194,12 @@ _SAMPLING_RETRY_BENIGN_STDERR_LINE = (
     '2026-05-29T04:08:39.894468Z  WARN codex_core::session::turn: '
     'stream disconnected - retrying sampling request (1/5 in 219ms)'
 )
+_PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE = (
+    '2026-05-29T05:06:32.508104Z  WARN codex_core_plugins::manager: '
+    'ignoring remote plugins missing from local marketplace during sync '
+    'marketplace=openai-curated missing_remote_plugin_count=5 '
+    'missing_remote_plugin_examples=["chatgpt-apps", "codex-security-victor-0528b"]'
+)
 
 
 class _ExitedWithBenignStderrAndFinalMessageProcess:
@@ -2265,6 +2294,43 @@ class _ExitedWithCommandExecutionFailureAndFinalMessageProcess:
             }) + '\n',
         ])
         self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
+class _ExitedWithMcpToolCallFailureAndFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 65434
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'mcp_tool_call',
+                    'status': 'failed',
+                    'name': 'browser',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {'last_agent_message': '브라우저 검증 불가 사유를 정리했습니다.'},
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([
+            _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE + '\n',
+        ])
 
     def poll(self):
         return self._return_code
@@ -2488,10 +2554,12 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
     stderr_text = '\n'.join([
         _QUEUE_FULL_BENIGN_STDERR_LINE,
         _SAMPLING_RETRY_BENIGN_STDERR_LINE,
+        _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE,
     ])
 
     assert codex_chat._is_benign_codex_stderr_line(_QUEUE_FULL_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_SAMPLING_RETRY_BENIGN_STDERR_LINE) is True
+    assert codex_chat._is_benign_codex_stderr_line(_PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE) is True
     assert codex_chat._filter_benign_codex_stderr(stderr_text) == ''
     assert codex_chat._extract_codex_stderr_diagnostics(stderr_text) == {
         'queue_full_warning_count': 1,
@@ -2649,6 +2717,58 @@ def test_run_codex_stream_keeps_command_execution_failure_as_nonfatal_event(
         assert stream.get('saved') is True
         assert stream.get('done') is True
         assert stream.get('codex_error_seen') is False
+
+
+def test_run_codex_stream_keeps_mcp_tool_call_failure_as_nonfatal_event(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(
+        codex_chat.subprocess,
+        'Popen',
+        _ExitedWithMcpToolCallFailureAndFinalMessageProcess,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-mcp-tool-call')
+    session_id = session['id']
+    stream_id = 'stream-json-mcp-tool-call'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-mcp-tool-call.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json stream prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    assert updated_session['messages']
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'assistant'
+    assert saved_message['content'] == '브라우저 검증 불가 사유를 정리했습니다.'
+    assert saved_message['finalize_reason'] == 'process_exit'
+    assert 'item.completed' not in saved_message['content']
+    assert _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE not in saved_message['content']
+    assert any(
+        event.get('item_type') == 'mcp_tool_call'
+        for event in saved_message.get('codex_events') or []
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('saved') is True
+        assert stream.get('done') is True
+        assert stream.get('codex_error_seen') is False
+        assert stream.get('error') == ''
 
 
 def test_run_codex_stream_surfaces_json_error_event(monkeypatch, isolated_codex_workspace):

@@ -15,6 +15,8 @@ from ..config import (
     CODEX_API_ONLY_MODE,
     CODEX_ENABLE_FILES_API,
     CODEX_ENABLE_GIT_API,
+    CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
+    CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
     CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
     CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
     CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS,
@@ -540,6 +542,10 @@ def _build_runtime_info():
         'attachments': {
             'max_per_turn': int(CODEX_MAX_ATTACHMENTS_PER_TURN),
             'max_bytes': int(CODEX_MAX_ATTACHMENT_BYTES),
+        },
+        'file_download': {
+            'max_single_bytes': int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES),
+            'max_archive_bytes': int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES),
         },
         'mail': {
             'configured': bool(CODEX_MAIL_USERNAME and CODEX_MAIL_PASSWORD),

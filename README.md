@@ -72,6 +72,19 @@ Protection rules are read from `sync_protect.list`.
 - `http://localhost:<port>/` serves the chat UI.
 - `http://localhost:<port>/health` returns JSON status.
 
+## File Download And Mail Limits
+- File preview downloads are limited by `CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES`
+  for one file and `CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES` for multi-file or
+  folder zip downloads. Defaults are 64MB and 128MB; each can be raised up to
+  512MB.
+- Mail delivery uses `CODEX_MAIL_MAX_ARCHIVE_BYTES` for the generated zip
+  attachment. The default is 20MB and the application cap is 128MB, but the
+  SMTP provider can still reject attachments below that value.
+- These limits exist because the current download and mail paths build the
+  response/archive in server memory before the browser or SMTP server receives
+  it. Going beyond these caps should use a streaming download or temporary-file
+  archive flow instead of only raising environment variables.
+
 ## Tailscale Code Server Access
 The deployment split artifacts were removed. The remaining remote-access helper is:
 

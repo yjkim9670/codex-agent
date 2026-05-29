@@ -10,7 +10,11 @@ import time
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from ..config import WORKSPACE_DIR
+from ..config import (
+    CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
+    CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
+    WORKSPACE_DIR,
+)
 
 BROWSER_ROOT_SERVER = 'server'
 BROWSER_ROOT_WORKSPACE = 'workspace'
@@ -20,8 +24,8 @@ _MAX_FILE_PREVIEW_BYTES = 512 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
-_MAX_FILE_DOWNLOAD_BYTES = 64 * 1024 * 1024
-_MAX_MULTI_DOWNLOAD_TOTAL_BYTES = 128 * 1024 * 1024
+_MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
+_MAX_MULTI_DOWNLOAD_TOTAL_BYTES = int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES)
 _MAX_FILE_UPLOAD_BYTES = 64 * 1024 * 1024
 _MAX_MULTI_UPLOAD_TOTAL_BYTES = 128 * 1024 * 1024
 _DELETE_QUARANTINE_PREFIX = '.codex-delete-'
@@ -152,6 +156,23 @@ class FileBrowserError(RuntimeError):
         super().__init__(str(message))
         self.error_code = str(error_code or 'file_browser_error')
         self.status_code = int(status_code)
+
+
+def _format_byte_limit(value):
+    try:
+        size = max(0, int(value))
+    except (TypeError, ValueError):
+        size = 0
+    if size >= 1024 * 1024 * 1024:
+        amount = size / (1024 * 1024 * 1024)
+        return f'{amount:g}GB'
+    if size >= 1024 * 1024:
+        amount = size / (1024 * 1024)
+        return f'{amount:g}MB'
+    if size >= 1024:
+        amount = size / 1024
+        return f'{amount:g}KB'
+    return f'{size} bytes'
 
 
 def _get_server_root():
@@ -1303,13 +1324,13 @@ def build_download_payload(root_key=None, relative_paths=None):
     )
     if len(targets) == 1 and not contains_directories and total_bytes > _MAX_FILE_DOWNLOAD_BYTES:
         raise FileBrowserError(
-            '단일 파일 다운로드 크기 제한(64MB)을 초과했습니다.',
+            f'단일 파일 다운로드 크기 제한({_format_byte_limit(_MAX_FILE_DOWNLOAD_BYTES)})을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )
     if len(targets) > 1 and not contains_directories and total_bytes > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
         raise FileBrowserError(
-            '선택한 파일의 전체 다운로드 크기 제한(128MB)을 초과했습니다.',
+            f'선택한 파일의 전체 다운로드 크기 제한({_format_byte_limit(_MAX_MULTI_DOWNLOAD_TOTAL_BYTES)})을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )
@@ -1360,7 +1381,7 @@ def build_download_payload(root_key=None, relative_paths=None):
                 total_source_bytes += max(0, source_size)
                 if total_source_bytes > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
                     raise FileBrowserError(
-                        '선택한 파일과 폴더의 전체 다운로드 크기 제한(128MB)을 초과했습니다.',
+                        f'선택한 파일과 폴더의 전체 다운로드 크기 제한({_format_byte_limit(_MAX_MULTI_DOWNLOAD_TOTAL_BYTES)})을 초과했습니다.',
                         error_code='file_too_large',
                         status_code=413,
                     )
@@ -1429,7 +1450,7 @@ def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=
                 total_source_bytes += max(0, source_size)
                 if total_source_bytes > byte_limit:
                     raise FileBrowserError(
-                        f'메일 첨부 크기 제한({byte_limit} bytes)을 초과했습니다.',
+                        f'메일 첨부 크기 제한({_format_byte_limit(byte_limit)})을 초과했습니다.',
                         error_code='archive_too_large',
                         status_code=413,
                     )
@@ -1447,7 +1468,7 @@ def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=
     content = buffer.getvalue()
     if len(content) > byte_limit:
         raise FileBrowserError(
-            f'메일 첨부 압축 파일 크기 제한({byte_limit} bytes)을 초과했습니다.',
+            f'메일 첨부 압축 파일 크기 제한({_format_byte_limit(byte_limit)})을 초과했습니다.',
             error_code='archive_too_large',
             status_code=413,
         )

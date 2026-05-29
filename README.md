@@ -36,6 +36,14 @@ Or with the helper script:
 
 The helper launcher also uses `../.venv`.
 
+## Codex CLI Stability Options
+Set `CODEX_CLI_SERIALIZE_EXEC=1` when several Workbench instances share the
+same `CODEX_HOME` or upstream LLM gateway. This serializes `codex exec` child
+processes with a lock file and reduces CLI event-stream queue pressure.
+
+If the provider is slow to produce a final response after retries, increase
+`CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS` from the default.
+
 ## Codex CLI Self Protection
 Set `CODEX_CLI_SELF_PROTECT=1` to run only the Codex CLI child process with
 Workbench/agent paths mounted read-only. Other Workbench APIs remain unchanged.

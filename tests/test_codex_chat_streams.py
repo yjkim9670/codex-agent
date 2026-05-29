@@ -540,6 +540,27 @@ def test_extract_exec_json_summary_parses_response_item_and_task_complete():
     assert summary['usage']['total_tokens'] == 150
 
 
+def test_extract_exec_json_summary_records_app_server_event_lag():
+    payload = '\n'.join([
+        'in-process app-server event stream lagged; dropped 519 events',
+        json.dumps({
+            'type': 'response_item',
+            'payload': {
+                'type': 'message',
+                'role': 'assistant',
+                'content': [{'type': 'output_text', 'text': '진행 중'}],
+            },
+        }),
+    ])
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['event_stream_lagged'] is True
+    assert summary['dropped_event_count'] == 519
+    assert summary['event_count'] == 1
+    assert summary['last_text'] == '진행 중'
+
+
 def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkeypatch, isolated_codex_workspace):
     stdout_payload = '\n'.join([
         json.dumps({
@@ -2142,6 +2163,14 @@ _STDIN_CLOSED_BENIGN_STDERR_LINE = (
     'error=write_stdin failed: stdin is closed for this session; '
     'rerun exec_command with tty=true to keep stdin open'
 )
+_QUEUE_FULL_BENIGN_STDERR_LINE = (
+    '2026-05-29T03:50:15.557962Z  WARN codex_app_server_client: '
+    'dropping in-process app-server event because consumer queue is full'
+)
+_SAMPLING_RETRY_BENIGN_STDERR_LINE = (
+    '2026-05-29T04:08:39.894468Z  WARN codex_core::session::turn: '
+    'stream disconnected - retrying sampling request (1/5 in 219ms)'
+)
 
 
 class _ExitedWithBenignStderrAndFinalMessageProcess:
@@ -2160,6 +2189,42 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
             'Reading additional input from stdin...\n',
             'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
             _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
+        ])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
+class _ExitedWithLaggedProgressOnlyProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 65436
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            'in-process app-server event stream lagged; dropped 519 events\n',
+            json.dumps({
+                'type': 'response_item',
+                'payload': {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{'type': 'output_text', 'text': '진행 중 메시지'}],
+                    'phase': 'commentary',
+                },
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([
+            _QUEUE_FULL_BENIGN_STDERR_LINE + '\n',
+            _SAMPLING_RETRY_BENIGN_STDERR_LINE + '\n',
         ])
 
     def poll(self):
@@ -2419,6 +2484,30 @@ def test_benign_stderr_filter_ignores_closed_stdin_tool_router_log():
     assert codex_chat._is_benign_codex_stderr_line(_STDIN_CLOSED_BENIGN_STDERR_LINE) is True
 
 
+def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
+    stderr_text = '\n'.join([
+        _QUEUE_FULL_BENIGN_STDERR_LINE,
+        _SAMPLING_RETRY_BENIGN_STDERR_LINE,
+    ])
+
+    assert codex_chat._is_benign_codex_stderr_line(_QUEUE_FULL_BENIGN_STDERR_LINE) is True
+    assert codex_chat._is_benign_codex_stderr_line(_SAMPLING_RETRY_BENIGN_STDERR_LINE) is True
+    assert codex_chat._filter_benign_codex_stderr(stderr_text) == ''
+    assert codex_chat._extract_codex_stderr_diagnostics(stderr_text) == {
+        'queue_full_warning_count': 1,
+        'sampling_stream_retry_count': 1,
+    }
+
+
+def test_codex_exec_gate_can_serialize_cli_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SERIALIZE_EXEC', True)
+    monkeypatch.setattr(codex_chat, '_CODEX_EXEC_LOCK_PATH', tmp_path / 'codex_exec.lock')
+
+    with codex_chat._codex_exec_gate() as lock_info:
+        assert lock_info['parallel'] is False
+        assert isinstance(lock_info['wait_ms'], int)
+
+
 def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
         monkeypatch,
         isolated_codex_workspace):
@@ -2462,6 +2551,54 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
         assert stream.get('done') is True
         assert stream.get('error') == ''
         assert stream.get('codex_error_seen') is False
+
+
+def test_run_codex_stream_errors_when_event_stream_lag_hides_final_response(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithLaggedProgressOnlyProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-lagged-no-final')
+    session_id = session['id']
+    stream_id = 'stream-json-lagged-no-final'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-lagged-no-final.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json stream prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'event_stream_incomplete'
+    assert 'Codex CLI event stream이 유실되어 최종 응답을 확인하지 못했습니다.' in saved_message['content']
+    assert '진행 중 메시지' not in saved_message['content']
+    assert saved_message.get('event_stream_lagged') is True
+    assert saved_message.get('dropped_event_count') == 519
+    assert saved_message.get('queue_full_warning_count') == 1
+    assert saved_message.get('sampling_stream_retry_count') == 1
+    assert saved_message.get('untrusted_output_suppressed') is True
+    assert '진행 중 메시지' in (saved_message.get('work_details') or '')
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('done') is True
+        assert stream.get('saved') is True
+        assert stream.get('codex_error_seen') is True
+        assert stream.get('event_stream_lagged') is True
 
 
 def test_run_codex_stream_keeps_command_execution_failure_as_nonfatal_event(

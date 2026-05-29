@@ -1198,6 +1198,14 @@ def codex_session_message(session_id):
         metadata['queue_wait_ms'] = queue_wait_ms
         metadata['cli_runtime_ms'] = cli_runtime_ms
         metadata['finalize_lag_ms'] = finalize_lag_ms
+        for diagnostic_key in (
+            'event_stream_lagged',
+            'dropped_event_count',
+            'queue_full_warning_count',
+            'sampling_stream_retry_count',
+        ):
+            if diagnostic_key in timing:
+                metadata[diagnostic_key] = timing.get(diagnostic_key)
     if isinstance(token_usage, dict):
         metadata['token_usage'] = token_usage
         metadata['token_count'] = int(token_usage.get('total_tokens') or 0)

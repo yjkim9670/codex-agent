@@ -27,6 +27,7 @@ from ..config import (
     CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
     CODEX_CLI_PROFILE,
+    CODEX_CLI_SERIALIZE_EXEC,
     CODEX_CLI_SELF_PROTECT,
     CODEX_CLI_SELF_PROTECT_GIT_RW,
     CODEX_MAX_ATTACHMENT_BYTES,
@@ -354,6 +355,19 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "stdin is closed for this session",
         "rerun exec_command with tty=true",
     ),
+    (
+        "WARN codex_app_server_client:",
+        "dropping in-process app-server event",
+        "consumer queue is full",
+    ),
+    (
+        "WARN codex_core::session::turn:",
+        "stream disconnected - retrying sampling request",
+    ),
+)
+_APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
+    r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
+    re.IGNORECASE,
 )
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
@@ -2290,6 +2304,12 @@ def _acquire_codex_exec_lock():
 
 @contextmanager
 def _codex_exec_gate():
+    if CODEX_CLI_SERIALIZE_EXEC:
+        with _acquire_codex_exec_lock() as lock_info:
+            lock_payload = dict(lock_info or {})
+            lock_payload['parallel'] = False
+            yield lock_payload
+        return
     now = time.time()
     yield {
         'wait_ms': 0,
@@ -6561,8 +6581,17 @@ def _extract_exec_json_summary(raw_stdout):
     saw_empty_final_answer = False
     imagegen_workbench_filenames = []
     imagegen_workbench_detected = False
+    task_complete_seen = False
+    task_complete_output = ''
+    event_stream_lagged = False
+    dropped_event_count = 0
 
     for line in str(raw_stdout or '').splitlines():
+        dropped_events = _extract_app_server_event_stream_lag_count(line)
+        if dropped_events is not None:
+            event_stream_lagged = True
+            dropped_event_count += dropped_events
+            continue
         event = _parse_json_object(line)
         if not event:
             continue
@@ -6584,12 +6613,17 @@ def _extract_exec_json_summary(raw_stdout):
             saw_empty_final_answer = True
             text_candidates.clear()
             continue
-        if saw_empty_final_answer and _event_is_task_complete(event):
+        event_is_task_complete = _event_is_task_complete(event)
+        if event_is_task_complete:
+            task_complete_seen = True
+        if saw_empty_final_answer and event_is_task_complete:
             continue
         text = _extract_agent_text_from_exec_event(event)
         if text:
             text, filenames = _extract_imagegen_workbench_filename_declarations(text)
             imagegen_workbench_filenames.extend(filenames)
+        if event_is_task_complete and text:
+            task_complete_output = text
         if text:
             text_candidates.append(text)
 
@@ -6606,6 +6640,10 @@ def _extract_exec_json_summary(raw_stdout):
         'saw_empty_final_answer': saw_empty_final_answer,
         'imagegen_workbench_filenames': imagegen_workbench_filenames,
         'imagegen_workbench_detected': imagegen_workbench_detected,
+        'task_complete_seen': task_complete_seen,
+        'task_complete_output': task_complete_output,
+        'event_stream_lagged': event_stream_lagged,
+        'dropped_event_count': dropped_event_count,
     }
 
 
@@ -6658,6 +6696,13 @@ def execute_codex_prompt(
         completed_at=completed_at,
         saved_at=completed_at,
     )
+    stderr_diagnostics = _extract_codex_stderr_diagnostics(result.stderr or '')
+    if json_summary.get('event_stream_lagged'):
+        timing['event_stream_lagged'] = True
+        timing['dropped_event_count'] = int(json_summary.get('dropped_event_count') or 0)
+    for key, value in stderr_diagnostics.items():
+        if int(value or 0) > 0:
+            timing[key] = int(value or 0)
 
     output_text = ''
     output_imagegen_filenames = []
@@ -6676,6 +6721,8 @@ def execute_codex_prompt(
                 pass
 
     if not output_text:
+        output_text = json_summary.get('task_complete_output') or ''
+    if not output_text and not json_summary.get('event_stream_lagged'):
         output_text = json_summary.get('last_text') or ''
     imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
         list(json_summary.get('imagegen_workbench_filenames') or []) + output_imagegen_filenames
@@ -6703,9 +6750,11 @@ def execute_codex_prompt(
         output_text = _append_imagegen_workbench_output_message(output_text, copied_image_outputs)
     elif not output_text and json_summary.get('saw_empty_final_answer'):
         output_text = 'Codex completed without a final response.'
-    if not output_text and json_summary.get('event_count'):
+    elif not output_text and json_summary.get('task_complete_seen'):
         output_text = 'Codex completed without a final response.'
-    if not output_text:
+    if not output_text and json_summary.get('event_count') and not json_summary.get('event_stream_lagged'):
+        output_text = 'Codex completed without a final response.'
+    if not output_text and not json_summary.get('event_stream_lagged'):
         output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
 
     if result.returncode != 0:
@@ -6718,6 +6767,19 @@ def execute_codex_prompt(
             message_error_text or 'Codex 실행에 실패했습니다.'
         )
         return None, _apply_auth_failure_guard(message_text), token_usage, timing
+
+    has_trusted_final_output = bool(
+        output_text.strip()
+        or copied_image_outputs
+        or json_summary.get('task_complete_seen')
+    )
+    if json_summary.get('event_stream_lagged') and not has_trusted_final_output:
+        return (
+            None,
+            _event_stream_incomplete_message(json_summary.get('dropped_event_count')),
+            token_usage,
+            timing,
+        )
 
     return output_text, None, token_usage, timing
 
@@ -8011,6 +8073,47 @@ def _append_stream_chunk(stream_id, key, chunk):
     _persist_stream_progress(stream_id, force=False)
 
 
+def _is_app_server_queue_full_warning(line):
+    normalized = str(line or '').strip()
+    return (
+        'WARN codex_app_server_client:' in normalized
+        and 'dropping in-process app-server event' in normalized
+        and 'consumer queue is full' in normalized
+    )
+
+
+def _is_sampling_stream_retry_warning(line):
+    normalized = str(line or '').strip()
+    return (
+        'WARN codex_core::session::turn:' in normalized
+        and 'stream disconnected - retrying sampling request' in normalized
+    )
+
+
+def _extract_app_server_event_stream_lag_count(line):
+    match = _APP_SERVER_EVENT_STREAM_LAG_RE.search(str(line or ''))
+    if not match:
+        return None
+    try:
+        return max(0, int(match.group(1)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_codex_stderr_diagnostics(text):
+    queue_full_count = 0
+    sampling_retry_count = 0
+    for line in str(text or '').splitlines():
+        if _is_app_server_queue_full_warning(line):
+            queue_full_count += 1
+        if _is_sampling_stream_retry_warning(line):
+            sampling_retry_count += 1
+    return {
+        'queue_full_warning_count': queue_full_count,
+        'sampling_stream_retry_count': sampling_retry_count,
+    }
+
+
 def _is_benign_codex_stderr_line(line):
     normalized = str(line or '').strip()
     if not normalized:
@@ -8035,6 +8138,19 @@ def _filter_benign_codex_stderr(text):
             continue
         lines.append(line)
     return '\n'.join(lines).strip()
+
+
+def _event_stream_incomplete_message(dropped_event_count=0):
+    try:
+        dropped_count = max(0, int(dropped_event_count or 0))
+    except (TypeError, ValueError):
+        dropped_count = 0
+    suffix = f' dropped_events={dropped_count}' if dropped_count else ''
+    return (
+        'Codex CLI event stream이 유실되어 최종 응답을 확인하지 못했습니다.'
+        f'{suffix}\n'
+        '작업 진행 로그는 work_details에 보존했습니다. 같은 요청을 다시 실행해 주세요.\n'
+    )
 
 
 def _snapshot_stream_runtime_locked(stream):
@@ -8091,6 +8207,50 @@ def _set_stream_token_usage(stream_id, usage):
         if not stream:
             return
         stream['token_usage'] = normalized
+        stream['updated_at'] = time.time()
+
+
+def _mark_stream_task_complete(stream_id, text=''):
+    normalized = str(text or '').strip()
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        stream['task_complete_seen'] = True
+        if normalized:
+            stream['task_complete_output'] = normalized
+        stream['updated_at'] = time.time()
+
+
+def _record_stream_app_server_event_lag(stream_id, dropped_events=0):
+    try:
+        dropped_count = max(0, int(dropped_events or 0))
+    except (TypeError, ValueError):
+        dropped_count = 0
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        stream['event_stream_lagged'] = True
+        stream['dropped_event_count'] = int(stream.get('dropped_event_count') or 0) + dropped_count
+        stream['updated_at'] = time.time()
+
+
+def _record_stream_app_server_queue_full_warning(stream_id):
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        stream['queue_full_warning_count'] = int(stream.get('queue_full_warning_count') or 0) + 1
+        stream['updated_at'] = time.time()
+
+
+def _record_stream_sampling_retry_warning(stream_id):
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        stream['sampling_stream_retry_count'] = int(stream.get('sampling_stream_retry_count') or 0) + 1
         stream['updated_at'] = time.time()
 
 
@@ -8253,6 +8413,11 @@ def _copy_codex_events(events):
 
 
 def _handle_stream_json_output_line(stream_id, line):
+    dropped_events = _extract_app_server_event_stream_lag_count(line)
+    if dropped_events is not None:
+        _record_stream_app_server_event_lag(stream_id, dropped_events)
+        return
+
     event = _parse_json_object(line)
     if not event:
         _append_stream_chunk(stream_id, 'output', line)
@@ -8271,16 +8436,22 @@ def _handle_stream_json_output_line(stream_id, line):
     if error_text:
         _append_stream_exec_error(stream_id, error_text)
 
+    event_is_task_complete = _event_is_task_complete(event)
+    text = _extract_agent_text_from_exec_event(event)
     if _event_is_empty_final_answer(event):
+        if event_is_task_complete:
+            _mark_stream_task_complete(stream_id, text)
         _mark_stream_empty_final_answer(stream_id)
         return
-    if _event_is_task_complete(event) and _stream_has_empty_final_answer(stream_id):
+    if event_is_task_complete and _stream_has_empty_final_answer(stream_id):
+        _mark_stream_task_complete(stream_id, text)
         return
 
-    text = _extract_agent_text_from_exec_event(event)
     if text:
         text, filenames = _extract_imagegen_workbench_filename_declarations(text)
         _record_stream_imagegen_workbench_filenames(stream_id, filenames)
+    if event_is_task_complete:
+        _mark_stream_task_complete(stream_id, text)
     if text:
         should_append = _set_stream_output_last_message(stream_id, text)
         if not should_append:
@@ -8294,6 +8465,12 @@ def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
             _apply_auth_failure_guard(line)
+            if key == 'error' and _is_app_server_queue_full_warning(line):
+                _record_stream_app_server_queue_full_warning(stream_id)
+                continue
+            if key == 'error' and _is_sampling_stream_retry_warning(line):
+                _record_stream_sampling_retry_warning(stream_id)
+                continue
             if key == 'error' and _is_benign_codex_stderr_line(line):
                 continue
             if key == 'output':
@@ -8507,10 +8684,18 @@ def _run_codex_stream(stream_id, prompt):
                         current_output = (stream.get('output') or '').strip()
                         current_error = (stream.get('error') or '').strip()
                         current_output_last_message = (stream.get('output_last_message') or '').strip()
+                        task_complete_seen = bool(stream.get('task_complete_seen'))
+                        task_complete_output = (stream.get('task_complete_output') or '').strip()
+                        event_stream_lagged = bool(stream.get('event_stream_lagged'))
+                        dropped_event_count = int(stream.get('dropped_event_count') or 0)
                     else:
                         current_output = ''
                         current_error = ''
                         current_output_last_message = ''
+                        task_complete_seen = False
+                        task_complete_output = ''
+                        event_stream_lagged = False
+                        dropped_event_count = 0
 
                 output_text, output_imagegen_filenames = (
                     _read_output_last_message_with_imagegen_filenames(output_path)
@@ -8530,15 +8715,43 @@ def _run_codex_stream(stream_id, prompt):
                             stream,
                             base_final_response_timeout_seconds,
                         )
+                selected_output_base = output_text or task_complete_output or current_output_last_message
                 selected_output_text = _append_imagegen_workbench_output_message(
-                    output_text or current_output_last_message,
+                    selected_output_base,
                     copied_image_outputs,
                 )
-                has_output_response = (
+                has_trusted_output_response = (
                     bool(output_text.strip())
                     or bool(imagegen_output_text)
-                    or bool(current_output_last_message)
-                    or bool(current_output)
+                    or bool(copied_image_outputs)
+                    or bool(task_complete_seen)
+                )
+                has_progress_output_response = bool(current_output_last_message) or bool(current_output)
+                if (
+                    event_stream_lagged
+                    and not has_trusted_output_response
+                    and not current_error
+                ):
+                    _append_stream_exec_error(
+                        stream_id,
+                        _event_stream_incomplete_message(dropped_event_count),
+                    )
+                    incomplete_now = time.time()
+                    with state.codex_streams_lock:
+                        stream = state.codex_streams.get(stream_id)
+                        if stream:
+                            stream['done'] = True
+                            stream['exit_code'] = 1
+                            stream['completed_at'] = stream.get('completed_at') or process_exited_at or incomplete_now
+                            stream['updated_at'] = incomplete_now
+                            stream['process'] = None
+                            stream['finalize_reason'] = 'event_stream_incomplete'
+                            stream['untrusted_output_suppressed'] = bool(has_progress_output_response)
+                    break
+
+                has_output_response = (
+                    has_trusted_output_response
+                    or (has_progress_output_response and not event_stream_lagged)
                 )
                 has_final_response = has_output_response or bool(current_error)
                 if imagegen_output_waiting and not imagegen_output_text:
@@ -8652,8 +8865,10 @@ def _run_codex_stream(stream_id, prompt):
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             current_output_last_message = (stream.get('output_last_message') or '').strip() if stream else ''
+            task_complete_output = (stream.get('task_complete_output') or '').strip() if stream else ''
+            suppress_untrusted_output = bool(stream.get('untrusted_output_suppressed')) if stream else False
         selected_output_text = _append_imagegen_workbench_output_message(
-            output_text or current_output_last_message,
+            output_text or task_complete_output or ('' if suppress_untrusted_output else current_output_last_message),
             copied_image_outputs,
         )
         if selected_output_text:
@@ -8798,6 +9013,13 @@ def create_codex_stream(
         'codex_event_count': 0,
         'codex_error_seen': False,
         'mcp_tool_call_cancel_error_seen': False,
+        'task_complete_seen': False,
+        'task_complete_output': '',
+        'event_stream_lagged': False,
+        'dropped_event_count': 0,
+        'queue_full_warning_count': 0,
+        'sampling_stream_retry_count': 0,
+        'untrusted_output_suppressed': False,
         'codex_session_id': '',
         'codex_home': '',
         'assistant_final_empty': False,
@@ -8889,6 +9111,13 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
             or (stream.get('output_last_message') or '').strip()
             or (stream.get('error') or '').strip()
         )
+        if (
+            stream.get('event_stream_lagged')
+            and not stream.get('task_complete_seen')
+            and not stream.get('imagegen_workbench_outputs')
+            and not (stream.get('error') or '').strip()
+        ):
+            has_response = False
         waiting_for_imagegen_output = _stream_is_waiting_for_imagegen_workbench_output(stream)
         if waiting_for_imagegen_output:
             has_response = False
@@ -8901,19 +9130,31 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
         stream['updated_at'] = now
         stream['process'] = None
         if not has_response:
-            message = _stream_timeout_message(
-                timeout_seconds,
-                waiting_for_imagegen_output=waiting_for_imagegen_output,
-                stale=True,
-            )
+            if stream.get('event_stream_lagged'):
+                message = _event_stream_incomplete_message(stream.get('dropped_event_count'))
+                stream['untrusted_output_suppressed'] = bool(
+                    (stream.get('output') or '').strip()
+                    or (stream.get('output_last_message') or '').strip()
+                )
+            else:
+                message = _stream_timeout_message(
+                    timeout_seconds,
+                    waiting_for_imagegen_output=waiting_for_imagegen_output,
+                    stale=True,
+                )
             stream['error'] = (stream.get('error') or '') + message
             stream['error_length'] = len(stream.get('error') or '')
-            stream['exit_code'] = 124
-            stream['finalize_reason'] = (
-                'stale_imagegen_output_timeout'
-                if waiting_for_imagegen_output
-                else 'stale_final_response_timeout'
-            )
+            stream['codex_error_seen'] = True
+            if stream.get('event_stream_lagged'):
+                stream['exit_code'] = 1
+                stream['finalize_reason'] = 'stale_event_stream_incomplete'
+            else:
+                stream['exit_code'] = 124
+                stream['finalize_reason'] = (
+                    'stale_imagegen_output_timeout'
+                    if waiting_for_imagegen_output
+                    else 'stale_final_response_timeout'
+                )
         elif not stream.get('finalize_reason'):
             stream['finalize_reason'] = 'stale_finalizing_recovered'
         stale_stream_ids.append(stream_id)
@@ -9528,6 +9769,13 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         assistant_final_empty = bool(stream.get('assistant_final_empty'))
         codex_error_seen = bool(stream.get('codex_error_seen'))
         mcp_tool_call_cancel_error_seen = bool(stream.get('mcp_tool_call_cancel_error_seen'))
+        task_complete_seen = bool(stream.get('task_complete_seen'))
+        task_complete_output = (stream.get('task_complete_output') or '').strip()
+        event_stream_lagged = bool(stream.get('event_stream_lagged'))
+        dropped_event_count = int(stream.get('dropped_event_count') or 0)
+        queue_full_warning_count = int(stream.get('queue_full_warning_count') or 0)
+        sampling_stream_retry_count = int(stream.get('sampling_stream_retry_count') or 0)
+        untrusted_output_suppressed = bool(stream.get('untrusted_output_suppressed'))
         imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
@@ -9549,6 +9797,10 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
         output_last_message = output_from_file
+    elif task_complete_output:
+        output_last_message = task_complete_output
+    elif untrusted_output_suppressed:
+        output_last_message = ''
     _cleanup_output_last_message(output_path)
 
     metadata = _build_stream_message_metadata(
@@ -9575,6 +9827,17 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         metadata['codex_events'] = codex_events
     if mcp_tool_call_cancel_error_seen:
         metadata['mcp_tool_call_cancel_error_seen'] = True
+    if task_complete_seen:
+        metadata['task_complete_seen'] = True
+    if event_stream_lagged:
+        metadata['event_stream_lagged'] = True
+        metadata['dropped_event_count'] = dropped_event_count
+    if queue_full_warning_count:
+        metadata['queue_full_warning_count'] = queue_full_warning_count
+    if sampling_stream_retry_count:
+        metadata['sampling_stream_retry_count'] = sampling_stream_retry_count
+    if untrusted_output_suppressed:
+        metadata['untrusted_output_suppressed'] = True
     if imagegen_workbench_outputs:
         metadata['imagegen_workbench_outputs'] = imagegen_workbench_outputs
     created_at_value = _iso_timestamp_from_epoch(completed_at)
@@ -9587,7 +9850,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 finalize_lag_ms,
                 finalize_reason
             )
-    final_output = output_last_message or ('' if assistant_final_empty else output)
+    final_output = output_last_message or ('' if (assistant_final_empty or untrusted_output_suppressed) else output)
     if imagegen_workbench_outputs:
         final_output = _append_imagegen_workbench_output_message(final_output, imagegen_workbench_outputs)
     elif not final_output and assistant_final_empty:

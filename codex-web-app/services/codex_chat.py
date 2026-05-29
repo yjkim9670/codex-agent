@@ -373,6 +373,21 @@ _APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
     r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
     re.IGNORECASE,
 )
+_CODEX_CHILD_ENV_STRIP_KEYS = frozenset({
+    'LOG_FORMAT',
+    'RUST_LOG',
+    'CODEX_THREAD_ID',
+    'CODEX_TURN_ID',
+    'CODEX_RUN_ID',
+    'CODEX_SESSION_ID',
+    'CODEX_EVENT_STREAM_ID',
+})
+_CODEX_CHILD_ENV_STRIP_PREFIXES = (
+    'CODEX_APP_SERVER_',
+    'CODEX_PARENT_',
+    'CODEX_TRACE_',
+    'CODEX_INTERNAL_',
+)
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
@@ -6211,8 +6226,19 @@ def _wrap_codex_cli_command(cmd, env=None):
     return wrapped_cmd
 
 
-def _build_codex_exec_env(queued_execution=False):
+def _build_codex_child_base_env():
     env = os.environ.copy()
+    for key in list(env.keys()):
+        if key in _CODEX_CHILD_ENV_STRIP_KEYS:
+            env.pop(key, None)
+            continue
+        if any(key.startswith(prefix) for prefix in _CODEX_CHILD_ENV_STRIP_PREFIXES):
+            env.pop(key, None)
+    return env
+
+
+def _build_codex_exec_env(queued_execution=False):
+    env = _build_codex_child_base_env()
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
     env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
@@ -6224,7 +6250,7 @@ def _build_codex_exec_env(queued_execution=False):
 
 
 def _build_codex_app_server_env():
-    env = os.environ.copy()
+    env = _build_codex_child_base_env()
     env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     app_server_home = _prepare_app_server_codex_home(env)
     env['CODEX_HOME'] = str(app_server_home)
@@ -6701,12 +6727,22 @@ def execute_codex_prompt(
         saved_at=completed_at,
     )
     stderr_diagnostics = _extract_codex_stderr_diagnostics(result.stderr or '')
+    event_stream_lagged = bool(
+        json_summary.get('event_stream_lagged')
+        or stderr_diagnostics.get('event_stream_lagged')
+    )
+    dropped_event_count = int(json_summary.get('dropped_event_count') or 0)
     if json_summary.get('event_stream_lagged'):
         timing['event_stream_lagged'] = True
-        timing['dropped_event_count'] = int(json_summary.get('dropped_event_count') or 0)
-    for key, value in stderr_diagnostics.items():
-        if int(value or 0) > 0:
-            timing[key] = int(value or 0)
+        timing['dropped_event_count'] = dropped_event_count
+    if stderr_diagnostics.get('event_stream_lagged'):
+        timing['event_stream_lagged'] = True
+        dropped_event_count += int(stderr_diagnostics.get('dropped_event_count') or 0)
+        timing['dropped_event_count'] = dropped_event_count
+    for key in ('queue_full_warning_count', 'sampling_stream_retry_count'):
+        value = int(stderr_diagnostics.get(key) or 0)
+        if value > 0:
+            timing[key] = value
 
     output_text = ''
     output_imagegen_filenames = []
@@ -6726,7 +6762,7 @@ def execute_codex_prompt(
 
     if not output_text:
         output_text = json_summary.get('task_complete_output') or ''
-    if not output_text and not json_summary.get('event_stream_lagged'):
+    if not output_text and not event_stream_lagged:
         output_text = json_summary.get('last_text') or ''
     imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
         list(json_summary.get('imagegen_workbench_filenames') or []) + output_imagegen_filenames
@@ -6756,9 +6792,9 @@ def execute_codex_prompt(
         output_text = 'Codex completed without a final response.'
     elif not output_text and json_summary.get('task_complete_seen'):
         output_text = 'Codex completed without a final response.'
-    if not output_text and json_summary.get('event_count') and not json_summary.get('event_stream_lagged'):
+    if not output_text and json_summary.get('event_count') and not event_stream_lagged:
         output_text = 'Codex completed without a final response.'
-    if not output_text and not json_summary.get('event_stream_lagged'):
+    if not output_text and not event_stream_lagged:
         output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
 
     if result.returncode != 0:
@@ -6777,10 +6813,10 @@ def execute_codex_prompt(
         or copied_image_outputs
         or json_summary.get('task_complete_seen')
     )
-    if json_summary.get('event_stream_lagged') and not has_trusted_final_output:
+    if event_stream_lagged and not has_trusted_final_output:
         return (
             None,
-            _event_stream_incomplete_message(json_summary.get('dropped_event_count')),
+            _event_stream_incomplete_message(dropped_event_count),
             token_usage,
             timing,
         )
@@ -8116,7 +8152,13 @@ def _extract_app_server_event_stream_lag_count(line):
 def _extract_codex_stderr_diagnostics(text):
     queue_full_count = 0
     sampling_retry_count = 0
+    event_stream_lagged = False
+    dropped_event_count = 0
     for line in str(text or '').splitlines():
+        dropped_events = _extract_app_server_event_stream_lag_count(line)
+        if dropped_events is not None:
+            event_stream_lagged = True
+            dropped_event_count += dropped_events
         if _is_app_server_queue_full_warning(line):
             queue_full_count += 1
         if _is_sampling_stream_retry_warning(line):
@@ -8124,6 +8166,8 @@ def _extract_codex_stderr_diagnostics(text):
     return {
         'queue_full_warning_count': queue_full_count,
         'sampling_stream_retry_count': sampling_retry_count,
+        'event_stream_lagged': event_stream_lagged,
+        'dropped_event_count': dropped_event_count,
     }
 
 
@@ -8137,6 +8181,8 @@ def _is_benign_codex_stderr_line(line):
         normalized.startswith(prefix)
         for prefix in _BENIGN_CODEX_STDERR_PREFIXES
     ):
+        return True
+    if _extract_app_server_event_stream_lag_count(normalized) is not None:
         return True
     return any(
         all(fragment in normalized for fragment in fragment_group)
@@ -8478,6 +8524,11 @@ def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
             _apply_auth_failure_guard(line)
+            if key == 'error':
+                dropped_events = _extract_app_server_event_stream_lag_count(line)
+                if dropped_events is not None:
+                    _record_stream_app_server_event_lag(stream_id, dropped_events)
+                    continue
             if key == 'error' and _is_app_server_queue_full_warning(line):
                 _record_stream_app_server_queue_full_warning(stream_id)
                 continue

@@ -1180,6 +1180,38 @@ def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(mon
     assert not (app_server_home / 'skills').is_symlink()
 
 
+def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path):
+    explicit_home = tmp_path / 'explicit-codex-home'
+    explicit_home.mkdir()
+    default_home = tmp_path / 'default-codex-home'
+    default_home.mkdir()
+    home = tmp_path / 'home'
+    home.mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(explicit_home))
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', default_home)
+    monkeypatch.setenv('RUST_LOG', 'warn')
+    monkeypatch.setenv('LOG_FORMAT', 'json')
+    monkeypatch.setenv('CODEX_THREAD_ID', 'thread-from-parent')
+    monkeypatch.setenv('CODEX_TURN_ID', 'turn-from-parent')
+    monkeypatch.setenv('CODEX_APP_SERVER_PILOT_ENABLED', '1')
+    monkeypatch.setenv('CODEX_TRACE_ID', 'trace-from-parent')
+
+    env = codex_chat._build_codex_exec_env()
+
+    assert env['CODEX_HOME'] == str(explicit_home)
+    assert env[codex_chat._IMAGEGEN_WORKBENCH_OUTPUT_ENV]
+    assert env[codex_chat._IMAGEGEN_WORKBENCH_TMP_ENV]
+    for key in (
+            'RUST_LOG',
+            'LOG_FORMAT',
+            'CODEX_THREAD_ID',
+            'CODEX_TURN_ID',
+            'CODEX_APP_SERVER_PILOT_ENABLED',
+            'CODEX_TRACE_ID'):
+        assert key not in env
+
+
 def test_app_server_blocks_unallowlisted_methods(monkeypatch):
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
 
@@ -1781,7 +1813,10 @@ def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatc
     explicit_home = tmp_path / 'explicit-codex-home'
     default_home = tmp_path / 'default-codex-home'
     default_home.mkdir()
+    home = tmp_path / 'home'
+    home.mkdir()
     monkeypatch.setenv('CODEX_HOME', str(explicit_home))
+    monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(codex_chat, '_CODEX_HOME', default_home)
 
     env = codex_chat._build_codex_exec_env()
@@ -2200,6 +2235,10 @@ _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE = (
     'marketplace=openai-curated missing_remote_plugin_count=5 '
     'missing_remote_plugin_examples=["chatgpt-apps", "codex-security-victor-0528b"]'
 )
+_APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE = (
+    '2026-05-29T05:51:40.451768Z  WARN codex_exec: '
+    'in-process app-server event stream lagged; dropped 6475 events'
+)
 
 
 class _ExitedWithBenignStderrAndFinalMessageProcess:
@@ -2555,16 +2594,48 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
         _QUEUE_FULL_BENIGN_STDERR_LINE,
         _SAMPLING_RETRY_BENIGN_STDERR_LINE,
         _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE,
+        _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE,
     ])
 
     assert codex_chat._is_benign_codex_stderr_line(_QUEUE_FULL_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_SAMPLING_RETRY_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE) is True
+    assert codex_chat._is_benign_codex_stderr_line(_APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE) is True
     assert codex_chat._filter_benign_codex_stderr(stderr_text) == ''
     assert codex_chat._extract_codex_stderr_diagnostics(stderr_text) == {
         'queue_full_warning_count': 1,
         'sampling_stream_retry_count': 1,
+        'event_stream_lagged': True,
+        'dropped_event_count': 6475,
     }
+
+
+def test_stream_reader_records_stderr_app_server_event_lag(isolated_codex_workspace):
+    session = codex_chat.create_session('stderr-app-server-event-lag')
+    stream_id = 'stream-stderr-app-server-event-lag'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session['id'],
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stderr-lag.txt',
+        )
+
+    codex_chat._stream_reader(
+        stream_id,
+        _FakePipe([_APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE + '\n']),
+        'error',
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('event_stream_lagged') is True
+        assert stream.get('dropped_event_count') == 6475
+        assert stream.get('codex_error_seen') is False
+        assert stream.get('error') == ''
 
 
 def test_codex_exec_gate_can_serialize_cli_runs(monkeypatch, tmp_path):

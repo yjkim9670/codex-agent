@@ -6549,6 +6549,7 @@ def _extract_exec_json_summary(raw_stdout):
     usage = None
     text_candidates = []
     error_candidates = []
+    mcp_tool_call_cancel_error_candidates = []
     raw_lines = []
     codex_session_id = ''
     saw_empty_final_answer = False
@@ -6570,6 +6571,8 @@ def _extract_exec_json_summary(raw_stdout):
         error_text = _extract_exec_error_text_from_event(event)
         if error_text:
             error_candidates.append(error_text)
+            if _is_user_cancelled_mcp_tool_call_error(error_text):
+                mcp_tool_call_cancel_error_candidates.append(error_text)
         raw_lines.append(line.strip())
         if _event_is_empty_final_answer(event):
             saw_empty_final_answer = True
@@ -6588,6 +6591,10 @@ def _extract_exec_json_summary(raw_stdout):
         'usage': usage,
         'last_text': text_candidates[-1] if text_candidates else '',
         'last_error': error_candidates[-1] if error_candidates else '',
+        'last_mcp_tool_call_cancel_error': (
+            mcp_tool_call_cancel_error_candidates[-1]
+            if mcp_tool_call_cancel_error_candidates else ''
+        ),
         'event_count': len(raw_lines),
         'codex_session_id': codex_session_id,
         'saw_empty_final_answer': saw_empty_final_answer,
@@ -6698,7 +6705,12 @@ def execute_codex_prompt(
     if result.returncode != 0:
         error_text = _filter_benign_codex_stderr(result.stderr or '')
         event_error_text = json_summary.get('last_error') or ''
-        message_text = error_text or event_error_text or output_text or 'Codex 실행에 실패했습니다.'
+        mcp_tool_call_cancel_error_text = json_summary.get('last_mcp_tool_call_cancel_error') or ''
+        message_error_text = error_text or event_error_text or mcp_tool_call_cancel_error_text
+        message_text = _combine_stream_output_and_error(
+            output_text,
+            message_error_text or 'Codex 실행에 실패했습니다.'
+        )
         return None, _apply_auth_failure_guard(message_text), token_usage, timing
 
     return output_text, None, token_usage, timing
@@ -7358,6 +7370,18 @@ def _exec_event_type_is_failure(value):
     return normalized in {'error', 'failed', 'failure'} or normalized.endswith('.failed')
 
 
+def _is_user_cancelled_mcp_tool_call_error(text):
+    normalized = re.sub(r'\s+', ' ', str(text or '').strip().lower())
+    if not normalized:
+        return False
+    return (
+        'user' in normalized
+        and 'mcp' in normalized
+        and 'tool call' in normalized
+        and ('cancelled' in normalized or 'canceled' in normalized)
+    )
+
+
 def _container_status_is_failure(container):
     if not isinstance(container, dict):
         return False
@@ -7854,6 +7878,16 @@ def _combine_stream_output_and_error(output_text, error_text):
     return output_value or error_value
 
 
+def _stream_has_user_visible_output(stream):
+    if not isinstance(stream, dict):
+        return False
+    return bool(
+        (stream.get('output_last_message') or '').strip()
+        or (stream.get('output') or '').strip()
+        or stream.get('imagegen_workbench_outputs')
+    )
+
+
 def _build_partial_stream_message_metadata(stream):
     response_mode = _normalize_response_mode_label(stream.get('response_mode'))
     response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
@@ -8058,11 +8092,15 @@ def _append_stream_exec_error(stream_id, text):
     normalized = _normalize_stream_log_text(text)
     if not normalized:
         return False
+    user_cancelled_mcp_tool_call = _is_user_cancelled_mcp_tool_call_error(normalized)
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if not stream or stream.get('cancelled'):
             return False
-        stream['codex_error_seen'] = True
+        if user_cancelled_mcp_tool_call:
+            stream['mcp_tool_call_cancel_error_seen'] = True
+        else:
+            stream['codex_error_seen'] = True
         existing = stream.get('error') or ''
         if normalized in existing:
             stream['updated_at'] = time.time()
@@ -8071,7 +8109,10 @@ def _append_stream_exec_error(stream_id, text):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream and not stream.get('cancelled'):
-            stream['codex_error_seen'] = True
+            if user_cancelled_mcp_tool_call:
+                stream['mcp_tool_call_cancel_error_seen'] = True
+            else:
+                stream['codex_error_seen'] = True
             stream['updated_at'] = time.time()
     return True
 
@@ -8487,13 +8528,13 @@ def _run_codex_stream(stream_id, prompt):
                     output_text or current_output_last_message,
                     copied_image_outputs,
                 )
-                has_final_response = (
+                has_output_response = (
                     bool(output_text.strip())
                     or bool(imagegen_output_text)
                     or bool(current_output_last_message)
                     or bool(current_output)
-                    or bool(current_error)
                 )
+                has_final_response = has_output_response or bool(current_error)
                 if imagegen_output_waiting and not imagegen_output_text:
                     has_final_response = False
 
@@ -8512,7 +8553,15 @@ def _run_codex_stream(stream_id, prompt):
                             stream['done'] = True
                             stream['updated_at'] = done_now
                             if not stream.get('finalize_reason'):
-                                if stream.get('exit_code') == 0 and not stream.get('codex_error_seen'):
+                                mcp_cancel_without_output = (
+                                    stream.get('mcp_tool_call_cancel_error_seen')
+                                    and not has_output_response
+                                )
+                                if (
+                                    stream.get('exit_code') == 0
+                                    and not stream.get('codex_error_seen')
+                                    and not mcp_cancel_without_output
+                                ):
                                     stream['finalize_reason'] = 'process_exit'
                                 else:
                                     stream['finalize_reason'] = 'process_exit_error'
@@ -8640,7 +8689,14 @@ def _run_codex_stream(stream_id, prompt):
                 if stream.get('done') and not stream.get('finalize_reason'):
                     if stream.get('cancelled'):
                         stream['finalize_reason'] = 'user_cancelled'
-                    elif stream.get('exit_code') == 0 and not stream.get('codex_error_seen'):
+                    elif (
+                        stream.get('exit_code') == 0
+                        and not stream.get('codex_error_seen')
+                        and not (
+                            stream.get('mcp_tool_call_cancel_error_seen')
+                            and not _stream_has_user_visible_output(stream)
+                        )
+                    ):
                         stream['finalize_reason'] = 'process_exit'
                     else:
                         stream['finalize_reason'] = 'process_exit_error'
@@ -8735,6 +8791,7 @@ def create_codex_stream(
         'codex_events': [],
         'codex_event_count': 0,
         'codex_error_seen': False,
+        'mcp_tool_call_cancel_error_seen': False,
         'codex_session_id': '',
         'codex_home': '',
         'assistant_final_empty': False,
@@ -9464,6 +9521,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         codex_events = _copy_codex_events(stream.get('codex_events'))
         assistant_final_empty = bool(stream.get('assistant_final_empty'))
         codex_error_seen = bool(stream.get('codex_error_seen'))
+        mcp_tool_call_cancel_error_seen = bool(stream.get('mcp_tool_call_cancel_error_seen'))
         imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
@@ -9509,6 +9567,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             metadata['worktree_task'] = worktree_task
     if codex_events:
         metadata['codex_events'] = codex_events
+    if mcp_tool_call_cancel_error_seen:
+        metadata['mcp_tool_call_cancel_error_seen'] = True
     if imagegen_workbench_outputs:
         metadata['imagegen_workbench_outputs'] = imagegen_workbench_outputs
     created_at_value = _iso_timestamp_from_epoch(completed_at)
@@ -9536,10 +9596,21 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 structured_report_metadata['label'] = structured_report_label
             metadata['structured_report'] = structured_report_metadata
             metadata['structured_report_preset'] = structured_report_preset
+    mcp_cancel_without_final_output = (
+        mcp_tool_call_cancel_error_seen
+        and not (final_output or '').strip()
+    )
+    if mcp_cancel_without_final_output and finalize_reason == 'process_exit':
+        finalize_reason = 'process_exit_error'
+        metadata['finalize_reason'] = finalize_reason
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream['finalize_reason'] = finalize_reason
     work_details = _build_work_details(output, final_output, error)
     if work_details:
         metadata['work_details'] = work_details
-    if exit_code == 0 and not codex_error_seen:
+    if exit_code == 0 and not codex_error_seen and not mcp_cancel_without_final_output:
         message_role = 'assistant'
         message_content = format_assistant_response_content(
             final_output,
@@ -9549,7 +9620,12 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         usage_source = 'stream_finalize_success'
     else:
         message_role = 'error'
-        message_content = _apply_auth_failure_guard(error or final_output or 'Codex 실행에 실패했습니다.')
+        message_content = _apply_auth_failure_guard(
+            _combine_stream_output_and_error(
+                final_output,
+                error or 'Codex 실행에 실패했습니다.'
+            )
+        )
         usage_source = 'stream_finalize_error'
 
     saved_message = None

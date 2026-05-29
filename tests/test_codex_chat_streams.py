@@ -171,6 +171,7 @@ def _build_stream_state(stream_id, session_id, started_at, output_path):
         },
         'json_output': True,
         'codex_error_seen': False,
+        'mcp_tool_call_cancel_error_seen': False,
         'output_length': 0,
         'error_length': 0,
         'created_at': started_at,
@@ -488,6 +489,18 @@ def test_extract_exec_json_summary_ignores_completed_command_execution_as_fatal(
     assert summary['last_text'] == '테스트 실패 원인을 수정했습니다.'
 
 
+def test_extract_exec_json_summary_identifies_mcp_tool_call_cancel_error():
+    payload = json.dumps({
+        'type': 'error',
+        'message': 'user cancelled MCP tool call',
+    })
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['last_error'] == 'user cancelled MCP tool call'
+    assert summary['last_mcp_tool_call_cancel_error'] == 'user cancelled MCP tool call'
+
+
 def test_extract_exec_json_summary_parses_response_item_and_task_complete():
     payload = '\n'.join([
         json.dumps({
@@ -594,6 +607,35 @@ def test_execute_codex_prompt_does_not_surface_raw_json_events_as_response(
     assert error is None
     assert output == 'Codex completed without a final response.'
     assert 'item.completed' not in output
+    assert token_usage is None
+    assert isinstance(timing, dict)
+
+
+def test_execute_codex_prompt_preserves_output_when_mcp_cancel_exit_fails(
+        monkeypatch,
+        isolated_codex_workspace):
+    stdout_payload = '\n'.join([
+        json.dumps({
+            'type': 'task_complete',
+            'payload': {'last_agent_message': 'sync work summary'},
+        }),
+        json.dumps({
+            'type': 'error',
+            'message': 'user canceled MCP tool call',
+        }),
+    ])
+
+    def _fake_run(cmd, **kwargs):
+        del kwargs
+        return subprocess.CompletedProcess(cmd, 1, stdout_payload, '')
+
+    monkeypatch.setattr(codex_chat.subprocess, 'run', _fake_run)
+
+    output, error, token_usage, timing = codex_chat.execute_codex_prompt('sync prompt')
+
+    assert output is None
+    assert 'sync work summary' in error
+    assert 'user canceled MCP tool call' in error
     assert token_usage is None
     assert isinstance(timing, dict)
 
@@ -2206,6 +2248,68 @@ class _ExitedWithJsonErrorProcess:
         return self._return_code
 
 
+class _ExitedWithMcpToolCancelAndFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 76544
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'error',
+                'message': 'user cancelled MCP tool call',
+            }) + '\n',
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {'last_agent_message': '작업 내용은 정상적으로 정리했습니다.'},
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
+class _ExitedWithMcpToolCancelFinalMessageAndFailureProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 76545
+        self._return_code = 1
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'task_complete',
+                'payload': {'last_agent_message': '실패 전까지 완료한 작업입니다.'},
+            }) + '\n',
+            json.dumps({
+                'type': 'error',
+                'message': 'user canceled MCP tool call',
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 1
+
+    def kill(self):
+        self._return_code = 1
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatch, isolated_codex_workspace):
     monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithJsonFinalMessageProcess)
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
@@ -2440,6 +2544,87 @@ def test_run_codex_stream_surfaces_json_error_event(monkeypatch, isolated_codex_
         assert stream.get('saved') is True
         assert stream.get('exit_code') == 1
         assert stream.get('codex_error_seen') is True
+
+
+def test_run_codex_stream_treats_mcp_tool_cancel_as_nonfatal_with_final_message(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', _ExitedWithMcpToolCancelAndFinalMessageProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-mcp-cancel-final')
+    session_id = session['id']
+    stream_id = 'stream-json-mcp-cancel-final'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-mcp-cancel.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json mcp cancel prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'assistant'
+    assert saved_message['content'] == '작업 내용은 정상적으로 정리했습니다.'
+    assert saved_message['finalize_reason'] == 'process_exit'
+    assert saved_message.get('mcp_tool_call_cancel_error_seen') is True
+    assert 'user cancelled MCP tool call' not in saved_message['content']
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        assert stream is not None
+        assert stream.get('codex_error_seen') is False
+        assert stream.get('mcp_tool_call_cancel_error_seen') is True
+        assert 'user cancelled MCP tool call' in stream.get('error', '')
+
+
+def test_run_codex_stream_preserves_final_message_when_mcp_tool_cancel_exit_fails(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(
+        codex_chat.subprocess,
+        'Popen',
+        _ExitedWithMcpToolCancelFinalMessageAndFailureProcess,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-mcp-cancel-failed')
+    session_id = session['id']
+    stream_id = 'stream-json-mcp-cancel-failed'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-mcp-cancel-failed.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'json mcp cancel failed prompt')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'process_exit_error'
+    assert '실패 전까지 완료한 작업입니다.' in saved_message['content']
+    assert 'user canceled MCP tool call' in saved_message['content']
+    assert saved_message.get('mcp_tool_call_cancel_error_seen') is True
 
 
 def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isolated_codex_workspace):

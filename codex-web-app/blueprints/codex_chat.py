@@ -166,12 +166,18 @@ _PLAN_MODE_PROMPT_SUFFIX = (
     "- If changes are needed, describe proposed patches without applying them."
 )
 _PROC_MANAGER_JOBS_PATH = Path.home() / 'proc_manager_jobs.json'
-_CODEX_JOB_COMMAND_HINTS = ('run_codex_chat_server.sh', 'run_codex_chat_server.py')
+_CODEX_COMPANY_RUNNER_HINT = 'run_codex_chat_server_company.ps1'
+_CODEX_JOB_COMMAND_HINTS = (
+    'run_codex_chat_server.sh',
+    'run_codex_chat_server.py',
+    _CODEX_COMPANY_RUNNER_HINT,
+)
 _CODEX_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
     r'(?:^|\s)(?:export\s+)?CODEX_CHAT_DEBUG\s*=\s*([^\s;#]+)',
     re.IGNORECASE,
 )
 _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
+_RELOAD_FLAG_PATTERN = re.compile(r'(^|\s)--reload(\s|$)', re.IGNORECASE)
 _TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback'
 
 
@@ -402,7 +408,7 @@ def _resolve_codex_use_reloader(job_config):
         return explicit_use_reloader
 
     env_debug_value = None
-    has_debug_flag = False
+    has_reloader_flag = False
     commands = _extract_job_commands(job_config)
     has_codex_entrypoint = False
     for command in commands:
@@ -415,10 +421,12 @@ def _resolve_codex_use_reloader(job_config):
         lowered = command_text.lower()
         if 'run_codex_chat_server' in lowered:
             has_codex_entrypoint = True
-            if _DEBUG_FLAG_PATTERN.search(command_text):
-                has_debug_flag = True
+            if _CODEX_COMPANY_RUNNER_HINT in lowered:
+                has_reloader_flag = True
+            if _DEBUG_FLAG_PATTERN.search(command_text) or _RELOAD_FLAG_PATTERN.search(command_text):
+                has_reloader_flag = True
 
-    if has_debug_flag:
+    if has_reloader_flag:
         return True
     if env_debug_value is not None:
         return env_debug_value

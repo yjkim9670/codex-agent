@@ -521,6 +521,32 @@ def test_extract_exec_json_summary_marks_text_before_command_as_progress_only():
 
     assert summary['last_text'] == '파일을 만들겠습니다.'
     assert summary['last_text_invalidated_by_work_item'] is True
+    assert summary['turn_completed_seen'] is True
+
+
+def test_extract_exec_json_summary_marks_turn_completed_without_final_after_command():
+    payload = '\n'.join([
+        json.dumps({
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': '먼저 상태를 확인하겠습니다.'},
+        }),
+        json.dumps({
+            'type': 'item.completed',
+            'item': {
+                'type': 'command_execution',
+                'status': 'completed',
+                'command': 'powershell.exe -Command "Get-ChildItem test"',
+                'exit_code': 0,
+            },
+        }),
+        json.dumps({'type': 'turn.completed'}),
+    ])
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['last_text'] == '먼저 상태를 확인하겠습니다.'
+    assert summary['last_text_invalidated_by_work_item'] is True
+    assert summary['turn_completed_seen'] is True
 
 
 def test_extract_exec_json_summary_ignores_completed_mcp_tool_call_as_fatal():
@@ -824,6 +850,23 @@ def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspa
     ]
     provider_index = cmd.index('model_provider="dtgpt_linux"')
     assert cmd[provider_index - 1] == '--config'
+
+
+def test_company_runner_restart_policy_reports_reloader_enabled():
+    job_config = {
+        'commands': [
+            'powershell.exe -ExecutionPolicy Bypass -File .\\run_codex_chat_server_company.ps1'
+        ],
+    }
+
+    assert codex_chat_blueprint._is_codex_chat_job_config(job_config) is True
+    assert codex_chat_blueprint._resolve_codex_use_reloader(job_config) is True
+
+
+def test_restart_policy_reports_reload_flag_enabled():
+    job_config = {'commands': ['python run_codex_chat_server.py --reload']}
+
+    assert codex_chat_blueprint._resolve_codex_use_reloader(job_config) is True
 
 
 def test_codex_exec_input_details_include_policy_values(isolated_codex_workspace):
@@ -2269,6 +2312,62 @@ class _ExitedAfterProgressAndCommandWithoutFinalMessageProcess:
         return self._return_code
 
 
+class _ExitedAfterProgressAndCommandTurnCompletedWithoutFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 54323
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({'type': 'thread.started'}) + '\n',
+            json.dumps({'type': 'turn.started'}) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'agent_message',
+                    'text': '먼저 test 폴더 현재 상태를 확인하고 앱을 구현하겠습니다.',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.started',
+                'item': {
+                    'type': 'command_execution',
+                    'status': 'in_progress',
+                    'command': (
+                        'powershell.exe -Command "Get-ChildItem -Path \'test\' '
+                        '-Recurse -ErrorAction SilentlyContinue | Select-Object FullName"'
+                    ),
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'command_execution',
+                    'status': 'completed',
+                    'command': (
+                        'powershell.exe -Command "Get-ChildItem -Path \'test\' '
+                        '-Recurse -ErrorAction SilentlyContinue | Select-Object FullName"'
+                    ),
+                    'exit_code': 0,
+                },
+            }) + '\n',
+            json.dumps({'type': 'turn.completed'}) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 class _ExitedWithJsonFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -3294,6 +3393,54 @@ def test_run_codex_stream_does_not_finalize_with_pre_command_progress(
         event.get('item_type') == 'command_execution'
         and 'command=mkdir app' in event.get('detail', '')
         and 'exit_code=0' in event.get('detail', '')
+        for event in saved_message.get('codex_events') or []
+    )
+
+
+def test_run_codex_stream_errors_immediately_when_turn_completes_without_final_after_command(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(
+        codex_chat.subprocess,
+        'Popen',
+        _ExitedAfterProgressAndCommandTurnCompletedWithoutFinalMessageProcess,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 30)
+
+    session = codex_chat.create_session('turn-completed-missing-final')
+    session_id = session['id']
+    stream_id = 'stream-turn-completed-missing-final'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=(
+                isolated_codex_workspace['workspace_dir']
+                / 'stream-turn-completed-missing-final.txt'
+            ),
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'make an app')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'missing_final_response_after_work_item'
+    assert saved_message.get('progress_output_invalidated') is True
+    assert saved_message.get('turn_completed_seen') is True
+    assert saved_message.get('missing_final_response_after_work_item') is True
+    assert '중간 진행 메시지는 최종 답변이 아니므로 저장하지 않았습니다' in saved_message['content']
+    assert '먼저 test 폴더 현재 상태를 확인하고 앱을 구현하겠습니다.' not in saved_message['content']
+    assert any(
+        event.get('type') == 'turn.completed'
         for event in saved_message.get('codex_events') or []
     )
 

@@ -163,6 +163,6 @@ if (Test-Path $RequirementsPath) {
 }
 
 Set-Location $ParentDir
-$ServerArgs = @((Join-Path $ScriptDir "run_codex_chat_server.py"), "--host", $BindHost, "--port", "$Port") + $RemainingArgs
+$ServerArgs = @((Join-Path $ScriptDir "run_codex_chat_server.py"), "--host", $BindHost, "--port", "$Port", "--reload") + $RemainingArgs
 Invoke-GlobalPython $GlobalPython @ServerArgs
 exit $LASTEXITCODE

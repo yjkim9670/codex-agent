@@ -57,6 +57,11 @@ def parse_args():
         action='store_true',
         help='Enable Flask debug mode and auto reloader.',
     )
+    parser.add_argument(
+        '--reload',
+        action='store_true',
+        help='Enable Flask auto reloader without enabling debug mode.',
+    )
     args = parser.parse_args()
     if args.port < 1 or args.port > 65535:
         parser.error('--port must be between 1 and 65535')
@@ -81,7 +86,7 @@ if __name__ == '__main__':
         '1', 'true', 'yes', 'on'
     }
     debug_mode = bool(args.debug or env_debug)
-    use_reloader = debug_mode
+    use_reloader = bool(args.reload or debug_mode)
     print("[INFO] Starting Codex Chat Server...")
     print(f"[INFO] Access the Codex chat API at: http://localhost:{args.port}")
     app.run(

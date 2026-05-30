@@ -615,6 +615,8 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
     def _fake_run(cmd, **kwargs):
         captured['cmd'] = cmd
         captured['input'] = kwargs.get('input')
+        captured['encoding'] = kwargs.get('encoding')
+        captured['errors'] = kwargs.get('errors')
         return subprocess.CompletedProcess(cmd, 0, stdout_payload, '')
 
     monkeypatch.setattr(codex_chat.subprocess, 'run', _fake_run)
@@ -630,8 +632,11 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
     assert token_usage['total_tokens'] == 120
     assert captured['cmd'][-2:] == ['--', '-']
     assert captured['input'] == 'sync prompt'
+    assert captured['encoding'] == 'utf-8'
+    assert captured['errors'] == 'replace'
     assert 'Codex exec input:' in timing.get('work_details', '')
     assert 'prompt sent to stdin:' in timing.get('work_details', '')
+    assert 'prompt_encoding: utf-8' in timing.get('work_details', '')
     assert 'sync prompt' in timing.get('work_details', '')
 
 
@@ -2529,6 +2534,7 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
     assert saved_message['finalize_reason'] == 'process_exit'
     assert 'Codex exec input:' in saved_message.get('work_details', '')
     assert 'prompt sent to stdin:' in saved_message.get('work_details', '')
+    assert 'prompt_encoding: utf-8' in saved_message.get('work_details', '')
     assert 'json stream prompt' in saved_message.get('work_details', '')
 
     with state.codex_streams_lock:
@@ -2536,6 +2542,40 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
         assert stream is not None
         assert stream.get('saved') is True
         assert stream.get('done') is True
+
+
+def test_run_codex_stream_uses_utf8_for_cli_text_pipes(monkeypatch, isolated_codex_workspace):
+    captured = {}
+
+    class CapturingProcess(_ExitedWithJsonFinalMessageProcess):
+        def __init__(self, cmd, **kwargs):
+            captured['cmd'] = cmd
+            captured['kwargs'] = kwargs
+            super().__init__(cmd, **kwargs)
+
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', CapturingProcess)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('json-stream-utf8-pipes')
+    stream_id = 'stream-json-utf8-pipes'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session['id'],
+            started_at=started_at,
+            output_path=isolated_codex_workspace['workspace_dir'] / 'stream-json-utf8-pipes.txt',
+        )
+
+    codex_chat._run_codex_stream(stream_id, '한글 stream prompt')
+
+    assert captured['cmd'][-2:] == ['--', '-']
+    assert captured['kwargs']['encoding'] == 'utf-8'
+    assert captured['kwargs']['errors'] == 'replace'
 
 
 def test_run_codex_stream_waits_for_delayed_imagegen_output_after_final_text(

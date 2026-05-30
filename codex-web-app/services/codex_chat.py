@@ -118,6 +118,8 @@ _WORK_DETAILS_CODE_KEY_LINE_LIMIT = 20
 _WORK_DETAILS_CODE_MAX_CHARS = 2600
 _AUTO_SESSION_TITLE_MAX_CHARS = 36
 _WORK_DETAILS_CODE_FENCE_RE = re.compile(r'```([^\n`]*)\n(.*?)```', re.DOTALL)
+_CODEX_EXEC_TEXT_ENCODING = 'utf-8'
+_CODEX_EXEC_TEXT_ERRORS = 'replace'
 _WORK_DETAILS_KEY_CODE_LINE_RE = re.compile(
     r'^\s*(?:'
     r'async\s+def\s+|def\s+|class\s+|function\s+|const\s+|let\s+|var\s+|'
@@ -6716,6 +6718,8 @@ def execute_codex_prompt(
                 cwd=str(WORKSPACE_DIR),
                 capture_output=True,
                 text=True,
+                encoding=_CODEX_EXEC_TEXT_ENCODING,
+                errors=_CODEX_EXEC_TEXT_ERRORS,
                 input=prompt,
                 env=exec_env,
                 check=False
@@ -7145,6 +7149,7 @@ def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env
 
     details = {
         'prompt_transport': 'stdin',
+        'prompt_encoding': _CODEX_EXEC_TEXT_ENCODING,
         'command': command_text,
         'prompt': str(prompt or ''),
     }
@@ -7165,6 +7170,9 @@ def _format_codex_exec_input_details(exec_details):
     transport = str(exec_details.get('prompt_transport') or '').strip()
     if transport:
         parts.append(f'prompt_transport: {transport}')
+    prompt_encoding = str(exec_details.get('prompt_encoding') or '').strip()
+    if prompt_encoding:
+        parts.append(f'prompt_encoding: {prompt_encoding}')
     cwd = str(exec_details.get('cwd') or '').strip()
     if cwd:
         parts.append(f'cwd: {cwd}')
@@ -8743,6 +8751,8 @@ def _run_codex_stream(stream_id, prompt):
                 stderr=subprocess.PIPE,
                 env=exec_env,
                 text=True,
+                encoding=_CODEX_EXEC_TEXT_ENCODING,
+                errors=_CODEX_EXEC_TEXT_ERRORS,
                 bufsize=1
             )
             _write_codex_prompt_to_stdin(process, prompt)

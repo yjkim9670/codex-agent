@@ -610,7 +610,11 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
         }),
     ])
 
+    captured = {}
+
     def _fake_run(cmd, **kwargs):
+        captured['cmd'] = cmd
+        captured['input'] = kwargs.get('input')
         return subprocess.CompletedProcess(cmd, 0, stdout_payload, '')
 
     monkeypatch.setattr(codex_chat.subprocess, 'run', _fake_run)
@@ -624,6 +628,11 @@ def test_execute_codex_prompt_uses_json_response_when_output_file_missing(monkey
     assert token_usage['cached_input_tokens'] == 40
     assert token_usage['output_tokens'] == 20
     assert token_usage['total_tokens'] == 120
+    assert captured['cmd'][-2:] == ['--', '-']
+    assert captured['input'] == 'sync prompt'
+    assert 'Codex exec input:' in timing.get('work_details', '')
+    assert 'prompt sent to stdin:' in timing.get('work_details', '')
+    assert 'sync prompt' in timing.get('work_details', '')
 
 
 def test_execute_codex_prompt_does_not_surface_raw_json_events_as_response(
@@ -2518,6 +2527,9 @@ def test_run_codex_stream_uses_json_response_when_output_file_missing(monkeypatc
     assert saved_message['role'] == 'assistant'
     assert saved_message['content'] == '스트림 최종 응답'
     assert saved_message['finalize_reason'] == 'process_exit'
+    assert 'Codex exec input:' in saved_message.get('work_details', '')
+    assert 'prompt sent to stdin:' in saved_message.get('work_details', '')
+    assert 'json stream prompt' in saved_message.get('work_details', '')
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)

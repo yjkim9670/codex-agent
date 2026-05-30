@@ -6445,9 +6445,9 @@ def _build_codex_command(
         cmd.extend(['--image', attachment.get('path')])
     if json_output:
         cmd.append('--json')
-    if normalized_attachments:
-        cmd.append('--')
-    cmd.append(prompt)
+    # Send the large structured prompt over stdin instead of argv. This avoids
+    # Windows .cmd/CMD parsing edge cases with newlines and shell metacharacters.
+    cmd.extend(['--', '-'])
     return cmd
 
 
@@ -6698,10 +6698,17 @@ def execute_codex_prompt(
     queued_at = time.time()
     cli_started_at = None
     completed_at = None
+    exec_details = None
     try:
         exec_env = _build_codex_exec_env()
         _prepare_imagegen_workbench_dirs(prompt)
         cmd = _wrap_codex_cli_command(cmd, env=exec_env)
+        exec_details = _build_codex_exec_input_details(
+            cmd,
+            prompt,
+            execution_cwd=WORKSPACE_DIR,
+            exec_env=exec_env,
+        )
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
             result = subprocess.run(
@@ -6709,6 +6716,7 @@ def execute_codex_prompt(
                 cwd=str(WORKSPACE_DIR),
                 capture_output=True,
                 text=True,
+                input=prompt,
                 env=exec_env,
                 check=False
             )
@@ -6796,6 +6804,15 @@ def execute_codex_prompt(
         output_text = 'Codex completed without a final response.'
     if not output_text and not event_stream_lagged:
         output_text = _strip_imagegen_workbench_filename_declarations(result.stdout or '').strip()
+
+    work_details = _build_work_details(
+        result.stdout or '',
+        output_text or '',
+        result.stderr or '',
+        exec_details=exec_details,
+    )
+    if work_details:
+        timing['work_details'] = work_details
 
     if result.returncode != 0:
         error_text = _filter_benign_codex_stderr(result.stderr or '')
@@ -7119,15 +7136,79 @@ def _compact_stream_log_section(value):
     return _clip_stream_log_detail(compacted, _WORK_DETAILS_SECTION_MAX_CHARS)
 
 
-def _build_work_details(stdout_text, final_output_text, stderr_text):
+def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env=None):
+    command_parts = [str(part) for part in (cmd or [])]
+    try:
+        command_text = subprocess.list2cmdline(command_parts)
+    except Exception:
+        command_text = ' '.join(command_parts)
+
+    details = {
+        'prompt_transport': 'stdin',
+        'command': command_text,
+        'prompt': str(prompt or ''),
+    }
+    if execution_cwd:
+        details['cwd'] = str(execution_cwd)
+    if isinstance(exec_env, dict):
+        codex_home = str(exec_env.get('CODEX_HOME') or '').strip()
+        if codex_home:
+            details['codex_home'] = codex_home
+    return details
+
+
+def _format_codex_exec_input_details(exec_details):
+    if not isinstance(exec_details, dict):
+        return ''
+
+    parts = []
+    transport = str(exec_details.get('prompt_transport') or '').strip()
+    if transport:
+        parts.append(f'prompt_transport: {transport}')
+    cwd = str(exec_details.get('cwd') or '').strip()
+    if cwd:
+        parts.append(f'cwd: {cwd}')
+    codex_home = str(exec_details.get('codex_home') or '').strip()
+    if codex_home:
+        parts.append(f'CODEX_HOME: {codex_home}')
+
+    command = str(exec_details.get('command') or '').strip()
+    if command:
+        parts.append(f'command:\n{command}')
+
+    prompt = _compact_stream_log_section(exec_details.get('prompt') or '')
+    if prompt:
+        parts.append(f'prompt sent to stdin:\n{prompt}')
+
+    return '\n\n'.join(part for part in parts if part).strip()
+
+
+def _write_codex_prompt_to_stdin(process, prompt):
+    stdin = getattr(process, 'stdin', None)
+    if stdin is None:
+        return
+    try:
+        stdin.write(str(prompt or ''))
+        stdin.close()
+    except (BrokenPipeError, OSError):
+        try:
+            stdin.close()
+        except Exception:
+            pass
+
+
+def _build_work_details(stdout_text, final_output_text, stderr_text, exec_details=None):
     stdout_value = _normalize_stream_log_text(stdout_text)
     final_value = _normalize_stream_log_text(final_output_text)
     stderr_value = _normalize_stream_log_text(stderr_text)
 
     compacted_stdout = _compact_stream_log_section(stdout_value)
     compacted_stderr = _compact_stream_log_section(stderr_value)
+    exec_input_details = _format_codex_exec_input_details(exec_details)
 
     sections = []
+    if exec_input_details:
+        sections.append(f"Codex exec input:\n{exec_input_details}")
     if compacted_stdout and stdout_value != final_value:
         sections.append(f"CLI stdout:\n{compacted_stdout}")
     if compacted_stderr:
@@ -8644,15 +8725,27 @@ def _run_codex_stream(stream_id, prompt):
         try:
             _prepare_imagegen_workbench_dirs(prompt)
             cmd = _wrap_codex_cli_command(cmd, env=exec_env)
+            exec_details = _build_codex_exec_input_details(
+                cmd,
+                prompt,
+                execution_cwd=execution_cwd,
+                exec_env=exec_env,
+            )
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['exec_details'] = exec_details
             process = subprocess.Popen(
                 cmd,
                 cwd=str(execution_cwd),
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=exec_env,
                 text=True,
                 bufsize=1
             )
+            _write_codex_prompt_to_stdin(process, prompt)
         except FileNotFoundError:
             _append_stream_chunk(stream_id, 'error', 'codex 명령을 찾을 수 없습니다.\n')
             with state.codex_streams_lock:
@@ -9857,6 +9950,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         )
         structured_report_label = str(stream.get('structured_report_label') or '').strip()
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
+        exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:
@@ -9940,7 +10034,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             stream = state.codex_streams.get(stream_id)
             if stream:
                 stream['finalize_reason'] = finalize_reason
-    work_details = _build_work_details(output, final_output, error)
+    work_details = _build_work_details(output, final_output, error, exec_details=exec_details)
     if work_details:
         metadata['work_details'] = work_details
     if exit_code == 0 and not codex_error_seen and not mcp_cancel_without_final_output:
@@ -10031,6 +10125,7 @@ def stop_codex_stream(stream_id):
         execution_policy = str(stream.get('execution_policy') or 'standard').strip() or 'standard'
         structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
+        exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
 
     grace_seconds = _coerce_positive_seconds(
         CODEX_STREAM_TERMINATE_GRACE_SECONDS,
@@ -10080,7 +10175,12 @@ def stop_codex_stream(stream_id):
             metadata['worktree_task'] = worktree_task
     if codex_events:
         metadata['codex_events'] = codex_events
-    work_details = _build_work_details(output, output_last_message or output, error)
+    work_details = _build_work_details(
+        output,
+        output_last_message or output,
+        error,
+        exec_details=exec_details,
+    )
     if work_details:
         metadata['work_details'] = work_details
     created_at_value = _iso_timestamp_from_epoch(completed_at)

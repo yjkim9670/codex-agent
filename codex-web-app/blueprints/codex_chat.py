@@ -1212,6 +1212,9 @@ def codex_session_message(session_id):
         ):
             if diagnostic_key in timing:
                 metadata[diagnostic_key] = timing.get(diagnostic_key)
+        work_details = str(timing.get('work_details') or '').strip()
+        if work_details:
+            metadata['work_details'] = work_details
     if isinstance(token_usage, dict):
         metadata['token_usage'] = token_usage
         metadata['token_count'] = int(token_usage.get('total_tokens') or 0)

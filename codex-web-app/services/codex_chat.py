@@ -6285,6 +6285,53 @@ def _build_imagegen_workbench_overlay():
     )
 
 
+def _codex_host_platform():
+    return str(getattr(sys, 'platform', '') or 'unknown')
+
+
+def _codex_host_os_label(platform_name=None):
+    platform_name = str(platform_name or _codex_host_platform())
+    if platform_name == 'win32':
+        return 'Windows'
+    if platform_name == 'darwin':
+        return 'macOS'
+    if platform_name.startswith('linux'):
+        return 'Linux'
+    return platform_name
+
+
+def _codex_shell_family(platform_name=None):
+    platform_name = str(platform_name or _codex_host_platform())
+    if platform_name == 'win32':
+        return 'powershell'
+    return 'posix'
+
+
+def _build_execution_environment_overlay():
+    platform_name = _codex_host_platform()
+    shell_family = _codex_shell_family(platform_name)
+    if shell_family != 'powershell':
+        return ''
+
+    host_os = _codex_host_os_label(platform_name)
+    return '\n'.join([
+        f'- Host OS: {host_os} (`sys.platform={platform_name}`).',
+        '- `command_execution` commands run in PowerShell. Use PowerShell syntax, not Bash/POSIX syntax.',
+        '- Create directories with `New-Item -ItemType Directory -Force -Path \'path\'`.',
+        '- Create empty files with `New-Item -ItemType File -Force -Path \'path\'`.',
+        '- Do not use Bash heredocs such as `cat <<EOF`, `<<\'EOF\'`, or Python stdin heredocs.',
+        '- For multiline file writes in PowerShell, here-string delimiters must be alone on their own lines:',
+        '```powershell',
+        '$content = @\'',
+        'file contents',
+        '\'@',
+        'Set-Content -LiteralPath \'path\' -Value $content -Encoding utf8',
+        '```',
+        '- Never emit compact invalid here-strings like `@\'`n\'@`.',
+        '- If PowerShell returns `ParserError` or a shell syntax error, fix the command and retry before the final response.',
+    ])
+
+
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     sections = [
         (
@@ -6309,6 +6356,9 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     )
     if _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
         sections.append(f'## Image Generation Workbench Overlay\n{_build_imagegen_workbench_overlay()}')
+    execution_environment = _build_execution_environment_overlay()
+    if execution_environment:
+        sections.append(f'## Execution Environment\n{execution_environment}')
     sections.append(
         '\n'.join([
             '## Response Rules',
@@ -7162,6 +7212,8 @@ def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env
     details = {
         'prompt_transport': 'stdin',
         'prompt_encoding': _CODEX_EXEC_TEXT_ENCODING,
+        'host_platform': _codex_host_platform(),
+        'shell_family': _codex_shell_family(),
         'command': command_text,
         'prompt': str(prompt or ''),
     }
@@ -7196,6 +7248,12 @@ def _format_codex_exec_input_details(exec_details):
     prompt_encoding = str(exec_details.get('prompt_encoding') or '').strip()
     if prompt_encoding:
         parts.append(f'prompt_encoding: {prompt_encoding}')
+    host_platform = str(exec_details.get('host_platform') or '').strip()
+    if host_platform:
+        parts.append(f'host_platform: {host_platform}')
+    shell_family = str(exec_details.get('shell_family') or '').strip()
+    if shell_family:
+        parts.append(f'shell_family: {shell_family}')
     approval_policy = str(exec_details.get('approval_policy') or '').strip()
     if approval_policy:
         parts.append(f'approval_policy: {approval_policy}')

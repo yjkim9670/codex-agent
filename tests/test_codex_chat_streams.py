@@ -855,6 +855,21 @@ def test_codex_exec_input_details_include_policy_values(isolated_codex_workspace
     assert 'CODEX_HOME: /tmp/codex-home' in formatted
 
 
+def test_codex_exec_input_details_include_host_shell_on_windows(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'win32')
+
+    details = codex_chat._build_codex_exec_input_details(
+        ['codex', 'exec', '--sandbox', 'danger-full-access', '--', '-'],
+        'hello',
+    )
+    formatted = codex_chat._format_codex_exec_input_details(details)
+
+    assert details['host_platform'] == 'win32'
+    assert details['shell_family'] == 'powershell'
+    assert 'host_platform: win32' in formatted
+    assert 'shell_family: powershell' in formatted
+
+
 def test_build_codex_command_uses_configured_cli_bin(isolated_codex_workspace, monkeypatch):
     monkeypatch.setenv('CODEX_CLI_BIN', '/opt/codex/bin/codex')
 
@@ -1600,6 +1615,28 @@ def test_imagegen_overlay_points_to_workbench_managed_dirs(isolated_codex_worksp
     assert 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR' in prompt
     assert str(workspace_dir / 'output' / 'imagegen') in prompt
     assert str(workspace_dir / 'tmp' / 'imagegen') in prompt
+
+
+def test_build_codex_prompt_includes_powershell_rules_on_windows(monkeypatch):
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'win32')
+
+    prompt = codex_chat.build_codex_prompt([], '폴더와 파일을 만들어줘')
+
+    assert '## Execution Environment' in prompt
+    assert 'Host OS: Windows (`sys.platform=win32`)' in prompt
+    assert 'commands run in PowerShell' in prompt
+    assert 'New-Item -ItemType Directory -Force' in prompt
+    assert "Never emit compact invalid here-strings like `@'`n'@`" in prompt
+    assert 'ParserError' in prompt
+
+
+def test_build_codex_prompt_omits_powershell_rules_on_posix(monkeypatch):
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'darwin')
+
+    prompt = codex_chat.build_codex_prompt([], '폴더와 파일을 만들어줘')
+
+    assert '## Execution Environment' not in prompt
+    assert 'commands run in PowerShell' not in prompt
 
 
 def test_execute_codex_prompt_prepares_imagegen_dirs_and_env(monkeypatch, isolated_codex_workspace):

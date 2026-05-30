@@ -15,6 +15,22 @@ if [[ -x "${CODEX_APP_RESOURCES_DIR}/codex" ]]; then
 fi
 
 resolve_host_python() {
+    local candidate
+    for candidate in "${CODEX_PYTHON_BIN:-}" "${PYTHON_BIN:-}" "${PYTHON:-}"; do
+        [[ -n "${candidate}" ]] || continue
+        if [[ "${candidate}" == */* ]]; then
+            if [[ -x "${candidate}" ]]; then
+                echo "${candidate}"
+                return 0
+            fi
+        elif command -v "${candidate}" >/dev/null 2>&1; then
+            command -v "${candidate}"
+            return 0
+        fi
+        echo "Configured Python executable not found or not executable: ${candidate}" >&2
+        return 1
+    done
+
     if command -v python3 >/dev/null 2>&1; then
         echo "python3"
         return 0
@@ -24,6 +40,52 @@ resolve_host_python() {
         return 0
     fi
     return 1
+}
+
+python_ready_for_workbench() {
+    local python_bin="$1"
+    "${python_bin}" -c "import sys; sys.exit(1) if sys.version_info < (3, 10) else None; import flask, cryptography" >/dev/null 2>&1
+}
+
+resolve_global_python() {
+    local candidate
+    for candidate in "${CODEX_PYTHON_BIN:-}" "${PYTHON_BIN:-}" "${PYTHON:-}"; do
+        if [[ -n "${candidate}" ]]; then
+            resolve_host_python
+            return $?
+        fi
+    done
+
+    local fallback=""
+    local resolved=""
+    for candidate in python3 python; do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+            resolved="$(command -v "${candidate}")"
+            [[ -n "${fallback}" ]] || fallback="${resolved}"
+            if python_ready_for_workbench "${resolved}"; then
+                echo "${resolved}"
+                return 0
+            fi
+        fi
+    done
+
+    if [[ -n "${fallback}" ]]; then
+        echo "${fallback}"
+        return 0
+    fi
+
+    return 1
+}
+
+use_global_python() {
+    case "${CODEX_USE_GLOBAL_PYTHON:-${CODEX_SKIP_VENV:-0}}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 ensure_venv_python() {
@@ -71,8 +133,45 @@ ensure_requirements() {
     fi
 }
 
-PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
-ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
+check_global_requirements() {
+    local python_bin="$1"
+    local requirements_path="$2"
+
+    if [[ ! -f "${requirements_path}" ]]; then
+        return 0
+    fi
+
+    if ! "${python_bin}" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1; then
+        echo "Python 3.10+ is required for Workbench. Configured global Python is: ${python_bin}" >&2
+        return 1
+    fi
+
+    if "${python_bin}" -c "import flask, cryptography" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo "Required Python packages are missing from the configured global Python: ${python_bin}" >&2
+    echo "Install them before launching Workbench." >&2
+    local wheelhouse_path
+    wheelhouse_path="$(dirname "${requirements_path}")/wheelhouse"
+    if [[ -d "${wheelhouse_path}" ]]; then
+        echo "Suggested command: ${python_bin} -m pip install --no-index --find-links ${wheelhouse_path} -r ${requirements_path}" >&2
+    else
+        echo "Suggested command: ${python_bin} -m pip install -r ${requirements_path}" >&2
+    fi
+    return 1
+}
+
+if use_global_python; then
+    PYTHON_BIN="$(resolve_global_python)" || {
+        echo "Python executable not found on PATH." >&2
+        exit 1
+    }
+    check_global_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
+else
+    PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
+    ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
+fi
 
 cd "${PARENT_DIR}"
 

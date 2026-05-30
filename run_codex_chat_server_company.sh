@@ -7,6 +7,7 @@ export CODEX_MODEL_OPTIONS="${CODEX_MODEL_OPTIONS:-DeepSeek-V4-Pro,Qwen3.5-397B-
 export CODEX_REASONING_OPTIONS="${CODEX_REASONING_OPTIONS:-low,medium,high,xhigh}"
 export CODEX_CLI_MODEL_PROVIDER="${CODEX_CLI_MODEL_PROVIDER:-dtgpt_linux}"
 export CODEX_STORAGE_SUBDIR="${CODEX_STORAGE_SUBDIR:-.agent_state_company}"
+export CODEX_USE_GLOBAL_PYTHON=1
 if [[ -z "${CODEX_CLI_BIN:-}" ]] && command -v codex >/dev/null 2>&1; then
     export CODEX_CLI_BIN="$(command -v codex)"
 fi

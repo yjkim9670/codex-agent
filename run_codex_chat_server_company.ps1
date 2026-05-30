@@ -30,6 +30,10 @@ if (-not $env:CODEX_STORAGE_SUBDIR) {
     $env:CODEX_STORAGE_SUBDIR = ".agent_state_company"
 }
 $env:CODEX_USE_GLOBAL_PYTHON = "1"
+# Company/offline Workbench must not inherit the legacy global exec lock. The
+# older variable is set to 0 as well so older bundled server code stays lock-free.
+$env:CODEX_CLI_EXEC_LOCK = "0"
+$env:CODEX_CLI_SERIALIZE_EXEC = "0"
 if (-not $env:CODEX_CLI_BIN) {
     $CodexCommand = Get-Command codex.cmd -ErrorAction SilentlyContinue
     if (-not $CodexCommand) {

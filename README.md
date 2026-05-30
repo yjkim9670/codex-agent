@@ -37,9 +37,15 @@ Or with the helper script:
 The helper launcher also uses `../.venv`.
 
 ## Codex CLI Stability Options
-Set `CODEX_CLI_SERIALIZE_EXEC=1` when several Workbench instances share the
-same `CODEX_HOME` or upstream LLM gateway. This serializes `codex exec` child
-processes with a lock file and reduces CLI event-stream queue pressure.
+Workbench does not serialize `codex exec` child processes by default. Company
+launchers explicitly force the exec lock off so stale launcher environments do
+not make every Workbench share one global queue.
+
+For temporary debugging only, set `CODEX_CLI_EXEC_LOCK=1` to serialize `codex
+exec` child processes with a lock file. This can reduce CLI event-stream queue
+pressure, but it also makes all Workbench instances that share the same lock
+wait for one another. The older `CODEX_CLI_SERIALIZE_EXEC` variable is ignored
+by current server code.
 
 If the provider is slow to produce a final response after retries, increase
 `CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS` from the default.

@@ -2978,7 +2978,7 @@ def test_stream_reader_records_stderr_app_server_event_lag(isolated_codex_worksp
 
 
 def test_codex_exec_gate_can_serialize_cli_runs(monkeypatch, tmp_path):
-    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SERIALIZE_EXEC', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_EXEC_LOCK', True)
     monkeypatch.setattr(codex_chat, '_CODEX_EXEC_LOCK_PATH', tmp_path / 'codex_exec.lock')
 
     with codex_chat._codex_exec_gate() as lock_info:

@@ -8,6 +8,10 @@ export CODEX_REASONING_OPTIONS="${CODEX_REASONING_OPTIONS:-low,medium,high,xhigh
 export CODEX_CLI_MODEL_PROVIDER="${CODEX_CLI_MODEL_PROVIDER:-dtgpt_linux}"
 export CODEX_STORAGE_SUBDIR="${CODEX_STORAGE_SUBDIR:-.agent_state_company}"
 export CODEX_USE_GLOBAL_PYTHON=1
+# Company/offline Workbench must not inherit the legacy global exec lock. The
+# older variable is set to 0 as well so older bundled server code stays lock-free.
+export CODEX_CLI_EXEC_LOCK=0
+export CODEX_CLI_SERIALIZE_EXEC=0
 if [[ -z "${CODEX_CLI_BIN:-}" ]] && command -v codex >/dev/null 2>&1; then
     export CODEX_CLI_BIN="$(command -v codex)"
 fi

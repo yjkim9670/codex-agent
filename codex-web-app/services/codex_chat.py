@@ -29,7 +29,7 @@ from ..config import (
     CODEX_CLI_PROFILE,
     CODEX_CLI_READ_ONLY_SANDBOX,
     CODEX_CLI_SANDBOX,
-    CODEX_CLI_SERIALIZE_EXEC,
+    CODEX_CLI_EXEC_LOCK,
     CODEX_CLI_SELF_PROTECT,
     CODEX_CLI_SELF_PROTECT_GIT_RW,
     CODEX_MAX_ATTACHMENT_BYTES,
@@ -2331,7 +2331,7 @@ def _acquire_codex_exec_lock():
 
 @contextmanager
 def _codex_exec_gate():
-    if CODEX_CLI_SERIALIZE_EXEC:
+    if CODEX_CLI_EXEC_LOCK:
         with _acquire_codex_exec_lock() as lock_info:
             lock_payload = dict(lock_info or {})
             lock_payload['parallel'] = False
@@ -6682,6 +6682,9 @@ def _extract_exec_json_summary(raw_stdout):
     event_stream_lagged = False
     dropped_event_count = 0
     last_text_invalidated_by_work_item = False
+    work_item_seen = False
+    work_item_completed_seen = False
+    final_agent_message_after_work_seen = False
     turn_completed_seen = False
 
     for line in str(raw_stdout or '').splitlines():
@@ -6722,13 +6725,20 @@ def _extract_exec_json_summary(raw_stdout):
         if text:
             text, filenames = _extract_imagegen_workbench_filename_declarations(text)
             imagegen_workbench_filenames.extend(filenames)
+            if work_item_seen:
+                final_agent_message_after_work_seen = True
             last_text_invalidated_by_work_item = False
         if event_is_task_complete and text:
             task_complete_output = text
         if text:
             text_candidates.append(text)
-        elif _exec_event_is_work_item(event) and text_candidates:
-            last_text_invalidated_by_work_item = True
+        if _exec_event_is_work_item(event):
+            work_item_seen = True
+            if _exec_event_is_completed_nonfatal_work_item(event):
+                work_item_completed_seen = True
+            final_agent_message_after_work_seen = False
+            if text_candidates:
+                last_text_invalidated_by_work_item = True
 
     return {
         'usage': usage,
@@ -6748,6 +6758,9 @@ def _extract_exec_json_summary(raw_stdout):
         'event_stream_lagged': event_stream_lagged,
         'dropped_event_count': dropped_event_count,
         'last_text_invalidated_by_work_item': last_text_invalidated_by_work_item,
+        'work_item_seen': work_item_seen,
+        'work_item_completed_seen': work_item_completed_seen,
+        'final_agent_message_after_work_seen': final_agent_message_after_work_seen,
         'turn_completed_seen': turn_completed_seen,
     }
 
@@ -6845,18 +6858,28 @@ def execute_codex_prompt(
             except Exception:
                 pass
 
+    output_file_untrusted_after_work_item = bool(
+        output_text
+        and json_summary.get('work_item_seen')
+        and not json_summary.get('final_agent_message_after_work_seen')
+    )
+    if output_file_untrusted_after_work_item:
+        output_text = ''
+        output_imagegen_filenames = []
+
     if not output_text:
         output_text = json_summary.get('task_complete_output') or ''
     if (
         not output_text
         and not event_stream_lagged
-        and not json_summary.get('last_text_invalidated_by_work_item')
+        and not json_summary.get('work_item_seen')
     ):
         output_text = json_summary.get('last_text') or ''
     missing_final_after_work_item = bool(
         not output_text
         and not event_stream_lagged
-        and json_summary.get('last_text_invalidated_by_work_item')
+        and json_summary.get('work_item_seen')
+        and not json_summary.get('final_agent_message_after_work_seen')
         and json_summary.get('turn_completed_seen')
     )
     imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
@@ -7920,18 +7943,21 @@ def _mark_stream_empty_final_answer(stream_id):
         stream['updated_at'] = time.time()
 
 
-def _mark_stream_progress_output_invalidated(stream_id):
+def _record_stream_work_item_event(stream_id, completed=False):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if not stream or stream.get('cancelled'):
             return
+        stream['work_item_seen'] = True
+        if completed:
+            stream['work_item_completed_seen'] = True
+        stream['final_agent_message_after_work_seen'] = False
         has_progress_output = bool(
             (stream.get('output') or '').strip()
             or (stream.get('output_last_message') or '').strip()
         )
-        if not has_progress_output:
-            return
-        stream['progress_output_invalidated'] = True
+        if has_progress_output:
+            stream['progress_output_invalidated'] = True
         stream['updated_at'] = time.time()
 
 
@@ -8618,7 +8644,7 @@ def _record_stream_imagegen_workbench_filenames(stream_id, filenames):
         stream['updated_at'] = time.time()
 
 
-def _set_stream_output_last_message(stream_id, text):
+def _set_stream_output_last_message(stream_id, text, final_after_work=None):
     normalized = str(text or '').strip()
     if not normalized:
         return False
@@ -8629,6 +8655,10 @@ def _set_stream_output_last_message(stream_id, text):
         previous = str(stream.get('output_last_message') or '').strip()
         stream['output_last_message'] = normalized
         stream['progress_output_invalidated'] = False
+        if final_after_work is None:
+            final_after_work = bool(stream.get('work_item_seen'))
+        if final_after_work:
+            stream['final_agent_message_after_work_seen'] = True
         stream['updated_at'] = time.time()
     return normalized != previous
 
@@ -8804,7 +8834,10 @@ def _handle_stream_json_output_line(stream_id, line):
     if error_text:
         _append_stream_exec_error(stream_id, error_text)
     if _exec_event_is_work_item(event):
-        _mark_stream_progress_output_invalidated(stream_id)
+        _record_stream_work_item_event(
+            stream_id,
+            completed=_exec_event_is_completed_nonfatal_work_item(event),
+        )
 
     event_is_task_complete = _event_is_task_complete(event)
     text = _extract_agent_text_from_exec_event(event)
@@ -9070,12 +9103,24 @@ def _run_codex_stream(stream_id, prompt):
                             )
                         stream['process'] = None
                         stream['updated_at'] = now
+
+                stdout_thread.join(timeout=terminate_grace_seconds)
+                stderr_thread.join(timeout=terminate_grace_seconds)
+
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    if stream:
                         current_output = (stream.get('output') or '').strip()
                         current_error = (stream.get('error') or '').strip()
                         current_output_last_message = (stream.get('output_last_message') or '').strip()
                         task_complete_seen = bool(stream.get('task_complete_seen'))
                         task_complete_output = (stream.get('task_complete_output') or '').strip()
                         progress_output_invalidated = bool(stream.get('progress_output_invalidated'))
+                        work_item_seen = bool(stream.get('work_item_seen'))
+                        work_item_completed_seen = bool(stream.get('work_item_completed_seen'))
+                        final_agent_message_after_work_seen = bool(
+                            stream.get('final_agent_message_after_work_seen')
+                        )
                         turn_completed_seen = bool(stream.get('turn_completed_seen'))
                         event_stream_lagged = bool(stream.get('event_stream_lagged'))
                         dropped_event_count = int(stream.get('dropped_event_count') or 0)
@@ -9086,6 +9131,9 @@ def _run_codex_stream(stream_id, prompt):
                         task_complete_seen = False
                         task_complete_output = ''
                         progress_output_invalidated = False
+                        work_item_seen = False
+                        work_item_completed_seen = False
+                        final_agent_message_after_work_seen = False
                         turn_completed_seen = False
                         event_stream_lagged = False
                         dropped_event_count = 0
@@ -9093,6 +9141,14 @@ def _run_codex_stream(stream_id, prompt):
                 output_text, output_imagegen_filenames = (
                     _read_output_last_message_with_imagegen_filenames(output_path)
                 )
+                output_file_untrusted_after_work_item = bool(
+                    output_text
+                    and work_item_seen
+                    and not final_agent_message_after_work_seen
+                )
+                if output_file_untrusted_after_work_item:
+                    output_text = ''
+                    output_imagegen_filenames = []
                 _record_stream_imagegen_workbench_filenames(stream_id, output_imagegen_filenames)
                 copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
                 imagegen_output_text = _format_imagegen_workbench_output_message(copied_image_outputs)
@@ -9121,11 +9177,12 @@ def _run_codex_stream(stream_id, prompt):
                     bool(output_text.strip())
                     or bool(imagegen_output_text)
                     or bool(copied_image_outputs)
-                    or bool(task_complete_seen)
+                    or bool(task_complete_output)
                 )
                 has_progress_output_response = (
                     (bool(current_output_last_message) or bool(current_output))
                     and not progress_output_invalidated
+                    and (not work_item_seen or final_agent_message_after_work_seen)
                 )
                 if (
                     event_stream_lagged
@@ -9161,7 +9218,8 @@ def _run_codex_stream(stream_id, prompt):
 
                 missing_final_after_work_item = bool(
                     turn_completed_seen
-                    and progress_output_invalidated
+                    and work_item_seen
+                    and not final_agent_message_after_work_seen
                     and not has_trusted_output_response
                     and not current_error
                     and not imagegen_output_waiting
@@ -9235,7 +9293,13 @@ def _run_codex_stream(stream_id, prompt):
                         if stream:
                             stream['done'] = True
                             stream['exit_code'] = 124
-                            if progress_output_invalidated:
+                            if (
+                                progress_output_invalidated
+                                or (
+                                    work_item_seen
+                                    and not final_agent_message_after_work_seen
+                                )
+                            ):
                                 stream['untrusted_output_suppressed'] = bool(
                                     (stream.get('output') or '').strip()
                                     or (stream.get('output_last_message') or '').strip()
@@ -9464,6 +9528,9 @@ def create_codex_stream(
         'sampling_stream_retry_count': 0,
         'untrusted_output_suppressed': False,
         'progress_output_invalidated': False,
+        'work_item_seen': False,
+        'work_item_completed_seen': False,
+        'final_agent_message_after_work_seen': False,
         'codex_session_id': '',
         'codex_home': '',
         'assistant_final_empty': False,

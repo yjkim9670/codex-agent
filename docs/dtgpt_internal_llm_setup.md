@@ -292,6 +292,8 @@ export DTGPT_API_KEY="replace-with-token"
 export CODEX_MODEL_OPTIONS="DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT"
 export CODEX_CLI_MODEL_PROVIDER="dtgpt_linux"
 export CODEX_STORAGE_SUBDIR=".agent_state_company"
+export CODEX_CLI_EXEC_LOCK=0
+export CODEX_CLI_SERIALIZE_EXEC=0
 
 ./run_codex_chat_server_company.sh
 ```
@@ -361,6 +363,8 @@ $env:DTGPT_API_KEY = "replace-with-token"
 $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
 $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 $env:CODEX_STORAGE_SUBDIR = ".agent_state_company"
+$env:CODEX_CLI_EXEC_LOCK = "0"
+$env:CODEX_CLI_SERIALIZE_EXEC = "0"
 
 .\run_codex_chat_server_company.ps1
 ```

@@ -170,7 +170,10 @@ CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
 CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS = float(
     os.environ.get('CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS', '180')
 )
-CODEX_CLI_SERIALIZE_EXEC = _parse_bool_env('CODEX_CLI_SERIALIZE_EXEC', default=False)
+# `CODEX_CLI_SERIALIZE_EXEC` was used briefly as an opt-in global lock. Keep
+# the runtime default lock-free even when that older environment variable leaks
+# in from launch managers; use the explicit new name only for manual debugging.
+CODEX_CLI_EXEC_LOCK = _parse_bool_env('CODEX_CLI_EXEC_LOCK', default=False)
 CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40

@@ -15877,6 +15877,33 @@ function buildTrustedHttpCryptoFallbackHeaders(headers = {}) {
     };
 }
 
+function normalizeJsonRequestPayload(payload) {
+    return payload && typeof payload === 'object' ? payload : {};
+}
+
+function stringifyJsonRequestPayload(payload) {
+    return JSON.stringify(normalizeJsonRequestPayload(payload));
+}
+
+function getUtf8ByteLength(value) {
+    const text = String(value || '');
+    if (window.TextEncoder) {
+        return new TextEncoder().encode(text).length;
+    }
+    if (window.Blob) {
+        return new Blob([text]).size;
+    }
+    return text.length;
+}
+
+function buildJsonTransferResult(result, transferMeta, includeTransferMeta = false) {
+    if (!includeTransferMeta) return result;
+    return {
+        result,
+        transferMeta
+    };
+}
+
 function createCryptoUnsupportedError(scopeLabel) {
     const label = String(scopeLabel || '요청').trim() || '요청';
     return new Error(
@@ -16010,9 +16037,12 @@ async function getFileBrowserCryptoSession() {
     return fileBrowserCryptoSessionPromise;
 }
 
-async function encryptFileBrowserRequestPayload(payload) {
+async function encryptFileBrowserRequestPayload(payload, payloadJson = null) {
     const session = await getFileBrowserCryptoSession();
     const encoder = new TextEncoder();
+    const requestBody = typeof payloadJson === 'string'
+        ? payloadJson
+        : stringifyJsonRequestPayload(payload);
     const iv = new Uint8Array(12);
     window.crypto.getRandomValues(iv);
     const ciphertext = await window.crypto.subtle.encrypt(
@@ -16022,7 +16052,7 @@ async function encryptFileBrowserRequestPayload(payload) {
             additionalData: encoder.encode(session.id)
         },
         session.requestKey,
-        encoder.encode(JSON.stringify(payload && typeof payload === 'object' ? payload : {}))
+        encoder.encode(requestBody)
     );
     return {
         encrypted: true,
@@ -16059,30 +16089,54 @@ function isRecoverableFileBrowserCryptoError(error) {
         || errorCode === 'crypto_session_required';
 }
 
-async function fetchEncryptedFileBrowserJson(url, payload, { timeoutMs = FILE_BROWSER_REQUEST_TIMEOUT_MS } = {}) {
+async function fetchEncryptedFileBrowserJson(url, payload, {
+    timeoutMs = FILE_BROWSER_REQUEST_TIMEOUT_MS,
+    includeTransferMeta = false
+} = {}) {
+    const payloadBody = stringifyJsonRequestPayload(payload);
+    const payloadBytes = getUtf8ByteLength(payloadBody);
     if (!isFileBrowserCryptoSupported()) {
         if (!canUseTrustedHttpCryptoFallback()) {
             throw createCryptoUnsupportedError('파일 요청');
         }
-        return fetchJson(url, {
+        const result = await fetchJson(url, {
             method: 'POST',
             headers: buildTrustedHttpCryptoFallbackHeaders(),
             timeoutMs,
-            body: JSON.stringify(payload && typeof payload === 'object' ? payload : {})
+            body: payloadBody
         });
+        return buildJsonTransferResult(result, {
+            encrypted: false,
+            transport: 'trusted_http_fallback',
+            payloadBytes,
+            uploadedBytes: payloadBytes,
+            responseEncrypted: false,
+            responseDecrypted: false
+        }, includeTransferMeta);
     }
 
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-            const encryptedPayload = await encryptFileBrowserRequestPayload(payload);
+            const encryptedPayload = await encryptFileBrowserRequestPayload(payload, payloadBody);
+            const encryptedBody = stringifyJsonRequestPayload(encryptedPayload);
             const response = await fetchJson(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 timeoutMs,
-                body: JSON.stringify(encryptedPayload)
+                body: encryptedBody
             });
-            return await decryptFileBrowserResponsePayload(response);
+            const responseEncrypted = Boolean(response?.encrypted);
+            const result = await decryptFileBrowserResponsePayload(response);
+            return buildJsonTransferResult(result, {
+                encrypted: true,
+                transport: 'browser_aes_gcm',
+                payloadBytes,
+                uploadedBytes: getUtf8ByteLength(encryptedBody),
+                responseEncrypted,
+                responseDecrypted: responseEncrypted,
+                attempt: attempt + 1
+            }, includeTransferMeta);
         } catch (error) {
             lastError = error;
             if (!isRecoverableFileBrowserCryptoError(error) || attempt > 0) {
@@ -16357,7 +16411,8 @@ async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', 
         expected_modified_ns: String(expectedModifiedNs || '').trim(),
         patch: buildFilePanelEditPatch(baseContent, nextContent)
     }, {
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        includeTransferMeta: true
     });
 }
 
@@ -19642,6 +19697,36 @@ async function toggleFilePanelEditMode(variant) {
     return rerenderFilePanelPreviewFromState(normalizedVariant);
 }
 
+function formatFilePanelSaveTransferToast(transferMeta) {
+    const parts = ['파일 저장 완료'];
+    const uploadedBytes = Number(transferMeta?.uploadedBytes);
+    const payloadBytes = Number(transferMeta?.payloadBytes);
+    const hasUploadedBytes = Number.isFinite(uploadedBytes) && uploadedBytes >= 0;
+    const hasPayloadBytes = Number.isFinite(payloadBytes) && payloadBytes >= 0;
+
+    if (hasUploadedBytes) {
+        const sizeParts = [`업로드 ${formatFileBrowserSize(uploadedBytes)}`];
+        if (hasPayloadBytes && Math.round(payloadBytes) !== Math.round(uploadedBytes)) {
+            sizeParts.push(`요청 ${formatFileBrowserSize(payloadBytes)}`);
+        }
+        parts.push(sizeParts.join(' / '));
+    }
+
+    if (transferMeta?.encrypted) {
+        parts.push(
+            transferMeta.responseDecrypted
+                ? 'AES-GCM 암호화 전송 및 응답 복호화 확인'
+                : 'AES-GCM 암호화 전송 확인'
+        );
+    } else if (transferMeta?.transport === 'trusted_http_fallback') {
+        parts.push('신뢰된 HTTP 예외 전송(브라우저 암호화 미사용)');
+    } else {
+        parts.push('암호화 상태 확인 불가');
+    }
+
+    return parts.join(' · ');
+}
+
 async function saveFilePanelEdits(variant, options = {}) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const state = getFilePanelEditState(normalizedVariant);
@@ -19653,13 +19738,17 @@ async function saveFilePanelEdits(variant, options = {}) {
     state.saving = true;
     syncFilePanelViewerActionState(normalizedVariant);
     try {
-        const result = await writeFilePanelFile(
+        const writeResult = await writeFilePanelFile(
             state.root || getFilePanelCurrentRoot(normalizedVariant),
             state.path,
             contentToSave,
             state.modifiedNs,
             originalContent
         );
+        const result = writeResult && Object.prototype.hasOwnProperty.call(writeResult, 'result')
+            ? writeResult.result
+            : writeResult;
+        const transferMeta = writeResult?.transferMeta || null;
         const savedResult = result && typeof result === 'object'
             ? { ...(state.previewResult || {}), ...result, content: contentToSave }
             : { ...(state.previewResult || {}), content: contentToSave, saved: true };
@@ -19694,9 +19783,9 @@ async function saveFilePanelEdits(variant, options = {}) {
         } else {
             applyWorkModeFileSelectionState();
         }
-        showToast('파일을 저장했습니다.', {
+        showToast(formatFilePanelSaveTransferToast(transferMeta), {
             tone: 'success',
-            durationMs: 2400
+            durationMs: 5200
         });
         return true;
     } catch (error) {

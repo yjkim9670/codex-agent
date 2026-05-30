@@ -5,8 +5,6 @@ from __future__ import annotations
 import atexit
 import errno
 import os
-import pty
-import select
 import signal
 import struct
 import subprocess
@@ -19,6 +17,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import file_browser
+
+_IS_WINDOWS = os.name == 'nt'
+
+if _IS_WINDOWS:
+    pty = None
+    select = None
+else:
+    import pty
+    import select
 
 _TERMINAL_DEFAULT_COLS = 120
 _TERMINAL_DEFAULT_ROWS = 32
@@ -49,6 +56,17 @@ class TerminalSessionError(RuntimeError):
         super().__init__(str(message))
         self.error_code = str(error_code or 'terminal_session_error')
         self.status_code = int(status_code)
+
+
+def _ensure_terminal_supported():
+    if not _IS_WINDOWS:
+        return
+    raise TerminalSessionError(
+        'Windows 앱 패키지에서는 아직 PTY 터미널 백엔드가 포함되어 있지 않습니다. '
+        '채팅, 파일, Git 기능은 계속 사용할 수 있으며 Terminal 기능은 pywinpty 백엔드 추가 후 활성화할 수 있습니다.',
+        error_code='terminal_windows_backend_missing',
+        status_code=501,
+    )
 
 
 @dataclass
@@ -660,6 +678,7 @@ def _start_reader_thread(session):
 
 
 def create_terminal_session(root_key=None, relative_path='', cols=None, rows=None):
+    _ensure_terminal_supported()
     normalized_root, root_path, resolved_path, directory_path = _resolve_terminal_directory(
         root_key=root_key,
         relative_path=relative_path,
@@ -856,6 +875,23 @@ def _terminate_process(process):
     exit_code = process.poll()
     if exit_code is not None:
         return int(exit_code)
+
+    if _IS_WINDOWS:
+        try:
+            process.terminate()
+        except OSError:
+            pass
+        try:
+            return int(process.wait(timeout=_TERMINAL_CLOSE_WAIT_SECONDS))
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        try:
+            return int(process.wait(timeout=_TERMINAL_CLOSE_WAIT_SECONDS))
+        except subprocess.TimeoutExpired:
+            return process.poll()
 
     try:
         os.killpg(process.pid, signal.SIGTERM)

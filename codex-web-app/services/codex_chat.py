@@ -6620,6 +6620,7 @@ def _extract_exec_json_summary(raw_stdout):
     task_complete_output = ''
     event_stream_lagged = False
     dropped_event_count = 0
+    last_text_invalidated_by_work_item = False
 
     for line in str(raw_stdout or '').splitlines():
         dropped_events = _extract_app_server_event_stream_lag_count(line)
@@ -6657,10 +6658,13 @@ def _extract_exec_json_summary(raw_stdout):
         if text:
             text, filenames = _extract_imagegen_workbench_filename_declarations(text)
             imagegen_workbench_filenames.extend(filenames)
+            last_text_invalidated_by_work_item = False
         if event_is_task_complete and text:
             task_complete_output = text
         if text:
             text_candidates.append(text)
+        elif _exec_event_is_work_item(event) and text_candidates:
+            last_text_invalidated_by_work_item = True
 
     return {
         'usage': usage,
@@ -6679,6 +6683,7 @@ def _extract_exec_json_summary(raw_stdout):
         'task_complete_output': task_complete_output,
         'event_stream_lagged': event_stream_lagged,
         'dropped_event_count': dropped_event_count,
+        'last_text_invalidated_by_work_item': last_text_invalidated_by_work_item,
     }
 
 
@@ -6777,7 +6782,11 @@ def execute_codex_prompt(
 
     if not output_text:
         output_text = json_summary.get('task_complete_output') or ''
-    if not output_text and not event_stream_lagged:
+    if (
+        not output_text
+        and not event_stream_lagged
+        and not json_summary.get('last_text_invalidated_by_work_item')
+    ):
         output_text = json_summary.get('last_text') or ''
     imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
         list(json_summary.get('imagegen_workbench_filenames') or []) + output_imagegen_filenames
@@ -7623,6 +7632,25 @@ def _container_type_is_mcp_tool_call(container):
     return container_type == 'mcp_tool_call'
 
 
+def _container_type_is_work_item(container):
+    return (
+        _container_type_is_command_execution(container)
+        or _container_type_is_mcp_tool_call(container)
+    )
+
+
+def _exec_event_is_work_item(event):
+    if not isinstance(event, dict):
+        return False
+    event_type = _normalize_exec_event_type(event.get('type'))
+    if not event_type.startswith('item.'):
+        return False
+    return (
+        _container_type_is_work_item(event.get('item'))
+        or _container_type_is_work_item(event.get('payload'))
+    )
+
+
 def _exec_event_is_completed_nonfatal_work_item(event):
     if not isinstance(event, dict):
         return False
@@ -7630,10 +7658,8 @@ def _exec_event_is_completed_nonfatal_work_item(event):
     if event_type != 'item.completed':
         return False
     return (
-        _container_type_is_command_execution(event.get('item'))
-        or _container_type_is_command_execution(event.get('payload'))
-        or _container_type_is_mcp_tool_call(event.get('item'))
-        or _container_type_is_mcp_tool_call(event.get('payload'))
+        _container_type_is_work_item(event.get('item'))
+        or _container_type_is_work_item(event.get('payload'))
     )
 
 
@@ -7793,6 +7819,21 @@ def _mark_stream_empty_final_answer(stream_id):
             return
         stream['assistant_final_empty'] = True
         stream['output_last_message'] = ''
+        stream['updated_at'] = time.time()
+
+
+def _mark_stream_progress_output_invalidated(stream_id):
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        has_progress_output = bool(
+            (stream.get('output') or '').strip()
+            or (stream.get('output_last_message') or '').strip()
+        )
+        if not has_progress_output:
+            return
+        stream['progress_output_invalidated'] = True
         stream['updated_at'] = time.time()
 
 
@@ -8480,8 +8521,50 @@ def _set_stream_output_last_message(stream_id, text):
             return False
         previous = str(stream.get('output_last_message') or '').strip()
         stream['output_last_message'] = normalized
+        stream['progress_output_invalidated'] = False
         stream['updated_at'] = time.time()
     return normalized != previous
+
+
+def _format_command_value_for_event_detail(value):
+    if isinstance(value, list):
+        parts = [str(part) for part in value]
+        try:
+            return subprocess.list2cmdline(parts)
+        except Exception:
+            return ' '.join(parts)
+    return _single_line_text(value)
+
+
+def _append_work_item_event_detail(container, detail_candidates):
+    if not isinstance(container, dict):
+        return
+    parts = []
+    name = str(container.get('name') or container.get('title') or '').strip()
+    if name:
+        parts.append(name)
+    status = str(container.get('status') or '').strip()
+    if status:
+        parts.append(f'status={status}')
+    command = (
+        container.get('command')
+        if 'command' in container
+        else container.get('cmd')
+    )
+    command_text = _format_command_value_for_event_detail(command)
+    if command_text:
+        parts.append(f'command={command_text}')
+    for key in ('exit_code', 'returncode'):
+        value = container.get(key)
+        if isinstance(value, (int, float)) or (isinstance(value, str) and value.strip()):
+            parts.append(f'exit_code={value}')
+            break
+    for key in ('stdout', 'stderr', 'output'):
+        value = _single_line_text(container.get(key))
+        if value:
+            parts.append(f'{key}={value}')
+    if parts:
+        detail_candidates.append(_clip_text(' '.join(parts), _CODEX_EVENT_DETAIL_MAX_CHARS))
 
 
 def _summarize_exec_event(event):
@@ -8520,6 +8603,8 @@ def _summarize_exec_event(event):
                 detail_text = ' '.join(fragments)
                 if 'Generated images are saved' in detail_text:
                     detail_candidates.append(detail_text)
+        elif _container_type_is_work_item(payload):
+            _append_work_item_event_detail(payload, detail_candidates)
         else:
             for key in ('name', 'title', 'status', 'message', 'last_agent_message', 'text'):
                 value = payload.get(key)
@@ -8528,11 +8613,14 @@ def _summarize_exec_event(event):
                     break
     if isinstance(item, dict):
         item_type = str(item.get('type') or '').strip()
-        for key in ('name', 'title', 'status', 'text'):
-            value = item.get(key)
-            if isinstance(value, str) and value.strip():
-                detail_candidates.append(value.strip())
-                break
+        if _container_type_is_work_item(item):
+            _append_work_item_event_detail(item, detail_candidates)
+        else:
+            for key in ('name', 'title', 'status', 'text'):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    detail_candidates.append(value.strip())
+                    break
 
     detail = ''
     if detail_candidates:
@@ -8606,6 +8694,8 @@ def _handle_stream_json_output_line(stream_id, line):
     error_text = _extract_exec_error_text_from_event(event)
     if error_text:
         _append_stream_exec_error(stream_id, error_text)
+    if _exec_event_is_work_item(event):
+        _mark_stream_progress_output_invalidated(stream_id)
 
     event_is_task_complete = _event_is_task_complete(event)
     text = _extract_agent_text_from_exec_event(event)
@@ -8876,6 +8966,7 @@ def _run_codex_stream(stream_id, prompt):
                         current_output_last_message = (stream.get('output_last_message') or '').strip()
                         task_complete_seen = bool(stream.get('task_complete_seen'))
                         task_complete_output = (stream.get('task_complete_output') or '').strip()
+                        progress_output_invalidated = bool(stream.get('progress_output_invalidated'))
                         event_stream_lagged = bool(stream.get('event_stream_lagged'))
                         dropped_event_count = int(stream.get('dropped_event_count') or 0)
                     else:
@@ -8884,6 +8975,7 @@ def _run_codex_stream(stream_id, prompt):
                         current_output_last_message = ''
                         task_complete_seen = False
                         task_complete_output = ''
+                        progress_output_invalidated = False
                         event_stream_lagged = False
                         dropped_event_count = 0
 
@@ -8905,7 +8997,11 @@ def _run_codex_stream(stream_id, prompt):
                             stream,
                             base_final_response_timeout_seconds,
                         )
-                selected_output_base = output_text or task_complete_output or current_output_last_message
+                selected_output_base = (
+                    output_text
+                    or task_complete_output
+                    or ('' if progress_output_invalidated else current_output_last_message)
+                )
                 selected_output_text = _append_imagegen_workbench_output_message(
                     selected_output_base,
                     copied_image_outputs,
@@ -8916,7 +9012,10 @@ def _run_codex_stream(stream_id, prompt):
                     or bool(copied_image_outputs)
                     or bool(task_complete_seen)
                 )
-                has_progress_output_response = bool(current_output_last_message) or bool(current_output)
+                has_progress_output_response = (
+                    (bool(current_output_last_message) or bool(current_output))
+                    and not progress_output_invalidated
+                )
                 if (
                     event_stream_lagged
                     and not has_trusted_output_response
@@ -8936,7 +9035,9 @@ def _run_codex_stream(stream_id, prompt):
                             stream['updated_at'] = incomplete_now
                             stream['process'] = None
                             stream['finalize_reason'] = 'event_stream_incomplete'
-                            stream['untrusted_output_suppressed'] = bool(has_progress_output_response)
+                            stream['untrusted_output_suppressed'] = bool(
+                                current_output_last_message or current_output
+                            )
                     break
 
                 has_output_response = (
@@ -8990,6 +9091,11 @@ def _run_codex_stream(stream_id, prompt):
                         if stream:
                             stream['done'] = True
                             stream['exit_code'] = 124
+                            if progress_output_invalidated:
+                                stream['untrusted_output_suppressed'] = bool(
+                                    (stream.get('output') or '').strip()
+                                    or (stream.get('output_last_message') or '').strip()
+                                )
                             if not isinstance(stream.get('completed_at'), (int, float)):
                                 stream['completed_at'] = process_exited_at
                             if (
@@ -9057,8 +9163,11 @@ def _run_codex_stream(stream_id, prompt):
             current_output_last_message = (stream.get('output_last_message') or '').strip() if stream else ''
             task_complete_output = (stream.get('task_complete_output') or '').strip() if stream else ''
             suppress_untrusted_output = bool(stream.get('untrusted_output_suppressed')) if stream else False
+            progress_output_invalidated = bool(stream.get('progress_output_invalidated')) if stream else False
         selected_output_text = _append_imagegen_workbench_output_message(
-            output_text or task_complete_output or ('' if suppress_untrusted_output else current_output_last_message),
+            output_text
+            or task_complete_output
+            or ('' if (suppress_untrusted_output or progress_output_invalidated) else current_output_last_message),
             copied_image_outputs,
         )
         if selected_output_text:
@@ -9210,6 +9319,7 @@ def create_codex_stream(
         'queue_full_warning_count': 0,
         'sampling_stream_retry_count': 0,
         'untrusted_output_suppressed': False,
+        'progress_output_invalidated': False,
         'codex_session_id': '',
         'codex_home': '',
         'assistant_final_empty': False,
@@ -9296,10 +9406,18 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
 
         timeout_seconds = _final_response_timeout_seconds_for_stream(stream, base_timeout_seconds)
         stale_after_seconds = timeout_seconds + 1
-        has_response = bool(
+        has_progress_response = bool(
             (stream.get('output') or '').strip()
             or (stream.get('output_last_message') or '').strip()
-            or (stream.get('error') or '').strip()
+        )
+        has_trusted_response = bool(
+            (stream.get('error') or '').strip()
+            or stream.get('task_complete_seen')
+            or stream.get('imagegen_workbench_outputs')
+        )
+        has_response = bool(
+            has_trusted_response
+            or (has_progress_response and not stream.get('progress_output_invalidated'))
         )
         if (
             stream.get('event_stream_lagged')
@@ -9322,16 +9440,13 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
         if not has_response:
             if stream.get('event_stream_lagged'):
                 message = _event_stream_incomplete_message(stream.get('dropped_event_count'))
-                stream['untrusted_output_suppressed'] = bool(
-                    (stream.get('output') or '').strip()
-                    or (stream.get('output_last_message') or '').strip()
-                )
             else:
                 message = _stream_timeout_message(
                     timeout_seconds,
                     waiting_for_imagegen_output=waiting_for_imagegen_output,
                     stale=True,
                 )
+            stream['untrusted_output_suppressed'] = bool(has_progress_response)
             stream['error'] = (stream.get('error') or '') + message
             stream['error_length'] = len(stream.get('error') or '')
             stream['codex_error_seen'] = True
@@ -9966,6 +10081,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         queue_full_warning_count = int(stream.get('queue_full_warning_count') or 0)
         sampling_stream_retry_count = int(stream.get('sampling_stream_retry_count') or 0)
         untrusted_output_suppressed = bool(stream.get('untrusted_output_suppressed'))
+        progress_output_invalidated = bool(stream.get('progress_output_invalidated'))
         imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
@@ -10029,6 +10145,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         metadata['sampling_stream_retry_count'] = sampling_stream_retry_count
     if untrusted_output_suppressed:
         metadata['untrusted_output_suppressed'] = True
+    if progress_output_invalidated:
+        metadata['progress_output_invalidated'] = True
     if imagegen_workbench_outputs:
         metadata['imagegen_workbench_outputs'] = imagegen_workbench_outputs
     created_at_value = _iso_timestamp_from_epoch(completed_at)

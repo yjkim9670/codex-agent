@@ -491,6 +491,38 @@ def test_extract_exec_json_summary_ignores_completed_command_execution_as_fatal(
     assert summary['last_text'] == '테스트 실패 원인을 수정했습니다.'
 
 
+def test_extract_exec_json_summary_marks_text_before_command_as_progress_only():
+    payload = '\n'.join([
+        json.dumps({
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': '파일을 만들겠습니다.'},
+        }),
+        json.dumps({
+            'type': 'item.started',
+            'item': {'type': 'command_execution', 'command': 'mkdir app'},
+        }),
+        json.dumps({
+            'type': 'item.completed',
+            'item': {
+                'type': 'command_execution',
+                'status': 'completed',
+                'command': 'mkdir app',
+                'exit_code': 0,
+            },
+        }),
+        json.dumps({
+            'type': 'item.completed',
+            'item': {'type': 'agent_message', 'text': ''},
+        }),
+        json.dumps({'type': 'turn.completed'}),
+    ])
+
+    summary = codex_chat._extract_exec_json_summary(payload)
+
+    assert summary['last_text'] == '파일을 만들겠습니다.'
+    assert summary['last_text_invalidated_by_work_item'] is True
+
+
 def test_extract_exec_json_summary_ignores_completed_mcp_tool_call_as_fatal():
     payload = '\n'.join([
         json.dumps({
@@ -2136,6 +2168,70 @@ class _ExitedWithoutFinalMessageProcess:
         return self._return_code
 
 
+class _ExitedAfterProgressAndCommandWithoutFinalMessageProcess:
+    def __init__(self, cmd, **kwargs):
+        del cmd
+        del kwargs
+        self.pid = 54322
+        self._return_code = 0
+        self.stdout = _FakePipe([
+            json.dumps({
+                'type': 'thread.started',
+            }) + '\n',
+            json.dumps({
+                'type': 'turn.started',
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'agent_message',
+                    'text': '앱 구조를 설계하고 구현하겠습니다.',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.started',
+                'item': {
+                    'type': 'command_execution',
+                    'command': 'mkdir app',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'command_execution',
+                    'status': 'completed',
+                    'command': 'mkdir app',
+                    'exit_code': 0,
+                    'stdout': '',
+                    'stderr': '',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'item.completed',
+                'item': {
+                    'type': 'agent_message',
+                    'text': '',
+                },
+            }) + '\n',
+            json.dumps({
+                'type': 'turn.completed',
+            }) + '\n',
+        ])
+        self.stderr = _FakePipe([])
+
+    def poll(self):
+        return self._return_code
+
+    def terminate(self):
+        self._return_code = 0
+
+    def kill(self):
+        self._return_code = 0
+
+    def wait(self, timeout=None):
+        return self._return_code
+
+
 class _ExitedWithJsonFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
         del cmd
@@ -3114,6 +3210,55 @@ def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isol
         assert stream.get('done') is True
         assert stream.get('saved') is True
         assert stream.get('exit_code') == 124
+
+
+def test_run_codex_stream_does_not_finalize_with_pre_command_progress(
+        monkeypatch,
+        isolated_codex_workspace):
+    monkeypatch.setattr(
+        codex_chat.subprocess,
+        'Popen',
+        _ExitedAfterProgressAndCommandWithoutFinalMessageProcess,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POST_OUTPUT_IDLE_SECONDS', 5)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_TERMINATE_GRACE_SECONDS', 0.05)
+    monkeypatch.setattr(codex_chat, 'CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS', 0.05)
+
+    session = codex_chat.create_session('progress-before-command-timeout')
+    session_id = session['id']
+    stream_id = 'stream-progress-before-command-timeout'
+    started_at = time.time()
+
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=started_at,
+            output_path=(
+                isolated_codex_workspace['workspace_dir']
+                / 'stream-progress-before-command-timeout.txt'
+            ),
+        )
+
+    codex_chat._run_codex_stream(stream_id, 'make an app')
+
+    updated_session = codex_chat.get_session(session_id)
+    assert updated_session is not None
+    saved_message = updated_session['messages'][-1]
+
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'final_response_timeout'
+    assert saved_message.get('progress_output_invalidated') is True
+    assert saved_message.get('untrusted_output_suppressed') is True
+    assert '앱 구조를 설계하고 구현하겠습니다.' not in saved_message['content']
+    assert '최종 응답을 받지 못해 종료합니다' in saved_message['content']
+    assert any(
+        event.get('item_type') == 'command_execution'
+        and 'command=mkdir app' in event.get('detail', '')
+        and 'exit_code=0' in event.get('detail', '')
+        for event in saved_message.get('codex_events') or []
+    )
 
 
 def test_run_codex_stream_times_out_waiting_for_imagegen_output_after_final_text(

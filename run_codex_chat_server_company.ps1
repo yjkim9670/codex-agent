@@ -20,6 +20,12 @@ if (-not $env:CODEX_REASONING_OPTIONS) {
 if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
     $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 }
+if ($env:OS -eq "Windows_NT" -and -not $env:CODEX_CLI_SANDBOX) {
+    # Corporate Windows images can block Codex CLI's Windows sandbox setup with
+    # CreateProcessWithLogonW 1326. Keep this override local to the company
+    # PowerShell runner and allow callers to opt back into workspace-write.
+    $env:CODEX_CLI_SANDBOX = "danger-full-access"
+}
 if (-not $env:CODEX_STORAGE_SUBDIR) {
     $env:CODEX_STORAGE_SUBDIR = ".agent_state_company"
 }

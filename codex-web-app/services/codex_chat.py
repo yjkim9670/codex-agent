@@ -27,6 +27,8 @@ from ..config import (
     CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
     CODEX_CLI_PROFILE,
+    CODEX_CLI_READ_ONLY_SANDBOX,
+    CODEX_CLI_SANDBOX,
     CODEX_CLI_SERIALIZE_EXEC,
     CODEX_CLI_SELF_PROTECT,
     CODEX_CLI_SELF_PROTECT_GIT_RW,
@@ -6393,12 +6395,13 @@ def _build_codex_command(
     ]
     if CODEX_CLI_PROFILE:
         base_cmd.extend(['--profile', CODEX_CLI_PROFILE])
+    sandbox_mode = CODEX_CLI_READ_ONLY_SANDBOX if question_only else CODEX_CLI_SANDBOX
     if question_only:
         cmd = [
             *base_cmd,
             'exec',
             '--sandbox',
-            'read-only',
+            sandbox_mode,
             '--ephemeral',
             '--color',
             'never'
@@ -6408,7 +6411,7 @@ def _build_codex_command(
             *base_cmd,
             'exec',
             '--sandbox',
-            'workspace-write',
+            sandbox_mode,
             '--color',
             'never'
         ]
@@ -7153,6 +7156,17 @@ def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env
         'command': command_text,
         'prompt': str(prompt or ''),
     }
+    for option_name, detail_key in (
+            ('--ask-for-approval', 'approval_policy'),
+            ('--sandbox', 'sandbox'),
+            ('--profile', 'profile')):
+        try:
+            option_index = command_parts.index(option_name)
+            option_value = command_parts[option_index + 1]
+        except (ValueError, IndexError):
+            option_value = ''
+        if option_value:
+            details[detail_key] = option_value
     if execution_cwd:
         details['cwd'] = str(execution_cwd)
     if isinstance(exec_env, dict):
@@ -7173,6 +7187,15 @@ def _format_codex_exec_input_details(exec_details):
     prompt_encoding = str(exec_details.get('prompt_encoding') or '').strip()
     if prompt_encoding:
         parts.append(f'prompt_encoding: {prompt_encoding}')
+    approval_policy = str(exec_details.get('approval_policy') or '').strip()
+    if approval_policy:
+        parts.append(f'approval_policy: {approval_policy}')
+    sandbox = str(exec_details.get('sandbox') or '').strip()
+    if sandbox:
+        parts.append(f'sandbox: {sandbox}')
+    profile = str(exec_details.get('profile') or '').strip()
+    if profile:
+        parts.append(f'profile: {profile}')
     cwd = str(exec_details.get('cwd') or '').strip()
     if cwd:
         parts.append(f'cwd: {cwd}')

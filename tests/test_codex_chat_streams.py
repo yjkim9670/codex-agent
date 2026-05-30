@@ -58,6 +58,8 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         hashlib.sha1(str(workspace_dir).encode('utf-8')).hexdigest()[:12],
     )
     monkeypatch.setattr(codex_chat, 'CODEX_SKIP_GIT_REPO_CHECK', True)
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SANDBOX', 'workspace-write')
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_READ_ONLY_SANDBOX', 'read-only')
     monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
 
     return {
@@ -714,6 +716,15 @@ def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspa
     assert '--full-auto' not in cmd
 
 
+def test_build_codex_command_supports_standard_sandbox_override(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SANDBOX', 'danger-full-access')
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[cmd.index('--sandbox') + 1] == 'danger-full-access'
+    assert '--full-auto' not in cmd
+
+
 def test_build_codex_command_supports_read_only_output_schema(isolated_codex_workspace, tmp_path):
     schema_path = tmp_path / 'report.schema.json'
 
@@ -736,6 +747,21 @@ def test_build_codex_command_supports_read_only_output_schema(isolated_codex_wor
         '--skip-git-repo-check',
     ]
     assert '--full-auto' not in cmd
+    assert cmd[cmd.index('--output-schema') + 1] == str(schema_path)
+
+
+def test_build_codex_command_supports_read_only_sandbox_override(isolated_codex_workspace, tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_READ_ONLY_SANDBOX', 'danger-full-access')
+    schema_path = tmp_path / 'report.schema.json'
+
+    cmd = codex_chat._build_codex_command(
+        'report prompt',
+        output_schema_path=schema_path,
+        question_only=True,
+    )
+
+    assert cmd[cmd.index('--sandbox') + 1] == 'danger-full-access'
+    assert '--ephemeral' in cmd
     assert cmd[cmd.index('--output-schema') + 1] == str(schema_path)
 
 
@@ -766,6 +792,35 @@ def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspa
     ]
     provider_index = cmd.index('model_provider="dtgpt_linux"')
     assert cmd[provider_index - 1] == '--config'
+
+
+def test_codex_exec_input_details_include_policy_values(isolated_codex_workspace):
+    details = codex_chat._build_codex_exec_input_details(
+        [
+            'codex',
+            '--ask-for-approval',
+            'never',
+            '--profile',
+            'dtgpt_oa',
+            'exec',
+            '--sandbox',
+            'danger-full-access',
+            '--color',
+            'never',
+            '--',
+            '-',
+        ],
+        'hello',
+        execution_cwd='/tmp/workspace',
+        exec_env={'CODEX_HOME': '/tmp/codex-home'},
+    )
+
+    formatted = codex_chat._format_codex_exec_input_details(details)
+
+    assert 'approval_policy: never' in formatted
+    assert 'sandbox: danger-full-access' in formatted
+    assert 'profile: dtgpt_oa' in formatted
+    assert 'CODEX_HOME: /tmp/codex-home' in formatted
 
 
 def test_build_codex_command_uses_configured_cli_bin(isolated_codex_workspace, monkeypatch):

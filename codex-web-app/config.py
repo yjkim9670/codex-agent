@@ -88,6 +88,13 @@ def _parse_cli_text_env(name, max_chars=120):
     return token
 
 
+def _parse_choice_env(name, default, allowed_values):
+    token = _parse_cli_text_env(name, max_chars=80)
+    if token in allowed_values:
+        return token
+    return default
+
+
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
 _workspace_override = os.environ.get('CODEX_WORKSPACE_DIR')
@@ -170,6 +177,17 @@ CODEX_MAX_REASONING_CHARS = 40
 CODEX_MAX_SERVICE_TIER_CHARS = 40
 CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
 CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
+_CODEX_CLI_SANDBOX_VALUES = ('read-only', 'workspace-write', 'danger-full-access')
+CODEX_CLI_SANDBOX = _parse_choice_env(
+    'CODEX_CLI_SANDBOX',
+    'workspace-write',
+    _CODEX_CLI_SANDBOX_VALUES,
+)
+CODEX_CLI_READ_ONLY_SANDBOX = _parse_choice_env(
+    'CODEX_CLI_READ_ONLY_SANDBOX',
+    'read-only',
+    _CODEX_CLI_SANDBOX_VALUES,
+)
 
 
 def _normalize_reasoning_options(options):

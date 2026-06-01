@@ -522,6 +522,7 @@ def test_extract_exec_json_summary_marks_text_before_command_as_progress_only():
     assert summary['last_text'] == '파일을 만들겠습니다.'
     assert summary['last_text_invalidated_by_work_item'] is True
     assert summary['turn_completed_seen'] is True
+    assert summary['missing_final_response_after_work_item'] is True
 
 
 def test_extract_exec_json_summary_marks_turn_completed_without_final_after_command():
@@ -547,6 +548,7 @@ def test_extract_exec_json_summary_marks_turn_completed_without_final_after_comm
     assert summary['last_text'] == '먼저 상태를 확인하겠습니다.'
     assert summary['last_text_invalidated_by_work_item'] is True
     assert summary['turn_completed_seen'] is True
+    assert summary['missing_final_response_after_work_item'] is True
 
 
 def test_extract_exec_json_summary_ignores_completed_mcp_tool_call_as_fatal():
@@ -1822,6 +1824,53 @@ def test_finalize_stream_uses_completed_at_metadata(monkeypatch, isolated_codex_
     assert saved_message['completed_at'] == saved_message['created_at']
 
 
+def test_finalize_stream_suppresses_stale_output_file_after_work_without_final(
+        monkeypatch,
+        isolated_codex_workspace):
+    session = codex_chat.create_session('finalize-missing-final')
+    session_id = session['id']
+
+    stream_id = 'stream-finalize-missing-final'
+    output_path = isolated_codex_workspace['workspace_dir'] / 'stream-finalize-missing-final.txt'
+    output_path.write_text('먼저 상태를 확인하겠습니다.', encoding='utf-8')
+    with state.codex_streams_lock:
+        stream = _build_stream_state(
+            stream_id,
+            session_id,
+            started_at=100.0,
+            output_path=output_path,
+        )
+        stream['done'] = True
+        stream['exit_code'] = 1
+        stream['output'] = '먼저 상태를 확인하겠습니다.'
+        stream['output_last_message'] = '먼저 상태를 확인하겠습니다.'
+        stream['error'] = 'Codex CLI가 작업 명령 실행 후 최종 응답 없이 turn.completed를 반환했습니다.'
+        stream['work_item_seen'] = True
+        stream['work_item_completed_seen'] = True
+        stream['progress_output_invalidated'] = True
+        stream['turn_completed_seen'] = True
+        stream['missing_final_response_after_work_item'] = True
+        stream['untrusted_output_suppressed'] = True
+        stream['codex_error_seen'] = True
+        stream['completed_at'] = 102.0
+        stream['updated_at'] = 102.0
+        stream['finalize_reason'] = 'missing_final_response_after_work_item'
+        state.codex_streams[stream_id] = stream
+
+    monkeypatch.setattr(codex_chat.time, 'time', lambda: 105.0)
+
+    saved_message = codex_chat.finalize_codex_stream(stream_id)
+
+    assert saved_message is not None
+    assert saved_message['role'] == 'error'
+    assert saved_message['finalize_reason'] == 'missing_final_response_after_work_item'
+    assert saved_message.get('work_item_seen') is True
+    assert saved_message.get('work_item_completed_seen') is True
+    assert saved_message.get('missing_final_response_after_work_item') is True
+    assert '최종 응답 없이 turn.completed' in saved_message['content']
+    assert '먼저 상태를 확인하겠습니다.' not in saved_message['content']
+
+
 def test_enqueue_codex_queue_persists_and_starts_when_triggered(monkeypatch, isolated_codex_workspace):
     session = codex_chat.create_session('queue-trigger')
     session_id = session['id']
@@ -2149,6 +2198,17 @@ class _FakePipe:
         return None
 
 
+def _write_output_last_message_from_cmd(cmd, text):
+    output_path = None
+    for index, token in enumerate(cmd):
+        if token == '--output-last-message' and index + 1 < len(cmd):
+            output_path = Path(cmd[index + 1])
+            break
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text, encoding='utf-8')
+
+
 class _HangingProcess:
     def __init__(self, cmd, **kwargs):
         self.pid = 43210
@@ -2250,6 +2310,7 @@ class _ExitedWithoutFinalMessageProcess:
 
 class _ExitedAfterProgressAndCommandWithoutFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
+        _write_output_last_message_from_cmd(cmd, '앱 구조를 설계하고 구현하겠습니다.')
         del cmd
         del kwargs
         self.pid = 54322
@@ -2314,6 +2375,10 @@ class _ExitedAfterProgressAndCommandWithoutFinalMessageProcess:
 
 class _ExitedAfterProgressAndCommandTurnCompletedWithoutFinalMessageProcess:
     def __init__(self, cmd, **kwargs):
+        _write_output_last_message_from_cmd(
+            cmd,
+            '먼저 test 폴더 현재 상태를 확인하고 앱을 구현하겠습니다.',
+        )
         del cmd
         del kwargs
         self.pid = 54323
@@ -3348,7 +3413,7 @@ def test_run_codex_stream_times_out_when_final_message_missing(monkeypatch, isol
         assert stream.get('exit_code') == 124
 
 
-def test_run_codex_stream_does_not_finalize_with_pre_command_progress(
+def test_run_codex_stream_errors_when_empty_final_after_command(
         monkeypatch,
         isolated_codex_workspace):
     monkeypatch.setattr(
@@ -3384,11 +3449,13 @@ def test_run_codex_stream_does_not_finalize_with_pre_command_progress(
     saved_message = updated_session['messages'][-1]
 
     assert saved_message['role'] == 'error'
-    assert saved_message['finalize_reason'] == 'final_response_timeout'
+    assert saved_message['finalize_reason'] == 'missing_final_response_after_work_item'
     assert saved_message.get('progress_output_invalidated') is True
+    assert saved_message.get('turn_completed_seen') is True
+    assert saved_message.get('missing_final_response_after_work_item') is True
     assert saved_message.get('untrusted_output_suppressed') is True
     assert '앱 구조를 설계하고 구현하겠습니다.' not in saved_message['content']
-    assert '최종 응답을 받지 못해 종료합니다' in saved_message['content']
+    assert '중간 진행 메시지는 최종 답변이 아니므로 저장하지 않았습니다' in saved_message['content']
     assert any(
         event.get('item_type') == 'command_execution'
         and 'command=mkdir app' in event.get('detail', '')

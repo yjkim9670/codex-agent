@@ -6762,6 +6762,11 @@ def _extract_exec_json_summary(raw_stdout):
         'work_item_completed_seen': work_item_completed_seen,
         'final_agent_message_after_work_seen': final_agent_message_after_work_seen,
         'turn_completed_seen': turn_completed_seen,
+        'missing_final_response_after_work_item': bool(
+            turn_completed_seen
+            and work_item_seen
+            and not final_agent_message_after_work_seen
+        ),
     }
 
 
@@ -6858,10 +6863,10 @@ def execute_codex_prompt(
             except Exception:
                 pass
 
-    output_file_untrusted_after_work_item = bool(
-        output_text
-        and json_summary.get('work_item_seen')
-        and not json_summary.get('final_agent_message_after_work_seen')
+    output_file_untrusted_after_work_item = _output_file_is_untrusted_after_work_item(
+        output_text,
+        json_summary.get('work_item_seen'),
+        json_summary.get('final_agent_message_after_work_seen'),
     )
     if output_file_untrusted_after_work_item:
         output_text = ''
@@ -6878,9 +6883,7 @@ def execute_codex_prompt(
     missing_final_after_work_item = bool(
         not output_text
         and not event_stream_lagged
-        and json_summary.get('work_item_seen')
-        and not json_summary.get('final_agent_message_after_work_seen')
-        and json_summary.get('turn_completed_seen')
+        and json_summary.get('missing_final_response_after_work_item')
     )
     imagegen_workbench_filenames = _copy_imagegen_workbench_preferred_filenames(
         list(json_summary.get('imagegen_workbench_filenames') or []) + output_imagegen_filenames
@@ -7407,6 +7410,17 @@ def _read_output_last_message(path):
         return text
     except Exception:
         return ''
+
+
+def _output_file_is_untrusted_after_work_item(
+        output_text,
+        work_item_seen,
+        final_agent_message_after_work_seen):
+    return bool(
+        str(output_text or '').strip()
+        and work_item_seen
+        and not final_agent_message_after_work_seen
+    )
 
 
 def _cleanup_output_last_message(path):
@@ -9141,10 +9155,10 @@ def _run_codex_stream(stream_id, prompt):
                 output_text, output_imagegen_filenames = (
                     _read_output_last_message_with_imagegen_filenames(output_path)
                 )
-                output_file_untrusted_after_work_item = bool(
-                    output_text
-                    and work_item_seen
-                    and not final_agent_message_after_work_seen
+                output_file_untrusted_after_work_item = _output_file_is_untrusted_after_work_item(
+                    output_text,
+                    work_item_seen,
+                    final_agent_message_after_work_seen,
                 )
                 if output_file_untrusted_after_work_item:
                     output_text = ''
@@ -9364,14 +9378,25 @@ def _run_codex_stream(stream_id, prompt):
         output_text, output_imagegen_filenames = (
             _read_output_last_message_with_imagegen_filenames(output_path)
         )
-        _record_stream_imagegen_workbench_filenames(stream_id, output_imagegen_filenames)
-        copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             current_output_last_message = (stream.get('output_last_message') or '').strip() if stream else ''
             task_complete_output = (stream.get('task_complete_output') or '').strip() if stream else ''
             suppress_untrusted_output = bool(stream.get('untrusted_output_suppressed')) if stream else False
             progress_output_invalidated = bool(stream.get('progress_output_invalidated')) if stream else False
+            work_item_seen = bool(stream.get('work_item_seen')) if stream else False
+            final_agent_message_after_work_seen = bool(
+                stream.get('final_agent_message_after_work_seen')
+            ) if stream else False
+        if _output_file_is_untrusted_after_work_item(
+            output_text,
+            work_item_seen,
+            final_agent_message_after_work_seen,
+        ):
+            output_text = ''
+            output_imagegen_filenames = []
+        _record_stream_imagegen_workbench_filenames(stream_id, output_imagegen_filenames)
+        copied_image_outputs = _copy_imagegen_workbench_outputs_for_stream(stream_id)
         selected_output_text = _append_imagegen_workbench_output_message(
             output_text
             or task_complete_output
@@ -9644,7 +9669,8 @@ def _mark_stale_finalizing_streams_done_locked(session_id):
             has_response = False
         missing_final_after_work_item = bool(
             stream.get('turn_completed_seen')
-            and stream.get('progress_output_invalidated')
+            and stream.get('work_item_seen')
+            and not stream.get('final_agent_message_after_work_seen')
             and not has_trusted_response
             and not waiting_for_imagegen_output
         )
@@ -10309,6 +10335,9 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         sampling_stream_retry_count = int(stream.get('sampling_stream_retry_count') or 0)
         untrusted_output_suppressed = bool(stream.get('untrusted_output_suppressed'))
         progress_output_invalidated = bool(stream.get('progress_output_invalidated'))
+        work_item_seen = bool(stream.get('work_item_seen'))
+        work_item_completed_seen = bool(stream.get('work_item_completed_seen'))
+        final_agent_message_after_work_seen = bool(stream.get('final_agent_message_after_work_seen'))
         turn_completed_seen = bool(stream.get('turn_completed_seen'))
         missing_final_response_after_work_item = bool(
             stream.get('missing_final_response_after_work_item')
@@ -10333,11 +10362,20 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
 
     output_from_file = _read_output_last_message(output_path)
-    if output_from_file:
+    output_file_untrusted_after_work_item = _output_file_is_untrusted_after_work_item(
+        output_from_file,
+        work_item_seen,
+        final_agent_message_after_work_seen,
+    )
+    if (
+        output_from_file
+        and not output_file_untrusted_after_work_item
+        and not missing_final_response_after_work_item
+    ):
         output_last_message = output_from_file
     elif task_complete_output:
         output_last_message = task_complete_output
-    elif untrusted_output_suppressed:
+    elif untrusted_output_suppressed or output_file_untrusted_after_work_item:
         output_last_message = ''
     _cleanup_output_last_message(output_path)
 
@@ -10378,6 +10416,12 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         metadata['untrusted_output_suppressed'] = True
     if progress_output_invalidated:
         metadata['progress_output_invalidated'] = True
+    if work_item_seen:
+        metadata['work_item_seen'] = True
+    if work_item_completed_seen:
+        metadata['work_item_completed_seen'] = True
+    if final_agent_message_after_work_seen:
+        metadata['final_agent_message_after_work_seen'] = True
     if turn_completed_seen:
         metadata['turn_completed_seen'] = True
     if missing_final_response_after_work_item:
@@ -10394,7 +10438,15 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 finalize_lag_ms,
                 finalize_reason
             )
-    final_output = output_last_message or ('' if (assistant_final_empty or untrusted_output_suppressed) else output)
+    final_output = output_last_message or (
+        ''
+        if (
+            assistant_final_empty
+            or untrusted_output_suppressed
+            or output_file_untrusted_after_work_item
+        )
+        else output
+    )
     if imagegen_workbench_outputs:
         final_output = _append_imagegen_workbench_output_message(final_output, imagegen_workbench_outputs)
     elif not final_output and assistant_final_empty:

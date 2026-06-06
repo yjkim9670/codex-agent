@@ -311,9 +311,11 @@ const TERMINAL_SURFACE_WORK_MODE = 'work-mode';
 const TERMINAL_REQUEST_TIMEOUT_MS = 20000;
 const TERMINAL_INPUT_TIMEOUT_MS = 12000;
 const TERMINAL_CLOSE_TIMEOUT_MS = 20000;
+const TERMINAL_INPUT_BATCH_MS = 10;
 const TERMINAL_POLL_MS = 600;
 const TERMINAL_STREAM_RECONNECT_BASE_MS = 320;
 const TERMINAL_STREAM_RECONNECT_MAX_MS = 4000;
+const TERMINAL_ATTACH_TAIL_CHARS = 80000;
 const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
 const TERMINAL_DEFAULT_COLS = 120;
 const TERMINAL_DEFAULT_ROWS = 32;
@@ -7450,11 +7452,22 @@ function updateUsageSummary(usage) {
     });
 }
 
+function buildModelSelectOptions(options, selectedModel) {
+    const normalizedOptions = normalizeOptionList(options);
+    const normalizedModel = typeof selectedModel === 'string' ? selectedModel.trim() : '';
+    if (normalizedModel && !normalizedOptions.includes(normalizedModel)) {
+        return [normalizedModel, ...normalizedOptions];
+    }
+    return normalizedOptions;
+}
+
 function updateModelControls(model, options) {
     const select = document.getElementById('codex-model-select');
     const input = document.getElementById('codex-model-input');
     const field = select ? select.closest('.model-field') : null;
-    const normalizedOptions = normalizeOptionList(options);
+    const catalogOptions = normalizeOptionList(options);
+    const selectedModel = typeof model === 'string' ? model.trim() : '';
+    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
     if (select) {
         select.innerHTML = '';
@@ -7467,11 +7480,13 @@ function updateModelControls(model, options) {
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                option.textContent = item === selectedModel && !catalogOptions.includes(item)
+                    ? `${item} (saved)`
+                    : item;
                 select.appendChild(option);
             });
-            if (model) {
-                select.value = normalizedOptions.includes(model) ? model : '';
+            if (selectedModel) {
+                select.value = normalizedOptions.includes(selectedModel) ? selectedModel : '';
             } else {
                 select.value = '';
             }
@@ -7480,8 +7495,8 @@ function updateModelControls(model, options) {
         }
     }
     if (input) {
-        input.value = model || '';
-        input.placeholder = model ? model : 'Default model';
+        input.value = selectedModel || '';
+        input.placeholder = selectedModel ? selectedModel : 'Default model';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7495,7 +7510,9 @@ function updatePlanModeModelControls(planModeModel, options) {
     const select = document.getElementById('codex-plan-mode-model-select');
     const input = document.getElementById('codex-plan-mode-model-input');
     const field = select ? select.closest('.model-field') : null;
-    const normalizedOptions = normalizeOptionList(options);
+    const catalogOptions = normalizeOptionList(options);
+    const selectedModel = typeof planModeModel === 'string' ? planModeModel.trim() : '';
+    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
     if (select) {
         select.innerHTML = '';
@@ -7508,11 +7525,13 @@ function updatePlanModeModelControls(planModeModel, options) {
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                option.textContent = item === selectedModel && !catalogOptions.includes(item)
+                    ? `${item} (saved)`
+                    : item;
                 select.appendChild(option);
             });
-            if (planModeModel) {
-                select.value = normalizedOptions.includes(planModeModel) ? planModeModel : '';
+            if (selectedModel) {
+                select.value = normalizedOptions.includes(selectedModel) ? selectedModel : '';
             } else {
                 select.value = '';
             }
@@ -7521,8 +7540,8 @@ function updatePlanModeModelControls(planModeModel, options) {
         }
     }
     if (input) {
-        input.value = planModeModel || '';
-        input.placeholder = planModeModel ? planModeModel : 'Use default model';
+        input.value = selectedModel || '';
+        input.placeholder = selectedModel ? selectedModel : 'Use default model';
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -8997,11 +9016,17 @@ function isTerminalSessionClosedError(error) {
     return errorCode === 'session_not_running' || errorCode === 'session_closed';
 }
 
+function shouldFlushTerminalInputImmediately(chunk) {
+    return /[\r\n\x03\x04\x1a\x1b]/.test(typeof chunk === 'string' ? chunk : '');
+}
+
 async function syncTerminalSessionAfterInputFailure(sessionId) {
     const targetId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!targetId) return;
     try {
-        const response = await readTerminalApiSession(targetId);
+        const response = await readTerminalApiSession(targetId, null, {
+            tailChars: TERMINAL_ATTACH_TAIL_CHARS
+        });
         const updatedSession = upsertTerminalSession(response);
         if (terminalState.activeSessionId === targetId && updatedSession) {
             writeTerminalOutput(response?.output || '', { reset: true });
@@ -9031,13 +9056,23 @@ function queueTerminalInput(sessionId, data) {
     }
     terminalState.inputSessionId = targetId;
     terminalState.inputBuffer += chunk;
+    const flushImmediately = shouldFlushTerminalInputImmediately(chunk);
     if (terminalState.inputFlushTimer !== null) {
+        if (flushImmediately) {
+            window.clearTimeout(terminalState.inputFlushTimer);
+            terminalState.inputFlushTimer = null;
+            void flushQueuedTerminalInput();
+        }
+        return;
+    }
+    if (flushImmediately) {
+        void flushQueuedTerminalInput();
         return;
     }
     terminalState.inputFlushTimer = window.setTimeout(() => {
         terminalState.inputFlushTimer = null;
         void flushQueuedTerminalInput();
-    }, 10);
+    }, TERMINAL_INPUT_BATCH_MS);
 }
 
 async function flushQueuedTerminalInput() {
@@ -9257,11 +9292,17 @@ async function createTerminalApiSession(root, path, cols, rows) {
     });
 }
 
-async function readTerminalApiSession(sessionId, offset = null) {
-    const query = offset === null || offset === undefined
-        ? ''
-        : `?offset=${encodeURIComponent(String(offset))}`;
-    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}${query}`, {
+async function readTerminalApiSession(sessionId, offset = null, { tailChars = null } = {}) {
+    const query = new URLSearchParams();
+    if (offset !== null && offset !== undefined) {
+        query.set('offset', String(offset));
+    }
+    if (tailChars !== null && tailChars !== undefined) {
+        query.set('tail_chars', String(tailChars));
+    }
+    const queryString = query.toString();
+    const suffix = queryString ? `?${queryString}` : '';
+    return fetchJson(`/api/codex/terminals/${encodeURIComponent(sessionId)}${suffix}`, {
         cache: 'no-store',
         timeoutMs: TERMINAL_REQUEST_TIMEOUT_MS
     });
@@ -9563,7 +9604,9 @@ async function attachActiveTerminalSession({ forceReset = false } = {}) {
     await ensureTerminalInstance();
     const needsReset = Boolean(forceReset || terminalState.mountedSessionId !== activeSession.id);
     const offset = needsReset ? null : activeSession.outputLength;
-    const response = await readTerminalApiSession(activeSession.id, offset);
+    const response = await readTerminalApiSession(activeSession.id, offset, {
+        tailChars: needsReset ? TERMINAL_ATTACH_TAIL_CHARS : null
+    });
     if (terminalState.activeSessionId !== activeSession.id) {
         return false;
     }
@@ -9593,7 +9636,12 @@ async function pollActiveTerminalSession() {
     try {
         const response = await readTerminalApiSession(
             activeSession.id,
-            terminalState.mountedSessionId === activeSession.id ? activeSession.outputLength : null
+            terminalState.mountedSessionId === activeSession.id ? activeSession.outputLength : null,
+            {
+                tailChars: terminalState.mountedSessionId === activeSession.id
+                    ? null
+                    : TERMINAL_ATTACH_TAIL_CHARS
+            }
         );
         if (terminalState.activeSessionId !== activeSession.id) {
             return;

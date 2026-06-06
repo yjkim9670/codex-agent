@@ -39,6 +39,7 @@ from ..config import (
     REPO_ROOT,
     WORKSPACE_DIR,
     get_codex_model_catalog,
+    get_codex_model_catalog_source,
     get_codex_model_options,
     normalize_codex_service_tier,
 )
@@ -539,6 +540,7 @@ def _build_runtime_info():
         'current_branch_name': get_current_branch_name(),
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
+        'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'feature_flags': {
@@ -602,6 +604,7 @@ def codex_settings():
         'settings': get_settings(),
         'model_options': get_codex_model_options(),
         'model_catalog': get_codex_model_catalog(),
+        'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'execution_policy_presets': get_execution_policy_presets(),
@@ -1826,6 +1829,7 @@ def codex_terminals_read(session_id):
         result = read_terminal_session(
             session_id,
             offset=request.args.get('offset'),
+            tail_chars=request.args.get('tail_chars'),
         )
     except TerminalSessionError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
@@ -1838,6 +1842,7 @@ def codex_terminals_events(session_id):
         events = iter_terminal_session_events(
             session_id,
             offset=request.args.get('offset'),
+            tail_chars=request.args.get('tail_chars'),
         )
     except TerminalSessionError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code

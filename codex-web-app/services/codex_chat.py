@@ -18,6 +18,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
 
+try:
+    import pwd
+except ImportError:
+    pwd = None
+
 from .. import state
 from ..config import (
     CODEX_ACCOUNT_TOKEN_USAGE_PATH,
@@ -89,7 +94,7 @@ _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
-_QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
+_QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml', 'models_cache.json')
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
 _QUEUED_CODEX_HOME_COPY_ENTRIES = ('memories',)
 _QUEUED_CODEX_RUNTIME_DIRS = {
@@ -5933,6 +5938,19 @@ def _codex_home_has_auth(codex_home):
         return False
 
 
+def _get_login_codex_home():
+    if pwd is None:
+        return None
+    try:
+        home_dir = pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:
+        return None
+    token = str(home_dir or '').strip()
+    if not token:
+        return None
+    return Path(token).expanduser() / '.codex'
+
+
 def _resolve_authenticated_codex_home(env):
     configured_value = str(env.get('CODEX_HOME') or _CODEX_HOME).strip()
     configured_home = Path(configured_value).expanduser() if configured_value else _CODEX_HOME
@@ -5952,6 +5970,9 @@ def _resolve_authenticated_codex_home(env):
     home_value = str(env.get('HOME') or '').strip()
     if home_value:
         candidates.append(Path(home_value).expanduser() / '.codex')
+    login_home = _get_login_codex_home()
+    if login_home is not None:
+        candidates.append(login_home)
 
     seen = set()
     for candidate in candidates:

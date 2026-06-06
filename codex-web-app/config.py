@@ -6,6 +6,11 @@ from datetime import timedelta, timezone
 from pathlib import Path
 
 try:
+    import pwd
+except ImportError:
+    pwd = None
+
+try:
     from zoneinfo import ZoneInfo
 except ImportError:
     ZoneInfo = None
@@ -79,6 +84,51 @@ def _parse_path_list_env(name):
     return tuple(paths)
 
 
+def _expand_path_value(value):
+    token = str(value or '').strip()
+    if not token:
+        return None
+    try:
+        return Path(token).expanduser().resolve()
+    except Exception:
+        return Path(token).expanduser()
+
+
+def _resolve_codex_home():
+    configured_home = _expand_path_value(os.environ.get('CODEX_HOME'))
+    if configured_home is not None:
+        return configured_home
+    return Path.home() / '.codex'
+
+
+def _get_login_codex_home():
+    if pwd is None:
+        return None
+    try:
+        home_dir = pwd.getpwuid(os.getuid()).pw_dir
+    except Exception:
+        return None
+    login_home = _expand_path_value(home_dir)
+    if login_home is None:
+        return None
+    return login_home / '.codex'
+
+
+def _unique_paths(paths):
+    unique = []
+    seen = set()
+    for path in paths:
+        if path is None:
+            continue
+        candidate = Path(path).expanduser()
+        key = str(candidate)
+        if not key or key in seen:
+            continue
+        unique.append(candidate)
+        seen.add(key)
+    return unique
+
+
 def _parse_cli_text_env(name, max_chars=120):
     token = str(os.environ.get(name) or '').strip()
     if not token or '\x00' in token:
@@ -144,7 +194,7 @@ LEGACY_CODEX_SETTINGS_PATH = WORKSPACE_DIR / 'codex_settings.json'
 LEGACY_CODEX_TOKEN_USAGE_PATH = WORKSPACE_DIR / 'codex_token_usage.json'
 LEGACY_CODEX_USAGE_HISTORY_PATH = WORKSPACE_DIR / 'codex_usage_history.json'
 CODEX_CHAT_STORE_PATH = CODEX_STORAGE_DIR / 'codex_chat_sessions.json'
-CODEX_HOME = Path.home() / '.codex'
+CODEX_HOME = _resolve_codex_home()
 CODEX_CONFIG_PATH = CODEX_HOME / 'config.toml'
 CODEX_SESSIONS_PATH = CODEX_HOME / 'sessions'
 CODEX_SETTINGS_PATH = CODEX_STORAGE_DIR / 'codex_settings.json'
@@ -360,8 +410,23 @@ def _read_model_options_from_models_cache():
     ]
 
 
-def _read_model_catalog_from_models_cache():
-    models_cache_path = CODEX_HOME / 'models_cache.json'
+def _iter_model_cache_paths():
+    explicit_cache_path = _expand_path_value(os.environ.get('CODEX_MODEL_CACHE_PATH'))
+    if explicit_cache_path is not None:
+        return _unique_paths([explicit_cache_path])
+    auth_home = _expand_path_value(os.environ.get('CODEX_WORKBENCH_AUTH_HOME'))
+    env_home = _expand_path_value(os.environ.get('CODEX_HOME'))
+    login_home = _get_login_codex_home()
+    return _unique_paths([
+        auth_home / 'models_cache.json' if auth_home is not None else None,
+        env_home / 'models_cache.json' if env_home is not None else None,
+        CODEX_HOME / 'models_cache.json',
+        Path.home() / '.codex' / 'models_cache.json',
+        login_home / 'models_cache.json' if login_home is not None else None,
+    ])
+
+
+def _read_model_catalog_from_models_cache_path(models_cache_path):
     try:
         payload = json.loads(models_cache_path.read_text(encoding='utf-8'))
     except Exception:
@@ -400,6 +465,19 @@ def _read_model_catalog_from_models_cache():
     return model_catalog
 
 
+def _read_model_catalog_from_models_cache():
+    catalog, _path = _read_model_catalog_with_source_from_models_cache()
+    return catalog
+
+
+def _read_model_catalog_with_source_from_models_cache():
+    for models_cache_path in _iter_model_cache_paths():
+        model_catalog = _read_model_catalog_from_models_cache_path(models_cache_path)
+        if model_catalog:
+            return model_catalog, models_cache_path
+    return [], None
+
+
 def _select_model_catalog_entries(model_options, source_catalog):
     source_map = {
         entry['slug']: entry
@@ -425,7 +503,7 @@ def _select_model_catalog_entries(model_options, source_catalog):
 
 def get_codex_model_catalog():
     env_options = _read_model_options_from_env()
-    cache_catalog = _read_model_catalog_from_models_cache()
+    cache_catalog, _cache_path = _read_model_catalog_with_source_from_models_cache()
     if env_options:
         return _select_model_catalog_entries(
             env_options,
@@ -434,6 +512,27 @@ def get_codex_model_catalog():
     if cache_catalog:
         return _normalize_model_catalog(cache_catalog)
     return _normalize_model_catalog(_default_model_catalog)
+
+
+def get_codex_model_catalog_source():
+    env_options = _read_model_options_from_env()
+    cache_catalog, cache_path = _read_model_catalog_with_source_from_models_cache()
+    if env_options:
+        return {
+            'type': 'env',
+            'env': 'CODEX_MODEL_OPTIONS',
+            'models_cache_path': str(cache_path) if cache_path else None,
+        }
+    if cache_catalog:
+        return {
+            'type': 'models_cache',
+            'models_cache_path': str(cache_path),
+        }
+    return {
+        'type': 'fallback',
+        'models_cache_path': None,
+        'model_cache_candidates': [str(path) for path in _iter_model_cache_paths()],
+    }
 
 
 def get_codex_model_options():

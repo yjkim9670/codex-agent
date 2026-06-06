@@ -22,11 +22,34 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from codex_agent import codex_app
+from codex_agent import config as codex_config
 from codex_agent import state
 from codex_agent.blueprints import codex_chat as codex_chat_blueprint
 from codex_agent.services import codex_chat
 
 CHAT_CRYPTO_INFO = b'codex-workbench-chat-prompt-v1'
+
+
+def _write_test_models_cache(codex_home, slug='gpt-5.5'):
+    codex_home.mkdir(parents=True, exist_ok=True)
+    (codex_home / 'models_cache.json').write_text(json.dumps({
+        'models': [
+            {
+                'slug': slug,
+                'display_name': slug,
+                'visibility': 'list',
+                'default_reasoning_level': 'xhigh',
+                'supported_reasoning_levels': [
+                    {'effort': 'low'},
+                    {'effort': 'xhigh'},
+                ],
+            },
+            {
+                'slug': 'hidden-model',
+                'visibility': 'hidden',
+            },
+        ],
+    }), encoding='utf-8')
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +110,41 @@ def _b64encode(raw: bytes) -> str:
 
 def _b64decode(text: str) -> bytes:
     return base64.b64decode(text.encode('ascii'), validate=True)
+
+
+def test_model_catalog_reads_workbench_auth_home_cache(monkeypatch, tmp_path):
+    stale_home = tmp_path / 'works' / '.codex'
+    auth_home = tmp_path / 'home' / '.codex'
+    _write_test_models_cache(auth_home)
+
+    monkeypatch.setattr(codex_config, 'CODEX_HOME', stale_home)
+    monkeypatch.setenv('HOME', str(tmp_path / 'shifted-home'))
+    monkeypatch.setenv('CODEX_WORKBENCH_AUTH_HOME', str(auth_home))
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
+    monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
+
+    assert codex_config.get_codex_model_options() == ['gpt-5.5']
+    assert codex_config.get_codex_model_catalog_source() == {
+        'type': 'models_cache',
+        'models_cache_path': str(auth_home / 'models_cache.json'),
+    }
+
+
+def test_model_catalog_falls_back_to_login_home_cache(monkeypatch, tmp_path):
+    stale_home = tmp_path / 'works' / '.codex'
+    login_home = tmp_path / 'login' / '.codex'
+    _write_test_models_cache(login_home)
+
+    monkeypatch.setattr(codex_config, 'CODEX_HOME', stale_home)
+    monkeypatch.setattr(codex_config, '_get_login_codex_home', lambda: login_home)
+    monkeypatch.setenv('HOME', str(tmp_path / 'shifted-home'))
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.delenv('CODEX_WORKBENCH_AUTH_HOME', raising=False)
+    monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
+    monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
+
+    assert codex_config.get_codex_model_options() == ['gpt-5.5']
 
 
 def _open_test_chat_crypto_session(client):
@@ -2069,6 +2127,27 @@ def test_build_codex_exec_env_uses_authenticated_default_home(monkeypatch, tmp_p
     assert env.get('CODEX_HOME') == str(default_home)
 
 
+def test_build_codex_exec_env_uses_authenticated_login_home(monkeypatch, tmp_path):
+    explicit_home = tmp_path / 'explicit-codex-home'
+    explicit_home.mkdir()
+    default_home = tmp_path / 'default-codex-home'
+    default_home.mkdir()
+    shifted_home = tmp_path / 'works'
+    shifted_home.mkdir()
+    login_home = tmp_path / 'real-home' / '.codex'
+    login_home.mkdir(parents=True)
+    (login_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+
+    monkeypatch.setenv('CODEX_HOME', str(explicit_home))
+    monkeypatch.setenv('HOME', str(shifted_home))
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', default_home)
+    monkeypatch.setattr(codex_chat, '_get_login_codex_home', lambda: login_home)
+
+    env = codex_chat._build_codex_exec_env()
+
+    assert env.get('CODEX_HOME') == str(login_home)
+
+
 def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_execution(
         monkeypatch,
         tmp_path):
@@ -2076,6 +2155,7 @@ def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_executi
     source_home.mkdir()
     (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
     (source_home / 'config.toml').write_text('model = "test"\n', encoding='utf-8')
+    (source_home / 'models_cache.json').write_text('{"models": []}\n', encoding='utf-8')
     storage_dir = tmp_path / 'agent-state'
 
     monkeypatch.setenv('CODEX_HOME', str(source_home))
@@ -2096,6 +2176,7 @@ def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_executi
     assert env.get('CODEX_HOME') == str(queued_home)
     assert (queued_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
     assert (queued_home / 'config.toml').read_text(encoding='utf-8') == 'model = "test"\n'
+    assert (queued_home / 'models_cache.json').read_text(encoding='utf-8') == '{"models": []}\n'
 
 
 def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch, tmp_path):
@@ -2103,6 +2184,7 @@ def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch
     source_home.mkdir()
     (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
     (source_home / 'config.toml').write_text('model = "test"\n', encoding='utf-8')
+    (source_home / 'models_cache.json').write_text('{"models": []}\n', encoding='utf-8')
     (source_home / 'skills').mkdir()
     storage_dir = tmp_path / 'agent-state'
     read_only_home = tmp_path / 'read-only-home'
@@ -2131,6 +2213,7 @@ def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch
     assert (queued_home / 'config').is_dir()
     assert (queued_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
     assert (queued_home / 'config.toml').read_text(encoding='utf-8') == 'model = "test"\n'
+    assert (queued_home / 'models_cache.json').read_text(encoding='utf-8') == '{"models": []}\n'
     assert (queued_home / 'skills').is_symlink()
     assert (queued_home / 'skills').resolve() == source_home / 'skills'
 

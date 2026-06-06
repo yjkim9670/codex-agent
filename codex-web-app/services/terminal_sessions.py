@@ -35,6 +35,7 @@ _TERMINAL_MAX_COLS = 240
 _TERMINAL_MAX_ROWS = 80
 _TERMINAL_READ_CHUNK_BYTES = 32 * 1024
 _TERMINAL_MAX_OUTPUT_CHARS = 1_000_000
+_TERMINAL_MAX_REPLAY_TAIL_CHARS = 250_000
 _TERMINAL_CLOSE_WAIT_SECONDS = 1.2
 _TERMINAL_SELECT_TIMEOUT_SECONDS = 0.2
 _TERMINAL_STARTUP_GRACE_SECONDS = 0.2
@@ -122,6 +123,18 @@ def _normalize_cols(value):
 
 def _normalize_rows(value):
     return _normalize_dimension(value, _TERMINAL_DEFAULT_ROWS, _TERMINAL_MIN_ROWS, _TERMINAL_MAX_ROWS)
+
+
+def _normalize_tail_chars(value):
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return min(parsed, _TERMINAL_MAX_REPLAY_TAIL_CHARS)
 
 
 def _format_display_path(root_key, relative_path=''):
@@ -487,13 +500,15 @@ def _build_session_summary(session):
     }
 
 
-def _build_session_snapshot(session, offset=None):
+def _build_session_snapshot(session, offset=None, tail_chars=None):
     summary = _build_session_summary(session)
     base_offset = session.output_base_offset
     output_buffer = session.output_buffer
     output_length = summary['output_length']
+    replay_tail_chars = _normalize_tail_chars(tail_chars)
 
     reset = False
+    replay_truncated = False
     start_offset = base_offset
     if offset is None:
         reset = True
@@ -507,8 +522,13 @@ def _build_session_snapshot(session, offset=None):
         else:
             start_offset = requested_offset
     if reset:
-        output = output_buffer
-        start_offset = base_offset
+        if replay_tail_chars is not None and len(output_buffer) > replay_tail_chars:
+            start_offset = output_length - replay_tail_chars
+            output = output_buffer[start_offset - base_offset:]
+            replay_truncated = True
+        else:
+            output = output_buffer
+            start_offset = base_offset
     else:
         output = output_buffer[start_offset - base_offset:]
 
@@ -516,11 +536,17 @@ def _build_session_snapshot(session, offset=None):
         'reset': reset,
         'output_offset': start_offset,
         'output': output,
+        'output_replay_chars': len(output),
+        'output_replay_truncated': replay_truncated,
     })
     return summary
 
 
-def iter_terminal_session_events(session_id, offset=None, heartbeat_seconds=_TERMINAL_STREAM_HEARTBEAT_SECONDS):
+def iter_terminal_session_events(
+        session_id,
+        offset=None,
+        tail_chars=None,
+        heartbeat_seconds=_TERMINAL_STREAM_HEARTBEAT_SECONDS):
     terminal_id = str(session_id or '').strip()
     if not terminal_id:
         raise TerminalSessionError(
@@ -568,7 +594,11 @@ def iter_terminal_session_events(session_id, offset=None, heartbeat_seconds=_TER
             heartbeat_payload = None
 
             with session.stream_condition:
-                snapshot = _build_session_snapshot(session, offset=last_offset)
+                snapshot = _build_session_snapshot(
+                    session,
+                    offset=last_offset,
+                    tail_chars=tail_chars if emit_initial_snapshot else None,
+                )
                 current_stream_seq = session.stream_seq
                 should_emit = (
                     emit_initial_snapshot
@@ -729,7 +759,7 @@ def list_terminal_sessions():
     return {'sessions': summaries}
 
 
-def read_terminal_session(session_id, offset=None):
+def read_terminal_session(session_id, offset=None, tail_chars=None):
     terminal_id = str(session_id or '').strip()
     if not terminal_id:
         raise TerminalSessionError(
@@ -747,7 +777,7 @@ def read_terminal_session(session_id, offset=None):
         )
     with session.lock:
         _sync_process_state(session)
-        return _build_session_snapshot(session, offset=offset)
+        return _build_session_snapshot(session, offset=offset, tail_chars=tail_chars)
 
 
 def write_terminal_input(session_id, data=''):

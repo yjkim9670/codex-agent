@@ -812,6 +812,44 @@ def test_terminal_session_supports_input_resize_and_close(isolated_browser_roots
     assert exc_info.value.error_code == 'session_not_found'
 
 
+def test_terminal_session_reset_snapshot_can_replay_tail_only():
+    now = time.time()
+    session = terminal_sessions._TerminalSession(
+        id='tail-replay-session',
+        root='workspace',
+        root_path='/tmp/workspace',
+        path='',
+        cwd='/tmp/workspace',
+        display_path='$workspace',
+        title='$workspace',
+        shell='bash',
+        cols=96,
+        rows=28,
+        created_ts=now,
+        updated_ts=now,
+        last_output_ts=now,
+        output_base_offset=100,
+        output_buffer='0123456789abcdef',
+        process_running=False,
+        exit_code=0,
+    )
+
+    with terminal_sessions._SESSIONS_LOCK:
+        terminal_sessions._TERMINAL_SESSIONS[session.id] = session
+    try:
+        snapshot = terminal_sessions.read_terminal_session(session.id, tail_chars=6)
+    finally:
+        with terminal_sessions._SESSIONS_LOCK:
+            terminal_sessions._TERMINAL_SESSIONS.pop(session.id, None)
+
+    assert snapshot['reset'] is True
+    assert snapshot['output'] == 'abcdef'
+    assert snapshot['output_offset'] == 110
+    assert snapshot['output_length'] == 116
+    assert snapshot['output_replay_chars'] == 6
+    assert snapshot['output_replay_truncated'] is True
+
+
 def test_terminal_environment_uses_current_path_prompt(monkeypatch, tmp_path):
     monkeypatch.setenv('CODEX_TERMINAL_STARTUP_DIR', str(tmp_path / 'terminal-startup'))
 

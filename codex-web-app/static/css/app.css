@@ -6713,6 +6713,9 @@ body.is-work-mode-resizing * {
     padding: 10px;
     box-shadow: var(--card-shadow);
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .chat-controls-header {
@@ -6792,8 +6795,10 @@ body.is-work-mode-resizing * {
     gap: 12px;
     align-items: stretch;
     min-height: 0;
+    max-width: 100%;
     max-height: min(34vh, 280px);
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .chat-controls-body > * {
@@ -7004,6 +7009,8 @@ body.is-work-mode-resizing * {
     background: var(--surface);
     color: var(--text-primary);
     min-height: 32px;
+    max-width: 100%;
+    text-overflow: ellipsis;
 }
 
 .model-field {
@@ -7024,6 +7031,15 @@ body.is-work-mode-resizing * {
 .model-field-reasoning .model-select,
 .model-field-reasoning .model-input {
     max-width: 132px;
+}
+
+.model-card.is-no-reasoning .model-row:not(.model-row-single),
+.model-card.is-no-reasoning .model-row.model-row-combined {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.model-card.is-no-reasoning .model-field-reasoning {
+    display: none;
 }
 
 .model-select.is-hidden {

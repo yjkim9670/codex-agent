@@ -16,7 +16,9 @@ from .config import (
     SECRET_KEY,
     WORKSPACE_DIR,
     get_codex_agent_backend_options,
+    get_codex_model_catalogs_by_agent_backend,
     get_codex_model_options,
+    get_codex_security_policy,
 )
 from .services.codex_chat import (
     ensure_pending_queue_background_worker,
@@ -70,6 +72,7 @@ def create_codex_app():
                 'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
                 'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
             },
+            'security_policy': get_codex_security_policy(),
         }
 
     @app.route('/')
@@ -90,6 +93,8 @@ def create_codex_app():
             reasoning_options=CODEX_REASONING_OPTIONS,
             service_tier_options=CODEX_SERVICE_TIER_OPTIONS,
             agent_backend_options=get_codex_agent_backend_options(),
+            model_catalogs_by_agent_backend=get_codex_model_catalogs_by_agent_backend(),
+            security_policy=runtime_context['security_policy'],
             server_directory_name=runtime_context['server_directory_name'],
             server_directory_path=runtime_context['server_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],
@@ -106,6 +111,7 @@ def create_codex_app():
             'mode': runtime_context['mode'],
             'api': '/api/codex/sessions',
             'feature_flags': runtime_context['feature_flags'],
+            'security_policy': runtime_context['security_policy'],
         })
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])

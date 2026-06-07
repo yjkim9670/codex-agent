@@ -381,9 +381,8 @@ def _build_model_catalog_entry(slug, default_reasoning_effort=None, reasoning_op
     normalized_slug = normalize_codex_model_name(slug)
     if not normalized_slug:
         return None
-    normalized_reasoning_options = _normalize_reasoning_options(
-        reasoning_options or _DEFAULT_REASONING_OPTIONS
-    )
+    raw_reasoning_options = _DEFAULT_REASONING_OPTIONS if reasoning_options is None else reasoning_options
+    normalized_reasoning_options = _normalize_reasoning_options(raw_reasoning_options)
     normalized_default_reasoning = str(default_reasoning_effort or '').strip()
     if normalized_default_reasoning and normalized_default_reasoning not in normalized_reasoning_options:
         normalized_reasoning_options.insert(0, normalized_default_reasoning)
@@ -639,6 +638,62 @@ def get_codex_reasoning_options(model_name=None):
     return list(_DEFAULT_REASONING_OPTIONS)
 
 
+def _read_claude_model_options_from_env():
+    options = _normalize_model_options(
+        item.strip()
+        for item in os.environ.get('CODEX_CLAUDE_MODEL_OPTIONS', '').split(',')
+        if item.strip()
+    )
+    default_model = normalize_codex_model_name(os.environ.get('CODEX_CLAUDE_MODEL'))
+    if default_model and default_model not in options:
+        options.insert(0, default_model)
+    return options
+
+
+def get_claude_model_catalog():
+    return _normalize_model_catalog(
+        {
+            'slug': model_name,
+            'default_reasoning_effort': None,
+            'reasoning_options': [],
+        }
+        for model_name in _read_claude_model_options_from_env()
+    )
+
+
+def get_codex_model_catalog_for_backend(agent_backend=None):
+    backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
+    if backend == 'claude':
+        return get_claude_model_catalog()
+    return get_codex_model_catalog()
+
+
+def get_codex_model_options_for_backend(agent_backend=None):
+    return [
+        entry['slug']
+        for entry in get_codex_model_catalog_for_backend(agent_backend)
+    ]
+
+
+def get_codex_reasoning_options_for_backend(agent_backend=None, model_name=None):
+    backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
+    if backend == 'claude':
+        return []
+    return get_codex_reasoning_options(model_name=model_name)
+
+
+def get_codex_model_catalogs_by_agent_backend():
+    catalogs = {'dtgpt': get_codex_model_catalog()}
+    option_ids = {
+        str(item.get('id') or '').strip()
+        for item in get_codex_agent_backend_options()
+        if isinstance(item, dict)
+    }
+    if 'claude' in option_ids:
+        catalogs['claude'] = get_claude_model_catalog()
+    return catalogs
+
+
 def get_codex_service_tier_options():
     if not _parse_bool_env('CODEX_ENABLE_SERVICE_TIER', default=True):
         return []
@@ -699,6 +754,7 @@ CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS = _parse_bool_env(
     'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS',
     default=True,
 )
+CODEX_SHOW_USAGE_LIMITS = _parse_bool_env('CODEX_SHOW_USAGE_LIMITS', default=True)
 CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK = _parse_bool_env(
     'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK',
     default=True,
@@ -757,6 +813,13 @@ CODEX_MAIL_MAX_ARCHIVE_ENTRIES = _parse_int_env(
     minimum=1,
     maximum=100000,
 )
+
+
+def get_codex_security_policy():
+    return {
+        'chat_prompt_encryption_required': bool(CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS),
+        'file_write_encryption_required': bool(CODEX_REQUIRE_ENCRYPTED_FILE_WRITES),
+    }
 
 KST = timezone(timedelta(hours=9))
 KST_ZONEINFO = ZoneInfo('Asia/Seoul') if ZoneInfo else None

@@ -1044,6 +1044,16 @@ def test_agent_backend_options_include_company_choices(monkeypatch):
     assert codex_config.normalize_codex_agent_backend('codex') == 'dtgpt'
 
 
+def test_claude_model_catalog_is_backend_scoped(monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'claude-sonnet,claude-opus')
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert [entry['slug'] for entry in catalog] == ['claude-sonnet', 'claude-opus']
+    assert all(entry['reasoning_options'] == [] for entry in catalog)
+    assert codex_config.get_codex_reasoning_options_for_backend('claude') == []
+
+
 def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, monkeypatch):
     monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
     monkeypatch.setenv('CODEX_CLAUDE_MAX_TURNS', '2')
@@ -1072,6 +1082,28 @@ def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, m
     ]
     assert '--sandbox' not in cmd
     assert '--config' not in cmd
+
+
+def test_build_agent_command_uses_selected_claude_model(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'claude-sonnet,claude-opus')
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+
+    codex_chat.update_settings(agent_backend='claude', model='claude-sonnet')
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert cmd[:4] == [r'C:\tools\claude.cmd', '-p', '--model', 'claude-sonnet']
+    assert '--output-format' in cmd
 
 
 def test_extract_claude_json_summary_reads_result_and_usage():
@@ -2094,6 +2126,35 @@ def test_chat_queue_route_rejects_plain_prompt_when_encryption_required(chat_rou
     assert response.status_code == 400
     payload = response.get_json()
     assert payload['error_code'] == 'encrypted_chat_prompt_required'
+
+
+def test_chat_queue_route_accepts_plain_prompt_when_encryption_disabled(
+        chat_route_client,
+        isolated_codex_workspace,
+        monkeypatch):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', False)
+    session = codex_chat.create_session('plain-route-queue')
+    session_id = session['id']
+    with state.codex_streams_lock:
+        active_stream = _build_stream_state(
+            'active-plain-route-stream',
+            session_id,
+            started_at=time.time(),
+            output_path=isolated_codex_workspace['workspace_dir'] / 'active-plain-route-stream.txt',
+        )
+        active_stream['done'] = False
+        state.codex_streams['active-plain-route-stream'] = active_stream
+
+    response = chat_route_client.post(
+        f'/api/codex/sessions/{session_id}/message/queue',
+        base_url='http://company.internal',
+        json={'prompt': 'plain company prompt'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['queued'] is True
+    assert payload['pending_queue'][0]['prompt'] == 'plain company prompt'
 
 
 def test_chat_queue_route_accepts_trusted_tailscale_http_fallback(

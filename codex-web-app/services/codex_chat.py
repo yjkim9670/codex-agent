@@ -61,6 +61,7 @@ from ..config import (
     KST,
     REPO_ROOT,
     WORKSPACE_DIR,
+    get_codex_model_options_for_backend,
     normalize_codex_agent_backend,
     normalize_codex_model_name,
     normalize_codex_service_tier,
@@ -1622,11 +1623,34 @@ def _parse_claude_max_turns():
     return min(parsed, 100)
 
 
-def _resolve_claude_model():
-    model_name = str(os.environ.get('CODEX_CLAUDE_MODEL') or '').strip()
+def _normalize_claude_model_candidate(value):
+    model_name = str(value or '').strip()
     if not model_name or '\x00' in model_name:
         return ''
-    return model_name
+    return normalize_codex_model_name(model_name)
+
+
+def _resolve_claude_model(model_override=None):
+    allowed_models = set(get_codex_model_options_for_backend('claude'))
+    allow_custom = str(os.environ.get('CODEX_CLAUDE_ALLOW_CUSTOM_MODEL') or '').strip().lower() in {
+        '1', 'true', 'yes', 'on'
+    }
+    for candidate in (
+        _normalize_claude_model_candidate(model_override),
+        _normalize_claude_model_candidate(get_settings().get('model')),
+    ):
+        if not candidate:
+            continue
+        if allowed_models and candidate not in allowed_models:
+            continue
+        if not allowed_models and not allow_custom:
+            continue
+        return candidate
+    env_model = _normalize_claude_model_candidate(os.environ.get('CODEX_CLAUDE_MODEL'))
+    if env_model:
+        if not allowed_models or env_model in allowed_models:
+            return env_model
+    return ''
 
 
 def _read_codex_config_text():
@@ -2083,7 +2107,7 @@ def build_structured_report_prompt(prompt_text, preset_id):
 def resolve_response_model_name(model_override=None):
     settings = get_settings()
     if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'claude':
-        return _resolve_claude_model() or 'claude-default'
+        return _resolve_claude_model(model_override=model_override) or 'claude-default'
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
@@ -6670,7 +6694,7 @@ def _build_claude_command(
     del execution_cwd
 
     cmd = [_claude_cli_command(), '-p']
-    claude_model = _resolve_claude_model()
+    claude_model = _resolve_claude_model(model_override=model_override)
     if claude_model:
         cmd.extend(['--model', claude_model])
     max_turns = _parse_claude_max_turns()

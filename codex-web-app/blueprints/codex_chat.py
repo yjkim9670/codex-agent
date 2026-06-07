@@ -19,6 +19,7 @@ from ..config import (
     CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
     CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
     CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
+    CODEX_SHOW_USAGE_LIMITS,
     CODEX_TRUSTED_HTTP_CRYPTO_FALLBACK_HOSTS,
     CODEX_MAIL_FROM,
     CODEX_MAIL_MAX_ARCHIVE_BYTES,
@@ -35,13 +36,15 @@ from ..config import (
     CODEX_MAX_REASONING_CHARS,
     CODEX_MAX_SERVICE_TIER_CHARS,
     CODEX_MAX_TITLE_CHARS,
-    CODEX_REASONING_OPTIONS,
     CODEX_SERVICE_TIER_OPTIONS,
     REPO_ROOT,
     WORKSPACE_DIR,
-    get_codex_model_catalog,
+    get_codex_model_catalog_for_backend,
     get_codex_model_catalog_source,
-    get_codex_model_options,
+    get_codex_model_catalogs_by_agent_backend,
+    get_codex_model_options_for_backend,
+    get_codex_reasoning_options_for_backend,
+    get_codex_security_policy,
     normalize_codex_agent_backend,
     normalize_codex_service_tier,
 )
@@ -534,6 +537,8 @@ def _feature_disabled_response(feature_key):
 def _build_runtime_info():
     server_directory = Path.cwd().resolve()
     workspace_directory = WORKSPACE_DIR.resolve()
+    settings = get_settings()
+    agent_backend = settings.get('agent_backend')
     return {
         'service': 'codex-workbench',
         'mode': 'api-only' if CODEX_API_ONLY_MODE else 'ui+api',
@@ -542,17 +547,20 @@ def _build_runtime_info():
         'workspace_directory_name': workspace_directory.name or str(workspace_directory),
         'workspace_directory_path': str(workspace_directory),
         'current_branch_name': get_current_branch_name(),
-        'model_options': get_codex_model_options(),
-        'model_catalog': get_codex_model_catalog(),
+        'model_options': get_codex_model_options_for_backend(agent_backend),
+        'model_catalog': get_codex_model_catalog_for_backend(agent_backend),
+        'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
         'model_catalog_source': get_codex_model_catalog_source(),
-        'reasoning_options': CODEX_REASONING_OPTIONS,
+        'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'agent_backend_options': get_agent_backend_options(),
+        'security_policy': get_codex_security_policy(),
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
             'image_attachments_enabled': CODEX_MAX_ATTACHMENTS_PER_TURN > 0,
             'mail_api_enabled': bool(CODEX_ENABLE_FILES_API),
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
         },
         'attachments': {
             'max_per_turn': int(CODEX_MAX_ATTACHMENTS_PER_TURN),
@@ -605,12 +613,15 @@ def codex_settings():
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
     if not isinstance(usage, dict):
         usage = get_usage_summary()
+    settings = get_settings()
+    agent_backend = settings.get('agent_backend')
     return jsonify({
-        'settings': get_settings(),
-        'model_options': get_codex_model_options(),
-        'model_catalog': get_codex_model_catalog(),
+        'settings': settings,
+        'model_options': get_codex_model_options_for_backend(agent_backend),
+        'model_catalog': get_codex_model_catalog_for_backend(agent_backend),
+        'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
         'model_catalog_source': get_codex_model_catalog_source(),
-        'reasoning_options': CODEX_REASONING_OPTIONS,
+        'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
@@ -618,6 +629,10 @@ def codex_settings():
         'app_server_status': get_codex_app_server_status(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
+        'security_policy': get_codex_security_policy(),
+        'feature_flags': {
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
+        },
     })
 
 
@@ -632,6 +647,9 @@ def codex_usage():
         'usage': usage,
         'usage_history': get_usage_history_summary(),
         'session_storage': get_session_storage_summary(),
+        'feature_flags': {
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
+        },
     })
 
 
@@ -647,6 +665,9 @@ def codex_usage_history():
         'usage': usage,
         'usage_history': get_usage_history_summary(hours=hours),
         'session_storage': get_session_storage_summary(),
+        'feature_flags': {
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
+        },
     })
 
 
@@ -724,11 +745,14 @@ def codex_settings_update():
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
     if not isinstance(usage, dict):
         usage = get_usage_summary()
+    agent_backend = settings.get('agent_backend')
     return jsonify({
         'settings': settings,
-        'model_options': get_codex_model_options(),
-        'model_catalog': get_codex_model_catalog(),
-        'reasoning_options': CODEX_REASONING_OPTIONS,
+        'model_options': get_codex_model_options_for_backend(agent_backend),
+        'model_catalog': get_codex_model_catalog_for_backend(agent_backend),
+        'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
+        'model_catalog_source': get_codex_model_catalog_source(),
+        'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
@@ -736,6 +760,10 @@ def codex_settings_update():
         'app_server_status': get_codex_app_server_status(),
         'usage': usage,
         'session_storage': get_session_storage_summary(),
+        'security_policy': get_codex_security_policy(),
+        'feature_flags': {
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
+        },
     })
 
 

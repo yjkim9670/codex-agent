@@ -2,6 +2,14 @@ const CODEX_PUBLIC_PREVIEW_CONFIG = (() => {
     const raw = window.__CODEX_PUBLIC_PREVIEW_CONFIG__;
     return raw && typeof raw === 'object' ? raw : {};
 })();
+const CODEX_SECURITY_POLICY_CONFIG = (() => {
+    const raw = window.__CODEX_SECURITY_POLICY__;
+    return raw && typeof raw === 'object' ? raw : {};
+})();
+const CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND_CONFIG = (() => {
+    const raw = window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__;
+    return raw && typeof raw === 'object' ? raw : {};
+})();
 
 function getPublicPreviewConfigValue(key, fallback = '') {
     const value = CODEX_PUBLIC_PREVIEW_CONFIG && CODEX_PUBLIC_PREVIEW_CONFIG[key];
@@ -75,6 +83,7 @@ const state = {
     settings: {
         model: null,
         modelCatalog: [],
+        modelCatalogsByBackend: normalizeModelCatalogsByBackend(CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND_CONFIG),
         modelOptions: [],
         agentBackend: null,
         agentBackendLabel: null,
@@ -90,9 +99,11 @@ const state = {
         reasoningOptions: [],
         serviceTier: null,
         serviceTierOptions: [],
+        securityPolicy: normalizeSecurityPolicy(CODEX_SECURITY_POLICY_CONFIG),
         structuredReportPresets: [],
         usage: null,
         usageHistory: null,
+        usageLimitsEnabled: true,
         loaded: false
     }
 };
@@ -1592,6 +1603,31 @@ function normalizeAgentBackendOptions(options) {
     return normalized;
 }
 
+function normalizeBooleanPolicyFlag(value, fallback = true) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+        const token = value.trim().toLowerCase();
+        if (token === '1' || token === 'true' || token === 'yes' || token === 'on') return true;
+        if (token === '0' || token === 'false' || token === 'no' || token === 'off') return false;
+    }
+    return fallback;
+}
+
+function normalizeSecurityPolicy(policy) {
+    const source = policy && typeof policy === 'object' ? policy : {};
+    return {
+        chatPromptEncryptionRequired: normalizeBooleanPolicyFlag(
+            source.chat_prompt_encryption_required ?? source.chatPromptEncryptionRequired,
+            true
+        ),
+        fileWriteEncryptionRequired: normalizeBooleanPolicyFlag(
+            source.file_write_encryption_required ?? source.fileWriteEncryptionRequired,
+            true
+        )
+    };
+}
+
 function collectAgentBackendOptionsFromDom(select) {
     const dataOptions = normalizeAgentBackendOptions(readOptionsFromData(select));
     if (!select) return dataOptions;
@@ -1604,6 +1640,100 @@ function collectAgentBackendOptionsFromDom(select) {
         ...dataOptions,
         ...domOptions
     ]);
+}
+
+function normalizeModelCatalogsByBackend(catalogs) {
+    const normalized = {};
+    if (!catalogs || typeof catalogs !== 'object') return normalized;
+    Object.entries(catalogs).forEach(([rawBackend, catalog]) => {
+        const backend = normalizeAgentBackendValue(rawBackend);
+        if (!backend) return;
+        normalized[backend] = normalizeModelCatalog(catalog);
+    });
+    return normalized;
+}
+
+function getActiveAgentBackend() {
+    return normalizeAgentBackendValue(state.settings.agentBackend) || 'dtgpt';
+}
+
+function isClaudeBackend(agentBackend = getActiveAgentBackend()) {
+    return normalizeAgentBackendValue(agentBackend) === 'claude';
+}
+
+function getModelCatalogForBackend(agentBackend = getActiveAgentBackend()) {
+    const backend = normalizeAgentBackendValue(agentBackend) || 'dtgpt';
+    const catalogs = state.settings.modelCatalogsByBackend || {};
+    if (Array.isArray(catalogs[backend])) {
+        return catalogs[backend];
+    }
+    return backend === 'dtgpt' ? state.settings.modelCatalog : [];
+}
+
+function getModelOptionsForBackend(agentBackend = getActiveAgentBackend()) {
+    return collectCatalogModelOptions(getModelCatalogForBackend(agentBackend));
+}
+
+function getReasoningOptionsForBackend(agentBackend = getActiveAgentBackend(), fallbackOptions = state.settings.reasoningOptions) {
+    if (isClaudeBackend(agentBackend)) return [];
+    const catalogOptions = collectCatalogReasoningOptions(getModelCatalogForBackend(agentBackend));
+    return catalogOptions.length > 0 ? catalogOptions : normalizeOptionList(fallbackOptions);
+}
+
+function getCompatibleModelForBackend(model, agentBackend = getActiveAgentBackend()) {
+    const selectedModel = typeof model === 'string' ? model.trim() : '';
+    if (!selectedModel) return '';
+    const options = getModelOptionsForBackend(agentBackend);
+    if (options.length > 0 && !options.includes(selectedModel)) return '';
+    if (isClaudeBackend(agentBackend) && options.length === 0) return '';
+    return selectedModel;
+}
+
+function syncModelCardForBackend(agentBackend = getActiveAgentBackend()) {
+    const modelCard = document.querySelector('.model-card');
+    const modelLabel = document.getElementById('codex-model-label');
+    const planModeModelLabel = document.getElementById('codex-plan-mode-model-label');
+    const noReasoning = isClaudeBackend(agentBackend);
+    if (modelCard) {
+        modelCard.classList.toggle('is-no-reasoning', noReasoning);
+    }
+    if (modelLabel) {
+        modelLabel.textContent = noReasoning ? 'Claude model' : 'Model · Reasoning effort';
+    }
+    if (planModeModelLabel) {
+        planModeModelLabel.textContent = noReasoning ? 'Plan mode Claude model' : 'Plan mode model · Reasoning effort';
+    }
+}
+
+function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) {
+    const backend = getActiveAgentBackend();
+    const catalog = getModelCatalogForBackend(backend);
+    const modelOptions = collectCatalogModelOptions(catalog);
+    const reasoningOptions = getReasoningOptionsForBackend(backend);
+    const nextModel = clearIncompatibleModel
+        ? getCompatibleModelForBackend(state.settings.model, backend)
+        : (state.settings.model || '');
+    const nextPlanModeModel = clearIncompatibleModel
+        ? getCompatibleModelForBackend(state.settings.planModeModel, backend)
+        : (state.settings.planModeModel || '');
+    state.settings.modelCatalog = catalog;
+    state.settings.modelOptions = modelOptions;
+    state.settings.reasoningOptions = reasoningOptions;
+    state.settings.model = nextModel || null;
+    state.settings.planModeModel = nextPlanModeModel || null;
+    if (isClaudeBackend(backend)) {
+        state.settings.reasoningEffort = null;
+        state.settings.planModeReasoningEffort = null;
+    }
+    syncModelCardForBackend(backend);
+    updateModelControls(state.settings.model, state.settings.modelOptions);
+    updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
+    updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions, state.settings.model);
+    updatePlanModeReasoningControls(
+        state.settings.planModeReasoningEffort,
+        state.settings.reasoningOptions,
+        state.settings.planModeModel || state.settings.model
+    );
 }
 
 function normalizeServiceTierValue(value) {
@@ -1785,6 +1915,15 @@ function primeSettingsOptionsFromDom(
     const serviceTierOptions = collectServiceTierOptionsFromDom(serviceTierSelect);
     if (modelOptions.length > 0) {
         state.settings.modelOptions = modelOptions;
+        if (!state.settings.modelCatalogsByBackend.dtgpt) {
+            state.settings.modelCatalogsByBackend.dtgpt = normalizeModelCatalog(
+                modelOptions.map(slug => ({
+                    slug,
+                    default_reasoning_effort: null,
+                    reasoning_options: reasoningOptions
+                }))
+            );
+        }
     } else if (planModeModelOptions.length > 0) {
         state.settings.modelOptions = planModeModelOptions;
     }
@@ -3303,6 +3442,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (agentBackendSelect) {
         agentBackendSelect.addEventListener('change', () => {
             state.settings.agentBackend = normalizeAgentBackendValue(agentBackendSelect.value) || state.settings.agentBackend;
+            applyBackendScopedModelOptions();
             setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         });
     }
@@ -7391,21 +7531,30 @@ async function loadSettings({ silent = true } = {}) {
     try {
         const result = await fetchJson('/api/codex/settings');
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
-        const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
-        const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
+        const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
+        if (!modelCatalogsByBackend.dtgpt && modelCatalog.length > 0) {
+            modelCatalogsByBackend.dtgpt = modelCatalog;
+        }
+        const activeBackend = normalizeAgentBackendValue(result?.settings?.agent_backend) || null;
+        const activeModelCatalog = modelCatalogsByBackend[activeBackend] || modelCatalog;
+        const catalogModelOptions = collectCatalogModelOptions(activeModelCatalog);
+        const catalogReasoningOptions = collectCatalogReasoningOptions(activeModelCatalog);
         const modelOptions = catalogModelOptions.length > 0
             ? catalogModelOptions
             : normalizeOptionList(result?.model_options);
-        const reasoningOptions = normalizeOptionList(result?.reasoning_options);
+        const reasoningOptions = isClaudeBackend(activeBackend)
+            ? []
+            : normalizeOptionList(result?.reasoning_options);
         const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
         const agentBackendOptions = normalizeAgentBackendOptions(result?.agent_backend_options);
         const executionPolicyPresets = normalizeExecutionPolicyPresets(result?.execution_policy_presets);
         const structuredReportPresets = normalizeStructuredReportPresets(result?.structured_report_presets);
         state.settings = {
             model: result?.settings?.model || null,
-            modelCatalog,
+            modelCatalog: activeModelCatalog,
+            modelCatalogsByBackend,
             modelOptions,
-            agentBackend: normalizeAgentBackendValue(result?.settings?.agent_backend) || null,
+            agentBackend: activeBackend,
             agentBackendLabel: result?.settings?.agent_backend_label || null,
             agentBackendOptions,
             cliProfile: result?.settings?.cli_profile || null,
@@ -7419,9 +7568,11 @@ async function loadSettings({ silent = true } = {}) {
             reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
             serviceTier: normalizeServiceTierValue(result?.settings?.service_tier) || null,
             serviceTierOptions,
+            securityPolicy: normalizeSecurityPolicy(result?.security_policy),
             structuredReportPresets,
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
+            usageLimitsEnabled: normalizeBooleanPolicyFlag(result?.feature_flags?.usage_limits_enabled, true),
             loaded: true
         };
         state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
@@ -7431,12 +7582,8 @@ async function loadSettings({ silent = true } = {}) {
         }
         updateUsageSummary(state.settings.usage);
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
-        updateModelControls(state.settings.model, state.settings.modelOptions);
-        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
-        updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
-        updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
+        applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
-        updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -7465,6 +7612,10 @@ async function refreshUsageSummary({ silent = true, showSuccessToast = false } =
         const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
         const usage = result?.usage ?? null;
         const usageHistory = result?.usage_history ?? null;
+        state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
+            result?.feature_flags?.usage_limits_enabled,
+            state.settings.usageLimitsEnabled !== false
+        );
         state.settings.usage = usage;
         state.settings.usageHistory = usageHistory;
         if (result?.session_storage) {
@@ -7484,10 +7635,12 @@ async function refreshUsageSummary({ silent = true, showSuccessToast = false } =
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
+    const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
     if (historyButton) {
         const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
             && state.settings.usageHistory.items.length > 1;
+        historyButton.classList.toggle('is-hidden', !showUsageLimits);
         historyButton.classList.toggle('is-ready', hasHistory);
     }
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
@@ -7497,7 +7650,7 @@ function updateUsageSummary(usage) {
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
-    const hasUsage = Boolean(usage && (usage.five_hour || usage.weekly));
+    const hasUsage = showUsageLimits && Boolean(usage && (usage.five_hour || usage.weekly));
     if (hasTokenUsage) {
         const tokenEntries = [
             buildTokenUsageEntry(tokenUsage?.today, 'Today'),
@@ -7519,10 +7672,10 @@ function updateUsageSummary(usage) {
         element.appendChild(fallback);
         return;
     }
-    const entries = [
+    const entries = showUsageLimits ? [
         buildUsageEntry(usage?.five_hour, '5h'),
         buildUsageEntry(usage?.weekly, 'Weekly')
-    ].filter(Boolean);
+    ].filter(Boolean) : [];
     entries.forEach(entry => {
         element.appendChild(entry);
     });
@@ -7545,6 +7698,7 @@ function updateModelControls(model, options) {
     const selectedModel = typeof model === 'string' ? model.trim() : '';
     const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
+    const defaultPlaceholder = isClaudeBackend() ? 'Claude CLI default model' : 'Default model';
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -7572,7 +7726,7 @@ function updateModelControls(model, options) {
     }
     if (input) {
         input.value = selectedModel || '';
-        input.placeholder = selectedModel ? selectedModel : 'Default model';
+        input.placeholder = selectedModel ? selectedModel : defaultPlaceholder;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7590,6 +7744,7 @@ function updatePlanModeModelControls(planModeModel, options) {
     const selectedModel = typeof planModeModel === 'string' ? planModeModel.trim() : '';
     const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
+    const defaultPlaceholder = isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model';
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -7617,7 +7772,7 @@ function updatePlanModeModelControls(planModeModel, options) {
     }
     if (input) {
         input.value = selectedModel || '';
-        input.placeholder = selectedModel ? selectedModel : 'Use default model';
+        input.placeholder = selectedModel ? selectedModel : defaultPlaceholder;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7835,10 +7990,11 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     const modelText = model ? model : 'default';
     const backendText = formatAgentBackendStatus(state.settings.agentBackend);
+    const noReasoning = isClaudeBackend(state.settings.agentBackend);
     const showBackend = normalizeAgentBackendOptions(state.settings.agentBackendOptions).length > 1;
     const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
-    const reasoningText = formatReasoningStatus(model, reasoning);
-    const planModeReasoningText = formatReasoningStatus(
+    const reasoningText = noReasoning ? '' : formatReasoningStatus(model, reasoning);
+    const planModeReasoningText = noReasoning ? '' : formatReasoningStatus(
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     );
@@ -7848,24 +8004,37 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
     if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
     const routingText = routingParts.length > 0 ? ` · ${routingParts.join(' · ')}` : '';
-    const backendPrefix = showBackend && backendText ? `Agent: ${backendText} · ` : '';
-    const speedPart = showSpeed ? ` · Speed: ${speedText}` : '';
-    const fullText = `${backendPrefix}Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}${speedPart}${routingText}`;
+    const fullTextParts = [];
+    if (showBackend && backendText) fullTextParts.push(`Agent: ${backendText}`);
+    fullTextParts.push(`Model: ${modelText}`);
+    if (planModeModelText !== modelText || state.settings.planModeModel) {
+        fullTextParts.push(`Plan model: ${planModeModelText}`);
+    }
+    if (!noReasoning) {
+        fullTextParts.push(`Reasoning: ${reasoningText}`);
+        if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
+            fullTextParts.push(`Plan reasoning: ${planModeReasoningText}`);
+        }
+    }
+    if (showSpeed) fullTextParts.push(`Speed: ${speedText}`);
+    const fullText = `${fullTextParts.join(' · ')}${routingText}`;
     const compactToken = value => {
         if (value === 'default') return 'def';
         return value.replace(' (default)', '*');
     };
     const compactSummaryParts = [
-        `Model:${compactToken(modelText)}`,
-        `R:${compactToken(reasoningText)}`
+        `Model:${compactToken(modelText)}`
     ];
+    if (!noReasoning) {
+        compactSummaryParts.push(`R:${compactToken(reasoningText)}`);
+    }
     if (showBackend && backendText) {
         compactSummaryParts.unshift(`Agent:${compactToken(backendText)}`);
     }
     if (planModeModelText !== modelText || state.settings.planModeModel) {
         compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
     }
-    if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
+    if (!noReasoning && (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
     }
     if (state.settings.serviceTier) {
@@ -7924,13 +8093,20 @@ async function updateSettings() {
             body: JSON.stringify({ agent_backend, model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
-        const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
-        const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
+        const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
+        if (!modelCatalogsByBackend.dtgpt && modelCatalog.length > 0) {
+            modelCatalogsByBackend.dtgpt = modelCatalog;
+        }
+        const nextBackend = normalizeAgentBackendValue(result?.settings?.agent_backend) || state.settings.agentBackend;
+        const activeModelCatalog = modelCatalogsByBackend[nextBackend] || modelCatalog;
+        const catalogModelOptions = collectCatalogModelOptions(activeModelCatalog);
+        const catalogReasoningOptions = collectCatalogReasoningOptions(activeModelCatalog);
         const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
         const agentBackendOptions = normalizeAgentBackendOptions(result?.agent_backend_options);
         state.settings.model = result?.settings?.model || null;
-        state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
-        state.settings.agentBackend = normalizeAgentBackendValue(result?.settings?.agent_backend) || state.settings.agentBackend;
+        state.settings.modelCatalog = activeModelCatalog;
+        state.settings.modelCatalogsByBackend = modelCatalogsByBackend;
+        state.settings.agentBackend = nextBackend;
         state.settings.agentBackendLabel = result?.settings?.agent_backend_label || null;
         state.settings.agentBackendOptions = agentBackendOptions.length > 0
             ? agentBackendOptions
@@ -7951,11 +8127,13 @@ async function updateSettings() {
             : (Array.isArray(result?.model_options)
                 ? normalizeOptionList(result.model_options)
                 : state.settings.modelOptions);
-        state.settings.reasoningOptions = Array.isArray(result?.reasoning_options)
+        state.settings.reasoningOptions = isClaudeBackend(state.settings.agentBackend)
+            ? []
+            : (Array.isArray(result?.reasoning_options)
             ? normalizeOptionList(result.reasoning_options)
             : (catalogReasoningOptions.length > 0
                 ? catalogReasoningOptions
-                : state.settings.reasoningOptions);
+                : state.settings.reasoningOptions));
         state.settings.executionPolicyPresets = Array.isArray(result?.execution_policy_presets)
             ? normalizeExecutionPolicyPresets(result.execution_policy_presets)
             : state.settings.executionPolicyPresets;
@@ -7963,21 +8141,15 @@ async function updateSettings() {
             ? normalizeStructuredReportPresets(result.structured_report_presets)
             : state.settings.structuredReportPresets;
         state.settings.usage = result?.usage || state.settings.usage;
+        state.settings.securityPolicy = normalizeSecurityPolicy(result?.security_policy);
+        state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
+            result?.feature_flags?.usage_limits_enabled,
+            state.settings.usageLimitsEnabled !== false
+        );
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
-        updateModelControls(state.settings.model, state.settings.modelOptions);
-        updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
-        updateReasoningControls(
-            state.settings.reasoningEffort,
-            state.settings.reasoningOptions,
-            state.settings.model
-        );
-        updatePlanModeReasoningControls(
-            state.settings.planModeReasoningEffort,
-            state.settings.reasoningOptions,
-            state.settings.planModeModel || state.settings.model
-        );
+        applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
@@ -13007,6 +13179,10 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
         });
         const usage = result?.usage ?? null;
         const usageHistory = result?.usage_history ?? null;
+        state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
+            result?.feature_flags?.usage_limits_enabled,
+            state.settings.usageLimitsEnabled !== false
+        );
         if (usage) {
             state.settings.usage = usage;
             updateUsageSummary(usage);
@@ -16076,6 +16252,21 @@ function buildTrustedHttpCryptoFallbackHeaders(headers = {}) {
     };
 }
 
+function buildPlainJsonPostHeaders(headers = {}) {
+    return {
+        ...(headers || {}),
+        'Content-Type': 'application/json'
+    };
+}
+
+function shouldEncryptChatPromptRequests() {
+    return state.settings?.securityPolicy?.chatPromptEncryptionRequired !== false;
+}
+
+function shouldEncryptFileBrowserRequests() {
+    return state.settings?.securityPolicy?.fileWriteEncryptionRequired !== false;
+}
+
 function normalizeJsonRequestPayload(payload) {
     return payload && typeof payload === 'object' ? payload : {};
 }
@@ -16294,6 +16485,22 @@ async function fetchEncryptedFileBrowserJson(url, payload, {
 } = {}) {
     const payloadBody = stringifyJsonRequestPayload(payload);
     const payloadBytes = getUtf8ByteLength(payloadBody);
+    if (!shouldEncryptFileBrowserRequests()) {
+        const result = await fetchJson(url, {
+            method: 'POST',
+            headers: buildPlainJsonPostHeaders(),
+            timeoutMs,
+            body: payloadBody
+        });
+        return buildJsonTransferResult(result, {
+            encrypted: false,
+            transport: 'plain_json',
+            payloadBytes,
+            uploadedBytes: payloadBytes,
+            responseEncrypted: false,
+            responseDecrypted: false
+        }, includeTransferMeta);
+    }
     if (!isFileBrowserCryptoSupported()) {
         if (!canUseTrustedHttpCryptoFallback()) {
             throw createCryptoUnsupportedError('파일 요청');
@@ -16502,6 +16709,14 @@ function isRecoverableChatPromptCryptoError(error) {
 
 async function fetchEncryptedChatPromptJson(url, payload, options = {}) {
     const requestOptions = options && typeof options === 'object' ? { ...options } : {};
+    if (!shouldEncryptChatPromptRequests()) {
+        return fetchJson(url, {
+            ...requestOptions,
+            method: 'POST',
+            headers: buildPlainJsonPostHeaders(requestOptions.headers),
+            body: JSON.stringify(payload && typeof payload === 'object' ? payload : {})
+        });
+    }
     if (!isFileBrowserCryptoSupported()) {
         if (!canUseTrustedHttpCryptoFallback()) {
             throw createCryptoUnsupportedError('채팅 프롬프트');
@@ -24635,6 +24850,7 @@ function createSessionResponseModeBadge(session) {
 }
 
 function resolveResponseModelForRequest(planMode = false) {
+    const fallbackModel = isClaudeBackend() ? 'claude-default' : 'codex-default';
     const defaultModel = typeof state.settings?.model === 'string'
         ? state.settings.model.trim()
         : '';
@@ -24642,12 +24858,13 @@ function resolveResponseModelForRequest(planMode = false) {
         ? state.settings.planModeModel.trim()
         : '';
     if (planMode) {
-        return planModeModel || defaultModel || 'codex-default';
+        return planModeModel || defaultModel || fallbackModel;
     }
-    return defaultModel || 'codex-default';
+    return defaultModel || fallbackModel;
 }
 
 function resolveReasoningEffortForRequest(planMode = false, model = '') {
+    if (isClaudeBackend()) return '';
     const fallbackReasoning = typeof state.settings?.reasoningEffort === 'string'
         ? state.settings.reasoningEffort.trim()
         : '';

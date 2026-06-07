@@ -29,6 +29,15 @@ if (-not $env:CODEX_AGENT_BACKEND) {
 if (-not $env:CODEX_ENABLE_SERVICE_TIER) {
     $env:CODEX_ENABLE_SERVICE_TIER = "0"
 }
+if (-not $env:CODEX_SHOW_USAGE_LIMITS) {
+    $env:CODEX_SHOW_USAGE_LIMITS = "0"
+}
+if (-not $env:CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS) {
+    $env:CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS = "0"
+}
+if (-not $env:CODEX_REQUIRE_ENCRYPTED_FILE_WRITES) {
+    $env:CODEX_REQUIRE_ENCRYPTED_FILE_WRITES = "0"
+}
 if ($env:OS -eq "Windows_NT" -and -not $env:CODEX_CLI_SANDBOX) {
     # Corporate Windows images can block Codex CLI's Windows sandbox setup with
     # CreateProcessWithLogonW 1326. Keep this override local to the company

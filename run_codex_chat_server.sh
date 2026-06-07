@@ -58,7 +58,7 @@ resolve_global_python() {
 
     local fallback=""
     local resolved=""
-    for candidate in python3 python; do
+    for candidate in /opt/homebrew/opt/python@3.12/bin/python3.12 python3.12 python3 python; do
         if command -v "${candidate}" >/dev/null 2>&1; then
             resolved="$(command -v "${candidate}")"
             [[ -n "${fallback}" ]] || fallback="${resolved}"
@@ -78,7 +78,7 @@ resolve_global_python() {
 }
 
 use_global_python() {
-    case "${CODEX_USE_GLOBAL_PYTHON:-${CODEX_SKIP_VENV:-0}}" in
+    case "${CODEX_USE_GLOBAL_PYTHON:-${CODEX_SKIP_VENV:-1}}" in
         1|true|TRUE|yes|YES|on|ON)
             return 0
             ;;

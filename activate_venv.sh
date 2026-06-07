@@ -1,71 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script must be sourced to keep the venv active in the current shell.
+# This script must be sourced so the global Python settings stay in the shell.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     echo "Please run: source ./activate_venv.sh"
     exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
-VENV_DIR="${PARENT_DIR}/.venv"
-VENV_PYTHON=""
+GLOBAL_PYTHON_BIN="${CODEX_PYTHON_BIN:-${PYTHON_BIN:-/opt/homebrew/opt/python@3.12/bin/python3.12}}"
+GLOBAL_PYTHON_USER_BIN="/Users/dinya/Library/Python/3.12/bin"
+GLOBAL_PYTHON_USER_SITE="/Users/dinya/Library/Python/3.12/lib/python/site-packages"
 
-resolve_host_python() {
-    if command -v python3 >/dev/null 2>&1; then
-        echo "python3"
-        return 0
-    fi
-    if command -v python >/dev/null 2>&1; then
-        echo "python"
-        return 0
-    fi
-    return 1
-}
-
-ensure_venv_python() {
-    local venv_dir="$1"
-    local host_python
-    host_python="$(resolve_host_python)" || {
+if [[ ! -x "${GLOBAL_PYTHON_BIN}" ]]; then
+    if command -v python3.12 >/dev/null 2>&1; then
+        GLOBAL_PYTHON_BIN="$(command -v python3.12)"
+    elif command -v python3 >/dev/null 2>&1; then
+        GLOBAL_PYTHON_BIN="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        GLOBAL_PYTHON_BIN="$(command -v python)"
+    else
         echo "Python executable not found on PATH." >&2
         return 1
-    }
-
-    if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >&2
-        rm -rf "${venv_dir}"
-        "${host_python}" -m venv "${venv_dir}"
     fi
+fi
 
-    if [[ ! -x "${venv_dir}/bin/python" ]]; then
-        echo "Failed to create a usable venv at ${venv_dir}" >&2
-        return 1
-    fi
+GLOBAL_PYTHON_BIN_DIR="$(cd "$(dirname "${GLOBAL_PYTHON_BIN}")" && pwd)"
 
-    printf '%s\n' "${venv_dir}/bin/python"
-}
-
-VENV_PYTHON="$(ensure_venv_python "${VENV_DIR}")"
-
-# Activate environment without relying on potentially stale activate scripts.
-export VIRTUAL_ENV="${VENV_DIR}"
+export CODEX_USE_GLOBAL_PYTHON=1
+export CODEX_PYTHON_BIN="${GLOBAL_PYTHON_BIN}"
+export PYTHON_BIN="${GLOBAL_PYTHON_BIN}"
+export PYTHON="${GLOBAL_PYTHON_BIN}"
 case ":${PATH}:" in
-    *":${VENV_DIR}/bin:"*) ;;
-    *) export PATH="${VENV_DIR}/bin:${PATH}" ;;
+    *":${GLOBAL_PYTHON_USER_BIN}:"*) ;;
+    *) export PATH="${GLOBAL_PYTHON_USER_BIN}:${PATH}" ;;
 esac
+case ":${PATH}:" in
+    *":${GLOBAL_PYTHON_BIN_DIR}:"*) ;;
+    *) export PATH="${GLOBAL_PYTHON_BIN_DIR}:${PATH}" ;;
+esac
+case ":${PYTHONPATH:-}:" in
+    *":${GLOBAL_PYTHON_USER_SITE}:"*) ;;
+    *) export PYTHONPATH="${GLOBAL_PYTHON_USER_SITE}${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
+unset VIRTUAL_ENV
 unset PYTHONHOME
 hash -r 2>/dev/null || true
 
-echo "Activated venv: ${VENV_DIR}"
-
-if [[ -f "${SCRIPT_DIR}/requirements.txt" ]]; then
-    if ! "${VENV_PYTHON}" -c "import flask, cryptography" >/dev/null 2>&1; then
-        if [[ -d "${SCRIPT_DIR}/wheelhouse" ]]; then
-            "${VENV_PYTHON}" -m pip install --no-index --find-links "${SCRIPT_DIR}/wheelhouse" -r "${SCRIPT_DIR}/requirements.txt"
-        else
-            "${VENV_PYTHON}" -m pip install --upgrade pip
-            "${VENV_PYTHON}" -m pip install -r "${SCRIPT_DIR}/requirements.txt"
-        fi
-    fi
-fi
+echo "Using global Python: ${GLOBAL_PYTHON_BIN}"

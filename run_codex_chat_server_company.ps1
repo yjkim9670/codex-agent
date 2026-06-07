@@ -20,6 +20,15 @@ if (-not $env:CODEX_REASONING_OPTIONS) {
 if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
     $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 }
+if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
+    $env:CODEX_AGENT_BACKEND_OPTIONS = "dtgpt,claude"
+}
+if (-not $env:CODEX_AGENT_BACKEND) {
+    $env:CODEX_AGENT_BACKEND = "dtgpt"
+}
+if (-not $env:CODEX_ENABLE_SERVICE_TIER) {
+    $env:CODEX_ENABLE_SERVICE_TIER = "0"
+}
 if ($env:OS -eq "Windows_NT" -and -not $env:CODEX_CLI_SANDBOX) {
     # Corporate Windows images can block Codex CLI's Windows sandbox setup with
     # CreateProcessWithLogonW 1326. Keep this override local to the company
@@ -64,6 +73,18 @@ if (-not $env:CODEX_CLI_BIN) {
             $env:CODEX_CLI_BIN = $CandidatePath
             break
         }
+    }
+}
+if (-not $env:CODEX_CLAUDE_CLI_BIN) {
+    $ClaudeCommand = Get-Command claude.cmd -ErrorAction SilentlyContinue
+    if (-not $ClaudeCommand) {
+        $ClaudeCommand = Get-Command claude.exe -ErrorAction SilentlyContinue
+    }
+    if (-not $ClaudeCommand) {
+        $ClaudeCommand = Get-Command claude -ErrorAction SilentlyContinue
+    }
+    if ($ClaudeCommand) {
+        $env:CODEX_CLAUDE_CLI_BIN = $ClaudeCommand.Source
     }
 }
 

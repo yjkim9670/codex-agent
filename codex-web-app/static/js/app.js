@@ -76,6 +76,9 @@ const state = {
         model: null,
         modelCatalog: [],
         modelOptions: [],
+        agentBackend: null,
+        agentBackendLabel: null,
+        agentBackendOptions: [],
         cliProfile: null,
         executionPolicyPresets: [],
         appServerPilotEnabled: false,
@@ -1553,6 +1556,56 @@ function normalizeOptionList(options) {
     return normalized;
 }
 
+function normalizeAgentBackendValue(value) {
+    const token = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!token) return '';
+    if (token === 'codex' || token === 'codex-cli' || token === 'codex_cli' || token === 'dtgpt_oa') {
+        return 'dtgpt';
+    }
+    if (token === 'anthropic' || token === 'claude-cli' || token === 'claude_cli') {
+        return 'claude';
+    }
+    if (token === 'dtgpt' || token === 'claude') return token;
+    return '';
+}
+
+function normalizeAgentBackendOptions(options) {
+    if (!Array.isArray(options)) return [];
+    const normalized = [];
+    const seen = new Set();
+    options.forEach(item => {
+        const rawId = typeof item?.id === 'string' ? item.id : (typeof item === 'string' ? item : '');
+        const id = normalizeAgentBackendValue(rawId);
+        if (!id || seen.has(id)) return;
+        const fallbackName = id === 'claude' ? 'Claude' : 'DTGPT';
+        const name = typeof item?.name === 'string'
+            ? item.name.trim()
+            : (typeof item?.label === 'string' ? item.label.trim() : fallbackName);
+        const description = typeof item?.description === 'string' ? item.description.trim() : '';
+        normalized.push({
+            id,
+            name: name || fallbackName,
+            description
+        });
+        seen.add(id);
+    });
+    return normalized;
+}
+
+function collectAgentBackendOptionsFromDom(select) {
+    const dataOptions = normalizeAgentBackendOptions(readOptionsFromData(select));
+    if (!select) return dataOptions;
+    const domOptions = Array.from(select.options || []).map(option => ({
+        id: option.value,
+        name: option.textContent || option.value,
+        description: option.title || ''
+    }));
+    return normalizeAgentBackendOptions([
+        ...dataOptions,
+        ...domOptions
+    ]);
+}
+
 function normalizeServiceTierValue(value) {
     const token = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (!token || token === 'standard' || token === 'default' || token === 'auto') return '';
@@ -1717,12 +1770,14 @@ function formatReasoningStatus(model, reasoning) {
 }
 
 function primeSettingsOptionsFromDom(
+    agentBackendSelect,
     modelSelect,
     reasoningSelect,
     planModeModelSelect,
     planModeReasoningSelect,
     serviceTierSelect
 ) {
+    const agentBackendOptions = collectAgentBackendOptionsFromDom(agentBackendSelect);
     const modelOptions = readOptionsFromData(modelSelect);
     const planModeModelOptions = readOptionsFromData(planModeModelSelect);
     const reasoningOptions = readOptionsFromData(reasoningSelect);
@@ -1741,13 +1796,18 @@ function primeSettingsOptionsFromDom(
     if (serviceTierOptions.length > 0) {
         state.settings.serviceTierOptions = serviceTierOptions;
     }
+    if (agentBackendOptions.length > 0) {
+        state.settings.agentBackendOptions = agentBackendOptions;
+    }
     if (
-        modelOptions.length > 0
+        agentBackendOptions.length > 0
+        || modelOptions.length > 0
         || planModeModelOptions.length > 0
         || reasoningOptions.length > 0
         || planModeReasoningOptions.length > 0
         || serviceTierOptions.length > 0
     ) {
+        updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
@@ -1784,6 +1844,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('codex-theme-toggle');
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
+    const agentBackendSelect = document.getElementById('codex-agent-backend-select');
     const modelSelect = document.getElementById('codex-model-select');
     const modelInput = document.getElementById('codex-model-input');
     const modelApply = document.getElementById('codex-model-apply');
@@ -3112,6 +3173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     primeSettingsOptionsFromDom(
+        agentBackendSelect,
         modelSelect,
         reasoningSelect,
         planModeModelSelect,
@@ -3190,6 +3252,7 @@ document.addEventListener('DOMContentLoaded', () => {
             planModeModelInput,
             planModeReasoningInput,
             reasoningInput,
+            agentBackendSelect,
             modelSelect,
             planModeModelSelect,
             planModeReasoningSelect,
@@ -3234,6 +3297,13 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modelApply) {
         modelApply.addEventListener('click', () => {
             void updateSettings();
+        });
+    }
+
+    if (agentBackendSelect) {
+        agentBackendSelect.addEventListener('change', () => {
+            state.settings.agentBackend = normalizeAgentBackendValue(agentBackendSelect.value) || state.settings.agentBackend;
+            setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         });
     }
 
@@ -7328,12 +7398,16 @@ async function loadSettings({ silent = true } = {}) {
             : normalizeOptionList(result?.model_options);
         const reasoningOptions = normalizeOptionList(result?.reasoning_options);
         const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
+        const agentBackendOptions = normalizeAgentBackendOptions(result?.agent_backend_options);
         const executionPolicyPresets = normalizeExecutionPolicyPresets(result?.execution_policy_presets);
         const structuredReportPresets = normalizeStructuredReportPresets(result?.structured_report_presets);
         state.settings = {
             model: result?.settings?.model || null,
             modelCatalog,
             modelOptions,
+            agentBackend: normalizeAgentBackendValue(result?.settings?.agent_backend) || null,
+            agentBackendLabel: result?.settings?.agent_backend_label || null,
+            agentBackendOptions,
             cliProfile: result?.settings?.cli_profile || null,
             executionPolicyPresets,
             appServerPilotEnabled: Boolean(result?.settings?.app_server_pilot_enabled),
@@ -7356,11 +7430,13 @@ async function loadSettings({ silent = true } = {}) {
             updateSessionStorageSummary(state.sessionStorage);
         }
         updateUsageSummary(state.settings.usage);
+        updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
+        updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -7641,6 +7717,38 @@ function updatePlanModeReasoningControls(
     }
 }
 
+function updateAgentBackendControls(agentBackend, options) {
+    const select = document.getElementById('codex-agent-backend-select');
+    const row = document.getElementById('codex-agent-backend-row');
+    const label = document.getElementById('codex-agent-backend-label');
+    const normalizedOptions = normalizeAgentBackendOptions(options);
+    const normalizedBackend = normalizeAgentBackendValue(agentBackend)
+        || normalizedOptions[0]?.id
+        || '';
+    const shouldShow = normalizedOptions.length > 1;
+    if (select) {
+        select.innerHTML = '';
+        normalizedOptions.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.id;
+            option.textContent = item.description ? `${item.name} · ${item.description}` : item.name;
+            if (item.description) {
+                option.title = item.description;
+            }
+            select.appendChild(option);
+        });
+        select.value = normalizedOptions.some(item => item.id === normalizedBackend)
+            ? normalizedBackend
+            : (normalizedOptions[0]?.id || '');
+    }
+    if (row) {
+        row.classList.toggle('is-hidden', !shouldShow);
+    }
+    if (label) {
+        label.classList.toggle('is-hidden', !shouldShow);
+    }
+}
+
 function getServiceTierOption(serviceTier) {
     const normalized = normalizeServiceTierValue(serviceTier);
     const options = normalizeServiceTierOptions(state.settings.serviceTierOptions);
@@ -7656,10 +7764,33 @@ function formatServiceTierStatus(serviceTier) {
     return option.name;
 }
 
+function getAgentBackendOption(agentBackend) {
+    const normalized = normalizeAgentBackendValue(agentBackend);
+    const options = normalizeAgentBackendOptions(state.settings.agentBackendOptions);
+    return options.find(option => option.id === normalized) || null;
+}
+
+function formatAgentBackendStatus(agentBackend) {
+    const normalized = normalizeAgentBackendValue(agentBackend);
+    if (!normalized) return '';
+    const option = getAgentBackendOption(normalized);
+    if (option) return option.name;
+    return normalized === 'claude' ? 'Claude' : 'DTGPT';
+}
+
 function updateServiceTierControls(serviceTier, options) {
     const select = document.getElementById('codex-service-tier-select');
-    if (!select) return;
+    const row = document.getElementById('codex-service-tier-row');
+    const label = document.getElementById('codex-service-tier-label');
     const normalizedOptions = normalizeServiceTierOptions(options);
+    const shouldShow = normalizedOptions.length > 1;
+    if (row) {
+        row.classList.toggle('is-hidden', !shouldShow);
+    }
+    if (label) {
+        label.classList.toggle('is-hidden', !shouldShow);
+    }
+    if (!select) return;
     const normalizedServiceTier = normalizeServiceTierValue(serviceTier);
     const optionIds = new Set(normalizedOptions.map(option => option.id));
     select.innerHTML = '';
@@ -7689,6 +7820,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     if (
         !state.settings.loaded
+        && !state.settings.agentBackend
         && !model
         && !reasoning
         && !state.settings.planModeReasoningEffort
@@ -7702,18 +7834,23 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         return;
     }
     const modelText = model ? model : 'default';
+    const backendText = formatAgentBackendStatus(state.settings.agentBackend);
+    const showBackend = normalizeAgentBackendOptions(state.settings.agentBackendOptions).length > 1;
     const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
     const reasoningText = formatReasoningStatus(model, reasoning);
     const planModeReasoningText = formatReasoningStatus(
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     );
+    const showSpeed = normalizeServiceTierOptions(state.settings.serviceTierOptions).length > 1;
     const speedText = formatServiceTierStatus(state.settings.serviceTier);
     const routingParts = [];
     if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
     if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
     const routingText = routingParts.length > 0 ? ` · ${routingParts.join(' · ')}` : '';
-    const fullText = `Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText} · Speed: ${speedText}${routingText}`;
+    const backendPrefix = showBackend && backendText ? `Agent: ${backendText} · ` : '';
+    const speedPart = showSpeed ? ` · Speed: ${speedText}` : '';
+    const fullText = `${backendPrefix}Model: ${modelText} · Plan model: ${planModeModelText} · Reasoning: ${reasoningText} · Plan reasoning: ${planModeReasoningText}${speedPart}${routingText}`;
     const compactToken = value => {
         if (value === 'default') return 'def';
         return value.replace(' (default)', '*');
@@ -7722,6 +7859,9 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         `Model:${compactToken(modelText)}`,
         `R:${compactToken(reasoningText)}`
     ];
+    if (showBackend && backendText) {
+        compactSummaryParts.unshift(`Agent:${compactToken(backendText)}`);
+    }
     if (planModeModelText !== modelText || state.settings.planModeModel) {
         compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
     }
@@ -7750,6 +7890,7 @@ async function updateSettings() {
     const input = document.getElementById('codex-model-input');
     const status = document.getElementById('codex-model-status');
     const refreshBtn = document.getElementById('codex-controls-refresh');
+    const agentBackendSelect = document.getElementById('codex-agent-backend-select');
     const modelSelect = document.getElementById('codex-model-select');
     const planModeModelInput = document.getElementById('codex-plan-mode-model-input');
     const planModeModelSelect = document.getElementById('codex-plan-mode-model-select');
@@ -7771,20 +7912,29 @@ async function updateSettings() {
         ? planModeReasoningSelect.value.trim()
         : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
     const service_tier = serviceTierSelect ? normalizeServiceTierValue(serviceTierSelect.value) : '';
+    const agent_backend = agentBackendSelect
+        ? normalizeAgentBackendValue(agentBackendSelect.value || state.settings.agentBackend)
+        : normalizeAgentBackendValue(state.settings.agentBackend);
     if (status) status.textContent = 'Saving...';
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier })
+            body: JSON.stringify({ agent_backend, model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const catalogModelOptions = collectCatalogModelOptions(modelCatalog);
         const catalogReasoningOptions = collectCatalogReasoningOptions(modelCatalog);
         const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
+        const agentBackendOptions = normalizeAgentBackendOptions(result?.agent_backend_options);
         state.settings.model = result?.settings?.model || null;
         state.settings.modelCatalog = modelCatalog.length > 0 ? modelCatalog : state.settings.modelCatalog;
+        state.settings.agentBackend = normalizeAgentBackendValue(result?.settings?.agent_backend) || state.settings.agentBackend;
+        state.settings.agentBackendLabel = result?.settings?.agent_backend_label || null;
+        state.settings.agentBackendOptions = agentBackendOptions.length > 0
+            ? agentBackendOptions
+            : state.settings.agentBackendOptions;
         state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
         state.settings.modelProvider = result?.settings?.model_provider || null;
@@ -7815,6 +7965,7 @@ async function updateSettings() {
         state.settings.usage = result?.usage || state.settings.usage;
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
+        updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         updateModelControls(state.settings.model, state.settings.modelOptions);
         updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
         updateReasoningControls(

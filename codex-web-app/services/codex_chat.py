@@ -26,6 +26,8 @@ except ImportError:
 from .. import state
 from ..config import (
     CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+    CODEX_AGENT_BACKEND_DEFAULT,
+    CODEX_AGENT_BACKEND_OPTIONS,
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
@@ -59,6 +61,7 @@ from ..config import (
     KST,
     REPO_ROOT,
     WORKSPACE_DIR,
+    normalize_codex_agent_backend,
     normalize_codex_model_name,
     normalize_codex_service_tier,
     resolve_codex_reasoning_effort,
@@ -114,6 +117,7 @@ _STRICT_COMPETING_PROCESSES = str(
 ).strip().lower() in ('1', 'true', 'yes', 'on')
 _LOGGER = logging.getLogger(__name__)
 _CODEX_CLI_BIN_ENV = 'CODEX_CLI_BIN'
+_CLAUDE_CLI_BIN_ENV = 'CODEX_CLAUDE_CLI_BIN'
 _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -1528,6 +1532,103 @@ def _codex_cli_available():
     )
 
 
+def get_agent_backend_options():
+    return [dict(item) for item in CODEX_AGENT_BACKEND_OPTIONS]
+
+
+def _agent_backend_ids():
+    return {
+        str(item.get('id') or '').strip()
+        for item in CODEX_AGENT_BACKEND_OPTIONS
+        if isinstance(item, dict) and item.get('id')
+    }
+
+
+def _normalize_agent_backend_setting(value):
+    normalized = normalize_codex_agent_backend(value)
+    if normalized and normalized in _agent_backend_ids():
+        return normalized
+    default_backend = normalize_codex_agent_backend(CODEX_AGENT_BACKEND_DEFAULT)
+    if default_backend and default_backend in _agent_backend_ids():
+        return default_backend
+    return 'dtgpt'
+
+
+def _agent_backend_label(backend_id):
+    normalized = _normalize_agent_backend_setting(backend_id)
+    for item in CODEX_AGENT_BACKEND_OPTIONS:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get('id') or '').strip() == normalized:
+            return str(item.get('name') or normalized).strip() or normalized
+    return normalized
+
+
+def get_selected_agent_backend():
+    settings = get_settings()
+    return _normalize_agent_backend_setting(settings.get('agent_backend'))
+
+
+def _configured_claude_cli_bin():
+    configured_bin = str(os.environ.get(_CLAUDE_CLI_BIN_ENV) or '').strip()
+    if not configured_bin or '\x00' in configured_bin:
+        return ''
+    return configured_bin
+
+
+def _claude_cli_windows_candidates():
+    return ('claude.cmd', 'claude.exe', 'claude')
+
+
+def _claude_cli_command():
+    configured_bin = _configured_claude_cli_bin()
+    if configured_bin:
+        return configured_bin
+    if sys.platform == 'win32':
+        for candidate in _claude_cli_windows_candidates():
+            resolved = shutil.which(candidate)
+            if resolved:
+                return resolved
+        return 'claude.cmd'
+    if shutil.which('claude') is not None:
+        return 'claude'
+    return 'claude'
+
+
+def _claude_cli_available():
+    configured_bin = _configured_claude_cli_bin()
+    if configured_bin:
+        if shutil.which(configured_bin):
+            return True
+        try:
+            return Path(configured_bin).expanduser().is_file()
+        except Exception:
+            return False
+    if sys.platform == 'win32':
+        return any(shutil.which(candidate) for candidate in _claude_cli_windows_candidates())
+    return shutil.which('claude') is not None
+
+
+def _parse_claude_max_turns():
+    raw_value = str(os.environ.get('CODEX_CLAUDE_MAX_TURNS') or '').strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return min(parsed, 100)
+
+
+def _resolve_claude_model():
+    model_name = str(os.environ.get('CODEX_CLAUDE_MODEL') or '').strip()
+    if not model_name or '\x00' in model_name:
+        return ''
+    return model_name
+
+
 def _read_codex_config_text():
     try:
         return CODEX_CONFIG_PATH.read_text(encoding='utf-8')
@@ -1980,17 +2081,21 @@ def build_structured_report_prompt(prompt_text, preset_id):
 
 
 def resolve_response_model_name(model_override=None):
+    settings = get_settings()
+    if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'claude':
+        return _resolve_claude_model() or 'claude-default'
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
     if not model_name:
-        settings = get_settings()
         model_name = str(settings.get('model') or '').strip()
     return model_name or 'codex-default'
 
 
 def resolve_response_reasoning_effort(model_override=None, reasoning_override=None):
     settings = get_settings()
+    if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'claude':
+        return None
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
@@ -2036,6 +2141,7 @@ def _read_workspace_settings():
     plan_mode_model = _normalize_model_setting(data.get('plan_mode_model'))
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
     service_tier = normalize_codex_service_tier(data.get('service_tier'))
+    agent_backend = _normalize_agent_backend_setting(data.get('agent_backend'))
     app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
         data.get('app_server_pilot_enabled')
     )
@@ -2045,6 +2151,7 @@ def _read_workspace_settings():
         'plan_mode_model': plan_mode_model or None,
         'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
         'service_tier': service_tier or None,
+        'agent_backend': agent_backend,
         'app_server_pilot_enabled': app_server_pilot_enabled,
     }
 
@@ -2056,6 +2163,7 @@ def _write_workspace_settings(settings):
         'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
         'service_tier': normalize_codex_service_tier(settings.get('service_tier')) or None,
+        'agent_backend': _normalize_agent_backend_setting(settings.get('agent_backend')),
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
@@ -2429,6 +2537,8 @@ def _get_effective_cli_model_provider():
 
 def _merge_runtime_cli_settings(settings):
     payload = dict(settings or {})
+    payload['agent_backend'] = _normalize_agent_backend_setting(payload.get('agent_backend'))
+    payload['agent_backend_label'] = _agent_backend_label(payload.get('agent_backend'))
     payload['cli_profile'] = str(CODEX_CLI_PROFILE or '').strip() or None
     payload['model_provider'] = _get_effective_cli_model_provider()
     return payload
@@ -2484,6 +2594,7 @@ def get_settings():
             or workspace_settings.get('plan_mode_model')
             or workspace_settings.get('plan_mode_reasoning_effort')
             or workspace_settings.get('service_tier')
+            or workspace_settings.get('agent_backend')
             or workspace_settings.get('app_server_pilot_enabled')
         ):
             _write_workspace_settings(workspace_settings)
@@ -2493,6 +2604,7 @@ def get_settings():
         if fallback.get('model') or fallback.get('reasoning_effort') or fallback.get('service_tier'):
             fallback['plan_mode_model'] = None
             fallback['plan_mode_reasoning_effort'] = None
+            fallback['agent_backend'] = _normalize_agent_backend_setting(None)
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             _write_workspace_settings(fallback)
             return _merge_runtime_cli_settings(_read_workspace_settings())
@@ -2502,6 +2614,7 @@ def get_settings():
         'plan_mode_model': None,
         'plan_mode_reasoning_effort': None,
         'service_tier': None,
+        'agent_backend': _normalize_agent_backend_setting(None),
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
     })
 
@@ -2512,6 +2625,7 @@ def update_settings(
         plan_mode_model=None,
         plan_mode_reasoning_effort=None,
         service_tier=None,
+        agent_backend=None,
         app_server_pilot_enabled=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
@@ -2520,6 +2634,7 @@ def update_settings(
             current = _parse_top_level_config(text)
             current['plan_mode_model'] = None
             current['plan_mode_reasoning_effort'] = None
+            current['agent_backend'] = _normalize_agent_backend_setting(None)
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
         next_settings = {
             'model': current.get('model'),
@@ -2527,6 +2642,7 @@ def update_settings(
             'plan_mode_model': current.get('plan_mode_model'),
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
             'service_tier': normalize_codex_service_tier(current.get('service_tier')) or None,
+            'agent_backend': _normalize_agent_backend_setting(current.get('agent_backend')),
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
@@ -2543,6 +2659,8 @@ def update_settings(
             next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None
         if service_tier is not None:
             next_settings['service_tier'] = normalize_codex_service_tier(service_tier) or None
+        if agent_backend is not None:
+            next_settings['agent_backend'] = _normalize_agent_backend_setting(agent_backend)
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         _write_workspace_settings(next_settings)
@@ -6532,6 +6650,80 @@ def _build_codex_command(
     return cmd
 
 
+def _build_claude_command(
+        prompt,
+        output_path=None,
+        output_schema_path=None,
+        json_output=False,
+        stream_json=False,
+        model_override=None,
+        reasoning_override=None,
+        attachments=None,
+        question_only=False,
+        execution_cwd=None):
+    del prompt
+    del output_path
+    del output_schema_path
+    del reasoning_override
+    del attachments
+    del question_only
+    del execution_cwd
+
+    cmd = [_claude_cli_command(), '-p']
+    claude_model = _resolve_claude_model()
+    if claude_model:
+        cmd.extend(['--model', claude_model])
+    max_turns = _parse_claude_max_turns()
+    if max_turns:
+        cmd.extend(['--max-turns', str(max_turns)])
+    if stream_json:
+        cmd.extend(['--output-format', 'stream-json', '--verbose'])
+    elif json_output:
+        cmd.extend(['--output-format', 'json'])
+    else:
+        cmd.extend(['--output-format', 'text'])
+    return cmd
+
+
+def _build_agent_command(
+        prompt,
+        output_path=None,
+        output_schema_path=None,
+        json_output=False,
+        stream_json=False,
+        model_override=None,
+        reasoning_override=None,
+        attachments=None,
+        question_only=False,
+        execution_cwd=None,
+        agent_backend=None):
+    backend = _normalize_agent_backend_setting(agent_backend or get_selected_agent_backend())
+    if backend == 'claude':
+        return backend, _build_claude_command(
+            prompt,
+            output_path=output_path,
+            output_schema_path=output_schema_path,
+            json_output=json_output,
+            stream_json=stream_json,
+            model_override=model_override,
+            reasoning_override=reasoning_override,
+            attachments=attachments,
+            question_only=question_only,
+            execution_cwd=execution_cwd,
+        )
+    return backend, _build_codex_command(
+        prompt,
+        output_path=output_path,
+        output_schema_path=output_schema_path,
+        json_output=json_output,
+        model_override=model_override,
+        reasoning_override=reasoning_override,
+        attachments=attachments,
+        question_only=question_only,
+        execution_cwd=execution_cwd,
+    )
+
+
 def _is_git_repository(path):
     try:
         result = subprocess.run(
@@ -6791,6 +6983,219 @@ def _extract_exec_json_summary(raw_stdout):
     }
 
 
+def _extract_claude_usage_from_payload(payload):
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get('usage')
+    if isinstance(usage, dict):
+        input_tokens = _coerce_non_negative_int(usage.get('input_tokens'))
+        output_tokens = _coerce_non_negative_int(usage.get('output_tokens'))
+        cache_read_tokens = _coerce_non_negative_int(usage.get('cache_read_input_tokens'))
+        cache_creation_tokens = _coerce_non_negative_int(usage.get('cache_creation_input_tokens'))
+        cached_input_tokens = (cache_read_tokens or 0) + (cache_creation_tokens or 0)
+        normalized = {
+            'input_tokens': input_tokens or 0,
+            'cached_input_tokens': cached_input_tokens,
+            'output_tokens': output_tokens or 0,
+            'reasoning_output_tokens': 0,
+            'total_tokens': (input_tokens or 0) + (output_tokens or 0),
+        }
+        return _normalize_token_usage(normalized)
+    return _normalize_token_usage(payload.get('token_usage'))
+
+
+def _extract_claude_usage_from_event(event):
+    if not isinstance(event, dict):
+        return None
+    usage = _extract_claude_usage_from_payload(event)
+    if usage:
+        return usage
+    message = event.get('message')
+    if isinstance(message, dict):
+        usage = _extract_claude_usage_from_payload(message)
+        if usage:
+            return usage
+    result = event.get('result')
+    if isinstance(result, dict):
+        usage = _extract_claude_usage_from_payload(result)
+        if usage:
+            return usage
+    return None
+
+
+def _extract_text_from_claude_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        fragments = []
+        for item in content:
+            text = _extract_text_from_claude_content(item)
+            if text:
+                fragments.append(text)
+        return ''.join(fragments)
+    if not isinstance(content, dict):
+        return ''
+
+    content_type = str(content.get('type') or '').strip().lower()
+    if content_type in {'text', 'output_text'}:
+        text = content.get('text')
+        if isinstance(text, str):
+            return text
+    if content_type in {'text_delta', 'input_json_delta'}:
+        text = content.get('text') or content.get('partial_json')
+        if isinstance(text, str):
+            return text
+
+    delta = content.get('delta')
+    if isinstance(delta, dict):
+        text = _extract_text_from_claude_content(delta)
+        if text:
+            return text
+    nested = content.get('content')
+    if nested is not None:
+        text = _extract_text_from_claude_content(nested)
+        if text:
+            return text
+    text_value = content.get('text')
+    if isinstance(text_value, str):
+        return text_value
+    return ''
+
+
+def _extract_claude_session_id(event):
+    if not isinstance(event, dict):
+        return ''
+    for key in ('session_id', 'sessionId'):
+        value = str(event.get(key) or '').strip()
+        if value:
+            return value
+    message = event.get('message')
+    if isinstance(message, dict):
+        for key in ('session_id', 'sessionId'):
+            value = str(message.get(key) or '').strip()
+            if value:
+                return value
+    return ''
+
+
+def _extract_text_from_claude_event(event):
+    if not isinstance(event, dict):
+        return ''
+    event_type = str(event.get('type') or '').strip().lower()
+    if event_type == 'result':
+        result = event.get('result')
+        if isinstance(result, str):
+            return result.strip()
+        if isinstance(result, dict):
+            text = result.get('result') or result.get('text') or result.get('message')
+            if isinstance(text, str):
+                return text.strip()
+    if isinstance(event.get('result'), str):
+        return str(event.get('result') or '').strip()
+
+    message = event.get('message')
+    if isinstance(message, dict):
+        text = _extract_text_from_claude_content(message.get('content'))
+        if text:
+            return text.strip()
+    text = _extract_text_from_claude_content(event.get('content'))
+    if text:
+        return text.strip()
+    delta = event.get('delta')
+    if isinstance(delta, dict):
+        text = _extract_text_from_claude_content(delta)
+        if text:
+            return text
+    for key in ('text', 'message'):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ''
+
+
+def _extract_claude_error_text(event):
+    if not isinstance(event, dict):
+        return ''
+    event_type = str(event.get('type') or '').strip().lower()
+    subtype = str(event.get('subtype') or '').strip().lower()
+    is_error = bool(event.get('is_error')) or subtype in {'error', 'failure', 'failed'}
+    if event_type not in {'error', 'result'} and not is_error:
+        return ''
+    parts = []
+    for key in ('error', 'message', 'detail', 'details'):
+        value = event.get(key)
+        text = _stringify_exec_error_value(value)
+        if text and text not in parts:
+            parts.append(text)
+    if event_type == 'result' and is_error:
+        result = event.get('result')
+        if isinstance(result, str) and result.strip():
+            parts.append(result.strip())
+        elif isinstance(result, dict):
+            text = _stringify_exec_error_value(result)
+            if text and text not in parts:
+                parts.append(text)
+    if not parts and event_type == 'error':
+        parts.append(_stringify_exec_error_value(event))
+    return _clip_text(' · '.join(part for part in parts if part), _CODEX_EVENT_ERROR_MAX_CHARS)
+
+
+def _parse_claude_json_events(raw_stdout):
+    raw = str(raw_stdout or '').strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return [parsed]
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+
+    events = []
+    for line in raw.splitlines():
+        event = _parse_json_object(line)
+        if event:
+            events.append(event)
+    return events
+
+
+def _extract_claude_json_summary(raw_stdout):
+    usage = None
+    text_candidates = []
+    error_candidates = []
+    raw_lines = []
+    claude_session_id = ''
+    result_seen = False
+    for event in _parse_claude_json_events(raw_stdout):
+        raw_lines.append(json.dumps(event, ensure_ascii=False))
+        event_usage = _extract_claude_usage_from_event(event)
+        if event_usage:
+            usage = event_usage
+        session_id = _extract_claude_session_id(event)
+        if session_id:
+            claude_session_id = session_id
+        error_text = _extract_claude_error_text(event)
+        if error_text:
+            error_candidates.append(error_text)
+        text = _extract_text_from_claude_event(event)
+        if text:
+            text_candidates.append(text)
+        if str(event.get('type') or '').strip().lower() == 'result':
+            result_seen = True
+    if not text_candidates and raw_stdout:
+        text_candidates.append(str(raw_stdout or '').strip())
+    return {
+        'usage': usage,
+        'last_text': text_candidates[-1] if text_candidates else '',
+        'last_error': error_candidates[-1] if error_candidates else '',
+        'event_count': len(raw_lines),
+        'claude_session_id': claude_session_id,
+        'result_seen': result_seen,
+    }
+
+
 def execute_codex_prompt(
         prompt,
         model_override=None,
@@ -6801,7 +7206,7 @@ def execute_codex_prompt(
     output_path = _new_codex_output_path()
     normalized_attachments = normalize_codex_attachments(attachments or [])
     prompt = _append_attachment_exec_context(prompt, normalized_attachments)
-    cmd = _build_codex_command(
+    agent_backend, cmd = _build_agent_command(
         prompt,
         output_path=output_path,
         json_output=True,
@@ -6822,6 +7227,7 @@ def execute_codex_prompt(
             prompt,
             execution_cwd=WORKSPACE_DIR,
             exec_env=exec_env,
+            agent_backend=agent_backend,
         )
         with _codex_exec_gate() as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
@@ -6838,9 +7244,47 @@ def execute_codex_prompt(
             )
             completed_at = time.time()
     except FileNotFoundError:
-        return None, 'codex 명령을 찾을 수 없습니다.', None, None
+        command_label = 'claude' if agent_backend == 'claude' else 'codex'
+        return None, f'{command_label} 명령을 찾을 수 없습니다.', None, None
     except Exception as exc:
-        return None, f'Codex 실행 중 오류가 발생했습니다: {exc}', None, None
+        command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
+        return None, f'{command_label} 실행 중 오류가 발생했습니다: {exc}', None, None
+
+    if agent_backend == 'claude':
+        json_summary = _extract_claude_json_summary(result.stdout or '')
+        token_usage = json_summary.get('usage')
+        timing = _build_duration_breakdown(
+            queued_at,
+            cli_started_at=cli_started_at,
+            completed_at=completed_at,
+            saved_at=completed_at,
+        )
+        output_text = str(json_summary.get('last_text') or '').strip()
+        error_text = str(json_summary.get('last_error') or '').strip()
+        if not output_text and result.returncode == 0 and json_summary.get('result_seen'):
+            output_text = 'Claude completed without a final response.'
+        work_details = _build_work_details(
+            result.stdout or '',
+            output_text or '',
+            result.stderr or '',
+            exec_details=exec_details,
+        )
+        if work_details:
+            timing['work_details'] = work_details
+        _cleanup_output_last_message(output_path)
+        if result.returncode != 0:
+            message_error_text = (
+                _normalize_stream_log_text(result.stderr or '')
+                or error_text
+                or 'Claude 실행에 실패했습니다.'
+            )
+            return (
+                None,
+                _combine_stream_output_and_error(output_text, message_error_text),
+                token_usage,
+                timing,
+            )
+        return output_text, None, token_usage, timing
 
     json_summary = _extract_exec_json_summary(result.stdout or '')
     token_usage = json_summary.get('usage')
@@ -7289,7 +7733,13 @@ def _compact_stream_log_section(value):
     return _clip_stream_log_detail(compacted, _WORK_DETAILS_SECTION_MAX_CHARS)
 
 
-def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env=None):
+def _build_codex_exec_input_details(
+        cmd,
+        prompt,
+        *,
+        execution_cwd=None,
+        exec_env=None,
+        agent_backend=None):
     command_parts = [str(part) for part in (cmd or [])]
     try:
         command_text = subprocess.list2cmdline(command_parts)
@@ -7301,6 +7751,7 @@ def _build_codex_exec_input_details(cmd, prompt, *, execution_cwd=None, exec_env
         'prompt_encoding': _CODEX_EXEC_TEXT_ENCODING,
         'host_platform': _codex_host_platform(),
         'shell_family': _codex_shell_family(),
+        'agent_backend': _normalize_agent_backend_setting(agent_backend),
         'command': command_text,
         'prompt': str(prompt or ''),
     }
@@ -7341,6 +7792,9 @@ def _format_codex_exec_input_details(exec_details):
     shell_family = str(exec_details.get('shell_family') or '').strip()
     if shell_family:
         parts.append(f'shell_family: {shell_family}')
+    agent_backend = str(exec_details.get('agent_backend') or '').strip()
+    if agent_backend:
+        parts.append(f'agent_backend: {agent_backend}')
     approval_policy = str(exec_details.get('approval_policy') or '').strip()
     if approval_policy:
         parts.append(f'approval_policy: {approval_policy}')
@@ -7393,7 +7847,11 @@ def _build_work_details(stdout_text, final_output_text, stderr_text, exec_detail
 
     sections = []
     if exec_input_details:
-        sections.append(f"Codex exec input:\n{exec_input_details}")
+        detail_backend = ''
+        if isinstance(exec_details, dict):
+            detail_backend = _normalize_agent_backend_setting(exec_details.get('agent_backend'))
+        detail_label = 'Claude exec input' if detail_backend == 'claude' else 'Codex exec input'
+        sections.append(f"{detail_label}:\n{exec_input_details}")
     if compacted_stdout and stdout_value != final_value:
         sections.append(f"CLI stdout:\n{compacted_stdout}")
     if compacted_stderr:
@@ -8318,6 +8776,7 @@ def _stream_has_user_visible_output(stream):
 
 
 def _build_partial_stream_message_metadata(stream):
+    agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
     response_mode = _normalize_response_mode_label(stream.get('response_mode'))
     response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
         model_override=stream.get('model_override')
@@ -8330,6 +8789,7 @@ def _build_partial_stream_message_metadata(stream):
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': agent_backend,
         'execution_policy': str(stream.get('execution_policy') or 'standard').strip() or 'standard',
         'streaming': True,
     }
@@ -8345,6 +8805,7 @@ def _build_partial_stream_message_metadata(stream):
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': agent_backend,
         'streaming': True,
     }
 
@@ -8826,6 +9287,31 @@ def _append_stream_event(stream_id, event):
         stream['updated_at'] = time.time()
 
 
+def _set_stream_output_text_delta(stream_id, text, final_after_work=None):
+    normalized = str(text or '')
+    if not normalized.strip():
+        return
+    chunk = normalized
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        previous = str(stream.get('output_last_message') or '')
+        if previous and normalized.startswith(previous):
+            chunk = normalized[len(previous):]
+        elif previous and previous.startswith(normalized):
+            chunk = ''
+        stream['output_last_message'] = normalized.strip()
+        stream['progress_output_invalidated'] = False
+        if final_after_work is None:
+            final_after_work = bool(stream.get('work_item_seen'))
+        if final_after_work:
+            stream['final_agent_message_after_work_seen'] = True
+        stream['updated_at'] = time.time()
+    if chunk:
+        _append_stream_chunk(stream_id, 'output', chunk)
+
+
 def _copy_codex_events(events):
     if not isinstance(events, list):
         return []
@@ -8899,6 +9385,38 @@ def _handle_stream_json_output_line(stream_id, line):
         _append_stream_chunk(stream_id, 'output', text)
 
 
+def _handle_claude_stream_json_output_line(stream_id, line):
+    event = _parse_json_object(line)
+    if not event:
+        _append_stream_chunk(stream_id, 'output', line)
+        return
+
+    _append_stream_event(stream_id, event)
+    usage = _extract_claude_usage_from_event(event)
+    if usage:
+        _set_stream_token_usage(stream_id, usage)
+
+    session_id = _extract_claude_session_id(event)
+    if session_id:
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream and not str(stream.get('claude_session_id') or '').strip():
+                stream['claude_session_id'] = session_id
+                stream['updated_at'] = time.time()
+
+    error_text = _extract_claude_error_text(event)
+    if error_text:
+        _append_stream_exec_error(stream_id, error_text)
+
+    event_type = str(event.get('type') or '').strip().lower()
+    text = _extract_text_from_claude_event(event)
+    if text:
+        _set_stream_output_text_delta(stream_id, text, final_after_work=True)
+    if event_type == 'result':
+        _mark_stream_task_complete(stream_id, text)
+        _mark_stream_turn_completed(stream_id)
+
+
 def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
@@ -8920,10 +9438,15 @@ def _stream_reader(stream_id, pipe, key):
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)
                     json_output = True
+                    agent_backend = 'dtgpt'
                     if stream is not None:
                         json_output = stream.get('json_output') is not False
+                        agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
                 if json_output:
-                    _handle_stream_json_output_line(stream_id, line)
+                    if agent_backend == 'claude':
+                        _handle_claude_stream_json_output_line(stream_id, line)
+                    else:
+                        _handle_stream_json_output_line(stream_id, line)
                     continue
             _append_stream_chunk(stream_id, key, line)
     finally:
@@ -8963,6 +9486,7 @@ def _run_codex_stream(stream_id, prompt):
         model_override = stream.get('model_override') if stream else None
         reasoning_override = stream.get('reasoning_override') if stream else None
         attachments = stream.get('attachments') if stream else []
+        agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend')) if stream else get_selected_agent_backend()
         queued_execution = bool(stream.get('queued_execution')) if stream else False
         question_only = bool(stream.get('question_only')) if stream else False
         execution_cwd = stream.get('execution_cwd') if stream else None
@@ -8996,16 +9520,18 @@ def _run_codex_stream(stream_id, prompt):
 
     prompt = _append_attachment_exec_context(prompt, attachments)
     exec_env = _build_codex_exec_env(queued_execution=queued_execution)
-    cmd = _build_codex_command(
+    agent_backend, cmd = _build_agent_command(
         prompt,
         output_path=output_path,
         output_schema_path=output_schema_path,
         json_output=json_output,
+        stream_json=(agent_backend == 'claude' and json_output),
         model_override=model_override,
         reasoning_override=reasoning_override,
         attachments=attachments,
         question_only=question_only,
         execution_cwd=execution_cwd,
+        agent_backend=agent_backend,
     )
     if not worktree_task:
         execution_cwd.mkdir(parents=True, exist_ok=True)
@@ -9015,10 +9541,11 @@ def _run_codex_stream(stream_id, prompt):
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             if stream:
-                stream['cli_started_at'] = cli_started_at
-                stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
-                stream['codex_home'] = str(exec_env.get('CODEX_HOME') or _CODEX_HOME)
-                stream['updated_at'] = cli_started_at
+                    stream['cli_started_at'] = cli_started_at
+                    stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
+                    stream['codex_home'] = str(exec_env.get('CODEX_HOME') or _CODEX_HOME)
+                    stream['agent_backend'] = agent_backend
+                    stream['updated_at'] = cli_started_at
 
         try:
             _prepare_imagegen_workbench_dirs(prompt)
@@ -9028,6 +9555,7 @@ def _run_codex_stream(stream_id, prompt):
                 prompt,
                 execution_cwd=execution_cwd,
                 exec_env=exec_env,
+                agent_backend=agent_backend,
             )
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
@@ -9047,7 +9575,8 @@ def _run_codex_stream(stream_id, prompt):
             )
             _write_codex_prompt_to_stdin(process, prompt)
         except FileNotFoundError:
-            _append_stream_chunk(stream_id, 'error', 'codex 명령을 찾을 수 없습니다.\n')
+            command_label = 'claude' if agent_backend == 'claude' else 'codex'
+            _append_stream_chunk(stream_id, 'error', f'{command_label} 명령을 찾을 수 없습니다.\n')
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
@@ -9060,7 +9589,8 @@ def _run_codex_stream(stream_id, prompt):
             _cleanup_output_schema(output_schema_path)
             return
         except Exception as exc:
-            _append_stream_chunk(stream_id, 'error', f'Codex 실행 중 오류가 발생했습니다: {exc}\n')
+            command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
+            _append_stream_chunk(stream_id, 'error', f'{command_label} 실행 중 오류가 발생했습니다: {exc}\n')
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
@@ -9509,6 +10039,7 @@ def create_codex_stream(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
     )
+    agent_backend = get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -9551,6 +10082,7 @@ def create_codex_stream(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'agent_backend': agent_backend,
         'execution_policy': execution_policy,
         'structured_report_preset': structured_report_preset_id,
         'structured_report_label': structured_report.get('label') if structured_report else '',
@@ -9610,6 +10142,7 @@ def create_codex_stream(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': agent_backend,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
         'execution_policy': execution_policy,
         'structured_report_preset': structured_report_preset_id,
@@ -9839,6 +10372,7 @@ def _start_codex_stream_for_session_locked(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
     )
+    agent_backend = get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -9852,6 +10386,7 @@ def _start_codex_stream_for_session_locked(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': agent_backend,
         'streaming': True,
         'execution_policy': execution_policy,
     }
@@ -9899,6 +10434,7 @@ def _start_codex_stream_for_session_locked(
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': agent_backend,
         'execution_policy': stream_info.get('execution_policy'),
         'structured_report_preset': stream_info.get('structured_report_preset'),
         'worktree_task': stream_info.get('worktree_task'),
@@ -10229,6 +10765,7 @@ def list_codex_streams(include_done=False):
                 'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
                 'cli_runtime_ms': stream.get('cli_runtime_ms'),
                 'assistant_message_id': stream.get('assistant_message_id'),
+                'agent_backend': _normalize_agent_backend_setting(stream.get('agent_backend')),
                 'response_mode': stream.get('response_mode'),
                 'response_model': stream.get('response_model'),
                 'response_reasoning_effort': stream.get('response_reasoning_effort'),
@@ -10291,6 +10828,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
             'cli_runtime_ms': stream.get('cli_runtime_ms'),
             'assistant_message_id': stream.get('assistant_message_id'),
+            'agent_backend': _normalize_agent_backend_setting(stream.get('agent_backend')),
             'response_mode': stream.get('response_mode'),
             'response_model': stream.get('response_model'),
             'response_reasoning_effort': stream.get('response_reasoning_effort'),
@@ -10366,6 +10904,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         imagegen_workbench_outputs = _copy_imagegen_workbench_outputs(
             stream.get('imagegen_workbench_outputs')
         )
+        agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
@@ -10413,6 +10952,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
     if worktree_task:
@@ -10573,6 +11113,7 @@ def stop_codex_stream(stream_id):
         output_schema_path = stream.get('output_schema_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
         codex_events = _copy_codex_events(stream.get('codex_events'))
+        agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
         response_mode = _normalize_response_mode_label(stream.get('response_mode'))
         response_model = str(stream.get('response_model') or '').strip() or resolve_response_model_name(
             model_override=stream.get('model_override')
@@ -10623,6 +11164,7 @@ def stop_codex_stream(stream_id):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
     if structured_report_preset:

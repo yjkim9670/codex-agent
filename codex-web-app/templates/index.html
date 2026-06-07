@@ -523,6 +523,16 @@
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
+                            <label id="codex-agent-backend-label" class="model-label is-hidden" for="codex-agent-backend-select">Agent backend</label>
+                            <div id="codex-agent-backend-row" class="model-row model-row-single is-hidden">
+                                <div class="model-field model-field-agent-backend">
+                                    <select id="codex-agent-backend-select" class="model-select" aria-label="Select agent backend" data-options='{{ agent_backend_options|default([], true)|tojson }}'>
+                                        {% for option in agent_backend_options|default([], true) %}
+                                        <option value="{{ option.id }}">{{ option.name }}{% if option.description %} · {{ option.description }}{% endif %}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
                             <label class="model-label" for="codex-model-input">Model · Reasoning effort</label>
                             <div class="model-row model-row-combined">
                                 <div class="model-field model-field-model">
@@ -545,12 +555,14 @@
                                     <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
-                            <label class="model-sub-label" for="codex-service-tier-select">Speed mode</label>
-                            <div class="model-row model-row-single">
+                            <label id="codex-service-tier-label" class="model-sub-label" for="codex-service-tier-select">Speed mode</label>
+                            <div id="codex-service-tier-row" class="model-row model-row-single">
                                 <div class="model-field model-field-service-tier">
                                     <select id="codex-service-tier-select" class="model-select" aria-label="Select Codex service tier" data-options='{{ service_tier_options|default([], true)|tojson }}'>
                                         <option value="">Standard</option>
-                                        <option value="priority">Fast · 1.5x</option>
+                                        {% for option in service_tier_options|default([], true) %}
+                                        <option value="{{ option.id }}">{{ option.name }}{% if option.description %} · {{ option.description }}{% endif %}</option>
+                                        {% endfor %}
                                     </select>
                                 </div>
                             </div>

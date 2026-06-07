@@ -1026,6 +1026,89 @@ def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, 
     assert cmd[service_tier_index - 1] == '--config'
 
 
+def test_service_tier_can_be_disabled_for_company_runner(monkeypatch):
+    monkeypatch.setenv('CODEX_ENABLE_SERVICE_TIER', '0')
+
+    assert codex_config.get_codex_service_tier_options() == []
+    assert codex_config.normalize_codex_service_tier('priority') is None
+
+
+def test_agent_backend_options_include_company_choices(monkeypatch):
+    monkeypatch.setenv('CODEX_AGENT_BACKEND_OPTIONS', 'dtgpt,claude')
+    monkeypatch.setenv('CODEX_AGENT_BACKEND', 'claude')
+
+    options = codex_config.get_codex_agent_backend_options()
+
+    assert [item['id'] for item in options] == ['dtgpt', 'claude']
+    assert codex_config.normalize_codex_agent_backend('claude-cli') == 'claude'
+    assert codex_config.normalize_codex_agent_backend('codex') == 'dtgpt'
+
+
+def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_MAX_TURNS', '2')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_DEFAULT', 'dtgpt')
+
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        stream_json=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert cmd == [
+        r'C:\tools\claude.cmd',
+        '-p',
+        '--max-turns',
+        '2',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+    ]
+    assert '--sandbox' not in cmd
+    assert '--config' not in cmd
+
+
+def test_extract_claude_json_summary_reads_result_and_usage():
+    raw_stdout = '\n'.join([
+        json.dumps({
+            'type': 'assistant',
+            'message': {
+                'content': [{'type': 'text', 'text': 'partial'}],
+                'usage': {'input_tokens': 4, 'output_tokens': 1},
+            },
+            'session_id': 'claude-session-1',
+        }),
+        json.dumps({
+            'type': 'result',
+            'subtype': 'success',
+            'is_error': False,
+            'result': 'final ok',
+            'usage': {
+                'input_tokens': 5,
+                'cache_read_input_tokens': 2,
+                'output_tokens': 3,
+            },
+            'session_id': 'claude-session-1',
+        }),
+    ])
+
+    summary = codex_chat._extract_claude_json_summary(raw_stdout)
+
+    assert summary['last_text'] == 'final ok'
+    assert summary['claude_session_id'] == 'claude-session-1'
+    assert summary['result_seen'] is True
+    assert summary['usage']['input_tokens'] == 5
+    assert summary['usage']['cached_input_tokens'] == 2
+    assert summary['usage']['output_tokens'] == 3
+    assert summary['usage']['total_tokens'] == 8
+
+
 def test_structured_report_preset_formats_valid_payload():
     payload = {
         'title': 'Risk report',

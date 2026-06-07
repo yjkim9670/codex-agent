@@ -15,6 +15,7 @@ from .config import (
     CODEX_SERVICE_TIER_OPTIONS,
     SECRET_KEY,
     WORKSPACE_DIR,
+    get_codex_agent_backend_options,
     get_codex_model_options,
 )
 from .services.codex_chat import (
@@ -88,6 +89,7 @@ def create_codex_app():
             model_options=get_codex_model_options(),
             reasoning_options=CODEX_REASONING_OPTIONS,
             service_tier_options=CODEX_SERVICE_TIER_OPTIONS,
+            agent_backend_options=get_codex_agent_backend_options(),
             server_directory_name=runtime_context['server_directory_name'],
             server_directory_path=runtime_context['server_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],

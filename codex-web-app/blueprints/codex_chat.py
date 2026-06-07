@@ -29,6 +29,7 @@ from ..config import (
     CODEX_MAIL_USERNAME,
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
+    CODEX_MAX_AGENT_BACKEND_CHARS,
     CODEX_MAX_MODEL_CHARS,
     CODEX_MAX_PROMPT_CHARS,
     CODEX_MAX_REASONING_CHARS,
@@ -41,6 +42,7 @@ from ..config import (
     get_codex_model_catalog,
     get_codex_model_catalog_source,
     get_codex_model_options,
+    normalize_codex_agent_backend,
     normalize_codex_service_tier,
 )
 from ..services.codex_chat import (
@@ -60,6 +62,7 @@ from ..services.codex_chat import (
     create_git_worktree_task,
     get_codex_project_safety_preview,
     get_session_storage_summary,
+    get_selected_agent_backend,
     create_session,
     cleanup_codex_streams,
     delete_session,
@@ -71,6 +74,7 @@ from ..services.codex_chat import (
     get_active_stream_id_for_session,
     get_codex_app_server_status,
     get_execution_policy_presets,
+    get_agent_backend_options,
     get_usage_history_summary,
     get_session,
     get_settings,
@@ -543,6 +547,7 @@ def _build_runtime_info():
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'agent_backend_options': get_agent_backend_options(),
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
@@ -607,6 +612,7 @@ def codex_settings():
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),
@@ -657,6 +663,7 @@ def codex_settings_update():
     plan_mode_model = payload.get('plan_mode_model')
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
     service_tier = payload.get('service_tier')
+    agent_backend = payload.get('agent_backend')
     app_server_pilot_enabled = None
     if 'app_server_pilot_enabled' in payload:
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
@@ -691,12 +698,26 @@ def codex_settings_update():
         if normalized_service_tier and normalized_service_tier not in supported_service_tiers:
             return jsonify({'error': 'service_tier 값이 올바르지 않습니다.'}), 400
         service_tier = normalized_service_tier or ''
+    if agent_backend is not None:
+        agent_backend = str(agent_backend).strip()
+        if len(agent_backend) > CODEX_MAX_AGENT_BACKEND_CHARS:
+            return jsonify({'error': 'agent_backend 값이 너무 깁니다.'}), 400
+        normalized_agent_backend = normalize_codex_agent_backend(agent_backend)
+        supported_agent_backends = {
+            item.get('id')
+            for item in get_agent_backend_options()
+            if isinstance(item, dict) and item.get('id')
+        }
+        if not normalized_agent_backend or normalized_agent_backend not in supported_agent_backends:
+            return jsonify({'error': 'agent_backend 값이 올바르지 않습니다.'}), 400
+        agent_backend = normalized_agent_backend
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
         plan_mode_model=plan_mode_model,
         plan_mode_reasoning_effort=plan_mode_reasoning,
         service_tier=service_tier,
+        agent_backend=agent_backend,
         app_server_pilot_enabled=app_server_pilot_enabled,
     )
     snapshot = record_usage_snapshot_if_due()
@@ -709,6 +730,7 @@ def codex_settings_update():
         'model_catalog': get_codex_model_catalog(),
         'reasoning_options': CODEX_REASONING_OPTIONS,
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),
@@ -1182,6 +1204,7 @@ def codex_session_message(session_id):
     model_override = _resolve_model_override(plan_mode=plan_mode)
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
+    response_agent_backend = get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -1207,6 +1230,7 @@ def codex_session_message(session_id):
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': response_agent_backend,
     }
     if isinstance(timing, dict):
         queue_wait_ms = int(timing.get('queue_wait_ms') or 0)
@@ -1259,6 +1283,7 @@ def codex_session_message(session_id):
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
+        'response_agent_backend': response_agent_backend,
     }, crypto_session_id)
 
 
@@ -1351,6 +1376,7 @@ def codex_session_message_stream(session_id):
         'response_mode': start_result.get('response_mode'),
         'response_model': start_result.get('response_model'),
         'response_reasoning_effort': start_result.get('response_reasoning_effort'),
+        'response_agent_backend': start_result.get('response_agent_backend'),
         'execution_policy': start_result.get('execution_policy'),
         'structured_report_preset': start_result.get('structured_report_preset'),
         'worktree_task': start_result.get('worktree_task'),
@@ -1423,6 +1449,7 @@ def codex_session_message_queue(session_id):
         response['response_mode'] = result.get('response_mode')
         response['response_model'] = result.get('response_model')
         response['response_reasoning_effort'] = result.get('response_reasoning_effort')
+        response['response_agent_backend'] = result.get('response_agent_backend')
         response['execution_policy'] = result.get('execution_policy')
         response['structured_report_preset'] = result.get('structured_report_preset')
         response['worktree_task'] = result.get('worktree_task')
@@ -1472,6 +1499,7 @@ def codex_session_subjob_create(session_id):
         'response_mode': result.get('response_mode'),
         'response_model': result.get('response_model'),
         'response_reasoning_effort': result.get('response_reasoning_effort'),
+        'response_agent_backend': result.get('response_agent_backend'),
         'session_storage': get_session_storage_summary(),
     }, crypto_session_id)
 

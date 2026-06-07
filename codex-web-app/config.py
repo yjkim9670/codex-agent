@@ -228,6 +228,7 @@ CODEX_MAX_TITLE_CHARS = 80
 CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
 CODEX_MAX_SERVICE_TIER_CHARS = 40
+CODEX_MAX_AGENT_BACKEND_CHARS = 40
 CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
 CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
 _CODEX_CLI_SANDBOX_VALUES = ('read-only', 'workspace-write', 'danger-full-access')
@@ -290,6 +291,27 @@ _DEFAULT_SERVICE_TIER_OPTIONS = _normalize_service_tier_options([
         'description': '1.5x speed, increased usage',
     },
 ])
+_AGENT_BACKEND_DEFINITIONS = {
+    'dtgpt': {
+        'id': 'dtgpt',
+        'name': 'DTGPT',
+        'description': 'Codex CLI',
+    },
+    'claude': {
+        'id': 'claude',
+        'name': 'Claude',
+        'description': 'Claude CLI',
+    },
+}
+_AGENT_BACKEND_ALIASES = {
+    'codex': 'dtgpt',
+    'codex-cli': 'dtgpt',
+    'codex_cli': 'dtgpt',
+    'dtgpt_oa': 'dtgpt',
+    'anthropic': 'claude',
+    'claude-cli': 'claude',
+    'claude_cli': 'claude',
+}
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
     'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
@@ -313,6 +335,46 @@ def _normalize_model_options(options):
         normalized_options.append(normalized)
         seen.add(normalized)
     return normalized_options
+
+
+def normalize_codex_agent_backend(value):
+    normalized = str(value or '').strip().lower()
+    if not normalized:
+        return ''
+    normalized = _AGENT_BACKEND_ALIASES.get(normalized, normalized)
+    if normalized not in _AGENT_BACKEND_DEFINITIONS:
+        return ''
+    return normalized
+
+
+def _normalize_agent_backend_options(options):
+    normalized_options = []
+    seen = set()
+    for item in options:
+        backend_id = normalize_codex_agent_backend(item)
+        if not backend_id or backend_id in seen:
+            continue
+        normalized_options.append(dict(_AGENT_BACKEND_DEFINITIONS[backend_id]))
+        seen.add(backend_id)
+    if not normalized_options:
+        normalized_options.append(dict(_AGENT_BACKEND_DEFINITIONS['dtgpt']))
+    return normalized_options
+
+
+def get_codex_agent_backend_options():
+    raw_options = str(os.environ.get('CODEX_AGENT_BACKEND_OPTIONS') or '').strip()
+    requested = [
+        item.strip()
+        for item in raw_options.replace('\n', ',').split(',')
+        if item.strip()
+    ]
+    default_backend = normalize_codex_agent_backend(os.environ.get('CODEX_AGENT_BACKEND'))
+    requested_ids = {normalize_codex_agent_backend(item) for item in requested}
+    if not requested:
+        requested = [default_backend or 'dtgpt']
+    elif default_backend and default_backend not in requested_ids:
+        requested.insert(0, default_backend)
+    return _normalize_agent_backend_options(requested)
 
 
 def _build_model_catalog_entry(slug, default_reasoning_effort=None, reasoning_options=None):
@@ -578,10 +640,14 @@ def get_codex_reasoning_options(model_name=None):
 
 
 def get_codex_service_tier_options():
+    if not _parse_bool_env('CODEX_ENABLE_SERVICE_TIER', default=True):
+        return []
     return [dict(item) for item in _DEFAULT_SERVICE_TIER_OPTIONS]
 
 
 def normalize_codex_service_tier(service_tier):
+    if not _parse_bool_env('CODEX_ENABLE_SERVICE_TIER', default=True):
+        return None
     normalized = str(service_tier or '').strip().lower()
     if normalized in {'', 'standard', 'default', 'auto'}:
         return None
@@ -606,6 +672,16 @@ def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
 CODEX_MODEL_OPTIONS = get_codex_model_options()
 CODEX_REASONING_OPTIONS = get_codex_reasoning_options()
 CODEX_SERVICE_TIER_OPTIONS = get_codex_service_tier_options()
+CODEX_AGENT_BACKEND_OPTIONS = get_codex_agent_backend_options()
+_CODEX_AGENT_BACKEND_IDS = tuple(
+    item['id'] for item in CODEX_AGENT_BACKEND_OPTIONS if item.get('id')
+)
+_REQUESTED_AGENT_BACKEND = normalize_codex_agent_backend(os.environ.get('CODEX_AGENT_BACKEND'))
+CODEX_AGENT_BACKEND_DEFAULT = (
+    _REQUESTED_AGENT_BACKEND
+    if _REQUESTED_AGENT_BACKEND in _CODEX_AGENT_BACKEND_IDS
+    else (_CODEX_AGENT_BACKEND_IDS[0] if _CODEX_AGENT_BACKEND_IDS else 'dtgpt')
+)
 
 CODEX_ALLOWED_ORIGINS = _parse_allowed_origins(
     os.environ.get(

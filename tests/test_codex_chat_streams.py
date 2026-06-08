@@ -84,6 +84,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_CLI_SANDBOX', 'workspace-write')
     monkeypatch.setattr(codex_chat, 'CODEX_CLI_READ_ONLY_SANDBOX', 'read-only')
     monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_PERMISSION_MODE', raising=False)
 
     return {
         'store_path': store_path,
@@ -1082,6 +1083,53 @@ def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, m
     ]
     assert '--sandbox' not in cmd
     assert '--config' not in cmd
+
+
+def test_build_agent_command_uses_claude_permission_mode(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_PERMISSION_MODE', 'accept_edits')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_DEFAULT', 'dtgpt')
+
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert cmd == [
+        r'C:\tools\claude.cmd',
+        '-p',
+        '--permission-mode',
+        'acceptEdits',
+        '--output-format',
+        'json',
+    ]
+
+
+def test_build_agent_command_ignores_invalid_claude_permission_mode(
+        isolated_codex_workspace,
+        monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_PERMISSION_MODE', 'acceptEdits --bad-flag')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_DEFAULT', 'dtgpt')
+
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert '--permission-mode' not in cmd
 
 
 def test_build_agent_command_uses_selected_claude_model(tmp_path, monkeypatch):

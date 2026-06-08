@@ -119,6 +119,7 @@ _STRICT_COMPETING_PROCESSES = str(
 _LOGGER = logging.getLogger(__name__)
 _CODEX_CLI_BIN_ENV = 'CODEX_CLI_BIN'
 _CLAUDE_CLI_BIN_ENV = 'CODEX_CLAUDE_CLI_BIN'
+_CLAUDE_PERMISSION_MODE_ENV = 'CODEX_CLAUDE_PERMISSION_MODE'
 _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -1621,6 +1622,25 @@ def _parse_claude_max_turns():
     if parsed <= 0:
         return None
     return min(parsed, 100)
+
+
+def _normalize_claude_permission_mode(value):
+    raw_value = str(value or '').strip()
+    if not raw_value or '\x00' in raw_value:
+        return ''
+    normalized = re.sub(r'[\s_-]+', '', raw_value).lower()
+    return {
+        'default': 'default',
+        'acceptedits': 'acceptEdits',
+        'plan': 'plan',
+        'auto': 'auto',
+        'dontask': 'dontAsk',
+        'bypasspermissions': 'bypassPermissions',
+    }.get(normalized, '')
+
+
+def _resolve_claude_permission_mode():
+    return _normalize_claude_permission_mode(os.environ.get(_CLAUDE_PERMISSION_MODE_ENV))
 
 
 def _normalize_claude_model_candidate(value):
@@ -6697,6 +6717,9 @@ def _build_claude_command(
     claude_model = _resolve_claude_model(model_override=model_override)
     if claude_model:
         cmd.extend(['--model', claude_model])
+    permission_mode = _resolve_claude_permission_mode()
+    if permission_mode:
+        cmd.extend(['--permission-mode', permission_mode])
     max_turns = _parse_claude_max_turns()
     if max_turns:
         cmd.extend(['--max-turns', str(max_turns)])

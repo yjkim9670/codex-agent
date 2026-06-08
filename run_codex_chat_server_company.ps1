@@ -96,6 +96,9 @@ if (-not $env:CODEX_CLAUDE_CLI_BIN) {
         $env:CODEX_CLAUDE_CLI_BIN = $ClaudeCommand.Source
     }
 }
+if (-not $env:CODEX_CLAUDE_PERMISSION_MODE) {
+    $env:CODEX_CLAUDE_PERMISSION_MODE = "acceptEdits"
+}
 
 function Test-GlobalPythonReady {
     param(

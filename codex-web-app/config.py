@@ -284,6 +284,10 @@ _DEFAULT_REASONING_OPTIONS = _normalize_reasoning_options(
     for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
     if item.strip()
 )
+_CLAUDE_EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
+_CLAUDE_DEFAULT_EFFORT = 'high'
+_CLAUDE_SONNET_EFFORT_OPTIONS = ('medium', 'high', 'max')
+_CLAUDE_OPUS_EFFORT_OPTIONS = ('medium', 'high', 'xhigh', 'max')
 _DEFAULT_SERVICE_TIER_OPTIONS = _normalize_service_tier_options([
     {
         'id': 'priority',
@@ -646,6 +650,140 @@ def _read_claude_model_options_from_env():
     )
 
 
+def normalize_claude_effort_level(value):
+    token = str(value or '').strip().lower()
+    if not token:
+        return ''
+    token = token.replace('-', '').replace('_', '').replace(' ', '')
+    return token if token in _CLAUDE_EFFORT_LEVELS else ''
+
+
+def _normalize_claude_effort_options(options):
+    normalized_options = []
+    seen = set()
+    for item in options:
+        if isinstance(item, dict):
+            item = item.get('effort') or item.get('level') or item.get('id') or item.get('name')
+        normalized = normalize_claude_effort_level(item)
+        if not normalized or normalized in seen:
+            continue
+        normalized_options.append(normalized)
+        seen.add(normalized)
+    return normalized_options
+
+
+def _read_claude_effort_options_from_env():
+    return _normalize_claude_effort_options(
+        item.strip()
+        for item in os.environ.get('CODEX_CLAUDE_EFFORT_OPTIONS', '').split(',')
+        if item.strip()
+    )
+
+
+def _compact_claude_model_key(model_name):
+    return ''.join(
+        ch
+        for ch in str(model_name or '').lower()
+        if ch.isalnum()
+    )
+
+
+def _infer_claude_effort_metadata(model_name):
+    key = _compact_claude_model_key(model_name)
+    if not key:
+        return None, []
+    if 'haiku' in key:
+        return None, []
+    if 'opus' in key:
+        return _CLAUDE_DEFAULT_EFFORT, list(_CLAUDE_OPUS_EFFORT_OPTIONS)
+    if 'sonnet' in key:
+        return _CLAUDE_DEFAULT_EFFORT, list(_CLAUDE_SONNET_EFFORT_OPTIONS)
+    return None, []
+
+
+def _extract_claude_model_name(entry):
+    if isinstance(entry, dict):
+        for key in ('model', 'name', 'id', 'slug'):
+            model_name = normalize_codex_model_name(entry.get(key))
+            if model_name:
+                return model_name
+        return ''
+    return normalize_codex_model_name(entry)
+
+
+def _coerce_claude_effort_metadata(raw_value):
+    default_effort = None
+    raw_options = None
+    if isinstance(raw_value, dict):
+        raw_options = (
+            raw_value.get('efforts')
+            or raw_value.get('effortLevels')
+            or raw_value.get('reasoningOptions')
+            or raw_value.get('reasoning_options')
+            or raw_value.get('supportedReasoningLevels')
+            or raw_value.get('supported_reasoning_levels')
+        )
+        default_effort = (
+            raw_value.get('defaultEffort')
+            or raw_value.get('default_effort')
+            or raw_value.get('defaultReasoningEffort')
+            or raw_value.get('default_reasoning_effort')
+            or raw_value.get('effortLevel')
+            or raw_value.get('effort')
+        )
+    elif isinstance(raw_value, list):
+        raw_options = raw_value
+    elif isinstance(raw_value, str):
+        raw_options = [item.strip() for item in raw_value.split(',') if item.strip()]
+    options = _normalize_claude_effort_options(raw_options or [])
+    default_effort = normalize_claude_effort_level(default_effort)
+    return default_effort or None, options
+
+
+def _find_claude_effort_metadata_for_model(payload, model_name, raw_model_entry=None):
+    default_effort, options = _coerce_claude_effort_metadata(raw_model_entry)
+    if options or default_effort:
+        return default_effort, options
+    for key in (
+            'availableModelEfforts',
+            'modelEfforts',
+            'modelEffortLevels',
+            'modelReasoningEfforts',
+            'modelReasoningOptions'):
+        raw_mapping = payload.get(key)
+        if not isinstance(raw_mapping, dict):
+            continue
+        for candidate_key, candidate_value in raw_mapping.items():
+            if normalize_codex_model_name(candidate_key) == model_name:
+                return _coerce_claude_effort_metadata(candidate_value)
+    return _infer_claude_effort_metadata(model_name)
+
+
+def _build_claude_model_catalog_entry(model_name, default_reasoning_effort=None, reasoning_options=None):
+    env_effort_options = _read_claude_effort_options_from_env()
+    if env_effort_options:
+        reasoning_options = env_effort_options
+        if default_reasoning_effort not in env_effort_options:
+            default_reasoning_effort = None
+    normalized_reasoning_options = _normalize_claude_effort_options(reasoning_options or [])
+    default_reasoning_effort = normalize_claude_effort_level(default_reasoning_effort)
+    if not default_reasoning_effort and _CLAUDE_DEFAULT_EFFORT in normalized_reasoning_options:
+        default_reasoning_effort = _CLAUDE_DEFAULT_EFFORT
+    return _build_model_catalog_entry(
+        model_name,
+        default_reasoning_effort=default_reasoning_effort,
+        reasoning_options=normalized_reasoning_options,
+    )
+
+
+def _read_claude_settings_payload(settings_path):
+    try:
+        payload = json.loads(settings_path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _iter_claude_settings_paths():
     candidates = []
     explicit_settings_path = _expand_path_value(os.environ.get('CODEX_CLAUDE_SETTINGS_PATH'))
@@ -664,49 +802,180 @@ def _iter_claude_settings_paths():
         yield path
 
 
-def _read_claude_model_options_from_settings_path(settings_path):
-    try:
-        payload = json.loads(settings_path.read_text(encoding='utf-8'))
-    except Exception:
-        return []
-    if not isinstance(payload, dict):
+def _read_claude_model_catalog_from_settings_path(settings_path):
+    payload = _read_claude_settings_payload(settings_path)
+    if not payload:
         return []
     raw_models = payload.get('availableModels')
     if not isinstance(raw_models, list):
         return []
-    return _normalize_model_options(
-        item.strip()
-        for item in raw_models
-        if isinstance(item, str) and item.strip()
-    )
+    model_catalog = []
+    seen = set()
+    for raw_model in raw_models:
+        model_name = _extract_claude_model_name(raw_model)
+        if not model_name or model_name in seen:
+            continue
+        default_effort, effort_options = _find_claude_effort_metadata_for_model(
+            payload,
+            model_name,
+            raw_model_entry=raw_model,
+        )
+        catalog_entry = _build_claude_model_catalog_entry(
+            model_name,
+            default_reasoning_effort=default_effort,
+            reasoning_options=effort_options,
+        )
+        if not catalog_entry:
+            continue
+        model_catalog.append(catalog_entry)
+        seen.add(model_name)
+    return model_catalog
 
 
-def _read_claude_model_options_from_settings():
+def _normalize_claude_cli_model_name(model_name):
+    normalized = str(model_name or '').strip()
+    if not normalized or '\x00' in normalized:
+        return ''
+    return normalized
+
+
+def _coerce_claude_model_override_value(raw_value):
+    if isinstance(raw_value, dict):
+        for key in ('model', 'name', 'id', 'slug', 'value', 'target'):
+            override = _normalize_claude_cli_model_name(raw_value.get(key))
+            if override:
+                return override
+        return ''
+    return _normalize_claude_cli_model_name(raw_value)
+
+
+def _find_claude_model_override_in_payload(payload, model_name):
+    normalized_model_name = normalize_codex_model_name(model_name)
+    compact_model_key = _compact_claude_model_key(normalized_model_name)
+    if not normalized_model_name:
+        return ''
+    for key in (
+            'modelOverrides',
+            'model_overrides',
+            'availableModelOverrides',
+            'available_model_overrides'):
+        raw_mapping = payload.get(key)
+        if not isinstance(raw_mapping, dict):
+            continue
+        for candidate_key, candidate_value in raw_mapping.items():
+            normalized_candidate = normalize_codex_model_name(candidate_key)
+            if normalized_candidate == normalized_model_name:
+                override = _coerce_claude_model_override_value(candidate_value)
+                if override:
+                    return override
+            if compact_model_key and _compact_claude_model_key(candidate_key) == compact_model_key:
+                override = _coerce_claude_model_override_value(candidate_value)
+                if override:
+                    return override
+    return ''
+
+
+def _read_claude_model_catalog_from_settings():
     for settings_path in _iter_claude_settings_paths():
-        model_options = _read_claude_model_options_from_settings_path(settings_path)
-        if model_options:
-            return model_options
+        model_catalog = _read_claude_model_catalog_from_settings_path(settings_path)
+        if model_catalog:
+            return model_catalog
     return []
 
 
-def _read_claude_model_options():
-    options = _read_claude_model_options_from_env()
-    if not options:
-        options = _read_claude_model_options_from_settings()
+def _select_claude_model_catalog_entries(model_options, source_catalog):
+    source_map = {
+        entry['slug']: entry
+        for entry in _normalize_model_catalog(source_catalog)
+    }
+    selected_catalog = []
+    seen = set()
+    for item in model_options:
+        model_name = normalize_codex_model_name(item)
+        if not model_name or model_name in seen:
+            continue
+        source_entry = source_map.get(model_name)
+        if source_entry:
+            catalog_entry = _clone_model_catalog_entry(source_entry)
+        else:
+            default_effort, effort_options = _infer_claude_effort_metadata(model_name)
+            catalog_entry = _build_claude_model_catalog_entry(
+                model_name,
+                default_reasoning_effort=default_effort,
+                reasoning_options=effort_options,
+            )
+        if not catalog_entry:
+            continue
+        selected_catalog.append(catalog_entry)
+        seen.add(model_name)
+    return selected_catalog
+
+
+def _read_claude_model_catalog():
+    settings_catalog = _read_claude_model_catalog_from_settings()
+    env_options = _read_claude_model_options_from_env()
+    if env_options:
+        catalog = _select_claude_model_catalog_entries(env_options, settings_catalog)
+    else:
+        catalog = _normalize_model_catalog(settings_catalog)
     default_model = normalize_codex_model_name(os.environ.get('CODEX_CLAUDE_MODEL'))
-    if default_model and default_model not in options:
-        options.insert(0, default_model)
-    return options
+    catalog_model_names = {entry['slug'] for entry in catalog}
+    if default_model and default_model not in catalog_model_names:
+        default_effort, effort_options = _infer_claude_effort_metadata(default_model)
+        default_entry = _build_claude_model_catalog_entry(
+            default_model,
+            default_reasoning_effort=default_effort,
+            reasoning_options=effort_options,
+        )
+        if default_entry:
+            catalog.insert(0, default_entry)
+    return _normalize_model_catalog(catalog)
 
 
 def get_claude_model_catalog():
-    return _normalize_model_catalog(
-        {
-            'slug': model_name,
-            'default_reasoning_effort': None,
-            'reasoning_options': [],
-        }
-        for model_name in _read_claude_model_options()
+    return _read_claude_model_catalog()
+
+
+def resolve_claude_cli_model_name(model_name):
+    normalized_model_name = normalize_codex_model_name(model_name)
+    if not normalized_model_name:
+        return ''
+    for settings_path in _iter_claude_settings_paths():
+        payload = _read_claude_settings_payload(settings_path)
+        if not payload:
+            continue
+        override = _find_claude_model_override_in_payload(payload, normalized_model_name)
+        if override:
+            return override
+    return normalized_model_name
+
+
+def get_claude_model_metadata(model_name):
+    normalized_model_name = normalize_codex_model_name(model_name)
+    if not normalized_model_name:
+        return None
+    for entry in get_claude_model_catalog():
+        if entry['slug'] == normalized_model_name:
+            return entry
+    return None
+
+
+def get_claude_default_reasoning_effort(model_name):
+    metadata = get_claude_model_metadata(model_name)
+    if not metadata:
+        return None
+    default_reasoning = str(metadata.get('default_reasoning_effort') or '').strip()
+    return default_reasoning or None
+
+
+def get_claude_reasoning_options(model_name=None):
+    metadata = get_claude_model_metadata(model_name) if model_name else None
+    if metadata is not None:
+        return list(metadata.get('reasoning_options') or [])
+    return _normalize_reasoning_options(
+        item
+        for entry in get_claude_model_catalog()
+        for item in entry.get('reasoning_options') or []
     )
 
 
@@ -727,7 +996,7 @@ def get_codex_model_options_for_backend(agent_backend=None):
 def get_codex_reasoning_options_for_backend(agent_backend=None, model_name=None):
     backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
     if backend == 'claude':
-        return []
+        return get_claude_reasoning_options(model_name=model_name)
     return get_codex_reasoning_options(model_name=model_name)
 
 
@@ -771,6 +1040,16 @@ def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
             return get_codex_default_reasoning_effort(model_name) or normalized_reasoning
         return normalized_reasoning
     return get_codex_default_reasoning_effort(model_name)
+
+
+def resolve_claude_reasoning_effort(model_name=None, reasoning_effort=None):
+    normalized_reasoning = normalize_claude_effort_level(reasoning_effort)
+    supported_reasoning = get_claude_reasoning_options(model_name=model_name)
+    if normalized_reasoning:
+        if supported_reasoning and normalized_reasoning in supported_reasoning:
+            return normalized_reasoning
+        return get_claude_default_reasoning_effort(model_name)
+    return get_claude_default_reasoning_effort(model_name)
 
 
 CODEX_MODEL_OPTIONS = get_codex_model_options()

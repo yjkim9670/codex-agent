@@ -87,6 +87,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.delenv('CODEX_CLAUDE_PERMISSION_MODE', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_SETTINGS_PATH', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_EFFORT_OPTIONS', raising=False)
 
     return {
         'store_path': store_path,
@@ -1052,9 +1053,24 @@ def test_claude_model_catalog_is_backend_scoped(monkeypatch):
 
     catalog = codex_config.get_codex_model_catalog_for_backend('claude')
 
-    assert [entry['slug'] for entry in catalog] == ['claude-sonnet', 'claude-opus']
-    assert all(entry['reasoning_options'] == [] for entry in catalog)
-    assert codex_config.get_codex_reasoning_options_for_backend('claude') == []
+    assert catalog == [
+        {
+            'slug': 'claude-sonnet',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'max'],
+        },
+        {
+            'slug': 'claude-opus',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'xhigh', 'max'],
+        },
+    ]
+    assert codex_config.get_codex_reasoning_options_for_backend('claude') == [
+        'medium',
+        'high',
+        'max',
+        'xhigh',
+    ]
 
 
 def test_claude_model_catalog_reads_available_models_from_settings(monkeypatch, tmp_path):
@@ -1062,10 +1078,12 @@ def test_claude_model_catalog_reads_available_models_from_settings(monkeypatch, 
     settings_path.parent.mkdir(parents=True)
     settings_path.write_text(json.dumps({
         'availableModels': [
-            'claude-sonnet',
+            'haiku',
+            'sonnet',
             '',
-            'claude-opus',
-            'claude-sonnet',
+            'claude-opus-4-8',
+            'claude-opus-4-7',
+            'sonnet',
         ],
     }), encoding='utf-8')
     monkeypatch.delenv('CODEX_CLAUDE_MODEL_OPTIONS', raising=False)
@@ -1074,8 +1092,90 @@ def test_claude_model_catalog_reads_available_models_from_settings(monkeypatch, 
 
     catalog = codex_config.get_codex_model_catalog_for_backend('claude')
 
-    assert [entry['slug'] for entry in catalog] == ['claude-sonnet', 'claude-opus']
-    assert all(entry['reasoning_options'] == [] for entry in catalog)
+    assert catalog == [
+        {
+            'slug': 'haiku',
+            'default_reasoning_effort': None,
+            'reasoning_options': [],
+        },
+        {
+            'slug': 'sonnet',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'max'],
+        },
+        {
+            'slug': 'claude-opus-4-8',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'xhigh', 'max'],
+        },
+        {
+            'slug': 'claude-opus-4-7',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'xhigh', 'max'],
+        },
+    ]
+
+
+def test_claude_model_catalog_infers_efforts_from_supported_model_names(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': [
+            'claude-opus-4-7',
+            'claude-sonnet-4-6',
+        ],
+    }), encoding='utf-8')
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL_OPTIONS', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL', raising=False)
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert catalog == [
+        {
+            'slug': 'claude-opus-4-7',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'xhigh', 'max'],
+        },
+        {
+            'slug': 'claude-sonnet-4-6',
+            'default_reasoning_effort': 'high',
+            'reasoning_options': ['medium', 'high', 'max'],
+        },
+    ]
+    assert codex_config.get_codex_reasoning_options_for_backend('claude') == [
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+    ]
+
+
+def test_claude_model_catalog_reads_model_efforts_from_settings(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': ['company-sonnet'],
+        'availableModelEfforts': {
+            'company-sonnet': {
+                'defaultEffort': 'medium',
+                'efforts': ['low', 'medium', 'high'],
+            },
+        },
+    }), encoding='utf-8')
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL_OPTIONS', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL', raising=False)
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert catalog == [{
+        'slug': 'company-sonnet',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': ['low', 'medium', 'high'],
+    }]
+    assert codex_config.resolve_claude_reasoning_effort('company-sonnet', 'high') == 'high'
+    assert codex_config.resolve_claude_reasoning_effort('company-sonnet', 'xhigh') == 'medium'
 
 
 def test_claude_model_catalog_env_options_override_settings(monkeypatch, tmp_path):
@@ -1090,6 +1190,44 @@ def test_claude_model_catalog_env_options_override_settings(monkeypatch, tmp_pat
     catalog = codex_config.get_codex_model_catalog_for_backend('claude')
 
     assert [entry['slug'] for entry in catalog] == ['claude-from-env']
+
+
+def test_claude_model_catalog_env_options_keep_matching_settings_efforts(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': ['company-sonnet'],
+        'modelEfforts': {
+            'company-sonnet': ['low', 'high'],
+        },
+    }), encoding='utf-8')
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'company-sonnet')
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert catalog == [{
+        'slug': 'company-sonnet',
+        'default_reasoning_effort': 'high',
+        'reasoning_options': ['low', 'high'],
+    }]
+
+
+def test_resolve_claude_cli_model_name_reads_model_overrides(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': ['sonnet', 'claude-opus-4-8'],
+        'modelOverrides': {
+            'claude-opus-4-8': 'global.anthropic.claude-opus-4-8[1m]',
+        },
+    }), encoding='utf-8')
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    assert codex_config.resolve_claude_cli_model_name('claude-opus-4-8') == (
+        'global.anthropic.claude-opus-4-8[1m]'
+    )
+    assert codex_config.resolve_claude_cli_model_name('sonnet') == 'sonnet'
 
 
 def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, monkeypatch):
@@ -1217,6 +1355,81 @@ def test_build_agent_command_uses_selected_claude_model(tmp_path, monkeypatch):
 
     assert backend == 'claude'
     assert cmd[:4] == [r'C:\tools\claude.cmd', '-p', '--model', 'claude-sonnet']
+    assert '--output-format' in cmd
+
+
+def test_build_agent_command_uses_claude_model_override_from_settings(tmp_path, monkeypatch):
+    claude_settings_path = tmp_path / '.claude' / 'settings.json'
+    claude_settings_path.parent.mkdir(parents=True)
+    claude_settings_path.write_text(json.dumps({
+        'availableModels': ['claude-opus-4-8'],
+        'modelOverrides': {
+            'claude-opus-4-8': 'global.anthropic.claude-opus-4-8[1m]',
+        },
+    }), encoding='utf-8')
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(claude_settings_path))
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL_OPTIONS', raising=False)
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+
+    codex_chat.update_settings(
+        agent_backend='claude',
+        model='claude-opus-4-8',
+        reasoning_effort='',
+    )
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert cmd[:6] == [
+        r'C:\tools\claude.cmd',
+        '-p',
+        '--model',
+        'global.anthropic.claude-opus-4-8[1m]',
+        '--effort',
+        'high',
+    ]
+    assert '--output-format' in cmd
+
+
+def test_build_agent_command_uses_selected_claude_effort(tmp_path, monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'claude-sonnet-4-6')
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', tmp_path / 'settings.json')
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+
+    codex_chat.update_settings(
+        agent_backend='claude',
+        model='claude-sonnet-4-6',
+        reasoning_effort='medium',
+    )
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+    )
+
+    assert backend == 'claude'
+    assert cmd[:6] == [
+        r'C:\tools\claude.cmd',
+        '-p',
+        '--model',
+        'claude-sonnet-4-6',
+        '--effort',
+        'medium',
+    ]
     assert '--output-format' in cmd
 
 

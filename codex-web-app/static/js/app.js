@@ -1675,9 +1675,14 @@ function getModelOptionsForBackend(agentBackend = getActiveAgentBackend()) {
 }
 
 function getReasoningOptionsForBackend(agentBackend = getActiveAgentBackend(), fallbackOptions = state.settings.reasoningOptions) {
-    if (isClaudeBackend(agentBackend)) return [];
+    const backend = normalizeAgentBackendValue(agentBackend) || 'dtgpt';
     const catalogOptions = collectCatalogReasoningOptions(getModelCatalogForBackend(agentBackend));
-    return catalogOptions.length > 0 ? catalogOptions : normalizeOptionList(fallbackOptions);
+    if (catalogOptions.length > 0) return catalogOptions;
+    return backend === 'dtgpt' ? normalizeOptionList(fallbackOptions) : [];
+}
+
+function hasReasoningControlsForBackend(agentBackend = getActiveAgentBackend()) {
+    return getReasoningOptionsForBackend(agentBackend).length > 0;
 }
 
 function getCompatibleModelForBackend(model, agentBackend = getActiveAgentBackend()) {
@@ -1693,15 +1698,20 @@ function syncModelCardForBackend(agentBackend = getActiveAgentBackend()) {
     const modelCard = document.querySelector('.model-card');
     const modelLabel = document.getElementById('codex-model-label');
     const planModeModelLabel = document.getElementById('codex-plan-mode-model-label');
-    const noReasoning = isClaudeBackend(agentBackend);
+    const noReasoning = !hasReasoningControlsForBackend(agentBackend);
+    const claudeBackend = isClaudeBackend(agentBackend);
     if (modelCard) {
         modelCard.classList.toggle('is-no-reasoning', noReasoning);
     }
     if (modelLabel) {
-        modelLabel.textContent = noReasoning ? 'Claude model' : 'Model · Reasoning effort';
+        modelLabel.textContent = noReasoning
+            ? (claudeBackend ? 'Claude model' : 'Model')
+            : (claudeBackend ? 'Claude model · Effort' : 'Model · Reasoning effort');
     }
     if (planModeModelLabel) {
-        planModeModelLabel.textContent = noReasoning ? 'Plan mode Claude model' : 'Plan mode model · Reasoning effort';
+        planModeModelLabel.textContent = noReasoning
+            ? (claudeBackend ? 'Plan mode Claude model' : 'Plan mode model')
+            : (claudeBackend ? 'Plan mode Claude model · Effort' : 'Plan mode model · Reasoning effort');
     }
 }
 
@@ -1721,10 +1731,16 @@ function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) 
     state.settings.reasoningOptions = reasoningOptions;
     state.settings.model = nextModel || null;
     state.settings.planModeModel = nextPlanModeModel || null;
-    if (isClaudeBackend(backend)) {
-        state.settings.reasoningEffort = null;
-        state.settings.planModeReasoningEffort = null;
-    }
+    state.settings.reasoningEffort = getCompatibleReasoningForModel(
+        state.settings.reasoningEffort,
+        state.settings.model,
+        reasoningOptions
+    ) || null;
+    state.settings.planModeReasoningEffort = getCompatibleReasoningForModel(
+        state.settings.planModeReasoningEffort,
+        state.settings.planModeModel || state.settings.model,
+        reasoningOptions
+    ) || null;
     syncModelCardForBackend(backend);
     updateModelControls(state.settings.model, state.settings.modelOptions);
     updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
@@ -1866,23 +1882,28 @@ function getModelCatalogEntry(model) {
 
 function getReasoningProfile(model, reasoning, fallbackOptions = null) {
     const entry = getModelCatalogEntry(model);
-    const reasoningOptions = entry?.reasoningOptions?.length
-        ? entry.reasoningOptions
+    const reasoningOptions = entry
+        ? normalizeOptionList(entry.reasoningOptions)
         : normalizeOptionList(fallbackOptions || state.settings.reasoningOptions);
     const explicitReasoning = typeof reasoning === 'string' ? reasoning.trim() : '';
     const defaultReasoning = entry?.defaultReasoningEffort || '';
     const isExplicitSupported = Boolean(explicitReasoning)
-        && (reasoningOptions.length === 0 || reasoningOptions.includes(explicitReasoning));
+        && (reasoningOptions.includes(explicitReasoning) || (!entry && reasoningOptions.length === 0));
     const effectiveReasoning = isExplicitSupported
         ? explicitReasoning
-        : (defaultReasoning || explicitReasoning || '');
+        : (defaultReasoning || '');
     return {
         defaultReasoning,
         effectiveReasoning,
         explicitReasoning,
-        isExplicit: isExplicitSupported || (!defaultReasoning && Boolean(explicitReasoning)),
+        isExplicit: isExplicitSupported,
         reasoningOptions
     };
+}
+
+function getCompatibleReasoningForModel(reasoning, model, fallbackOptions = null) {
+    const profile = getReasoningProfile(model, reasoning, fallbackOptions);
+    return profile.isExplicit ? profile.explicitReasoning : '';
 }
 
 function buildReasoningPlaceholder(defaultReasoning, fallbackText) {
@@ -7542,9 +7563,7 @@ async function loadSettings({ silent = true } = {}) {
         const modelOptions = catalogModelOptions.length > 0
             ? catalogModelOptions
             : normalizeOptionList(result?.model_options);
-        const reasoningOptions = isClaudeBackend(activeBackend)
-            ? []
-            : normalizeOptionList(result?.reasoning_options);
+        const reasoningOptions = normalizeOptionList(result?.reasoning_options);
         const serviceTierOptions = normalizeServiceTierOptions(result?.service_tier_options);
         const agentBackendOptions = normalizeAgentBackendOptions(result?.agent_backend_options);
         const executionPolicyPresets = normalizeExecutionPolicyPresets(result?.execution_policy_presets);
@@ -7990,14 +8009,22 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     const modelText = model ? model : 'default';
     const backendText = formatAgentBackendStatus(state.settings.agentBackend);
-    const noReasoning = isClaudeBackend(state.settings.agentBackend);
-    const showBackend = normalizeAgentBackendOptions(state.settings.agentBackendOptions).length > 1;
-    const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
-    const reasoningText = noReasoning ? '' : formatReasoningStatus(model, reasoning);
-    const planModeReasoningText = noReasoning ? '' : formatReasoningStatus(
+    const reasoningProfile = getReasoningProfile(model, reasoning);
+    const planModeReasoningProfile = getReasoningProfile(
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     );
+    const showReasoning = Boolean(reasoningProfile.effectiveReasoning)
+        || reasoningProfile.reasoningOptions.length > 0;
+    const showPlanModeReasoning = Boolean(planModeReasoningProfile.effectiveReasoning)
+        || planModeReasoningProfile.reasoningOptions.length > 0;
+    const showBackend = normalizeAgentBackendOptions(state.settings.agentBackendOptions).length > 1;
+    const planModeModelText = state.settings.planModeModel ? state.settings.planModeModel : 'default';
+    const reasoningText = showReasoning ? formatReasoningStatus(model, reasoning) : '';
+    const planModeReasoningText = showPlanModeReasoning ? formatReasoningStatus(
+        state.settings.planModeModel || model,
+        state.settings.planModeReasoningEffort
+    ) : '';
     const showSpeed = normalizeServiceTierOptions(state.settings.serviceTierOptions).length > 1;
     const speedText = formatServiceTierStatus(state.settings.serviceTier);
     const routingParts = [];
@@ -8010,11 +8037,11 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (planModeModelText !== modelText || state.settings.planModeModel) {
         fullTextParts.push(`Plan model: ${planModeModelText}`);
     }
-    if (!noReasoning) {
+    if (showReasoning) {
         fullTextParts.push(`Reasoning: ${reasoningText}`);
-        if (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort) {
-            fullTextParts.push(`Plan reasoning: ${planModeReasoningText}`);
-        }
+    }
+    if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
+        fullTextParts.push(`Plan reasoning: ${planModeReasoningText}`);
     }
     if (showSpeed) fullTextParts.push(`Speed: ${speedText}`);
     const fullText = `${fullTextParts.join(' · ')}${routingText}`;
@@ -8025,7 +8052,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     const compactSummaryParts = [
         `Model:${compactToken(modelText)}`
     ];
-    if (!noReasoning) {
+    if (showReasoning) {
         compactSummaryParts.push(`R:${compactToken(reasoningText)}`);
     }
     if (showBackend && backendText) {
@@ -8034,7 +8061,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (planModeModelText !== modelText || state.settings.planModeModel) {
         compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
     }
-    if (!noReasoning && (planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
+    if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
     }
     if (state.settings.serviceTier) {
@@ -8127,13 +8154,11 @@ async function updateSettings() {
             : (Array.isArray(result?.model_options)
                 ? normalizeOptionList(result.model_options)
                 : state.settings.modelOptions);
-        state.settings.reasoningOptions = isClaudeBackend(state.settings.agentBackend)
-            ? []
-            : (Array.isArray(result?.reasoning_options)
+        state.settings.reasoningOptions = Array.isArray(result?.reasoning_options)
             ? normalizeOptionList(result.reasoning_options)
             : (catalogReasoningOptions.length > 0
                 ? catalogReasoningOptions
-                : state.settings.reasoningOptions));
+                : state.settings.reasoningOptions);
         state.settings.executionPolicyPresets = Array.isArray(result?.execution_policy_presets)
             ? normalizeExecutionPolicyPresets(result.execution_policy_presets)
             : state.settings.executionPolicyPresets;

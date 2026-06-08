@@ -129,7 +129,23 @@ if (-not $env:CODEX_CLAUDE_MODEL_OPTIONS -and (Test-Path $env:CODEX_CLAUDE_SETTI
         $ClaudeAvailableModels = @()
         $SeenClaudeModels = @{}
         foreach ($Model in @($ClaudeSettings.availableModels)) {
-            $ModelName = "$Model".Trim()
+            $ModelName = ""
+            if ($null -eq $Model) {
+                continue
+            }
+            if ($Model -is [string]) {
+                $ModelName = $Model.Trim()
+            } else {
+                foreach ($ModelNameKey in @("model", "name", "id", "slug")) {
+                    $ModelNameProperty = $Model.PSObject.Properties[$ModelNameKey]
+                    if ($ModelNameProperty -and $null -ne $ModelNameProperty.Value) {
+                        $ModelName = "$($ModelNameProperty.Value)".Trim()
+                        if ($ModelName) {
+                            break
+                        }
+                    }
+                }
+            }
             if ($ModelName -and -not $SeenClaudeModels.ContainsKey($ModelName)) {
                 $ClaudeAvailableModels += $ModelName
                 $SeenClaudeModels[$ModelName] = $true

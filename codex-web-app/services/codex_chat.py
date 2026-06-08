@@ -65,6 +65,8 @@ from ..config import (
     normalize_codex_agent_backend,
     normalize_codex_model_name,
     normalize_codex_service_tier,
+    resolve_claude_cli_model_name,
+    resolve_claude_reasoning_effort,
     resolve_codex_reasoning_effort,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
@@ -2146,7 +2148,16 @@ def resolve_response_model_name(model_override=None):
 def resolve_response_reasoning_effort(model_override=None, reasoning_override=None):
     settings = get_settings()
     if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'claude':
-        return None
+        model_name = _resolve_claude_model(model_override=model_override)
+        reasoning_effort = ''
+        if reasoning_override is not None:
+            reasoning_effort = str(reasoning_override).strip()
+        if not reasoning_effort:
+            reasoning_effort = str(settings.get('reasoning_effort') or '').strip()
+        return resolve_claude_reasoning_effort(
+            model_name=model_name,
+            reasoning_effort=reasoning_effort,
+        ) or None
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
@@ -6715,7 +6726,6 @@ def _build_claude_command(
     del prompt
     del output_path
     del output_schema_path
-    del reasoning_override
     del attachments
     del question_only
     del execution_cwd
@@ -6723,7 +6733,19 @@ def _build_claude_command(
     cmd = [_claude_cli_command(), '-p']
     claude_model = _resolve_claude_model(model_override=model_override)
     if claude_model:
-        cmd.extend(['--model', claude_model])
+        cli_model = resolve_claude_cli_model_name(claude_model) or claude_model
+        cmd.extend(['--model', cli_model])
+    settings = get_settings()
+    reasoning_effort = (
+        (str(reasoning_override).strip() if reasoning_override is not None else '')
+        or settings.get('reasoning_effort')
+    )
+    reasoning_effort = resolve_claude_reasoning_effort(
+        model_name=claude_model,
+        reasoning_effort=reasoning_effort,
+    )
+    if reasoning_effort:
+        cmd.extend(['--effort', reasoning_effort])
     dangerously_skip_permissions = _resolve_claude_dangerously_skip_permissions()
     if dangerously_skip_permissions:
         cmd.append('--dangerously-skip-permissions')

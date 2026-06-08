@@ -120,6 +120,7 @@ _LOGGER = logging.getLogger(__name__)
 _CODEX_CLI_BIN_ENV = 'CODEX_CLI_BIN'
 _CLAUDE_CLI_BIN_ENV = 'CODEX_CLAUDE_CLI_BIN'
 _CLAUDE_PERMISSION_MODE_ENV = 'CODEX_CLAUDE_PERMISSION_MODE'
+_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS_ENV = 'CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS'
 _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -1641,6 +1642,12 @@ def _normalize_claude_permission_mode(value):
 
 def _resolve_claude_permission_mode():
     return _normalize_claude_permission_mode(os.environ.get(_CLAUDE_PERMISSION_MODE_ENV))
+
+
+def _resolve_claude_dangerously_skip_permissions():
+    return bool(_coerce_optional_bool(
+        os.environ.get(_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS_ENV)
+    ))
 
 
 def _normalize_claude_model_candidate(value):
@@ -6717,9 +6724,13 @@ def _build_claude_command(
     claude_model = _resolve_claude_model(model_override=model_override)
     if claude_model:
         cmd.extend(['--model', claude_model])
-    permission_mode = _resolve_claude_permission_mode()
-    if permission_mode:
-        cmd.extend(['--permission-mode', permission_mode])
+    dangerously_skip_permissions = _resolve_claude_dangerously_skip_permissions()
+    if dangerously_skip_permissions:
+        cmd.append('--dangerously-skip-permissions')
+    else:
+        permission_mode = _resolve_claude_permission_mode()
+        if permission_mode:
+            cmd.extend(['--permission-mode', permission_mode])
     max_turns = _parse_claude_max_turns()
     if max_turns:
         cmd.extend(['--max-turns', str(max_turns)])

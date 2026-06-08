@@ -99,6 +99,9 @@ if (-not $env:CODEX_CLAUDE_CLI_BIN) {
 if (-not $env:CODEX_CLAUDE_PERMISSION_MODE) {
     $env:CODEX_CLAUDE_PERMISSION_MODE = "acceptEdits"
 }
+if (-not $env:CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS) {
+    $env:CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS = "1"
+}
 
 function Test-GlobalPythonReady {
     param(

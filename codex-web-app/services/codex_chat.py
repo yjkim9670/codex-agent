@@ -282,6 +282,21 @@ _SUBJOB_PROMPT_SUFFIX = (
     "- If repository context is needed, inspect files using read-only commands only.\n"
     "- Keep results in this child session; do not assume the parent session is blocked on you."
 )
+_BROWSER_VERIFICATION_PROMPT_SUFFIX = (
+    "## Browser Verification In Workbench\n"
+    "- For browser-facing UI changes, verify rendered behavior when feasible.\n"
+    "- This Workbench launches Codex through `codex exec`; the Codex App in-app "
+    "Browser/IAB may not be attached to this child process. If IAB is unavailable, "
+    "do not treat that alone as sufficient verification.\n"
+    "- Prefer a repeatable Playwright check, browser screenshot, or DOM/canvas smoke "
+    "test against a local server. If the project has an existing dev server command, "
+    "use the project's command; otherwise use a temporary local server on an unused "
+    "loopback port and clean it up.\n"
+    "- Do not restart active long-running servers unless the user asked; use an "
+    "unused temporary port for checks.\n"
+    "- If sandbox or missing dependencies prevent rendered verification, report the "
+    "exact command and error, then run the closest static/unit checks."
+)
 _IMAGEGEN_WORKBENCH_OVERLAY = (
     "Apply these extra rules only when the current task uses $imagegen, "
     "image_gen, or asks Codex to generate/edit raster images:\n"
@@ -692,27 +707,27 @@ _EXECUTION_POLICY_PRESETS = (
         'id': 'standard',
         'label': 'Standard edit',
         'approval': 'never',
-        'sandbox': 'workspace-write',
+        'sandbox': CODEX_CLI_SANDBOX,
         'ephemeral': False,
-        'risk': 'medium',
+        'risk': 'high' if CODEX_CLI_SANDBOX == 'danger-full-access' else 'medium',
         'scope': 'default',
     },
     {
         'id': 'worktree_isolated',
         'label': 'Isolated worktree',
         'approval': 'never',
-        'sandbox': 'workspace-write',
+        'sandbox': CODEX_CLI_SANDBOX,
         'ephemeral': False,
-        'risk': 'medium',
+        'risk': 'high' if CODEX_CLI_SANDBOX == 'danger-full-access' else 'medium',
         'scope': 'git worktree',
     },
     {
         'id': 'read_only_ephemeral',
         'label': 'Read-only ephemeral',
         'approval': 'never',
-        'sandbox': 'read-only',
+        'sandbox': CODEX_CLI_READ_ONLY_SANDBOX,
         'ephemeral': True,
-        'risk': 'low',
+        'risk': 'low' if CODEX_CLI_READ_ONLY_SANDBOX == 'read-only' else 'medium',
         'scope': 'subjob/report',
     },
 )
@@ -6564,6 +6579,7 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     execution_environment = _build_execution_environment_overlay()
     if execution_environment:
         sections.append(f'## Execution Environment\n{execution_environment}')
+    sections.append(_BROWSER_VERIFICATION_PROMPT_SUFFIX)
     sections.append(
         '\n'.join([
             '## Response Rules',

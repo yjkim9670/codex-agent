@@ -86,6 +86,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_PERMISSION_MODE', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_SETTINGS_PATH', raising=False)
 
     return {
         'store_path': store_path,
@@ -1054,6 +1055,41 @@ def test_claude_model_catalog_is_backend_scoped(monkeypatch):
     assert [entry['slug'] for entry in catalog] == ['claude-sonnet', 'claude-opus']
     assert all(entry['reasoning_options'] == [] for entry in catalog)
     assert codex_config.get_codex_reasoning_options_for_backend('claude') == []
+
+
+def test_claude_model_catalog_reads_available_models_from_settings(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': [
+            'claude-sonnet',
+            '',
+            'claude-opus',
+            'claude-sonnet',
+        ],
+    }), encoding='utf-8')
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL_OPTIONS', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_MODEL', raising=False)
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert [entry['slug'] for entry in catalog] == ['claude-sonnet', 'claude-opus']
+    assert all(entry['reasoning_options'] == [] for entry in catalog)
+
+
+def test_claude_model_catalog_env_options_override_settings(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'availableModels': ['claude-from-settings'],
+    }), encoding='utf-8')
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'claude-from-env')
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert [entry['slug'] for entry in catalog] == ['claude-from-env']
 
 
 def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, monkeypatch):

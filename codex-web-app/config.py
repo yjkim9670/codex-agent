@@ -639,11 +639,60 @@ def get_codex_reasoning_options(model_name=None):
 
 
 def _read_claude_model_options_from_env():
-    options = _normalize_model_options(
+    return _normalize_model_options(
         item.strip()
         for item in os.environ.get('CODEX_CLAUDE_MODEL_OPTIONS', '').split(',')
         if item.strip()
     )
+
+
+def _iter_claude_settings_paths():
+    candidates = []
+    explicit_settings_path = _expand_path_value(os.environ.get('CODEX_CLAUDE_SETTINGS_PATH'))
+    if explicit_settings_path is not None:
+        candidates.append(explicit_settings_path)
+    userprofile = _expand_path_value(os.environ.get('USERPROFILE'))
+    if userprofile is not None:
+        candidates.append(userprofile / '.claude' / 'settings.json')
+    candidates.append(Path.home() / '.claude' / 'settings.json')
+    seen = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield path
+
+
+def _read_claude_model_options_from_settings_path(settings_path):
+    try:
+        payload = json.loads(settings_path.read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    raw_models = payload.get('availableModels')
+    if not isinstance(raw_models, list):
+        return []
+    return _normalize_model_options(
+        item.strip()
+        for item in raw_models
+        if isinstance(item, str) and item.strip()
+    )
+
+
+def _read_claude_model_options_from_settings():
+    for settings_path in _iter_claude_settings_paths():
+        model_options = _read_claude_model_options_from_settings_path(settings_path)
+        if model_options:
+            return model_options
+    return []
+
+
+def _read_claude_model_options():
+    options = _read_claude_model_options_from_env()
+    if not options:
+        options = _read_claude_model_options_from_settings()
     default_model = normalize_codex_model_name(os.environ.get('CODEX_CLAUDE_MODEL'))
     if default_model and default_model not in options:
         options.insert(0, default_model)
@@ -657,7 +706,7 @@ def get_claude_model_catalog():
             'default_reasoning_effort': None,
             'reasoning_options': [],
         }
-        for model_name in _read_claude_model_options_from_env()
+        for model_name in _read_claude_model_options()
     )
 
 

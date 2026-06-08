@@ -26,6 +26,9 @@ if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
 if (-not $env:CODEX_AGENT_BACKEND) {
     $env:CODEX_AGENT_BACKEND = "dtgpt"
 }
+if (-not $env:CODEX_CLAUDE_SETTINGS_PATH) {
+    $env:CODEX_CLAUDE_SETTINGS_PATH = Join-Path $HOME ".claude\settings.json"
+}
 if (-not $env:CODEX_ENABLE_SERVICE_TIER) {
     $env:CODEX_ENABLE_SERVICE_TIER = "0"
 }
@@ -85,6 +88,30 @@ if (-not $env:CODEX_CLI_BIN) {
     }
 }
 if (-not $env:CODEX_CLAUDE_CLI_BIN) {
+    $ClaudeHomeCandidates = @()
+    foreach ($HomeCandidate in @($HOME, $env:USERPROFILE)) {
+        if (-not [string]::IsNullOrWhiteSpace($HomeCandidate)) {
+            $ClaudeHomeCandidates += $HomeCandidate
+        }
+    }
+    if ($env:HOMEDRIVE -and $env:HOMEPATH) {
+        $ClaudeHomeCandidates += "$($env:HOMEDRIVE)$($env:HOMEPATH)"
+    }
+
+    $ClaudeCliCandidatePaths = @()
+    foreach ($HomeCandidate in $ClaudeHomeCandidates) {
+        $ClaudeLocalBin = Join-Path $HomeCandidate ".local\bin"
+        $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.exe"
+        $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.cmd"
+    }
+    foreach ($CandidatePath in $ClaudeCliCandidatePaths) {
+        if ($CandidatePath -and (Test-Path $CandidatePath)) {
+            $env:CODEX_CLAUDE_CLI_BIN = $CandidatePath
+            break
+        }
+    }
+}
+if (-not $env:CODEX_CLAUDE_CLI_BIN) {
     $ClaudeCommand = Get-Command claude.cmd -ErrorAction SilentlyContinue
     if (-not $ClaudeCommand) {
         $ClaudeCommand = Get-Command claude.exe -ErrorAction SilentlyContinue
@@ -94,6 +121,28 @@ if (-not $env:CODEX_CLAUDE_CLI_BIN) {
     }
     if ($ClaudeCommand) {
         $env:CODEX_CLAUDE_CLI_BIN = $ClaudeCommand.Source
+    }
+}
+if (-not $env:CODEX_CLAUDE_MODEL_OPTIONS -and (Test-Path $env:CODEX_CLAUDE_SETTINGS_PATH)) {
+    try {
+        $ClaudeSettings = Get-Content $env:CODEX_CLAUDE_SETTINGS_PATH -Raw -Encoding UTF8 | ConvertFrom-Json
+        $ClaudeAvailableModels = @()
+        $SeenClaudeModels = @{}
+        foreach ($Model in @($ClaudeSettings.availableModels)) {
+            $ModelName = "$Model".Trim()
+            if ($ModelName -and -not $SeenClaudeModels.ContainsKey($ModelName)) {
+                $ClaudeAvailableModels += $ModelName
+                $SeenClaudeModels[$ModelName] = $true
+            }
+        }
+        if ($ClaudeAvailableModels.Count -gt 0) {
+            $env:CODEX_CLAUDE_MODEL_OPTIONS = ($ClaudeAvailableModels -join ",")
+            if (-not $env:CODEX_CLAUDE_MODEL) {
+                $env:CODEX_CLAUDE_MODEL = $ClaudeAvailableModels[0]
+            }
+        }
+    } catch {
+        Write-Warning ("Failed to read Claude availableModels from {0}: {1}" -f $env:CODEX_CLAUDE_SETTINGS_PATH, $_.Exception.Message)
     }
 }
 if (-not $env:CODEX_CLAUDE_PERMISSION_MODE) {

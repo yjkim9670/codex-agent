@@ -1358,7 +1358,9 @@ def test_build_agent_command_uses_selected_claude_model(tmp_path, monkeypatch):
     assert '--output-format' in cmd
 
 
-def test_build_agent_command_uses_claude_model_override_from_settings(tmp_path, monkeypatch):
+def test_build_agent_command_keeps_selected_claude_model_when_settings_have_override(
+        tmp_path,
+        monkeypatch):
     claude_settings_path = tmp_path / '.claude' / 'settings.json'
     claude_settings_path.parent.mkdir(parents=True)
     claude_settings_path.write_text(json.dumps({
@@ -1393,7 +1395,7 @@ def test_build_agent_command_uses_claude_model_override_from_settings(tmp_path, 
         r'C:\tools\claude.cmd',
         '-p',
         '--model',
-        'global.anthropic.claude-opus-4-8[1m]',
+        'claude-opus-4-8',
         '--effort',
         'high',
     ]

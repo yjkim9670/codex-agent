@@ -65,7 +65,6 @@ from ..config import (
     normalize_codex_agent_backend,
     normalize_codex_model_name,
     normalize_codex_service_tier,
-    resolve_claude_cli_model_name,
     resolve_claude_reasoning_effort,
     resolve_codex_reasoning_effort,
 )
@@ -6749,8 +6748,7 @@ def _build_claude_command(
     cmd = [_claude_cli_command(), '-p']
     claude_model = _resolve_claude_model(model_override=model_override)
     if claude_model:
-        cli_model = resolve_claude_cli_model_name(claude_model) or claude_model
-        cmd.extend(['--model', cli_model])
+        cmd.extend(['--model', claude_model])
     settings = get_settings()
     reasoning_effort = (
         (str(reasoning_override).strip() if reasoning_override is not None else '')

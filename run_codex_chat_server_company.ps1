@@ -87,29 +87,40 @@ if (-not $env:CODEX_CLI_BIN) {
         }
     }
 }
-if (-not $env:CODEX_CLAUDE_CLI_BIN) {
-    $ClaudeHomeCandidates = @()
-    foreach ($HomeCandidate in @($HOME, $env:USERPROFILE)) {
-        if (-not [string]::IsNullOrWhiteSpace($HomeCandidate)) {
-            $ClaudeHomeCandidates += $HomeCandidate
-        }
+$ClaudeHomeCandidates = @()
+foreach ($HomeCandidate in @($HOME, $env:USERPROFILE)) {
+    if (-not [string]::IsNullOrWhiteSpace($HomeCandidate)) {
+        $ClaudeHomeCandidates += $HomeCandidate
     }
-    if ($env:HOMEDRIVE -and $env:HOMEPATH) {
-        $ClaudeHomeCandidates += "$($env:HOMEDRIVE)$($env:HOMEPATH)"
-    }
+}
+if ($env:HOMEDRIVE -and $env:HOMEPATH) {
+    $ClaudeHomeCandidates += "$($env:HOMEDRIVE)$($env:HOMEPATH)"
+}
 
-    $ClaudeCliCandidatePaths = @()
-    foreach ($HomeCandidate in $ClaudeHomeCandidates) {
-        $ClaudeLocalBin = Join-Path $HomeCandidate ".local\bin"
-        $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.exe"
-        $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.cmd"
+$ClaudeCliCandidatePaths = @()
+$SeenClaudeHomes = @{}
+foreach ($HomeCandidate in $ClaudeHomeCandidates) {
+    if ($SeenClaudeHomes.ContainsKey($HomeCandidate)) {
+        continue
     }
-    foreach ($CandidatePath in $ClaudeCliCandidatePaths) {
-        if ($CandidatePath -and (Test-Path $CandidatePath)) {
-            $env:CODEX_CLAUDE_CLI_BIN = $CandidatePath
-            break
-        }
+    $SeenClaudeHomes[$HomeCandidate] = $true
+    $ClaudeLocalBin = Join-Path $HomeCandidate ".local\bin"
+    $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.exe"
+    $ClaudeCliCandidatePaths += Join-Path $ClaudeLocalBin "claude.cmd"
+}
+
+$PreferredClaudeCliPath = $null
+foreach ($CandidatePath in $ClaudeCliCandidatePaths) {
+    if ($CandidatePath -and (Test-Path $CandidatePath)) {
+        $PreferredClaudeCliPath = $CandidatePath
+        break
     }
+}
+if ($PreferredClaudeCliPath) {
+    if ($env:CODEX_CLAUDE_CLI_BIN -and ($env:CODEX_CLAUDE_CLI_BIN -ne $PreferredClaudeCliPath)) {
+        Write-Warning ("Using user-local Claude CLI instead of inherited CODEX_CLAUDE_CLI_BIN: {0} -> {1}" -f $env:CODEX_CLAUDE_CLI_BIN, $PreferredClaudeCliPath)
+    }
+    $env:CODEX_CLAUDE_CLI_BIN = $PreferredClaudeCliPath
 }
 if (-not $env:CODEX_CLAUDE_CLI_BIN) {
     $ClaudeCommand = Get-Command claude.cmd -ErrorAction SilentlyContinue
@@ -122,6 +133,16 @@ if (-not $env:CODEX_CLAUDE_CLI_BIN) {
     if ($ClaudeCommand) {
         $env:CODEX_CLAUDE_CLI_BIN = $ClaudeCommand.Source
     }
+}
+if ($env:CODEX_CLAUDE_CLI_BIN) {
+    Write-Host ("Claude CLI: {0}" -f $env:CODEX_CLAUDE_CLI_BIN)
+    try {
+        & $env:CODEX_CLAUDE_CLI_BIN --version
+    } catch {
+        Write-Warning ("Failed to run Claude CLI version check: {0}" -f $_.Exception.Message)
+    }
+} else {
+    Write-Warning "Claude CLI was not found. Claude backend requests will fail until claude is installed or CODEX_CLAUDE_CLI_BIN is set."
 }
 if (-not $env:CODEX_CLAUDE_MODEL_OPTIONS -and (Test-Path $env:CODEX_CLAUDE_SETTINGS_PATH)) {
     try {

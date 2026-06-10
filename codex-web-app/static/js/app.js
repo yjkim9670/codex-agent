@@ -1910,6 +1910,42 @@ function buildReasoningPlaceholder(defaultReasoning, fallbackText) {
     return defaultReasoning ? `${fallbackText} (${defaultReasoning})` : fallbackText;
 }
 
+function truncateMiddleText(value, maxLength = 32) {
+    const text = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+    if (!text || text.length <= maxLength) return text;
+    if (maxLength <= 6) return text.slice(0, maxLength);
+    const marker = '...';
+    const available = maxLength - marker.length;
+    const headLength = Math.ceil(available * 0.58);
+    const tailLength = available - headLength;
+    return `${text.slice(0, headLength)}${marker}${text.slice(text.length - tailLength)}`;
+}
+
+function setCompactOptionText(option, label, maxLength = 36) {
+    if (!option) return;
+    const fullText = typeof label === 'string' ? label : String(label ?? '');
+    const compactText = truncateMiddleText(fullText, maxLength);
+    option.textContent = compactText;
+    option.dataset.fullText = fullText;
+    if (compactText !== fullText) {
+        option.title = fullText;
+    } else {
+        option.removeAttribute('title');
+    }
+}
+
+function syncSelectFullTextTitle(select) {
+    if (!select) return;
+    const selectedOption = Array.from(select.options || [])
+        .find(option => option.value === select.value);
+    const fullText = selectedOption?.dataset?.fullText || selectedOption?.textContent || '';
+    if (fullText) {
+        select.title = fullText;
+    } else {
+        select.removeAttribute('title');
+    }
+}
+
 function formatReasoningStatus(model, reasoning) {
     const profile = getReasoningProfile(model, reasoning);
     if (!profile.effectiveReasoning) {
@@ -3438,8 +3474,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modelSelect) {
         modelSelect.addEventListener('change', () => {
             const selectedModel = modelSelect.value || '';
+            syncSelectFullTextTitle(modelSelect);
             if (modelInput) {
                 modelInput.value = selectedModel;
+                modelInput.title = selectedModel || modelInput.placeholder || '';
             }
             updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions, selectedModel);
         });
@@ -3462,6 +3500,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (agentBackendSelect) {
         agentBackendSelect.addEventListener('change', () => {
+            syncSelectFullTextTitle(agentBackendSelect);
             state.settings.agentBackend = normalizeAgentBackendValue(agentBackendSelect.value) || state.settings.agentBackend;
             applyBackendScopedModelOptions();
             setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
@@ -3471,8 +3510,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (planModeModelSelect) {
         planModeModelSelect.addEventListener('change', () => {
             const selectedModel = planModeModelSelect.value || '';
+            syncSelectFullTextTitle(planModeModelSelect);
             if (planModeModelInput) {
                 planModeModelInput.value = selectedModel;
+                planModeModelInput.title = selectedModel || planModeModelInput.placeholder || '';
             }
             updatePlanModeReasoningControls(
                 state.settings.planModeReasoningEffort,
@@ -3493,8 +3534,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (reasoningSelect) {
         reasoningSelect.addEventListener('change', () => {
+            syncSelectFullTextTitle(reasoningSelect);
             if (reasoningInput) {
                 reasoningInput.value = reasoningSelect.value || '';
+                reasoningInput.title = reasoningInput.value || reasoningInput.placeholder || '';
             }
         });
     }
@@ -3510,8 +3553,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeReasoningSelect) {
         planModeReasoningSelect.addEventListener('change', () => {
+            syncSelectFullTextTitle(planModeReasoningSelect);
             if (planModeReasoningInput) {
                 planModeReasoningInput.value = planModeReasoningSelect.value || '';
+                planModeReasoningInput.title = planModeReasoningInput.value || planModeReasoningInput.placeholder || '';
             }
         });
     }
@@ -3522,6 +3567,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 event.preventDefault();
                 void updateSettings();
             }
+        });
+    }
+
+    if (serviceTierSelect) {
+        serviceTierSelect.addEventListener('change', () => {
+            syncSelectFullTextTitle(serviceTierSelect);
         });
     }
 
@@ -7729,9 +7780,10 @@ function updateModelControls(model, options) {
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item === selectedModel && !catalogOptions.includes(item)
+                const optionText = item === selectedModel && !catalogOptions.includes(item)
                     ? `${item} (saved)`
                     : item;
+                setCompactOptionText(option, optionText, 34);
                 select.appendChild(option);
             });
             if (selectedModel) {
@@ -7739,13 +7791,16 @@ function updateModelControls(model, options) {
             } else {
                 select.value = '';
             }
+            syncSelectFullTextTitle(select);
         } else {
             select.classList.add('is-hidden');
+            select.removeAttribute('title');
         }
     }
     if (input) {
         input.value = selectedModel || '';
         input.placeholder = selectedModel ? selectedModel : defaultPlaceholder;
+        input.title = selectedModel || defaultPlaceholder;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7775,9 +7830,10 @@ function updatePlanModeModelControls(planModeModel, options) {
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item === selectedModel && !catalogOptions.includes(item)
+                const optionText = item === selectedModel && !catalogOptions.includes(item)
                     ? `${item} (saved)`
                     : item;
+                setCompactOptionText(option, optionText, 34);
                 select.appendChild(option);
             });
             if (selectedModel) {
@@ -7785,13 +7841,16 @@ function updatePlanModeModelControls(planModeModel, options) {
             } else {
                 select.value = '';
             }
+            syncSelectFullTextTitle(select);
         } else {
             select.classList.add('is-hidden');
+            select.removeAttribute('title');
         }
     }
     if (input) {
         input.value = selectedModel || '';
         input.placeholder = selectedModel ? selectedModel : defaultPlaceholder;
+        input.title = selectedModel || defaultPlaceholder;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7819,7 +7878,7 @@ function updateReasoningControls(reasoning, options, model = state.settings.mode
             profile.reasoningOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                setCompactOptionText(option, item, 24);
                 select.appendChild(option);
             });
             if (profile.explicitReasoning) {
@@ -7829,13 +7888,16 @@ function updateReasoningControls(reasoning, options, model = state.settings.mode
             } else {
                 select.value = '';
             }
+            syncSelectFullTextTitle(select);
         } else {
             select.classList.add('is-hidden');
+            select.removeAttribute('title');
         }
     }
     if (input) {
         input.value = reasoning || '';
         input.placeholder = reasoning ? reasoning : placeholderText;
+        input.title = reasoning || placeholderText;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7866,7 +7928,7 @@ function updatePlanModeReasoningControls(
             profile.reasoningOptions.forEach(item => {
                 const option = document.createElement('option');
                 option.value = item;
-                option.textContent = item;
+                setCompactOptionText(option, item, 24);
                 select.appendChild(option);
             });
             if (profile.explicitReasoning) {
@@ -7876,13 +7938,16 @@ function updatePlanModeReasoningControls(
             } else {
                 select.value = '';
             }
+            syncSelectFullTextTitle(select);
         } else {
             select.classList.add('is-hidden');
+            select.removeAttribute('title');
         }
     }
     if (input) {
         input.value = reasoning || '';
         input.placeholder = reasoning ? reasoning : placeholderText;
+        input.title = reasoning || placeholderText;
         input.disabled = hasOptions;
         input.classList.toggle('is-hidden', hasOptions);
     }
@@ -7905,15 +7970,14 @@ function updateAgentBackendControls(agentBackend, options) {
         normalizedOptions.forEach(item => {
             const option = document.createElement('option');
             option.value = item.id;
-            option.textContent = item.description ? `${item.name} · ${item.description}` : item.name;
-            if (item.description) {
-                option.title = item.description;
-            }
+            const optionText = item.description ? `${item.name} · ${item.description}` : item.name;
+            setCompactOptionText(option, optionText, 36);
             select.appendChild(option);
         });
         select.value = normalizedOptions.some(item => item.id === normalizedBackend)
             ? normalizedBackend
             : (normalizedOptions[0]?.id || '');
+        syncSelectFullTextTitle(select);
     }
     if (row) {
         row.classList.toggle('is-hidden', !shouldShow);
@@ -7971,13 +8035,12 @@ function updateServiceTierControls(serviceTier, options) {
     normalizedOptions.forEach(item => {
         const option = document.createElement('option');
         option.value = item.id;
-        option.textContent = item.id ? `${item.name}${item.description ? ` · ${item.description}` : ''}` : item.name;
-        if (item.description) {
-            option.title = item.description;
-        }
+        const optionText = item.id ? `${item.name}${item.description ? ` · ${item.description}` : ''}` : item.name;
+        setCompactOptionText(option, optionText, 36);
         select.appendChild(option);
     });
     select.value = optionIds.has(normalizedServiceTier) ? normalizedServiceTier : '';
+    syncSelectFullTextTitle(select);
 }
 
 function setSettingsStatus(model, reasoning, overrideText = null) {
@@ -7986,6 +8049,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (!status) return;
     if (overrideText) {
         status.textContent = overrideText;
+        status.title = overrideText;
         if (summary) {
             summary.textContent = overrideText;
             summary.title = overrideText;
@@ -8001,6 +8065,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         && !state.settings.serviceTier
     ) {
         status.textContent = 'Refresh to load';
+        status.title = 'Refresh to load';
         if (summary) {
             summary.textContent = 'Refresh to load';
             summary.title = 'Refresh to load';
@@ -8045,9 +8110,29 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     if (showSpeed) fullTextParts.push(`Speed: ${speedText}`);
     const fullText = `${fullTextParts.join(' · ')}${routingText}`;
+    const displayTextParts = [];
+    if (showBackend && backendText) displayTextParts.push(`Agent: ${truncateMiddleText(backendText, 18)}`);
+    displayTextParts.push(`Model: ${truncateMiddleText(modelText, 28)}`);
+    if (planModeModelText !== modelText || state.settings.planModeModel) {
+        displayTextParts.push(`Plan model: ${truncateMiddleText(planModeModelText, 24)}`);
+    }
+    if (showReasoning) {
+        displayTextParts.push(`Reasoning: ${truncateMiddleText(reasoningText, 14)}`);
+    }
+    if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
+        displayTextParts.push(`Plan reasoning: ${truncateMiddleText(planModeReasoningText, 14)}`);
+    }
+    if (showSpeed) displayTextParts.push(`Speed: ${truncateMiddleText(speedText, 18)}`);
+    if (state.settings.modelProvider) {
+        displayTextParts.push(`Provider: ${truncateMiddleText(state.settings.modelProvider, 16)}`);
+    }
+    if (state.settings.cliProfile) {
+        displayTextParts.push(`Profile: ${truncateMiddleText(state.settings.cliProfile, 16)}`);
+    }
+    const displayText = displayTextParts.join(' · ');
     const compactToken = value => {
         if (value === 'default') return 'def';
-        return value.replace(' (default)', '*');
+        return truncateMiddleText(value.replace(' (default)', '*'), 18);
     };
     const compactSummaryParts = [
         `Model:${compactToken(modelText)}`
@@ -8075,7 +8160,8 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     const compactSummary = compactSummaryParts.join(' · ');
 
-    status.textContent = fullText;
+    status.textContent = displayText || fullText;
+    status.title = fullText;
     if (summary) {
         summary.textContent = compactSummary;
         summary.title = fullText;

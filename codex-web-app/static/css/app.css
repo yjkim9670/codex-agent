@@ -6722,6 +6722,8 @@ body.is-work-mode-resizing * {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .chat-controls-toggle {
@@ -6737,6 +6739,8 @@ body.is-work-mode-resizing * {
     justify-content: space-between;
     cursor: pointer;
     flex: 1;
+    min-width: 0;
+    max-width: 100%;
     transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.12s ease;
 }
 
@@ -6998,6 +7002,7 @@ body.is-work-mode-resizing * {
     margin-top: 6px;
     padding-top: 8px;
     min-width: 0;
+    max-width: 100%;
 }
 
 .model-select,
@@ -7008,13 +7013,24 @@ body.is-work-mode-resizing * {
     font-size: 12px;
     background: var(--surface);
     color: var(--text-primary);
+    display: block;
     min-height: 32px;
+    min-width: 0;
+    width: 100%;
     max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.model-input::placeholder {
+    overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .model-field {
     min-width: 0;
+    max-width: 100%;
 }
 
 .model-field .model-select,
@@ -7071,8 +7087,11 @@ body.is-work-mode-resizing * {
     color: var(--text-tertiary);
     flex: 1 1 auto;
     min-width: 0;
+    max-width: 100%;
     line-height: 1.35;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chat-input {

@@ -244,6 +244,11 @@ port_in_use() {
         return $?
     fi
 
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t >/dev/null 2>&1
+        return $?
+    fi
+
     if command -v netstat >/dev/null 2>&1; then
         netstat -ltn 2>/dev/null | awk -v p=":${port}" 'NR > 2 && $4 ~ (p "$") { found = 1 } END { exit(found ? 0 : 1) }'
         return $?

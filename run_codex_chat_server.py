@@ -85,8 +85,14 @@ if __name__ == '__main__':
     env_debug = os.environ.get('CODEX_CHAT_DEBUG', '').strip().lower() in {
         '1', 'true', 'yes', 'on'
     }
+    env_reload = os.environ.get('CODEX_CHAT_RELOAD', '').strip().lower()
     debug_mode = bool(args.debug or env_debug)
-    use_reloader = bool(args.reload or debug_mode)
+    if env_reload in {'1', 'true', 'yes', 'on'}:
+        use_reloader = True
+    elif env_reload in {'0', 'false', 'no', 'off'}:
+        use_reloader = False
+    else:
+        use_reloader = bool(args.reload or debug_mode)
     print("[INFO] Starting Codex Chat Server...")
     print(f"[INFO] Access the Codex chat API at: http://localhost:{args.port}")
     app.run(

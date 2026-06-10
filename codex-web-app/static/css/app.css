@@ -3749,12 +3749,15 @@ body.is-mermaid-diagram-viewer-open {
 
 .terminal-overlay-extra-key-row {
     display: grid;
-    grid-template-columns: repeat(var(--terminal-extra-key-count, 1), minmax(0, 1fr));
+    grid-template-columns: repeat(var(--terminal-extra-key-count, 8), minmax(0, 1fr));
     gap: 4px;
     min-width: 0;
 }
 
 .terminal-overlay-extra-key {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
     min-width: 0;
     min-height: 38px;
@@ -3766,8 +3769,14 @@ body.is-mermaid-diagram-viewer-open {
     font: inherit;
     font-size: 12px;
     font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
     cursor: pointer;
     transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
+}
+
+.terminal-overlay-extra-key[data-terminal-extra-key-action="dismiss"] {
+    color: var(--text-primary);
 }
 
 .terminal-overlay-extra-key:hover,

@@ -143,7 +143,8 @@ const terminalState = {
     extraKeyModifiers: {
         ctrl: false,
         alt: false
-    }
+    },
+    extraKeysDismissed: false
 };
 
 const SESSION_COLLAPSE_KEY = 'codexSessionsCollapsed';
@@ -345,21 +346,22 @@ const TERMINAL_FONT_FAMILY = NAVER_CODE_FONT_FAMILY;
 const TERMINAL_EXTRA_KEY_ROWS = Object.freeze([
     Object.freeze([
         Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
-        Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
         Object.freeze({ id: 'ctrl', label: 'Ctrl', modifier: 'ctrl' }),
-        Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
         Object.freeze({ id: 'slash', label: '/', text: '/' }),
-        Object.freeze({ id: 'dash', label: '-', text: '-' }),
-        Object.freeze({ id: 'pipe', label: '|', text: '|' })
+        Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
+        Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
+        Object.freeze({ id: 'dismiss', label: '닫기', action: 'dismiss' }),
+        Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
+        Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' })
     ]),
     Object.freeze([
-        Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
-        Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
+        Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
+        Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
+        Object.freeze({ id: 'dash', label: '-', text: '-' }),
         Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
-        Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' }),
-        Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
-        Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
         Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' }),
+        Object.freeze({ id: 'pipe', label: '|', text: '|' }),
+        Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
         Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
     ])
 ]);
@@ -8976,11 +8978,19 @@ function renderTerminalExtraKeys() {
             if (key.modifier) {
                 button.dataset.terminalModifier = key.modifier;
             }
+            if (key.action) {
+                button.dataset.terminalExtraKeyAction = key.action;
+            }
             button.addEventListener('pointerdown', event => {
                 event.preventDefault();
             });
             button.addEventListener('click', event => {
                 event.preventDefault();
+                if (key.action === 'dismiss') {
+                    dismissTerminalExtraKeys();
+                    focusActiveTerminalInstance();
+                    return;
+                }
                 if (key.modifier) {
                     toggleTerminalExtraKeyModifier(key.modifier);
                     focusActiveTerminalInstance();
@@ -8996,16 +9006,39 @@ function renderTerminalExtraKeys() {
     syncTerminalExtraKeysState();
 }
 
-function shouldShowTerminalExtraKeys() {
+function isTerminalVirtualKeyboardActive() {
+    const isMobile = isMobileViewportBehaviorActive();
+    if (!isMobile || !isTerminalUiOpen() || !isTerminalFocusElement()) {
+        return false;
+    }
+    if (isMobileKeyboardOpen(isMobile)) {
+        return true;
+    }
+    const metrics = getVisualViewportMetrics();
+    if (metrics.hasVisualHeight && metrics.hasLayoutHeight) {
+        return false;
+    }
     const hasCoarsePointer = mediaQueryMatches('(pointer: coarse)') || mediaQueryMatches('(any-pointer: coarse)');
     const hasFinePointer = mediaQueryMatches('(pointer: fine)') || mediaQueryMatches('(any-pointer: fine)');
-    if (isLikelyVirtualKeyboardEnvironment()) {
-        return true;
+    return Boolean(isLikelyVirtualKeyboardEnvironment() && hasCoarsePointer && !hasFinePointer);
+}
+
+function shouldOfferTerminalExtraKeys() {
+    return isTerminalVirtualKeyboardActive();
+}
+
+function shouldShowTerminalExtraKeys() {
+    const shouldOffer = shouldOfferTerminalExtraKeys();
+    if (!shouldOffer) {
+        terminalState.extraKeysDismissed = false;
+        return false;
     }
-    if (hasCoarsePointer && isCompactLayout()) {
-        return true;
-    }
-    return hasCoarsePointer && !hasFinePointer;
+    return !terminalState.extraKeysDismissed;
+}
+
+function dismissTerminalExtraKeys() {
+    terminalState.extraKeysDismissed = true;
+    syncTerminalExtraKeysState();
 }
 
 function getTerminalExtraKeysViewportBottomInset() {
@@ -9083,7 +9116,8 @@ function syncTerminalExtraKeysState() {
         button.classList.toggle('is-active', Boolean(terminalState.extraKeyModifiers[modifierName]));
     });
     container.querySelectorAll('.terminal-overlay-extra-key').forEach(button => {
-        button.disabled = !hasActiveSession;
+        const isDismissButton = button.getAttribute('data-terminal-extra-key-action') === 'dismiss';
+        button.disabled = !isDismissButton && !hasActiveSession;
     });
     const layoutChanged = syncTerminalExtraKeysOverlayMetrics({ visible: isVisible });
     if (wasVisible !== isVisible || layoutChanged) {

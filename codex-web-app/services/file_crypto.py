@@ -295,6 +295,14 @@ def decrypt_chat_payload(envelope):
     return _decrypt_payload(envelope, purpose=_PURPOSE_CHAT)
 
 
+def validate_chat_crypto_session(session_id: str) -> str:
+    """Validate an existing chat crypto session and return its normalized id."""
+
+    normalized_session_id = str(session_id or '').strip()
+    _get_session(normalized_session_id, purpose=_PURPOSE_CHAT)
+    return normalized_session_id
+
+
 def _encrypt_payload(session_id: str, payload, *, purpose: str):
     """Encrypt an API response for an existing session."""
 

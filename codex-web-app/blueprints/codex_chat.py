@@ -147,6 +147,7 @@ from ..services.file_crypto import (
     encrypt_file_payload,
     is_encrypted_chat_payload,
     is_encrypted_file_payload,
+    validate_chat_crypto_session,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
 from ..services.mail_sender import MailSendError, send_mail_with_archive
@@ -187,6 +188,7 @@ _CODEX_CHAT_DEBUG_ASSIGN_PATTERN = re.compile(
 _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
 _RELOAD_FLAG_PATTERN = re.compile(r'(^|\s)--reload(\s|$)', re.IGNORECASE)
 _TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback'
+_CHAT_RESPONSE_CRYPTO_SESSION_HEADER = 'X-Codex-Chat-Crypto-Session'
 
 
 def _format_sse_payload(data, *, event=None):
@@ -338,6 +340,26 @@ def _jsonify_chat_payload(result, crypto_session_id=''):
     if crypto_session_id:
         return jsonify(encrypt_chat_payload(crypto_session_id, result))
     return jsonify(result)
+
+
+def _get_chat_response_crypto_session_id():
+    crypto_session_id = str(request.headers.get(_CHAT_RESPONSE_CRYPTO_SESSION_HEADER) or '').strip()
+    if crypto_session_id:
+        return validate_chat_crypto_session(crypto_session_id)
+    if CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS and not _is_trusted_http_crypto_fallback_allowed():
+        raise FileCryptoError(
+            '채팅 응답 요청은 암호화 세션이 필요합니다.',
+            error_code='crypto_session_required',
+            status_code=400,
+        )
+    return ''
+
+
+def _jsonify_chat_payload_or_crypto_error(result, crypto_session_id=''):
+    try:
+        return _jsonify_chat_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
 
 
 def _append_plan_mode_guardrails(prompt_text):
@@ -1077,10 +1099,14 @@ def codex_tooling_github_actions_save_preview():
 
 @bp.route('/api/codex/sessions')
 def codex_sessions():
-    return jsonify({
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    return _jsonify_chat_payload_or_crypto_error({
         'sessions': list_sessions(),
         'session_storage': get_session_storage_summary(),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/chat/crypto-session', methods=['POST'])
@@ -1097,25 +1123,37 @@ def codex_chat_crypto_session():
 
 @bp.route('/api/codex/sessions', methods=['POST'])
 def codex_sessions_create():
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     payload = request.get_json(silent=True) or {}
     title = (payload.get('title') or '').strip()
     session = create_session(title=title or None)
-    return jsonify({
+    return _jsonify_chat_payload_or_crypto_error({
         'session': session,
         'session_storage': get_session_storage_summary(),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>')
 def codex_session_detail(session_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     session = get_session(session_id)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
-    return jsonify({'session': session})
+    return _jsonify_chat_payload_or_crypto_error({'session': session}, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>', methods=['PATCH'])
 def codex_session_rename(session_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     payload = request.get_json(silent=True) or {}
     title = (payload.get('title') or '').strip()
 
@@ -1135,7 +1173,7 @@ def codex_session_rename(session_id):
     session = rename_session(session_id, title)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
-    return jsonify({'session': session})
+    return _jsonify_chat_payload_or_crypto_error({'session': session}, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>', methods=['DELETE'])
@@ -1158,6 +1196,10 @@ def codex_session_delete(session_id):
 
 @bp.route('/api/codex/sessions/<session_id>/messages/<message_id>', methods=['DELETE'])
 def codex_session_message_delete(session_id, message_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     active_stream_id = get_active_stream_id_for_session(session_id)
     if active_stream_id:
         return jsonify({
@@ -1169,14 +1211,18 @@ def codex_session_message_delete(session_id, message_id):
     session = delete_session_message(session_id, message_id)
     if not session:
         return jsonify({'error': '대화를 찾을 수 없습니다.'}), 404
-    return jsonify({
+    return _jsonify_chat_payload_or_crypto_error({
         'session': session,
         'session_storage': get_session_storage_summary(),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>/messages/<message_id>/branch', methods=['POST'])
 def codex_session_message_branch(session_id, message_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     payload = request.get_json(silent=True) or {}
     title = (payload.get('title') or '').strip()
     if len(title) > CODEX_MAX_TITLE_CHARS:
@@ -1193,10 +1239,10 @@ def codex_session_message_branch(session_id, message_id):
     session = branch_session_from_message(session_id, message_id, title=title or None)
     if not session:
         return jsonify({'error': '브랜치 기준 대화를 찾을 수 없습니다.'}), 404
-    return jsonify({
+    return _jsonify_chat_payload_or_crypto_error({
         'session': session,
         'session_storage': get_session_storage_summary(),
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/sessions/<session_id>/message', methods=['POST'])
@@ -1534,6 +1580,10 @@ def codex_session_subjob_create(session_id):
 
 @bp.route('/api/codex/streams/<stream_id>')
 def codex_stream_output(stream_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     cleanup_codex_streams()
     try:
         output_offset = int(request.args.get('offset', 0))
@@ -1566,7 +1616,7 @@ def codex_stream_output(stream_id):
     response = data or {}
     if saved_message:
         response['saved_message'] = saved_message
-    return jsonify(response)
+    return _jsonify_chat_payload_or_crypto_error(response, crypto_session_id)
 
 
 @bp.route('/api/codex/streams')
@@ -1578,10 +1628,14 @@ def codex_streams_list():
 
 @bp.route('/api/codex/streams/<stream_id>/stop', methods=['POST'])
 def codex_stream_stop(stream_id):
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     result = stop_codex_stream(stream_id)
     if not result:
         return jsonify({'error': '스트림을 찾을 수 없습니다.'}), 404
-    return jsonify(result)
+    return _jsonify_chat_payload_or_crypto_error(result, crypto_session_id)
 
 
 @bp.route('/api/codex/files/list', methods=['POST'])

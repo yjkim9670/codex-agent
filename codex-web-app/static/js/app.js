@@ -280,6 +280,7 @@ const FILE_BROWSER_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
 const CHAT_PROMPT_CRYPTO_SESSION_ENDPOINT = '/api/codex/chat/crypto-session';
 const CHAT_PROMPT_CRYPTO_INFO = 'codex-workbench-chat-prompt-v1';
 const CHAT_PROMPT_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
+const CHAT_RESPONSE_CRYPTO_SESSION_HEADER = 'X-Codex-Chat-Crypto-Session';
 const TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_MAX_RETRIES = 45;
@@ -7481,7 +7482,7 @@ async function pollStreamMonitor() {
     const current = streamMonitorState;
     current.polling = true;
     try {
-        const result = await fetchJson(
+        const result = await fetchChatResponseJson(
             `/api/codex/streams/${current.id}?offset=${current.outputOffset}&error_offset=${current.errorOffset}&event_offset=${current.eventOffset || 0}`
         );
         if (!streamMonitorState || streamMonitorState.id !== current.id) return;
@@ -7560,7 +7561,7 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
     sessionLoadLockStartedAt = Date.now();
     setStatus('Loading sessions...');
     try {
-        const result = await fetchJson('/api/codex/sessions', {
+        const result = await fetchChatResponseJson('/api/codex/sessions', {
             timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
         });
         state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
@@ -16397,6 +16398,13 @@ function buildTrustedHttpCryptoFallbackHeaders(headers = {}) {
     };
 }
 
+function buildTrustedHttpCryptoFallbackMarkerHeaders(headers = {}) {
+    return {
+        ...(headers || {}),
+        [TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER]: '1'
+    };
+}
+
 function buildPlainJsonPostHeaders(headers = {}) {
     return {
         ...(headers || {}),
@@ -16900,6 +16908,47 @@ async function fetchEncryptedChatPromptJson(url, payload, options = {}) {
         }
     }
     throw lastError || new Error('채팅 프롬프트 암호화 요청에 실패했습니다.');
+}
+
+async function fetchChatResponseJson(url, options = {}) {
+    const requestOptions = options && typeof options === 'object' ? { ...options } : {};
+    if (!shouldEncryptChatPromptRequests()) {
+        return fetchJson(url, requestOptions);
+    }
+    if (!isFileBrowserCryptoSupported()) {
+        if (!canUseTrustedHttpCryptoFallback()) {
+            throw createCryptoUnsupportedError('채팅 응답');
+        }
+        return fetchJson(url, {
+            ...requestOptions,
+            headers: buildTrustedHttpCryptoFallbackMarkerHeaders(requestOptions.headers)
+        });
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const session = await getChatPromptCryptoSession();
+            const response = await fetchJson(url, {
+                ...requestOptions,
+                headers: {
+                    ...(requestOptions.headers || {}),
+                    [CHAT_RESPONSE_CRYPTO_SESSION_HEADER]: session.id
+                }
+            });
+            return await decryptChatPromptResponsePayload(response);
+        } catch (error) {
+            lastError = error;
+            if (error?.name === 'AbortError') {
+                throw error;
+            }
+            if (!isRecoverableChatPromptCryptoError(error) || attempt > 0) {
+                throw error;
+            }
+            resetChatPromptCryptoSession();
+        }
+    }
+    throw lastError || new Error('채팅 응답 암호화 요청에 실패했습니다.');
 }
 
 function buildFilePanelEditPatch(originalContent, nextContent) {
@@ -21639,13 +21688,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
             syncActiveSessionControls();
         }
         try {
-            const response = await fetch(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
-            const result = await response.json();
-            if (!response.ok) {
-                const err = new Error(result?.error || 'Failed to resume stream.');
-                err.status = response.status;
-                throw err;
-            }
+            const result = await fetchChatResponseJson(`/api/codex/streams/${pending.id}?offset=0&error_offset=0`);
             if (result?.done) {
                 clearPersistedStream(pending.id);
                 if (sessionState) {
@@ -21746,7 +21789,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
 async function syncActiveSessionMessagesFromServer(sessionId) {
     if (!sessionId || sessionId !== state.activeSessionId) return false;
     try {
-        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+        const result = await fetchChatResponseJson(`/api/codex/sessions/${sessionId}`, {
             timeoutMs: SESSION_DETAIL_REQUEST_TIMEOUT_MS
         });
         const session = result?.session;
@@ -22053,7 +22096,7 @@ function removeSessionSummary(sessionId) {
 async function createSession(selectAfter = true) {
     setStatus('Creating session...');
     try {
-        const result = await fetchJson('/api/codex/sessions', {
+        const result = await fetchChatResponseJson('/api/codex/sessions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
@@ -22085,7 +22128,7 @@ async function loadSession(sessionId) {
     if (!sessionId) return;
     setStatus('Loading session...');
     try {
-        const result = await fetchJson(`/api/codex/sessions/${sessionId}`, {
+        const result = await fetchChatResponseJson(`/api/codex/sessions/${sessionId}`, {
             timeoutMs: SESSION_DETAIL_REQUEST_TIMEOUT_MS
         });
         const session = result?.session;
@@ -24579,11 +24622,7 @@ async function stopStream(sessionId) {
     if (!stream) return;
     setSessionStatus(sessionId, 'Stopping...');
     try {
-        const response = await fetch(`/api/codex/streams/${stream.id}/stop`, { method: 'POST' });
-        const result = await response.json();
-        if (!response.ok) {
-            throw new Error(result?.error || 'Failed to stop stream.');
-        }
+        const result = await fetchChatResponseJson(`/api/codex/streams/${stream.id}/stop`, { method: 'POST' });
         const wrapper = stream.entry?.wrapper;
         const bubble = stream.entry?.bubble;
         if (wrapper) {
@@ -24629,7 +24668,7 @@ async function pollStream(streamId) {
     stream.polling = true;
 
     try {
-        const result = await fetchJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}&event_offset=${stream.eventOffset || 0}`);
+        const result = await fetchChatResponseJson(`/api/codex/streams/${stream.id}?offset=${stream.outputOffset}&error_offset=${stream.errorOffset}&event_offset=${stream.eventOffset || 0}`);
         const current = state.streams[streamId];
         if (!current) {
             return;
@@ -24843,7 +24882,7 @@ async function renameSession(session) {
     }
     setStatus('Renaming session...');
     try {
-        const result = await fetchJson(`/api/codex/sessions/${session.id}`, {
+        const result = await fetchChatResponseJson(`/api/codex/sessions/${session.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
@@ -25454,7 +25493,7 @@ async function deleteMessageFromWrapper(wrapper, button) {
     setStatus('Deleting message...');
     setMessageActionBusy(button, true);
     try {
-        const result = await fetchJson(
+        const result = await fetchChatResponseJson(
             `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}`,
             {
                 method: 'DELETE',
@@ -25508,7 +25547,7 @@ async function branchMessageFromWrapper(wrapper, button) {
     setStatus('Creating branched session...');
     setMessageActionBusy(button, true);
     try {
-        const result = await fetchJson(
+        const result = await fetchChatResponseJson(
             `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/branch`,
             {
                 method: 'POST',

@@ -134,6 +134,7 @@ const terminalState = {
     resizeObservedShell: null,
     viewportRefreshFrameId: null,
     viewportRefreshTimerId: null,
+    mobileFocusResyncTimerIds: [],
     viewportRefreshNeedsFocus: false,
     viewportRefreshNeedsFit: false,
     launchContext: {
@@ -341,29 +342,40 @@ const TERMINAL_FONT_SIZE_COMPACT = 13;
 const TERMINAL_FONT_SIZE_DESKTOP = 14;
 const TERMINAL_MOBILE_SHELL_HEIGHT_VAR = '--terminal-mobile-shell-height';
 const TERMINAL_MOBILE_SHELL_LIMIT_CLASS = 'has-mobile-viewport-limit';
-const NAVER_UI_FONT_FAMILY = '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", "Noto Sans CJK KR", "Apple SD Gothic Neo", sans-serif';
+const IBM_UI_FONT_FAMILY_KO = '"IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif';
+const IBM_UI_FONT_FAMILY_JA = '"IBM Plex Sans JP", "IBM Plex Sans KR", sans-serif';
+const NAVER_UI_FONT_FAMILY = IBM_UI_FONT_FAMILY_KO;
 const NAVER_CODE_FONT_FAMILY = '"D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace';
 const TERMINAL_FONT_FAMILY = NAVER_CODE_FONT_FAMILY;
+
+function getLocaleAwareUiFontFamily() {
+    const lang = String(document.documentElement?.lang || navigator.language || '').trim().toLowerCase();
+    if (lang.startsWith('ja')) {
+        return IBM_UI_FONT_FAMILY_JA;
+    }
+    return IBM_UI_FONT_FAMILY_KO;
+}
+
 const TERMINAL_EXTRA_KEY_ROWS = Object.freeze([
     Object.freeze([
         Object.freeze({ id: 'escape', label: 'Esc', sequence: '\x1b' }),
         Object.freeze({ id: 'ctrl', label: 'Ctrl', modifier: 'ctrl' }),
-        Object.freeze({ id: 'slash', label: '/', text: '/' }),
+        Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
         Object.freeze({ id: 'home', label: 'Home', sequence: '\x1b[H' }),
-        Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
-        Object.freeze({ id: 'dismiss', label: '닫기', action: 'dismiss' }),
+        Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' }),
+        Object.freeze({ id: 'slash', label: '/', text: '/' }),
         Object.freeze({ id: 'up', label: '↑', sequence: '\x1b[A' }),
-        Object.freeze({ id: 'page-up', label: 'PgUp', sequence: '\x1b[5~' })
+        Object.freeze({ id: 'dismiss', label: '닫기', action: 'dismiss' })
     ]),
     Object.freeze([
         Object.freeze({ id: 'tab', label: 'Tab', sequence: '\t' }),
-        Object.freeze({ id: 'alt', label: 'Alt', modifier: 'alt' }),
         Object.freeze({ id: 'dash', label: '-', text: '-' }),
-        Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
-        Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' }),
         Object.freeze({ id: 'pipe', label: '|', text: '|' }),
+        Object.freeze({ id: 'end', label: 'End', sequence: '\x1b[F' }),
+        Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' }),
+        Object.freeze({ id: 'left', label: '←', sequence: '\x1b[D' }),
         Object.freeze({ id: 'down', label: '↓', sequence: '\x1b[B' }),
-        Object.freeze({ id: 'page-down', label: 'PgDn', sequence: '\x1b[6~' })
+        Object.freeze({ id: 'right', label: '→', sequence: '\x1b[C' })
     ])
 ]);
 const XTERM_VENDOR_SRC = buildStaticAssetPath('/vendor/xterm-5.5.0.js');
@@ -8696,7 +8708,60 @@ function focusActiveTerminalInstance() {
     }
 }
 
+function refreshTerminalRowsLayer() {
+    const terminal = terminalState.terminal;
+    if (!terminal || typeof terminal.refresh !== 'function') return;
+    const rows = Number(terminal.rows);
+    if (!Number.isFinite(rows) || rows <= 0) return;
+    try {
+        terminal.refresh(0, Math.max(0, Math.round(rows) - 1));
+    } catch (error) {
+        void error;
+    }
+}
+
+function clearTerminalMobileFocusResyncTimers() {
+    const timers = terminalState.mobileFocusResyncTimerIds;
+    if (!Array.isArray(timers) || !timers.length) return;
+    timers.forEach(timerId => {
+        window.clearTimeout(timerId);
+    });
+    timers.length = 0;
+}
+
+function runTerminalMobileFocusResyncStep({ focus = false } = {}) {
+    if (!terminalState.terminal || !isTerminalUiOpen() || !isMobileViewportBehaviorActive()) return;
+    applyMobileViewportHeight();
+    const keyboardOpen = syncMobileKeyboardState(true);
+    syncTerminalMobileShellHeightLimit({
+        isMobile: true,
+        keyboardOpen
+    });
+    scheduleTerminalViewportRefresh({ focus, fit: true });
+    refreshTerminalRowsLayer();
+}
+
+function scheduleTerminalMobileFocusResync({ focus = false } = {}) {
+    if (!terminalState.terminal || !isTerminalUiOpen() || !isMobileViewportBehaviorActive()) return;
+    clearTerminalMobileFocusResyncTimers();
+    runTerminalMobileFocusResyncStep({ focus });
+    const resyncDelays = isAndroidPlatform()
+        ? MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS.concat(MOBILE_VIEWPORT_ANDROID_FOCUS_RESYNC_DELAYS)
+        : MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS;
+    resyncDelays.forEach(delay => {
+        const timerId = window.setTimeout(() => {
+            const index = terminalState.mobileFocusResyncTimerIds.indexOf(timerId);
+            if (index !== -1) {
+                terminalState.mobileFocusResyncTimerIds.splice(index, 1);
+            }
+            runTerminalMobileFocusResyncStep({ focus });
+        }, delay);
+        terminalState.mobileFocusResyncTimerIds.push(timerId);
+    });
+}
+
 function cancelTerminalViewportRefresh() {
+    clearTerminalMobileFocusResyncTimers();
     if (terminalState.viewportRefreshFrameId !== null) {
         window.cancelAnimationFrame(terminalState.viewportRefreshFrameId);
         terminalState.viewportRefreshFrameId = null;
@@ -9447,15 +9512,32 @@ async function ensureTerminalRuntimeLoaded() {
 
 function buildTerminalTheme() {
     const styles = getComputedStyle(document.documentElement);
-    const background = styles.getPropertyValue('--code-bg').trim() || '#111111';
-    const foreground = styles.getPropertyValue('--text-primary').trim() || '#f0f0f0';
-    const cursor = styles.getPropertyValue('--accent').trim() || foreground;
+    const readThemeColor = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+    const background = readThemeColor('--code-bg', '#393939');
+    const foreground = readThemeColor('--code-text', '#ffffff');
+    const cursor = readThemeColor('--code-cursor', foreground);
     return {
         background,
         foreground,
         cursor,
         cursorAccent: background,
-        selectionBackground: 'rgba(127, 143, 163, 0.24)'
+        selectionBackground: readThemeColor('--code-selection-bg', 'rgba(166, 200, 255, 0.36)'),
+        black: readThemeColor('--code-ansi-black', '#393939'),
+        red: readThemeColor('--code-ansi-red', '#ffb3b8'),
+        green: readThemeColor('--code-ansi-green', '#a7f0ba'),
+        yellow: readThemeColor('--code-ansi-yellow', '#fddc69'),
+        blue: readThemeColor('--code-ansi-blue', '#a6c8ff'),
+        magenta: readThemeColor('--code-ansi-magenta', '#d4bbff'),
+        cyan: readThemeColor('--code-ansi-cyan', '#82cfff'),
+        white: readThemeColor('--code-ansi-white', '#ffffff'),
+        brightBlack: readThemeColor('--code-ansi-bright-black', '#525252'),
+        brightRed: readThemeColor('--code-ansi-bright-red', '#ffd7d9'),
+        brightGreen: readThemeColor('--code-ansi-bright-green', '#defbe6'),
+        brightYellow: readThemeColor('--code-ansi-bright-yellow', '#fcf4d6'),
+        brightBlue: readThemeColor('--code-ansi-bright-blue', '#d0e2ff'),
+        brightMagenta: readThemeColor('--code-ansi-bright-magenta', '#e8daff'),
+        brightCyan: readThemeColor('--code-ansi-bright-cyan', '#bae6ff'),
+        brightWhite: readThemeColor('--code-ansi-bright-white', '#ffffff')
     };
 }
 
@@ -9600,9 +9682,14 @@ function attachTerminalShellFocusListeners(shell) {
     if (shell.dataset.terminalFocusBound === 'true') return;
     const focusTerminal = () => {
         focusActiveTerminalInstance();
+        scheduleTerminalMobileFocusResync({ focus: true });
+    };
+    const resyncTerminalFocus = () => {
+        scheduleTerminalMobileFocusResync({ focus: true });
     };
     shell.addEventListener('mousedown', focusTerminal);
     shell.addEventListener('touchstart', focusTerminal, { passive: true });
+    shell.addEventListener('focusin', resyncTerminalFocus);
     shell.dataset.terminalFocusBound = 'true';
 }
 
@@ -9671,7 +9758,8 @@ async function ensureTerminalInstance() {
         fontSize: getTerminalFontSize(),
         fontFamily: TERMINAL_FONT_FAMILY,
         lineHeight: 1.16,
-        fontWeight: '500',
+        fontWeight: '400',
+        fontWeightBold: '700',
         theme: buildTerminalTheme()
     });
     const fitAddon = new runtime.FitAddon();
@@ -9726,6 +9814,7 @@ function scheduleTerminalFit() {
         } catch (error) {
             void error;
         }
+        refreshTerminalRowsLayer();
     });
 }
 
@@ -14484,7 +14573,7 @@ function filePanelMarkdownPreviewRuntime() {
         if (!api || typeof api.initialize !== 'function' || typeof api.render !== 'function') return;
         api.initialize({
             startOnLoad: false,
-            fontFamily: '"NanumSquareNeo", "NanumSquare", "Nanum Gothic", sans-serif',
+            fontFamily: getLocaleAwareUiFontFamily(),
             theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default'
         });
         let serial = 0;
@@ -26536,7 +26625,7 @@ async function hydrateMermaidDiagrams(container) {
     const theme = getMermaidThemeName();
     mermaidApi.initialize({
         startOnLoad: false,
-        fontFamily: NAVER_UI_FONT_FAMILY,
+        fontFamily: getLocaleAwareUiFontFamily(),
         theme
     });
     for (const node of diagrams) {

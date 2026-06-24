@@ -38,15 +38,19 @@ def _cleanup_terminal_sessions():
 @pytest.fixture
 def isolated_browser_roots(tmp_path, monkeypatch):
     server_root = (tmp_path / 'server').resolve()
+    tmp_root = (tmp_path / 'tmp').resolve()
     workspace_root = (tmp_path / 'workspace').resolve()
     server_root.mkdir(parents=True, exist_ok=True)
+    tmp_root.mkdir(parents=True, exist_ok=True)
     workspace_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(file_browser, '_get_server_root', lambda: server_root)
+    monkeypatch.setattr(file_browser, '_get_tmp_root', lambda: tmp_root)
     monkeypatch.setattr(file_browser, 'WORKSPACE_DIR', workspace_root)
 
     return {
         'server_root': server_root,
+        'tmp_root': tmp_root,
         'workspace_root': workspace_root,
     }
 
@@ -125,6 +129,14 @@ def _decrypt_test_file_payload(session, envelope):
         session['id'].encode('ascii'),
     )
     return json.loads(raw.decode('utf-8'))
+
+
+def test_root_page_exposes_tmp_path(browser_test_client, isolated_browser_roots):
+    response = browser_test_client.get('/')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert f'data-tmp-path="{isolated_browser_roots["tmp_root"]}"' in body
 
 
 def _wait_for_terminal_snapshot(fetch_snapshot, predicate, timeout_seconds=6.0):
@@ -504,6 +516,42 @@ def test_write_route_updates_file(browser_test_client, isolated_browser_roots):
     assert payload['content'] == 'after'
     assert payload['editable'] is True
     assert (server_root / 'notes.txt').read_text(encoding='utf-8') == 'after'
+
+
+def test_tmp_root_read_preview_is_supported(browser_test_client, isolated_browser_roots):
+    tmp_root = isolated_browser_roots['tmp_root']
+    (tmp_root / 'screenshot-note.txt').write_text('tmp preview', encoding='utf-8')
+
+    response = browser_test_client.post(
+        '/api/codex/files/read',
+        json={'root': 'tmp', 'path': 'screenshot-note.txt'},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['root'] == 'tmp'
+    assert payload['root_path'] == str(tmp_root)
+    assert payload['content'] == 'tmp preview'
+    assert payload['editable'] is False
+
+
+def test_tmp_root_write_is_rejected(browser_test_client, isolated_browser_roots):
+    tmp_root = isolated_browser_roots['tmp_root']
+    (tmp_root / 'notes.txt').write_text('before', encoding='utf-8')
+
+    response = browser_test_client.post(
+        '/api/codex/files/write',
+        json={
+            'root': 'tmp',
+            'path': 'notes.txt',
+            'content': 'after',
+        },
+    )
+
+    assert response.status_code == 403
+    payload = response.get_json()
+    assert payload['error_code'] == 'read_only_root'
+    assert (tmp_root / 'notes.txt').read_text(encoding='utf-8') == 'before'
 
 
 def test_write_route_returns_conflict_when_file_changed(browser_test_client, isolated_browser_roots):
@@ -1201,8 +1249,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=167' in template
-    assert '/static/css/app.css?v=172' in template
+    assert '/static/js/app.js?v=177' in template
+    assert '/static/css/app.css?v=180' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1224,7 +1272,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '압축 파일 준비 중' in app_js
     assert '수신 중' in app_js
     assert '저장 시작 중' in app_js
-    assert '/static/js/app.js?v=167' in template
+    assert '/static/js/app.js?v=177' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

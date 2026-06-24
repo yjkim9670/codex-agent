@@ -8488,7 +8488,7 @@ body.is-work-mode-resizing * {
 
 .message.user {
     align-self: flex-end;
-    text-align: right;
+    text-align: left;
     align-items: flex-end;
 }
 
@@ -8900,6 +8900,9 @@ body.is-work-mode-resizing * {
     background: var(--accent);
     color: #fff;
     border-color: transparent;
+    width: fit-content;
+    min-width: 0;
+    text-align: left;
 }
 
 .message.is-plan-response .message-bubble {

@@ -17,6 +17,7 @@ from ..config import (
 )
 
 BROWSER_ROOT_SERVER = 'server'
+BROWSER_ROOT_TMP = 'tmp'
 BROWSER_ROOT_WORKSPACE = 'workspace'
 
 _MAX_LIST_ENTRIES = 2000
@@ -179,11 +180,32 @@ def _get_server_root():
     return Path.cwd().resolve()
 
 
+def _get_tmp_root():
+    tmp_root = Path('/tmp')
+    if not tmp_root.exists():
+        tmp_root = Path(tempfile.gettempdir())
+    return tmp_root.resolve()
+
+
+def get_tmp_root_path():
+    return _get_tmp_root()
+
+
 def _get_browser_roots():
     return {
         BROWSER_ROOT_SERVER: _get_server_root(),
+        BROWSER_ROOT_TMP: _get_tmp_root(),
         BROWSER_ROOT_WORKSPACE: WORKSPACE_DIR.resolve(),
     }
+
+
+def _ensure_mutable_root(root_key):
+    if root_key == BROWSER_ROOT_TMP:
+        raise FileBrowserError(
+            '/tmp 파일 브라우징 루트는 미리보기만 지원합니다.',
+            error_code='read_only_root',
+            status_code=403,
+        )
 
 
 def _normalize_root_key(value):
@@ -904,6 +926,7 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
         and not truncated
         and is_utf8_text
         and _is_editable_text_path(target_path)
+        and normalized_root != BROWSER_ROOT_TMP
     )
 
     return {
@@ -1031,6 +1054,7 @@ def _write_file_content(normalized_root, root_path, normalized_path, content, *,
 
 def write_file(root_key=None, relative_path='', content='', expected_modified_ns=None, *, include_content=True):
     normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
     normalized_path = _normalize_relative_path(relative_path)
     if not normalized_path:
         raise FileBrowserError(
@@ -1050,6 +1074,7 @@ def write_file(root_key=None, relative_path='', content='', expected_modified_ns
 
 def write_file_patch(root_key=None, relative_path='', patch=None, expected_modified_ns=None, *, include_content=False):
     normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
     normalized_path = _normalize_relative_path(relative_path)
     if not normalized_path:
         raise FileBrowserError(
@@ -1074,6 +1099,7 @@ def write_file_patch(root_key=None, relative_path='', patch=None, expected_modif
 
 def create_file(root_key=None, relative_path='', content=''):
     normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
     normalized_path = _normalize_relative_path(relative_path)
     if not normalized_path:
         raise FileBrowserError(
@@ -1138,6 +1164,7 @@ def create_file(root_key=None, relative_path='', content=''):
 
 def upload_files(root_key=None, relative_path='', file_storages=None):
     normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
     normalized_directory, target_directory = _ensure_existing_directory(root_path, relative_path)
     files = _normalize_upload_files(file_storages)
 
@@ -1498,6 +1525,7 @@ def build_mail_archive_payload(root_key=None, relative_paths=None, *, max_bytes=
 
 def delete_files(root_key=None, relative_paths=None):
     normalized_root, root_path, targets = _resolve_delete_targets(root_key, relative_paths)
+    _ensure_mutable_root(normalized_root)
     quarantine_directory = Path(tempfile.mkdtemp(prefix=_DELETE_QUARANTINE_PREFIX, dir=root_path))
     moved_targets = []
 
@@ -1540,6 +1568,7 @@ def delete_files(root_key=None, relative_paths=None):
 
 def delete_directory(root_key=None, relative_path=''):
     normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
     normalized_path = _normalize_relative_path(relative_path)
     if not normalized_path:
         raise FileBrowserError(
@@ -1593,6 +1622,7 @@ def delete_directory(root_key=None, relative_path=''):
 
 def move_files(root_key=None, relative_paths=None, *, destination_path=None, destination_directory=None):
     normalized_root, root_path, targets = _resolve_file_targets(root_key, relative_paths)
+    _ensure_mutable_root(normalized_root)
     operations = _build_move_operations(
         root_path,
         targets,

@@ -269,6 +269,7 @@ const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
 const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
+const FILE_BROWSER_ROOT_TMP = 'tmp';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
@@ -388,6 +389,7 @@ const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
+    [FILE_BROWSER_ROOT_TMP]: 'Tmp',
     [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
 });
 const CODEX_PUBLIC_PREVIEW_HTML_EXTENSIONS = new Set(['.html', '.htm', '.xhtml']);
@@ -5017,7 +5019,7 @@ function syncWorkModePanelModeState() {
             path.classList.remove('is-compact-path');
             setHoverTooltip(path, activeSession?.cwd || displayPath);
         } else {
-            setFilePanelPathLabel(path, workModeFilePath, '', {
+            setFilePanelPathLabel(path, workModeFileRoot, workModeFilePath, '', {
                 compact: isCompactLayout()
             });
         }
@@ -13793,12 +13795,18 @@ function getMessageLogPathRoots() {
     }
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
     const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
+    const tmpPath = normalizeFilesystemPath(document.body.dataset?.tmpPath || '');
     if (workspacePath) {
         roots.push({ path: workspacePath, label: '$workspace' });
     }
     if (serverPath && serverPath !== workspacePath) {
         roots.push({ path: serverPath, label: '$server' });
     }
+    [tmpPath, '/tmp'].forEach(path => {
+        if (path && !roots.some(root => root.path === path)) {
+            roots.push({ path, label: '$tmp' });
+        }
+    });
     roots.sort((a, b) => b.path.length - a.path.length);
     return roots;
 }
@@ -13952,6 +13960,10 @@ function closeMessageLogOverlay() {
 }
 
 function normalizeFileBrowserRoot(value) {
+    const requestedRoot = String(value || '').trim().toLowerCase();
+    if (requestedRoot === FILE_BROWSER_ROOT_TMP) {
+        return FILE_BROWSER_ROOT_TMP;
+    }
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
         const normalized = String(value || CODEX_PUBLIC_PREVIEW_CONFIG.root || '').trim().toLowerCase();
         if (normalized === 'server') return 'server';
@@ -14019,7 +14031,7 @@ function formatFileBrowserDisplayPath(root, relativePath = '') {
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
         ? '$workspace'
-        : getFileBrowserRootLabel(normalizedRoot);
+        : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot));
     return normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
 }
 
@@ -14028,7 +14040,7 @@ function formatFileBrowserCompactDisplayPath(root, relativePath = '', { keepTail
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
         ? '$workspace'
-        : getFileBrowserRootLabel(normalizedRoot);
+        : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot));
     if (!normalizedPath) return displayPrefix;
 
     const segments = normalizedPath.split('/').filter(Boolean);
@@ -14045,6 +14057,7 @@ function getFileBrowserAbsoluteRoots() {
     }
     const roots = [];
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
+    const tmpPath = normalizeFilesystemPath(document.body.dataset?.tmpPath || '');
     if (workspacePath) {
         roots.push({
             root: FILE_BROWSER_ROOT_WORKSPACE,
@@ -14052,6 +14065,15 @@ function getFileBrowserAbsoluteRoots() {
             display: '$workspace'
         });
     }
+    [tmpPath, '/tmp'].forEach(path => {
+        if (path && !roots.some(root => root.path === path)) {
+            roots.push({
+                root: FILE_BROWSER_ROOT_TMP,
+                path,
+                display: '$tmp'
+            });
+        }
+    });
     roots.sort((a, b) => b.path.length - a.path.length);
     return roots;
 }
@@ -14130,12 +14152,13 @@ function updateFileBrowserRootButtons() {
     });
 }
 
-function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath = '', options = {}) {
+function setFilePanelPathLabel(pathElement, root, relativePath = '', absoluteRootPath = '', options = {}) {
     if (!pathElement) return;
+    const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
-    const fullDisplay = formatFileBrowserDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath);
+    const fullDisplay = formatFileBrowserDisplayPath(normalizedRoot, normalizedPath);
     const display = options?.compact
-        ? formatFileBrowserCompactDisplayPath(FILE_BROWSER_ROOT_WORKSPACE, normalizedPath)
+        ? formatFileBrowserCompactDisplayPath(normalizedRoot, normalizedPath)
         : fullDisplay;
     pathElement.textContent = display;
     pathElement.dataset.fullPath = fullDisplay;
@@ -14149,19 +14172,17 @@ function setFilePanelPathLabel(pathElement, relativePath = '', absoluteRootPath 
 }
 
 function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
-    void root;
     const elements = getFileBrowserElements();
-    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath);
+    setFilePanelPathLabel(elements?.path, root, relativePath, absoluteRootPath);
 }
 
 function setWorkModeFilePathLabel(root, relativePath = '', absoluteRootPath = '') {
-    void root;
     const elements = getWorkModeFileElements();
     if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
         syncWorkModePanelModeState();
         return;
     }
-    setFilePanelPathLabel(elements?.path, relativePath, absoluteRootPath, {
+    setFilePanelPathLabel(elements?.path, root, relativePath, absoluteRootPath, {
         compact: isCompactLayout()
     });
 }

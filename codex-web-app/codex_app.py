@@ -24,6 +24,7 @@ from .services.codex_chat import (
     ensure_pending_queue_background_worker,
     ensure_usage_snapshot_background_worker,
 )
+from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
 
 
@@ -64,6 +65,7 @@ def create_codex_app():
         return {
             'server_directory_name': server_directory.name or str(server_directory),
             'server_directory_path': str(server_directory),
+            'tmp_directory_path': str(get_tmp_root_path()),
             'workspace_directory_name': workspace_directory.name or str(workspace_directory),
             'workspace_directory_path': str(workspace_directory),
             'current_branch_name': get_current_branch_name(),
@@ -97,6 +99,7 @@ def create_codex_app():
             security_policy=runtime_context['security_policy'],
             server_directory_name=runtime_context['server_directory_name'],
             server_directory_path=runtime_context['server_directory_path'],
+            tmp_directory_path=runtime_context['tmp_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],
             workspace_directory_path=runtime_context['workspace_directory_path'],
             current_branch_name=runtime_context['current_branch_name'],

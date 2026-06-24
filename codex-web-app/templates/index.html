@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=178">
+    <link rel="stylesheet" href="/static/css/app.css?v=180">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
-<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}">
+<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
     {% macro render_file_panel(id_prefix) -%}
     <div class="file-browser-layout work-mode-file-layout" id="{{ id_prefix }}-layout" data-file-panel-id="{{ id_prefix }}">
         <div class="file-browser-list-panel work-mode-file-list-panel">
@@ -1379,6 +1379,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=176"></script>
+    <script src="/static/js/app.js?v=177"></script>
 </body>
 </html>

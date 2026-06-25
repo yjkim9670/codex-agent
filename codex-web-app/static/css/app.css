@@ -4407,8 +4407,15 @@ body.is-mermaid-diagram-viewer-open {
     color: var(--accent);
 }
 
-.message-log-overlay.is-preview-mode .message-log-overlay-content code {
-    background: rgba(59, 130, 246, 0.12);
+.message-log-overlay.is-preview-mode .message-log-overlay-content :not(pre) > code {
+    background: var(--code-inline-bg);
+    color: var(--code-text);
+}
+
+.message-log-overlay.is-preview-mode .message-log-overlay-content pre code,
+.message-log-overlay.is-detail-mode .message-log-overlay-content pre code {
+    background: transparent;
+    color: inherit;
 }
 
 .message-log-overlay.is-preview-mode .message-log-overlay-content th {
@@ -4434,7 +4441,9 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .message-log-overlay.is-detail-mode .message-log-overlay-content pre {
-    background: rgba(15, 23, 42, 0.06);
+    border-color: var(--code-border);
+    background: var(--code-bg);
+    color: var(--code-text);
 }
 
 .message-log-overlay.is-detail-mode .message-log-overlay-content th {

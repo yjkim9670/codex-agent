@@ -1250,7 +1250,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
     assert '/static/js/app.js?v=178' in template
-    assert '/static/css/app.css?v=181' in template
+    assert '/static/css/app.css?v=182' in template
 
 
 def test_file_preview_download_supports_selected_directories():

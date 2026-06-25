@@ -263,12 +263,14 @@ const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
 const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
 const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
 const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
+const GIT_DIFF_REQUEST_TIMEOUT_MS = 60000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
 const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
+const FILE_BROWSER_ROOT_SERVER = 'server';
 const FILE_BROWSER_ROOT_TMP = 'tmp';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
@@ -389,6 +391,7 @@ const WORK_MODE_MOBILE_VIEW_CHAT = 'chat';
 const WORK_MODE_MOBILE_VIEW_LIST = 'list';
 const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
+    [FILE_BROWSER_ROOT_SERVER]: 'Server',
     [FILE_BROWSER_ROOT_TMP]: 'Tmp',
     [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
 });
@@ -570,6 +573,10 @@ let fileBrowserEditState = {
     modifiedNs: '',
     previewResult: null,
     editBuffer: '',
+    diffMode: false,
+    diffLoading: false,
+    diffResult: null,
+    diffError: '',
     editorMode: loadFilePanelEditorModePreference(),
     vimMode: FILE_PANEL_VIM_MODE_INSERT,
     vimPending: '',
@@ -594,6 +601,10 @@ let workModeFileEditState = {
     modifiedNs: '',
     previewResult: null,
     editBuffer: '',
+    diffMode: false,
+    diffLoading: false,
+    diffResult: null,
+    diffError: '',
     editorMode: loadFilePanelEditorModePreference(),
     vimMode: FILE_PANEL_VIM_MODE_INSERT,
     vimPending: '',
@@ -2118,6 +2129,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeFileAddCurrentContextBtn = document.getElementById('codex-work-mode-file-add-current-context');
     const workModeFileCopyBtn = document.getElementById('codex-work-mode-file-copy');
+    const workModeFileDiffBtn = document.getElementById('codex-work-mode-file-diff');
     const workModeFileRenameCurrentBtn = document.getElementById('codex-work-mode-file-rename-current');
     const workModeFileDeleteCurrentBtn = document.getElementById('codex-work-mode-file-delete-current');
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
@@ -2175,6 +2187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserOpenNewBtn = document.getElementById('codex-file-browser-open-new');
     const fileBrowserAddCurrentContextBtn = document.getElementById('codex-file-browser-add-current-context');
     const fileBrowserCopyBtn = document.getElementById('codex-file-browser-copy');
+    const fileBrowserDiffBtn = document.getElementById('codex-file-browser-diff');
     const fileBrowserRenameCurrentBtn = document.getElementById('codex-file-browser-rename-current');
     const fileBrowserDeleteCurrentBtn = document.getElementById('codex-file-browser-delete-current');
     const fileBrowserNewFileBtn = document.getElementById('codex-file-browser-new-file');
@@ -2606,6 +2619,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileCopyBtn) {
         workModeFileCopyBtn.addEventListener('click', () => {
             void copyCurrentFileContentFromFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileDiffBtn) {
+        workModeFileDiffBtn.addEventListener('click', () => {
+            void toggleFilePanelDiffMode(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileRenameCurrentBtn) {
@@ -3071,6 +3089,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserCopyBtn) {
         fileBrowserCopyBtn.addEventListener('click', () => {
             void copyCurrentFileContentFromFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserDiffBtn) {
+        fileBrowserDiffBtn.addEventListener('click', () => {
+            void toggleFilePanelDiffMode(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserRenameCurrentBtn) {
@@ -4899,6 +4922,7 @@ function getFilePanelElementsByPrefix({
         openNewBtn: byId('open-new'),
         addCurrentContextBtn: byId('add-current-context'),
         copyBtn: byId('copy'),
+        diffBtn: byId('diff'),
         renameCurrentBtn: byId('rename-current'),
         deleteCurrentBtn: byId('delete-current'),
         editBtn: byId('edit'),
@@ -5849,6 +5873,10 @@ function resetFilePanelEditState(variant, { root = null } = {}) {
     state.modifiedNs = '';
     state.previewResult = null;
     state.editBuffer = '';
+    state.diffMode = false;
+    state.diffLoading = false;
+    state.diffResult = null;
+    state.diffError = '';
     state.editorMode = loadFilePanelEditorModePreference();
     resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
@@ -5867,6 +5895,10 @@ function hydrateFilePanelEditStateFromResult(variant, result, { root = null } = 
     state.modifiedNs = String(result?.modified_ns || '').trim();
     state.previewResult = result && typeof result === 'object' ? { ...result } : null;
     state.editBuffer = state.editable && typeof result?.content === 'string' ? result.content : '';
+    state.diffMode = false;
+    state.diffLoading = false;
+    state.diffResult = null;
+    state.diffError = '';
     state.editorMode = loadFilePanelEditorModePreference();
     resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
@@ -5880,6 +5912,10 @@ function discardFilePanelEditChanges(variant) {
     state.dirty = false;
     state.saving = false;
     state.editBuffer = typeof state.previewResult?.content === 'string' ? state.previewResult.content : '';
+    state.diffMode = false;
+    state.diffLoading = false;
+    state.diffResult = null;
+    state.diffError = '';
     resetFilePanelVimInteractionState(state, { editorMode: state.editorMode });
     syncFilePanelViewerActionState(normalizedVariant);
 }
@@ -5893,6 +5929,37 @@ function confirmDiscardFilePanelEditChanges(variant, message = FILE_PANEL_EDIT_D
     return true;
 }
 
+function normalizeGitRepoTarget(value) {
+    const target = String(value || '').trim().toLowerCase().replace(/-/g, '_');
+    if (target === GIT_SYNC_TARGET_CODEX_AGENT || target === 'codex' || target === 'workbench') {
+        return GIT_SYNC_TARGET_CODEX_AGENT;
+    }
+    return GIT_SYNC_TARGET_WORKSPACE;
+}
+
+function getGitRepoTargetForFileBrowserRoot(root) {
+    const normalizedRoot = normalizeFileBrowserRoot(root);
+    if (normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE) {
+        return GIT_SYNC_TARGET_WORKSPACE;
+    }
+    if (normalizedRoot === FILE_BROWSER_ROOT_SERVER) {
+        return GIT_SYNC_TARGET_CODEX_AGENT;
+    }
+    return '';
+}
+
+function getFileBrowserRootForGitRepoTarget(repoTarget) {
+    const normalizedTarget = normalizeGitRepoTarget(repoTarget);
+    return normalizedTarget === GIT_SYNC_TARGET_CODEX_AGENT
+        ? FILE_BROWSER_ROOT_SERVER
+        : FILE_BROWSER_ROOT_WORKSPACE;
+}
+
+function isFilePanelDiffSupported(state) {
+    if (!state?.path) return false;
+    return Boolean(getGitRepoTargetForFileBrowserRoot(state.root));
+}
+
 function syncFilePanelViewerActionState(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const config = getFilePanelVariantConfig(normalizedVariant);
@@ -5902,11 +5969,14 @@ function syncFilePanelViewerActionState(variant) {
     const state = getFilePanelEditState(normalizedVariant);
     const hasPreview = Boolean(state.path);
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
-    const canEdit = hasPreview && Boolean(state.editable);
-    const canCopy = hasPreview && !state.previewResult?.is_binary;
+    const isDiffMode = Boolean(state.diffMode);
+    const canDiff = hasPreview && isFilePanelDiffSupported(state);
+    const canEdit = hasPreview && !isDiffMode && Boolean(state.editable);
+    const canCopy = hasPreview && !isDiffMode && !state.previewResult?.is_binary;
     if (elements.viewerPanel) {
         elements.viewerPanel.classList.toggle('has-preview', hasPreview);
         elements.viewerPanel.classList.toggle('is-editing', Boolean(state.editing));
+        elements.viewerPanel.classList.toggle('is-diff-mode', isDiffMode);
     }
     if (elements.openNewBtn) {
         syncFilePanelPreviewOpenButton(normalizedVariant, { loading: isBusy });
@@ -5929,6 +5999,19 @@ function syncFilePanelViewerActionState(variant) {
                 : '파일 내용 복사'
         );
         setIconButtonScreenReaderText(elements.copyBtn, '파일 내용 전체 복사');
+    }
+    if (elements.diffBtn) {
+        elements.diffBtn.classList.toggle('is-hidden', !canDiff);
+        elements.diffBtn.classList.toggle('is-active', isDiffMode);
+        elements.diffBtn.classList.toggle('is-loading', Boolean(state.diffLoading));
+        elements.diffBtn.disabled = !canDiff || state.editing || isBusy || state.diffLoading;
+        elements.diffBtn.setAttribute('aria-pressed', isDiffMode ? 'true' : 'false');
+        updateFilePanelActionButtonLabel(
+            elements.diffBtn,
+            isDiffMode ? '현재 내용 미리보기' : 'HEAD 기준 diff 보기'
+        );
+        setIconButtonScreenReaderText(elements.diffBtn, isDiffMode ? 'Preview' : 'Diff');
+        syncHoverTooltipFromLabel(elements.diffBtn);
     }
     if (elements.renameCurrentBtn) {
         elements.renameCurrentBtn.classList.toggle('is-hidden', !hasPreview);
@@ -11184,6 +11267,9 @@ function renderGitChangedFileTreeList(options = {}) {
     const onFileRevert = typeof options.onFileRevert === 'function'
         ? options.onFileRevert
         : null;
+    const onFileOpen = typeof options.onFileOpen === 'function'
+        ? options.onFileOpen
+        : null;
     const fileRevertDisabled = Boolean(options.fileRevertDisabled);
     const fileRevertBusyPath = typeof options.fileRevertBusyPath === 'string'
         ? options.fileRevertBusyPath
@@ -11276,8 +11362,21 @@ function renderGitChangedFileTreeList(options = {}) {
             if (file?.status) {
                 rowNode.appendChild(createGitStatusBadgeNode(file.status));
             }
-            const textWrap = document.createElement('span');
-            textWrap.className = 'git-file-tree-file-text';
+            const textWrap = onFileOpen && file?.path
+                ? document.createElement('button')
+                : document.createElement('span');
+            textWrap.className = onFileOpen && file?.path
+                ? 'git-file-tree-file-text git-file-tree-file-open'
+                : 'git-file-tree-file-text';
+            if (onFileOpen && file?.path) {
+                textWrap.type = 'button';
+                textWrap.title = `${file.path} 파일 미리보기 열기`;
+                textWrap.addEventListener('click', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onFileOpen(file.path, file, textWrap);
+                });
+            }
 
             const fileName = document.createElement('span');
             fileName.className = 'git-file-tree-file-name';
@@ -11338,6 +11437,45 @@ function getGitStatusBadgeClass(status) {
         default:
             return '';
     }
+}
+
+function shouldOpenGitChangedFileInDiffMode(file) {
+    const rawStatus = String(file?.raw_status || file?.rawStatus || '').toUpperCase();
+    const status = String(file?.status || '').toUpperCase();
+    return rawStatus.includes('D') || status === 'D';
+}
+
+function openGitChangedFileInFilePreview(path, repoTarget, file = {}) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    if (!normalizedPath) {
+        showToast('열 파일 경로를 확인할 수 없습니다.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+    const normalizedRepoTarget = normalizeGitRepoTarget(repoTarget);
+    const root = getFileBrowserRootForGitRepoTarget(normalizedRepoTarget);
+    const preferDiffMode = shouldOpenGitChangedFileInDiffMode(file);
+    if (isWorkModeEnabled()) {
+        if (isGitBranchOverlayOpen()) {
+            closeGitBranchOverlay();
+        }
+        if (isGitSyncOverlayOpen()) {
+            closeGitSyncOverlay();
+        }
+        return openWorkModeFileTarget(
+            { root, path: normalizedPath },
+            {
+                preferDiffMode,
+                repoTarget: normalizedRepoTarget
+            }
+        );
+    }
+    openFileBrowserOverlay({
+        root,
+        filePath: normalizedPath,
+        preferDiffMode,
+        repoTarget: normalizedRepoTarget
+    });
+    return true;
 }
 
 function syncGitOverlaySelection(files) {
@@ -11703,6 +11841,9 @@ function renderGitBranchOverlay(status) {
             },
             onFileRevert: (path, file, button) => {
                 void handleGitFileRevert(button, path, GIT_SYNC_TARGET_WORKSPACE);
+            },
+            onFileOpen: (path, file) => {
+                openGitChangedFileInFilePreview(path, GIT_SYNC_TARGET_WORKSPACE, file);
             }
         });
         renderedFileCount = rendered.fileCount;
@@ -12194,6 +12335,9 @@ function renderGitSyncOverlay(history) {
             fileRevertBusyPath: gitFileRevertingPath,
             onFileRevert: (path, file, button) => {
                 void handleGitFileRevert(button, path, repoTarget);
+            },
+            onFileOpen: (path, file) => {
+                openGitChangedFileInFilePreview(path, repoTarget, file);
             },
             onFolderCollapseToggle: (folderPath, shouldCollapse) => {
                 if (!folderPath) return;
@@ -13961,12 +14105,15 @@ function closeMessageLogOverlay() {
 
 function normalizeFileBrowserRoot(value) {
     const requestedRoot = String(value || '').trim().toLowerCase();
+    if (requestedRoot === FILE_BROWSER_ROOT_SERVER) {
+        return FILE_BROWSER_ROOT_SERVER;
+    }
     if (requestedRoot === FILE_BROWSER_ROOT_TMP) {
         return FILE_BROWSER_ROOT_TMP;
     }
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
         const normalized = String(value || CODEX_PUBLIC_PREVIEW_CONFIG.root || '').trim().toLowerCase();
-        if (normalized === 'server') return 'server';
+        if (normalized === FILE_BROWSER_ROOT_SERVER) return FILE_BROWSER_ROOT_SERVER;
     }
     return FILE_BROWSER_ROOT_WORKSPACE;
 }
@@ -14031,7 +14178,9 @@ function formatFileBrowserDisplayPath(root, relativePath = '') {
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
         ? '$workspace'
-        : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot));
+        : (normalizedRoot === FILE_BROWSER_ROOT_SERVER
+            ? '$server'
+            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot)));
     return normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
 }
 
@@ -14040,7 +14189,9 @@ function formatFileBrowserCompactDisplayPath(root, relativePath = '', { keepTail
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const displayPrefix = normalizedRoot === FILE_BROWSER_ROOT_WORKSPACE
         ? '$workspace'
-        : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot));
+        : (normalizedRoot === FILE_BROWSER_ROOT_SERVER
+            ? '$server'
+            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot)));
     if (!normalizedPath) return displayPrefix;
 
     const segments = normalizedPath.split('/').filter(Boolean);
@@ -14056,8 +14207,16 @@ function getFileBrowserAbsoluteRoots() {
         return [];
     }
     const roots = [];
+    const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
     const tmpPath = normalizeFilesystemPath(document.body.dataset?.tmpPath || '');
+    if (serverPath) {
+        roots.push({
+            root: FILE_BROWSER_ROOT_SERVER,
+            path: serverPath,
+            display: '$server'
+        });
+    }
     if (workspacePath) {
         roots.push({
             root: FILE_BROWSER_ROOT_WORKSPACE,
@@ -14853,6 +15012,9 @@ function canOpenWorkModePreviewInNewWindow() {
 
 function canOpenFilePanelPreviewInNewWindow(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (getFilePanelEditState(normalizedVariant)?.diffMode) {
+        return false;
+    }
     if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
         if (!isWorkModeEnabled()) return false;
         if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
@@ -16106,6 +16268,10 @@ function openWorkModeFileTarget(target, options = {}) {
     const requestedLine = normalizeSourceLineNumber(options?.line);
     const requestedColumn = normalizeSourceColumnNumber(options?.column);
     const requestedRoot = normalizeFileBrowserRoot(target.root);
+    const preferDiffMode = Boolean(options?.preferDiffMode);
+    const requestedRepoTarget = normalizeGitRepoTarget(
+        options?.repoTarget || getGitRepoTargetForFileBrowserRoot(requestedRoot)
+    );
     const requestedFilePath = normalizeFileBrowserRelativePath(target.path || '');
     const requestedPath = normalizeFileBrowserRelativePath(
         requestedFilePath ? getFileBrowserParentPath(requestedFilePath) : ''
@@ -16143,6 +16309,17 @@ function openWorkModeFileTarget(target, options = {}) {
             force: true
         });
         if (!listed || !requestedFilePath) return;
+        if (preferDiffMode) {
+            resetFilePanelEditState(FILE_PANEL_VARIANT_WORK_MODE, { root: requestedRoot });
+            await renderFilePanelDiffFromState(FILE_PANEL_VARIANT_WORK_MODE, {
+                root: requestedRoot,
+                path: requestedFilePath,
+                repoTarget: requestedRepoTarget,
+                isDeleted: true
+            });
+            applyWorkModeFileSelectionState();
+            return;
+        }
         await openFileInWorkModePanel(requestedFilePath, {
             root: requestedRoot,
             fallbackToDirectory: true,
@@ -17217,6 +17394,23 @@ async function fetchFileBrowserFile(root, path) {
         preview_max_bytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
     }, {
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
+    });
+}
+
+async function fetchGitFileDiff(repoTarget, path) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path);
+    const normalizedRepoTarget = normalizeGitRepoTarget(repoTarget);
+    if (!normalizedPath) {
+        throw new Error('diff를 볼 파일을 먼저 선택하세요.');
+    }
+    return fetchJson('/api/codex/git/diff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: GIT_DIFF_REQUEST_TIMEOUT_MS,
+        body: JSON.stringify({
+            repo_target: normalizedRepoTarget,
+            file: normalizedPath
+        })
     });
 }
 
@@ -18677,6 +18871,96 @@ function buildFileBrowserSourceViewer(content, { language = '', isScript = false
         lineCount,
         highlightFound
     };
+}
+
+function getGitDiffLineKind(lineText) {
+    const text = String(lineText || '');
+    if (text.startsWith('diff --git') || text.startsWith('index ') || text.startsWith('new file mode ')
+        || text.startsWith('deleted file mode ') || text.startsWith('similarity index ')
+        || text.startsWith('rename from ') || text.startsWith('rename to ')) {
+        return 'header';
+    }
+    if (text.startsWith('@@')) return 'hunk';
+    if (text.startsWith('+++') || text.startsWith('---')) return 'file';
+    if (text.startsWith('+')) return 'added';
+    if (text.startsWith('-')) return 'deleted';
+    return 'context';
+}
+
+function getGitDiffLineMarker(kind) {
+    switch (kind) {
+        case 'added':
+            return '+';
+        case 'deleted':
+            return '-';
+        case 'hunk':
+            return '@';
+        default:
+            return '';
+    }
+}
+
+function buildFileBrowserDiffViewer(diffText, {
+    truncated = false,
+    path = '',
+    command = ''
+} = {}) {
+    const wrapper = document.createElement('section');
+    wrapper.className = 'file-browser-diff-shell';
+
+    const normalizedDiff = normalizeFileBrowserPreviewText(diffText);
+    if (truncated || command) {
+        const note = document.createElement('div');
+        note.className = 'file-browser-diff-note';
+        const noteParts = [];
+        if (command) {
+            noteParts.push(command);
+        }
+        if (truncated) {
+            noteParts.push('diff가 커서 일부만 표시됩니다.');
+        }
+        note.textContent = noteParts.join(' · ');
+        wrapper.appendChild(note);
+    }
+
+    if (!normalizedDiff) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = path
+            ? `${path} · HEAD 기준 변경 내용이 없습니다.`
+            : 'HEAD 기준 변경 내용이 없습니다.';
+        wrapper.appendChild(placeholder);
+        return wrapper;
+    }
+
+    const lines = normalizedDiff.split('\n');
+    const lineCount = Math.max(1, lines.length);
+    const source = document.createElement('div');
+    source.className = 'file-browser-source file-browser-diff';
+    source.style.setProperty('--file-browser-line-digit-width', '2');
+
+    for (let index = 0; index < lineCount; index += 1) {
+        const rawLine = lines[index] || '';
+        const kind = getGitDiffLineKind(rawLine);
+        const row = document.createElement('div');
+        row.className = `file-browser-source-line file-browser-diff-line is-${kind}`;
+        row.dataset.lineNumber = String(index + 1);
+
+        const marker = document.createElement('span');
+        marker.className = 'file-browser-source-line-number file-browser-diff-marker';
+        marker.textContent = getGitDiffLineMarker(kind);
+
+        const line = document.createElement('span');
+        line.className = 'file-browser-source-line-content file-browser-diff-content';
+        line.textContent = rawLine || ' ';
+
+        row.appendChild(marker);
+        row.appendChild(line);
+        source.appendChild(row);
+    }
+
+    wrapper.appendChild(source);
+    return wrapper;
 }
 
 function revealFileBrowserSourceLineInContainer(container, lineNumber) {
@@ -20474,6 +20758,142 @@ function renderFilePanelEditor(variant, options = {}) {
     return true;
 }
 
+function ensureFilePanelPreviewStateForDiff(variant, root, path, options = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    const normalizedRoot = normalizeFileBrowserRoot(root || state.root || getFilePanelCurrentRoot(normalizedVariant));
+    const normalizedPath = normalizeFileBrowserRelativePath(path || state.path || getFilePanelPreviewPath(normalizedVariant));
+    state.root = normalizedRoot;
+    state.path = normalizedPath;
+    state.editing = false;
+    state.dirty = false;
+    state.saving = false;
+    const previewResultRoot = normalizeFileBrowserRoot(state.previewResult?.root || normalizedRoot);
+    const previewResultPath = normalizeFileBrowserRelativePath(state.previewResult?.path || '');
+    if (!state.previewResult || previewResultRoot !== normalizedRoot || previewResultPath !== normalizedPath) {
+        state.previewResult = {
+            root: normalizedRoot,
+            path: normalizedPath,
+            content: '',
+            editable: false,
+            is_binary: false
+        };
+        state.editable = false;
+    }
+    if (options.isDeleted) {
+        state.previewResult.is_deleted = true;
+        state.previewResult.editable = false;
+        state.editable = false;
+    }
+    setFilePanelPreviewPath(normalizedVariant, normalizedPath);
+    return {
+        root: normalizedRoot,
+        path: normalizedPath
+    };
+}
+
+async function renderFilePanelDiffFromState(variant, options = {}) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const config = getFilePanelVariantConfig(normalizedVariant);
+    const elements = config.getElements();
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!elements?.viewerContent) return false;
+
+    const target = ensureFilePanelPreviewStateForDiff(
+        normalizedVariant,
+        options.root || state.root,
+        options.path || state.path,
+        { isDeleted: Boolean(options.isDeleted) }
+    );
+    if (!target.path) {
+        showToast('diff를 볼 파일을 먼저 선택하세요.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+    const repoTarget = normalizeGitRepoTarget(
+        options.repoTarget || getGitRepoTargetForFileBrowserRoot(target.root)
+    );
+    if (!getGitRepoTargetForFileBrowserRoot(target.root)) {
+        showToast('이 파일 위치는 git diff를 지원하지 않습니다.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+
+    const renderToken = getFileBrowserViewerRenderToken();
+    elements.viewerContent.dataset.renderToken = renderToken;
+    state.diffMode = true;
+    state.diffLoading = true;
+    state.diffError = '';
+    syncFilePanelViewerActionState(normalizedVariant);
+    setFilePanelViewerMetaText(
+        elements,
+        `${formatFileBrowserDisplayPath(target.root, target.path)} · HEAD diff · 불러오는 중...`
+    );
+    elements.viewerContent.innerHTML = '';
+    const loading = document.createElement('div');
+    loading.className = 'file-browser-placeholder';
+    loading.textContent = 'diff를 불러오는 중...';
+    elements.viewerContent.appendChild(loading);
+
+    try {
+        const result = await fetchGitFileDiff(repoTarget, target.path);
+        if (elements.viewerContent.dataset.renderToken !== renderToken) {
+            return false;
+        }
+        state.diffResult = result && typeof result === 'object' ? { ...result } : null;
+        state.diffLoading = false;
+        state.diffMode = true;
+        state.diffError = '';
+        if (state.diffResult?.is_deleted) {
+            state.previewResult = {
+                ...(state.previewResult || {}),
+                is_deleted: true,
+                editable: false
+            };
+            state.editable = false;
+        }
+        const diffPath = normalizeFileBrowserRelativePath(state.diffResult?.path || target.path);
+        const diffText = typeof state.diffResult?.diff === 'string'
+            ? state.diffResult.diff
+            : String(state.diffResult?.stdout || '');
+        const metaParts = [
+            formatFileBrowserDisplayPath(target.root, diffPath),
+            'HEAD diff'
+        ];
+        const status = String(state.diffResult?.status || '').trim();
+        if (status) {
+            metaParts.push(status);
+        }
+        setFilePanelViewerMetaText(elements, metaParts.join(' · '), {
+            truncated: Boolean(state.diffResult?.diff_truncated),
+            noteText: 'diff가 커서 일부만 표시됩니다.'
+        });
+        elements.viewerContent.innerHTML = '';
+        elements.viewerContent.appendChild(buildFileBrowserDiffViewer(diffText, {
+            truncated: Boolean(state.diffResult?.diff_truncated),
+            path: diffPath,
+            command: String(state.diffResult?.command || '')
+        }));
+        syncFilePanelViewerActionState(normalizedVariant);
+        return true;
+    } catch (error) {
+        if (elements.viewerContent.dataset.renderToken !== renderToken) {
+            return false;
+        }
+        state.diffResult = null;
+        state.diffLoading = false;
+        state.diffMode = true;
+        state.diffError = normalizeError(error, 'diff를 불러오지 못했습니다.');
+        setFilePanelViewerMetaText(elements, formatFileBrowserDisplayPath(target.root, target.path));
+        elements.viewerContent.innerHTML = '';
+        const placeholder = document.createElement('div');
+        placeholder.className = 'file-browser-placeholder';
+        placeholder.textContent = state.diffError;
+        elements.viewerContent.appendChild(placeholder);
+        syncFilePanelViewerActionState(normalizedVariant);
+        showToast(state.diffError, { tone: 'error', durationMs: 4200 });
+        return false;
+    }
+}
+
 async function rerenderFilePanelPreviewFromState(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const config = getFilePanelVariantConfig(normalizedVariant);
@@ -20484,6 +20904,35 @@ async function rerenderFilePanelPreviewFromState(variant) {
         root: state.root
     });
     return true;
+}
+
+async function toggleFilePanelDiffMode(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!state.path) {
+        showToast('diff를 볼 파일을 먼저 선택하세요.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+    if (state.editing) {
+        showToast('편집 모드에서는 diff 토글을 사용할 수 없습니다.', { tone: 'default', durationMs: 2600 });
+        return false;
+    }
+    if (!isFilePanelDiffSupported(state)) {
+        showToast('이 파일 위치는 git diff를 지원하지 않습니다.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+    if (state.diffMode) {
+        if (state.previewResult?.is_deleted) {
+            showToast('삭제된 파일은 diff만 표시할 수 있습니다.', { tone: 'default', durationMs: 2600 });
+            return true;
+        }
+        state.diffMode = false;
+        state.diffLoading = false;
+        state.diffError = '';
+        await rerenderFilePanelPreviewFromState(normalizedVariant);
+        return true;
+    }
+    return renderFilePanelDiffFromState(normalizedVariant);
 }
 
 async function toggleFilePanelEditMode(variant) {
@@ -20944,6 +21393,10 @@ function openFileBrowserOverlay(options = {}) {
     const requestedRoot = normalizeFileBrowserRoot(
         hasRoot ? options?.root : fileBrowserRoot
     );
+    const preferDiffMode = Boolean(options?.preferDiffMode);
+    const requestedRepoTarget = normalizeGitRepoTarget(
+        options?.repoTarget || getGitRepoTargetForFileBrowserRoot(requestedRoot)
+    );
     const requestedFilePath = normalizeFileBrowserRelativePath(
         hasFilePath ? options?.filePath : (hasPath ? '' : fileBrowserSelectedPath)
     );
@@ -20997,6 +21450,18 @@ function openFileBrowserOverlay(options = {}) {
             force: true
         });
         if (!listed || !requestedFilePath) return;
+        if (preferDiffMode) {
+            resetFilePanelEditState(FILE_PANEL_VARIANT_OVERLAY, { root: requestedRoot });
+            await renderFilePanelDiffFromState(FILE_PANEL_VARIANT_OVERLAY, {
+                root: requestedRoot,
+                path: requestedFilePath,
+                repoTarget: requestedRepoTarget,
+                isDeleted: true
+            });
+            applyFileBrowserSelectionState();
+            setFileBrowserMobileView(FILE_BROWSER_MOBILE_VIEW_VIEWER);
+            return;
+        }
         await openFileInBrowserOverlay(requestedFilePath, {
             root: requestedRoot,
             fallbackToDirectory: true,

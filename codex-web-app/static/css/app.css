@@ -388,6 +388,7 @@
     --icon-copy-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='8' y='8' width='10' height='11' rx='1.8'/><path d='M6 15.5V6.8A1.8 1.8 0 0 1 7.8 5h7.7'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
     --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
+    --icon-file-diff: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.9 12h3.4'/><path d='M8.9 16h3.4'/><path d='M14.7 12h3.1'/><path d='M16.2 10.5v3'/><path d='M14.7 16h3.1'/></svg>");
     --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-terminal: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='m8.3 10.1 3 2.9-3 2.9'/><path d='M13.1 15.9h3.8'/></svg>");
     --icon-file-preview: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.7 13.3s1.3-2.2 3.3-2.2 3.3 2.2 3.3 2.2-1.3 2.2-3.3 2.2-3.3-2.2-3.3-2.2z'/><circle cx='12' cy='13.3' r='0.9'/></svg>");
@@ -540,6 +541,7 @@
     --icon-copy-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='8' y='8' width='10' height='11' rx='1.8'/><path d='M6 15.5V6.8A1.8 1.8 0 0 1 7.8 5h7.7'/></svg>");
     --icon-path-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.5 7.5h7'/><path d='M4.5 12h5.4'/><path d='M4.5 16.5h7.8'/><path d='m14.2 7.4 2.4-2.4a1.8 1.8 0 0 1 2.6 0l.8.8a1.8 1.8 0 0 1 0 2.6l-7.6 7.6-3.6.9.9-3.6z'/></svg>");
     --icon-file-edit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4.8 19.2h4.1l8.8-8.8a1.8 1.8 0 0 0 0-2.5l-1.6-1.6a1.8 1.8 0 0 0-2.5 0l-8.8 8.8z'/><path d='m12.8 7.2 4 4'/><path d='M4.8 19.2h14.4'/></svg>");
+    --icon-file-diff: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.9 12h3.4'/><path d='M8.9 16h3.4'/><path d='M14.7 12h3.1'/><path d='M16.2 10.5v3'/><path d='M14.7 16h3.1'/></svg>");
     --icon-save-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h10.7l3.3 3.3v11.1H5.2z'/><path d='M8.5 4.8v5.7h6.2V4.8'/><path d='M9 16h6'/></svg>");
     --icon-terminal: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='3.8' y='5.1' width='16.4' height='13.8' rx='2.3'/><path d='m8.3 10.1 3 2.9-3 2.9'/><path d='M13.1 15.9h3.8'/></svg>");
     --icon-file-preview: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6.2 3.8h7.2l4.4 4.4v12H6.2z'/><path d='M13.4 3.8v4.4h4.4'/><path d='M8.7 13.3s1.3-2.2 3.3-2.2 3.3 2.2 3.3 2.2-1.3 2.2-3.3 2.2-3.3-2.2-3.3-2.2z'/><circle cx='12' cy='13.3' r='0.9'/></svg>");
@@ -1350,6 +1352,28 @@ textarea {
     gap: 1px;
 }
 
+.git-file-tree-file-open {
+    appearance: none;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin: -2px -4px;
+}
+
+.git-file-tree-file-open:hover {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.git-file-tree-file-open:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
 .git-file-tree-file-name {
     color: var(--text-primary);
     font-size: 12px;
@@ -2011,9 +2035,9 @@ textarea {
     align-items: center;
     justify-content: flex-end;
     gap: 4px;
-    flex: 0 0 calc((var(--icon-button-size) * 7) + 24px);
-    width: calc((var(--icon-button-size) * 7) + 24px);
-    min-width: calc((var(--icon-button-size) * 7) + 24px);
+    flex: 0 0 calc((var(--icon-button-size) * 8) + 28px);
+    width: calc((var(--icon-button-size) * 8) + 28px);
+    min-width: calc((var(--icon-button-size) * 8) + 28px);
 }
 
 .file-browser-viewer-panel:not(.has-preview) .file-browser-viewer-actions {
@@ -2062,6 +2086,10 @@ textarea {
 
 .file-browser-viewer-edit {
     background-image: var(--icon-file-edit);
+}
+
+.file-browser-viewer-diff {
+    background-image: var(--icon-file-diff);
 }
 
 .file-browser-viewer-save {
@@ -2470,6 +2498,70 @@ textarea {
 
 .file-browser-source-line.is-target .file-browser-source-line-content {
     background: var(--code-active-line-bg);
+}
+
+.file-browser-diff-shell {
+    min-height: 100%;
+    background: var(--code-bg);
+    color: var(--code-text);
+}
+
+.file-browser-diff-note {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--code-border);
+    color: var(--code-muted);
+    background: color-mix(in srgb, var(--code-gutter-bg) 88%, var(--code-bg) 12%);
+    font-family: var(--font-code-block);
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: nowrap;
+}
+
+.file-browser-diff {
+    min-height: auto;
+}
+
+.file-browser-diff-marker {
+    justify-content: center;
+    min-width: 36px;
+    padding: 0 8px;
+    font-weight: 700;
+}
+
+.file-browser-diff-line.is-header,
+.file-browser-diff-line.is-file {
+    color: var(--code-muted);
+    background: color-mix(in srgb, var(--code-gutter-bg) 72%, var(--code-bg) 28%);
+}
+
+.file-browser-diff-line.is-hunk {
+    color: var(--code-token-keyword);
+    background: color-mix(in srgb, var(--code-token-literal) 13%, var(--code-bg) 87%);
+}
+
+.file-browser-diff-line.is-added {
+    color: var(--code-ansi-bright-green);
+    background: color-mix(in srgb, var(--code-ansi-green) 14%, var(--code-bg) 86%);
+}
+
+.file-browser-diff-line.is-deleted {
+    color: var(--code-ansi-bright-red);
+    background: color-mix(in srgb, var(--code-ansi-red) 14%, var(--code-bg) 86%);
+}
+
+.file-browser-diff-line.is-added .file-browser-diff-marker {
+    color: var(--code-ansi-bright-green);
+}
+
+.file-browser-diff-line.is-deleted .file-browser-diff-marker {
+    color: var(--code-ansi-bright-red);
+}
+
+.file-browser-diff-line.is-hunk .file-browser-diff-marker {
+    color: var(--code-token-literal);
 }
 
 .file-browser-large-text {

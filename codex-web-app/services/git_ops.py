@@ -12,6 +12,7 @@ from ..config import REPO_ROOT, WORKSPACE_DIR
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
+GIT_DIFF_OUTPUT_MAX_CHARS = 512 * 1024
 _GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
@@ -1667,6 +1668,82 @@ def _find_changed_file_detail(changed_files_detail, selected_path):
     return None
 
 
+def _truncate_git_diff_output(text):
+    diff_text = str(text or '')
+    if len(diff_text) <= GIT_DIFF_OUTPUT_MAX_CHARS:
+        return diff_text, False, len(diff_text)
+    truncated = diff_text[:GIT_DIFF_OUTPUT_MAX_CHARS]
+    if '\n' in truncated:
+        truncated = truncated.rsplit('\n', 1)[0]
+    marker = (
+        '\n'
+        f'... diff output truncated at {GIT_DIFF_OUTPUT_MAX_CHARS} characters ...'
+        '\n'
+    )
+    return f'{truncated}{marker}', True, len(diff_text)
+
+
+def _build_git_file_diff_payload(repo_root, env, selected_file):
+    selected_path = str(selected_file or '').strip().replace('\\', '/')
+    while selected_path.startswith('./'):
+        selected_path = selected_path[2:]
+    if not selected_path:
+        return None, {'error': 'diff를 볼 파일을 하나 선택해주세요.'}
+
+    changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+    target_entry = _find_changed_file_detail(changed_files_detail, selected_path)
+    raw_status = str(target_entry.get('raw_status') or '').strip() if target_entry else ''
+    status = str(target_entry.get('status') or '').strip() if target_entry else ''
+    original_path = str(target_entry.get('original_path') or '').strip().replace('\\', '/') if target_entry else ''
+    is_untracked = raw_status == '??'
+    diff_path = str(target_entry.get('path') or selected_path).strip().replace('\\', '/') if target_entry else selected_path
+
+    if is_untracked:
+        cmd = [
+            'git', '-C', str(repo_root), 'diff', '--no-color', '--no-index',
+            '--', os.devnull, diff_path
+        ]
+        command_preview = f'git diff --no-index /dev/null -- {diff_path}'
+        success_codes = {0, 1}
+    else:
+        base_ref = _resolve_diff_base_ref(repo_root, env)
+        cmd = [
+            'git', '-C', str(repo_root), 'diff', '--no-color',
+            base_ref, '--', diff_path
+        ]
+        command_preview = f'git diff --no-color {base_ref} -- {diff_path}'
+        success_codes = {0}
+
+    result, error = _run_git_command(cmd, repo_root, 30, env)
+    if error:
+        return None, error
+    if not result or result.returncode not in success_codes:
+        stderr = (result.stderr or '').strip() if result else ''
+        stdout = (result.stdout or '').strip() if result else ''
+        return None, {
+            'error': stderr or stdout or 'git diff를 불러오지 못했습니다.',
+            'error_code': 'git_diff_failed'
+        }
+
+    diff_text, truncated, original_length = _truncate_git_diff_output(result.stdout or '')
+    return {
+        'file': diff_path,
+        'path': diff_path,
+        'original_path': original_path,
+        'status': status,
+        'raw_status': raw_status,
+        'is_untracked': is_untracked,
+        'is_deleted': 'D' in raw_status or status == 'D',
+        'diff': diff_text,
+        'diff_truncated': truncated,
+        'diff_original_length': original_length,
+        'command': command_preview,
+        'exit_code': 0,
+        'stdout': diff_text,
+        'stderr': ''
+    }, None
+
+
 def _build_git_revert_paths(entry):
     paths = []
     for key in ('original_path', 'path'):
@@ -1868,7 +1945,7 @@ def run_git_action(action, payload=None):
         payload = payload if isinstance(payload, dict) else {}
         if action not in {
             'status', 'preview', 'history', 'stage', 'commit', 'push',
-            'sync', 'sync-preflight', 'sync_preflight', 'revert', 'cancel', 'submit'
+            'sync', 'sync-preflight', 'sync_preflight', 'revert', 'cancel', 'submit', 'diff'
         }:
             return {'error': '지원하지 않는 git 작업입니다.'}
         if action == 'submit':
@@ -1984,6 +2061,34 @@ def run_git_action(action, payload=None):
                     stderr='',
                     extra={
                         **preview_payload,
+                        'repo_target': repo_target
+                    }
+                )
+
+            if action == 'diff':
+                file_value = payload.get('file')
+                if file_value is None:
+                    file_value = payload.get('path')
+                selected_files = _normalize_selected_files([file_value])
+                if len(selected_files) != 1:
+                    return {'error': 'diff를 볼 파일을 하나 선택해주세요.'}
+                diff_payload, diff_error = _build_git_file_diff_payload(
+                    repo_root,
+                    env,
+                    selected_files[0]
+                )
+                if diff_error:
+                    return diff_error
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=diff_payload.get('command') or 'git diff -- <file>',
+                    exit_code=0,
+                    stdout=diff_payload.get('stdout') or '',
+                    stderr=diff_payload.get('stderr') or '',
+                    extra={
+                        **diff_payload,
                         'repo_target': repo_target
                     }
                 )

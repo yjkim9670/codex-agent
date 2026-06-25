@@ -58,11 +58,12 @@ def _create_diverged_repo(tmp_path: Path, *, overlap: bool = False) -> Path:
 
     _init_repo(seed)
     _commit_file(seed, 'base.txt', 'base\n')
+    base_branch = _run_git(seed, 'branch', '--show-current').stdout.strip()
     _run_git(seed, 'checkout', '-q', '-b', branch)
     _commit_file(seed, 'branch.txt', 'branch\n')
     _run_git_raw('init', '--bare', str(remote))
     _run_git(seed, 'remote', 'add', 'upstream', str(remote))
-    _run_git(seed, 'push', '-q', 'upstream', 'master', branch)
+    _run_git(seed, 'push', '-q', 'upstream', base_branch, branch)
 
     _run_git_raw('clone', '-q', '-o', 'oo', str(remote), str(local))
     _configure_test_user(local)
@@ -155,6 +156,47 @@ def test_git_status_decodes_korean_untracked_excel_filename(tmp_path, monkeypatc
             'raw_status': '??',
         }
     ]
+
+
+def test_git_diff_returns_tracked_file_changes(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt', 'before\n')
+    (repo_root / 'tracked.txt').write_text('after\n', encoding='utf-8')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('diff', {
+        'repo_target': 'workspace',
+        'file': 'tracked.txt',
+    })
+
+    assert result['ok'] is True
+    assert result['repo_target'] == 'workspace'
+    assert result['path'] == 'tracked.txt'
+    assert result['status'] == 'M'
+    assert 'diff --git a/tracked.txt b/tracked.txt' in result['diff']
+    assert '-before' in result['diff']
+    assert '+after' in result['diff']
+
+
+def test_git_diff_returns_untracked_file_changes(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt')
+    (repo_root / 'scratch.txt').write_text('scratch\n', encoding='utf-8')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('diff', {
+        'repo_target': 'workspace',
+        'file': 'scratch.txt',
+    })
+
+    assert result['ok'] is True
+    assert result['path'] == 'scratch.txt'
+    assert result['status'] == 'U'
+    assert result['is_untracked'] is True
+    assert 'new file mode' in result['diff']
+    assert '+scratch' in result['diff']
 
 
 def test_git_revert_restores_staged_rename(tmp_path, monkeypatch):

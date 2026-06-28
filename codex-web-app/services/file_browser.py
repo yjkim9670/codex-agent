@@ -1327,8 +1327,6 @@ def read_file_raw(root_key=None, relative_path=''):
         ) from exc
 
     mime_type = mimetypes.guess_type(target_path.name)[0] or 'application/octet-stream'
-    if mime_type.startswith('text/html') and _looks_like_templated_html(target_path, raw=content):
-        mime_type = 'text/plain'
     return {
         'root': normalized_root,
         'root_path': str(root_path),

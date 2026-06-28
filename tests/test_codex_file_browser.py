@@ -185,6 +185,38 @@ def test_read_file_detects_html_and_script(isolated_browser_roots):
     assert 'answer = 42' in script_result['content']
 
 
+def test_read_large_html_can_still_use_raw_rendered_preview(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    html = '<!doctype html><html><body><h1 id="rendered">Rendered</h1>'
+    html += ''.join(f'<p>line {index}</p>' for index in range(40000))
+    html += '</body></html>'
+    (server_root / 'long.html').write_text(html, encoding='utf-8')
+
+    result = file_browser.read_file(
+        root_key='server',
+        relative_path='long.html',
+        preview_max_bytes=16 * 1024,
+    )
+    raw_result = file_browser.read_file_raw(root_key='server', relative_path='long.html')
+
+    assert result['is_html'] is True
+    assert result['truncated'] is True
+    assert raw_result['mime_type'].startswith('text/html')
+    assert b'id="rendered"' in raw_result['content']
+
+
+def test_read_file_raw_keeps_html_mime_for_template_markers(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'template.html').write_text(
+        '<!doctype html><html><body>{{ name }}</body></html>',
+        encoding='utf-8',
+    )
+
+    result = file_browser.read_file_raw(root_key='server', relative_path='template.html')
+
+    assert result['mime_type'].startswith('text/html')
+
+
 def test_read_file_marks_binary_content(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'raw.bin').write_bytes(b'\x00\x01\x02\x03')
@@ -1249,7 +1281,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=178' in template
+    assert '/static/js/app.js?v=179' in template
     assert '/static/css/app.css?v=182' in template
 
 
@@ -1269,10 +1301,10 @@ def test_file_preview_download_shows_progress_toast():
 
     assert 'function showPersistentToast(' in app_js
     assert 'onDownloadProgress' in app_js
-    assert '압축 파일 준비 중' in app_js
+    assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
-    assert '저장 시작 중' in app_js
-    assert '/static/js/app.js?v=178' in template
+    assert '다운로드 버튼 여는 중' in app_js
+    assert '/static/js/app.js?v=179' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

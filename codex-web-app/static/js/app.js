@@ -304,7 +304,6 @@ const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 600;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 96 * 1024;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 1200;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
-const FILE_BROWSER_HTML_PREVIEW_MAX_CHARS = 256 * 1024;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
 const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 64 * 1024;
 const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 1200;
@@ -19016,15 +19015,6 @@ function isPdfPreviewableFile(path, mimeType = '') {
     return String(mimeType || '').trim().toLowerCase().includes('application/pdf');
 }
 
-function containsTemplateLikeHtmlSyntax(text = '') {
-    const source = typeof text === 'string' ? text : '';
-    if (!source) return false;
-    return source.includes('{%')
-        || source.includes('{{')
-        || source.includes('{#')
-        || source.includes('<%');
-}
-
 function formatSpreadsheetColumnLabel(index) {
     let value = Number(index);
     if (!Number.isFinite(value) || value < 0) value = 0;
@@ -21089,20 +21079,14 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const text = typeof result?.content === 'string' ? result.content : '';
     const previewLineCount = getFileBrowserPreviewLineCount(text, result?.line_count);
     const isMarkdown = isMarkdownLanguage(language);
-    const useLargeTextPreview = shouldUseLargeFileBrowserTextPreview(text, {
+    const useLargeTextPreview = !isHtml && shouldUseLargeFileBrowserTextPreview(text, {
         lineCount: previewLineCount,
         isMarkdown,
         truncated: Boolean(result?.truncated),
         size: result?.size
     });
     const normalizedText = useLargeTextPreview ? '' : normalizeFileBrowserPreviewText(text);
-    const canRenderHtmlPreview = !useLargeTextPreview
-        && isHtml
-        && result?.html_previewable !== false
-        && normalizedText.length <= FILE_BROWSER_HTML_PREVIEW_MAX_CHARS
-        && previewLineCount <= FILE_BROWSER_TEXT_DETAIL_MAX_LINES
-        && !hasFileBrowserLongPreviewLine(normalizedText)
-        && !containsTemplateLikeHtmlSyntax(text);
+    const canRenderHtmlPreview = isHtml;
     const sizeText = formatFileBrowserSize(result?.size);
     const infoParts = [normalizedPath || '(unknown path)'];
     if (sizeText && sizeText !== '--') {
@@ -21125,7 +21109,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
     hydrateFilePanelEditStateFromResult(variant, result, { root: previewRoot });
     setFilePanelViewerMetaText(elements, infoParts.join(' · '), {
-        truncated: Boolean(result?.truncated),
+        truncated: Boolean(result?.truncated) && !isHtml,
         noteText: useLargeTextPreview
             ? '큰 텍스트는 성능을 위해 경량 모드로 표시됩니다.'
             : ''
@@ -21176,16 +21160,43 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         return;
     }
 
+    if (isHtml && isPublicPreviewHtmlPath(normalizedPath)) {
+        renderPublicHtmlPreviewIntoElements(elements, previewRoot, normalizedPath);
+        return;
+    }
+
+    if (canRenderHtmlPreview) {
+        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        if (isWorkModeViewer) {
+            setWorkModeHtmlPreviewState({
+                root: previewRoot,
+                path: normalizedPath,
+                previewUrl,
+                suspended: false
+            });
+        }
+        const iframe = document.createElement('iframe');
+        iframe.className = 'file-browser-html-preview';
+        iframe.setAttribute(
+            'sandbox',
+            CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview
+                ? 'allow-scripts allow-forms'
+                : 'allow-same-origin allow-scripts allow-forms'
+        );
+        if (previewUrl) {
+            iframe.src = previewUrl;
+        } else {
+            iframe.srcdoc = text;
+        }
+        elements.viewerContent.appendChild(iframe);
+        return;
+    }
+
     if (!text) {
         const placeholder = document.createElement('div');
         placeholder.className = 'file-browser-placeholder';
         placeholder.textContent = '표시할 파일 내용이 없습니다.';
         elements.viewerContent.appendChild(placeholder);
-        return;
-    }
-
-    if (isHtml && !requestedLine && isPublicPreviewHtmlPath(normalizedPath)) {
-        renderPublicHtmlPreviewIntoElements(elements, previewRoot, normalizedPath);
         return;
     }
 
@@ -21212,33 +21223,6 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
                 behavior: 'smooth'
             });
         });
-        return;
-    }
-
-    if (canRenderHtmlPreview && !requestedLine) {
-        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
-        if (isWorkModeViewer) {
-            setWorkModeHtmlPreviewState({
-                root: previewRoot,
-                path: normalizedPath,
-                previewUrl,
-                suspended: false
-            });
-        }
-        const iframe = document.createElement('iframe');
-        iframe.className = 'file-browser-html-preview';
-        iframe.setAttribute(
-            'sandbox',
-            CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview
-                ? 'allow-scripts allow-forms'
-                : 'allow-same-origin allow-scripts allow-forms'
-        );
-        if (previewUrl) {
-            iframe.src = previewUrl;
-        } else {
-            iframe.srcdoc = text;
-        }
-        elements.viewerContent.appendChild(iframe);
         return;
     }
 

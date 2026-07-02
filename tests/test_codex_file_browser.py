@@ -1281,8 +1281,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=179' in template
-    assert '/static/css/app.css?v=182' in template
+    assert '/static/js/app.js?v=183' in template
+    assert '/static/css/app.css?v=183' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1304,7 +1304,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/js/app.js?v=179' in template
+    assert '/static/css/app.css?v=183' in template
+    assert '/static/js/app.js?v=183' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():
@@ -1314,10 +1315,31 @@ def test_markdown_new_window_uses_loaded_app_stylesheet():
     assert 'document.querySelectorAll(\'link[rel="stylesheet"]\')' in app_js
     assert '/\\/static\\/css\\/app\\.css(?:[?#]|$)/.test(href)' in app_js
     assert 'const stylesheetUrl = getCodexAppStylesheetUrl();' in app_js
+    assert 'html{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;overflow-x:hidden;overflow-y:auto;}' in app_js
+    assert 'body.file-browser-markdown-preview-page{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);overflow-x:hidden;' in app_js
+    assert '.markdown-preview-shell{box-sizing:border-box;width:100%;max-width:980px;min-width:0;margin:0 auto;padding:28px 16px 48px;}' in app_js
+    assert 'body.file-browser-markdown-preview-page .file-browser-markdown{box-sizing:border-box;width:100%;max-width:100%;min-width:0;padding:0;font-size:14px;line-height:1.62;overflow-x:hidden;' in app_js
+    assert 'body.file-browser-markdown-preview-page .file-browser-markdown{font-size:12.5px;line-height:1.5;}' in app_js
+    assert "const opened = window.open('', '_blank');" in app_js
+    assert 'opened.opener = null;' in app_js
+    assert 'opened.location.href = objectUrl;' in app_js
+    assert "window.open(objectUrl, '_blank', 'noopener,noreferrer')" not in app_js
 
 
 def test_markdown_tables_use_content_based_column_widths():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+
+    assert '<div class="markdown-table-scroll"><table class="markdown-table">' in app_js
+    assert 'body.file-browser-markdown-preview-page .markdown-table-scroll{width:100%;overflow-y:hidden;}' in app_js
+    assert 'body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid,body.file-browser-markdown-preview-page .file-browser-mermaid-source{max-width:100%;overflow-x:auto;' in app_js
+
+    markdown_rule_start = app_css.index('.file-browser-markdown {')
+    markdown_rule = app_css[markdown_rule_start:app_css.index('}', markdown_rule_start)]
+    assert 'width: 100%;' in markdown_rule
+    assert 'max-width: 100%;' in markdown_rule
+    assert 'min-width: 0;' in markdown_rule
+    assert 'overflow-x: hidden;' in markdown_rule
 
     markdown_table_rules = (
         '.file-browser-markdown .markdown-table',
@@ -1329,6 +1351,19 @@ def test_markdown_tables_use_content_based_column_widths():
         rule = app_css[start:app_css.index('}', start)]
         assert 'table-layout: auto;' in rule
         assert 'table-layout: fixed;' not in rule
+
+    scroll_rules = (
+        '.file-browser-markdown .markdown-table-scroll',
+        '.message-log-overlay-content .markdown-table-scroll',
+        '.message-bubble .markdown-table-scroll',
+    )
+    for selector in scroll_rules:
+        start = app_css.index(selector)
+        rule = app_css[start:app_css.index('}', start)]
+        assert 'width: 100%;' in rule or selector != '.file-browser-markdown .markdown-table-scroll'
+        assert 'max-width: 100%;' in rule
+        assert 'overflow-x: auto;' in rule
+        assert 'overflow-y: hidden;' in rule
 
     assert app_css.count('overflow-wrap: break-word;') >= 3
     assert app_css.count('word-break: normal;') >= 3

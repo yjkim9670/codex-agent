@@ -14934,15 +14934,19 @@ function buildFilePanelMarkdownPreviewDocument(payload) {
         `<base href="${escapeHtml(window.location.origin)}/">`,
         `<link rel="stylesheet" href="${escapeHtml(stylesheetUrl)}">`,
         '<style>',
-        'html{min-height:100%;height:auto;overflow-x:hidden;overflow-y:auto;}',
-        'body.file-browser-markdown-preview-page{min-height:100%;height:auto;margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:auto;}',
-        '.markdown-preview-shell{box-sizing:border-box;width:min(980px,calc(100vw - 32px));margin:0 auto;padding:28px 0 48px;}',
-        '.markdown-preview-header{display:flex;flex-direction:column;gap:6px;margin:0 0 18px;padding:0 2px 16px;border-bottom:1px solid var(--border);}',
+        'html{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;overflow-x:hidden;overflow-y:auto;}',
+        'body.file-browser-markdown-preview-page{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:auto;}',
+        '.markdown-preview-shell{box-sizing:border-box;width:100%;max-width:980px;min-width:0;margin:0 auto;padding:28px 16px 48px;}',
+        '.markdown-preview-header{display:flex;flex-direction:column;gap:6px;margin:0 0 16px;padding:0 0 14px;border-bottom:1px solid var(--border);}',
         '.markdown-preview-title{margin:0;color:var(--text-primary);font-size:20px;line-height:1.35;font-weight:800;overflow-wrap:anywhere;}',
         '.markdown-preview-meta{color:var(--text-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere;}',
         '.markdown-preview-note{display:inline-block;margin-top:2px;color:var(--danger);font-size:12px;font-weight:700;}',
-        'body.file-browser-markdown-preview-page .file-browser-markdown{padding:0;font-size:14px;line-height:1.7;}',
-        '@media(max-width:640px){.markdown-preview-shell{width:min(100vw - 22px,980px);padding:18px 0 32px;}.markdown-preview-title{font-size:18px;}}',
+        'body.file-browser-markdown-preview-page .file-browser-markdown{box-sizing:border-box;width:100%;max-width:100%;min-width:0;padding:0;font-size:14px;line-height:1.62;overflow-x:hidden;overflow-wrap:break-word;}',
+        'body.file-browser-markdown-preview-page .file-browser-markdown>*{box-sizing:border-box;max-width:100%;min-width:0;}',
+        'body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid,body.file-browser-markdown-preview-page .file-browser-mermaid-source{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}',
+        'body.file-browser-markdown-preview-page .markdown-table-scroll{width:100%;overflow-y:hidden;}',
+        'body.file-browser-markdown-preview-page .markdown-table-scroll .markdown-table{width:max-content;min-width:100%;max-width:none;}',
+        '@media(max-width:640px){.markdown-preview-shell{max-width:100%;padding:12px 8px 24px;}.markdown-preview-header{gap:4px;margin-bottom:10px;padding-bottom:10px;}.markdown-preview-title{font-size:16px;line-height:1.25;}.markdown-preview-meta{font-size:11px;line-height:1.35;}body.file-browser-markdown-preview-page .file-browser-markdown{font-size:12.5px;line-height:1.5;}body.file-browser-markdown-preview-page .file-browser-markdown h1,body.file-browser-markdown-preview-page .file-browser-markdown h2,body.file-browser-markdown-preview-page .file-browser-markdown h3{margin:7px 0 5px;line-height:1.24;}body.file-browser-markdown-preview-page .file-browser-markdown h4,body.file-browser-markdown-preview-page .file-browser-markdown h5,body.file-browser-markdown-preview-page .file-browser-markdown h6{margin:6px 0 4px;line-height:1.26;}body.file-browser-markdown-preview-page .file-browser-markdown p{margin:5px 0 6px;}body.file-browser-markdown-preview-page .file-browser-markdown ul,body.file-browser-markdown-preview-page .file-browser-markdown ol{margin:5px 0 6px;padding-left:18px;}body.file-browser-markdown-preview-page .file-browser-markdown li+li{margin-top:2px;}body.file-browser-markdown-preview-page .file-browser-markdown blockquote{margin:6px 0;padding-left:9px;}body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid{margin:6px 0 8px;}body.file-browser-markdown-preview-page .file-browser-markdown th,body.file-browser-markdown-preview-page .file-browser-markdown td{padding:5px 6px;}}',
         '</style>',
         '</head>',
         `<body class="file-browser-markdown-preview-page" data-mermaid-src="${escapeHtml(mermaidUrl)}">`,
@@ -14966,7 +14970,7 @@ function openFilePanelMarkdownPreviewInNewWindow(payload) {
     const html = buildFilePanelMarkdownPreviewDocument(payload);
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const objectUrl = URL.createObjectURL(blob);
-    const opened = window.open(objectUrl, '_blank', 'noopener,noreferrer');
+    const opened = window.open('', '_blank');
     if (!opened) {
         URL.revokeObjectURL(objectUrl);
         showToast('팝업이 차단되어 마크다운 미리보기를 열지 못했습니다.', {
@@ -14975,6 +14979,12 @@ function openFilePanelMarkdownPreviewInNewWindow(payload) {
         });
         return false;
     }
+    try {
+        opened.opener = null;
+    } catch (error) {
+        // Some embedded browsers expose a read-only opener; navigation is still safe for this Blob URL.
+    }
+    opened.location.href = objectUrl;
     window.setTimeout(() => {
         URL.revokeObjectURL(objectUrl);
     }, FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS);
@@ -28768,7 +28778,7 @@ function parseMarkdownTable(lines, startIndex) {
         : '';
 
     return {
-        html: `<table class="markdown-table"><thead><tr>${headHtml}</tr></thead>${bodyHtml}</table>`,
+        html: `<div class="markdown-table-scroll"><table class="markdown-table"><thead><tr>${headHtml}</tr></thead>${bodyHtml}</table></div>`,
         nextIndex: index
     };
 }

@@ -7045,6 +7045,11 @@ body.is-work-mode-resizing * {
     font-size: 10px;
     color: var(--text-tertiary);
     margin-top: 1px;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .chat-frame {

@@ -302,6 +302,36 @@ def test_tpl_files_are_editable_from_preview(isolated_browser_roots):
     assert target.read_text(encoding='utf-8') == 'Hi, {{ name }}\n'
 
 
+def test_verilog_family_files_are_editable_from_preview(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    cases = {
+        'counter.sv': ('module counter; endmodule\n', 'systemverilog'),
+        'counter.svh': ('`define COUNTER_WIDTH 8\n', 'systemverilog'),
+        'legacy.v': ('module legacy; endmodule\n', 'verilog'),
+        'legacy.vh': ('`define LEGACY_WIDTH 8\n', 'verilog'),
+    }
+
+    for filename, (initial_content, expected_language) in cases.items():
+        target = server_root / filename
+        target.write_text(initial_content, encoding='utf-8')
+
+        original = file_browser.read_file(root_key='server', relative_path=filename)
+        updated_content = f'{initial_content}// updated\n'
+        updated = file_browser.write_file(
+            root_key='server',
+            relative_path=filename,
+            content=updated_content,
+            expected_modified_ns=original['modified_ns'],
+        )
+
+        assert original['editable'] is True
+        assert original['language'] == expected_language
+        assert updated['editable'] is True
+        assert updated['language'] == expected_language
+        assert updated['saved'] is True
+        assert target.read_text(encoding='utf-8') == updated_content
+
+
 def test_write_file_rejects_non_editable_extension(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'diagram.svg').write_text('<svg></svg>', encoding='utf-8')

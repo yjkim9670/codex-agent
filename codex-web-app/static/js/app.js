@@ -3652,6 +3652,7 @@ async function initializeApp() {
     const pendingStreams = getPersistedStreams();
     const targetSessionId = pendingStreams.length > 0 ? pendingStreams[0].sessionId : null;
     await loadSessions({ preserveActive: true, selectSessionId: targetSessionId });
+    void refreshUsageSummary({ silent: true });
     if (pendingStreams.length > 0) {
         await resumeStreamsFromStorage(pendingStreams);
     }
@@ -7893,6 +7894,7 @@ async function refreshUsageSummary({ silent = true, showSuccessToast = false } =
             updateSessionStorageSummary(state.sessionStorage);
         }
         updateUsageSummary(usage);
+        updateRenderedLimitUsageEstimates();
         if (showSuccessToast) {
             showToast('사용량을 갱신했습니다.', { tone: 'default', durationMs: 3000 });
         }
@@ -13669,6 +13671,7 @@ async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent
             updateUsageSummary(usage);
         }
         state.settings.usageHistory = usageHistory;
+        updateRenderedLimitUsageEstimates();
         if (isUsageHistoryOverlayOpen()) {
             renderUsageHistoryOverlay(usageHistory, normalizedHours);
         }
@@ -22555,6 +22558,7 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         const updated = formatTimestamp(session.updated_at);
         const count = resolveSessionMessageCount(session);
         const tokenSummary = formatSessionTokenSummary(session);
+        const limitEstimate = buildSessionLimitUsageEstimate(session);
         const metaText = document.createElement('span');
         metaText.className = 'session-meta-text';
         const metaParts = [];
@@ -22568,7 +22572,19 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         if (tokenSummary) {
             metaParts.push(tokenSummary);
         }
+        if (limitEstimate?.text) {
+            metaParts.push(limitEstimate.text);
+            metaText.classList.add('has-limit-estimate');
+            metaText.classList.toggle('is-limit-low-confidence', Boolean(limitEstimate.lowConfidence));
+        }
         metaText.textContent = metaParts.join(' · ');
+        setHoverTooltip(
+            metaText,
+            limitEstimate?.tooltip
+                ? `${metaText.textContent}\n${limitEstimate.tooltip}`
+                : metaText.textContent,
+            { focusable: false }
+        );
         meta.appendChild(metaText);
         if (isSessionStreaming(session.id)) {
             const spinner = document.createElement('span');
@@ -23028,6 +23044,7 @@ function updateHeader(session) {
         title.setAttribute('title', 'Select a session');
         title.setAttribute('aria-label', 'Select a session');
         meta.textContent = '';
+        setHoverTooltip(meta, '', { focusable: false });
         return;
     }
     const sessionTitle = session.title || 'New session';
@@ -23045,7 +23062,9 @@ function updateHeader(session) {
     if (tokenSummary) {
         parts.push(tokenSummary);
     }
-    meta.textContent = parts.join(' · ');
+    const metaText = parts.join(' · ');
+    meta.textContent = metaText;
+    setHoverTooltip(meta, metaText, { focusable: false });
 }
 
 function normalizePlanModeState(value) {
@@ -26313,22 +26332,63 @@ function toNonNegativeInt(value) {
     return Math.round(numeric);
 }
 
+function resolveMessageTokenUsageObject(message) {
+    if (!message || typeof message !== 'object') return null;
+    const metadata = message.metadata && typeof message.metadata === 'object'
+        ? message.metadata
+        : null;
+    const candidates = [
+        message.token_usage,
+        message.usage,
+        message.total_token_usage,
+        message.last_token_usage,
+        metadata?.token_usage,
+        metadata?.usage,
+        metadata?.total_token_usage,
+        metadata?.last_token_usage
+    ];
+    for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object') {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+function resolveMessageTokenPart(message, usage, key) {
+    const usageValue = toNonNegativeInt(usage?.[key]);
+    if (usageValue !== null) return usageValue;
+    const messageValue = toNonNegativeInt(message?.[key]);
+    if (messageValue !== null) return messageValue;
+    return toNonNegativeInt(message?.metadata?.[key]);
+}
+
+function resolveCachedInputTokens(message, usage) {
+    const cachedInputTokens = resolveMessageTokenPart(message, usage, 'cached_input_tokens');
+    if (cachedInputTokens !== null) return cachedInputTokens;
+
+    const cacheReadTokens = resolveMessageTokenPart(message, usage, 'cache_read_input_tokens');
+    const cacheCreationTokens = resolveMessageTokenPart(message, usage, 'cache_creation_input_tokens');
+    if (cacheReadTokens !== null || cacheCreationTokens !== null) {
+        return (cacheReadTokens || 0) + (cacheCreationTokens || 0);
+    }
+    return null;
+}
+
 function resolveMessageTokenUsage(message, { fallbackToEstimate = true } = {}) {
     const role = String(message?.role || 'assistant').trim().toLowerCase();
-    const usage = (message && typeof message.token_usage === 'object') ? message.token_usage : null;
+    const usage = resolveMessageTokenUsageObject(message);
 
-    let inputTokens = toNonNegativeInt(usage?.input_tokens);
-    let cachedInputTokens = toNonNegativeInt(usage?.cached_input_tokens);
-    let outputTokens = toNonNegativeInt(usage?.output_tokens);
-    let reasoningOutputTokens = toNonNegativeInt(usage?.reasoning_output_tokens);
-    let totalTokens = toNonNegativeInt(usage?.total_tokens);
+    let inputTokens = resolveMessageTokenPart(message, usage, 'input_tokens');
+    let cachedInputTokens = resolveCachedInputTokens(message, usage);
+    let outputTokens = resolveMessageTokenPart(message, usage, 'output_tokens');
+    let reasoningOutputTokens = resolveMessageTokenPart(message, usage, 'reasoning_output_tokens');
+    let totalTokens = resolveMessageTokenPart(message, usage, 'total_tokens');
 
-    if (inputTokens === null) inputTokens = toNonNegativeInt(message?.input_tokens);
-    if (cachedInputTokens === null) cachedInputTokens = toNonNegativeInt(message?.cached_input_tokens);
-    if (outputTokens === null) outputTokens = toNonNegativeInt(message?.output_tokens);
-    if (reasoningOutputTokens === null) reasoningOutputTokens = toNonNegativeInt(message?.reasoning_output_tokens);
-    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.total_tokens);
     if (totalTokens === null) totalTokens = toNonNegativeInt(message?.token_count);
+    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.metadata?.token_count);
+    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.tokens);
+    if (totalTokens === null) totalTokens = toNonNegativeInt(message?.metadata?.tokens);
 
     if (inputTokens === null) inputTokens = 0;
     if (cachedInputTokens === null) cachedInputTokens = 0;
@@ -26473,7 +26533,14 @@ function resolveSessionMessageCount(session) {
 function formatSessionTokenSummary(session) {
     const usage = resolveSessionTokenUsage(session);
     if (!usage || usage.totalTokens <= 0) return '';
-    const text = `In ${formatCompactTokenCount(usage.inputTokens)} / Out ${formatCompactTokenCount(usage.outputTokens)}`;
+    const parts = [
+        `In ${formatCompactTokenCount(usage.inputTokens)}`,
+        `Out ${formatCompactTokenCount(usage.outputTokens)}`
+    ];
+    if (usage.cachedInputTokens > 0) {
+        parts.push(`Cached ${formatCompactTokenCount(usage.cachedInputTokens)}`);
+    }
+    const text = parts.join(' / ');
     return usage.estimated ? `${text} ~` : text;
 }
 
@@ -26493,9 +26560,156 @@ function formatMessageTokenSummary(message) {
     return parts.join(' · ');
 }
 
+function resolveWeeklyLimitTokenScale(history = state.settings?.usageHistory) {
+    const relation = history?.relation || {};
+    const weekly = relation?.weekly || {};
+    const reliableValue = Number(weekly?.tokens_per_percent);
+    const rawValue = Number(weekly?.raw_tokens_per_percent);
+    const hasReliableValue = Number.isFinite(reliableValue) && reliableValue > 0;
+    const hasRawValue = Number.isFinite(rawValue) && rawValue > 0;
+    const tokensPerPercent = hasReliableValue
+        ? reliableValue
+        : (hasRawValue ? rawValue : null);
+    if (!tokensPerPercent) return null;
+    const confidence = String(weekly?.confidence || '').trim().toLowerCase();
+    const relationScope = resolveUsageHistoryRelationScope(history);
+    return {
+        tokensPerPercent,
+        scope: relationScope,
+        confidence,
+        sampleCount: toNonNegativeInt(weekly?.sample_count),
+        percentSum: Number(weekly?.percent_sum),
+        isReliable: Boolean(weekly?.is_reliable && hasReliableValue),
+        usesRawFallback: !hasReliableValue && hasRawValue
+    };
+}
+
+function formatLimitUsagePercent(value, { allowZero = false } = {}) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return '';
+    if (numeric === 0) return allowZero ? '0.000' : '';
+    if (numeric < 0.0001) {
+        return '<0.0001';
+    }
+    if (numeric < 0.001) {
+        return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+    }
+    if (numeric < 0.01) {
+        return numeric.toFixed(4).replace(/0+$/, '').replace(/\.$/, '.0');
+    }
+    return numeric.toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
+}
+
+function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero = false } = {}) {
+    if (!usage || (usage.hasData === false)) return null;
+    const totalTokens = Number(usage.totalTokens);
+    if (!Number.isFinite(totalTokens) || totalTokens < 0 || (!includeZero && totalTokens <= 0)) return null;
+    const scale = resolveWeeklyLimitTokenScale();
+    if (!scale) return null;
+
+    const percent = totalTokens / scale.tokensPerPercent;
+    const percentText = formatLimitUsagePercent(percent, { allowZero: includeZero });
+    if (!percentText) return null;
+
+    const liveSessionCount = countLiveSessionCount();
+    const hasConcurrentActivity = Number.isFinite(liveSessionCount) && liveSessionCount > 1;
+    const lowConfidence = Boolean(
+        usage.estimated
+        || scale.usesRawFallback
+        || !scale.isReliable
+        || scale.confidence === 'low'
+        || hasConcurrentActivity
+    );
+    const marker = lowConfidence ? '~' : '';
+    const tooltipParts = [
+        `주간 리밋 추정 ${marker}${percentText}%`,
+        `${formatNumber(totalTokens)} tok / ${formatNumber(Math.round(scale.tokensPerPercent))} tok per 1%`,
+        `scope ${scale.scope}`
+    ];
+    if (scale.sampleCount !== null) {
+        tooltipParts.push(`samples ${formatNumber(scale.sampleCount)}`);
+    }
+    if (Number.isFinite(scale.percentSum)) {
+        tooltipParts.push(`observed ${formatUsageHistoryRatePercent(scale.percentSum)}`);
+    }
+    if (scale.confidence && scale.confidence !== 'none') {
+        tooltipParts.push(`confidence ${scale.confidence}`);
+    }
+    if (usage.estimated) {
+        tooltipParts.push(`${subjectLabel} tokens are estimated from text`);
+    }
+    if (scale.usesRawFallback || !scale.isReliable) {
+        tooltipParts.push('weekly token scale is estimated');
+    }
+    if (hasConcurrentActivity) {
+        tooltipParts.push(`active sessions ${formatNumber(liveSessionCount)}`);
+    }
+    tooltipParts.push('동시 실행/외부 Codex 사용이 있으면 오차가 커질 수 있습니다.');
+
+    return {
+        text: `Weekly ${marker}${percentText}%`,
+        tooltip: tooltipParts.join(' · '),
+        lowConfidence
+    };
+}
+
+function buildMessageLimitUsageEstimate(usage) {
+    return buildLimitUsageEstimate(usage, { subjectLabel: 'message' });
+}
+
+function buildSessionLimitUsageEstimate(session) {
+    const usage = resolveSessionTokenUsage(session);
+    if (!usage || usage.totalTokens < 0) return null;
+    return buildLimitUsageEstimate({
+        ...usage,
+        hasData: true
+    }, { subjectLabel: 'session', includeZero: true });
+}
+
+function getFooterStoredTokenUsage(footer) {
+    if (!footer) return null;
+    const totalTokens = toNonNegativeInt(footer.dataset.tokenTotal);
+    if (totalTokens === null || totalTokens <= 0) return null;
+    return {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens,
+        estimated: footer.dataset.tokenEstimated === '1',
+        hasData: true
+    };
+}
+
+function setMessageLimitUsage(footer, usage = null) {
+    if (!footer) return;
+    const resolvedUsage = usage || getFooterStoredTokenUsage(footer);
+    const estimate = buildMessageLimitUsageEstimate(resolvedUsage);
+    footer.dataset.limitText = estimate?.text || '';
+    footer.dataset.limitTooltip = estimate?.tooltip || '';
+    footer.classList.toggle('has-limit-estimate', Boolean(estimate));
+    footer.classList.toggle('is-limit-low-confidence', Boolean(estimate?.lowConfidence));
+}
+
+function updateRenderedMessageLimitUsageEstimates() {
+    document.querySelectorAll('.message-footer').forEach(footer => {
+        setMessageLimitUsage(footer);
+        syncMessageFooter(footer);
+    });
+}
+
+function updateRenderedLimitUsageEstimates() {
+    updateRenderedMessageLimitUsageEstimates();
+    renderSessions();
+}
+
 function setMessageTokenUsage(footer, message) {
     if (!footer) return;
-    footer.dataset.tokenText = formatMessageTokenSummary(message) || '';
+    const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
+    footer.dataset.tokenText = usage.hasData ? formatMessageTokenSummary(message) : '';
+    footer.dataset.tokenTotal = usage.hasData ? String(usage.totalTokens) : '';
+    footer.dataset.tokenEstimated = usage.estimated ? '1' : '0';
+    setMessageLimitUsage(footer, usage);
     syncMessageFooter(footer);
 }
 
@@ -26503,6 +26717,10 @@ function createMessageFooter() {
     const footer = document.createElement('div');
     footer.className = 'message-footer';
     footer.dataset.tokenText = '';
+    footer.dataset.tokenTotal = '';
+    footer.dataset.tokenEstimated = '0';
+    footer.dataset.limitText = '';
+    footer.dataset.limitTooltip = '';
     footer.dataset.durationText = '';
     footer.dataset.cliRuntimeText = '';
     footer.dataset.queueWaitText = '';
@@ -26575,6 +26793,8 @@ function getFinalizeReasonLabel(reason) {
 function syncMessageFooter(footer) {
     if (!footer) return;
     const tokenText = footer.dataset.tokenText || '';
+    const limitText = footer.dataset.limitText || '';
+    const limitTooltip = footer.dataset.limitTooltip || '';
     const durationText = footer.dataset.durationText || '';
     const cliRuntimeText = footer.dataset.cliRuntimeText || '';
     const queueWaitText = footer.dataset.queueWaitText || '';
@@ -26585,6 +26805,9 @@ function syncMessageFooter(footer) {
     const parts = [];
     if (tokenText) {
         parts.push(tokenText);
+    }
+    if (limitText) {
+        parts.push(limitText);
     }
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
@@ -26604,6 +26827,7 @@ function syncMessageFooter(footer) {
     const textElement = footer.querySelector('.message-footer-text');
     if (textElement) {
         textElement.textContent = parts.join(' · ');
+        setHoverTooltip(textElement, limitTooltip, { focusable: false });
     } else {
         footer.textContent = parts.join(' · ');
     }

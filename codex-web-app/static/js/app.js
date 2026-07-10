@@ -259,6 +259,7 @@ const GIT_COMMIT_PREVIEW_CACHE_MS = 15000;
 const GIT_STAGE_REQUEST_TIMEOUT_MS = 100000;
 const GIT_REVERT_REQUEST_TIMEOUT_MS = 100000;
 const GIT_COMMIT_REQUEST_TIMEOUT_MS = 620000;
+const GIT_COMMIT_MESSAGE_REQUEST_TIMEOUT_MS = 260000;
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 380000;
 const GIT_FETCH_ONLY_REQUEST_TIMEOUT_MS = 240000;
 const GIT_FETCH_SYNC_REQUEST_TIMEOUT_MS = 900000;
@@ -266,6 +267,7 @@ const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_DIFF_REQUEST_TIMEOUT_MS = 60000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
+const GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY = 'codex.gitCommitMessageModel';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
@@ -498,6 +500,8 @@ let gitSyncOverlayPreviewKeyByTarget = {
     [GIT_SYNC_TARGET_CODEX_AGENT]: ''
 };
 let gitSyncOverlayFullscreen = false;
+let gitCommitMessageModel = '';
+let gitCommitMessageGenerationInFlight = false;
 let gitFileRevertingPath = '';
 const gitCommitPreviewCacheByKey = new Map();
 const gitCommitPreviewInFlightByKey = new Map();
@@ -2072,6 +2076,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const compactMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
     const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('codex-theme-toggle');
+    loadGitCommitMessageModelSetting();
+    syncGitCommitMessageModelLabels();
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);
     const agentBackendSelect = document.getElementById('codex-agent-backend-select');
     const modelSelect = document.getElementById('codex-model-select');
@@ -2160,11 +2166,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const branchOverlayStageAllBtn = document.getElementById('codex-branch-overlay-stage-all');
     const branchOverlayStageNoneBtn = document.getElementById('codex-branch-overlay-stage-none');
     const branchOverlayCommitMessageInput = document.getElementById('codex-branch-overlay-commit-message');
+    const branchOverlayCommitBodyInput = document.getElementById('codex-branch-overlay-commit-body');
+    const branchOverlayGenerateMessageBtn = document.getElementById('codex-branch-overlay-generate-message');
+    const branchOverlayMessageModelBtn = document.getElementById('codex-branch-overlay-message-model');
     const syncOverlayFetchBtn = document.getElementById('codex-sync-overlay-fetch');
     const syncOverlaySyncBtn = document.getElementById('codex-sync-overlay-sync');
     const syncOverlayCommitBtn = document.getElementById('codex-sync-overlay-commit');
+    const syncOverlayCommitMessageInput = document.getElementById('codex-sync-overlay-commit-message');
+    const syncOverlayCommitBodyInput = document.getElementById('codex-sync-overlay-commit-body');
+    const syncOverlayGenerateMessageBtn = document.getElementById('codex-sync-overlay-generate-message');
+    const syncOverlayMessageModelBtn = document.getElementById('codex-sync-overlay-message-model');
     const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
     const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
+    const gitMessageModelOverlay = document.getElementById('codex-git-message-model-overlay');
+    const gitMessageModelCloseBtn = document.getElementById('codex-git-message-model-close');
+    const gitMessageModelClearBtn = document.getElementById('codex-git-message-model-clear');
+    const gitMessageModelApplyBtn = document.getElementById('codex-git-message-model-apply');
+    const gitMessageModelSelect = document.getElementById('codex-git-message-model-select');
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
     const messageLogOverlayCopy = document.getElementById('codex-message-log-overlay-copy');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
@@ -2817,6 +2835,24 @@ document.addEventListener('DOMContentLoaded', () => {
             updateGitBranchOverlayCommitPreview(gitBranchStatusCache);
         });
     }
+    if (branchOverlayCommitBodyInput) {
+        branchOverlayCommitBodyInput.addEventListener('input', () => {
+            if (!isGitBranchOverlayOpen()) return;
+            updateGitBranchOverlayCommitPreview(gitBranchStatusCache);
+        });
+    }
+    if (branchOverlayGenerateMessageBtn) {
+        branchOverlayGenerateMessageBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void handleGitCommitMessageGenerate('branch', branchOverlayGenerateMessageBtn);
+        });
+    }
+    if (branchOverlayMessageModelBtn) {
+        branchOverlayMessageModelBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openGitCommitMessageModelOverlay();
+        });
+    }
 
     if (gitBranch) {
         gitBranch.addEventListener('click', event => {
@@ -2887,6 +2923,43 @@ document.addEventListener('DOMContentLoaded', () => {
             setGitSyncOverlayFullscreen(!gitSyncOverlayFullscreen);
         });
         syncGitOverlayFullscreenButton(syncOverlayFullscreen, gitSyncOverlayFullscreen);
+    }
+    if (gitMessageModelOverlay) {
+        gitMessageModelOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeGitCommitMessageModelOverlay();
+            }
+        });
+    }
+    if (gitMessageModelCloseBtn) {
+        gitMessageModelCloseBtn.addEventListener('click', closeGitCommitMessageModelOverlay);
+    }
+    if (gitMessageModelClearBtn) {
+        gitMessageModelClearBtn.addEventListener('click', event => {
+            event.preventDefault();
+            clearGitCommitMessageModelSelection();
+        });
+    }
+    if (gitMessageModelApplyBtn) {
+        gitMessageModelApplyBtn.addEventListener('click', event => {
+            event.preventDefault();
+            applyGitCommitMessageModelSelection();
+        });
+    }
+    if (gitMessageModelSelect) {
+        gitMessageModelSelect.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            applyGitCommitMessageModelSelection();
+        });
+        gitMessageModelSelect.addEventListener('change', () => {
+            const elements = getGitCommitMessageModelOverlayElements();
+            if (elements?.status) {
+                elements.status.textContent = gitMessageModelSelect.value || '대화 기본 모델 사용';
+                elements.status.classList.remove('is-error');
+            }
+        });
     }
     if (usageHistoryOpen) {
         usageHistoryOpen.addEventListener('click', () => {
@@ -3247,6 +3320,39 @@ document.addEventListener('DOMContentLoaded', () => {
             void refreshGitSyncOverlayHistory({ force: true });
         });
     }
+    if (syncOverlayCommitMessageInput) {
+        syncOverlayCommitMessageInput.addEventListener('input', () => {
+            if (!isGitSyncOverlayOpen()) return;
+            renderGitSyncOverlay(getGitSyncHistoryCache(gitSyncOverlayRepoTarget));
+        });
+        syncOverlayCommitMessageInput.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            if (syncOverlayCommitBtn) {
+                void handleGitQuickCommit(syncOverlayCommitBtn, {
+                    repoTarget: normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)
+                });
+            }
+        });
+    }
+    if (syncOverlayCommitBodyInput) {
+        syncOverlayCommitBodyInput.addEventListener('input', () => {
+            if (!isGitSyncOverlayOpen()) return;
+            renderGitSyncOverlay(getGitSyncHistoryCache(gitSyncOverlayRepoTarget));
+        });
+    }
+    if (syncOverlayGenerateMessageBtn) {
+        syncOverlayGenerateMessageBtn.addEventListener('click', event => {
+            event.preventDefault();
+            void handleGitCommitMessageGenerate('sync', syncOverlayGenerateMessageBtn);
+        });
+    }
+    if (syncOverlayMessageModelBtn) {
+        syncOverlayMessageModelBtn.addEventListener('click', event => {
+            event.preventDefault();
+            openGitCommitMessageModelOverlay();
+        });
+    }
     if (syncOverlayFetchBtn) {
         syncOverlayFetchBtn.addEventListener('click', () => {
             void handleGitSync(syncOverlayFetchBtn);
@@ -3278,6 +3384,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 : '';
             if (!repoTarget) return;
             if (repoTarget === gitSyncOverlayRepoTarget) return;
+            resetGitCommitMessageFields(getGitSyncOverlayElements());
             setGitSyncOverlayRepoTarget(repoTarget);
             void refreshGitSyncOverlayHistory({ force: true });
         });
@@ -3294,6 +3401,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (isTerminalOverlayOpen()) {
             closeTerminalOverlay();
+            return;
+        }
+        if (isGitCommitMessageModelOverlayOpen()) {
+            closeGitCommitMessageModelOverlay();
             return;
         }
         if (isMobileSessionOverlayOpen()) {
@@ -7860,6 +7971,10 @@ async function loadSettings({ silent = true } = {}) {
         renderStructuredReportBar();
         renderAppServerPilot();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        syncGitCommitMessageModelLabels();
+        if (isGitCommitMessageModelOverlayOpen()) {
+            renderGitCommitMessageModelOptions();
+        }
     } catch (error) {
         updateUsageSummary(null);
         updateModelControls(state.settings.model, state.settings.modelOptions);
@@ -7871,6 +7986,7 @@ async function loadSettings({ silent = true } = {}) {
         renderStructuredReportBar();
         renderAppServerPilot();
         setSettingsStatus(null, null, normalizeError(error, 'Failed to load settings.'));
+        syncGitCommitMessageModelLabels();
         if (!silent) {
             setStatus(normalizeError(error, 'Failed to load settings.'), true);
         }
@@ -11008,6 +11124,10 @@ function getGitBranchOverlayElements() {
         stageAllBtn: document.getElementById('codex-branch-overlay-stage-all'),
         stageNoneBtn: document.getElementById('codex-branch-overlay-stage-none'),
         commitMessage: document.getElementById('codex-branch-overlay-commit-message'),
+        commitBody: document.getElementById('codex-branch-overlay-commit-body'),
+        generateMessageBtn: document.getElementById('codex-branch-overlay-generate-message'),
+        messageModelBtn: document.getElementById('codex-branch-overlay-message-model'),
+        messageStatus: document.getElementById('codex-branch-overlay-message-status'),
         commitBtn: document.getElementById('codex-branch-overlay-commit'),
         pushBtn: document.getElementById('codex-branch-overlay-push'),
         fullscreenBtn: document.getElementById('codex-branch-overlay-fullscreen'),
@@ -11043,9 +11163,202 @@ function setGitBranchOverlayLoading(isLoading) {
     if (elements.stageNoneBtn) {
         elements.stageNoneBtn.disabled = Boolean(isLoading);
     }
+    if (elements.generateMessageBtn) {
+        elements.generateMessageBtn.disabled = Boolean(isLoading) || gitCommitMessageGenerationInFlight;
+    }
+    if (elements.messageModelBtn) {
+        elements.messageModelBtn.disabled = Boolean(isLoading);
+    }
     if (elements.selection) {
         elements.selection.textContent = isLoading ? '선택 -' : elements.selection.textContent;
     }
+}
+
+function loadGitCommitMessageModelSetting() {
+    try {
+        const value = window.localStorage?.getItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY);
+        gitCommitMessageModel = typeof value === 'string' ? value.trim() : '';
+    } catch (error) {
+        gitCommitMessageModel = '';
+    }
+    return gitCommitMessageModel;
+}
+
+function saveGitCommitMessageModelSetting(model) {
+    gitCommitMessageModel = String(model || '').trim();
+    try {
+        if (gitCommitMessageModel) {
+            window.localStorage?.setItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY, gitCommitMessageModel);
+        } else {
+            window.localStorage?.removeItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY);
+        }
+    } catch (error) {
+        // localStorage can be disabled in privacy modes; keep the in-memory value.
+    }
+    syncGitCommitMessageModelLabels();
+    return gitCommitMessageModel;
+}
+
+function getGitCommitMessageModelOptions() {
+    const catalogs = state.settings?.modelCatalogsByBackend || {};
+    const codexCatalog = normalizeModelCatalog(catalogs.dtgpt || CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND_CONFIG.dtgpt || []);
+    const catalogOptions = collectCatalogModelOptions(codexCatalog);
+    if (catalogOptions.length > 0) return catalogOptions;
+    const modelSelect = document.getElementById('codex-model-select');
+    const datasetOptions = readOptionsFromData(modelSelect);
+    return normalizeOptionList(datasetOptions);
+}
+
+function formatGitCommitMessageModelStatus() {
+    return gitCommitMessageModel
+        ? `커밋 메시지 생성 모델: ${gitCommitMessageModel}`
+        : '커밋 메시지 생성 모델: 대화 기본값';
+}
+
+function syncGitCommitMessageModelLabels() {
+    const label = gitCommitMessageModel ? `모델: ${gitCommitMessageModel}` : '모델 설정';
+    [
+        document.getElementById('codex-branch-overlay-message-model'),
+        document.getElementById('codex-sync-overlay-message-model')
+    ].forEach(button => {
+        if (!button) return;
+        button.textContent = label;
+        button.dataset.label = label;
+        syncHoverTooltipFromLabel(button, label);
+    });
+    const status = document.getElementById('codex-git-message-model-status');
+    if (status) {
+        status.textContent = gitCommitMessageModel ? gitCommitMessageModel : '대화 기본 모델 사용';
+        status.classList.remove('is-error');
+    }
+}
+
+function getGitCommitMessageModelOverlayElements() {
+    const overlay = document.getElementById('codex-git-message-model-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        select: document.getElementById('codex-git-message-model-select'),
+        status: document.getElementById('codex-git-message-model-status'),
+        closeBtn: document.getElementById('codex-git-message-model-close'),
+        clearBtn: document.getElementById('codex-git-message-model-clear'),
+        applyBtn: document.getElementById('codex-git-message-model-apply')
+    };
+}
+
+function renderGitCommitMessageModelOptions() {
+    const elements = getGitCommitMessageModelOverlayElements();
+    if (!elements?.select) return;
+    const select = elements.select;
+    const options = getGitCommitMessageModelOptions();
+    select.innerHTML = '';
+    const defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = '대화 기본 모델';
+    select.appendChild(defaultOption);
+    options.forEach(model => {
+        const value = String(model || '').trim();
+        if (!value) return;
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    });
+    if (gitCommitMessageModel && !options.includes(gitCommitMessageModel)) {
+        const currentOption = document.createElement('option');
+        currentOption.value = gitCommitMessageModel;
+        currentOption.textContent = `${gitCommitMessageModel} (현재)`;
+        select.appendChild(currentOption);
+    }
+    select.value = gitCommitMessageModel || '';
+    syncGitCommitMessageModelLabels();
+}
+
+function isGitCommitMessageModelOverlayOpen() {
+    const overlay = document.getElementById('codex-git-message-model-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openGitCommitMessageModelOverlay() {
+    const elements = getGitCommitMessageModelOverlayElements();
+    if (!elements) return;
+    renderGitCommitMessageModelOptions();
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    elements.select?.focus();
+}
+
+function closeGitCommitMessageModelOverlay() {
+    const elements = getGitCommitMessageModelOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function applyGitCommitMessageModelSelection() {
+    const elements = getGitCommitMessageModelOverlayElements();
+    const selectedModel = elements?.select?.value || '';
+    saveGitCommitMessageModelSetting(selectedModel);
+    closeGitCommitMessageModelOverlay();
+}
+
+function clearGitCommitMessageModelSelection() {
+    saveGitCommitMessageModelSetting('');
+    renderGitCommitMessageModelOptions();
+}
+
+function setGitCommitMessageStatus(elements, message = '', isError = false) {
+    if (!elements?.messageStatus) return;
+    elements.messageStatus.textContent = message;
+    elements.messageStatus.classList.toggle('is-error', Boolean(isError));
+}
+
+function getGitCommitMessageFields(elements) {
+    const subject = typeof elements?.commitMessage?.value === 'string'
+        ? elements.commitMessage.value.trim()
+        : '';
+    const body = typeof elements?.commitBody?.value === 'string'
+        ? elements.commitBody.value.trim()
+        : '';
+    return {
+        subject,
+        body,
+        hasValue: Boolean(subject || body),
+        full: [subject, body].filter(Boolean).join('\n\n')
+    };
+}
+
+function setGitCommitMessageFields(elements, subject = '', body = '') {
+    if (elements?.commitMessage) {
+        elements.commitMessage.value = String(subject || '').trim();
+    }
+    if (elements?.commitBody) {
+        elements.commitBody.value = String(body || '').trim();
+    }
+}
+
+function resetGitCommitMessageFields(elements) {
+    setGitCommitMessageFields(elements, '', '');
+    setGitCommitMessageStatus(elements, '');
+}
+
+function formatManualGitCommitPreviewLabel(fields) {
+    if (!fields?.hasValue) return '';
+    const subject = fields.subject || fields.body.split(/\r?\n/).find(Boolean) || '본문 입력됨';
+    return `커밋 예정 메시지(수동): ${subject}`;
 }
 
 function normalizeGitChangedFiles(files) {
@@ -11525,6 +11838,11 @@ function updateGitOverlaySelectionSummary(totalCount = 0, options = {}) {
         elements.commitBtn.dataset.label = label;
         syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
+    if (elements.generateMessageBtn) {
+        const isBusy = elements.generateMessageBtn.classList.contains('is-loading')
+            || elements.generateMessageBtn.getAttribute('aria-busy') === 'true';
+        elements.generateMessageBtn.disabled = isBusy || totalCount === 0 || selectedCount === 0 || hasWindowsPathIssues;
+    }
     if (elements.stageAllBtn) {
         elements.stageAllBtn.disabled = totalCount === 0;
     }
@@ -11683,6 +12001,115 @@ async function ensureGitCommitPreview(repoTarget, paths) {
     };
 }
 
+function normalizeGitCommitMessageGenerationResult(result, fallbackCount = 0) {
+    const normalized = normalizeGitCommitPreviewResult(result, fallbackCount);
+    const full = typeof result?.commit_message_full === 'string'
+        ? result.commit_message_full.trim()
+        : [normalized.subject, normalized.body].filter(Boolean).join('\n\n');
+    return {
+        ...normalized,
+        full,
+        model: typeof result?.generator_model === 'string' ? result.generator_model.trim() : '',
+        diffTruncated: Boolean(result?.generator_diff_truncated),
+        omittedFilesCount: Number.isFinite(Number(result?.generator_omitted_files_count))
+            ? Number(result.generator_omitted_files_count)
+            : 0
+    };
+}
+
+function getGitCommitMessageGenerationContext(kind) {
+    if (kind === 'sync') {
+        const repoTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
+        const history = getGitSyncHistoryCache(repoTarget);
+        const paths = normalizeGitChangedFiles(history?.changedFiles).map(file => file.path);
+        return {
+            kind,
+            repoTarget,
+            repoLabel: getGitSyncRepoLabel(repoTarget),
+            paths,
+            elements: getGitSyncOverlayElements()
+        };
+    }
+    const paths = getGitSelectedFilePathsInOrder(gitBranchStatusCache.changedFiles);
+    return {
+        kind: 'branch',
+        repoTarget: GIT_SYNC_TARGET_WORKSPACE,
+        repoLabel: getGitSyncRepoLabel(GIT_SYNC_TARGET_WORKSPACE),
+        paths,
+        elements: getGitBranchOverlayElements()
+    };
+}
+
+async function handleGitCommitMessageGenerate(kind, button) {
+    if (gitCommitMessageGenerationInFlight) {
+        showToast('커밋 메시지 생성이 이미 진행 중입니다.', { tone: 'error', durationMs: 3200 });
+        return;
+    }
+    const context = getGitCommitMessageGenerationContext(kind);
+    const paths = normalizeGitCommitPreviewPaths(context.paths);
+    if (!paths.length) {
+        showToast(`${context.repoLabel} · 커밋 메시지를 생성할 파일이 없습니다.`, {
+            tone: 'error',
+            durationMs: 3400
+        });
+        return;
+    }
+    const elements = context.elements;
+    gitCommitMessageGenerationInFlight = true;
+    setGitButtonBusy(button, true, 'Generating...');
+    setGitCommitMessageStatus(elements, `${formatGitCommitMessageModelStatus()} · 생성 중...`);
+    try {
+        const result = await fetchJson('/api/codex/git/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_COMMIT_MESSAGE_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({
+                repo_target: context.repoTarget,
+                files: paths,
+                model: gitCommitMessageModel || ''
+            })
+        });
+        const generated = normalizeGitCommitMessageGenerationResult(result, paths.length);
+        setGitCommitMessageFields(elements, generated.subject, generated.body);
+        const notes = [];
+        if (generated.model) notes.push(generated.model);
+        if (generated.diffTruncated) notes.push('diff 일부 생략');
+        if (generated.omittedFilesCount > 0) notes.push(`파일 ${generated.omittedFilesCount}개 생략`);
+        setGitCommitMessageStatus(
+            elements,
+            notes.length ? `상세 메시지 생성 완료 · ${notes.join(' · ')}` : '상세 메시지 생성 완료'
+        );
+        if (context.kind === 'sync') {
+            renderGitSyncOverlay(getGitSyncHistoryCache(context.repoTarget));
+        } else {
+            updateGitBranchOverlayCommitPreview(gitBranchStatusCache);
+        }
+        showToast(`${context.repoLabel} · 커밋 메시지 생성 완료`, {
+            tone: 'success',
+            durationMs: 2400
+        });
+    } catch (error) {
+        const message = normalizeGitActionError(error, '커밋 메시지 생성에 실패했습니다.');
+        setGitCommitMessageStatus(elements, message, true);
+        showToast(`${context.repoLabel} · 커밋 메시지 생성 실패: ${message}`, {
+            tone: 'error',
+            durationMs: 5200
+        });
+    } finally {
+        gitCommitMessageGenerationInFlight = false;
+        setGitButtonBusy(button, false);
+        if (context.kind === 'sync') {
+            updateGitSyncOverlayActionButtonState(getGitSyncHistoryCache(context.repoTarget));
+        } else {
+            updateGitOverlaySelectionSummary(normalizeGitChangedFiles(gitBranchStatusCache.changedFiles).length, {
+                hasWindowsPathIssues: gitBranchStatusCache.hasWindowsPathIssues,
+                windowsInvalidCount: gitBranchStatusCache.windowsInvalidCount,
+                windowsInvalidFiles: gitBranchStatusCache.windowsInvalidFiles
+            });
+        }
+    }
+}
+
 function getGitSelectedFilePathsInOrder(files) {
     const normalizedFiles = normalizeGitChangedFiles(files);
     const selectedPaths = [];
@@ -11707,10 +12134,10 @@ function getGitSelectedFilePathsInOrder(files) {
 function updateGitBranchOverlayCommitPreview(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements?.latestCommit) return;
-    const manualMessage = elements.commitMessage?.value?.trim() || '';
-    if (manualMessage) {
+    const manualFields = getGitCommitMessageFields(elements);
+    if (manualFields.hasValue) {
         gitBranchOverlayPreviewKey = '';
-        elements.latestCommit.textContent = `커밋 예정 메시지(수동): ${manualMessage}`;
+        elements.latestCommit.textContent = formatManualGitCommitPreviewLabel(manualFields);
         return;
     }
     const selectedPaths = getGitSelectedFilePathsInOrder(status?.changedFiles);
@@ -11893,9 +12320,7 @@ function openGitBranchOverlay() {
     gitOverlaySelectionTouched = false;
     gitOverlaySelectedFiles = new Set();
     gitBranchOverlayPreviewKey = '';
-    if (elements.commitMessage) {
-        elements.commitMessage.value = '';
-    }
+    resetGitCommitMessageFields(elements);
     setGitBranchOverlayFullscreen(false);
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
@@ -11908,11 +12333,13 @@ function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
     gitBranchOverlayPreviewKey = '';
+    resetGitCommitMessageFields(elements);
     setGitBranchOverlayFullscreen(false);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
         !isGitSyncOverlayOpen()
+        && !isGitCommitMessageModelOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
         && !isMailComposeOverlayOpen()
@@ -12038,6 +12465,11 @@ function getGitSyncOverlayElements() {
         fetchBtn: document.getElementById('codex-sync-overlay-fetch'),
         syncBtn: document.getElementById('codex-sync-overlay-sync'),
         commitBtn: document.getElementById('codex-sync-overlay-commit'),
+        commitMessage: document.getElementById('codex-sync-overlay-commit-message'),
+        commitBody: document.getElementById('codex-sync-overlay-commit-body'),
+        generateMessageBtn: document.getElementById('codex-sync-overlay-generate-message'),
+        messageModelBtn: document.getElementById('codex-sync-overlay-message-model'),
+        messageStatus: document.getElementById('codex-sync-overlay-message-status'),
         pushBtn: document.getElementById('codex-sync-overlay-push'),
         refreshBtn: document.getElementById('codex-sync-overlay-refresh'),
         fullscreenBtn: document.getElementById('codex-sync-overlay-fullscreen'),
@@ -12087,6 +12519,15 @@ function updateGitSyncOverlayActionButtonState(status) {
         elements.commitBtn.dataset.label = label;
         syncHoverTooltipFromLabel(elements.commitBtn, label);
     }
+    if (elements.generateMessageBtn) {
+        const isBusy = elements.generateMessageBtn.classList.contains('is-loading')
+            || elements.generateMessageBtn.getAttribute('aria-busy') === 'true';
+        const isLoading = elements.loading && !elements.loading.classList.contains('is-hidden');
+        elements.generateMessageBtn.disabled = isBusy || isLoading || !canCommit;
+    }
+    if (elements.messageModelBtn) {
+        elements.messageModelBtn.disabled = repoMissing;
+    }
     if (elements.pushBtn) {
         elements.pushBtn.classList.toggle('is-ready', hasPendingPush);
     }
@@ -12119,6 +12560,12 @@ function setGitSyncOverlayLoading(isLoading) {
         elements.syncBtn.disabled = Boolean(isLoading) || syncBusy;
     }
     [elements.commitBtn, elements.pushBtn].forEach(button => {
+        if (!button) return;
+        const actionBusy = button.classList.contains('is-loading')
+            || button.getAttribute('aria-busy') === 'true';
+        button.disabled = Boolean(isLoading) || actionBusy;
+    });
+    [elements.generateMessageBtn, elements.messageModelBtn].forEach(button => {
         if (!button) return;
         const actionBusy = button.classList.contains('is-loading')
             || button.getAttribute('aria-busy') === 'true';
@@ -12292,7 +12739,11 @@ function renderGitSyncOverlay(history) {
         elements.meta.textContent = `${repoText} · ${branchText} · ${compareText} · ${changedText}${windowsIssueText}${fallbackText}`;
     }
     if (elements.latestCommit) {
-        if (hasWindowsPathIssues) {
+        const manualFields = getGitCommitMessageFields(elements);
+        if (manualFields.hasValue) {
+            gitSyncOverlayPreviewKeyByTarget[repoTarget] = '';
+            elements.latestCommit.textContent = formatManualGitCommitPreviewLabel(manualFields);
+        } else if (hasWindowsPathIssues) {
             gitSyncOverlayPreviewKeyByTarget[repoTarget] = '';
             elements.latestCommit.textContent = `커밋 차단: ${formatGitWindowsPathIssueSummary(windowsInvalidCount)}`;
         } else {
@@ -12448,6 +12899,7 @@ function openGitSyncOverlay() {
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    resetGitCommitMessageFields(elements);
     gitSyncOverlayPreviewKeyByTarget[normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)] = '';
     if (elements.meta) {
         elements.meta.textContent = '히스토리를 불러오는 중...';
@@ -12480,11 +12932,13 @@ function closeGitSyncOverlay() {
     if (!elements) return;
     const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     gitSyncOverlayPreviewKeyByTarget[activeTarget] = '';
+    resetGitCommitMessageFields(elements);
     setGitSyncOverlayFullscreen(false);
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
         !isGitBranchOverlayOpen()
+        && !isGitCommitMessageModelOverlayOpen()
         && !isMessageLogOverlayOpen()
         && !isFileBrowserOverlayOpen()
         && !isMailComposeOverlayOpen()
@@ -22004,7 +22458,7 @@ async function handleGitCommit(button) {
     }
 
     const elements = getGitBranchOverlayElements();
-    const commitMessage = elements?.commitMessage?.value?.trim() || '';
+    const commitFields = getGitCommitMessageFields(elements);
     const commitButton = elements?.commitBtn;
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Committing...');
@@ -22026,7 +22480,9 @@ async function handleGitCommit(button) {
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
-                message: commitMessage
+                message_subject: commitFields.subject,
+                message_body: commitFields.body,
+                message: commitFields.full
             })
         });
         const commitHash = typeof result?.commit_hash === 'string' && result.commit_hash.trim()
@@ -22035,9 +22491,7 @@ async function handleGitCommit(button) {
         const commitSummary = summarizeGitOutput(result?.stdout || result?.stderr);
         const commitSuffix = commitSummary ? `: ${commitSummary}` : '';
         showToast(`git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
-        if (elements?.commitMessage) {
-            elements.commitMessage.value = '';
-        }
+        resetGitCommitMessageFields(elements);
         gitOverlaySelectionTouched = false;
         gitOverlaySelectedFiles = new Set();
     } catch (error) {
@@ -22069,6 +22523,22 @@ async function handleGitQuickCommit(button, options = {}) {
     const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
     const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || GIT_SYNC_TARGET_WORKSPACE);
     const repoLabel = getGitSyncRepoLabel(repoTarget);
+    const syncElements = getGitSyncOverlayElements();
+    const commitFields = (
+        isGitSyncOverlayOpen()
+        && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)
+    )
+        ? getGitCommitMessageFields(syncElements)
+        : {
+            subject: typeof options?.messageSubject === 'string' ? options.messageSubject.trim() : '',
+            body: typeof options?.messageBody === 'string' ? options.messageBody.trim() : '',
+            full: '',
+            hasValue: false
+        };
+    if (!commitFields.full) {
+        commitFields.full = [commitFields.subject, commitFields.body].filter(Boolean).join('\n\n');
+        commitFields.hasValue = Boolean(commitFields.subject || commitFields.body);
+    }
 
     gitMutationInFlight = true;
     setGitButtonBusy(button, true, 'Committing...');
@@ -22111,7 +22581,9 @@ async function handleGitQuickCommit(button, options = {}) {
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
                 repo_target: repoTarget,
-                message: ''
+                message_subject: commitFields.subject,
+                message_body: commitFields.body,
+                message: commitFields.full
             })
         });
         const commitHash = typeof result?.commit_hash === 'string' && result.commit_hash.trim()
@@ -22124,11 +22596,15 @@ async function handleGitQuickCommit(button, options = {}) {
             gitOverlaySelectionTouched = false;
             gitOverlaySelectedFiles = new Set();
             const overlayElements = getGitBranchOverlayElements();
-            if (overlayElements?.commitMessage) {
-                overlayElements.commitMessage.value = '';
-            }
+            resetGitCommitMessageFields(overlayElements);
         }
         setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
+        if (
+            isGitSyncOverlayOpen()
+            && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)
+        ) {
+            resetGitCommitMessageFields(syncElements);
+        }
         if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
             await refreshGitSyncOverlayHistory({ force: true, silent: true });
         }

@@ -6682,7 +6682,8 @@ def _build_codex_command(
         reasoning_override=None,
         attachments=None,
         question_only=False,
-        execution_cwd=None):
+        execution_cwd=None,
+        inherit_model_settings=True):
     base_cmd = [
         _codex_cli_command(),
         '--ask-for-approval',
@@ -6713,7 +6714,7 @@ def _build_codex_command(
     repo_check_dir = Path(execution_cwd) if execution_cwd else WORKSPACE_DIR
     if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(repo_check_dir):
         cmd.append('--skip-git-repo-check')
-    settings = get_settings()
+    settings = get_settings() if inherit_model_settings else {}
     model = (str(model_override).strip() if model_override is not None else '') or settings.get('model')
     if model:
         cmd.extend(['--model', model])
@@ -6815,7 +6816,8 @@ def _build_agent_command(
         attachments=None,
         question_only=False,
         execution_cwd=None,
-        agent_backend=None):
+        agent_backend=None,
+        inherit_model_settings=True):
     backend = _normalize_agent_backend_setting(agent_backend or get_selected_agent_backend())
     if backend == 'claude':
         return backend, _build_claude_command(
@@ -6840,6 +6842,7 @@ def _build_agent_command(
         attachments=attachments,
         question_only=question_only,
         execution_cwd=execution_cwd,
+        inherit_model_settings=inherit_model_settings,
     )
 
 
@@ -7320,7 +7323,10 @@ def execute_codex_prompt(
         model_override=None,
         reasoning_override=None,
         attachments=None,
-        imagegen_prompt=None):
+        imagegen_prompt=None,
+        question_only=False,
+        agent_backend=None,
+        inherit_model_settings=True):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = _new_codex_output_path()
     normalized_attachments = normalize_codex_attachments(attachments or [])
@@ -7332,6 +7338,9 @@ def execute_codex_prompt(
         model_override=model_override,
         reasoning_override=reasoning_override,
         attachments=normalized_attachments,
+        question_only=question_only,
+        agent_backend=agent_backend,
+        inherit_model_settings=inherit_model_settings,
     )
     queued_at = time.time()
     cli_started_at = None

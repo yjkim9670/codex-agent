@@ -1133,32 +1133,89 @@ textarea {
     color: var(--text-tertiary);
 }
 
-.branch-overlay-commit {
+.branch-overlay-commit,
+.sync-overlay-commit {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-.branch-overlay-commit label {
+.branch-overlay-commit label,
+.sync-overlay-commit label,
+.git-message-model-body label {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
 }
 
-.branch-overlay-commit input {
+.git-message-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.git-message-tool-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.git-message-generate,
+.git-message-model {
+    min-height: 30px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+.branch-overlay-commit input,
+.sync-overlay-commit input,
+.branch-overlay-commit textarea,
+.sync-overlay-commit textarea {
     border: 1px solid var(--border);
     background: var(--surface);
     color: var(--text-primary);
     border-radius: var(--radius-sm);
-    height: 34px;
-    padding: 0 10px;
     font-size: 12px;
 }
 
-.branch-overlay-commit input:focus {
+.branch-overlay-commit input,
+.sync-overlay-commit input {
+    height: 34px;
+    padding: 0 10px;
+}
+
+.branch-overlay-commit textarea,
+.sync-overlay-commit textarea {
+    min-height: 78px;
+    max-height: 140px;
+    resize: vertical;
+    padding: 9px 10px;
+    line-height: 1.45;
+    font-family: var(--font-sans);
+}
+
+.branch-overlay-commit input:focus,
+.sync-overlay-commit input:focus,
+.branch-overlay-commit textarea:focus,
+.sync-overlay-commit textarea:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: var(--focus-ring);
+}
+
+.git-message-status,
+.git-message-model-status {
+    min-height: 16px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.git-message-status.is-error,
+.git-message-model-status.is-error {
+    color: var(--danger);
 }
 
 .branch-overlay-loading,
@@ -1696,6 +1753,89 @@ textarea {
 }
 
 .sync-overlay-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px 18px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.git-message-model-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 2420;
+}
+
+.git-message-model-overlay.is-visible {
+    display: flex;
+}
+
+.git-message-model-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+}
+
+.git-message-model-card {
+    position: relative;
+    width: min(420px, calc(100vw - 48px));
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.git-message-model-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.git-message-model-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.git-message-model-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.git-message-model-subtitle {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.git-message-model-close {
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.git-message-model-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 20px 18px;
+}
+
+.git-message-model-footer {
     display: flex;
     justify-content: flex-end;
     gap: 8px;

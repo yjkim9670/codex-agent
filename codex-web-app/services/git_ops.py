@@ -2,7 +2,9 @@
 
 import ast
 from collections import Counter
+import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -13,6 +15,11 @@ from ..config import REPO_ROOT, WORKSPACE_DIR
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
 GIT_DIFF_OUTPUT_MAX_CHARS = 512 * 1024
+GIT_COMMIT_MESSAGE_DIFF_MAX_CHARS = 96 * 1024
+GIT_COMMIT_MESSAGE_FILE_DIFF_MAX_CHARS = 24 * 1024
+GIT_COMMIT_MESSAGE_MAX_FILES = 50
+GIT_COMMIT_MESSAGE_BODY_MAX_CHARS = 4000
+GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS = 240
 _GIT_EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 _GIT_ACTIONS = {
     'sync': ['git', 'fetch', '--prune']
@@ -1683,6 +1690,253 @@ def _truncate_git_diff_output(text):
     return f'{truncated}{marker}', True, len(diff_text)
 
 
+def _truncate_text_for_commit_message(value, max_chars):
+    text = str(value or '')
+    try:
+        limit = int(max_chars)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0 or len(text) <= limit:
+        return text, False, len(text)
+    truncated = text[:limit]
+    if '\n' in truncated:
+        truncated = truncated.rsplit('\n', 1)[0]
+    if not truncated:
+        truncated = text[:limit]
+    return (
+        f'{truncated}\n... truncated at {limit} characters ...',
+        True,
+        len(text)
+    )
+
+
+def _build_commit_message_diff_context(repo_root, env, selected_files=None):
+    changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+    normalized_selected = _normalize_selected_files(selected_files)
+    filtered_detail = _normalize_changed_file_details(
+        changed_files_detail,
+        normalized_selected if normalized_selected else None
+    )
+    selected_paths = [entry.get('path') for entry in filtered_detail if entry.get('path')]
+    selected_paths = _normalize_selected_files(selected_paths)
+    limited_paths = selected_paths[:GIT_COMMIT_MESSAGE_MAX_FILES]
+    omitted_count = max(0, len(selected_paths) - len(limited_paths))
+    analysis = _analyze_worktree_changes(
+        repo_root,
+        env,
+        selected_paths if selected_paths else None
+    )
+
+    chunks = []
+    errors = []
+    total_chars = 0
+    truncated = False
+    for path in limited_paths:
+        diff_payload, diff_error = _build_git_file_diff_payload(repo_root, env, path)
+        if diff_error:
+            errors.append({
+                'path': path,
+                'error': str(diff_error.get('error') or 'diff를 불러오지 못했습니다.')
+            })
+            continue
+        diff_text = diff_payload.get('diff') or ''
+        file_diff, file_truncated, original_length = _truncate_text_for_commit_message(
+            diff_text,
+            GIT_COMMIT_MESSAGE_FILE_DIFF_MAX_CHARS
+        )
+        truncated = truncated or file_truncated or bool(diff_payload.get('diff_truncated'))
+        status = str(diff_payload.get('raw_status') or diff_payload.get('status') or '').strip()
+        header = f'--- FILE: {path}'
+        if status:
+            header += f' ({status})'
+        header += ' ---'
+        if file_truncated:
+            header += f' [original {original_length} chars]'
+        chunk = f'{header}\n{file_diff}'.strip()
+        if not chunk:
+            continue
+        remaining = GIT_COMMIT_MESSAGE_DIFF_MAX_CHARS - total_chars
+        if remaining <= 0:
+            truncated = True
+            break
+        if len(chunk) > remaining:
+            chunk, _, _ = _truncate_text_for_commit_message(chunk, remaining)
+            truncated = True
+        chunks.append(chunk)
+        total_chars += len(chunk) + 2
+        if total_chars >= GIT_COMMIT_MESSAGE_DIFF_MAX_CHARS:
+            truncated = True
+            break
+
+    if omitted_count > 0:
+        truncated = True
+    return {
+        'paths': selected_paths,
+        'included_paths': limited_paths,
+        'omitted_count': omitted_count,
+        'diff_text': '\n\n'.join(chunks),
+        'diff_truncated': truncated,
+        'diff_errors': errors,
+        'analysis': analysis,
+        'analysis_lines': _build_commit_analysis_lines(analysis)
+    }
+
+
+def _build_commit_message_generation_prompt(diff_context):
+    analysis_lines = diff_context.get('analysis_lines')
+    if not isinstance(analysis_lines, list):
+        analysis_lines = []
+    paths = diff_context.get('included_paths')
+    if not isinstance(paths, list):
+        paths = []
+    summary_lines = []
+    if analysis_lines:
+        summary_lines.extend(f'- {line}' for line in analysis_lines)
+    if paths:
+        summary_lines.append(f'- 분석 대상 파일: {", ".join(paths[:20])}')
+    omitted_count = int(diff_context.get('omitted_count') or 0)
+    if omitted_count > 0:
+        summary_lines.append(f'- 크기 제한으로 생략된 파일: {omitted_count}개')
+    if diff_context.get('diff_truncated'):
+        summary_lines.append('- diff 일부는 크기 제한으로 잘렸습니다.')
+    errors = diff_context.get('diff_errors') if isinstance(diff_context.get('diff_errors'), list) else []
+    for item in errors[:5]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip()
+        error = str(item.get('error') or '').strip()
+        if path and error:
+            summary_lines.append(f'- diff 오류: {path}: {error}')
+
+    diff_text = str(diff_context.get('diff_text') or '').strip()
+    return '\n\n'.join([
+        'You are generating a Git commit message for a local coding workspace.',
+        'Return JSON only. Do not use Markdown fences or explanatory text.',
+        'The JSON schema is: {"subject": "type(scope): concise summary", "body": "- bullet\\n- bullet"}',
+        'Rules:',
+        '- The subject must be one line and should be <= 72 characters when possible.',
+        '- Prefer Conventional Commit style when the change type is clear.',
+        '- The body must be 2-5 concise bullet lines in Korean or English matching the diff context.',
+        '- Do not invent behavior that is not supported by the diff.',
+        '- Do not mention file counts unless that is the most useful summary.',
+        '',
+        'Change summary:',
+        '\n'.join(summary_lines) if summary_lines else '- 변경 요약 없음',
+        '',
+        'Diff context:',
+        diff_text or '(diff unavailable)',
+    ]).strip()
+
+
+def _strip_json_code_fence(text):
+    raw = str(text or '').strip()
+    if raw.startswith('```'):
+        raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'\s*```$', '', raw)
+    return raw.strip()
+
+
+def _parse_commit_message_generation_output(output_text):
+    raw = _strip_json_code_fence(output_text)
+    parsed = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r'\{.*\}', raw, flags=re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                parsed = None
+    if not isinstance(parsed, dict):
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        subject = lines[0] if lines else ''
+        body = '\n'.join(lines[1:]).strip()
+    else:
+        subject = (
+            parsed.get('subject')
+            or parsed.get('title')
+            or parsed.get('commit_message_subject')
+            or parsed.get('commit_message')
+            or ''
+        )
+        body = parsed.get('body') or parsed.get('commit_message_body') or ''
+
+    subject = str(subject or '').strip().splitlines()[0].strip()
+    if len(subject) > GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS:
+        subject = f'{subject[:GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS - 1]}…'
+    body = str(body or '').strip()
+    if len(body) > GIT_COMMIT_MESSAGE_BODY_MAX_CHARS:
+        body = f'{body[:GIT_COMMIT_MESSAGE_BODY_MAX_CHARS - 1]}…'
+    return subject, body
+
+
+def _execute_commit_message_prompt(prompt, model_override=None):
+    from .codex_chat import execute_codex_prompt
+
+    return execute_codex_prompt(
+        prompt,
+        model_override=model_override,
+        question_only=True,
+        agent_backend='dtgpt',
+        inherit_model_settings=False,
+    )
+
+
+def _build_generated_commit_message_payload(repo_root, env, payload):
+    selected_files = _normalize_selected_files(payload.get('files'))
+    diff_context = _build_commit_message_diff_context(repo_root, env, selected_files)
+    if not diff_context.get('paths'):
+        return None, {
+            'error': '커밋 메시지를 생성할 변경 파일이 없습니다.',
+            'error_code': 'git_commit_message_no_files'
+        }
+    prompt = _build_commit_message_generation_prompt(diff_context)
+    model_override = str(payload.get('model') or '').strip() or None
+    output_text, error_text, token_usage, timing = _execute_commit_message_prompt(
+        prompt,
+        model_override=model_override,
+    )
+    if error_text:
+        return None, {
+            'error': error_text,
+            'error_code': 'git_commit_message_generation_failed'
+        }
+    subject, body = _parse_commit_message_generation_output(output_text or '')
+    if not subject:
+        fallback = _build_commit_message(analysis=diff_context.get('analysis') or {})
+        subject = str(fallback.get('subject') or '').strip()
+        body = body or str(fallback.get('body') or '').strip()
+    if not subject:
+        return None, {
+            'error': '생성된 커밋 메시지를 파싱하지 못했습니다.',
+            'error_code': 'git_commit_message_parse_failed'
+        }
+    full_message = subject
+    if body:
+        full_message = f'{subject}\n\n{body}'
+    return {
+        'commit_message': subject,
+        'commit_message_subject': subject,
+        'commit_message_body': body,
+        'commit_message_full': full_message,
+        'commit_comment': '',
+        'commit_analysis': diff_context.get('analysis') or {},
+        'commit_analysis_lines': diff_context.get('analysis_lines') or [],
+        'ai_generated_message': True,
+        'auto_generated_message': False,
+        'generator_agent_backend': 'dtgpt',
+        'generator_execution_policy': 'read_only_ephemeral',
+        'generator_model': model_override or '',
+        'generator_token_usage': token_usage,
+        'generator_timing': timing,
+        'generator_diff_truncated': bool(diff_context.get('diff_truncated')),
+        'generator_diff_errors': diff_context.get('diff_errors') or [],
+        'generator_included_files': diff_context.get('included_paths') or [],
+        'generator_omitted_files_count': int(diff_context.get('omitted_count') or 0),
+    }, None
+
+
 def _build_git_file_diff_payload(repo_root, env, selected_file):
     selected_path = str(selected_file or '').strip().replace('\\', '/')
     while selected_path.startswith('./'):
@@ -1775,6 +2029,33 @@ def _parse_history_request(payload):
         limit = 20
     limit = max(1, min(100, limit))
     return requested_remote, requested_branch, limit
+
+
+def _parse_commit_message_request(payload):
+    if not isinstance(payload, dict):
+        return '', ''
+    subject = str(
+        payload.get('message_subject')
+        or payload.get('subject')
+        or ''
+    ).strip()
+    body = str(
+        payload.get('message_body')
+        or payload.get('body')
+        or ''
+    ).strip()
+    raw_message = str(payload.get('message') or '').strip()
+    if raw_message and not subject and not body:
+        lines = raw_message.splitlines()
+        subject = lines[0].strip() if lines else ''
+        body = '\n'.join(lines[1:]).strip()
+        if body.startswith('\n'):
+            body = body.strip()
+    if len(subject) > GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS:
+        subject = f'{subject[:GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS - 1]}…'
+    if len(body) > GIT_COMMIT_MESSAGE_BODY_MAX_CHARS:
+        body = f'{body[:GIT_COMMIT_MESSAGE_BODY_MAX_CHARS - 1]}…'
+    return subject, body
 
 
 def _build_history_unavailable_result(
@@ -1944,7 +2225,7 @@ def run_git_action(action, payload=None):
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
         if action not in {
-            'status', 'preview', 'history', 'stage', 'commit', 'push',
+            'status', 'preview', 'message', 'history', 'stage', 'commit', 'push',
             'sync', 'sync-preflight', 'sync_preflight', 'revert', 'cancel', 'submit', 'diff'
         }:
             return {'error': '지원하지 않는 git 작업입니다.'}
@@ -2061,6 +2342,36 @@ def run_git_action(action, payload=None):
                     stderr='',
                     extra={
                         **preview_payload,
+                        'repo_target': repo_target
+                    }
+                )
+
+            if action == 'message':
+                changed_files_detail, _ = _read_changed_snapshot(repo_root, env)
+                staged_files_detail, _ = _read_staged_snapshot(repo_root, env)
+                windows_invalid_files, _, has_windows_path_issues = _collect_windows_path_issues(
+                    changed_files_detail,
+                    staged_files_detail
+                )
+                if has_windows_path_issues:
+                    return _build_windows_path_issue_error(repo_target, windows_invalid_files)
+                generated_payload, generated_error = _build_generated_commit_message_payload(
+                    repo_root,
+                    env,
+                    payload
+                )
+                if generated_error:
+                    return generated_error
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command='codex exec -- commit-message',
+                    exit_code=0,
+                    stdout='',
+                    stderr='',
+                    extra={
+                        **generated_payload,
                         'repo_target': repo_target
                     }
                 )
@@ -2623,16 +2934,16 @@ def run_git_action(action, payload=None):
                 commit_analysis = _analyze_staged_changes(repo_root, env, staged_files_detail)
                 commit_analysis_lines = _build_commit_analysis_lines(commit_analysis)
 
-                commit_message_input = str(payload.get('message') or '').strip()
-                commit_message_subject = commit_message_input
-                commit_message_body = ''
+                commit_message_subject, commit_message_body = _parse_commit_message_request(payload)
+                commit_message_input = commit_message_subject or commit_message_body
                 commit_comment = '; '.join(commit_analysis_lines[:2]) if commit_analysis_lines else ''
                 if not commit_message_subject:
                     message_payload = _build_commit_message(
                         analysis=commit_analysis
                     )
                     commit_message_subject = str(message_payload.get('subject') or '').strip()
-                    commit_message_body = str(message_payload.get('body') or '').strip()
+                    if not commit_message_body:
+                        commit_message_body = str(message_payload.get('body') or '').strip()
                     commit_comment = str(message_payload.get('comment') or '').strip()
                     message_lines = message_payload.get('analysis_lines')
                     if isinstance(message_lines, list):

@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from codex_agent.services import git_ops
+from codex_agent.services import codex_chat, git_ops
 
 
 def _run_git(repo_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -197,6 +197,72 @@ def test_git_diff_returns_untracked_file_changes(tmp_path, monkeypatch):
     assert result['is_untracked'] is True
     assert 'new file mode' in result['diff']
     assert '+scratch' in result['diff']
+
+
+def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt', 'before\n')
+    (repo_root / 'tracked.txt').write_text('after\n', encoding='utf-8')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+    captured = {}
+
+    def fake_execute_codex_prompt(prompt, **kwargs):
+        captured['prompt'] = prompt
+        captured['kwargs'] = kwargs
+        return (
+            '{"subject":"feat: update tracked preview","body":"- tracked 파일 변경 내용을 반영\\n- 커밋 본문 생성을 검증"}',
+            None,
+            {'total_tokens': 10},
+            {'cli_runtime_ms': 1},
+        )
+
+    monkeypatch.setattr(codex_chat, 'execute_codex_prompt', fake_execute_codex_prompt)
+
+    result = git_ops.run_git_action('message', {
+        'repo_target': 'workspace',
+        'files': ['tracked.txt'],
+        'model': 'gpt-5-codex',
+    })
+
+    assert result['ok'] is True
+    assert result['commit_message_subject'] == 'feat: update tracked preview'
+    assert '- tracked 파일 변경 내용을 반영' in result['commit_message_body']
+    assert result['generator_agent_backend'] == 'dtgpt'
+    assert result['generator_execution_policy'] == 'read_only_ephemeral'
+    assert result['generator_model'] == 'gpt-5-codex'
+    assert 'diff --git a/tracked.txt b/tracked.txt' in captured['prompt']
+    assert captured['kwargs']['agent_backend'] == 'dtgpt'
+    assert captured['kwargs']['question_only'] is True
+    assert captured['kwargs']['inherit_model_settings'] is False
+    assert captured['kwargs']['model_override'] == 'gpt-5-codex'
+
+
+def test_git_commit_accepts_subject_and_body(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt', 'before\n')
+    (repo_root / 'tracked.txt').write_text('after\n', encoding='utf-8')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    stage_result = git_ops.run_git_action('stage', {
+        'repo_target': 'workspace',
+        'files': ['tracked.txt'],
+        'replace': True,
+    })
+    assert stage_result['ok'] is True
+
+    result = git_ops.run_git_action('commit', {
+        'repo_target': 'workspace',
+        'message_subject': 'feat: update tracked file',
+        'message_body': '- 상세 본문을 커밋에 포함\n- 두 번째 줄 유지',
+    })
+
+    assert result['ok'] is True
+    assert result['commit_message_subject'] == 'feat: update tracked file'
+    assert '두 번째 줄 유지' in result['commit_message_body']
+    log_message = _run_git(repo_root, 'log', '-1', '--pretty=%B').stdout.strip()
+    assert log_message == 'feat: update tracked file\n\n- 상세 본문을 커밋에 포함\n- 두 번째 줄 유지'
 
 
 def test_git_revert_restores_staged_rename(tmp_path, monkeypatch):

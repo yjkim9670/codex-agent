@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=183">
+    <link rel="stylesheet" href="/static/css/app.css?v=185">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1103,14 +1103,26 @@
                     <div class="branch-overlay-selection" id="codex-branch-overlay-selection">선택 0개</div>
                 </div>
                 <div class="branch-overlay-commit">
-                    <label for="codex-branch-overlay-commit-message">Commit message (선택)</label>
+                    <div class="git-message-tools">
+                        <label for="codex-branch-overlay-commit-message">Commit message</label>
+                        <div class="git-message-tool-actions">
+                            <button class="btn secondary git-message-generate" type="button" id="codex-branch-overlay-generate-message">AI로 상세 생성</button>
+                            <button class="btn ghost git-message-model" type="button" id="codex-branch-overlay-message-model">모델 설정</button>
+                        </div>
+                    </div>
                     <input
                         id="codex-branch-overlay-commit-message"
                         type="text"
                         autocomplete="off"
-                        placeholder="비워두면 자동 메시지가 생성됩니다."
+                        placeholder="제목을 비워두면 자동 메시지가 생성됩니다."
                         maxlength="240"
                     >
+                    <textarea
+                        id="codex-branch-overlay-commit-body"
+                        rows="4"
+                        placeholder="본문은 선택 사항입니다."
+                    ></textarea>
+                    <div class="git-message-status" id="codex-branch-overlay-message-status" aria-live="polite"></div>
                 </div>
                 <div class="branch-overlay-loading" id="codex-branch-overlay-loading">변경 파일을 불러오는 중...</div>
                 <div class="branch-overlay-empty is-hidden" id="codex-branch-overlay-empty">변경 파일이 없습니다.</div>
@@ -1168,6 +1180,28 @@
                         <span class="sr-only">히스토리 새로고침</span>
                     </button>
                 </div>
+                <div class="sync-overlay-commit">
+                    <div class="git-message-tools">
+                        <label for="codex-sync-overlay-commit-message">Commit message</label>
+                        <div class="git-message-tool-actions">
+                            <button class="btn secondary git-message-generate" type="button" id="codex-sync-overlay-generate-message">AI로 상세 생성</button>
+                            <button class="btn ghost git-message-model" type="button" id="codex-sync-overlay-message-model">모델 설정</button>
+                        </div>
+                    </div>
+                    <input
+                        id="codex-sync-overlay-commit-message"
+                        type="text"
+                        autocomplete="off"
+                        placeholder="제목을 비워두면 자동 메시지가 생성됩니다."
+                        maxlength="240"
+                    >
+                    <textarea
+                        id="codex-sync-overlay-commit-body"
+                        rows="4"
+                        placeholder="본문은 선택 사항입니다."
+                    ></textarea>
+                    <div class="git-message-status" id="codex-sync-overlay-message-status" aria-live="polite"></div>
+                </div>
                 <div class="sync-overlay-loading" id="codex-sync-overlay-loading">원격 이력을 불러오는 중...</div>
                 <div class="sync-overlay-sections">
                     <div class="sync-overlay-section sync-overlay-section-files">
@@ -1184,6 +1218,30 @@
             </div>
             <div class="sync-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-sync-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="git-message-model-overlay" id="codex-git-message-model-overlay" aria-hidden="true">
+        <div class="git-message-model-overlay-backdrop" data-action="close"></div>
+        <div class="git-message-model-card" role="dialog" aria-modal="true" aria-labelledby="codex-git-message-model-title">
+            <div class="git-message-model-header">
+                <div class="git-message-model-heading">
+                    <div class="git-message-model-title" id="codex-git-message-model-title">커밋 메시지 모델 설정</div>
+                    <div class="git-message-model-subtitle" id="codex-git-message-model-subtitle">Codex CLI 모델</div>
+                </div>
+                <button class="btn ghost icon-only git-message-model-close" type="button" id="codex-git-message-model-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="git-message-model-body">
+                <label for="codex-git-message-model-select">Model</label>
+                <select id="codex-git-message-model-select" class="model-select" aria-label="커밋 메시지 생성 모델"></select>
+                <div class="git-message-model-status" id="codex-git-message-model-status">대화 기본 모델 사용</div>
+            </div>
+            <div class="git-message-model-footer">
+                <button class="btn ghost" type="button" id="codex-git-message-model-clear">기본값 사용</button>
+                <button class="btn primary" type="button" id="codex-git-message-model-apply">저장</button>
             </div>
         </div>
     </div>
@@ -1390,6 +1448,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=184"></script>
+    <script src="/static/js/app.js?v=186"></script>
 </body>
 </html>

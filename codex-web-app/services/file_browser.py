@@ -21,7 +21,11 @@ BROWSER_ROOT_TMP = 'tmp'
 BROWSER_ROOT_WORKSPACE = 'workspace'
 
 _MAX_LIST_ENTRIES = 2000
-_MAX_FILE_PREVIEW_BYTES = 512 * 1024
+# Text is sent as JSON and may be highlighted or rendered client-side.  Keep the
+# server ceiling moderate so callers cannot turn a preview request into an
+# unbounded memory/DOM operation, while allowing useful inspection of larger
+# source and log files.
+_MAX_FILE_PREVIEW_BYTES = 1024 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024

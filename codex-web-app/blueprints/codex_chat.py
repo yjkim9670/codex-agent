@@ -1785,6 +1785,16 @@ def codex_files_raw(root_key, relative_path):
     response = Response(result.get('content') or b'', mimetype=mime_type)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    if mime_type.lower().split(';', 1)[0].strip() in {'text/html', 'application/xhtml+xml'}:
+        # Raw HTML is loaded by the file preview and can also be opened in a
+        # separate tab.  This response-level sandbox remains in force in both
+        # cases, so a previewed file cannot inherit the Workbench origin even
+        # if it contains executable JavaScript.
+        response.headers['Content-Security-Policy'] = (
+            "sandbox allow-scripts allow-forms; base-uri 'none'; "
+            "object-src 'none'; frame-ancestors 'self'"
+        )
+        response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
 

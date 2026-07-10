@@ -296,17 +296,18 @@ const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200;
 const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
 const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
 const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
-const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 96 * 1024;
-const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 96 * 1024;
-const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 1800;
+const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';
+const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 256 * 1024;
+const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 256 * 1024;
+const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 4000;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 48 * 1024;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 600;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 96 * 1024;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 1200;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
-const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 64 * 1024;
-const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 1200;
+const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 160 * 1024;
+const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 2500;
 const FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES = 60;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGES = 24;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH = 1120;
@@ -3708,7 +3709,7 @@ function renderPublicHtmlPreviewIntoElements(elements, root, path) {
     elements.viewerContent.innerHTML = '';
     const iframe = document.createElement('iframe');
     iframe.className = 'file-browser-html-preview';
-    iframe.setAttribute('sandbox', 'allow-scripts allow-forms');
+    iframe.setAttribute('sandbox', FILE_BROWSER_HTML_PREVIEW_SANDBOX);
     iframe.src = previewUrl;
     elements.viewerContent.appendChild(iframe);
     return true;
@@ -21190,12 +21191,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         }
         const iframe = document.createElement('iframe');
         iframe.className = 'file-browser-html-preview';
-        iframe.setAttribute(
-            'sandbox',
-            CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview
-                ? 'allow-scripts allow-forms'
-                : 'allow-same-origin allow-scripts allow-forms'
-        );
+        iframe.setAttribute('sandbox', FILE_BROWSER_HTML_PREVIEW_SANDBOX);
         if (previewUrl) {
             iframe.src = previewUrl;
         } else {

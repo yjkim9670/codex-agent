@@ -1479,6 +1479,24 @@ def _codex_cli_file_available(path_text):
         return False
 
 
+def _is_codex_app_bundle_cli(path_text):
+    normalized = str(path_text or '').replace('\\', '/')
+    return '/Codex.app/Contents/Resources/codex' in normalized
+
+
+def _codex_cli_posix_standalone_candidates():
+    candidates = []
+    for parent in (WORKSPACE_DIR, *WORKSPACE_DIR.parents):
+        candidates.append(parent / '.local' / 'bin' / 'codex')
+        try:
+            if parent == Path.home():
+                break
+        except Exception:
+            pass
+    candidates.append(Path.home() / '.local' / 'bin' / 'codex')
+    return tuple(candidates)
+
+
 def _codex_cli_file_candidates():
     candidates = []
     for env_name in ('NPM_PREFIX', 'npm_config_prefix', 'NPM_CONFIG_PREFIX'):
@@ -1503,7 +1521,9 @@ def _codex_cli_file_candidates():
                 Path(appdata).expanduser() / 'npm' / 'codex.cmd',
                 Path(appdata).expanduser() / 'npm' / 'codex.exe',
             ))
-    elif sys.platform == 'darwin':
+    if not sys.platform.startswith('win'):
+        candidates.extend(_codex_cli_posix_standalone_candidates())
+    if sys.platform == 'darwin':
         candidates.extend((
             Path('/Applications/Codex.app/Contents/Resources/codex'),
             Path.home() / 'Applications' / 'Codex.app' / 'Contents' / 'Resources' / 'codex',
@@ -1524,11 +1544,14 @@ def _codex_cli_command():
             if _codex_cli_file_available(candidate):
                 return candidate
         return 'codex.cmd'
-    if shutil.which('codex') is not None:
+    resolved = shutil.which('codex')
+    if resolved is not None and not _is_codex_app_bundle_cli(resolved):
         return 'codex'
     for candidate in _codex_cli_file_candidates():
         if _codex_cli_file_available(candidate):
             return candidate
+    if resolved is not None:
+        return resolved
     return 'codex'
 
 

@@ -12,8 +12,28 @@ export CODEX_USE_GLOBAL_PYTHON=1
 # older variable is set to 0 as well so older bundled server code stays lock-free.
 export CODEX_CLI_EXEC_LOCK=0
 export CODEX_CLI_SERIALIZE_EXEC=0
+
+is_codex_app_bundle_cli() {
+    local candidate="${1:-}"
+    [[ "${candidate}" == *"/Codex.app/Contents/Resources/codex" ]]
+}
+
+if [[ -z "${CODEX_CLI_BIN:-}" ]]; then
+    for candidate in \
+        "$(dirname "${SCRIPT_DIR}")/../.local/bin/codex" \
+        "$(dirname "${SCRIPT_DIR}")/.local/bin/codex" \
+        "${HOME:-}/.local/bin/codex"; do
+        if [[ -x "${candidate}" ]]; then
+            export CODEX_CLI_BIN="${candidate}"
+            break
+        fi
+    done
+fi
 if [[ -z "${CODEX_CLI_BIN:-}" ]] && command -v codex >/dev/null 2>&1; then
-    export CODEX_CLI_BIN="$(command -v codex)"
+    codex_path="$(command -v codex)"
+    if ! is_codex_app_bundle_cli "${codex_path}"; then
+        export CODEX_CLI_BIN="${codex_path}"
+    fi
 fi
 if [[ -z "${CODEX_CLI_BIN:-}" ]]; then
     for prefix in "${NPM_PREFIX:-}" "${npm_config_prefix:-}" "${NPM_CONFIG_PREFIX:-}"; do

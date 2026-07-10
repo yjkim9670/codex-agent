@@ -7,8 +7,9 @@ Codex Workbench server for Codex chat sessions, workspace files, terminal sessio
 - Codex CLI available on PATH (`codex` on macOS/Linux, `codex.cmd` on Windows)
 
 Set `CODEX_CLI_BIN=/absolute/path/to/codex` when the CLI is installed outside
-`PATH`. The company launchers also probe common npm prefix paths, Windows
-`%APPDATA%\npm\codex.cmd`, and the macOS Codex app bundle path.
+`PATH`. Launchers prefer standalone installs under `.local/bin` and npm prefix
+paths before falling back to the macOS Codex app bundle, which can lag behind
+standalone CLI releases.
 
 ## Setup
 ```bash

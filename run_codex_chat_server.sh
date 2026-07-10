@@ -7,10 +7,81 @@ DEFAULT_VENV_DIR="${PARENT_DIR}/.venv"
 VENV_DIR="${CODEX_COMMON_VENV_DIR:-${COMMON_PYTHON_VENV:-${VIRTUAL_ENV:-${DEFAULT_VENV_DIR}}}}"
 CODEX_APP_RESOURCES_DIR="${CODEX_APP_RESOURCES_DIR:-/Applications/Codex.app/Contents/Resources}"
 
-if [[ -x "${CODEX_APP_RESOURCES_DIR}/codex" ]]; then
+is_codex_app_bundle_cli() {
+    local candidate="${1:-}"
+    [[ "${candidate}" == *"/Codex.app/Contents/Resources/codex" ]]
+}
+
+codex_cli_candidate_available() {
+    local candidate="${1:-}"
+    [[ -n "${candidate}" && -x "${candidate}" ]]
+}
+
+resolve_codex_cli_bin() {
+    local candidate
+    local path_candidate
+    local prefix
+
+    if codex_cli_candidate_available "${CODEX_CLI_BIN:-}"; then
+        printf '%s\n' "${CODEX_CLI_BIN}"
+        return 0
+    fi
+
+    for candidate in \
+        "${PARENT_DIR}/../.local/bin/codex" \
+        "${PARENT_DIR}/.local/bin/codex" \
+        "${HOME:-}/.local/bin/codex"; do
+        if codex_cli_candidate_available "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    if command -v codex >/dev/null 2>&1; then
+        path_candidate="$(command -v codex)"
+        if [[ -n "${path_candidate}" ]] && ! is_codex_app_bundle_cli "${path_candidate}"; then
+            printf '%s\n' "${path_candidate}"
+            return 0
+        fi
+    fi
+
+    for prefix in "${NPM_PREFIX:-}" "${npm_config_prefix:-}" "${NPM_CONFIG_PREFIX:-}"; do
+        [[ -n "${prefix}" ]] || continue
+        for candidate in "${prefix}/bin/codex" "${prefix}/codex"; do
+            if codex_cli_candidate_available "${candidate}"; then
+                printf '%s\n' "${candidate}"
+                return 0
+            fi
+        done
+    done
+
+    for candidate in \
+        "${CODEX_APP_RESOURCES_DIR}/codex" \
+        "${HOME:-}/Applications/Codex.app/Contents/Resources/codex"; do
+        if codex_cli_candidate_available "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    if [[ -n "${path_candidate:-}" ]]; then
+        printf '%s\n' "${path_candidate}"
+        return 0
+    fi
+
+    return 1
+}
+
+if [[ -z "${CODEX_CLI_BIN:-}" ]]; then
+    if CODEX_CLI_BIN_RESOLVED="$(resolve_codex_cli_bin)"; then
+        export CODEX_CLI_BIN="${CODEX_CLI_BIN_RESOLVED}"
+    fi
+fi
+if [[ -n "${CODEX_CLI_BIN:-}" ]]; then
+    CODEX_CLI_DIR="$(dirname "${CODEX_CLI_BIN}")"
     case ":${PATH}:" in
-        *":${CODEX_APP_RESOURCES_DIR}:"*) ;;
-        *) export PATH="${CODEX_APP_RESOURCES_DIR}:${PATH}" ;;
+        *":${CODEX_CLI_DIR}:"*) ;;
+        *) export PATH="${CODEX_CLI_DIR}:${PATH}" ;;
     esac
 fi
 

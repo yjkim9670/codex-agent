@@ -284,6 +284,15 @@ _DEFAULT_REASONING_OPTIONS = _normalize_reasoning_options(
     for item in os.environ.get('CODEX_REASONING_OPTIONS', 'low,medium,high,xhigh').split(',')
     if item.strip()
 )
+_GPT56_REASONING_OPTIONS = _normalize_reasoning_options([
+    *_DEFAULT_REASONING_OPTIONS,
+    'max',
+    'ultra',
+])
+_GPT56_LUNA_REASONING_OPTIONS = _normalize_reasoning_options([
+    *_DEFAULT_REASONING_OPTIONS,
+    'max',
+])
 _CLAUDE_EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 _CLAUDE_DEFAULT_EFFORT = 'high'
 _CLAUDE_SONNET_EFFORT_OPTIONS = ('medium', 'high', 'max')
@@ -319,6 +328,7 @@ _AGENT_BACKEND_ALIASES = {
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
     'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
+    'gpt-5.6': 'gpt-5.6-sol',
 }
 
 
@@ -427,7 +437,34 @@ def _normalize_model_catalog(entries):
     return normalized_catalog
 
 
+_current_codex_model_catalog = _normalize_model_catalog([
+    {
+        'slug': 'gpt-5.6-sol',
+        'default_reasoning_effort': 'low',
+        'reasoning_options': _GPT56_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.6-terra',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _GPT56_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-5.6-luna',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _GPT56_LUNA_REASONING_OPTIONS,
+    },
+])
+_current_codex_model_order = {
+    entry['slug']: index
+    for index, entry in enumerate(_current_codex_model_catalog)
+}
 _default_model_catalog = _normalize_model_catalog([
+    *_current_codex_model_catalog,
+    {
+        'slug': 'gpt-5.5',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _DEFAULT_REASONING_OPTIONS,
+    },
     {
         'slug': 'gpt-5.4',
         'default_reasoning_effort': 'medium',
@@ -458,6 +495,48 @@ _default_model_catalog_by_slug = {
     entry['slug']: entry
     for entry in _default_model_catalog
 }
+
+
+def _merge_model_catalogs(*catalogs):
+    merged_catalog = []
+    seen = set()
+    for catalog in catalogs:
+        for entry in _normalize_model_catalog(catalog):
+            slug = entry['slug']
+            if slug in seen:
+                continue
+            merged_catalog.append(entry)
+            seen.add(slug)
+    return merged_catalog
+
+
+def _prioritize_current_codex_models(catalog):
+    normalized_catalog = _normalize_model_catalog(catalog)
+    return [
+        entry
+        for _index, entry in sorted(
+            enumerate(normalized_catalog),
+            key=lambda item: (
+                _current_codex_model_order.get(item[1]['slug'], len(_current_codex_model_order)),
+                item[0],
+            ),
+        )
+    ]
+
+
+def _catalog_has_current_codex_models(catalog):
+    current_slugs = set(_current_codex_model_order)
+    return any(entry['slug'] in current_slugs for entry in _normalize_model_catalog(catalog))
+
+
+def _supplement_codex_model_catalog(catalog):
+    normalized_catalog = _normalize_model_catalog(catalog)
+    if _catalog_has_current_codex_models(normalized_catalog):
+        return _prioritize_current_codex_models(normalized_catalog)
+    return _prioritize_current_codex_models(_merge_model_catalogs(
+        _current_codex_model_catalog,
+        normalized_catalog,
+    ))
 
 
 def _read_model_options_from_env():
@@ -572,10 +651,10 @@ def get_codex_model_catalog():
     if env_options:
         return _select_model_catalog_entries(
             env_options,
-            cache_catalog or _default_model_catalog,
+            _supplement_codex_model_catalog(cache_catalog or _default_model_catalog),
         )
     if cache_catalog:
-        return _normalize_model_catalog(cache_catalog)
+        return _supplement_codex_model_catalog(cache_catalog)
     return _normalize_model_catalog(_default_model_catalog)
 
 

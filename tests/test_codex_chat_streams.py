@@ -128,7 +128,12 @@ def test_model_catalog_reads_workbench_auth_home_cache(monkeypatch, tmp_path):
     monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
     monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
 
-    assert codex_config.get_codex_model_options() == ['gpt-5.5']
+    assert codex_config.get_codex_model_options()[:4] == [
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+    ]
     assert codex_config.get_codex_model_catalog_source() == {
         'type': 'models_cache',
         'models_cache_path': str(auth_home / 'models_cache.json'),
@@ -148,7 +153,36 @@ def test_model_catalog_falls_back_to_login_home_cache(monkeypatch, tmp_path):
     monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
     monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
 
-    assert codex_config.get_codex_model_options() == ['gpt-5.5']
+    assert codex_config.get_codex_model_options()[:4] == [
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+    ]
+
+
+def test_model_catalog_env_options_keep_explicit_order(monkeypatch, tmp_path):
+    codex_home = tmp_path / 'codex-home'
+    _write_test_models_cache(codex_home)
+
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(codex_home / 'models_cache.json'))
+    monkeypatch.setenv('CODEX_MODEL_OPTIONS', 'gpt-5.5,gpt-5.6-terra')
+
+    assert codex_config.get_codex_model_options() == ['gpt-5.5', 'gpt-5.6-terra']
+
+
+def test_model_catalog_default_starts_with_gpt56(monkeypatch, tmp_path):
+    missing_cache = tmp_path / 'missing-models-cache.json'
+
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(missing_cache))
+    monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
+
+    assert codex_config.get_codex_model_options()[:4] == [
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+    ]
 
 
 def _open_test_chat_crypto_session(client):
@@ -1012,6 +1046,36 @@ def test_build_codex_command_uses_app_bundle_cli_fallback(isolated_codex_workspa
     cmd = codex_chat._build_codex_command('sync prompt')
 
     assert cmd[0] == str(bundle_bin)
+
+
+def test_build_codex_command_prefers_standalone_candidate_over_app_bundle_path(
+        isolated_codex_workspace,
+        tmp_path,
+        monkeypatch):
+    standalone_bin = tmp_path / 'standalone' / 'codex'
+    app_bundle_bin = tmp_path / 'Codex.app' / 'Contents' / 'Resources' / 'codex'
+    standalone_bin.parent.mkdir(parents=True)
+    app_bundle_bin.parent.mkdir(parents=True)
+    standalone_bin.write_text('#!/usr/bin/env bash\n', encoding='utf-8')
+    app_bundle_bin.write_text('#!/usr/bin/env bash\n', encoding='utf-8')
+    standalone_bin.chmod(0o755)
+    app_bundle_bin.chmod(0o755)
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'darwin')
+    monkeypatch.setattr(
+        codex_chat.shutil,
+        'which',
+        lambda name: str(app_bundle_bin) if name == 'codex' else None,
+    )
+    monkeypatch.setattr(
+        codex_chat,
+        '_codex_cli_file_candidates',
+        lambda: (str(standalone_bin), str(app_bundle_bin)),
+    )
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[0] == str(standalone_bin)
 
 
 def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, monkeypatch):

@@ -1348,8 +1348,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=186' in template
-    assert '/static/css/app.css?v=185' in template
+    assert '/static/js/app.js?v=187' in template
+    assert '/static/css/app.css?v=186' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1371,8 +1371,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=185' in template
-    assert '/static/js/app.js?v=186' in template
+    assert '/static/css/app.css?v=186' in template
+    assert '/static/js/app.js?v=187' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():
@@ -1388,6 +1388,10 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert "fetchJson('/api/codex/git/message'" in app_js
     assert "agent_backend='dtgpt'" in (CODEX_APP_ROOT / 'services' / 'git_ops.py').read_text(encoding='utf-8')
     assert '.git-message-model-overlay' in app_css
+    assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';" in app_js
+    assert "body: JSON.stringify({ git_commit_message_model: selectedModel })" in app_js
+    assert 'elements.messageModelBtn.disabled' not in app_js
+    assert '저장된 모델: gpt-5.4-mini' in template
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

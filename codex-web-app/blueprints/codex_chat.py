@@ -17,6 +17,7 @@ from ..config import (
     CODEX_ENABLE_GIT_API,
     CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
     CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
     CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
     CODEX_SHOW_USAGE_LIMITS,
@@ -707,6 +708,7 @@ def codex_settings_update():
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
     service_tier = payload.get('service_tier')
     agent_backend = payload.get('agent_backend')
+    git_commit_message_model = payload.get('git_commit_message_model')
     app_server_pilot_enabled = None
     if 'app_server_pilot_enabled' in payload:
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
@@ -754,6 +756,13 @@ def codex_settings_update():
         if not normalized_agent_backend or normalized_agent_backend not in supported_agent_backends:
             return jsonify({'error': 'agent_backend 값이 올바르지 않습니다.'}), 400
         agent_backend = normalized_agent_backend
+    if git_commit_message_model is not None:
+        git_commit_message_model = str(git_commit_message_model).strip()
+        if len(git_commit_message_model) > CODEX_MAX_MODEL_CHARS:
+            return jsonify({'error': 'git_commit_message_model이 너무 깁니다.'}), 400
+        git_commit_message_model = (
+            git_commit_message_model or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        )
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
@@ -762,6 +771,7 @@ def codex_settings_update():
         service_tier=service_tier,
         agent_backend=agent_backend,
         app_server_pilot_enabled=app_server_pilot_enabled,
+        git_commit_message_model=git_commit_message_model,
     )
     snapshot = record_usage_snapshot_if_due()
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None

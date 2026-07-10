@@ -1237,10 +1237,10 @@
             <div class="git-message-model-body">
                 <label for="codex-git-message-model-select">Model</label>
                 <select id="codex-git-message-model-select" class="model-select" aria-label="커밋 메시지 생성 모델"></select>
-                <div class="git-message-model-status" id="codex-git-message-model-status">대화 기본 모델 사용</div>
+                <div class="git-message-model-status" id="codex-git-message-model-status">저장된 모델: gpt-5.4-mini</div>
             </div>
             <div class="git-message-model-footer">
-                <button class="btn ghost" type="button" id="codex-git-message-model-clear">기본값 사용</button>
+                <button class="btn ghost" type="button" id="codex-git-message-model-clear">기본값 선택</button>
                 <button class="btn primary" type="button" id="codex-git-message-model-apply">저장</button>
             </div>
         </div>
@@ -1448,6 +1448,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=186"></script>
+    <script src="/static/js/app.js?v=187"></script>
 </body>
 </html>

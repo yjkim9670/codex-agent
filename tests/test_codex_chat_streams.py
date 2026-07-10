@@ -1806,6 +1806,24 @@ def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
     assert disabled['app_server_pilot_enabled'] is False
 
 
+def test_git_commit_message_model_defaults_and_round_trips(tmp_path, monkeypatch):
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+
+    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4-mini'
+
+    updated = codex_chat.update_settings(git_commit_message_model='gpt-5.4')
+
+    assert updated['git_commit_message_model'] == 'gpt-5.4'
+    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4'
+    stored = json.loads(settings_path.read_text(encoding='utf-8'))
+    assert stored['git_commit_message_model'] == 'gpt-5.4'
+
+    restored = codex_chat.update_settings(git_commit_message_model='')
+    assert restored['git_commit_message_model'] == 'gpt-5.4-mini'
+
+
 def test_service_tier_setting_round_trips(tmp_path, monkeypatch):
     settings_path = tmp_path / 'settings.json'
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)

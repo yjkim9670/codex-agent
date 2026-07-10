@@ -99,6 +99,7 @@ const state = {
         reasoningOptions: [],
         serviceTier: null,
         serviceTierOptions: [],
+        gitCommitMessageModel: 'gpt-5.4-mini',
         securityPolicy: normalizeSecurityPolicy(CODEX_SECURITY_POLICY_CONFIG),
         structuredReportPresets: [],
         usage: null,
@@ -267,6 +268,7 @@ const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_DIFF_REQUEST_TIMEOUT_MS = 60000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
+const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';
 const GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY = 'codex.gitCommitMessageModel';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
@@ -500,8 +502,9 @@ let gitSyncOverlayPreviewKeyByTarget = {
     [GIT_SYNC_TARGET_CODEX_AGENT]: ''
 };
 let gitSyncOverlayFullscreen = false;
-let gitCommitMessageModel = '';
+let gitCommitMessageModel = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
 let gitCommitMessageGenerationInFlight = false;
+let gitCommitMessageModelSaveInFlight = false;
 let gitFileRevertingPath = '';
 const gitCommitPreviewCacheByKey = new Map();
 const gitCommitPreviewInFlightByKey = new Map();
@@ -2944,19 +2947,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (gitMessageModelApplyBtn) {
         gitMessageModelApplyBtn.addEventListener('click', event => {
             event.preventDefault();
-            applyGitCommitMessageModelSelection();
+            void applyGitCommitMessageModelSelection();
         });
     }
     if (gitMessageModelSelect) {
         gitMessageModelSelect.addEventListener('keydown', event => {
             if (event.key !== 'Enter') return;
             event.preventDefault();
-            applyGitCommitMessageModelSelection();
+            void applyGitCommitMessageModelSelection();
         });
         gitMessageModelSelect.addEventListener('change', () => {
             const elements = getGitCommitMessageModelOverlayElements();
             if (elements?.status) {
-                elements.status.textContent = gitMessageModelSelect.value || '대화 기본 모델 사용';
+                elements.status.textContent = `선택한 모델: ${normalizeGitCommitMessageModelSetting(gitMessageModelSelect.value)}`;
                 elements.status.classList.remove('is-error');
             }
         });
@@ -7951,6 +7954,9 @@ async function loadSettings({ silent = true } = {}) {
             reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
             serviceTier: normalizeServiceTierValue(result?.settings?.service_tier) || null,
             serviceTierOptions,
+            gitCommitMessageModel: normalizeGitCommitMessageModelSetting(
+                result?.settings?.git_commit_message_model
+            ),
             securityPolicy: normalizeSecurityPolicy(result?.security_policy),
             structuredReportPresets,
             usage: result?.usage || null,
@@ -7964,6 +7970,7 @@ async function loadSettings({ silent = true } = {}) {
             updateSessionStorageSummary(state.sessionStorage);
         }
         updateUsageSummary(state.settings.usage);
+        applyGitCommitMessageModelFromSettings(result?.settings);
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
@@ -8550,6 +8557,9 @@ async function updateSettings() {
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
         state.settings.serviceTier = normalizeServiceTierValue(result?.settings?.service_tier) || null;
+        state.settings.gitCommitMessageModel = normalizeGitCommitMessageModelSetting(
+            result?.settings?.git_commit_message_model
+        );
         state.settings.serviceTierOptions = serviceTierOptions.length > 0
             ? serviceTierOptions
             : state.settings.serviceTierOptions;
@@ -8578,6 +8588,7 @@ async function updateSettings() {
         );
         state.settings.loaded = true;
         updateUsageSummary(state.settings.usage);
+        applyGitCommitMessageModelFromSettings(result?.settings);
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
@@ -11166,37 +11177,41 @@ function setGitBranchOverlayLoading(isLoading) {
     if (elements.generateMessageBtn) {
         elements.generateMessageBtn.disabled = Boolean(isLoading) || gitCommitMessageGenerationInFlight;
     }
-    if (elements.messageModelBtn) {
-        elements.messageModelBtn.disabled = Boolean(isLoading);
-    }
     if (elements.selection) {
         elements.selection.textContent = isLoading ? '선택 -' : elements.selection.textContent;
     }
 }
 
+function normalizeGitCommitMessageModelSetting(model) {
+    return String(model || '').trim() || GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
+}
+
 function loadGitCommitMessageModelSetting() {
     try {
         const value = window.localStorage?.getItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY);
-        gitCommitMessageModel = typeof value === 'string' ? value.trim() : '';
+        gitCommitMessageModel = normalizeGitCommitMessageModelSetting(value);
     } catch (error) {
-        gitCommitMessageModel = '';
+        gitCommitMessageModel = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
     }
+    state.settings.gitCommitMessageModel = gitCommitMessageModel;
     return gitCommitMessageModel;
 }
 
-function saveGitCommitMessageModelSetting(model) {
-    gitCommitMessageModel = String(model || '').trim();
+function applyGitCommitMessageModelSetting(model) {
+    gitCommitMessageModel = normalizeGitCommitMessageModelSetting(model);
+    state.settings.gitCommitMessageModel = gitCommitMessageModel;
     try {
-        if (gitCommitMessageModel) {
-            window.localStorage?.setItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY, gitCommitMessageModel);
-        } else {
-            window.localStorage?.removeItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY);
-        }
+        window.localStorage?.setItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY, gitCommitMessageModel);
     } catch (error) {
-        // localStorage can be disabled in privacy modes; keep the in-memory value.
+        // localStorage is only a startup cache; the server setting remains authoritative.
     }
     syncGitCommitMessageModelLabels();
     return gitCommitMessageModel;
+}
+
+function applyGitCommitMessageModelFromSettings(settings) {
+    if (!settings || typeof settings !== 'object') return gitCommitMessageModel;
+    return applyGitCommitMessageModelSetting(settings.git_commit_message_model);
 }
 
 function getGitCommitMessageModelOptions() {
@@ -11210,13 +11225,12 @@ function getGitCommitMessageModelOptions() {
 }
 
 function formatGitCommitMessageModelStatus() {
-    return gitCommitMessageModel
-        ? `커밋 메시지 생성 모델: ${gitCommitMessageModel}`
-        : '커밋 메시지 생성 모델: 대화 기본값';
+    return `커밋 메시지 생성 모델: ${normalizeGitCommitMessageModelSetting(gitCommitMessageModel)}`;
 }
 
 function syncGitCommitMessageModelLabels() {
-    const label = gitCommitMessageModel ? `모델: ${gitCommitMessageModel}` : '모델 설정';
+    const model = normalizeGitCommitMessageModelSetting(gitCommitMessageModel);
+    const label = `모델: ${model}`;
     [
         document.getElementById('codex-branch-overlay-message-model'),
         document.getElementById('codex-sync-overlay-message-model')
@@ -11228,7 +11242,7 @@ function syncGitCommitMessageModelLabels() {
     });
     const status = document.getElementById('codex-git-message-model-status');
     if (status) {
-        status.textContent = gitCommitMessageModel ? gitCommitMessageModel : '대화 기본 모델 사용';
+        status.textContent = `저장된 모델: ${model}`;
         status.classList.remove('is-error');
     }
 }
@@ -11252,25 +11266,27 @@ function renderGitCommitMessageModelOptions() {
     const select = elements.select;
     const options = getGitCommitMessageModelOptions();
     select.innerHTML = '';
-    const defaultOption = document.createElement('option');
-    defaultOption.value = '';
-    defaultOption.textContent = '대화 기본 모델';
-    select.appendChild(defaultOption);
-    options.forEach(model => {
+    const selectedModel = normalizeGitCommitMessageModelSetting(gitCommitMessageModel);
+    const normalizedOptions = options.includes(GIT_COMMIT_MESSAGE_DEFAULT_MODEL)
+        ? options
+        : [GIT_COMMIT_MESSAGE_DEFAULT_MODEL, ...options];
+    normalizedOptions.forEach(model => {
         const value = String(model || '').trim();
         if (!value) return;
         const option = document.createElement('option');
         option.value = value;
-        option.textContent = value;
+        option.textContent = value === GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            ? `${value} (기본값)`
+            : value;
         select.appendChild(option);
     });
-    if (gitCommitMessageModel && !options.includes(gitCommitMessageModel)) {
+    if (!normalizedOptions.includes(selectedModel)) {
         const currentOption = document.createElement('option');
-        currentOption.value = gitCommitMessageModel;
-        currentOption.textContent = `${gitCommitMessageModel} (현재)`;
+        currentOption.value = selectedModel;
+        currentOption.textContent = `${selectedModel} (현재)`;
         select.appendChild(currentOption);
     }
-    select.value = gitCommitMessageModel || '';
+    select.value = selectedModel;
     syncGitCommitMessageModelLabels();
 }
 
@@ -11308,16 +11324,51 @@ function closeGitCommitMessageModelOverlay() {
     }
 }
 
-function applyGitCommitMessageModelSelection() {
+async function applyGitCommitMessageModelSelection() {
     const elements = getGitCommitMessageModelOverlayElements();
-    const selectedModel = elements?.select?.value || '';
-    saveGitCommitMessageModelSetting(selectedModel);
-    closeGitCommitMessageModelOverlay();
+    if (!elements?.select || gitCommitMessageModelSaveInFlight) return;
+    const selectedModel = normalizeGitCommitMessageModelSetting(elements.select.value);
+    gitCommitMessageModelSaveInFlight = true;
+    if (elements.applyBtn) elements.applyBtn.disabled = true;
+    if (elements.clearBtn) elements.clearBtn.disabled = true;
+    if (elements.status) {
+        elements.status.textContent = '저장 중...';
+        elements.status.classList.remove('is-error');
+    }
+    try {
+        const result = await fetchJson('/api/codex/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ git_commit_message_model: selectedModel })
+        });
+        applyGitCommitMessageModelFromSettings(result?.settings || {
+            git_commit_message_model: selectedModel
+        });
+        closeGitCommitMessageModelOverlay();
+        showToast(`커밋 메시지 모델 저장: ${gitCommitMessageModel}`, {
+            tone: 'success',
+            durationMs: 2400
+        });
+    } catch (error) {
+        if (elements.status) {
+            elements.status.textContent = normalizeError(error, '모델 설정을 저장하지 못했습니다.');
+            elements.status.classList.add('is-error');
+        }
+    } finally {
+        gitCommitMessageModelSaveInFlight = false;
+        if (elements.applyBtn) elements.applyBtn.disabled = false;
+        if (elements.clearBtn) elements.clearBtn.disabled = false;
+    }
 }
 
 function clearGitCommitMessageModelSelection() {
-    saveGitCommitMessageModelSetting('');
-    renderGitCommitMessageModelOptions();
+    const elements = getGitCommitMessageModelOverlayElements();
+    if (!elements?.select) return;
+    elements.select.value = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
+    if (elements.status) {
+        elements.status.textContent = `기본값 선택: ${GIT_COMMIT_MESSAGE_DEFAULT_MODEL}`;
+        elements.status.classList.remove('is-error');
+    }
 }
 
 function setGitCommitMessageStatus(elements, message = '', isError = false) {
@@ -12524,9 +12575,6 @@ function updateGitSyncOverlayActionButtonState(status) {
             || elements.generateMessageBtn.getAttribute('aria-busy') === 'true';
         const isLoading = elements.loading && !elements.loading.classList.contains('is-hidden');
         elements.generateMessageBtn.disabled = isBusy || isLoading || !canCommit;
-    }
-    if (elements.messageModelBtn) {
-        elements.messageModelBtn.disabled = repoMissing;
     }
     if (elements.pushBtn) {
         elements.pushBtn.classList.toggle('is-ready', hasPendingPush);

@@ -238,6 +238,28 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
     assert captured['kwargs']['model_override'] == 'gpt-5-codex'
 
 
+def test_git_message_uses_persisted_default_model_when_request_omits_model(monkeypatch):
+    captured = {}
+
+    def fake_execute_codex_prompt(prompt, **kwargs):
+        captured['prompt'] = prompt
+        captured['kwargs'] = kwargs
+        return '{}', None, None, None
+
+    monkeypatch.setattr(codex_chat, 'execute_codex_prompt', fake_execute_codex_prompt)
+    monkeypatch.setattr(
+        codex_chat,
+        'get_settings',
+        lambda: {'git_commit_message_model': 'gpt-5.4-mini'},
+    )
+
+    git_ops._execute_commit_message_prompt('commit prompt')
+
+    assert captured['kwargs']['model_override'] == 'gpt-5.4-mini'
+    assert captured['kwargs']['agent_backend'] == 'dtgpt'
+    assert captured['kwargs']['inherit_model_settings'] is False
+
+
 def test_git_commit_accepts_subject_and_body(tmp_path, monkeypatch):
     repo_root = tmp_path / 'workspace'
     _init_repo(repo_root)

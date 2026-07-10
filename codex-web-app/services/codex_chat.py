@@ -31,6 +31,7 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
     CODEX_CLI_PROFILE,
@@ -2245,6 +2246,10 @@ def _read_workspace_settings():
     app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
         data.get('app_server_pilot_enabled')
     )
+    git_commit_message_model = (
+        _normalize_model_setting(data.get('git_commit_message_model'))
+        or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+    )
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
@@ -2253,6 +2258,7 @@ def _read_workspace_settings():
         'service_tier': service_tier or None,
         'agent_backend': agent_backend,
         'app_server_pilot_enabled': app_server_pilot_enabled,
+        'git_commit_message_model': git_commit_message_model,
     }
 
 
@@ -2266,6 +2272,10 @@ def _write_workspace_settings(settings):
         'agent_backend': _normalize_agent_backend_setting(settings.get('agent_backend')),
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
+        ),
+        'git_commit_message_model': (
+            _normalize_model_setting(settings.get('git_commit_message_model'))
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
         ),
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2696,6 +2706,7 @@ def get_settings():
             or workspace_settings.get('service_tier')
             or workspace_settings.get('agent_backend')
             or workspace_settings.get('app_server_pilot_enabled')
+            or workspace_settings.get('git_commit_message_model')
         ):
             _write_workspace_settings(workspace_settings)
             return _merge_runtime_cli_settings(workspace_settings)
@@ -2706,6 +2717,7 @@ def get_settings():
             fallback['plan_mode_reasoning_effort'] = None
             fallback['agent_backend'] = _normalize_agent_backend_setting(None)
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
+            fallback['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
             _write_workspace_settings(fallback)
             return _merge_runtime_cli_settings(_read_workspace_settings())
     return _merge_runtime_cli_settings({
@@ -2716,6 +2728,7 @@ def get_settings():
         'service_tier': None,
         'agent_backend': _normalize_agent_backend_setting(None),
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
+        'git_commit_message_model': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     })
 
 
@@ -2726,7 +2739,8 @@ def update_settings(
         plan_mode_reasoning_effort=None,
         service_tier=None,
         agent_backend=None,
-        app_server_pilot_enabled=None):
+        app_server_pilot_enabled=None,
+        git_commit_message_model=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         if not current and not CODEX_SETTINGS_PATH.exists():
@@ -2736,6 +2750,7 @@ def update_settings(
             current['plan_mode_reasoning_effort'] = None
             current['agent_backend'] = _normalize_agent_backend_setting(None)
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
+            current['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
@@ -2745,6 +2760,10 @@ def update_settings(
             'agent_backend': _normalize_agent_backend_setting(current.get('agent_backend')),
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
+            ),
+            'git_commit_message_model': (
+                _normalize_model_setting(current.get('git_commit_message_model'))
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
             ),
         }
         if model is not None:
@@ -2763,6 +2782,11 @@ def update_settings(
             next_settings['agent_backend'] = _normalize_agent_backend_setting(agent_backend)
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
+        if git_commit_message_model is not None:
+            next_settings['git_commit_message_model'] = (
+                _normalize_model_setting(git_commit_message_model)
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            )
         _write_workspace_settings(next_settings)
         return _merge_runtime_cli_settings(next_settings)
 

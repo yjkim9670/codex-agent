@@ -339,6 +339,11 @@ def normalize_codex_model_name(model_name):
     return CODEX_MODEL_ALIASES.get(normalized, normalized)
 
 
+CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL = normalize_codex_model_name(
+    os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL') or 'gpt-5.4-mini'
+)
+
+
 def _normalize_model_options(options):
     normalized_options = []
     seen = set()

@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..config import REPO_ROOT, WORKSPACE_DIR
+from ..config import CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL, REPO_ROOT, WORKSPACE_DIR
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
@@ -1872,11 +1872,18 @@ def _parse_commit_message_generation_output(output_text):
 
 
 def _execute_commit_message_prompt(prompt, model_override=None):
-    from .codex_chat import execute_codex_prompt
+    from .codex_chat import execute_codex_prompt, get_settings
+
+    resolved_model = str(model_override or '').strip()
+    if not resolved_model:
+        resolved_model = str(
+            get_settings().get('git_commit_message_model')
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        ).strip()
 
     return execute_codex_prompt(
         prompt,
-        model_override=model_override,
+        model_override=resolved_model,
         question_only=True,
         agent_backend='dtgpt',
         inherit_model_settings=False,
@@ -1892,7 +1899,14 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
             'error_code': 'git_commit_message_no_files'
         }
     prompt = _build_commit_message_generation_prompt(diff_context)
-    model_override = str(payload.get('model') or '').strip() or None
+    model_override = str(payload.get('model') or '').strip()
+    if not model_override:
+        from .codex_chat import get_settings
+
+        model_override = str(
+            get_settings().get('git_commit_message_model')
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        ).strip()
     output_text, error_text, token_usage, timing = _execute_commit_message_prompt(
         prompt,
         model_override=model_override,

@@ -1812,11 +1812,20 @@ def _build_commit_message_generation_prompt(diff_context):
     return '\n\n'.join([
         'You are generating a Git commit message for a local coding workspace.',
         'Return JSON only. Do not use Markdown fences or explanatory text.',
-        'The JSON schema is: {"subject": "type(scope): concise summary", "body": "- bullet\\n- bullet"}',
+        (
+            'The JSON schema is: '
+            '{"subject": "type(scope): concise English summary", '
+            '"body_en": ["English bullet 1", "English bullet 2"], '
+            '"body_ko": ["Korean translation 1", "Korean translation 2"]}'
+        ),
         'Rules:',
-        '- The subject must be one line and should be <= 72 characters when possible.',
+        '- The subject must be written in English only, on one line, using ASCII characters.',
+        '- The subject should be <= 72 characters when possible.',
         '- Prefer Conventional Commit style when the change type is clear.',
-        '- The body must be 2-5 concise bullet lines in Korean or English matching the diff context.',
+        '- body_en must contain 2-5 concise English items matching the diff context.',
+        '- body_ko must contain faithful Korean translations of the body_en items.',
+        '- body_en and body_ko must have the same number of items in the same order.',
+        '- Do not include bullet prefixes or language headings inside the array items.',
         '- Do not invent behavior that is not supported by the diff.',
         '- Do not mention file counts unless that is the most useful summary.',
         '',
@@ -1834,6 +1843,69 @@ def _strip_json_code_fence(text):
         raw = re.sub(r'^```(?:json)?\s*', '', raw, flags=re.IGNORECASE)
         raw = re.sub(r'\s*```$', '', raw)
     return raw.strip()
+
+
+def _normalize_commit_message_body_items(value):
+    if isinstance(value, list):
+        candidates = value
+    elif isinstance(value, str):
+        candidates = value.splitlines()
+    else:
+        candidates = []
+
+    normalized = []
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        item = candidate.strip()
+        item = re.sub(r'^(?:[-*\u2022]|\d+[.)])\s*', '', item).strip()
+        if item:
+            normalized.append(item)
+    return normalized
+
+
+def _build_bilingual_commit_message_body(body_en, body_ko):
+    english_items = _normalize_commit_message_body_items(body_en)
+    korean_items = _normalize_commit_message_body_items(body_ko)
+    if (
+        not english_items
+        or not korean_items
+        or len(english_items) != len(korean_items)
+    ):
+        return ''
+    english_section = '\n'.join(f'- {item}' for item in english_items)
+    korean_section = '\n'.join(f'- {item}' for item in korean_items)
+    return f'{english_section}\n\n{korean_section}'
+
+
+def _is_english_only_commit_subject(subject):
+    value = str(subject or '').strip()
+    return bool(value and value.isascii() and re.search(r'[A-Za-z]', value))
+
+
+def _is_bilingual_commit_message_body(body):
+    value = str(body or '').strip()
+    sections = value.split('\n\n')
+    if len(sections) != 2:
+        return False
+    english_section, korean_section = sections
+    english_items = _normalize_commit_message_body_items(english_section)
+    korean_items = _normalize_commit_message_body_items(korean_section)
+    return bool(
+        english_items
+        and len(english_items) == len(korean_items)
+        and re.search(r'[A-Za-z]', english_section)
+        and not re.search(r'[가-힣]', english_section)
+        and re.search(r'[가-힣]', korean_section)
+    )
+
+
+def _build_ai_commit_message_fallback():
+    return (
+        'chore: update workspace changes',
+        '- Apply the selected workspace changes.\n\n'
+        '- 선택한 작업공간 변경사항을 반영합니다.',
+    )
 
 
 def _parse_commit_message_generation_output(output_text):
@@ -1860,11 +1932,16 @@ def _parse_commit_message_generation_output(output_text):
             or parsed.get('commit_message')
             or ''
         )
-        body = parsed.get('body') or parsed.get('commit_message_body') or ''
+        body = _build_bilingual_commit_message_body(
+            parsed.get('body_en') or parsed.get('english_body'),
+            parsed.get('body_ko') or parsed.get('korean_body'),
+        )
+        if not body:
+            body = parsed.get('body') or parsed.get('commit_message_body') or ''
 
     subject = str(subject or '').strip().splitlines()[0].strip()
     if len(subject) > GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS:
-        subject = f'{subject[:GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS - 1]}…'
+        subject = f'{subject[:GIT_COMMIT_MESSAGE_SUBJECT_MAX_CHARS - 3]}...'
     body = str(body or '').strip()
     if len(body) > GIT_COMMIT_MESSAGE_BODY_MAX_CHARS:
         body = f'{body[:GIT_COMMIT_MESSAGE_BODY_MAX_CHARS - 1]}…'
@@ -1917,15 +1994,11 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
             'error_code': 'git_commit_message_generation_failed'
         }
     subject, body = _parse_commit_message_generation_output(output_text or '')
-    if not subject:
-        fallback = _build_commit_message(analysis=diff_context.get('analysis') or {})
-        subject = str(fallback.get('subject') or '').strip()
-        body = body or str(fallback.get('body') or '').strip()
-    if not subject:
-        return None, {
-            'error': '생성된 커밋 메시지를 파싱하지 못했습니다.',
-            'error_code': 'git_commit_message_parse_failed'
-        }
+    fallback_subject, fallback_body = _build_ai_commit_message_fallback()
+    if not _is_english_only_commit_subject(subject):
+        subject = fallback_subject
+    if not _is_bilingual_commit_message_body(body):
+        body = fallback_body
     full_message = subject
     if body:
         full_message = f'{subject}\n\n{body}'

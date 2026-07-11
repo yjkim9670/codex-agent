@@ -211,7 +211,9 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
         captured['prompt'] = prompt
         captured['kwargs'] = kwargs
         return (
-            '{"subject":"feat: update tracked preview","body":"- tracked 파일 변경 내용을 반영\\n- 커밋 본문 생성을 검증"}',
+            '{"subject":"feat: update tracked preview",'
+            '"body_en":["Reflect tracked file changes","Verify bilingual commit body generation"],'
+            '"body_ko":["추적 파일 변경사항을 반영","이중 언어 커밋 본문 생성을 검증"]}',
             None,
             {'total_tokens': 10},
             {'cli_runtime_ms': 1},
@@ -227,15 +229,56 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
 
     assert result['ok'] is True
     assert result['commit_message_subject'] == 'feat: update tracked preview'
-    assert '- tracked 파일 변경 내용을 반영' in result['commit_message_body']
+    assert result['commit_message_body'] == (
+        '- Reflect tracked file changes\n'
+        '- Verify bilingual commit body generation\n\n'
+        '- 추적 파일 변경사항을 반영\n'
+        '- 이중 언어 커밋 본문 생성을 검증'
+    )
     assert result['generator_agent_backend'] == 'dtgpt'
     assert result['generator_execution_policy'] == 'read_only_ephemeral'
     assert result['generator_model'] == 'gpt-5-codex'
     assert 'diff --git a/tracked.txt b/tracked.txt' in captured['prompt']
+    assert 'The subject must be written in English only' in captured['prompt']
+    assert 'faithful Korean translations of the body_en items' in captured['prompt']
     assert captured['kwargs']['agent_backend'] == 'dtgpt'
     assert captured['kwargs']['question_only'] is True
     assert captured['kwargs']['inherit_model_settings'] is False
     assert captured['kwargs']['model_override'] == 'gpt-5-codex'
+
+
+def test_git_message_parser_formats_bilingual_body_and_rejects_non_english_subject():
+    subject, body = git_ops._parse_commit_message_generation_output(
+        '{"subject":"fix: 한국어 제목",'
+        '"body_en":["Handle generated comments"],'
+        '"body_ko":["생성된 코멘트를 처리합니다"]}'
+    )
+
+    assert git_ops._is_english_only_commit_subject(subject) is False
+    assert body == (
+        '- Handle generated comments\n\n'
+        '- 생성된 코멘트를 처리합니다'
+    )
+    assert 'English' not in body
+    assert '한국어' not in body
+    assert git_ops._is_bilingual_commit_message_body(body) is True
+
+
+def test_git_message_fallback_is_english_and_bilingual():
+    subject, body = git_ops._build_ai_commit_message_fallback()
+
+    assert git_ops._is_english_only_commit_subject(subject) is True
+    assert git_ops._is_bilingual_commit_message_body(body) is True
+
+
+def test_git_message_parser_rejects_unpaired_bilingual_items():
+    _, body = git_ops._parse_commit_message_generation_output(
+        '{"subject":"fix: keep translations paired",'
+        '"body_en":["First change","Second change"],'
+        '"body_ko":["첫 번째 변경"]}'
+    )
+
+    assert body == ''
 
 
 def test_git_message_uses_persisted_default_model_when_request_omits_model(monkeypatch):

@@ -415,8 +415,8 @@ const SESSION_DETAIL_REQUEST_TIMEOUT_MS = 20000;
 const SESSION_MUTATION_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_REQUEST_TIMEOUT_MS = 25000;
 const USAGE_HISTORY_DEFAULT_HOURS = 24 * 3;
-const USAGE_HISTORY_MAX_HOURS = 24 * 30;
-const USAGE_HISTORY_RANGE_HOURS = Object.freeze([72, 168, 336, 720]);
+const USAGE_HISTORY_MAX_HOURS = 24 * 90;
+const USAGE_HISTORY_RANGE_HOURS = Object.freeze([72, 168, 336, 720, 2160]);
 const USAGE_HISTORY_WEEKLY_HOURS = 24 * 7;
 const OPENAI_API_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
 // Standard API prices per 1M text tokens from OpenAI's pricing docs.
@@ -13178,8 +13178,8 @@ function isFiniteUsageHistoryPrice(value) {
 }
 
 function resolveUsageHistoryCurrentAverage(history) {
-    return history?.averages?.requested
-        || history?.relation?.averages?.requested
+    return history?.relation?.averages?.requested
+        || history?.averages?.requested
         || history?.averages?.daily
         || history?.relation?.averages?.daily
         || history?.averages?.weekly
@@ -13412,6 +13412,7 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
 
     const relationScope = resolveUsageHistoryRelationScope(history);
     const relation = history?.relation || {};
+    const relationPlanLabel = String(relation?.plan_label || history?.current_plan?.label || '').trim();
     if (costEstimate) {
         const projectedTokens = Number(costEstimate.projectedTokens);
         appendUsageHistoryMetricCard(elements.ratios, {
@@ -13445,6 +13446,9 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
             ? `${formatCompactTokenCount(rawRatioValue)} tok`
             : '--';
         const metaParts = [`scope ${relationScope}`];
+        if (relationPlanLabel) {
+            metaParts.push(`plan ${relationPlanLabel}`);
+        }
         if (Number.isFinite(sampleCount)) {
             metaParts.push(`samples ${Math.max(0, Math.round(sampleCount))}`);
         }
@@ -13465,15 +13469,15 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
     const averageItems = [
         {
             label: 'Range avg/hour',
-            entry: history?.averages?.requested || history?.relation?.averages?.requested || null
+            entry: history?.relation?.averages?.requested || history?.averages?.requested || null
         },
         {
             label: '24h avg/hour',
-            entry: history?.averages?.daily || history?.relation?.averages?.daily || null
+            entry: history?.relation?.averages?.daily || history?.averages?.daily || null
         },
         {
             label: '7d avg/hour',
-            entry: history?.averages?.weekly || history?.relation?.averages?.weekly || null
+            entry: history?.relation?.averages?.weekly || history?.averages?.weekly || null
         }
     ];
     averageItems.forEach(item => {
@@ -13485,6 +13489,9 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
         const scope = String(item?.entry?.scope || relationScope || '').trim() || relationScope;
         const weeklyPace = resolveUsageHistoryAverageWeeklyPace(history, item?.entry);
         const metaParts = [`scope ${scope}`];
+        if (relationPlanLabel) {
+            metaParts.push(`plan ${relationPlanLabel}`);
+        }
         if (weeklyPace) {
             metaParts.push(`wk rate ${formatUsageHistoryRatePercent(weeklyPace.percentPerHour, '/h')}`);
         }
@@ -13554,6 +13561,11 @@ function renderUsageHistoryLegend(history) {
     const tokenCounterResetCount = Number(history?.token_counter_reset_detected_count);
     const relationScope = resolveUsageHistoryRelationScope(history);
     const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
+    const currentPlanLabel = String(history?.current_plan?.label || history?.relation?.plan_label || '').trim();
+    const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(
+        history,
+        Array.isArray(history?.items) ? history.items : []
+    );
 
     const legendItems = [
         {
@@ -13565,6 +13577,18 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: '',
             text: `Workspace Δ ${Number.isFinite(workspaceDeltaTotal) ? formatNumber(workspaceDeltaTotal) : '--'} · Account Δ ${Number.isFinite(accountDeltaTotal) ? formatNumber(accountDeltaTotal) : '--'}`
+        });
+    }
+    if (currentPlanLabel) {
+        legendItems.push({
+            key: '',
+            text: `Current plan ${currentPlanLabel}`
+        });
+    }
+    if (visiblePlanTransitions.length > 0) {
+        legendItems.push({
+            key: 'plan-transition',
+            text: `Plan 경계 ${formatNumber(visiblePlanTransitions.length)}회`
         });
     }
     if (Number.isFinite(fiveHourResetCount)) {
@@ -13671,6 +13695,10 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
     }
+    const planLabel = String(item?.plan_period_label || '').trim();
+    if (planLabel) {
+        parts.push(`Plan ${planLabel}`);
+    }
     parts.push(
         `5h ${formatUsageHistoryPercentValue(item?.five_hour_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_five_hour_used_percent)})`,
         `5h reset ${formatResetTimestamp(item?.five_hour_resets_at) || '--'}`,
@@ -13679,6 +13707,9 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     );
     if (resetLabels.length > 0) {
         parts.push(`Reset 감지 ${resetLabels.join(', ')}`);
+    }
+    if (item?.plan_transition_detected) {
+        parts.push(`Plan 경계 ${formatUsageHistoryTimestamp(item?.plan_transition_at)}`);
     }
     const recordedAt = formatUsageHistoryTimestamp(item?.recorded_at);
     if (recordedAt !== '--' && recordedAt !== formatUsageHistoryTimestamp(item?.bucket_start)) {
@@ -13696,6 +13727,30 @@ function attachUsageHistoryTooltip(node, tooltipText) {
 
 function buildUsageHistoryResetTooltip(item, label, relationScope) {
     return buildUsageHistoryPointTooltip(item, `${label} 리셋 감지`, relationScope);
+}
+
+function buildUsageHistoryPlanTransitionTooltip(transition) {
+    const fromLabel = String(transition?.from_plan_label || transition?.from_plan_id || '').trim() || '이전 플랜';
+    const toLabel = String(transition?.to_plan_label || transition?.to_plan_id || '').trim() || '새 플랜';
+    return `Plan 전환 · ${fromLabel} → ${toLabel} · ${formatUsageHistoryTimestamp(transition?.at)}`;
+}
+
+function resolveVisibleUsagePlanTransitions(history, items = []) {
+    const transitions = Array.isArray(history?.plan_transitions) ? history.plan_transitions : [];
+    if (!Array.isArray(items) || items.length === 0) return [];
+    const firstAt = new Date(items[0]?.bucket_start || items[0]?.recorded_at || '').getTime();
+    const lastItem = items[items.length - 1] || {};
+    const lastBucketAt = new Date(lastItem?.bucket_start || '').getTime();
+    const lastRecordedAt = new Date(lastItem?.recorded_at || '').getTime();
+    const lastAt = Math.max(
+        Number.isFinite(lastBucketAt) ? lastBucketAt : Number.NEGATIVE_INFINITY,
+        Number.isFinite(lastRecordedAt) ? lastRecordedAt : Number.NEGATIVE_INFINITY
+    );
+    if (!Number.isFinite(firstAt) || !Number.isFinite(lastAt)) return [];
+    return transitions.filter(transition => {
+        const transitionAt = new Date(transition?.at || '').getTime();
+        return Number.isFinite(transitionAt) && transitionAt >= firstAt && transitionAt <= lastAt;
+    });
 }
 
 function resolveUsageHistoryChartDisplayHeight(containerWidth, mobileLayout) {
@@ -13818,6 +13873,25 @@ function renderUsageHistoryChart(history) {
     const xStep = items.length > 1 ? plotWidth / (items.length - 1) : 0;
     const barWidth = Math.max(2, Math.min(14, plotWidth / Math.max(items.length * 1.8, 1)));
     const xAt = index => margin.left + (xStep * index);
+    const itemTimestamps = items.map(item => new Date(item?.bucket_start || item?.recorded_at || '').getTime());
+    const xAtTimestamp = value => {
+        const target = new Date(value || '').getTime();
+        if (!Number.isFinite(target)) return null;
+        if (!Number.isFinite(itemTimestamps[0]) || target <= itemTimestamps[0]) return xAt(0);
+        const lastIndex = itemTimestamps.length - 1;
+        if (!Number.isFinite(itemTimestamps[lastIndex]) || target >= itemTimestamps[lastIndex]) return xAt(lastIndex);
+        for (let index = 1; index < itemTimestamps.length; index += 1) {
+            const previousTime = itemTimestamps[index - 1];
+            const currentTime = itemTimestamps[index];
+            if (!Number.isFinite(previousTime) || !Number.isFinite(currentTime) || target > currentTime) {
+                continue;
+            }
+            const duration = Math.max(1, currentTime - previousTime);
+            const ratio = Math.max(0, Math.min(1, (target - previousTime) / duration));
+            return xAt(index - 1) + (xStep * ratio);
+        }
+        return xAt(lastIndex);
+    };
     const yToken = value => tokenBottom - ((Math.max(0, value) / maxTokenDelta) * tokenPlotHeight);
     const yPercent = value => {
         const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
@@ -13980,16 +14054,41 @@ function renderUsageHistoryChart(history) {
 
     const appendPercentLine = (values, className, pointColor, metricLabel, hitClassName) => {
         const points = [];
+        const segments = [];
+        let segment = [];
         values.forEach((value, index) => {
-            if (!Number.isFinite(value)) return;
-            points.push({ x: xAt(index), y: yPercent(value), value, index });
+            if (!Number.isFinite(value)) {
+                if (segment.length > 0) segments.push(segment);
+                segment = [];
+                return;
+            }
+            const item = items[index] || {};
+            const previousItem = index > 0 ? (items[index - 1] || {}) : null;
+            const planChanged = Boolean(
+                previousItem
+                && item?.plan_period_id
+                && previousItem?.plan_period_id
+                && item.plan_period_id !== previousItem.plan_period_id
+            );
+            if ((item?.plan_transition_detected || planChanged) && segment.length > 0) {
+                segments.push(segment);
+                segment = [];
+            }
+            const point = { x: xAt(index), y: yPercent(value), value, index };
+            points.push(point);
+            segment.push(point);
         });
-        if (points.length < 2) return;
-        const d = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`).join(' ');
-        chart.appendChild(createUsageHistorySvgNode('path', {
-            d,
-            class: className
-        }));
+        if (segment.length > 0) segments.push(segment);
+        segments.forEach(currentSegment => {
+            if (currentSegment.length < 2) return;
+            const d = currentSegment
+                .map((point, index) => `${index === 0 ? 'M' : 'L'}${point.x} ${point.y}`)
+                .join(' ');
+            chart.appendChild(createUsageHistorySvgNode('path', {
+                d,
+                class: className
+            }));
+        });
         points.forEach(point => {
             chart.appendChild(createUsageHistorySvgNode('circle', {
                 cx: point.x,
@@ -14009,6 +14108,43 @@ function renderUsageHistoryChart(history) {
 
     appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(220, 90, 52, 0.95)', '5h used', 'five-hour-hit');
     appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
+
+    const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);
+    visiblePlanTransitions.forEach((transition, index) => {
+        const x = xAtTimestamp(transition?.at);
+        if (!Number.isFinite(x)) return;
+        const tooltip = buildUsageHistoryPlanTransitionTooltip(transition);
+        const guide = createUsageHistorySvgNode('line', {
+            x1: x,
+            y1: margin.top,
+            x2: x,
+            y2: percentBottom,
+            class: 'plan-transition-guide'
+        });
+        attachUsageHistoryTooltip(guide, tooltip);
+        chart.appendChild(guide);
+        const fromLabel = String(transition?.from_plan_label || transition?.from_plan_id || '').trim();
+        const toLabel = String(transition?.to_plan_label || transition?.to_plan_id || '').trim();
+        const markerLabel = [fromLabel, toLabel].filter(Boolean).join(' → ') || 'Plan transition';
+        const label = createUsageHistorySvgNode('text', {
+            x: Math.max(margin.left + 4, Math.min(margin.left + plotWidth - 4, x)),
+            y: margin.top + typography.axisFontSize + (index * (typography.axisFontSize + 3)),
+            'text-anchor': x > margin.left + (plotWidth * 0.78) ? 'end' : (x < margin.left + (plotWidth * 0.22) ? 'start' : 'middle'),
+            class: 'plan-transition-label',
+            tabindex: '0'
+        });
+        label.textContent = markerLabel;
+        attachUsageHistoryTooltip(label, tooltip);
+        chart.appendChild(label);
+        appendTooltipHitRect(
+            x - (mobileLayout ? 9 : 7),
+            margin.top,
+            mobileLayout ? 18 : 14,
+            percentBottom - margin.top,
+            tooltip,
+            'plan-transition-hit'
+        );
+    });
 
     const appendResetMarker = (item, index, label, keyClass, offset) => {
         const x = xAt(index);
@@ -14117,14 +14253,21 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         } else if (relationScope === 'workspace') {
             metaParts.push('Relation workspace scope');
         }
+        const currentPlanLabel = String(history?.current_plan?.label || history?.relation?.plan_label || '').trim();
+        if (currentPlanLabel) {
+            metaParts.push(`Plan ${currentPlanLabel}`);
+        }
         const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
+        const planPathText = typeof history?.plan_config_path === 'string'
+            ? history.plan_config_path.trim()
+            : '';
         const workspaceTokenPath = typeof history?.scope?.workspace_token_usage_path === 'string'
             ? history.scope.workspace_token_usage_path.trim()
             : '';
         const accountTokenPath = typeof history?.scope?.account_token_usage_path === 'string'
             ? history.scope.account_token_usage_path.trim()
             : '';
-        const titleParts = [pathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
+        const titleParts = [pathText, planPathText, workspaceTokenPath, accountTokenPath].filter(Boolean);
         if (pathText) {
             metaParts.push(pathText);
             elements.meta.setAttribute('title', titleParts.join('\n'));

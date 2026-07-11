@@ -52,6 +52,7 @@ from ..config import (
     CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
     CODEX_USAGE_HISTORY_PATH,
+    CODEX_USAGE_PLAN_PATH,
     CODEX_SKIP_GIT_REPO_CHECK,
     CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS,
     CODEX_STREAM_IMAGEGEN_FINAL_RESPONSE_TIMEOUT_SECONDS,
@@ -176,9 +177,9 @@ _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
-_USAGE_HISTORY_RETENTION_DAYS = 30
-_USAGE_HISTORY_DEFAULT_HOURS = 24 * _USAGE_HISTORY_RETENTION_DAYS
-_USAGE_HISTORY_MAX_ITEMS = _USAGE_HISTORY_DEFAULT_HOURS
+_USAGE_HISTORY_RETENTION_DAYS = 90
+_USAGE_HISTORY_DEFAULT_HOURS = 24 * 30
+_USAGE_HISTORY_MAX_ITEMS = 24 * _USAGE_HISTORY_RETENTION_DAYS
 _TOKENS_PER_PERCENT_MIN_SAMPLES = 2
 _TOKENS_PER_PERCENT_MIN_PERCENT_SUM = 1.0
 _TOKENS_PER_PERCENT_MEDIUM_SAMPLES = 3
@@ -4638,6 +4639,141 @@ def _normalize_optional_timestamp(value):
     return normalize_timestamp(parsed)
 
 
+def _normalize_usage_plan_period(value, index=0):
+    if not isinstance(value, dict):
+        return None
+
+    raw_starts_at = value.get('starts_at')
+    raw_ends_at = value.get('ends_at')
+    starts_at = _normalize_optional_timestamp(raw_starts_at)
+    ends_at = _normalize_optional_timestamp(raw_ends_at)
+    if raw_starts_at not in (None, '') and not starts_at:
+        return None
+    if raw_ends_at not in (None, '') and not ends_at:
+        return None
+
+    starts_dt = parse_timestamp(starts_at) if starts_at else None
+    ends_dt = parse_timestamp(ends_at) if ends_at else None
+    if starts_dt is not None and ends_dt is not None and ends_dt <= starts_dt:
+        return None
+
+    period_id = str(value.get('id') or '').strip()
+    if period_id:
+        period_id = re.sub(r'[^a-zA-Z0-9._-]+', '-', period_id).strip('-')
+    if not period_id:
+        period_id = f'plan-{max(1, int(index) + 1)}'
+
+    label = str(value.get('label') or value.get('name') or period_id).strip()
+    if not label:
+        label = period_id
+    label = label[:80]
+
+    multiplier = _coerce_float(value.get('multiplier'))
+    if multiplier is not None and multiplier <= 0:
+        multiplier = None
+
+    return {
+        'id': period_id[:80],
+        'label': label,
+        'multiplier': round(multiplier, 4) if multiplier is not None else None,
+        'starts_at': starts_at,
+        'ends_at': ends_at,
+    }
+
+
+def _normalize_usage_plan_periods(value):
+    raw_periods = value
+    if isinstance(value, dict):
+        raw_periods = value.get('periods')
+        if raw_periods is None:
+            raw_periods = value.get('plan_periods')
+    if not isinstance(raw_periods, list):
+        return []
+
+    periods = []
+    seen_ids = set()
+    for index, raw_period in enumerate(raw_periods):
+        period = _normalize_usage_plan_period(raw_period, index=index)
+        if not period:
+            continue
+        base_id = period['id']
+        period_id = base_id
+        suffix = 2
+        while period_id in seen_ids:
+            period_id = f'{base_id}-{suffix}'[:80]
+            suffix += 1
+        period['id'] = period_id
+        periods.append(period)
+        seen_ids.add(period_id)
+
+    periods.sort(key=lambda period: (
+        0 if not period.get('starts_at') else 1,
+        period.get('starts_at') or '',
+        period.get('id') or '',
+    ))
+    return periods
+
+
+def _load_usage_plan_periods(path=CODEX_USAGE_PLAN_PATH):
+    try:
+        if not path.exists():
+            return []
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        _LOGGER.debug('usage plan periods load skipped', exc_info=True)
+        return []
+    return _normalize_usage_plan_periods(payload)
+
+
+def _build_usage_plan_transitions(plan_periods):
+    transitions = []
+    periods = _normalize_usage_plan_periods(plan_periods)
+    for index, period in enumerate(periods):
+        transition_at = str(period.get('starts_at') or '').strip()
+        if index <= 0 or not transition_at:
+            continue
+        previous_period = periods[index - 1]
+        transitions.append({
+            'at': transition_at,
+            'from_plan_id': previous_period.get('id') or '',
+            'from_plan_label': previous_period.get('label') or previous_period.get('id') or '',
+            'to_plan_id': period.get('id') or '',
+            'to_plan_label': period.get('label') or period.get('id') or '',
+        })
+    return transitions
+
+
+def _resolve_usage_plan_period(plan_periods, value):
+    timestamp = parse_timestamp(value)
+    if timestamp is None:
+        return None
+    matched = None
+    for period in plan_periods:
+        starts_at = parse_timestamp(period.get('starts_at')) if period.get('starts_at') else None
+        ends_at = parse_timestamp(period.get('ends_at')) if period.get('ends_at') else None
+        if starts_at is not None and timestamp < starts_at:
+            continue
+        if ends_at is not None and timestamp >= ends_at:
+            continue
+        matched = period
+    return matched
+
+
+def _find_usage_plan_transition(plan_transitions, previous_value, current_value):
+    previous_at = parse_timestamp(previous_value)
+    current_at = parse_timestamp(current_value)
+    if previous_at is None or current_at is None or current_at < previous_at:
+        return None
+    matched = None
+    for transition in plan_transitions:
+        transition_at = parse_timestamp(transition.get('at'))
+        if transition_at is None:
+            continue
+        if previous_at < transition_at <= current_at:
+            matched = transition
+    return matched
+
+
 def _empty_usage_history_ledger():
     return {
         'version': _USAGE_HISTORY_VERSION,
@@ -4910,13 +5046,21 @@ def _limit_reset_detected(previous_reset, current_reset, previous_used, current_
     return current_used + 0.1 < previous_used
 
 
-def _build_usage_history_items(items):
+def _build_usage_history_items(items, plan_periods=None):
+    normalized_plan_periods = _normalize_usage_plan_periods(plan_periods)
+    plan_transitions = _build_usage_plan_transitions(normalized_plan_periods)
     derived = []
     previous = None
+    previous_plan_period = None
     for raw in items:
         snapshot = _normalize_usage_history_snapshot(raw)
         if not snapshot:
             continue
+        snapshot_time = snapshot.get('recorded_at') or snapshot.get('bucket_start')
+        current_plan_period = _resolve_usage_plan_period(normalized_plan_periods, snapshot_time)
+        current_plan_id = current_plan_period.get('id') if current_plan_period else ''
+        previous_plan_id = previous_plan_period.get('id') if previous_plan_period else ''
+        plan_transition = None
         workspace_token_total = _coerce_non_negative_int(
             snapshot.get('token_workspace_total')
         )
@@ -4936,6 +5080,29 @@ def _build_usage_history_items(items):
         delta_five_hour_used = None
         delta_weekly_used = None
         if previous:
+            previous_time = previous.get('recorded_at') or previous.get('bucket_start')
+            plan_transition = _find_usage_plan_transition(
+                plan_transitions,
+                previous_time,
+                snapshot_time,
+            )
+            if plan_transition is None and previous_plan_id != current_plan_id:
+                plan_transition = {
+                    'at': (
+                        current_plan_period.get('starts_at')
+                        if current_plan_period and current_plan_period.get('starts_at')
+                        else snapshot_time
+                    ),
+                    'from_plan_id': previous_plan_id,
+                    'from_plan_label': (
+                        previous_plan_period.get('label') if previous_plan_period else ''
+                    ),
+                    'to_plan_id': current_plan_id,
+                    'to_plan_label': (
+                        current_plan_period.get('label') if current_plan_period else ''
+                    ),
+                }
+
             previous_workspace_total = _coerce_non_negative_int(
                 previous.get('token_workspace_total')
             )
@@ -4957,38 +5124,39 @@ def _build_usage_history_items(items):
 
             previous_five_used = previous.get('five_hour_used_percent')
             previous_weekly_used = previous.get('weekly_used_percent')
-            if (
-                isinstance(previous_five_used, (int, float))
-                and isinstance(five_hour_used, (int, float))
-            ):
-                delta_five_hour_used = round(five_hour_used - previous_five_used, 3)
-            if (
-                isinstance(previous_weekly_used, (int, float))
-                and isinstance(weekly_used, (int, float))
-            ):
-                delta_weekly_used = round(weekly_used - previous_weekly_used, 3)
+            if plan_transition is None:
+                if (
+                    isinstance(previous_five_used, (int, float))
+                    and isinstance(five_hour_used, (int, float))
+                ):
+                    delta_five_hour_used = round(five_hour_used - previous_five_used, 3)
+                if (
+                    isinstance(previous_weekly_used, (int, float))
+                    and isinstance(weekly_used, (int, float))
+                ):
+                    delta_weekly_used = round(weekly_used - previous_weekly_used, 3)
 
-            previous_five_reset = str(previous.get('five_hour_resets_at') or '').strip()
-            current_five_reset = str(snapshot.get('five_hour_resets_at') or '').strip()
-            if _limit_reset_detected(
-                previous_five_reset,
-                current_five_reset,
-                previous_five_used,
-                five_hour_used,
-            ):
-                five_hour_reset_detected = True
-                reset_detected = True
+                previous_five_reset = str(previous.get('five_hour_resets_at') or '').strip()
+                current_five_reset = str(snapshot.get('five_hour_resets_at') or '').strip()
+                if _limit_reset_detected(
+                    previous_five_reset,
+                    current_five_reset,
+                    previous_five_used,
+                    five_hour_used,
+                ):
+                    five_hour_reset_detected = True
+                    reset_detected = True
 
-            previous_weekly_reset = str(previous.get('weekly_resets_at') or '').strip()
-            current_weekly_reset = str(snapshot.get('weekly_resets_at') or '').strip()
-            if _limit_reset_detected(
-                previous_weekly_reset,
-                current_weekly_reset,
-                previous_weekly_used,
-                weekly_used,
-            ):
-                weekly_reset_detected = True
-                reset_detected = True
+                previous_weekly_reset = str(previous.get('weekly_resets_at') or '').strip()
+                current_weekly_reset = str(snapshot.get('weekly_resets_at') or '').strip()
+                if _limit_reset_detected(
+                    previous_weekly_reset,
+                    current_weekly_reset,
+                    previous_weekly_used,
+                    weekly_used,
+                ):
+                    weekly_reset_detected = True
+                    reset_detected = True
 
         def token_delta(current_key, previous_key=None):
             previous_key = previous_key or current_key
@@ -5073,6 +5241,12 @@ def _build_usage_history_items(items):
             'delta_account_requests': max(0, int(delta_account_requests)),
             'delta_five_hour_used_percent': delta_five_hour_used,
             'delta_weekly_used_percent': delta_weekly_used,
+            'plan_period_id': current_plan_id,
+            'plan_period_label': current_plan_period.get('label') if current_plan_period else '',
+            'plan_multiplier': current_plan_period.get('multiplier') if current_plan_period else None,
+            'plan_transition_detected': plan_transition is not None,
+            'plan_transition_at': plan_transition.get('at') if plan_transition else '',
+            'plan_relation_eligible': plan_transition is None,
             'reset_detected': reset_detected,
             'five_hour_reset_detected': five_hour_reset_detected,
             'weekly_reset_detected': weekly_reset_detected,
@@ -5085,6 +5259,7 @@ def _build_usage_history_items(items):
             'tokens_per_weekly_percent_account': account_tokens_per_weekly_percent,
         })
         previous = snapshot
+        previous_plan_period = current_plan_period
     return derived
 
 
@@ -5236,6 +5411,76 @@ def _summarize_usage_history_hourly_average(history_items, window_hours, delta_k
     }
 
 
+def _usage_history_effective_window_hours(history_items, window_hours, constrain_to_span=False):
+    normalized_window_hours = max(1, _coerce_non_negative_int(window_hours) or 1)
+    if not constrain_to_span or not history_items:
+        return normalized_window_hours
+    timestamps = [
+        parse_timestamp(item.get('bucket_start'))
+        for item in history_items
+    ]
+    timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+    if not timestamps:
+        return normalized_window_hours
+    span_hours = max(1, int(math.ceil((max(timestamps) - min(timestamps)).total_seconds() / 3600)) + 1)
+    return min(normalized_window_hours, span_hours)
+
+
+def _build_usage_history_average_set(
+    history_items,
+    requested_hours,
+    relation_scope,
+    constrain_to_span=False,
+):
+    requested_window = _usage_history_effective_window_hours(
+        history_items,
+        requested_hours,
+        constrain_to_span=constrain_to_span,
+    )
+    daily_window = _usage_history_effective_window_hours(
+        history_items,
+        24,
+        constrain_to_span=constrain_to_span,
+    )
+    weekly_window = _usage_history_effective_window_hours(
+        history_items,
+        24 * 7,
+        constrain_to_span=constrain_to_span,
+    )
+    requested_average = _summarize_usage_history_hourly_average(
+        history_items,
+        requested_window,
+        delta_key='delta_tokens',
+    )
+    daily_average = _summarize_usage_history_hourly_average(
+        history_items,
+        daily_window,
+        delta_key='delta_tokens',
+    )
+    weekly_average = _summarize_usage_history_hourly_average(
+        history_items,
+        weekly_window,
+        delta_key='delta_tokens',
+    )
+    return {
+        'requested': {
+            **requested_average,
+            'scope': relation_scope,
+            'label': f'{requested_window}h',
+        },
+        'daily': {
+            **daily_average,
+            'scope': relation_scope,
+            'label': f'{daily_window}h',
+        },
+        'weekly': {
+            **weekly_average,
+            'scope': relation_scope,
+            'label': f'{weekly_window}h',
+        },
+    }
+
+
 def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
     requested_hours = _coerce_non_negative_int(hours)
     if requested_hours is None or requested_hours <= 0:
@@ -5249,10 +5494,15 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         except Exception:
             ledger = _empty_usage_history_ledger()
 
+    plan_periods = _load_usage_plan_periods(path=CODEX_USAGE_PLAN_PATH)
+    if not plan_periods:
+        plan_periods = _normalize_usage_plan_periods(ledger.get('plan_periods'))
+    plan_transitions = _build_usage_plan_transitions(plan_periods)
+
     items = list(ledger.get('items') or [])
     if requested_hours > 0 and len(items) > requested_hours:
         items = items[-requested_hours:]
-    history_items = _build_usage_history_items(items)
+    history_items = _build_usage_history_items(items, plan_periods=plan_periods)
     first_bucket = history_items[0]['bucket_start'] if history_items else ''
     last_bucket = history_items[-1]['bucket_start'] if history_items else ''
     first_recorded = history_items[0]['recorded_at'] if history_items else ''
@@ -5300,23 +5550,37 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             for item in history_items
         ]
 
+    current_plan_period = _resolve_usage_plan_period(
+        plan_periods,
+        last_recorded or last_bucket,
+    )
+    current_plan_id = current_plan_period.get('id') if current_plan_period else ''
+    has_plan_boundaries = len(plan_periods) > 1 and bool(plan_transitions)
+    relation_history_items = history_items
+    if current_plan_id and has_plan_boundaries:
+        relation_history_items = [
+            item for item in history_items
+            if item.get('plan_period_id') == current_plan_id
+            and item.get('plan_relation_eligible', True)
+        ]
+
     workspace_five_hour_relation = _aggregate_tokens_per_percent(
-        history_items,
+        relation_history_items,
         'delta_five_hour_used_percent',
         token_delta_key='delta_workspace_tokens',
     )
     workspace_weekly_relation = _aggregate_tokens_per_percent(
-        history_items,
+        relation_history_items,
         'delta_weekly_used_percent',
         token_delta_key='delta_workspace_tokens',
     )
     account_five_hour_relation = _aggregate_tokens_per_percent(
-        history_items,
+        relation_history_items,
         'delta_five_hour_used_percent',
         token_delta_key='delta_account_tokens',
     )
     account_weekly_relation = _aggregate_tokens_per_percent(
-        history_items,
+        relation_history_items,
         'delta_weekly_used_percent',
         token_delta_key='delta_account_tokens',
     )
@@ -5330,9 +5594,76 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
     five_hour_reset_count = sum(1 for item in history_items if item.get('five_hour_reset_detected'))
     weekly_reset_count = sum(1 for item in history_items if item.get('weekly_reset_detected'))
     token_counter_reset_count = sum(1 for item in history_items if item.get('token_counter_reset_detected'))
-    requested_average = _summarize_usage_history_hourly_average(history_items, requested_hours, delta_key='delta_tokens')
-    daily_average = _summarize_usage_history_hourly_average(history_items, 24, delta_key='delta_tokens')
-    weekly_average = _summarize_usage_history_hourly_average(history_items, 24 * 7, delta_key='delta_tokens')
+    plan_transition_count = sum(1 for item in history_items if item.get('plan_transition_detected'))
+    averages = _build_usage_history_average_set(
+        history_items,
+        requested_hours,
+        relation_scope,
+    )
+    relation_averages = _build_usage_history_average_set(
+        relation_history_items,
+        requested_hours,
+        relation_scope,
+        constrain_to_span=has_plan_boundaries,
+    )
+
+    relation_by_plan = []
+    plan_period_summaries = []
+    for plan_period in plan_periods:
+        period_id = plan_period.get('id') or ''
+        period_items = [
+            item for item in history_items
+            if item.get('plan_period_id') == period_id
+        ]
+        eligible_period_items = [
+            item for item in period_items
+            if item.get('plan_relation_eligible', True)
+        ]
+        period_averages = _build_usage_history_average_set(
+            eligible_period_items,
+            requested_hours,
+            relation_scope,
+            constrain_to_span=has_plan_boundaries,
+        )
+        plan_period_summaries.append({
+            **plan_period,
+            'sample_count': len(period_items),
+            'relation_sample_count': len(eligible_period_items),
+            'is_current': period_id == current_plan_id,
+        })
+        relation_by_plan.append({
+            **plan_period,
+            'sample_count': len(period_items),
+            'relation_sample_count': len(eligible_period_items),
+            'is_current': period_id == current_plan_id,
+            'five_hour': _aggregate_tokens_per_percent(
+                eligible_period_items,
+                'delta_five_hour_used_percent',
+                token_delta_key='delta_tokens',
+            ),
+            'weekly': _aggregate_tokens_per_percent(
+                eligible_period_items,
+                'delta_weekly_used_percent',
+                token_delta_key='delta_tokens',
+            ),
+            'averages': period_averages,
+        })
+
+    first_chart_at = parse_timestamp(first_bucket or first_recorded)
+    last_chart_at = parse_timestamp(last_recorded or last_bucket)
+    visible_plan_transitions = []
+    for transition in plan_transitions:
+        transition_at = parse_timestamp(transition.get('at'))
+        in_requested_range = bool(
+            transition_at is not None
+            and first_chart_at is not None
+            and last_chart_at is not None
+            and first_chart_at <= transition_at <= last_chart_at
+        )
+        visible_plan_transitions.append({
+            **transition,
+            'in_requested_range': in_requested_range,
+        })
 
     return {
         'path': str(CODEX_USAGE_HISTORY_PATH),
@@ -5355,27 +5686,23 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         'five_hour_reset_detected_count': five_hour_reset_count,
         'weekly_reset_detected_count': weekly_reset_count,
         'token_counter_reset_detected_count': token_counter_reset_count,
+        'plan_transition_detected_count': plan_transition_count,
+        'plan_config_path': str(CODEX_USAGE_PLAN_PATH),
+        'plan_periods': plan_period_summaries,
+        'plan_transitions': visible_plan_transitions,
+        'current_plan': ({
+            **current_plan_period,
+            'is_current': True,
+        } if current_plan_period else None),
         'relation': {
             'scope': relation_scope,
+            'plan_period_id': current_plan_id,
+            'plan_label': current_plan_period.get('label') if current_plan_period else '',
+            'plan_multiplier': current_plan_period.get('multiplier') if current_plan_period else None,
             'five_hour': five_hour_relation,
             'weekly': weekly_relation,
-            'averages': {
-                'requested': {
-                    **requested_average,
-                    'scope': relation_scope,
-                    'label': f'{requested_hours}h'
-                },
-                'daily': {
-                    **daily_average,
-                    'scope': relation_scope,
-                    'label': '24h'
-                },
-                'weekly': {
-                    **weekly_average,
-                    'scope': relation_scope,
-                    'label': '7d'
-                },
-            },
+            'averages': relation_averages,
+            'by_plan': relation_by_plan,
             'workspace': {
                 'five_hour': workspace_five_hour_relation,
                 'weekly': workspace_weekly_relation,
@@ -5394,23 +5721,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
             'relation_scope': relation_scope,
             'token_delta_key': token_delta_key,
         },
-        'averages': {
-            'requested': {
-                **requested_average,
-                'scope': relation_scope,
-                'label': f'{requested_hours}h'
-            },
-            'daily': {
-                **daily_average,
-                'scope': relation_scope,
-                'label': '24h'
-            },
-            'weekly': {
-                **weekly_average,
-                'scope': relation_scope,
-                'label': '7d'
-            },
-        },
+        'averages': averages,
         'items': history_items
     }
 

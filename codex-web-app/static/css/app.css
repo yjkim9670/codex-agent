@@ -4960,7 +4960,7 @@ body.is-mermaid-diagram-viewer-open {
 
 .usage-history-range-tabs {
     display: inline-grid;
-    grid-template-columns: repeat(4, minmax(48px, 1fr));
+    grid-template-columns: repeat(5, minmax(48px, 1fr));
     gap: 2px;
     padding: 2px;
     border: 1px solid var(--border);
@@ -5241,6 +5241,24 @@ body.is-mermaid-diagram-viewer-open {
     fill: rgba(61, 130, 197, 0.95);
 }
 
+.usage-history-chart .plan-transition-guide {
+    stroke: #8a3ffc;
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+    opacity: 0.9;
+    vector-effect: non-scaling-stroke;
+}
+
+.usage-history-chart .plan-transition-label {
+    fill: #6929c4;
+    stroke: var(--surface-muted);
+    stroke-width: 3px;
+    paint-order: stroke fill;
+    font-size: var(--usage-history-chart-axis-font-size, 11px);
+    font-weight: 700;
+    cursor: crosshair;
+}
+
 .usage-history-legend {
     font-size: 12px;
     color: var(--text-secondary);
@@ -5283,6 +5301,12 @@ body.is-mermaid-diagram-viewer-open {
 .usage-history-legend-swatch.weekly-reset {
     background: rgba(61, 130, 197, 0.95);
     transform: rotate(45deg);
+}
+
+.usage-history-legend-swatch.plan-transition {
+    width: 3px;
+    border-radius: 1px;
+    background: #8a3ffc;
 }
 
 .usage-history-empty {

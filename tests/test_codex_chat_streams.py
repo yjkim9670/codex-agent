@@ -67,6 +67,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     token_usage_path = tmp_path / 'codex_token_usage.json'
     account_token_usage_path = tmp_path / 'codex_account_token_usage.json'
     usage_history_path = tmp_path / 'codex_usage_history.json'
+    usage_plan_path = tmp_path / 'codex_usage_plans.json'
     workspace_dir = tmp_path / 'workspace'
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -74,6 +75,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_TOKEN_USAGE_PATH', token_usage_path)
     monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNT_TOKEN_USAGE_PATH', account_token_usage_path)
     monkeypatch.setattr(codex_chat, 'CODEX_USAGE_HISTORY_PATH', usage_history_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_USAGE_PLAN_PATH', usage_plan_path)
     monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', workspace_dir)
     monkeypatch.setattr(
         codex_chat,
@@ -93,6 +95,7 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         'store_path': store_path,
         'token_usage_path': token_usage_path,
         'usage_history_path': usage_history_path,
+        'usage_plan_path': usage_plan_path,
         'workspace_dir': workspace_dir,
     }
 
@@ -521,7 +524,7 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     loaded = codex_chat._load_usage_history_ledger(path=history_path)
     assert len(loaded['items']) == expected_hours
 
-    summary = codex_chat.get_usage_history_summary(hours=24 * 30)
+    summary = codex_chat.get_usage_history_summary(hours=expected_hours)
 
     assert summary['requested_hours'] == expected_hours
     assert summary['retention_days'] == expected_days
@@ -534,6 +537,95 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     assert summary['averages']['weekly']['avg_tokens_per_hour'] == pytest.approx(120)
     assert summary['averages']['weekly']['token_total'] == 120 * (24 * 7)
     assert summary['averages']['weekly']['sample_count'] == 24 * 7
+
+
+def test_usage_history_splits_limit_relations_at_plan_boundary(isolated_codex_workspace):
+    history_path = isolated_codex_workspace['usage_history_path']
+    plan_path = isolated_codex_workspace['usage_plan_path']
+    start = datetime(2026, 7, 14, 10, 0, tzinfo=codex_chat.KST)
+    transition_at = codex_chat.normalize_timestamp(start + timedelta(hours=1, minutes=30))
+
+    plan_path.write_text(json.dumps({
+        'version': 1,
+        'timezone': 'Asia/Seoul',
+        'periods': [
+            {
+                'id': 'pro-20x',
+                'label': 'Pro 20x',
+                'multiplier': 20,
+                'starts_at': None,
+                'ends_at': transition_at,
+            },
+            {
+                'id': 'pro-5x',
+                'label': 'Pro 5x',
+                'multiplier': 5,
+                'starts_at': transition_at,
+                'ends_at': None,
+            },
+        ],
+    }), encoding='utf-8')
+
+    totals = [0, 100, 300, 500]
+    five_hour_used = [1.0, 2.0, 60.0, 62.0]
+    weekly_used = [10.0, 11.0, 50.0, 52.0]
+    items = []
+    for index, total in enumerate(totals):
+        recorded_at = codex_chat.normalize_timestamp(start + timedelta(hours=index))
+        items.append({
+            'bucket_start': recorded_at,
+            'recorded_at': recorded_at,
+            'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
+            'workspace_path': str(isolated_codex_workspace['workspace_dir']),
+            'token_workspace_total': total,
+            'token_workspace_input': total,
+            'token_workspace_cached_input': 0,
+            'token_workspace_output': 0,
+            'token_workspace_reasoning_output': 0,
+            'token_workspace_requests': index,
+            'token_account_total': 0,
+            'token_account_input': 0,
+            'token_account_cached_input': 0,
+            'token_account_output': 0,
+            'token_account_reasoning_output': 0,
+            'token_account_requests': 0,
+            'five_hour_used_percent': five_hour_used[index],
+            'weekly_used_percent': weekly_used[index],
+        })
+
+    codex_chat._save_usage_history_ledger({
+        'version': codex_chat._USAGE_HISTORY_VERSION,
+        'updated_at': items[-1]['recorded_at'],
+        'bucket_hours': codex_chat._USAGE_HISTORY_BUCKET_HOURS,
+        'timezone': 'Asia/Seoul',
+        'items': items,
+    }, path=history_path)
+
+    summary = codex_chat.get_usage_history_summary(hours=24)
+
+    assert summary['current_plan']['id'] == 'pro-5x'
+    assert summary['relation']['plan_period_id'] == 'pro-5x'
+    assert summary['plan_transition_detected_count'] == 1
+    assert summary['plan_transitions'] == [{
+        'at': transition_at,
+        'from_plan_id': 'pro-20x',
+        'from_plan_label': 'Pro 20x',
+        'to_plan_id': 'pro-5x',
+        'to_plan_label': 'Pro 5x',
+        'in_requested_range': True,
+    }]
+    assert summary['items'][2]['plan_transition_detected'] is True
+    assert summary['items'][2]['delta_five_hour_used_percent'] is None
+    assert summary['items'][2]['delta_weekly_used_percent'] is None
+    assert summary['items'][2]['delta_tokens'] == 200
+    assert summary['relation']['five_hour']['raw_tokens_per_percent'] == pytest.approx(100)
+    assert summary['relation']['weekly']['raw_tokens_per_percent'] == pytest.approx(100)
+    assert summary['relation']['averages']['requested']['token_total'] == 200
+    assert summary['relation']['averages']['requested']['window_hours'] == 1
+
+    by_plan = {entry['id']: entry for entry in summary['relation']['by_plan']}
+    assert by_plan['pro-20x']['five_hour']['raw_tokens_per_percent'] == pytest.approx(100)
+    assert by_plan['pro-5x']['five_hour']['raw_tokens_per_percent'] == pytest.approx(100)
 
 
 def test_extract_exec_json_summary_parses_usage_and_last_agent_text():

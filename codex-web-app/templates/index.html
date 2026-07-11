@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=186">
+    <link rel="stylesheet" href="/static/css/app.css?v=187">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1045,6 +1045,7 @@
                         <button class="usage-history-range-btn" type="button" data-hours="168" aria-pressed="false">7일</button>
                         <button class="usage-history-range-btn" type="button" data-hours="336" aria-pressed="false">14일</button>
                         <button class="usage-history-range-btn" type="button" data-hours="720" aria-pressed="false">30일</button>
+                        <button class="usage-history-range-btn" type="button" data-hours="2160" aria-pressed="false">90일</button>
                     </div>
                     <div class="usage-history-cost-inline" id="codex-usage-history-cost-summary">API estimate --</div>
                 </div>
@@ -1448,6 +1449,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=187"></script>
+    <script src="/static/js/app.js?v=188"></script>
 </body>
 </html>

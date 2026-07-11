@@ -990,9 +990,9 @@ textarea {
 
 .branch-overlay-card {
     position: relative;
-    width: min(760px, calc(100vw - 48px));
-    height: min(90dvh, 860px);
-    max-height: calc(100dvh - 24px);
+    width: min(640px, calc(100vw - 48px));
+    height: min(80vh, 720px);
+    max-height: min(80vh, 720px);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--surface);
@@ -1219,41 +1219,9 @@ textarea {
 }
 
 .branch-overlay-loading,
-.branch-overlay-empty,
-.branch-overlay-history-loading {
+.branch-overlay-empty {
     font-size: 12px;
     color: var(--text-muted);
-}
-
-.branch-overlay-sections {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.branch-overlay-section {
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-}
-
-.branch-overlay-section-files {
-    flex: 1.05 1 0;
-}
-
-.branch-overlay-section-history {
-    flex: 0.95 1 0;
-}
-
-.branch-overlay-section-files:has(.branch-overlay-list.is-hidden) {
-    flex: 0 0 auto;
-}
-
-.branch-overlay-history-list {
-    min-height: 150px;
 }
 
 .branch-overlay-list {
@@ -10674,18 +10642,6 @@ label.hover-tooltip,
 
     .sync-overlay-sections {
         gap: 8px;
-    }
-
-    .branch-overlay-section-files {
-        flex: 0.95 1 0;
-    }
-
-    .branch-overlay-section-history {
-        flex: 1.05 1 0;
-    }
-
-    .branch-overlay-history-list {
-        min-height: 140px;
     }
 
     .sync-overlay-section-files {

@@ -483,7 +483,6 @@ let gitOverlaySelectionTouched = false;
 let gitBranchOverlayCollapsedFolders = new Set();
 let gitBranchOverlayPreviewKey = '';
 let gitBranchOverlayFullscreen = false;
-let gitBranchRemoteHistoryLoading = false;
 let gitHistoryDetailReturnFocus = null;
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
@@ -2904,7 +2903,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (branchOverlayRefresh) {
         branchOverlayRefresh.addEventListener('click', () => {
-            void refreshGitBranchOverlayData({ force: true, silent: false });
+            void refreshGitBranchStatus({ force: true, updateOverlay: true });
         });
     }
     const syncOverlay = document.getElementById('codex-sync-overlay');
@@ -11167,11 +11166,7 @@ function getGitBranchOverlayElements() {
         fullscreenBtn: document.getElementById('codex-branch-overlay-fullscreen'),
         loading: document.getElementById('codex-branch-overlay-loading'),
         empty: document.getElementById('codex-branch-overlay-empty'),
-        list: document.getElementById('codex-branch-overlay-list'),
-        historyTitle: document.getElementById('codex-branch-overlay-history-title'),
-        historyLoading: document.getElementById('codex-branch-overlay-history-loading'),
-        historyEmpty: document.getElementById('codex-branch-overlay-history-empty'),
-        historyList: document.getElementById('codex-branch-overlay-history-list')
+        list: document.getElementById('codex-branch-overlay-list')
     };
 }
 
@@ -11206,19 +11201,6 @@ function setGitBranchOverlayLoading(isLoading) {
     }
     if (elements.selection) {
         elements.selection.textContent = isLoading ? '선택 -' : elements.selection.textContent;
-    }
-}
-
-function setGitBranchRemoteHistoryLoading(isLoading) {
-    gitBranchRemoteHistoryLoading = Boolean(isLoading);
-    const elements = getGitBranchOverlayElements();
-    if (!elements) return;
-    if (elements.historyLoading) {
-        elements.historyLoading.classList.toggle('is-hidden', !gitBranchRemoteHistoryLoading);
-    }
-    if (gitBranchRemoteHistoryLoading) {
-        elements.historyEmpty?.classList.add('is-hidden');
-        elements.historyList?.classList.add('is-hidden');
     }
 }
 
@@ -12282,23 +12264,6 @@ function setGitOverlaySelectionState(selectAll) {
     });
 }
 
-function renderGitBranchRemoteHistoryPanel(history = getGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE)) {
-    const elements = getGitBranchOverlayElements();
-    if (!elements || gitBranchRemoteHistoryLoading) return;
-    const remoteRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
-        ? history.remoteMainRef.trim()
-        : '(unknown remote)';
-    if (elements.historyTitle) {
-        elements.historyTitle.textContent = `${remoteRef} 원격 이력`;
-    }
-    renderGitRemoteHistoryList({
-        listElement: elements.historyList,
-        emptyElement: elements.historyEmpty,
-        history: history?.remoteMainHistory,
-        error: history?.remoteMainHistoryError
-    });
-}
-
 function renderGitBranchOverlay(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
@@ -12400,7 +12365,6 @@ function renderGitBranchOverlay(status) {
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
-    renderGitBranchRemoteHistoryPanel();
 }
 
 function isGitBranchOverlayOpen() {
@@ -12435,16 +12399,12 @@ function openGitBranchOverlay() {
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
     setGitBranchOverlayLoading(true);
-    setGitBranchRemoteHistoryLoading(true);
-    void refreshGitBranchOverlayData({ force: true });
+    void refreshGitBranchStatus({ force: true, updateOverlay: true });
 }
 
 function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
-    if (isGitHistoryDetailOverlayOpen()) {
-        closeGitHistoryDetailOverlay();
-    }
     gitBranchOverlayPreviewKey = '';
     resetGitCommitMessageFields(elements);
     setGitBranchOverlayFullscreen(false);
@@ -22407,31 +22367,6 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     }
 }
 
-async function refreshGitBranchOverlayRemoteHistory({ force = false, silent = true } = {}) {
-    setGitBranchRemoteHistoryLoading(true);
-    try {
-        return await fetchGitSyncHistory(force, GIT_SYNC_TARGET_WORKSPACE, {
-            branch: normalizeGitSyncBranchName(gitBranchStatusCache?.branch)
-        });
-    } catch (error) {
-        if (!silent) {
-            const message = normalizeGitActionError(error, '원격 이력 조회에 실패했습니다.');
-            showToast(`원격 이력 조회 실패: ${message}`, { tone: 'error', durationMs: 5200 });
-        }
-        return null;
-    } finally {
-        setGitBranchRemoteHistoryLoading(false);
-        if (isGitBranchOverlayOpen()) {
-            renderGitBranchRemoteHistoryPanel(getGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE));
-        }
-    }
-}
-
-async function refreshGitBranchOverlayData({ force = false, silent = true } = {}) {
-    await refreshGitBranchStatus({ force, updateOverlay: true });
-    return refreshGitBranchOverlayRemoteHistory({ force, silent });
-}
-
 async function refreshGitSyncOverlayHistory({ force = false, silent = false } = {}) {
     const elements = getGitSyncOverlayElements();
     if (!elements) return null;
@@ -23036,8 +22971,6 @@ async function handleGitPush(button, options = {}) {
             setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
             if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
                 await refreshGitSyncOverlayHistory({ force: true, silent: true });
-            } else if (isGitBranchOverlayOpen() && repoTarget === GIT_SYNC_TARGET_WORKSPACE) {
-                await refreshGitBranchOverlayRemoteHistory({ force: true, silent: true });
             }
         }
     } catch (error) {

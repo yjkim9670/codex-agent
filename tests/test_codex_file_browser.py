@@ -1348,8 +1348,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=189' in template
-    assert '/static/css/app.css?v=188' in template
+    assert '/static/js/app.js?v=190' in template
+    assert '/static/css/app.css?v=189' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1371,8 +1371,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=188' in template
-    assert '/static/js/app.js?v=189' in template
+    assert '/static/css/app.css?v=189' in template
+    assert '/static/js/app.js?v=190' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():
@@ -1394,22 +1394,22 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert '저장된 모델: gpt-5.4-mini' in template
 
 
-def test_git_remote_history_is_shared_with_branch_overlay_and_opens_detail_overlay():
+def test_git_remote_history_stays_in_sync_overlay_and_opens_detail_overlay():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
     template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
 
-    assert 'id="codex-branch-overlay-history-list"' in template
-    assert 'id="codex-branch-overlay-history-empty"' in template
+    assert 'id="codex-branch-overlay-history-list"' not in template
+    assert 'id="codex-branch-overlay-history-empty"' not in template
     assert 'id="codex-git-history-detail-overlay"' in template
     assert 'id="codex-git-history-detail-title"' in template
     assert 'id="codex-git-history-detail-comment"' in template
     assert 'function renderGitRemoteHistoryList(options = {})' in app_js
-    assert 'function refreshGitBranchOverlayRemoteHistory(' in app_js
+    assert 'function refreshGitBranchOverlayRemoteHistory(' not in app_js
     assert 'openGitHistoryDetailOverlay(entry, item)' in app_js
     assert 'formatGitHistoryDetailToastText' not in app_js
     assert '.git-history-detail-overlay' in app_css
-    assert '.branch-overlay-section-history' in app_css
+    assert '.branch-overlay-section-history' not in app_css
 
 
 def test_markdown_new_window_uses_loaded_app_stylesheet():

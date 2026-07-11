@@ -990,9 +990,9 @@ textarea {
 
 .branch-overlay-card {
     position: relative;
-    width: min(640px, calc(100vw - 48px));
-    height: min(80vh, 720px);
-    max-height: min(80vh, 720px);
+    width: min(760px, calc(100vw - 48px));
+    height: min(90dvh, 860px);
+    max-height: calc(100dvh - 24px);
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     background: var(--surface);
@@ -1219,9 +1219,41 @@ textarea {
 }
 
 .branch-overlay-loading,
-.branch-overlay-empty {
+.branch-overlay-empty,
+.branch-overlay-history-loading {
     font-size: 12px;
     color: var(--text-muted);
+}
+
+.branch-overlay-sections {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.branch-overlay-section {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.branch-overlay-section-files {
+    flex: 1.05 1 0;
+}
+
+.branch-overlay-section-history {
+    flex: 0.95 1 0;
+}
+
+.branch-overlay-section-files:has(.branch-overlay-list.is-hidden) {
+    flex: 0 0 auto;
+}
+
+.branch-overlay-history-list {
+    min-height: 150px;
 }
 
 .branch-overlay-list {
@@ -1805,6 +1837,121 @@ textarea {
     justify-content: flex-end;
     gap: 8px;
     padding: 10px 18px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.git-history-detail-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 2460;
+}
+
+.git-history-detail-overlay.is-visible {
+    display: flex;
+}
+
+.git-history-detail-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.52);
+}
+
+.git-history-detail-card {
+    position: relative;
+    width: min(620px, calc(100vw - 48px));
+    max-height: min(78dvh, 680px);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.git-history-detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.git-history-detail-heading {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.git-history-detail-title {
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.git-history-detail-subtitle {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.git-history-detail-close {
+    flex: 0 0 auto;
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.git-history-detail-body {
+    min-height: 0;
+    padding: 16px 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+}
+
+.git-history-detail-label {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.git-history-detail-comment {
+    min-height: 120px;
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-muted);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow: auto;
+}
+
+.git-history-detail-comment.is-empty {
+    color: var(--text-muted);
+}
+
+.git-history-detail-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 12px 20px 18px;
     border-top: 1px solid var(--border);
     background: var(--surface);
 }
@@ -10215,6 +10362,15 @@ label.hover-tooltip,
         max-height: calc(100dvh - 32px);
     }
 
+    .git-history-detail-overlay {
+        padding: 16px;
+    }
+
+    .git-history-detail-card {
+        width: min(520px, calc(100vw - 32px));
+        max-height: calc(100dvh - 32px);
+    }
+
     .sync-overlay {
         padding: 16px;
     }
@@ -10336,6 +10492,13 @@ label.hover-tooltip,
     .branch-overlay-header,
     .branch-overlay-body,
     .branch-overlay-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
+    .git-history-detail-header,
+    .git-history-detail-body,
+    .git-history-detail-footer {
         padding-left: 16px;
         padding-right: 16px;
     }
@@ -10511,6 +10674,18 @@ label.hover-tooltip,
 
     .sync-overlay-sections {
         gap: 8px;
+    }
+
+    .branch-overlay-section-files {
+        flex: 0.95 1 0;
+    }
+
+    .branch-overlay-section-history {
+        flex: 1.05 1 0;
+    }
+
+    .branch-overlay-history-list {
+        min-height: 140px;
     }
 
     .sync-overlay-section-files {

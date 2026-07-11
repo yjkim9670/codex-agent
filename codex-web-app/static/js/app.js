@@ -483,6 +483,8 @@ let gitOverlaySelectionTouched = false;
 let gitBranchOverlayCollapsedFolders = new Set();
 let gitBranchOverlayPreviewKey = '';
 let gitBranchOverlayFullscreen = false;
+let gitBranchRemoteHistoryLoading = false;
+let gitHistoryDetailReturnFocus = null;
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -2181,6 +2183,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const syncOverlayMessageModelBtn = document.getElementById('codex-sync-overlay-message-model');
     const syncOverlayPushBtn = document.getElementById('codex-sync-overlay-push');
     const syncOverlayRefreshBtn = document.getElementById('codex-sync-overlay-refresh');
+    const gitHistoryDetailOverlay = document.getElementById('codex-git-history-detail-overlay');
+    const gitHistoryDetailCloseBtn = document.getElementById('codex-git-history-detail-close');
+    const gitHistoryDetailCloseFooterBtn = document.getElementById('codex-git-history-detail-close-footer');
     const gitMessageModelOverlay = document.getElementById('codex-git-message-model-overlay');
     const gitMessageModelCloseBtn = document.getElementById('codex-git-message-model-close');
     const gitMessageModelClearBtn = document.getElementById('codex-git-message-model-clear');
@@ -2899,7 +2904,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (branchOverlayRefresh) {
         branchOverlayRefresh.addEventListener('click', () => {
-            void refreshGitBranchStatus({ force: true, updateOverlay: true });
+            void refreshGitBranchOverlayData({ force: true, silent: false });
         });
     }
     const syncOverlay = document.getElementById('codex-sync-overlay');
@@ -2926,6 +2931,20 @@ document.addEventListener('DOMContentLoaded', () => {
             setGitSyncOverlayFullscreen(!gitSyncOverlayFullscreen);
         });
         syncGitOverlayFullscreenButton(syncOverlayFullscreen, gitSyncOverlayFullscreen);
+    }
+    if (gitHistoryDetailOverlay) {
+        gitHistoryDetailOverlay.addEventListener('click', event => {
+            const target = event.target;
+            if (target && target.dataset?.action === 'close') {
+                closeGitHistoryDetailOverlay();
+            }
+        });
+    }
+    if (gitHistoryDetailCloseBtn) {
+        gitHistoryDetailCloseBtn.addEventListener('click', closeGitHistoryDetailOverlay);
+    }
+    if (gitHistoryDetailCloseFooterBtn) {
+        gitHistoryDetailCloseFooterBtn.addEventListener('click', closeGitHistoryDetailOverlay);
     }
     if (gitMessageModelOverlay) {
         gitMessageModelOverlay.addEventListener('click', event => {
@@ -3404,6 +3423,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (isTerminalOverlayOpen()) {
             closeTerminalOverlay();
+            return;
+        }
+        if (isGitHistoryDetailOverlayOpen()) {
+            closeGitHistoryDetailOverlay();
             return;
         }
         if (isGitCommitMessageModelOverlayOpen()) {
@@ -11144,7 +11167,11 @@ function getGitBranchOverlayElements() {
         fullscreenBtn: document.getElementById('codex-branch-overlay-fullscreen'),
         loading: document.getElementById('codex-branch-overlay-loading'),
         empty: document.getElementById('codex-branch-overlay-empty'),
-        list: document.getElementById('codex-branch-overlay-list')
+        list: document.getElementById('codex-branch-overlay-list'),
+        historyTitle: document.getElementById('codex-branch-overlay-history-title'),
+        historyLoading: document.getElementById('codex-branch-overlay-history-loading'),
+        historyEmpty: document.getElementById('codex-branch-overlay-history-empty'),
+        historyList: document.getElementById('codex-branch-overlay-history-list')
     };
 }
 
@@ -11179,6 +11206,19 @@ function setGitBranchOverlayLoading(isLoading) {
     }
     if (elements.selection) {
         elements.selection.textContent = isLoading ? '선택 -' : elements.selection.textContent;
+    }
+}
+
+function setGitBranchRemoteHistoryLoading(isLoading) {
+    gitBranchRemoteHistoryLoading = Boolean(isLoading);
+    const elements = getGitBranchOverlayElements();
+    if (!elements) return;
+    if (elements.historyLoading) {
+        elements.historyLoading.classList.toggle('is-hidden', !gitBranchRemoteHistoryLoading);
+    }
+    if (gitBranchRemoteHistoryLoading) {
+        elements.historyEmpty?.classList.add('is-hidden');
+        elements.historyList?.classList.add('is-hidden');
     }
 }
 
@@ -12242,6 +12282,23 @@ function setGitOverlaySelectionState(selectAll) {
     });
 }
 
+function renderGitBranchRemoteHistoryPanel(history = getGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE)) {
+    const elements = getGitBranchOverlayElements();
+    if (!elements || gitBranchRemoteHistoryLoading) return;
+    const remoteRef = typeof history?.remoteMainRef === 'string' && history.remoteMainRef.trim()
+        ? history.remoteMainRef.trim()
+        : '(unknown remote)';
+    if (elements.historyTitle) {
+        elements.historyTitle.textContent = `${remoteRef} 원격 이력`;
+    }
+    renderGitRemoteHistoryList({
+        listElement: elements.historyList,
+        emptyElement: elements.historyEmpty,
+        history: history?.remoteMainHistory,
+        error: history?.remoteMainHistoryError
+    });
+}
+
 function renderGitBranchOverlay(status) {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
@@ -12343,6 +12400,7 @@ function renderGitBranchOverlay(status) {
     if (elements.loading) {
         elements.loading.classList.add('is-hidden');
     }
+    renderGitBranchRemoteHistoryPanel();
 }
 
 function isGitBranchOverlayOpen() {
@@ -12377,12 +12435,16 @@ function openGitBranchOverlay() {
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
     setGitBranchOverlayLoading(true);
-    void refreshGitBranchStatus({ force: true, updateOverlay: true });
+    setGitBranchRemoteHistoryLoading(true);
+    void refreshGitBranchOverlayData({ force: true });
 }
 
 function closeGitBranchOverlay() {
     const elements = getGitBranchOverlayElements();
     if (!elements) return;
+    if (isGitHistoryDetailOverlayOpen()) {
+        closeGitHistoryDetailOverlay();
+    }
     gitBranchOverlayPreviewKey = '';
     resetGitCommitMessageFields(elements);
     setGitBranchOverlayFullscreen(false);
@@ -12690,20 +12752,145 @@ function normalizeGitHistoryEntries(value) {
     }).filter(Boolean);
 }
 
-function formatGitHistoryDetailToastText(entry) {
-    const shortHash = typeof entry?.shortHash === 'string' ? entry.shortHash.trim() : '';
+function getGitHistoryComment(entry) {
     const subject = typeof entry?.subject === 'string' ? entry.subject.trim() : '';
     const fullMessage = typeof entry?.fullMessage === 'string' ? entry.fullMessage.trim() : '';
-    const detailSource = fullMessage || subject;
-    if (!detailSource && !shortHash) {
-        return '상세 커밋 메시지가 없습니다.';
+    if (!fullMessage || fullMessage === subject) return '';
+    const lines = fullMessage.replace(/\r\n/g, '\n').split('\n');
+    if (subject && lines[0]?.trim() === subject) {
+        return lines.slice(1).join('\n').trim();
     }
-    const flattened = detailSource.replace(/\s+/g, ' ').trim();
-    const normalizedDetail = flattened.length > 260 ? `${flattened.slice(0, 259)}…` : flattened;
-    if (shortHash && normalizedDetail) {
-        return `${shortHash} · ${normalizedDetail}`;
+    return fullMessage;
+}
+
+function getGitHistoryDetailOverlayElements() {
+    const overlay = document.getElementById('codex-git-history-detail-overlay');
+    if (!overlay) return null;
+    return {
+        overlay,
+        title: document.getElementById('codex-git-history-detail-title'),
+        subtitle: document.getElementById('codex-git-history-detail-subtitle'),
+        comment: document.getElementById('codex-git-history-detail-comment'),
+        closeBtn: document.getElementById('codex-git-history-detail-close')
+    };
+}
+
+function isGitHistoryDetailOverlayOpen() {
+    const overlay = document.getElementById('codex-git-history-detail-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function openGitHistoryDetailOverlay(entry, returnFocusElement = null) {
+    const elements = getGitHistoryDetailOverlayElements();
+    if (!elements) return;
+    const subject = typeof entry?.subject === 'string' && entry.subject.trim()
+        ? entry.subject.trim()
+        : '(no subject)';
+    const commitHash = typeof entry?.commitHash === 'string' && entry.commitHash.trim()
+        ? entry.commitHash.trim()
+        : (typeof entry?.shortHash === 'string' ? entry.shortHash.trim() : '');
+    const author = typeof entry?.author === 'string' && entry.author.trim()
+        ? entry.author.trim()
+        : 'unknown';
+    const timestamp = formatGitHistoryTimestamp(entry?.committedAt);
+    const comment = getGitHistoryComment(entry);
+    gitHistoryDetailReturnFocus = returnFocusElement instanceof HTMLElement
+        ? returnFocusElement
+        : document.activeElement;
+    if (elements.title) {
+        elements.title.textContent = subject;
     }
-    return normalizedDetail || shortHash;
+    if (elements.subtitle) {
+        elements.subtitle.textContent = [commitHash, timestamp, author].filter(Boolean).join(' · ');
+    }
+    if (elements.comment) {
+        elements.comment.textContent = comment || 'Comment 내용이 없습니다.';
+        elements.comment.classList.toggle('is-empty', !comment);
+        elements.comment.scrollTop = 0;
+    }
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    elements.closeBtn?.focus();
+}
+
+function closeGitHistoryDetailOverlay() {
+    const elements = getGitHistoryDetailOverlayElements();
+    if (!elements) return;
+    elements.overlay.classList.remove('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    if (
+        !isGitBranchOverlayOpen()
+        && !isGitSyncOverlayOpen()
+        && !isGitCommitMessageModelOverlayOpen()
+        && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen()
+        && !isMailComposeOverlayOpen()
+        && !isMobileSessionOverlayOpen()
+        && !isUsageHistoryOverlayOpen()
+        && !isTerminalOverlayOpen()
+    ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+    const returnFocusElement = gitHistoryDetailReturnFocus;
+    gitHistoryDetailReturnFocus = null;
+    if (returnFocusElement instanceof HTMLElement && returnFocusElement.isConnected) {
+        returnFocusElement.focus();
+    }
+}
+
+function renderGitRemoteHistoryList(options = {}) {
+    const listElement = options.listElement;
+    const emptyElement = options.emptyElement;
+    const remoteHistory = normalizeGitHistoryEntries(options.history).slice(0, 10);
+    const remoteHistoryError = typeof options.error === 'string' ? options.error.trim() : '';
+    if (listElement) {
+        listElement.innerHTML = '';
+        remoteHistory.forEach(entry => {
+            const item = document.createElement('li');
+            item.className = 'sync-overlay-history-item';
+            item.tabIndex = 0;
+            item.setAttribute('role', 'button');
+            item.title = '클릭하면 커밋 제목과 Comment를 표시합니다.';
+            const main = document.createElement('div');
+            main.className = 'sync-overlay-item-main';
+
+            const hash = document.createElement('span');
+            hash.className = 'sync-overlay-item-hash';
+            hash.textContent = entry.shortHash || '-';
+            if (entry.commitHash) {
+                hash.title = entry.commitHash;
+            }
+            main.appendChild(hash);
+
+            const subject = document.createElement('span');
+            subject.className = 'sync-overlay-item-subject';
+            subject.textContent = entry.subject || '(no subject)';
+            main.appendChild(subject);
+
+            const meta = document.createElement('div');
+            meta.className = 'sync-overlay-item-meta';
+            const authorText = entry.author || 'unknown';
+            meta.textContent = `${formatGitHistoryTimestamp(entry.committedAt)} · ${authorText}`;
+
+            item.appendChild(main);
+            item.appendChild(meta);
+            const showDetailOverlay = () => openGitHistoryDetailOverlay(entry, item);
+            item.addEventListener('click', showDetailOverlay);
+            item.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                showDetailOverlay();
+            });
+            listElement.appendChild(item);
+        });
+        listElement.classList.toggle('is-hidden', remoteHistory.length === 0);
+    }
+    if (emptyElement) {
+        emptyElement.textContent = remoteHistoryError || '표시할 이력이 없습니다.';
+        emptyElement.classList.toggle('is-hidden', remoteHistory.length !== 0);
+    }
+    return remoteHistory.length;
 }
 
 function formatGitHistoryTimestamp(value) {
@@ -12860,55 +13047,12 @@ function renderGitSyncOverlay(history) {
         elements.filesEmpty.textContent = fallbackFileMessage;
         elements.filesEmpty.classList.toggle('is-hidden', renderedChangedFileCount !== 0);
     }
-    if (elements.list) {
-        elements.list.innerHTML = '';
-        remoteHistory.forEach(entry => {
-            const item = document.createElement('li');
-            item.className = 'sync-overlay-history-item';
-            item.tabIndex = 0;
-            item.setAttribute('role', 'button');
-            item.title = '클릭하면 상세 커밋 메시지를 표시합니다.';
-            const main = document.createElement('div');
-            main.className = 'sync-overlay-item-main';
-
-            const hash = document.createElement('span');
-            hash.className = 'sync-overlay-item-hash';
-            hash.textContent = entry.shortHash || '-';
-            if (entry.commitHash) {
-                hash.title = entry.commitHash;
-            }
-            main.appendChild(hash);
-
-            const subject = document.createElement('span');
-            subject.className = 'sync-overlay-item-subject';
-            subject.textContent = entry.subject || '(no subject)';
-            main.appendChild(subject);
-
-            const meta = document.createElement('div');
-            meta.className = 'sync-overlay-item-meta';
-            const authorText = entry.author || 'unknown';
-            meta.textContent = `${formatGitHistoryTimestamp(entry.committedAt)} · ${authorText}`;
-
-            item.appendChild(main);
-            item.appendChild(meta);
-            const showDetailToast = () => {
-                showToast(formatGitHistoryDetailToastText(entry), { tone: 'default', durationMs: 5600 });
-            };
-            item.addEventListener('click', showDetailToast);
-            item.addEventListener('keydown', event => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                showDetailToast();
-            });
-            elements.list.appendChild(item);
-        });
-        elements.list.classList.toggle('is-hidden', remoteHistory.length === 0);
-    }
-    if (elements.empty) {
-        const fallbackMessage = remoteHistoryError || '표시할 이력이 없습니다.';
-        elements.empty.textContent = fallbackMessage;
-        elements.empty.classList.toggle('is-hidden', remoteHistory.length !== 0);
-    }
+    renderGitRemoteHistoryList({
+        listElement: elements.list,
+        emptyElement: elements.empty,
+        history: remoteHistory,
+        error: remoteHistoryError
+    });
     updateGitSyncOverlayActionButtonState({
         repoMissing,
         changedCount,
@@ -12978,6 +13122,9 @@ function openGitSyncOverlay() {
 function closeGitSyncOverlay() {
     const elements = getGitSyncOverlayElements();
     if (!elements) return;
+    if (isGitHistoryDetailOverlayOpen()) {
+        closeGitHistoryDetailOverlay();
+    }
     const activeTarget = normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget);
     gitSyncOverlayPreviewKeyByTarget[activeTarget] = '';
     resetGitCommitMessageFields(elements);
@@ -22260,6 +22407,31 @@ async function fetchGitSyncHistory(force = false, repoTarget = gitSyncOverlayRep
     }
 }
 
+async function refreshGitBranchOverlayRemoteHistory({ force = false, silent = true } = {}) {
+    setGitBranchRemoteHistoryLoading(true);
+    try {
+        return await fetchGitSyncHistory(force, GIT_SYNC_TARGET_WORKSPACE, {
+            branch: normalizeGitSyncBranchName(gitBranchStatusCache?.branch)
+        });
+    } catch (error) {
+        if (!silent) {
+            const message = normalizeGitActionError(error, '원격 이력 조회에 실패했습니다.');
+            showToast(`원격 이력 조회 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        }
+        return null;
+    } finally {
+        setGitBranchRemoteHistoryLoading(false);
+        if (isGitBranchOverlayOpen()) {
+            renderGitBranchRemoteHistoryPanel(getGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE));
+        }
+    }
+}
+
+async function refreshGitBranchOverlayData({ force = false, silent = true } = {}) {
+    await refreshGitBranchStatus({ force, updateOverlay: true });
+    return refreshGitBranchOverlayRemoteHistory({ force, silent });
+}
+
 async function refreshGitSyncOverlayHistory({ force = false, silent = false } = {}) {
     const elements = getGitSyncOverlayElements();
     if (!elements) return null;
@@ -22864,6 +23036,8 @@ async function handleGitPush(button, options = {}) {
             setGitSyncHistoryCache(repoTarget, { fetchedAt: 0 });
             if (isGitSyncOverlayOpen() && repoTarget === normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget)) {
                 await refreshGitSyncOverlayHistory({ force: true, silent: true });
+            } else if (isGitBranchOverlayOpen() && repoTarget === GIT_SYNC_TARGET_WORKSPACE) {
+                await refreshGitBranchOverlayRemoteHistory({ force: true, silent: true });
             }
         }
     } catch (error) {

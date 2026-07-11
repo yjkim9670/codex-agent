@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=187">
+    <link rel="stylesheet" href="/static/css/app.css?v=188">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1126,8 +1126,19 @@
                     <div class="git-message-status" id="codex-branch-overlay-message-status" aria-live="polite"></div>
                 </div>
                 <div class="branch-overlay-loading" id="codex-branch-overlay-loading">변경 파일을 불러오는 중...</div>
-                <div class="branch-overlay-empty is-hidden" id="codex-branch-overlay-empty">변경 파일이 없습니다.</div>
-                <ul class="branch-overlay-list git-file-tree-list is-hidden" id="codex-branch-overlay-list"></ul>
+                <div class="branch-overlay-sections">
+                    <div class="branch-overlay-section branch-overlay-section-files">
+                        <div class="sync-overlay-section-title">변경 파일</div>
+                        <div class="branch-overlay-empty is-hidden" id="codex-branch-overlay-empty">변경 파일이 없습니다.</div>
+                        <ul class="branch-overlay-list git-file-tree-list is-hidden" id="codex-branch-overlay-list"></ul>
+                    </div>
+                    <div class="branch-overlay-section branch-overlay-section-history">
+                        <div class="sync-overlay-section-title" id="codex-branch-overlay-history-title">원격 이력</div>
+                        <div class="branch-overlay-history-loading" id="codex-branch-overlay-history-loading">원격 이력을 불러오는 중...</div>
+                        <div class="sync-overlay-empty branch-overlay-history-empty is-hidden" id="codex-branch-overlay-history-empty">표시할 이력이 없습니다.</div>
+                        <ul class="sync-overlay-list branch-overlay-history-list is-hidden" id="codex-branch-overlay-history-list"></ul>
+                    </div>
+                </div>
             </div>
             <div class="branch-overlay-footer">
                 <button class="btn ghost icon-only git-action-commit" type="button" id="codex-branch-overlay-commit" aria-label="Commit staged files" title="Commit staged files">
@@ -1219,6 +1230,28 @@
             </div>
             <div class="sync-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-sync-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="git-history-detail-overlay" id="codex-git-history-detail-overlay" aria-hidden="true">
+        <div class="git-history-detail-backdrop" data-action="close"></div>
+        <div class="git-history-detail-card" role="dialog" aria-modal="true" aria-labelledby="codex-git-history-detail-title">
+            <div class="git-history-detail-header">
+                <div class="git-history-detail-heading">
+                    <div class="git-history-detail-title" id="codex-git-history-detail-title">커밋 제목</div>
+                    <div class="git-history-detail-subtitle" id="codex-git-history-detail-subtitle">-</div>
+                </div>
+                <button class="btn ghost icon-only git-history-detail-close" type="button" id="codex-git-history-detail-close" aria-label="닫기">
+                    <span class="sr-only">닫기</span>
+                </button>
+            </div>
+            <div class="git-history-detail-body">
+                <div class="git-history-detail-label">Comment</div>
+                <pre class="git-history-detail-comment" id="codex-git-history-detail-comment">Comment 내용이 없습니다.</pre>
+            </div>
+            <div class="git-history-detail-footer">
+                <button class="btn primary" type="button" id="codex-git-history-detail-close-footer">닫기</button>
             </div>
         </div>
     </div>
@@ -1449,6 +1482,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=188"></script>
+    <script src="/static/js/app.js?v=189"></script>
 </body>
 </html>

@@ -202,8 +202,24 @@ CODEX_TOKEN_USAGE_PATH = CODEX_STORAGE_DIR / 'codex_token_usage.json'
 CODEX_ACCOUNT_TOKEN_USAGE_PATH = CODEX_HOME / 'codex_account_token_usage.json'
 CODEX_USAGE_HISTORY_PATH = CODEX_STORAGE_DIR / 'codex_usage_history.json'
 CODEX_USAGE_PLAN_PATH = CODEX_STORAGE_DIR / 'codex_usage_plans.json'
-CODEX_ACCOUNTS_PATH = CODEX_STORAGE_DIR / 'codex_accounts.json'
-CODEX_ACCOUNTS_DIR = CODEX_STORAGE_DIR / 'accounts'
+CODEX_LOCAL_ACCOUNTS_PATH = CODEX_STORAGE_DIR / 'codex_accounts.json'
+CODEX_LOCAL_ACCOUNTS_DIR = CODEX_STORAGE_DIR / 'accounts'
+_shared_account_state_override = _expand_path_value(
+    os.environ.get('CODEX_WORKBENCH_SHARED_ACCOUNT_STATE_DIR')
+)
+_login_codex_home = _get_login_codex_home()
+_shared_account_state_home = (
+    _login_codex_home.parent
+    if _login_codex_home is not None
+    else Path.home()
+)
+CODEX_SHARED_ACCOUNT_STATE_DIR = (
+    _shared_account_state_override
+    if _shared_account_state_override is not None
+    else _shared_account_state_home / '.codex-workbench'
+)
+CODEX_ACCOUNTS_PATH = CODEX_SHARED_ACCOUNT_STATE_DIR / 'codex_accounts.json'
+CODEX_ACCOUNTS_DIR = CODEX_SHARED_ACCOUNT_STATE_DIR / 'accounts'
 CODEX_MAX_PROMPT_CHARS = 4000
 CODEX_CONTEXT_MAX_CHARS = 12000
 CODEX_MAX_ATTACHMENTS_PER_TURN = _parse_int_env('CODEX_MAX_ATTACHMENTS_PER_TURN', 8, minimum=0, maximum=32)

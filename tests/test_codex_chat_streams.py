@@ -61,17 +61,34 @@ def _reset_stream_state():
         state.codex_streams.clear()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shared_account_state(tmp_path, monkeypatch):
+    shared_root = tmp_path / 'shared-account-state'
+    local_root = tmp_path / 'local-account-state'
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', shared_root / 'codex_accounts.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', shared_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_root / 'codex_accounts.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_root / 'accounts')
+
+
 @pytest.fixture
 def isolated_codex_workspace(tmp_path, monkeypatch):
     store_path = tmp_path / 'codex_chat_sessions.json'
-    token_usage_path = tmp_path / 'codex_token_usage.json'
-    account_token_usage_path = tmp_path / 'codex_account_token_usage.json'
-    usage_history_path = tmp_path / 'codex_usage_history.json'
-    usage_plan_path = tmp_path / 'codex_usage_plans.json'
     accounts_path = tmp_path / 'codex_accounts.json'
     accounts_dir = tmp_path / 'accounts'
+    local_accounts_path = tmp_path / 'local' / 'codex_accounts.json'
+    local_accounts_dir = tmp_path / 'local' / 'accounts'
     workspace_dir = tmp_path / 'workspace'
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    workspace_scope_id = hashlib.sha1(str(workspace_dir).encode('utf-8')).hexdigest()[:12]
+    default_account_root = accounts_dir / 'default'
+    default_account_root.mkdir(parents=True, exist_ok=True)
+    token_usage_path = (
+        default_account_root / 'workspaces' / workspace_scope_id / 'codex_token_usage.json'
+    )
+    account_token_usage_path = default_account_root / 'codex_account_token_usage.json'
+    usage_history_path = default_account_root / 'codex_usage_history.json'
+    usage_plan_path = default_account_root / 'codex_usage_plans.json'
 
     monkeypatch.setattr(codex_chat, 'CODEX_CHAT_STORE_PATH', store_path)
     monkeypatch.setattr(codex_chat, 'CODEX_TOKEN_USAGE_PATH', token_usage_path)
@@ -80,12 +97,14 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_USAGE_PLAN_PATH', usage_plan_path)
     monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', accounts_path)
     monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', accounts_dir)
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_accounts_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_accounts_dir)
     monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path)
     monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', workspace_dir)
     monkeypatch.setattr(
         codex_chat,
         '_WORKSPACE_SCOPE_ID',
-        hashlib.sha1(str(workspace_dir).encode('utf-8')).hexdigest()[:12],
+        workspace_scope_id,
     )
     monkeypatch.setattr(codex_chat, 'CODEX_SKIP_GIT_REPO_CHECK', True)
     monkeypatch.setattr(codex_chat, 'CODEX_CLI_SANDBOX', 'workspace-write')
@@ -103,6 +122,8 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         'usage_plan_path': usage_plan_path,
         'accounts_path': accounts_path,
         'accounts_dir': accounts_dir,
+        'local_accounts_path': local_accounts_path,
+        'local_accounts_dir': local_accounts_dir,
         'workspace_dir': workspace_dir,
     }
 
@@ -679,6 +700,108 @@ def test_codex_accounts_isolate_auth_usage_history_and_plans(
     summary = codex_chat.get_codex_accounts_summary()
     assert summary['active_account_id'] == account_b['id']
     assert next(item for item in summary['accounts'] if item['id'] == account_b['id'])['authenticated'] is True
+
+
+def test_codex_accounts_share_account_state_but_keep_workspace_runtime_isolated(
+        isolated_codex_workspace, monkeypatch, tmp_path):
+    source = tmp_path / 'shared-source'
+    source.mkdir()
+    (source / 'auth.json').write_text('{"tokens": {"account_id": "shared"}}', encoding='utf-8')
+    account = codex_chat.create_codex_account('Shared Plus', source_codex_home=source)
+
+    context_a = codex_chat._account_storage_context(account['id'])
+    monkeypatch.setattr(codex_chat, '_WORKSPACE_SCOPE_ID', 'other-workspace')
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'other-local-state')
+    context_b = codex_chat._account_storage_context(account['id'])
+
+    assert context_a['root'] == context_b['root']
+    assert context_a['codex_home'] == context_b['codex_home']
+    assert context_a['account_token_usage_path'] == context_b['account_token_usage_path']
+    assert context_a['usage_history_path'] == context_b['usage_history_path']
+    assert context_a['usage_plan_path'] == context_b['usage_plan_path']
+    assert context_a['token_usage_path'] != context_b['token_usage_path']
+    assert context_a['queued_codex_home'] != context_b['queued_codex_home']
+
+
+def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch):
+    shared_root = tmp_path / 'shared'
+    local_root = tmp_path / 'local'
+    local_accounts_dir = local_root / 'accounts'
+    account_id = 'migrated-plus'
+    local_account_root = local_accounts_dir / account_id
+    local_codex_home = local_account_root / 'codex_home'
+    local_codex_home.mkdir(parents=True)
+    (local_codex_home / 'auth.json').write_text(
+        '{"tokens": {"account_id": "migrated"}}', encoding='utf-8'
+    )
+    (local_account_root / 'codex_usage_history.json').write_text(json.dumps({
+        'version': 1,
+        'items': [{'bucket_start': '2026-07-01T10:00:00+09:00', 'token_account_total': 10}],
+    }), encoding='utf-8')
+    (local_account_root / 'codex_usage_plans.json').write_text(json.dumps({
+        'version': 1,
+        'periods': [{'id': 'plus', 'label': 'Plus', 'multiplier': 1}],
+    }), encoding='utf-8')
+    local_registry = local_root / 'codex_accounts.json'
+    local_registry.write_text(json.dumps({
+        'active_account_id': account_id,
+        'accounts': [{
+            'id': account_id,
+            'label': 'Migrated Plus',
+            'codex_home': str(local_codex_home),
+            'legacy_storage': False,
+        }],
+    }), encoding='utf-8')
+
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', shared_root / 'codex_accounts.json')
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', shared_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_registry)
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_accounts_dir)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', local_root)
+    monkeypatch.setattr(codex_chat, '_WORKSPACE_SCOPE_ID', 'migration-workspace')
+
+    registry = codex_chat._load_accounts_registry()
+    context = codex_chat._account_storage_context(account_id)
+
+    assert registry['active_account_id'] == account_id
+    assert context['codex_home'] == shared_root / 'accounts' / account_id / 'codex_home'
+    assert (context['codex_home'] / 'auth.json').is_file()
+    assert context['usage_history_path'].is_file()
+    assert context['usage_plan_path'].is_file()
+
+
+def test_import_codex_account_histories_deduplicates_by_latest_snapshot(
+        isolated_codex_workspace, tmp_path):
+    source = tmp_path / 'history-source-home'
+    source.mkdir()
+    (source / 'auth.json').write_text('{"tokens": {}}', encoding='utf-8')
+    account = codex_chat.create_codex_account('History account', source_codex_home=source)
+    history_a = tmp_path / 'history-a.json'
+    history_b = tmp_path / 'history-b.json'
+    history_a.write_text(json.dumps({'items': [{
+        'bucket_start': '2026-07-01T10:00:00+09:00',
+        'recorded_at': '2026-07-01T10:01:00+09:00',
+        'token_account_total': 10,
+    }]}), encoding='utf-8')
+    history_b.write_text(json.dumps({'items': [{
+        'bucket_start': '2026-07-01T10:00:00+09:00',
+        'recorded_at': '2026-07-01T10:02:00+09:00',
+        'token_account_total': 20,
+    }, {
+        'bucket_start': '2026-07-01T11:00:00+09:00',
+        'recorded_at': '2026-07-01T11:01:00+09:00',
+        'token_account_total': 30,
+    }]}), encoding='utf-8')
+
+    result = codex_chat.import_codex_account_usage_histories(
+        account['id'], [history_a, history_b]
+    )
+    ledger = codex_chat._load_usage_history_ledger(
+        codex_chat._account_storage_context(account['id'])['usage_history_path']
+    )
+
+    assert result['count'] == 2
+    assert ledger['items'][0]['token_account_total'] == 20
 
 
 def test_pending_queue_entry_keeps_submission_account_after_switch(

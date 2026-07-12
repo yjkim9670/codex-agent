@@ -46,6 +46,8 @@ from ..config import (
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_ENABLE_LEGACY_STATE_IMPORT,
+    CODEX_LOCAL_ACCOUNTS_DIR,
+    CODEX_LOCAL_ACCOUNTS_PATH,
     LEGACY_CODEX_CHAT_STORE_PATH,
     LEGACY_CODEX_SETTINGS_PATH,
     LEGACY_CODEX_TOKEN_USAGE_PATH,
@@ -180,7 +182,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
-_ACCOUNTS_VERSION = 1
+_ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_RETENTION_DAYS = 90
 _USAGE_HISTORY_DEFAULT_HOURS = 24 * 30
@@ -4128,19 +4130,143 @@ def _normalize_account_profile(value):
 
 
 def _accounts_registry_path():
-    configured_path = Path(CODEX_ACCOUNTS_PATH)
-    storage_path = Path(CODEX_STORAGE_DIR) / configured_path.name
+    return Path(CODEX_ACCOUNTS_PATH)
+
+
+def _ensure_private_account_storage():
+    for path in (_accounts_registry_path().parent, Path(CODEX_ACCOUNTS_DIR)):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o700)
+        except OSError:
+            _LOGGER.debug('private account storage setup skipped: %s', path, exc_info=True)
+
+
+def _copy_account_state_file(source, destination):
+    source_path = Path(source)
+    destination_path = Path(destination)
     try:
-        if configured_path.parent.resolve() != Path(CODEX_STORAGE_DIR).resolve():
-            return storage_path
+        if not source_path.is_file() or destination_path.exists():
+            return
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination_path)
+    except OSError:
+        _LOGGER.debug(
+            'shared account state migration skipped: %s -> %s',
+            source_path,
+            destination_path,
+            exc_info=True,
+        )
+
+
+def _copy_account_codex_home(source, destination):
+    source_path = Path(source)
+    destination_path = Path(destination)
+    try:
+        if not source_path.is_dir() or source_path.resolve() == destination_path.resolve():
+            return
+    except OSError:
+        return
+    destination_path.mkdir(parents=True, exist_ok=True)
+    try:
+        destination_path.chmod(0o700)
+    except OSError:
+        pass
+    for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+        _copy_codex_home_file_if_available(source_path, destination_path, filename)
+    for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
+        _link_codex_home_entry_if_available(source_path, destination_path, entry_name)
+    for entry_name in _QUEUED_CODEX_HOME_COPY_ENTRIES:
+        _copy_codex_home_entry_if_available(source_path, destination_path, entry_name)
+
+
+def _migrate_local_accounts_to_shared_storage():
+    registry_path = _accounts_registry_path()
+    local_registry_path = Path(CODEX_LOCAL_ACCOUNTS_PATH)
+    try:
+        if registry_path.exists() or registry_path.resolve() == local_registry_path.resolve():
+            return
+    except OSError:
+        if registry_path.exists() or registry_path == local_registry_path:
+            return
+
+    try:
+        payload = json.loads(local_registry_path.read_text(encoding='utf-8'))
     except Exception:
-        if configured_path.parent != Path(CODEX_STORAGE_DIR):
-            return storage_path
-    return configured_path
+        return
+    raw_accounts = payload.get('accounts') if isinstance(payload, dict) else None
+    accounts = []
+    if isinstance(raw_accounts, list):
+        for raw_account in raw_accounts:
+            account = _normalize_account_profile(raw_account)
+            if account is not None:
+                accounts.append(account)
+    if not accounts:
+        return
+
+    _ensure_private_account_storage()
+    migrated_accounts = []
+    for account in accounts:
+        account_id = account['id']
+        shared_root = Path(CODEX_ACCOUNTS_DIR) / account_id
+        local_root = (
+            Path(CODEX_STORAGE_DIR)
+            if account.get('legacy_storage')
+            else Path(CODEX_LOCAL_ACCOUNTS_DIR) / account_id
+        )
+        source_codex_home = Path(account['codex_home']).expanduser()
+        managed_codex_home = not account.get('legacy_storage')
+        if managed_codex_home:
+            shared_codex_home = shared_root / 'codex_home'
+            _copy_account_codex_home(source_codex_home, shared_codex_home)
+            account['codex_home'] = str(shared_codex_home)
+
+        workspace_root = shared_root / 'workspaces' / _WORKSPACE_SCOPE_ID
+        _copy_account_state_file(
+            local_root / 'codex_token_usage.json',
+            workspace_root / 'codex_token_usage.json',
+        )
+        account_usage_source = (
+            Path(CODEX_ACCOUNT_TOKEN_USAGE_PATH)
+            if account.get('legacy_storage')
+            else local_root / 'codex_account_token_usage.json'
+        )
+        _copy_account_state_file(
+            account_usage_source,
+            shared_root / 'codex_account_token_usage.json',
+        )
+        _copy_account_state_file(
+            local_root / 'codex_usage_history.json',
+            shared_root / 'codex_usage_history.json',
+        )
+        _copy_account_state_file(
+            local_root / 'codex_usage_plans.json',
+            shared_root / 'codex_usage_plans.json',
+        )
+        migrated_accounts.append(account)
+
+    migrated_ids = {account['id'] for account in migrated_accounts}
+    active_account_id = _normalize_account_id(payload.get('active_account_id'))
+    if active_account_id not in migrated_ids:
+        active_account_id = migrated_accounts[0]['id']
+    migrated_payload = {
+        'version': _ACCOUNTS_VERSION,
+        'active_account_id': active_account_id,
+        'accounts': migrated_accounts,
+        'migrated_from': str(local_registry_path.parent),
+        'updated_at': normalize_timestamp(None),
+    }
+    try:
+        with _acquire_path_file_lock(registry_path):
+            if not registry_path.exists():
+                _write_json_atomic(registry_path, migrated_payload)
+    except OSError:
+        _LOGGER.debug('shared account registry migration skipped', exc_info=True)
 
 
 def _load_accounts_registry():
     registry_path = _accounts_registry_path()
+    _migrate_local_accounts_to_shared_storage()
     try:
         payload = json.loads(registry_path.read_text(encoding='utf-8'))
     except Exception:
@@ -4170,13 +4296,35 @@ def _load_accounts_registry():
 
 
 def _save_accounts_registry(registry):
-    payload = {
-        'version': _ACCOUNTS_VERSION,
-        'active_account_id': registry.get('active_account_id'),
-        'accounts': registry.get('accounts') or [],
-        'updated_at': normalize_timestamp(None),
-    }
-    _write_json_atomic(_accounts_registry_path(), payload)
+    registry_path = _accounts_registry_path()
+    _ensure_private_account_storage()
+    with _acquire_path_file_lock(registry_path):
+        accounts = list(registry.get('accounts') or [])
+        known_ids = {
+            account.get('id') for account in accounts
+            if isinstance(account, dict) and account.get('id')
+        }
+        try:
+            current_payload = json.loads(registry_path.read_text(encoding='utf-8'))
+        except Exception:
+            current_payload = {}
+        current_accounts = (
+            current_payload.get('accounts') if isinstance(current_payload, dict) else None
+        )
+        if isinstance(current_accounts, list):
+            for current_account in current_accounts:
+                normalized = _normalize_account_profile(current_account)
+                if normalized is None or normalized['id'] in known_ids:
+                    continue
+                accounts.append(normalized)
+                known_ids.add(normalized['id'])
+        payload = {
+            'version': _ACCOUNTS_VERSION,
+            'active_account_id': registry.get('active_account_id'),
+            'accounts': accounts,
+            'updated_at': normalize_timestamp(None),
+        }
+        _write_json_atomic(registry_path, payload)
 
 
 def _get_account_profile(account_id=None):
@@ -4198,30 +4346,23 @@ def _account_storage_context(account_id=None):
     account = _get_account_profile(account_id)
     if account is None:
         return None
-    if account.get('legacy_storage'):
-        return {
-            'account': account,
-            'root': CODEX_STORAGE_DIR,
-            'codex_home': Path(account['codex_home']).expanduser(),
-            'token_usage_path': CODEX_TOKEN_USAGE_PATH,
-            'account_token_usage_path': CODEX_ACCOUNT_TOKEN_USAGE_PATH,
-            'usage_history_path': CODEX_USAGE_HISTORY_PATH,
-            'usage_plan_path': CODEX_USAGE_PLAN_PATH,
-            'queued_codex_home': CODEX_STORAGE_DIR / 'queued_codex_home',
-            'app_server_codex_home': CODEX_STORAGE_DIR / 'app_server_codex_home',
-        }
     root = CODEX_ACCOUNTS_DIR / account['id']
     codex_home = Path(account['codex_home']).expanduser()
+    runtime_root = (
+        Path(CODEX_STORAGE_DIR)
+        if account.get('legacy_storage')
+        else Path(CODEX_STORAGE_DIR) / 'account_runtime' / account['id']
+    )
     return {
         'account': account,
         'root': root,
         'codex_home': codex_home,
-        'token_usage_path': root / 'codex_token_usage.json',
+        'token_usage_path': root / 'workspaces' / _WORKSPACE_SCOPE_ID / 'codex_token_usage.json',
         'account_token_usage_path': root / 'codex_account_token_usage.json',
         'usage_history_path': root / 'codex_usage_history.json',
         'usage_plan_path': root / 'codex_usage_plans.json',
-        'queued_codex_home': root / 'queued_codex_home',
-        'app_server_codex_home': root / 'app_server_codex_home',
+        'queued_codex_home': runtime_root / 'queued_codex_home',
+        'app_server_codex_home': runtime_root / 'app_server_codex_home',
     }
 
 
@@ -4295,7 +4436,66 @@ def get_codex_accounts_summary():
             _public_account_summary(account, registry['active_account_id'])
             for account in registry['accounts']
         ],
+        'shared_storage_path': str(_accounts_registry_path().parent),
         'automatic_failover': False,
+    }
+
+
+def import_codex_account_usage_histories(account_id, source_paths):
+    context = _account_storage_context(account_id)
+    if context is None:
+        raise ValueError('계정을 찾을 수 없습니다.')
+    paths = []
+    seen = set()
+    for value in source_paths or []:
+        path = Path(value).expanduser()
+        try:
+            key = str(path.resolve())
+        except OSError:
+            key = str(path)
+        if key in seen or path == context['usage_history_path']:
+            continue
+        seen.add(key)
+        paths.append(path)
+
+    imported_paths = []
+    with _USAGE_HISTORY_LOCK:
+        with _acquire_path_file_lock(context['usage_history_path']):
+            target = _load_usage_history_ledger(path=context['usage_history_path'])
+            snapshots = list(target.get('items') or [])
+            for path in paths:
+                try:
+                    if not path.is_file():
+                        continue
+                except OSError:
+                    continue
+                source = _load_usage_history_ledger(path=path)
+                source_items = list(source.get('items') or [])
+                if not source_items:
+                    continue
+                snapshots.extend(source_items)
+                imported_paths.append(str(path))
+
+            deduped = {}
+            for raw_snapshot in snapshots:
+                snapshot = _normalize_usage_history_snapshot(raw_snapshot)
+                if snapshot is None:
+                    continue
+                key = snapshot['bucket_start']
+                current = deduped.get(key)
+                if current is None or snapshot['recorded_at'] >= current['recorded_at']:
+                    deduped[key] = snapshot
+            items = sorted(deduped.values(), key=lambda item: item['bucket_start'])
+            if len(items) > _USAGE_HISTORY_MAX_ITEMS:
+                items = items[-_USAGE_HISTORY_MAX_ITEMS:]
+            target['items'] = items
+            target['updated_at'] = normalize_timestamp(None)
+            _save_usage_history_ledger(target, path=context['usage_history_path'])
+    return {
+        'account_id': context['account']['id'],
+        'path': str(context['usage_history_path']),
+        'count': len(target.get('items') or []),
+        'imported_paths': imported_paths,
     }
 
 
@@ -4386,7 +4586,7 @@ def append_codex_account_plan(account_id, label, multiplier=1, starts_at=None):
     if plan_multiplier is None or plan_multiplier <= 0:
         raise ValueError('요금제 배수는 0보다 커야 합니다.')
     transition_at = _normalize_optional_timestamp(starts_at) or normalize_timestamp(None)
-    with _ACCOUNTS_LOCK:
+    with _ACCOUNTS_LOCK, _acquire_path_file_lock(context['usage_plan_path']):
         periods = _load_usage_plan_periods(path=context['usage_plan_path'])
         transition_dt = parse_timestamp(transition_at)
         now_dt = parse_timestamp(normalize_timestamp(None))

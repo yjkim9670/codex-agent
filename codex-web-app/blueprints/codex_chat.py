@@ -62,6 +62,7 @@ from ..services.codex_chat import (
     CodexToolingError,
     CodexWorktreeError,
     cleanup_git_worktree_task,
+    create_codex_account,
     create_repo_skill_from_preview,
     create_git_worktree_task,
     get_codex_project_safety_preview,
@@ -76,6 +77,8 @@ from ..services.codex_chat import (
     execute_codex_prompt,
     finalize_codex_stream,
     get_active_stream_id_for_session,
+    get_active_account_id,
+    get_codex_accounts_summary,
     get_codex_app_server_status,
     get_execution_policy_presets,
     get_agent_backend_options,
@@ -110,6 +113,7 @@ from ..services.codex_chat import (
     save_codex_project_safety_template,
     save_github_action_template_preview,
     save_mcp_setup_preview,
+    append_codex_account_plan,
     start_codex_stream_for_session,
     start_codex_app_server_remote_control,
     start_subagent_cockpit_preset_for_session,
@@ -122,6 +126,7 @@ from ..services.codex_chat import (
     resolve_response_reasoning_effort,
     stop_codex_app_server_remote_control,
     stop_codex_stream,
+    switch_codex_account,
 )
 from ..services.file_browser import (
     FileBrowserError,
@@ -651,6 +656,7 @@ def codex_settings():
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),
         'usage': usage,
+        'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'security_policy': get_codex_security_policy(),
         'feature_flags': {
@@ -669,6 +675,7 @@ def codex_usage():
     return jsonify({
         'usage': usage,
         'usage_history': get_usage_history_summary(),
+        'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'feature_flags': {
             'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
@@ -687,10 +694,67 @@ def codex_usage_history():
     return jsonify({
         'usage': usage,
         'usage_history': get_usage_history_summary(hours=hours),
+        'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'feature_flags': {
             'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
         },
+    })
+
+
+@bp.route('/api/codex/accounts')
+def codex_accounts():
+    return jsonify({'accounts': get_codex_accounts_summary()})
+
+
+@bp.route('/api/codex/accounts', methods=['POST'])
+def codex_accounts_create():
+    payload = request.get_json(silent=True) or {}
+    try:
+        account = create_codex_account(
+            payload.get('label'),
+            plan_label=payload.get('plan_label') or 'Plus',
+            multiplier=payload.get('multiplier', 1),
+            source_codex_home=payload.get('source_codex_home'),
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({
+        'account': account,
+        'accounts': get_codex_accounts_summary(),
+    }), 201
+
+
+@bp.route('/api/codex/accounts/<account_id>/activate', methods=['POST'])
+def codex_account_activate(account_id):
+    try:
+        accounts = switch_codex_account(account_id)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 404
+    usage = get_usage_summary(account_id=account_id)
+    snapshot = record_usage_snapshot_if_due(usage_summary=usage, account_id=account_id)
+    return jsonify({
+        'accounts': accounts,
+        'usage': snapshot.get('usage') if isinstance(snapshot, dict) else usage,
+        'usage_history': get_usage_history_summary(account_id=account_id),
+    })
+
+
+@bp.route('/api/codex/accounts/<account_id>/plans', methods=['POST'])
+def codex_account_plan_create(account_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        account = append_codex_account_plan(
+            account_id,
+            payload.get('label'),
+            multiplier=payload.get('multiplier', 1),
+            starts_at=payload.get('starts_at'),
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({
+        'account': account,
+        'accounts': get_codex_accounts_summary(),
     })
 
 
@@ -1294,7 +1358,10 @@ def codex_session_message(session_id):
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
-    user_metadata = {'attachments': attachments} if attachments else None
+    account_id = get_active_account_id()
+    user_metadata = {'account_id': account_id}
+    if attachments:
+        user_metadata['attachments'] = attachments
     user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
@@ -1306,11 +1373,13 @@ def codex_session_message(session_id):
         reasoning_override=reasoning_override,
         attachments=attachments,
         imagegen_prompt=prompt,
+        account_id=account_id,
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))
     metadata = {
         'duration_ms': duration_ms,
+        'account_id': account_id,
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
@@ -1356,7 +1425,8 @@ def codex_session_message(session_id):
             session_id=session_id,
             message_id=assistant_message.get('id'),
             token_usage=token_usage,
-            source='sync_message'
+            source='sync_message',
+            account_id=account_id,
         )
 
     session = get_session(session_id)

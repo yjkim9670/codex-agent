@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,8 @@ except ImportError:
 
 from .. import state
 from ..config import (
+    CODEX_ACCOUNTS_DIR,
+    CODEX_ACCOUNTS_PATH,
     CODEX_ACCOUNT_TOKEN_USAGE_PATH,
     CODEX_AGENT_BACKEND_DEFAULT,
     CODEX_AGENT_BACKEND_OPTIONS,
@@ -97,6 +100,7 @@ _APP_SERVER_LOCK = threading.Lock()
 _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _AUTH_STATE_LOCK = threading.Lock()
+_ACCOUNTS_LOCK = threading.RLock()
 _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
@@ -176,6 +180,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_HISTORY_VERSION = 1
+_ACCOUNTS_VERSION = 1
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_RETENTION_DAYS = 90
 _USAGE_HISTORY_DEFAULT_HOURS = 24 * 30
@@ -1000,6 +1005,7 @@ def _normalize_pending_queue_entry(entry):
             entry.get('structured_report_preset')
         ),
         'worktree_mode': bool(entry.get('worktree_mode')),
+        'account_id': _normalize_account_id(entry.get('account_id')) or get_active_account_id(),
         'created_at': normalize_timestamp(entry.get('created_at')),
     }
 
@@ -4063,6 +4069,369 @@ def _extract_token_count_from_usage(value):
     return None
 
 
+def _normalize_account_id(value):
+    token = re.sub(r'[^a-z0-9_-]+', '-', str(value or '').strip().lower()).strip('-_')
+    return token[:64]
+
+
+def _default_account_codex_home():
+    candidates = []
+    for raw_value in (
+        os.environ.get('CODEX_WORKBENCH_AUTH_HOME'),
+        os.environ.get('CODEX_HOME'),
+    ):
+        token = str(raw_value or '').strip()
+        if token:
+            candidates.append(Path(token).expanduser())
+    candidates.append(_CODEX_HOME)
+    login_home = _get_login_codex_home()
+    if login_home is not None:
+        candidates.append(login_home)
+    seen = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _codex_home_has_auth(candidate):
+            return candidate
+    return candidates[0] if candidates else _CODEX_HOME
+
+
+def _legacy_account_profile():
+    return {
+        'id': 'default',
+        'label': 'Default account',
+        'codex_home': str(_default_account_codex_home()),
+        'legacy_storage': True,
+        'created_at': '',
+        'updated_at': '',
+    }
+
+
+def _normalize_account_profile(value):
+    if not isinstance(value, dict):
+        return None
+    account_id = _normalize_account_id(value.get('id'))
+    label = str(value.get('label') or '').strip()[:80]
+    codex_home = str(value.get('codex_home') or '').strip()
+    if not account_id or not label or not codex_home or '\x00' in codex_home:
+        return None
+    return {
+        'id': account_id,
+        'label': label,
+        'codex_home': str(Path(codex_home).expanduser()),
+        'legacy_storage': bool(value.get('legacy_storage')),
+        'created_at': normalize_timestamp(value.get('created_at')) if value.get('created_at') else '',
+        'updated_at': normalize_timestamp(value.get('updated_at')) if value.get('updated_at') else '',
+    }
+
+
+def _accounts_registry_path():
+    configured_path = Path(CODEX_ACCOUNTS_PATH)
+    storage_path = Path(CODEX_STORAGE_DIR) / configured_path.name
+    try:
+        if configured_path.parent.resolve() != Path(CODEX_STORAGE_DIR).resolve():
+            return storage_path
+    except Exception:
+        if configured_path.parent != Path(CODEX_STORAGE_DIR):
+            return storage_path
+    return configured_path
+
+
+def _load_accounts_registry():
+    registry_path = _accounts_registry_path()
+    try:
+        payload = json.loads(registry_path.read_text(encoding='utf-8'))
+    except Exception:
+        payload = {}
+    raw_accounts = payload.get('accounts') if isinstance(payload, dict) else None
+    accounts = []
+    seen = set()
+    if isinstance(raw_accounts, list):
+        for raw_account in raw_accounts:
+            account = _normalize_account_profile(raw_account)
+            if not account or account['id'] in seen:
+                continue
+            accounts.append(account)
+            seen.add(account['id'])
+    if not accounts:
+        accounts = [_legacy_account_profile()]
+    active_account_id = _normalize_account_id(
+        payload.get('active_account_id') if isinstance(payload, dict) else ''
+    )
+    if active_account_id not in {account['id'] for account in accounts}:
+        active_account_id = accounts[0]['id']
+    return {
+        'version': _ACCOUNTS_VERSION,
+        'active_account_id': active_account_id,
+        'accounts': accounts,
+    }
+
+
+def _save_accounts_registry(registry):
+    payload = {
+        'version': _ACCOUNTS_VERSION,
+        'active_account_id': registry.get('active_account_id'),
+        'accounts': registry.get('accounts') or [],
+        'updated_at': normalize_timestamp(None),
+    }
+    _write_json_atomic(_accounts_registry_path(), payload)
+
+
+def _get_account_profile(account_id=None):
+    with _ACCOUNTS_LOCK:
+        registry = _load_accounts_registry()
+    requested_id = _normalize_account_id(account_id) or registry['active_account_id']
+    for account in registry['accounts']:
+        if account['id'] == requested_id:
+            return account
+    return None
+
+
+def get_active_account_id():
+    with _ACCOUNTS_LOCK:
+        return _load_accounts_registry()['active_account_id']
+
+
+def _account_storage_context(account_id=None):
+    account = _get_account_profile(account_id)
+    if account is None:
+        return None
+    if account.get('legacy_storage'):
+        return {
+            'account': account,
+            'root': CODEX_STORAGE_DIR,
+            'codex_home': Path(account['codex_home']).expanduser(),
+            'token_usage_path': CODEX_TOKEN_USAGE_PATH,
+            'account_token_usage_path': CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+            'usage_history_path': CODEX_USAGE_HISTORY_PATH,
+            'usage_plan_path': CODEX_USAGE_PLAN_PATH,
+            'queued_codex_home': CODEX_STORAGE_DIR / 'queued_codex_home',
+            'app_server_codex_home': CODEX_STORAGE_DIR / 'app_server_codex_home',
+        }
+    root = CODEX_ACCOUNTS_DIR / account['id']
+    codex_home = Path(account['codex_home']).expanduser()
+    return {
+        'account': account,
+        'root': root,
+        'codex_home': codex_home,
+        'token_usage_path': root / 'codex_token_usage.json',
+        'account_token_usage_path': root / 'codex_account_token_usage.json',
+        'usage_history_path': root / 'codex_usage_history.json',
+        'usage_plan_path': root / 'codex_usage_plans.json',
+        'queued_codex_home': root / 'queued_codex_home',
+        'app_server_codex_home': root / 'app_server_codex_home',
+    }
+
+
+def _read_auth_identity(codex_home):
+    try:
+        auth_data = json.loads((Path(codex_home) / 'auth.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {'authenticated': False, 'account_name': '', 'provider_account_id': ''}
+    tokens = auth_data.get('tokens') if isinstance(auth_data, dict) else None
+    if not isinstance(tokens, dict):
+        tokens = {}
+    claims = _decode_jwt_payload(tokens.get('id_token'))
+    account_name = ''
+    for key in ('name', 'email', 'preferred_username', 'nickname'):
+        value = claims.get(key)
+        if isinstance(value, str) and value.strip():
+            account_name = value.strip()
+            break
+    provider_account_id = str(tokens.get('account_id') or '').strip()
+    if not account_name:
+        account_name = provider_account_id
+    return {
+        'authenticated': True,
+        'account_name': account_name,
+        'provider_account_id': provider_account_id,
+    }
+
+
+def _account_login_command(account):
+    codex_home = str((account or {}).get('codex_home') or '').strip()
+    if not codex_home:
+        return ''
+    return f'CODEX_HOME={shlex.quote(codex_home)} codex login'
+
+
+def _public_account_summary(account, active_account_id=''):
+    context = _account_storage_context(account.get('id'))
+    identity = _read_auth_identity(context['codex_home']) if context else {}
+    plan_periods = _load_usage_plan_periods(path=context['usage_plan_path']) if context else []
+    now_text = normalize_timestamp(None)
+    now_at = parse_timestamp(now_text)
+    current_plan = _resolve_usage_plan_period(plan_periods, now_text)
+    scheduled_plan = None
+    for period in plan_periods:
+        starts_at = parse_timestamp(period.get('starts_at')) if period.get('starts_at') else None
+        if starts_at is None or now_at is None or starts_at <= now_at:
+            continue
+        if scheduled_plan is None or period.get('starts_at', '') < scheduled_plan.get('starts_at', ''):
+            scheduled_plan = period
+    return {
+        'id': account.get('id'),
+        'label': account.get('label'),
+        'active': account.get('id') == active_account_id,
+        'authenticated': bool(identity.get('authenticated')),
+        'account_name': identity.get('account_name') or '',
+        'codex_home': str(context['codex_home']) if context else '',
+        'login_command': _account_login_command(account),
+        'current_plan': current_plan,
+        'scheduled_plan': scheduled_plan,
+        'created_at': account.get('created_at') or '',
+        'updated_at': account.get('updated_at') or '',
+    }
+
+
+def get_codex_accounts_summary():
+    with _ACCOUNTS_LOCK:
+        registry = _load_accounts_registry()
+    return {
+        'active_account_id': registry['active_account_id'],
+        'accounts': [
+            _public_account_summary(account, registry['active_account_id'])
+            for account in registry['accounts']
+        ],
+        'automatic_failover': False,
+    }
+
+
+def create_codex_account(label, plan_label='Plus', multiplier=1, source_codex_home=None):
+    account_label = str(label or '').strip()[:80]
+    if not account_label:
+        raise ValueError('계정 이름을 입력해 주세요.')
+    plan_name = str(plan_label or '').strip()[:80] or 'Plus'
+    plan_multiplier = _coerce_float(multiplier)
+    if plan_multiplier is None or plan_multiplier <= 0:
+        raise ValueError('요금제 배수는 0보다 커야 합니다.')
+    with _ACCOUNTS_LOCK:
+        registry = _load_accounts_registry()
+        base_id = _normalize_account_id(account_label) or 'account'
+        account_id = f'{base_id[:40]}-{uuid.uuid4().hex[:8]}'
+        root = CODEX_ACCOUNTS_DIR / account_id
+        codex_home = root / 'codex_home'
+        codex_home.mkdir(parents=True, exist_ok=True)
+        try:
+            codex_home.chmod(0o700)
+        except Exception:
+            pass
+
+        source_home = None
+        source_text = str(source_codex_home or '').strip()
+        if source_text:
+            source_home = Path(source_text).expanduser()
+            if not _codex_home_has_auth(source_home):
+                raise ValueError('지정한 CODEX_HOME에서 auth.json을 찾을 수 없습니다.')
+        else:
+            active_context = _account_storage_context(registry['active_account_id'])
+            source_home = active_context['codex_home'] if active_context else None
+
+        if source_home is not None:
+            copy_files = _QUEUED_CODEX_HOME_SYNC_FILES if source_text else ('config.toml', 'models_cache.json')
+            for filename in copy_files:
+                _copy_codex_home_file_if_available(source_home, codex_home, filename)
+            for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
+                _link_codex_home_entry_if_available(source_home, codex_home, entry_name)
+            for entry_name in _QUEUED_CODEX_HOME_COPY_ENTRIES:
+                _copy_codex_home_entry_if_available(source_home, codex_home, entry_name)
+
+        now = normalize_timestamp(None)
+        account = {
+            'id': account_id,
+            'label': account_label,
+            'codex_home': str(codex_home),
+            'legacy_storage': False,
+            'created_at': now,
+            'updated_at': now,
+        }
+        registry['accounts'].append(account)
+        _save_accounts_registry(registry)
+        context = _account_storage_context(account_id)
+        plan_id = f'{_normalize_account_id(plan_name) or "plan"}-{uuid.uuid4().hex[:6]}'
+        _write_json_atomic(context['usage_plan_path'], {
+            'version': 1,
+            'plan_periods': [{
+                'id': plan_id,
+                'label': plan_name,
+                'multiplier': plan_multiplier,
+                'starts_at': now,
+                'ends_at': '',
+            }],
+        })
+    return _public_account_summary(account, registry['active_account_id'])
+
+
+def switch_codex_account(account_id):
+    requested_id = _normalize_account_id(account_id)
+    with _ACCOUNTS_LOCK:
+        registry = _load_accounts_registry()
+        if requested_id not in {account['id'] for account in registry['accounts']}:
+            raise ValueError('계정을 찾을 수 없습니다.')
+        registry['active_account_id'] = requested_id
+        _save_accounts_registry(registry)
+    return get_codex_accounts_summary()
+
+
+def append_codex_account_plan(account_id, label, multiplier=1, starts_at=None):
+    context = _account_storage_context(account_id)
+    if context is None:
+        raise ValueError('계정을 찾을 수 없습니다.')
+    plan_label = str(label or '').strip()[:80]
+    plan_multiplier = _coerce_float(multiplier)
+    if not plan_label:
+        raise ValueError('요금제 이름을 입력해 주세요.')
+    if plan_multiplier is None or plan_multiplier <= 0:
+        raise ValueError('요금제 배수는 0보다 커야 합니다.')
+    transition_at = _normalize_optional_timestamp(starts_at) or normalize_timestamp(None)
+    with _ACCOUNTS_LOCK:
+        periods = _load_usage_plan_periods(path=context['usage_plan_path'])
+        transition_dt = parse_timestamp(transition_at)
+        now_dt = parse_timestamp(normalize_timestamp(None))
+        removed_starts = set()
+        if transition_dt is not None and now_dt is not None and transition_dt > now_dt:
+            retained_periods = []
+            for period in periods:
+                period_starts = parse_timestamp(period.get('starts_at')) if period.get('starts_at') else None
+                same_future_plan = (
+                    period_starts is not None
+                    and period_starts > now_dt
+                    and str(period.get('label') or '').strip().casefold() == plan_label.casefold()
+                )
+                if same_future_plan:
+                    removed_starts.add(period.get('starts_at') or '')
+                    continue
+                retained_periods.append(period)
+            periods = retained_periods
+            if removed_starts:
+                for period in periods:
+                    if period.get('ends_at') in removed_starts:
+                        period['ends_at'] = ''
+        for period in periods:
+            if not period.get('ends_at') and period.get('starts_at', '') <= transition_at:
+                period['ends_at'] = transition_at
+        periods.append({
+            'id': f'{_normalize_account_id(plan_label) or "plan"}-{uuid.uuid4().hex[:6]}',
+            'label': plan_label,
+            'multiplier': plan_multiplier,
+            'starts_at': transition_at,
+            'ends_at': '',
+        })
+        normalized = _normalize_usage_plan_periods(periods)
+        for index, period in enumerate(normalized[:-1]):
+            next_starts_at = normalized[index + 1].get('starts_at') or ''
+            current_ends_at = period.get('ends_at') or ''
+            if next_starts_at and (not current_ends_at or current_ends_at > next_starts_at):
+                period['ends_at'] = next_starts_at
+        _write_json_atomic(context['usage_plan_path'], {
+            'version': 1,
+            'plan_periods': normalized,
+        })
+    return _public_account_summary(context['account'], get_active_account_id())
+
+
 def _zero_token_usage():
     return {
         'input_tokens': 0,
@@ -4343,7 +4712,7 @@ def _record_token_usage_to_path(
         return False
 
 
-def _record_token_usage(event_id, session_id, usage, source='stream'):
+def _record_token_usage(event_id, session_id, usage, source='stream', account_id=None):
     normalized_usage = _normalize_token_usage(usage)
     if not normalized_usage or not _token_usage_has_data(normalized_usage):
         return False
@@ -4357,9 +4726,12 @@ def _record_token_usage(event_id, session_id, usage, source='stream'):
     account_event_key = f'{_WORKSPACE_SCOPE_ID}:{event_key}'
     account_session_key = f'{_WORKSPACE_SCOPE_ID}:{session_key}'
 
+    context = _account_storage_context(account_id)
+    if context is None:
+        return False
     with _TOKEN_USAGE_LOCK:
         recorded_workspace = _record_token_usage_to_path(
-            ledger_path=CODEX_TOKEN_USAGE_PATH,
+            ledger_path=context['token_usage_path'],
             event_key=event_key,
             session_key=session_key,
             usage=normalized_usage,
@@ -4368,7 +4740,7 @@ def _record_token_usage(event_id, session_id, usage, source='stream'):
             day_key=day_key,
         )
         recorded_account = _record_token_usage_to_path(
-            ledger_path=CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+            ledger_path=context['account_token_usage_path'],
             event_key=account_event_key,
             session_key=account_session_key,
             usage=normalized_usage,
@@ -4415,20 +4787,23 @@ def get_token_usage_summary(recent_days=7, ledger_path=CODEX_TOKEN_USAGE_PATH):
     }
 
 
-def get_account_token_usage_summary(recent_days=7):
+def get_account_token_usage_summary(recent_days=7, account_id=None):
+    context = _account_storage_context(account_id)
     return get_token_usage_summary(
         recent_days=recent_days,
-        ledger_path=CODEX_ACCOUNT_TOKEN_USAGE_PATH,
+        ledger_path=(context['account_token_usage_path'] if context else CODEX_ACCOUNT_TOKEN_USAGE_PATH),
     )
 
 
-def record_token_usage_for_message(session_id, message_id, token_usage, source='message'):
+def record_token_usage_for_message(
+        session_id, message_id, token_usage, source='message', account_id=None):
     message_key = str(message_id or '').strip() or uuid.uuid4().hex
     return _record_token_usage(
         event_id=f'message:{message_key}',
         session_id=session_id,
         usage=token_usage,
-        source=source
+        source=source,
+        account_id=account_id,
     )
 
 
@@ -4602,26 +4977,11 @@ def _decode_jwt_payload(token):
     return {}
 
 
-def _read_account_name():
-    try:
-        raw = _CODEX_AUTH_PATH.read_text(encoding='utf-8')
-        auth_data = json.loads(raw)
-    except Exception:
+def _read_account_name(account_id=None):
+    context = _account_storage_context(account_id)
+    if context is None:
         return ''
-    if not isinstance(auth_data, dict):
-        return ''
-    tokens = auth_data.get('tokens')
-    if not isinstance(tokens, dict):
-        tokens = {}
-    claims = _decode_jwt_payload(tokens.get('id_token'))
-    for key in ('name', 'email', 'preferred_username', 'nickname'):
-        value = claims.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    account_id = tokens.get('account_id')
-    if isinstance(account_id, str) and account_id.strip():
-        return account_id.strip()
-    return ''
+    return _read_auth_identity(context['codex_home']).get('account_name') or ''
 
 
 def _usage_history_bucket_start_text(value=None):
@@ -4965,9 +5325,12 @@ def _build_usage_history_snapshot(usage_summary):
     })
 
 
-def record_usage_snapshot_if_due(force=False, usage_summary=None):
+def record_usage_snapshot_if_due(force=False, usage_summary=None, account_id=None):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return {'recorded': False, 'usage': usage_summary, 'snapshot': None}
     if usage_summary is None:
-        usage_summary = get_usage_summary()
+        usage_summary = get_usage_summary(account_id=account_id)
     snapshot = _build_usage_history_snapshot(usage_summary)
     if not snapshot:
         return {
@@ -4980,8 +5343,8 @@ def record_usage_snapshot_if_due(force=False, usage_summary=None):
     recorded = False
     with _USAGE_HISTORY_LOCK:
         try:
-            with _acquire_path_file_lock(CODEX_USAGE_HISTORY_PATH):
-                ledger = _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH)
+            with _acquire_path_file_lock(context['usage_history_path']):
+                ledger = _load_usage_history_ledger(path=context['usage_history_path'])
                 items = list(ledger.get('items') or [])
                 existing_index = -1
                 for idx, item in enumerate(items):
@@ -5005,7 +5368,7 @@ def record_usage_snapshot_if_due(force=False, usage_summary=None):
                         items = items[-_USAGE_HISTORY_MAX_ITEMS:]
                     ledger['items'] = items
                     ledger['updated_at'] = normalize_timestamp(None)
-                    _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH)
+                    _save_usage_history_ledger(ledger, path=context['usage_history_path'])
         except Exception:
             _LOGGER.debug('usage history snapshot update skipped', exc_info=True)
             recorded = False
@@ -5481,7 +5844,10 @@ def _build_usage_history_average_set(
     }
 
 
-def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
+def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=None):
+    context = _account_storage_context(account_id)
+    if context is None:
+        context = _account_storage_context()
     requested_hours = _coerce_non_negative_int(hours)
     if requested_hours is None or requested_hours <= 0:
         requested_hours = _USAGE_HISTORY_DEFAULT_HOURS
@@ -5489,12 +5855,12 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
 
     with _USAGE_HISTORY_LOCK:
         try:
-            with _acquire_path_file_lock(CODEX_USAGE_HISTORY_PATH):
-                ledger = _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH)
+            with _acquire_path_file_lock(context['usage_history_path']):
+                ledger = _load_usage_history_ledger(path=context['usage_history_path'])
         except Exception:
             ledger = _empty_usage_history_ledger()
 
-    plan_periods = _load_usage_plan_periods(path=CODEX_USAGE_PLAN_PATH)
+    plan_periods = _load_usage_plan_periods(path=context['usage_plan_path'])
     if not plan_periods:
         plan_periods = _normalize_usage_plan_periods(ledger.get('plan_periods'))
     plan_transitions = _build_usage_plan_transitions(plan_periods)
@@ -5666,7 +6032,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         })
 
     return {
-        'path': str(CODEX_USAGE_HISTORY_PATH),
+        'path': str(context['usage_history_path']),
         'updated_at': ledger.get('updated_at'),
         'bucket_hours': max(1, _coerce_non_negative_int(ledger.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS),
         'timezone': str(ledger.get('timezone') or 'Asia/Seoul'),
@@ -5687,7 +6053,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         'weekly_reset_detected_count': weekly_reset_count,
         'token_counter_reset_detected_count': token_counter_reset_count,
         'plan_transition_detected_count': plan_transition_count,
-        'plan_config_path': str(CODEX_USAGE_PLAN_PATH),
+        'plan_config_path': str(context['usage_plan_path']),
         'plan_periods': plan_period_summaries,
         'plan_transitions': visible_plan_transitions,
         'current_plan': ({
@@ -5715,9 +6081,10 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS):
         'scope': {
             'workspace_id': _WORKSPACE_SCOPE_ID,
             'workspace_path': str(WORKSPACE_DIR),
-            'workspace_token_usage_path': str(CODEX_TOKEN_USAGE_PATH),
-            'account_token_usage_path': str(CODEX_ACCOUNT_TOKEN_USAGE_PATH),
-            'limits_source_path': str(CODEX_SESSIONS_PATH),
+            'account_id': context['account']['id'],
+            'workspace_token_usage_path': str(context['token_usage_path']),
+            'account_token_usage_path': str(context['account_token_usage_path']),
+            'limits_source_path': str(context['codex_home'] / 'sessions'),
             'relation_scope': relation_scope,
             'token_delta_key': token_delta_key,
         },
@@ -5750,21 +6117,32 @@ def ensure_usage_snapshot_background_worker():
     return True
 
 
-def get_usage_summary():
-    account_name = _read_account_name()
-    token_usage = get_token_usage_summary()
-    account_token_usage = get_account_token_usage_summary()
-    if not CODEX_SESSIONS_PATH.exists():
+def get_usage_summary(account_id=None):
+    context = _account_storage_context(account_id)
+    if context is None:
+        context = _account_storage_context()
+    resolved_account_id = context['account']['id']
+    sessions_path = context['codex_home'] / 'sessions'
+    account_name = _read_account_name(resolved_account_id)
+    token_usage = get_token_usage_summary(ledger_path=context['token_usage_path'])
+    account_token_usage = get_account_token_usage_summary(account_id=resolved_account_id)
+    account_metadata = {
+        'account_id': resolved_account_id,
+        'account_label': context['account']['label'],
+        'authenticated': _codex_home_has_auth(context['codex_home']),
+    }
+    if not sessions_path.exists():
         return {
             'five_hour': None,
             'weekly': None,
             'account_name': account_name,
             'token_usage': token_usage,
             'account_token_usage': account_token_usage,
+            **account_metadata,
         }
     try:
         files = sorted(
-            CODEX_SESSIONS_PATH.rglob('*.jsonl'),
+            sessions_path.rglob('*.jsonl'),
             key=lambda path: path.stat().st_mtime,
             reverse=True
         )
@@ -5775,6 +6153,7 @@ def get_usage_summary():
             'account_name': account_name,
             'token_usage': token_usage,
             'account_token_usage': account_token_usage,
+            **account_metadata,
         }
     best_limits = None
     best_timestamp = None
@@ -5795,6 +6174,7 @@ def get_usage_summary():
         best_limits['account_name'] = account_name
         best_limits['token_usage'] = token_usage
         best_limits['account_token_usage'] = account_token_usage
+        best_limits.update(account_metadata)
         return best_limits
     return {
         'five_hour': None,
@@ -5802,6 +6182,7 @@ def get_usage_summary():
         'account_name': account_name,
         'token_usage': token_usage,
         'account_token_usage': account_token_usage,
+        **account_metadata,
     }
 
 
@@ -6540,7 +6921,12 @@ def _resolve_authenticated_codex_home(env):
 
 
 def _prepare_app_server_codex_home(env):
-    app_server_home = CODEX_STORAGE_DIR / 'app_server_codex_home'
+    configured_home = str(env.get('CODEX_WORKBENCH_APP_SERVER_HOME') or '').strip()
+    app_server_home = (
+        Path(configured_home).expanduser()
+        if configured_home
+        else CODEX_STORAGE_DIR / 'app_server_codex_home'
+    )
     app_server_home.mkdir(parents=True, exist_ok=True)
     try:
         app_server_home.chmod(0o700)
@@ -6819,11 +7205,17 @@ def _build_codex_child_base_env():
     return env
 
 
-def _build_codex_exec_env(queued_execution=False):
+def _build_codex_exec_env(queued_execution=False, account_id=None):
     env = _build_codex_child_base_env()
+    use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
+    context = _account_storage_context(account_id) if use_account_context else None
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
-    env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
+    if context is not None:
+        env['CODEX_HOME'] = str(context['codex_home'])
+        env[_QUEUED_CODEX_HOME_ENV] = str(context['queued_codex_home'])
+    else:
+        env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     if queued_execution or _codex_home_needs_queued_redirect(env):
         queued_home = _prepare_queued_codex_home(env)
         env['CODEX_HOME'] = str(queued_home)
@@ -6831,9 +7223,15 @@ def _build_codex_exec_env(queued_execution=False):
     return env
 
 
-def _build_codex_app_server_env():
+def _build_codex_app_server_env(account_id=None):
     env = _build_codex_child_base_env()
-    env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
+    use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
+    context = _account_storage_context(account_id) if use_account_context else None
+    if context is not None:
+        env['CODEX_HOME'] = str(context['codex_home'])
+        env['CODEX_WORKBENCH_APP_SERVER_HOME'] = str(context['app_server_codex_home'])
+    else:
+        env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     app_server_home = _prepare_app_server_codex_home(env)
     env['CODEX_HOME'] = str(app_server_home)
     _prepare_queued_codex_runtime_env(env, app_server_home)
@@ -7661,7 +8059,8 @@ def execute_codex_prompt(
         imagegen_prompt=None,
         question_only=False,
         agent_backend=None,
-        inherit_model_settings=True):
+        inherit_model_settings=True,
+        account_id=None):
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = _new_codex_output_path()
     normalized_attachments = normalize_codex_attachments(attachments or [])
@@ -7682,7 +8081,7 @@ def execute_codex_prompt(
     completed_at = None
     exec_details = None
     try:
-        exec_env = _build_codex_exec_env()
+        exec_env = _build_codex_exec_env(account_id=account_id)
         _prepare_imagegen_workbench_dirs(prompt)
         cmd = _wrap_codex_cli_command(cmd, env=exec_env)
         exec_details = _build_codex_exec_input_details(
@@ -9951,6 +10350,7 @@ def _run_codex_stream(stream_id, prompt):
         attachments = stream.get('attachments') if stream else []
         agent_backend = _normalize_agent_backend_setting(stream.get('agent_backend')) if stream else get_selected_agent_backend()
         queued_execution = bool(stream.get('queued_execution')) if stream else False
+        account_id = str(stream.get('account_id') or '').strip() if stream else ''
         question_only = bool(stream.get('question_only')) if stream else False
         execution_cwd = stream.get('execution_cwd') if stream else None
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task')) if stream else None
@@ -9982,7 +10382,10 @@ def _run_codex_stream(stream_id, prompt):
         return
 
     prompt = _append_attachment_exec_context(prompt, attachments)
-    exec_env = _build_codex_exec_env(queued_execution=queued_execution)
+    exec_env = _build_codex_exec_env(
+        queued_execution=queued_execution,
+        account_id=account_id,
+    )
     agent_backend, cmd = _build_agent_command(
         prompt,
         output_path=output_path,
@@ -10484,7 +10887,8 @@ def create_codex_stream(
         question_only=False,
         user_prompt=None,
         structured_report_preset=None,
-        worktree_task=None):
+        worktree_task=None,
+        account_id=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -10513,6 +10917,7 @@ def create_codex_stream(
         else ('worktree_isolated' if worktree_task_payload else 'standard')
     )
     normalized_attachments = normalize_codex_attachments(attachments or [])
+    resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     stream = {
         'id': stream_id,
         'session_id': session_id,
@@ -10539,6 +10944,7 @@ def create_codex_stream(
         'reasoning_override': (str(reasoning_override).strip() if reasoning_override is not None else '') or None,
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
+        'account_id': resolved_account_id,
         'question_only': bool(question_only or structured_report_preset_id),
         'attachments': normalized_attachments,
         'user_prompt': str(user_prompt or '').strip(),
@@ -10795,7 +11201,8 @@ def _start_codex_stream_for_session_locked(
         queued_execution=False,
         question_only=False,
         structured_report_preset=None,
-        worktree_mode=False):
+        worktree_mode=False,
+        account_id=None):
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -10805,6 +11212,17 @@ def _start_codex_stream_for_session_locked(
             'active_stream_id': active_stream_id,
         }
 
+    resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
+    account_profile = _get_account_profile(resolved_account_id)
+    agent_backend = get_selected_agent_backend()
+    if account_profile is None:
+        return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
+    if agent_backend != 'claude' and not _codex_home_has_auth(account_profile['codex_home']):
+        return {
+            'ok': False,
+            'error': '선택한 계정에 로그인이 필요합니다. 계정 관리에서 로그인 명령을 확인해 주세요.',
+            'error_code': 'account_login_required',
+        }
     normalized_attachments = normalize_codex_attachments(attachments or [])
     structured_report_preset_id = normalize_structured_report_preset_id(structured_report_preset)
     worktree_task = None
@@ -10817,13 +11235,14 @@ def _start_codex_stream_for_session_locked(
                 'error': str(exc),
                 'error_code': exc.error_code,
             }
-    user_metadata = {}
+    user_metadata = {
+        'account_id': resolved_account_id,
+        'account_label': account_profile.get('label') or resolved_account_id,
+    }
     if normalized_attachments:
         user_metadata['attachments'] = normalized_attachments
     if worktree_task:
         user_metadata['worktree_task'] = worktree_task
-    if not user_metadata:
-        user_metadata = None
     user_message = append_message(session_id, 'user', prompt, user_metadata)
     if not user_message:
         return {
@@ -10835,7 +11254,6 @@ def _start_codex_stream_for_session_locked(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
     )
-    agent_backend = get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -10852,6 +11270,8 @@ def _start_codex_stream_for_session_locked(
         'response_agent_backend': agent_backend,
         'streaming': True,
         'execution_policy': execution_policy,
+        'account_id': resolved_account_id,
+        'account_label': account_profile.get('label') or resolved_account_id,
     }
     if structured_report_preset_id:
         assistant_metadata['structured_report_preset'] = structured_report_preset_id
@@ -10879,6 +11299,7 @@ def _start_codex_stream_for_session_locked(
         'user_prompt': prompt,
         'structured_report_preset': structured_report_preset_id,
         'worktree_task': worktree_task,
+        'account_id': resolved_account_id,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -10909,7 +11330,8 @@ def _build_pending_queue_entry(
         plan_mode=False,
         attachments=None,
         structured_report_preset=None,
-        worktree_mode=False):
+        worktree_mode=False,
+        account_id=None):
     normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,
@@ -10918,6 +11340,7 @@ def _build_pending_queue_entry(
         'attachments': normalized_attachments,
         'structured_report_preset': normalize_structured_report_preset_id(structured_report_preset),
         'worktree_mode': bool(worktree_mode),
+        'account_id': _normalize_account_id(account_id) or get_active_account_id(),
         'created_at': normalize_timestamp(None),
     }
 
@@ -10928,7 +11351,8 @@ def _enqueue_pending_queue_entry(
         plan_mode=False,
         attachments=None,
         structured_report_preset=None,
-        worktree_mode=False):
+        worktree_mode=False,
+        account_id=None):
     with _DATA_LOCK:
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -10942,6 +11366,7 @@ def _enqueue_pending_queue_entry(
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
+            account_id=account_id,
         )
         if not entry.get('prompt'):
             return {'ok': False, 'error': '프롬프트가 비어 있습니다.'}
@@ -10992,6 +11417,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             pending_entry.get('structured_report_preset')
         )
         worktree_mode = bool(pending_entry.get('worktree_mode')) and not structured_report_preset
+        account_id = _normalize_account_id(pending_entry.get('account_id')) or get_active_account_id()
         session = get_session(session_id)
         if not session:
             return {
@@ -11021,6 +11447,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             question_only=bool(structured_report_preset),
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
+            account_id=account_id,
         )
         if not start_result.get('ok'):
             return start_result
@@ -11047,7 +11474,8 @@ def start_codex_stream_for_session(
         attachments=None,
         question_only=False,
         structured_report_preset=None,
-        worktree_mode=False):
+        worktree_mode=False,
+        account_id=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -11062,6 +11490,7 @@ def start_codex_stream_for_session(
             question_only=question_only,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
+            account_id=account_id,
         )
 
 
@@ -11118,7 +11547,8 @@ def enqueue_codex_stream_for_session(
         plan_mode=False,
         attachments=None,
         structured_report_preset=None,
-        worktree_mode=False):
+        worktree_mode=False,
+        account_id=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         queued = _enqueue_pending_queue_entry(
@@ -11128,6 +11558,7 @@ def enqueue_codex_stream_for_session(
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
+            account_id=account_id,
         )
         if not queued.get('ok'):
             return queued
@@ -11211,6 +11642,7 @@ def list_codex_streams(include_done=False):
             streams.append({
                 'id': stream.get('id'),
                 'session_id': session_id,
+                'account_id': stream.get('account_id') or '',
                 'done': stream.get('done', False),
                 'cancelled': stream.get('cancelled', False),
                 'pending_queue_count': get_pending_queue_count_for_session(session_id),
@@ -11279,6 +11711,7 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
             'session_id': session_id,
+            'account_id': stream.get('account_id') or '',
             'pending_queue_count': get_pending_queue_count_for_session(session_id),
             'started_at': _epoch_to_millis(stream.get('started_at') or stream.get('created_at')) or 0,
             'cli_started_at': _epoch_to_millis(stream.get('cli_started_at')),
@@ -11341,6 +11774,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
         session_id = stream.get('session_id')
+        account_id = _normalize_account_id(stream.get('account_id')) or get_active_account_id()
         assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
@@ -11418,6 +11852,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
+    metadata['account_id'] = account_id
     if worktree_task:
         try:
             metadata['worktree_task'] = get_git_worktree_task(worktree_task.get('id'))
@@ -11540,7 +11975,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         event_id=f'stream:{stream_id}',
         session_id=session_id,
         usage=token_usage,
-        source=usage_source
+        source=usage_source,
+        account_id=account_id,
     )
     if trigger_queue:
         trigger_next_queued_codex_stream(session_id)
@@ -11565,6 +12001,7 @@ def stop_codex_stream(stream_id):
         stream['finalize_reason'] = 'user_cancelled'
         process = stream.get('process')
         session_id = stream.get('session_id')
+        account_id = _normalize_account_id(stream.get('account_id')) or get_active_account_id()
         assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
         output = (stream.get('output') or '').strip()
         output_last_message = (stream.get('output_last_message') or '').strip()
@@ -11630,6 +12067,7 @@ def stop_codex_stream(stream_id):
     metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
+    metadata['account_id'] = account_id
     if structured_report_preset:
         metadata['structured_report_preset'] = structured_report_preset
     if worktree_task:
@@ -11670,7 +12108,8 @@ def stop_codex_stream(stream_id):
         event_id=f'stream-stop:{stream_id}',
         session_id=session_id,
         usage=token_usage,
-        source='stream_user_cancelled'
+        source='stream_user_cancelled',
+        account_id=account_id,
     )
 
     with state.codex_streams_lock:

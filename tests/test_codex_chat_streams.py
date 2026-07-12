@@ -68,6 +68,8 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     account_token_usage_path = tmp_path / 'codex_account_token_usage.json'
     usage_history_path = tmp_path / 'codex_usage_history.json'
     usage_plan_path = tmp_path / 'codex_usage_plans.json'
+    accounts_path = tmp_path / 'codex_accounts.json'
+    accounts_dir = tmp_path / 'accounts'
     workspace_dir = tmp_path / 'workspace'
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -76,6 +78,9 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNT_TOKEN_USAGE_PATH', account_token_usage_path)
     monkeypatch.setattr(codex_chat, 'CODEX_USAGE_HISTORY_PATH', usage_history_path)
     monkeypatch.setattr(codex_chat, 'CODEX_USAGE_PLAN_PATH', usage_plan_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', accounts_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', accounts_dir)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path)
     monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', workspace_dir)
     monkeypatch.setattr(
         codex_chat,
@@ -96,6 +101,8 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
         'token_usage_path': token_usage_path,
         'usage_history_path': usage_history_path,
         'usage_plan_path': usage_plan_path,
+        'accounts_path': accounts_path,
+        'accounts_dir': accounts_dir,
         'workspace_dir': workspace_dir,
     }
 
@@ -626,6 +633,163 @@ def test_usage_history_splits_limit_relations_at_plan_boundary(isolated_codex_wo
     by_plan = {entry['id']: entry for entry in summary['relation']['by_plan']}
     assert by_plan['pro-20x']['five_hour']['raw_tokens_per_percent'] == pytest.approx(100)
     assert by_plan['pro-5x']['five_hour']['raw_tokens_per_percent'] == pytest.approx(100)
+
+
+def test_codex_accounts_isolate_auth_usage_history_and_plans(
+        isolated_codex_workspace, monkeypatch, tmp_path):
+    source_a = tmp_path / 'source-a'
+    source_b = tmp_path / 'source-b'
+    for source, account_id in ((source_a, 'provider-a'), (source_b, 'provider-b')):
+        source.mkdir()
+        (source / 'auth.json').write_text(json.dumps({
+            'tokens': {'account_id': account_id},
+        }), encoding='utf-8')
+
+    account_a = codex_chat.create_codex_account(
+        'Personal Plus',
+        plan_label='Plus',
+        multiplier=1,
+        source_codex_home=source_a,
+    )
+    account_b = codex_chat.create_codex_account(
+        'Work Pro',
+        plan_label='Pro 20x',
+        multiplier=20,
+        source_codex_home=source_b,
+    )
+
+    context_a = codex_chat._account_storage_context(account_a['id'])
+    context_b = codex_chat._account_storage_context(account_b['id'])
+    assert context_a['codex_home'] != context_b['codex_home']
+    assert context_a['usage_history_path'] != context_b['usage_history_path']
+    assert context_a['usage_plan_path'] != context_b['usage_plan_path']
+    assert json.loads((context_a['codex_home'] / 'auth.json').read_text())['tokens']['account_id'] == 'provider-a'
+    assert json.loads((context_b['codex_home'] / 'auth.json').read_text())['tokens']['account_id'] == 'provider-b'
+    assert codex_chat._load_usage_plan_periods(context_a['usage_plan_path'])[0]['label'] == 'Plus'
+    assert codex_chat._load_usage_plan_periods(context_b['usage_plan_path'])[0]['multiplier'] == 20
+
+    codex_chat._record_token_usage(
+        'event-a', 'session-a', {'total_tokens': 120, 'input_tokens': 100, 'output_tokens': 20},
+        account_id=account_a['id'],
+    )
+    assert codex_chat.get_token_usage_summary(ledger_path=context_a['token_usage_path'])['all_time']['total_tokens'] == 120
+    assert codex_chat.get_token_usage_summary(ledger_path=context_b['token_usage_path'])['all_time']['total_tokens'] == 0
+
+    codex_chat.switch_codex_account(account_b['id'])
+    summary = codex_chat.get_codex_accounts_summary()
+    assert summary['active_account_id'] == account_b['id']
+    assert next(item for item in summary['accounts'] if item['id'] == account_b['id'])['authenticated'] is True
+
+
+def test_pending_queue_entry_keeps_submission_account_after_switch(
+        isolated_codex_workspace, tmp_path):
+    source_a = tmp_path / 'queue-source-a'
+    source_b = tmp_path / 'queue-source-b'
+    for source in (source_a, source_b):
+        source.mkdir()
+        (source / 'auth.json').write_text('{"tokens": {}}', encoding='utf-8')
+    account_a = codex_chat.create_codex_account('Queue A', source_codex_home=source_a)
+    account_b = codex_chat.create_codex_account('Queue B', source_codex_home=source_b)
+    codex_chat.switch_codex_account(account_a['id'])
+
+    entry = codex_chat._build_pending_queue_entry('queued prompt')
+    codex_chat.switch_codex_account(account_b['id'])
+    normalized = codex_chat._normalize_pending_queue_entry(entry)
+
+    assert normalized['account_id'] == account_a['id']
+    assert codex_chat.get_active_account_id() == account_b['id']
+
+
+def test_codex_exec_env_uses_explicit_account_home(
+        isolated_codex_workspace, tmp_path):
+    source = tmp_path / 'exec-source'
+    source.mkdir()
+    (source / 'auth.json').write_text('{"tokens": {"account_id": "exec"}}', encoding='utf-8')
+    account = codex_chat.create_codex_account('Exec account', source_codex_home=source)
+
+    env = codex_chat._build_codex_exec_env(account_id=account['id'])
+    context = codex_chat._account_storage_context(account['id'])
+
+    assert env['CODEX_HOME'] == str(context['codex_home'])
+    assert Path(env['CODEX_HOME'], 'auth.json').is_file()
+
+
+def test_codex_account_routes_create_activate_and_append_plan(
+        chat_route_client, isolated_codex_workspace, tmp_path):
+    source = tmp_path / 'route-source'
+    source.mkdir()
+    (source / 'auth.json').write_text('{"tokens": {"account_id": "route"}}', encoding='utf-8')
+
+    create_response = chat_route_client.post('/api/codex/accounts', json={
+        'label': 'Route Plus',
+        'plan_label': 'Plus',
+        'multiplier': 1,
+        'source_codex_home': str(source),
+    })
+    assert create_response.status_code == 201
+    account_id = create_response.get_json()['account']['id']
+
+    activate_response = chat_route_client.post(f'/api/codex/accounts/{account_id}/activate')
+    assert activate_response.status_code == 200
+    assert activate_response.get_json()['accounts']['active_account_id'] == account_id
+
+    plan_response = chat_route_client.post(
+        f'/api/codex/accounts/{account_id}/plans',
+        json={'label': 'Pro 5x', 'multiplier': 5},
+    )
+    assert plan_response.status_code == 200
+    account = next(
+        item for item in plan_response.get_json()['accounts']['accounts']
+        if item['id'] == account_id
+    )
+    assert account['current_plan']['label'] == 'Pro 5x'
+    assert account['current_plan']['multiplier'] == 5
+
+
+def test_future_account_plan_is_scheduled_without_becoming_current(
+        isolated_codex_workspace, tmp_path):
+    source = tmp_path / 'scheduled-source'
+    source.mkdir()
+    (source / 'auth.json').write_text('{"tokens": {"account_id": "scheduled"}}', encoding='utf-8')
+    account = codex_chat.create_codex_account(
+        'Scheduled Plus',
+        plan_label='Pro 20x',
+        multiplier=20,
+        source_codex_home=source,
+    )
+    starts_at = codex_chat.normalize_timestamp(datetime.now(codex_chat.KST) + timedelta(days=1))
+
+    codex_chat.append_codex_account_plan(
+        account['id'],
+        'Plus',
+        multiplier=1,
+        starts_at=starts_at,
+    )
+
+    summary = codex_chat.get_codex_accounts_summary()
+    scheduled = next(item for item in summary['accounts'] if item['id'] == account['id'])
+    assert scheduled['current_plan']['label'] == 'Pro 20x'
+    assert scheduled['current_plan']['ends_at'] == starts_at
+    assert scheduled['scheduled_plan']['label'] == 'Plus'
+    assert scheduled['scheduled_plan']['starts_at'] == starts_at
+
+    revised_starts_at = codex_chat.normalize_timestamp(
+        datetime.now(codex_chat.KST) + timedelta(days=2)
+    )
+    codex_chat.append_codex_account_plan(
+        account['id'],
+        'Plus',
+        multiplier=1,
+        starts_at=revised_starts_at,
+    )
+    revised_summary = codex_chat.get_codex_accounts_summary()
+    revised = next(item for item in revised_summary['accounts'] if item['id'] == account['id'])
+    revised_periods = codex_chat._load_usage_plan_periods(
+        codex_chat._account_storage_context(account['id'])['usage_plan_path']
+    )
+    assert revised['current_plan']['ends_at'] == revised_starts_at
+    assert revised['scheduled_plan']['starts_at'] == revised_starts_at
+    assert [period['label'] for period in revised_periods].count('Plus') == 1
 
 
 def test_extract_exec_json_summary_parses_usage_and_last_agent_text():

@@ -80,6 +80,11 @@ const state = {
         loading: false,
         error: ''
     },
+    accounts: {
+        activeAccountId: '',
+        items: [],
+        automaticFailover: false
+    },
     settings: {
         model: null,
         modelCatalog: [],
@@ -2121,6 +2126,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const controls = document.getElementById('codex-controls');
     const usageHistoryOpen = document.getElementById('codex-usage-history-open');
     const usageRefreshBtn = document.getElementById('codex-usage-refresh');
+    const accountSelect = document.getElementById('codex-account-select');
+    const accountManageOpen = document.getElementById('codex-account-manage-open');
+    const accountOverlay = document.getElementById('codex-account-overlay');
+    const accountOverlayClose = document.getElementById('codex-account-overlay-close');
+    const accountOverlayCloseFooter = document.getElementById('codex-account-overlay-close-footer');
+    const accountCreateBtn = document.getElementById('codex-account-create');
+    const accountPlanUpdateBtn = document.getElementById('codex-account-plan-update');
     const gitBranch = document.getElementById('codex-git-branch');
     const gitCommitBtn = document.getElementById('codex-git-commit');
     const gitPushBtn = document.getElementById('codex-git-push');
@@ -2986,6 +2998,33 @@ document.addEventListener('DOMContentLoaded', () => {
         usageHistoryOpen.addEventListener('click', () => {
             void openUsageHistoryOverlay();
         });
+    }
+    if (accountSelect) {
+        accountSelect.addEventListener('change', () => {
+            void switchActiveCodexAccount(accountSelect.value);
+        });
+    }
+    if (accountManageOpen) {
+        accountManageOpen.addEventListener('click', () => void openCodexAccountOverlay());
+    }
+    if (accountOverlay) {
+        accountOverlay.addEventListener('click', event => {
+            if (event.target?.dataset?.action === 'close') {
+                closeCodexAccountOverlay();
+            }
+        });
+    }
+    if (accountOverlayClose) {
+        accountOverlayClose.addEventListener('click', closeCodexAccountOverlay);
+    }
+    if (accountOverlayCloseFooter) {
+        accountOverlayCloseFooter.addEventListener('click', closeCodexAccountOverlay);
+    }
+    if (accountCreateBtn) {
+        accountCreateBtn.addEventListener('click', () => void createCodexAccountFromForm());
+    }
+    if (accountPlanUpdateBtn) {
+        accountPlanUpdateBtn.addEventListener('click', () => void appendActiveCodexAccountPlanFromForm());
     }
     document.querySelectorAll('#codex-usage-history-range-tabs [data-hours]').forEach(button => {
         button.addEventListener('click', event => {
@@ -7935,6 +7974,261 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
     }
 }
 
+function normalizeCodexAccountsSummary(value) {
+    const summary = value && typeof value === 'object' ? value : {};
+    const items = Array.isArray(summary.accounts) ? summary.accounts : [];
+    return {
+        activeAccountId: typeof summary.active_account_id === 'string' ? summary.active_account_id : '',
+        items: items.filter(item => item && typeof item === 'object').map(item => ({
+            id: String(item.id || ''),
+            label: String(item.label || item.id || 'Account'),
+            active: Boolean(item.active),
+            authenticated: Boolean(item.authenticated),
+            accountName: String(item.account_name || ''),
+            codexHome: String(item.codex_home || ''),
+            loginCommand: String(item.login_command || ''),
+            currentPlan: item.current_plan && typeof item.current_plan === 'object' ? item.current_plan : null,
+            scheduledPlan: item.scheduled_plan && typeof item.scheduled_plan === 'object' ? item.scheduled_plan : null
+        })).filter(item => item.id),
+        automaticFailover: Boolean(summary.automatic_failover)
+    };
+}
+
+function applyCodexAccountsSummary(value) {
+    state.accounts = normalizeCodexAccountsSummary(value);
+    renderCodexAccountControls();
+}
+
+function getActiveCodexAccount() {
+    return state.accounts.items.find(item => item.id === state.accounts.activeAccountId)
+        || state.accounts.items.find(item => item.active)
+        || null;
+}
+
+function formatCodexAccountPlan(account) {
+    const plan = account?.currentPlan;
+    if (!plan) return '요금제 미설정';
+    const label = String(plan.label || plan.id || 'Plan');
+    const multiplier = plan.multiplier == null ? null : Number(plan.multiplier);
+    return Number.isFinite(multiplier) ? `${label} · ${multiplier}x` : label;
+}
+
+function formatCodexAccountPlanStart(value) {
+    const parsed = new Date(String(value || ''));
+    if (Number.isNaN(parsed.getTime())) return '';
+    return new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul',
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    }).format(parsed);
+}
+
+function formatCodexAccountSchedule(account) {
+    const plan = account?.scheduledPlan;
+    if (!plan) return '';
+    const label = String(plan.label || plan.id || 'Plan');
+    const startsAt = formatCodexAccountPlanStart(plan.starts_at);
+    return `다음: ${label}${startsAt ? ` · ${startsAt}` : ''}`;
+}
+
+function renderCodexAccountControls() {
+    const select = document.getElementById('codex-account-select');
+    const status = document.getElementById('codex-account-switcher-status');
+    if (select) {
+        const previousValue = select.value;
+        select.innerHTML = '';
+        state.accounts.items.forEach(account => {
+            const option = document.createElement('option');
+            option.value = account.id;
+            option.textContent = `${account.label}${account.authenticated ? '' : ' · 로그인 필요'}`;
+            select.appendChild(option);
+        });
+        select.value = state.accounts.activeAccountId || previousValue;
+        select.disabled = state.accounts.items.length < 2;
+    }
+    const active = getActiveCodexAccount();
+    if (status) {
+        status.classList.toggle('is-warning', Boolean(active && !active.authenticated));
+        const schedule = formatCodexAccountSchedule(active);
+        status.textContent = active
+            ? `${formatCodexAccountPlan(active)}${schedule ? ` · ${schedule}` : ''}${active.authenticated ? '' : ' · 로그인 필요'}`
+            : '계정 정보를 불러오는 중...';
+    }
+    renderCodexAccountList();
+}
+
+function setCodexAccountOverlayStatus(message, isError = false) {
+    const status = document.getElementById('codex-account-overlay-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.classList.toggle('is-error', Boolean(isError));
+}
+
+async function copyCodexAccountLoginCommand(command) {
+    if (!command) return;
+    try {
+        await navigator.clipboard.writeText(command);
+        showToast('로그인 명령을 복사했습니다.', { tone: 'default', durationMs: 2500 });
+    } catch (error) {
+        setCodexAccountOverlayStatus('클립보드 복사에 실패했습니다. 명령을 직접 선택해 주세요.', true);
+    }
+}
+
+function renderCodexAccountList() {
+    const list = document.getElementById('codex-account-list');
+    if (!list) return;
+    list.innerHTML = '';
+    state.accounts.items.forEach(account => {
+        const row = document.createElement('div');
+        row.className = `account-list-item${account.id === state.accounts.activeAccountId ? ' is-active' : ''}`;
+        const details = document.createElement('div');
+        const title = document.createElement('div');
+        title.className = 'account-list-title';
+        title.textContent = `${account.label}${account.id === state.accounts.activeAccountId ? ' · 활성' : ''}`;
+        const meta = document.createElement('div');
+        meta.className = 'account-list-meta';
+        const schedule = formatCodexAccountSchedule(account);
+        meta.textContent = `${account.accountName || (account.authenticated ? '로그인됨' : '로그인 필요')} · ${formatCodexAccountPlan(account)}${schedule ? ` · ${schedule}` : ''}`;
+        details.append(title, meta);
+        if (!account.authenticated && account.loginCommand) {
+            const command = document.createElement('div');
+            command.className = 'account-login-command';
+            command.textContent = account.loginCommand;
+            details.appendChild(command);
+        }
+        const actions = document.createElement('div');
+        actions.className = 'account-list-actions';
+        if (account.id !== state.accounts.activeAccountId) {
+            const activate = document.createElement('button');
+            activate.type = 'button';
+            activate.className = 'btn secondary';
+            activate.textContent = '전환';
+            activate.addEventListener('click', () => void switchActiveCodexAccount(account.id));
+            actions.appendChild(activate);
+        }
+        if (!account.authenticated && account.loginCommand) {
+            const copy = document.createElement('button');
+            copy.type = 'button';
+            copy.className = 'btn ghost';
+            copy.textContent = '명령 복사';
+            copy.addEventListener('click', () => void copyCodexAccountLoginCommand(account.loginCommand));
+            actions.appendChild(copy);
+        }
+        row.append(details, actions);
+        list.appendChild(row);
+    });
+}
+
+async function switchActiveCodexAccount(accountId) {
+    const normalizedId = String(accountId || '').trim();
+    if (!normalizedId || normalizedId === state.accounts.activeAccountId) return;
+    const targetAccount = state.accounts.items.find(item => item.id === normalizedId);
+    if (targetAccount && !targetAccount.authenticated) {
+        renderCodexAccountControls();
+        await openCodexAccountOverlay();
+        setCodexAccountOverlayStatus(`${targetAccount.label} 계정에 먼저 로그인해 주세요.`, true);
+        return;
+    }
+    setCodexAccountOverlayStatus('계정을 전환하는 중...');
+    try {
+        const result = await fetchJson(`/api/codex/accounts/${encodeURIComponent(normalizedId)}/activate`, {
+            method: 'POST'
+        });
+        applyCodexAccountsSummary(result?.accounts);
+        state.settings.usage = result?.usage || null;
+        state.settings.usageHistory = result?.usage_history || null;
+        updateUsageSummary(state.settings.usage);
+        setCodexAccountOverlayStatus('계정을 전환했습니다. 이미 실행/대기 중인 작업은 기존 계정에 고정됩니다.');
+        showToast('Codex 계정을 전환했습니다.', { tone: 'default', durationMs: 3000 });
+    } catch (error) {
+        renderCodexAccountControls();
+        setCodexAccountOverlayStatus(normalizeError(error, '계정 전환에 실패했습니다.'), true);
+    }
+}
+
+async function openCodexAccountOverlay() {
+    const overlay = document.getElementById('codex-account-overlay');
+    if (!overlay) return;
+    renderCodexAccountControls();
+    setCodexAccountOverlayStatus('');
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    try {
+        const result = await fetchJson('/api/codex/accounts', { cache: 'no-store' });
+        applyCodexAccountsSummary(result?.accounts);
+    } catch (error) {
+        setCodexAccountOverlayStatus(normalizeError(error, '계정 상태를 갱신하지 못했습니다.'), true);
+    }
+}
+
+function closeCodexAccountOverlay() {
+    const overlay = document.getElementById('codex-account-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('is-visible');
+    overlay.setAttribute('aria-hidden', 'true');
+    if (!isUsageHistoryOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+async function createCodexAccountFromForm() {
+    const label = document.getElementById('codex-account-label')?.value?.trim() || '';
+    const planLabel = document.getElementById('codex-account-plan-label')?.value?.trim() || 'Plus';
+    const multiplier = document.getElementById('codex-account-plan-multiplier')?.value || '1';
+    const sourceCodexHome = document.getElementById('codex-account-source-home')?.value?.trim() || '';
+    setCodexAccountOverlayStatus('계정을 추가하는 중...');
+    try {
+        const result = await fetchJson('/api/codex/accounts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                label,
+                plan_label: planLabel,
+                multiplier,
+                source_codex_home: sourceCodexHome || null
+            })
+        });
+        applyCodexAccountsSummary(result?.accounts);
+        const created = result?.account;
+        const message = created?.authenticated
+            ? '계정을 가져왔습니다. 목록에서 전환할 수 있습니다.'
+            : '계정을 만들었습니다. 표시된 로그인 명령을 실행한 뒤 이 창을 다시 열어 상태를 확인하세요.';
+        setCodexAccountOverlayStatus(message);
+        const labelInput = document.getElementById('codex-account-label');
+        const sourceInput = document.getElementById('codex-account-source-home');
+        if (labelInput) labelInput.value = '';
+        if (sourceInput) sourceInput.value = '';
+    } catch (error) {
+        setCodexAccountOverlayStatus(normalizeError(error, '계정 추가에 실패했습니다.'), true);
+    }
+}
+
+async function appendActiveCodexAccountPlanFromForm() {
+    const account = getActiveCodexAccount();
+    const label = document.getElementById('codex-account-next-plan-label')?.value?.trim() || '';
+    const multiplier = document.getElementById('codex-account-next-plan-multiplier')?.value || '1';
+    const startsAt = document.getElementById('codex-account-next-plan-starts-at')?.value?.trim() || '';
+    if (!account) return;
+    setCodexAccountOverlayStatus('요금제 변경을 기록하는 중...');
+    try {
+        const result = await fetchJson(`/api/codex/accounts/${encodeURIComponent(account.id)}/plans`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, multiplier, starts_at: startsAt || null })
+        });
+        applyCodexAccountsSummary(result?.accounts);
+        await refreshUsageSummary({ silent: true });
+        setCodexAccountOverlayStatus(startsAt
+            ? '예약된 요금제 시작 시각을 기록했습니다. 그래프 평가는 이 경계에서 분리됩니다.'
+            : '요금제 변경 시각을 기록했습니다. 그래프 평가는 이 경계에서 분리됩니다.');
+    } catch (error) {
+        setCodexAccountOverlayStatus(normalizeError(error, '요금제 변경 기록에 실패했습니다.'), true);
+    }
+}
+
 async function loadSettings({ silent = true } = {}) {
     const refreshBtn = document.getElementById('codex-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
@@ -7986,6 +8280,7 @@ async function loadSettings({ silent = true } = {}) {
             usageLimitsEnabled: normalizeBooleanPolicyFlag(result?.feature_flags?.usage_limits_enabled, true),
             loaded: true
         };
+        applyCodexAccountsSummary(result?.accounts);
         state.appServer.status = normalizeAppServerStatus(result?.app_server_status);
         if (result?.session_storage) {
             state.sessionStorage = result.session_storage;
@@ -8035,6 +8330,9 @@ async function refreshUsageSummary({ silent = true, showSuccessToast = false } =
         );
         state.settings.usage = usage;
         state.settings.usageHistory = usageHistory;
+        if (result?.accounts) {
+            applyCodexAccountsSummary(result.accounts);
+        }
         if (result?.session_storage) {
             state.sessionStorage = result.session_storage;
             updateSessionStorageSummary(state.sessionStorage);

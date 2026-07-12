@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=189">
+    <link rel="stylesheet" href="/static/css/app.css?v=190">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -531,6 +531,14 @@
                                     </button>
                                 </div>
                             </div>
+                            <div class="account-switcher">
+                                <label class="sr-only" for="codex-account-select">실행 계정</label>
+                                <select id="codex-account-select" class="model-select account-select" aria-label="실행 계정 선택" disabled>
+                                    <option value="">계정 불러오는 중...</option>
+                                </select>
+                                <button class="btn ghost account-manage-open" type="button" id="codex-account-manage-open">관리</button>
+                            </div>
+                            <div class="account-switcher-status" id="codex-account-switcher-status"></div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
                         <div class="model-card">
@@ -1078,6 +1086,50 @@
         </div>
     </div>
 
+    <div class="account-overlay" id="codex-account-overlay" aria-hidden="true">
+        <div class="account-overlay-backdrop" data-action="close"></div>
+        <div class="account-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-account-overlay-title">
+            <div class="account-overlay-header">
+                <div>
+                    <div class="account-overlay-title" id="codex-account-overlay-title">Codex 계정 관리</div>
+                    <div class="account-overlay-subtitle">계정별 인증, 사용량, 요금제 이력을 분리합니다. 자동 전환이나 한도 기반 순환은 지원하지 않습니다.</div>
+                </div>
+                <button class="btn ghost icon-only account-overlay-close" type="button" id="codex-account-overlay-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
+            </div>
+            <div class="account-overlay-body">
+                <section class="account-section">
+                    <h3>등록된 계정</h3>
+                    <div class="account-list" id="codex-account-list"></div>
+                </section>
+                <section class="account-section account-form-section">
+                    <h3>계정 추가</h3>
+                    <div class="account-form-grid">
+                        <label>표시 이름<input class="model-input" id="codex-account-label" type="text" maxlength="80" placeholder="개인 Plus"></label>
+                        <label>현재 요금제<input class="model-input" id="codex-account-plan-label" type="text" maxlength="80" value="Plus"></label>
+                        <label>배수<input class="model-input" id="codex-account-plan-multiplier" type="number" min="0.01" step="0.01" value="1"></label>
+                        <label class="account-source-field">기존 CODEX_HOME 가져오기 (선택)<input class="model-input" id="codex-account-source-home" type="text" placeholder="비우면 새 로그인용 홈 생성"></label>
+                    </div>
+                    <p class="account-form-help">경로를 비우면 계정 전용 홈을 만들고 로그인 명령을 제공합니다. 기존 홈을 입력하면 그 홈의 인증을 복사합니다.</p>
+                    <button class="btn primary" type="button" id="codex-account-create">계정 추가</button>
+                </section>
+                <section class="account-section account-form-section">
+                    <h3>선택 계정 요금제 변경</h3>
+                    <div class="account-form-grid">
+                        <label>새 요금제<input class="model-input" id="codex-account-next-plan-label" type="text" maxlength="80" placeholder="Plus"></label>
+                        <label>배수<input class="model-input" id="codex-account-next-plan-multiplier" type="number" min="0.01" step="0.01" value="1"></label>
+                        <label>시작 시각 (KST)<input class="model-input" id="codex-account-next-plan-starts-at" type="datetime-local"></label>
+                    </div>
+                    <p class="account-form-help">비워 두면 현재 시각, 미래 시각을 입력하면 예약된 요금제로 기록합니다. 같은 미래 요금제는 시작 시각이 갱신되며, 그래프 평가는 실제 시작 시각 경계에서 분리됩니다.</p>
+                    <button class="btn secondary" type="button" id="codex-account-plan-update">요금제 변경 기록</button>
+                </section>
+                <div class="account-overlay-status" id="codex-account-overlay-status" role="status"></div>
+            </div>
+            <div class="account-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-account-overlay-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
     <div class="branch-overlay" id="codex-branch-overlay" aria-hidden="true">
         <div class="branch-overlay-backdrop" data-action="close"></div>
         <div class="branch-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-branch-overlay-title">
@@ -1471,6 +1523,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=190"></script>
+    <script src="/static/js/app.js?v=191"></script>
 </body>
 </html>

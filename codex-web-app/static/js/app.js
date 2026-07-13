@@ -28123,6 +28123,11 @@ function updateSessionStorageSummary(storage) {
 }
 
 function normalizeUsedPercent(value) {
+    if (
+        value === null
+        || value === undefined
+        || (typeof value === 'string' && !value.trim())
+    ) return null;
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return null;
     if (numeric < 0) return 0;

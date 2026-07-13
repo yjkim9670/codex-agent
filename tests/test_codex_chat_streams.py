@@ -567,6 +567,40 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     assert summary['averages']['weekly']['sample_count'] == 24 * 7
 
 
+def test_extract_limits_does_not_reuse_weekly_only_window_for_five_hour():
+    limits = codex_chat._extract_limits({'primary': {
+        'used_percent': 7,
+        'window_minutes': 10080,
+        'resets_at': 1783900000,
+    }})
+
+    assert limits['five_hour'] is None
+    assert limits['weekly']['used_percent'] == 7
+    assert limits['weekly']['window_minutes'] == 10080
+
+
+def test_extract_limits_does_not_reuse_five_hour_only_window_for_weekly():
+    limits = codex_chat._extract_limits({'primary': {
+        'used_percent': 12,
+        'window_minutes': 300,
+        'resets_at': 1783900000,
+    }})
+
+    assert limits['five_hour']['used_percent'] == 12
+    assert limits['five_hour']['window_minutes'] == 300
+    assert limits['weekly'] is None
+
+
+def test_extract_limits_preserves_legacy_primary_secondary_order_without_windows():
+    limits = codex_chat._extract_limits({
+        'primary': {'usedPercentage': 3, 'resetsAt': 1783900000},
+        'secondary': {'used_percentage': 9, 'resets_at': 1784000000},
+    })
+
+    assert limits['five_hour']['used_percent'] == 3
+    assert limits['weekly']['used_percent'] == 9
+
+
 def test_usage_history_splits_limit_relations_at_plan_boundary(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     plan_path = isolated_codex_workspace['usage_plan_path']
@@ -768,6 +802,55 @@ def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch
     assert (context['codex_home'] / 'auth.json').is_file()
     assert context['usage_history_path'].is_file()
     assert context['usage_plan_path'].is_file()
+
+
+def test_local_account_registry_merges_into_existing_shared_storage(tmp_path, monkeypatch):
+    shared_root = tmp_path / 'shared'
+    shared_root.mkdir()
+    shared_registry = shared_root / 'codex_accounts.json'
+    shared_registry.write_text(json.dumps({
+        'active_account_id': 'shared-plus',
+        'accounts': [{
+            'id': 'shared-plus',
+            'label': 'Shared Plus',
+            'codex_home': str(tmp_path / 'shared-home'),
+            'legacy_storage': True,
+        }],
+    }), encoding='utf-8')
+
+    local_root = tmp_path / 'local'
+    local_account_root = local_root / 'accounts' / 'local-plus'
+    local_codex_home = local_account_root / 'codex_home'
+    local_codex_home.mkdir(parents=True)
+    (local_codex_home / 'auth.json').write_text(
+        '{"tokens": {"account_id": "local"}}', encoding='utf-8'
+    )
+    local_registry = local_root / 'codex_accounts.json'
+    local_registry.write_text(json.dumps({
+        'active_account_id': 'local-plus',
+        'accounts': [{
+            'id': 'local-plus',
+            'label': 'Local Plus',
+            'codex_home': str(local_codex_home),
+            'legacy_storage': False,
+        }],
+    }), encoding='utf-8')
+
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', shared_registry)
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', shared_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_registry)
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', local_root)
+
+    registry = codex_chat._load_accounts_registry()
+
+    assert registry['active_account_id'] == 'shared-plus'
+    assert [account['id'] for account in registry['accounts']] == [
+        'shared-plus',
+        'local-plus',
+    ]
+    migrated_home = shared_root / 'accounts' / 'local-plus' / 'codex_home'
+    assert (migrated_home / 'auth.json').is_file()
 
 
 def test_import_codex_account_histories_deduplicates_by_latest_snapshot(

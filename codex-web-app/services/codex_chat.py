@@ -4184,10 +4184,10 @@ def _migrate_local_accounts_to_shared_storage():
     registry_path = _accounts_registry_path()
     local_registry_path = Path(CODEX_LOCAL_ACCOUNTS_PATH)
     try:
-        if registry_path.exists() or registry_path.resolve() == local_registry_path.resolve():
+        if registry_path.resolve() == local_registry_path.resolve():
             return
     except OSError:
-        if registry_path.exists() or registry_path == local_registry_path:
+        if registry_path == local_registry_path:
             return
 
     try:
@@ -4205,61 +4205,87 @@ def _migrate_local_accounts_to_shared_storage():
         return
 
     _ensure_private_account_storage()
-    migrated_accounts = []
-    for account in accounts:
-        account_id = account['id']
-        shared_root = Path(CODEX_ACCOUNTS_DIR) / account_id
-        local_root = (
-            Path(CODEX_STORAGE_DIR)
-            if account.get('legacy_storage')
-            else Path(CODEX_LOCAL_ACCOUNTS_DIR) / account_id
-        )
-        source_codex_home = Path(account['codex_home']).expanduser()
-        managed_codex_home = not account.get('legacy_storage')
-        if managed_codex_home:
-            shared_codex_home = shared_root / 'codex_home'
-            _copy_account_codex_home(source_codex_home, shared_codex_home)
-            account['codex_home'] = str(shared_codex_home)
-
-        workspace_root = shared_root / 'workspaces' / _WORKSPACE_SCOPE_ID
-        _copy_account_state_file(
-            local_root / 'codex_token_usage.json',
-            workspace_root / 'codex_token_usage.json',
-        )
-        account_usage_source = (
-            Path(CODEX_ACCOUNT_TOKEN_USAGE_PATH)
-            if account.get('legacy_storage')
-            else local_root / 'codex_account_token_usage.json'
-        )
-        _copy_account_state_file(
-            account_usage_source,
-            shared_root / 'codex_account_token_usage.json',
-        )
-        _copy_account_state_file(
-            local_root / 'codex_usage_history.json',
-            shared_root / 'codex_usage_history.json',
-        )
-        _copy_account_state_file(
-            local_root / 'codex_usage_plans.json',
-            shared_root / 'codex_usage_plans.json',
-        )
-        migrated_accounts.append(account)
-
-    migrated_ids = {account['id'] for account in migrated_accounts}
-    active_account_id = _normalize_account_id(payload.get('active_account_id'))
-    if active_account_id not in migrated_ids:
-        active_account_id = migrated_accounts[0]['id']
-    migrated_payload = {
-        'version': _ACCOUNTS_VERSION,
-        'active_account_id': active_account_id,
-        'accounts': migrated_accounts,
-        'migrated_from': str(local_registry_path.parent),
-        'updated_at': normalize_timestamp(None),
-    }
     try:
         with _acquire_path_file_lock(registry_path):
-            if not registry_path.exists():
-                _write_json_atomic(registry_path, migrated_payload)
+            try:
+                shared_payload = json.loads(registry_path.read_text(encoding='utf-8'))
+            except Exception:
+                shared_payload = {}
+            shared_accounts = []
+            shared_ids = set()
+            raw_shared_accounts = (
+                shared_payload.get('accounts') if isinstance(shared_payload, dict) else None
+            )
+            if isinstance(raw_shared_accounts, list):
+                for raw_account in raw_shared_accounts:
+                    account = _normalize_account_profile(raw_account)
+                    if account is None or account['id'] in shared_ids:
+                        continue
+                    shared_accounts.append(account)
+                    shared_ids.add(account['id'])
+
+            added_accounts = []
+            for account in accounts:
+                account_id = account['id']
+                if account_id in shared_ids:
+                    continue
+                shared_root = Path(CODEX_ACCOUNTS_DIR) / account_id
+                local_root = (
+                    Path(CODEX_STORAGE_DIR)
+                    if account.get('legacy_storage')
+                    else Path(CODEX_LOCAL_ACCOUNTS_DIR) / account_id
+                )
+                source_codex_home = Path(account['codex_home']).expanduser()
+                if not account.get('legacy_storage'):
+                    shared_codex_home = shared_root / 'codex_home'
+                    _copy_account_codex_home(source_codex_home, shared_codex_home)
+                    account['codex_home'] = str(shared_codex_home)
+
+                workspace_root = shared_root / 'workspaces' / _WORKSPACE_SCOPE_ID
+                _copy_account_state_file(
+                    local_root / 'codex_token_usage.json',
+                    workspace_root / 'codex_token_usage.json',
+                )
+                account_usage_source = (
+                    Path(CODEX_ACCOUNT_TOKEN_USAGE_PATH)
+                    if account.get('legacy_storage')
+                    else local_root / 'codex_account_token_usage.json'
+                )
+                _copy_account_state_file(
+                    account_usage_source,
+                    shared_root / 'codex_account_token_usage.json',
+                )
+                _copy_account_state_file(
+                    local_root / 'codex_usage_history.json',
+                    shared_root / 'codex_usage_history.json',
+                )
+                _copy_account_state_file(
+                    local_root / 'codex_usage_plans.json',
+                    shared_root / 'codex_usage_plans.json',
+                )
+                shared_accounts.append(account)
+                shared_ids.add(account_id)
+                added_accounts.append(account)
+
+            if not added_accounts:
+                return
+            active_account_id = _normalize_account_id(
+                shared_payload.get('active_account_id')
+                if isinstance(shared_payload, dict)
+                else ''
+            )
+            if active_account_id not in shared_ids:
+                active_account_id = _normalize_account_id(payload.get('active_account_id'))
+            if active_account_id not in shared_ids:
+                active_account_id = shared_accounts[0]['id']
+            migrated_payload = {
+                'version': _ACCOUNTS_VERSION,
+                'active_account_id': active_account_id,
+                'accounts': shared_accounts,
+                'migrated_from': str(local_registry_path.parent),
+                'updated_at': normalize_timestamp(None),
+            }
+            _write_json_atomic(registry_path, migrated_payload)
     except OSError:
         _LOGGER.debug('shared account registry migration skipped', exc_info=True)
 
@@ -5076,10 +5102,14 @@ def _extract_limits(rate_limits):
             five_hour = entry
         elif entry.get('window_minutes') == 10080:
             weekly = entry
-    if not five_hour and entries:
-        five_hour = entries[0]
-    if not weekly and len(entries) > 1:
-        weekly = entries[1]
+    fallback_entries = [
+        entry for entry in entries
+        if entry.get('window_minutes') not in (300, 10080)
+    ]
+    if not five_hour and fallback_entries:
+        five_hour = fallback_entries.pop(0)
+    if not weekly and fallback_entries:
+        weekly = fallback_entries.pop(0)
     return {
         'five_hour': five_hour,
         'weekly': weekly

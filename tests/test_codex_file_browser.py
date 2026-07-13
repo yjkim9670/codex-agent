@@ -1380,7 +1380,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=192' in template
+    assert '/static/js/app.js?v=193' in template
     assert '/static/css/app.css?v=190' in template
 
 
@@ -1404,7 +1404,21 @@ def test_file_preview_download_shows_progress_toast():
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
     assert '/static/css/app.css?v=190' in template
-    assert '/static/js/app.js?v=192' in template
+    assert '/static/js/app.js?v=193' in template
+
+
+def test_usage_history_chart_keeps_missing_percent_values_as_gaps():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert """if (
+        value === null
+        || value === undefined
+        || (typeof value === 'string' && !value.trim())
+    ) return null;""" in app_js
+    assert (
+        "items.map(item => normalizeUsedPercent(item?.five_hour_used_percent))"
+        in app_js
+    )
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():

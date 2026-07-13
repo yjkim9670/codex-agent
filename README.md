@@ -38,15 +38,17 @@ Or with the helper script:
 The helper launcher also uses `../.venv`.
 
 ## Codex CLI Stability Options
-Workbench does not serialize `codex exec` child processes by default. Company
-launchers explicitly force the exec lock off so stale launcher environments do
-not make every Workbench share one global queue.
+Workbench serializes mutable, interactive `codex exec` runs per workspace by
+default. Read-only subjobs and structured reports can still run in parallel.
+The workspace gate uses `.agent_state/codex_interactive_exec.lock`, so two
+Workbench server processes aimed at the same workspace do not run interactive
+agents at the same time.
 
-For temporary debugging only, set `CODEX_CLI_EXEC_LOCK=1` to serialize `codex
-exec` child processes with a lock file. This can reduce CLI event-stream queue
-pressure, but it also makes all Workbench instances that share the same lock
-wait for one another. The older `CODEX_CLI_SERIALIZE_EXEC` variable is ignored
-by current server code.
+For temporary debugging only, set `CODEX_CLI_EXEC_LOCK=1` to serialize every
+`codex exec` child process, including read-only jobs, with a user-level lock
+file. This can reduce CLI event-stream queue pressure, but it also makes all
+Workbench instances that share the same lock wait for one another. The older
+`CODEX_CLI_SERIALIZE_EXEC` variable is ignored by current server code.
 
 If the provider is slow to produce a final response after retries, increase
 `CODEX_STREAM_FINAL_RESPONSE_TIMEOUT_SECONDS` from the default.
@@ -113,6 +115,23 @@ sudo tailscale set --operator=$USER
 Keep `8080` reserved for `code-server`. A successful remote check typically returns `302` with `location: ./login`.
 
 ## Codex Token Monitoring
-- Codex usage tracks prompt/response tokens separately (`input_tokens`, `output_tokens`) plus `cached_input_tokens`.
+- Codex usage tracks prompt/response tokens separately (`input_tokens`, `output_tokens`) plus `cached_input_tokens`. The UI displays uncached input (`input_tokens - cached_input_tokens`), cached input, and output separately.
 - Aggregated counters are stored at `<repo>/workspace/.agent_state/codex_token_usage.json` (default parent-workspace mode).
 - `GET /api/codex/usage` returns both rate-limit info and `token_usage` summary (`today`, `all_time`, `recent_days`).
+
+## Browser Verification
+
+The model settings card exposes `Auto`, `Browser`, and `Off` verification modes.
+`Auto` adds browser instructions only for UI-changing requests, `Browser` always
+adds them, and `Off` omits them. The injected instruction points to one stable
+runner invocation:
+
+```bash
+python3 scripts/verify_browser_ui.py --url http://127.0.0.1:3100 --selector body
+```
+
+The runner invokes the global Playwright CLI once with headless Chromium and a
+temporary profile. It checks HTTP status, the requested DOM selector, console
+errors, and page errors. Screenshots and artifacts are retained only when the
+check fails. Use an unused local port and leave active Workbench processes
+running during verification.

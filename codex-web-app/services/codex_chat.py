@@ -107,6 +107,8 @@ _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
+_VERIFICATION_MODES = ('auto', 'browser', 'off')
+_DEFAULT_VERIFICATION_MODE = 'auto'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
 _QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml', 'models_cache.json')
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
@@ -293,6 +295,13 @@ _SUBJOB_PROMPT_SUFFIX = (
 )
 _BROWSER_VERIFICATION_PROMPT_SUFFIX = (
     "## Browser Verification In Workbench\n"
+    "- Use the deterministic Workbench browser runner once after the local server is ready: "
+    f"`python3 {REPO_ROOT / 'scripts' / 'verify_browser_ui.py'} --url <URL>` "
+    "(add `--selector <CSS>` when one stable target identifies the changed UI).\n"
+    "- The runner uses headless Chromium with a temporary profile, checks the response, DOM, "
+    "and browser console in one pass, and saves a screenshot only on failure.\n"
+    "- Do not search the filesystem for Playwright, launch repeated exploratory browser turns, "
+    "or rerun a passing check.\n"
     "- For browser-facing UI changes, verify rendered behavior when feasible.\n"
     "- This Workbench launches Codex through `codex exec`; the Codex App in-app "
     "Browser/IAB may not be attached to this child process. If IAB is unavailable, "
@@ -305,6 +314,26 @@ _BROWSER_VERIFICATION_PROMPT_SUFFIX = (
     "unused temporary port for checks.\n"
     "- If sandbox or missing dependencies prevent rendered verification, report the "
     "exact command and error, then run the closest static/unit checks."
+)
+_BROWSER_UI_HINT_RE = re.compile(
+    r'(?:\b(?:ui|ux|front[ -]?end|browser|playwright|screenshot|render(?:ed|ing)?|'
+    r'html|css|(?:j|t)sx|react|vue|svelte|web[ -]?page|dashboard|modal|dialog|'
+    r'layout|responsive|accessibility|component|button|form|localhost)\b|'
+    r'화면|브라우저|프론트|렌더(?:링)?|스크린샷|웹\s*페이지|대시보드|모달|'
+    r'레이아웃|반응형|접근성|컴포넌트|버튼|폼)',
+    re.IGNORECASE,
+)
+_BROWSER_CHANGE_HINT_RE = re.compile(
+    r'(?:\b(?:change|fix|implement|create|build|update|modify|redesign|add|remove|'
+    r'verify|test|check)\b|변경|수정|구현|추가|삭제|제거|개선|고쳐|만들|적용|'
+    r'검증|테스트|확인)',
+    re.IGNORECASE,
+)
+_BROWSER_EXPLICIT_VERIFY_HINT_RE = re.compile(
+    r'(?:\bplaywright\b|\bbrowser\s+(?:verification|test|check)\b|'
+    r'\brender(?:ed|ing)?\s+(?:verification|test|check)\b|\bscreenshot\b|'
+    r'브라우저\s*(?:검증|테스트|확인)|렌더(?:링)?\s*(?:검증|테스트|확인)|스크린샷)',
+    re.IGNORECASE,
 )
 _IMAGEGEN_WORKBENCH_OVERLAY = (
     "Apply these extra rules only when the current task uses $imagegen, "
@@ -1607,6 +1636,34 @@ def _normalize_agent_backend_setting(value):
     return 'dtgpt'
 
 
+def normalize_verification_mode(value):
+    normalized = str(value or '').strip().lower()
+    if normalized in _VERIFICATION_MODES:
+        return normalized
+    return _DEFAULT_VERIFICATION_MODE
+
+
+def get_verification_mode_options():
+    labels = {
+        'auto': 'Auto',
+        'browser': 'Browser',
+        'off': 'Off',
+    }
+    descriptions = {
+        'auto': 'UI changes only',
+        'browser': 'Always include browser verification',
+        'off': 'Never include browser verification',
+    }
+    return [
+        {
+            'id': mode,
+            'name': labels[mode],
+            'description': descriptions[mode],
+        }
+        for mode in _VERIFICATION_MODES
+    ]
+
+
 def _agent_backend_label(backend_id):
     normalized = _normalize_agent_backend_setting(backend_id)
     for item in CODEX_AGENT_BACKEND_OPTIONS:
@@ -2252,6 +2309,7 @@ def _read_workspace_settings():
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
     service_tier = normalize_codex_service_tier(data.get('service_tier'))
     agent_backend = _normalize_agent_backend_setting(data.get('agent_backend'))
+    verification_mode = normalize_verification_mode(data.get('verification_mode'))
     app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
         data.get('app_server_pilot_enabled')
     )
@@ -2266,6 +2324,7 @@ def _read_workspace_settings():
         'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
         'service_tier': service_tier or None,
         'agent_backend': agent_backend,
+        'verification_mode': verification_mode,
         'app_server_pilot_enabled': app_server_pilot_enabled,
         'git_commit_message_model': git_commit_message_model,
     }
@@ -2279,6 +2338,7 @@ def _write_workspace_settings(settings):
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
         'service_tier': normalize_codex_service_tier(settings.get('service_tier')) or None,
         'agent_backend': _normalize_agent_backend_setting(settings.get('agent_backend')),
+        'verification_mode': normalize_verification_mode(settings.get('verification_mode')),
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
@@ -2526,10 +2586,15 @@ def _unlock_file_handle(handle):
             return
 
 
+def _workspace_interactive_exec_lock_path():
+    return Path(CODEX_STORAGE_DIR) / 'codex_interactive_exec.lock'
+
+
 @contextmanager
-def _acquire_codex_exec_lock():
-    _CODEX_EXEC_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lock_handle = _CODEX_EXEC_LOCK_PATH.open('a+', encoding='utf-8')
+def _acquire_codex_exec_lock(lock_path=None, lock_scope='global'):
+    resolved_lock_path = Path(lock_path or _CODEX_EXEC_LOCK_PATH)
+    resolved_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = resolved_lock_path.open('a+', encoding='utf-8')
     wait_started_at = time.time()
     acquired_at = wait_started_at
     try:
@@ -2541,6 +2606,7 @@ def _acquire_codex_exec_lock():
             lock_handle.write(json.dumps({
                 'pid': os.getpid(),
                 'workspace_dir': str(WORKSPACE_DIR),
+                'scope': str(lock_scope or 'global'),
                 'acquired_at': normalize_timestamp(datetime.fromtimestamp(acquired_at)),
             }, ensure_ascii=False, indent=2))
             lock_handle.flush()
@@ -2562,11 +2628,21 @@ def _acquire_codex_exec_lock():
 
 
 @contextmanager
-def _codex_exec_gate():
+def _codex_exec_gate(question_only=False):
     if CODEX_CLI_EXEC_LOCK:
-        with _acquire_codex_exec_lock() as lock_info:
+        with _acquire_codex_exec_lock(lock_scope='global') as lock_info:
             lock_payload = dict(lock_info or {})
             lock_payload['parallel'] = False
+            lock_payload['scope'] = 'global'
+            yield lock_payload
+        return
+    if not question_only:
+        with _acquire_codex_exec_lock(
+                lock_path=_workspace_interactive_exec_lock_path(),
+                lock_scope='workspace_interactive') as lock_info:
+            lock_payload = dict(lock_info or {})
+            lock_payload['parallel'] = False
+            lock_payload['scope'] = 'workspace_interactive'
             yield lock_payload
         return
     now = time.time()
@@ -2574,6 +2650,7 @@ def _codex_exec_gate():
         'wait_ms': 0,
         'acquired_at': now,
         'parallel': True,
+        'scope': 'read_only',
     }
 
 
@@ -2658,6 +2735,7 @@ def _merge_runtime_cli_settings(settings):
     payload = dict(settings or {})
     payload['agent_backend'] = _normalize_agent_backend_setting(payload.get('agent_backend'))
     payload['agent_backend_label'] = _agent_backend_label(payload.get('agent_backend'))
+    payload['verification_mode'] = normalize_verification_mode(payload.get('verification_mode'))
     payload['cli_profile'] = str(CODEX_CLI_PROFILE or '').strip() or None
     payload['model_provider'] = _get_effective_cli_model_provider()
     return payload
@@ -2714,6 +2792,7 @@ def get_settings():
             or workspace_settings.get('plan_mode_reasoning_effort')
             or workspace_settings.get('service_tier')
             or workspace_settings.get('agent_backend')
+            or workspace_settings.get('verification_mode')
             or workspace_settings.get('app_server_pilot_enabled')
             or workspace_settings.get('git_commit_message_model')
         ):
@@ -2725,6 +2804,7 @@ def get_settings():
             fallback['plan_mode_model'] = None
             fallback['plan_mode_reasoning_effort'] = None
             fallback['agent_backend'] = _normalize_agent_backend_setting(None)
+            fallback['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             fallback['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
             _write_workspace_settings(fallback)
@@ -2736,6 +2816,7 @@ def get_settings():
         'plan_mode_reasoning_effort': None,
         'service_tier': None,
         'agent_backend': _normalize_agent_backend_setting(None),
+        'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
         'git_commit_message_model': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     })
@@ -2748,6 +2829,7 @@ def update_settings(
         plan_mode_reasoning_effort=None,
         service_tier=None,
         agent_backend=None,
+        verification_mode=None,
         app_server_pilot_enabled=None,
         git_commit_message_model=None):
     with _CONFIG_LOCK:
@@ -2758,6 +2840,7 @@ def update_settings(
             current['plan_mode_model'] = None
             current['plan_mode_reasoning_effort'] = None
             current['agent_backend'] = _normalize_agent_backend_setting(None)
+            current['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             current['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
         next_settings = {
@@ -2767,6 +2850,7 @@ def update_settings(
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
             'service_tier': normalize_codex_service_tier(current.get('service_tier')) or None,
             'agent_backend': _normalize_agent_backend_setting(current.get('agent_backend')),
+            'verification_mode': normalize_verification_mode(current.get('verification_mode')),
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
@@ -2789,6 +2873,8 @@ def update_settings(
             next_settings['service_tier'] = normalize_codex_service_tier(service_tier) or None
         if agent_backend is not None:
             next_settings['agent_backend'] = _normalize_agent_backend_setting(agent_backend)
+        if verification_mode is not None:
+            next_settings['verification_mode'] = normalize_verification_mode(verification_mode)
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         if git_commit_message_model is not None:
@@ -7538,6 +7624,34 @@ def _build_execution_environment_overlay():
     ])
 
 
+def _looks_like_browser_ui_task(prompt_text, recent_blocks=None):
+    current = str(prompt_text or '').strip()
+    if not current:
+        return False
+    if _BROWSER_EXPLICIT_VERIFY_HINT_RE.search(current):
+        return True
+    if _BROWSER_UI_HINT_RE.search(current) and _BROWSER_CHANGE_HINT_RE.search(current):
+        return True
+    if len(current) > 180 or not _BROWSER_CHANGE_HINT_RE.search(current):
+        return False
+    context_tail = '\n'.join(
+        str(block or '')
+        for block in list(recent_blocks or [])[-2:]
+    )
+    return bool(_BROWSER_UI_HINT_RE.search(context_tail))
+
+
+def _should_include_browser_verification(prompt_text, recent_blocks=None, mode=None):
+    verification_mode = normalize_verification_mode(
+        mode if mode is not None else get_settings().get('verification_mode')
+    )
+    if verification_mode == 'off':
+        return False
+    if verification_mode == 'browser':
+        return True
+    return _looks_like_browser_ui_task(prompt_text, recent_blocks=recent_blocks)
+
+
 def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     sections = [
         (
@@ -7565,7 +7679,8 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     execution_environment = _build_execution_environment_overlay()
     if execution_environment:
         sections.append(f'## Execution Environment\n{execution_environment}')
-    sections.append(_BROWSER_VERIFICATION_PROMPT_SUFFIX)
+    if _should_include_browser_verification(prompt_text, recent_blocks=recent_blocks):
+        sections.append(_BROWSER_VERIFICATION_PROMPT_SUFFIX)
     sections.append(
         '\n'.join([
             '## Response Rules',
@@ -8321,7 +8436,7 @@ def execute_codex_prompt(
             exec_env=exec_env,
             agent_backend=agent_backend,
         )
-        with _codex_exec_gate() as lock_info:
+        with _codex_exec_gate(question_only=question_only) as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
             result = subprocess.run(
                 cmd,
@@ -10632,7 +10747,7 @@ def _run_codex_stream(stream_id, prompt):
     if not worktree_task:
         execution_cwd.mkdir(parents=True, exist_ok=True)
 
-    with _codex_exec_gate() as lock_info:
+    with _codex_exec_gate(question_only=question_only) as lock_info:
         cli_started_at = lock_info.get('acquired_at') or time.time()
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)

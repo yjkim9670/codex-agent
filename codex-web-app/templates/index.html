@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=190">
+    <link rel="stylesheet" href="/static/css/app.css?v=191">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -582,6 +582,16 @@
                                         {% for option in service_tier_options|default([], true) %}
                                         <option value="{{ option.id }}">{{ option.name }}{% if option.description %} · {{ option.description }}{% endif %}</option>
                                         {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <label class="model-sub-label" for="codex-verification-mode-select">Browser verification</label>
+                            <div class="model-row model-row-single">
+                                <div class="model-field model-field-verification-mode">
+                                    <select id="codex-verification-mode-select" class="model-select" aria-label="Select browser verification mode">
+                                        <option value="auto">Auto · UI changes only</option>
+                                        <option value="browser">Browser · always verify</option>
+                                        <option value="off">Off · no browser prompt</option>
                                     </select>
                                 </div>
                             </div>
@@ -1523,6 +1533,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=193"></script>
+    <script src="/static/js/app.js?v=195"></script>
 </body>
 </html>

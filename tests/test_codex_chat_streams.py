@@ -2268,6 +2268,24 @@ def test_app_server_pilot_setting_round_trips(tmp_path, monkeypatch):
     assert disabled['app_server_pilot_enabled'] is False
 
 
+def test_verification_mode_defaults_and_round_trips(tmp_path, monkeypatch):
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
+
+    assert codex_chat.get_settings()['verification_mode'] == 'auto'
+
+    updated = codex_chat.update_settings(verification_mode='browser')
+
+    assert updated['verification_mode'] == 'browser'
+    assert codex_chat.get_settings()['verification_mode'] == 'browser'
+    stored = json.loads(settings_path.read_text(encoding='utf-8'))
+    assert stored['verification_mode'] == 'browser'
+
+    disabled = codex_chat.update_settings(verification_mode='off')
+    assert disabled['verification_mode'] == 'off'
+
+
 def test_git_commit_message_model_defaults_and_round_trips(tmp_path, monkeypatch):
     settings_path = tmp_path / 'settings.json'
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
@@ -2728,6 +2746,37 @@ def test_build_codex_prompt_omits_powershell_rules_on_posix(monkeypatch):
 
     assert '## Execution Environment' not in prompt
     assert 'commands run in PowerShell' not in prompt
+
+
+@pytest.mark.parametrize(
+    ('mode', 'user_prompt', 'expected'),
+    [
+        ('auto', '파이썬 데이터 모델을 정리해줘', False),
+        ('auto', '데이터 format을 update해줘', False),
+        ('auto', '설정 화면의 버튼 레이아웃을 수정해줘', True),
+        ('browser', '파이썬 데이터 모델을 정리해줘', True),
+        ('off', '설정 화면의 버튼 레이아웃을 수정해줘', False),
+    ],
+)
+def test_build_codex_prompt_applies_verification_mode(monkeypatch, mode, user_prompt, expected):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'verification_mode': mode})
+
+    prompt = codex_chat.build_codex_prompt([], user_prompt)
+
+    assert ('## Browser Verification In Workbench' in prompt) is expected
+    assert ('scripts/verify_browser_ui.py' in prompt) is expected
+
+
+def test_auto_verification_uses_recent_ui_context_for_short_follow_up(monkeypatch):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'verification_mode': 'auto'})
+    messages = [
+        {'role': 'user', 'content': '설정 화면의 브라우저 UI를 개선하고 싶어.'},
+        {'role': 'assistant', 'content': '버튼과 레이아웃 변경을 계획했습니다.'},
+    ]
+
+    prompt = codex_chat.build_codex_prompt(messages, '모두 적용해줘')
+
+    assert '## Browser Verification In Workbench' in prompt
 
 
 def test_execute_codex_prompt_prepares_imagegen_dirs_and_env(monkeypatch, isolated_codex_workspace):
@@ -4149,6 +4198,55 @@ def test_codex_exec_gate_can_serialize_cli_runs(monkeypatch, tmp_path):
     with codex_chat._codex_exec_gate() as lock_info:
         assert lock_info['parallel'] is False
         assert isinstance(lock_info['wait_ms'], int)
+
+
+def test_codex_exec_gate_serializes_interactive_runs_but_not_read_only_jobs(
+        monkeypatch,
+        tmp_path):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_EXEC_LOCK', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
+
+    with codex_chat._codex_exec_gate(question_only=False) as lock_info:
+        assert lock_info['parallel'] is False
+        assert lock_info['scope'] == 'workspace_interactive'
+        assert codex_chat._workspace_interactive_exec_lock_path().exists()
+
+    with codex_chat._codex_exec_gate(question_only=True) as lock_info:
+        assert lock_info['parallel'] is True
+        assert lock_info['scope'] == 'read_only'
+
+
+def test_workspace_interactive_exec_gate_blocks_a_second_worker(monkeypatch, tmp_path):
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_EXEC_LOCK', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+
+    def first_worker():
+        with codex_chat._codex_exec_gate(question_only=False):
+            first_entered.set()
+            release_first.wait(timeout=2)
+
+    def second_worker():
+        first_entered.wait(timeout=2)
+        with codex_chat._codex_exec_gate(question_only=False):
+            second_entered.set()
+
+    first_thread = threading.Thread(target=first_worker)
+    second_thread = threading.Thread(target=second_worker)
+    first_thread.start()
+    second_thread.start()
+    assert first_entered.wait(timeout=1)
+    assert second_entered.wait(timeout=0.1) is False
+
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert second_entered.is_set() is True
+    assert first_thread.is_alive() is False
+    assert second_thread.is_alive() is False
 
 
 def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(

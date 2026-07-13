@@ -5297,12 +5297,6 @@ body.is-mermaid-diagram-viewer-open {
     fill: rgba(15, 76, 129, 0.24);
 }
 
-.usage-history-chart .five-hour-line {
-    fill: none;
-    stroke: rgba(220, 90, 52, 0.95);
-    stroke-width: 2;
-}
-
 .usage-history-chart .weekly-line {
     fill: none;
     stroke: rgba(61, 130, 197, 0.95);
@@ -5334,10 +5328,6 @@ body.is-mermaid-diagram-viewer-open {
     pointer-events: none;
 }
 
-.usage-history-chart .reset-guide.five-hour-reset {
-    stroke: rgba(220, 90, 52, 0.95);
-}
-
 .usage-history-chart .reset-guide.weekly-reset {
     stroke: rgba(61, 130, 197, 0.95);
 }
@@ -5346,10 +5336,6 @@ body.is-mermaid-diagram-viewer-open {
     stroke: var(--surface);
     stroke-width: 1.1;
     cursor: crosshair;
-}
-
-.usage-history-chart .reset-marker.five-hour-reset {
-    fill: rgba(220, 90, 52, 0.95);
 }
 
 .usage-history-chart .reset-marker.weekly-reset {
@@ -5400,17 +5386,8 @@ body.is-mermaid-diagram-viewer-open {
     background: rgba(15, 76, 129, 0.52);
 }
 
-.usage-history-legend-swatch.five-hour {
-    background: rgba(220, 90, 52, 0.95);
-}
-
 .usage-history-legend-swatch.weekly {
     background: rgba(61, 130, 197, 0.95);
-}
-
-.usage-history-legend-swatch.five-hour-reset {
-    background: rgba(220, 90, 52, 0.95);
-    transform: rotate(45deg);
 }
 
 .usage-history-legend-swatch.weekly-reset {

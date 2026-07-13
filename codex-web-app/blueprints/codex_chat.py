@@ -82,6 +82,7 @@ from ..services.codex_chat import (
     get_codex_app_server_status,
     get_execution_policy_presets,
     get_agent_backend_options,
+    get_verification_mode_options,
     get_usage_history_summary,
     get_session,
     get_settings,
@@ -103,6 +104,7 @@ from ..services.codex_chat import (
     read_codex_stream,
     list_sessions,
     normalize_codex_attachments,
+    normalize_verification_mode,
     normalize_structured_report_preset_id,
     read_codex_app_server_thread,
     rename_session,
@@ -638,6 +640,7 @@ def _build_runtime_info():
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'security_policy': get_codex_security_policy(),
         'feature_flags': {
@@ -708,6 +711,7 @@ def codex_settings():
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
@@ -829,6 +833,7 @@ def codex_settings_update():
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
     service_tier = payload.get('service_tier')
     agent_backend = payload.get('agent_backend')
+    verification_mode = payload.get('verification_mode')
     git_commit_message_model = payload.get('git_commit_message_model')
     app_server_pilot_enabled = None
     if 'app_server_pilot_enabled' in payload:
@@ -877,6 +882,16 @@ def codex_settings_update():
         if not normalized_agent_backend or normalized_agent_backend not in supported_agent_backends:
             return jsonify({'error': 'agent_backend 값이 올바르지 않습니다.'}), 400
         agent_backend = normalized_agent_backend
+    if verification_mode is not None:
+        verification_mode = str(verification_mode).strip().lower()
+        supported_verification_modes = {
+            item.get('id')
+            for item in get_verification_mode_options()
+            if isinstance(item, dict) and item.get('id')
+        }
+        if verification_mode not in supported_verification_modes:
+            return jsonify({'error': 'verification_mode 값이 올바르지 않습니다.'}), 400
+        verification_mode = normalize_verification_mode(verification_mode)
     if git_commit_message_model is not None:
         git_commit_message_model = str(git_commit_message_model).strip()
         if len(git_commit_message_model) > CODEX_MAX_MODEL_CHARS:
@@ -891,6 +906,7 @@ def codex_settings_update():
         plan_mode_reasoning_effort=plan_mode_reasoning,
         service_tier=service_tier,
         agent_backend=agent_backend,
+        verification_mode=verification_mode,
         app_server_pilot_enabled=app_server_pilot_enabled,
         git_commit_message_model=git_commit_message_model,
     )
@@ -907,6 +923,7 @@ def codex_settings_update():
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
         'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),

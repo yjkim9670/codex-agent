@@ -104,6 +104,7 @@ const state = {
         reasoningOptions: [],
         serviceTier: null,
         serviceTierOptions: [],
+        verificationMode: null,
         gitCommitMessageModel: 'gpt-5.4-mini',
         securityPolicy: normalizeSecurityPolicy(CODEX_SECURITY_POLICY_CONFIG),
         structuredReportPresets: [],
@@ -1805,6 +1806,11 @@ function normalizeServiceTierValue(value) {
     return token;
 }
 
+function normalizeVerificationMode(value) {
+    const token = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    return ['auto', 'browser', 'off'].includes(token) ? token : 'auto';
+}
+
 function normalizeServiceTierOptions(options) {
     const normalized = [{ id: '', name: 'Standard', description: 'Default service tier' }];
     const seen = new Set(['']);
@@ -2097,6 +2103,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const planModeReasoningSelect = document.getElementById('codex-plan-mode-reasoning-select');
     const planModeReasoningInput = document.getElementById('codex-plan-mode-reasoning-input');
     const serviceTierSelect = document.getElementById('codex-service-tier-select');
+    const verificationModeSelect = document.getElementById('codex-verification-mode-select');
     const chatToolsToggle = document.getElementById('codex-chat-tools-toggle');
     const chatToolsOverlay = document.getElementById('codex-chat-tools-overlay');
     const chatToolsOverlayClose = document.getElementById('codex-chat-tools-overlay-close');
@@ -3673,7 +3680,8 @@ document.addEventListener('DOMContentLoaded', () => {
             planModeModelSelect,
             planModeReasoningSelect,
             reasoningSelect,
-            serviceTierSelect
+            serviceTierSelect,
+            verificationModeSelect
         ],
     );
 
@@ -3724,6 +3732,12 @@ document.addEventListener('DOMContentLoaded', () => {
             state.settings.agentBackend = normalizeAgentBackendValue(agentBackendSelect.value) || state.settings.agentBackend;
             applyBackendScopedModelOptions();
             setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        });
+    }
+
+    if (verificationModeSelect) {
+        verificationModeSelect.addEventListener('change', () => {
+            syncSelectFullTextTitle(verificationModeSelect);
         });
     }
 
@@ -8270,6 +8284,7 @@ async function loadSettings({ silent = true } = {}) {
             reasoningOptions: reasoningOptions.length > 0 ? reasoningOptions : catalogReasoningOptions,
             serviceTier: normalizeServiceTierValue(result?.settings?.service_tier) || null,
             serviceTierOptions,
+            verificationMode: normalizeVerificationMode(result?.settings?.verification_mode),
             gitCommitMessageModel: normalizeGitCommitMessageModelSetting(
                 result?.settings?.git_commit_message_model
             ),
@@ -8291,6 +8306,7 @@ async function loadSettings({ silent = true } = {}) {
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
+        updateVerificationModeControls(state.settings.verificationMode);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -8306,6 +8322,7 @@ async function loadSettings({ silent = true } = {}) {
         updateReasoningControls(state.settings.reasoningEffort, state.settings.reasoningOptions);
         updatePlanModeReasoningControls(state.settings.planModeReasoningEffort, state.settings.reasoningOptions);
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
+        updateVerificationModeControls(state.settings.verificationMode);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -8366,7 +8383,7 @@ function updateUsageSummary(usage) {
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
-    const hasUsage = showUsageLimits && Boolean(usage && (usage.five_hour || usage.weekly));
+    const hasUsage = showUsageLimits && Boolean(usage?.weekly);
     if (hasTokenUsage) {
         const tokenEntries = [
             buildTokenUsageEntry(tokenUsage?.today, 'Today'),
@@ -8389,7 +8406,6 @@ function updateUsageSummary(usage) {
         return;
     }
     const entries = showUsageLimits ? [
-        buildUsageEntry(usage?.five_hour, '5h'),
         buildUsageEntry(usage?.weekly, 'Weekly')
     ].filter(Boolean) : [];
     entries.forEach(entry => {
@@ -8689,6 +8705,13 @@ function updateServiceTierControls(serviceTier, options) {
     syncSelectFullTextTitle(select);
 }
 
+function updateVerificationModeControls(mode) {
+    const select = document.getElementById('codex-verification-mode-select');
+    if (!select) return;
+    select.value = normalizeVerificationMode(mode);
+    syncSelectFullTextTitle(select);
+}
+
 function setSettingsStatus(model, reasoning, overrideText = null) {
     const status = document.getElementById('codex-model-status');
     const summary = document.getElementById('codex-controls-summary');
@@ -8738,6 +8761,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     ) : '';
     const showSpeed = normalizeServiceTierOptions(state.settings.serviceTierOptions).length > 1;
     const speedText = formatServiceTierStatus(state.settings.serviceTier);
+    const verificationText = normalizeVerificationMode(state.settings.verificationMode);
     const routingParts = [];
     if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
     if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
@@ -8755,6 +8779,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         fullTextParts.push(`Plan reasoning: ${planModeReasoningText}`);
     }
     if (showSpeed) fullTextParts.push(`Speed: ${speedText}`);
+    fullTextParts.push(`Browser verification: ${verificationText}`);
     const fullText = `${fullTextParts.join(' · ')}${routingText}`;
     const displayTextParts = [];
     if (showBackend && backendText) displayTextParts.push(`Agent: ${truncateMiddleText(backendText, 18)}`);
@@ -8769,6 +8794,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         displayTextParts.push(`Plan reasoning: ${truncateMiddleText(planModeReasoningText, 14)}`);
     }
     if (showSpeed) displayTextParts.push(`Speed: ${truncateMiddleText(speedText, 18)}`);
+    displayTextParts.push(`Verify: ${verificationText}`);
     if (state.settings.modelProvider) {
         displayTextParts.push(`Provider: ${truncateMiddleText(state.settings.modelProvider, 16)}`);
     }
@@ -8798,6 +8824,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (state.settings.serviceTier) {
         compactSummaryParts.push(`Speed:${compactToken(speedText)}`);
     }
+    compactSummaryParts.push(`Verify:${verificationText}`);
     if (state.settings.modelProvider) {
         compactSummaryParts.push(`Provider:${compactToken(state.settings.modelProvider)}`);
     }
@@ -8827,6 +8854,7 @@ async function updateSettings() {
     const reasoningInput = document.getElementById('codex-reasoning-input');
     const reasoningSelect = document.getElementById('codex-reasoning-select');
     const serviceTierSelect = document.getElementById('codex-service-tier-select');
+    const verificationModeSelect = document.getElementById('codex-verification-mode-select');
     const model = modelSelect && !modelSelect.classList.contains('is-hidden')
         ? modelSelect.value.trim()
         : (input ? input.value.trim() : '');
@@ -8840,6 +8868,9 @@ async function updateSettings() {
         ? planModeReasoningSelect.value.trim()
         : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
     const service_tier = serviceTierSelect ? normalizeServiceTierValue(serviceTierSelect.value) : '';
+    const verification_mode = verificationModeSelect
+        ? normalizeVerificationMode(verificationModeSelect.value)
+        : normalizeVerificationMode(state.settings.verificationMode);
     const agent_backend = agentBackendSelect
         ? normalizeAgentBackendValue(agentBackendSelect.value || state.settings.agentBackend)
         : normalizeAgentBackendValue(state.settings.agentBackend);
@@ -8849,7 +8880,7 @@ async function updateSettings() {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_backend, model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier })
+            body: JSON.stringify({ agent_backend, model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier, verification_mode })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
@@ -8877,6 +8908,7 @@ async function updateSettings() {
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
         state.settings.serviceTier = normalizeServiceTierValue(result?.settings?.service_tier) || null;
+        state.settings.verificationMode = normalizeVerificationMode(result?.settings?.verification_mode);
         state.settings.gitCommitMessageModel = normalizeGitCommitMessageModelSetting(
             result?.settings?.git_commit_message_model
         );
@@ -8912,6 +8944,7 @@ async function updateSettings() {
         updateAgentBackendControls(state.settings.agentBackend, state.settings.agentBackendOptions);
         applyBackendScopedModelOptions();
         updateServiceTierControls(state.settings.serviceTier, state.settings.serviceTierOptions);
+        updateVerificationModeControls(state.settings.verificationMode);
         renderExecutionPolicyStrip();
         renderStructuredReportBar();
         renderAppServerPilot();
@@ -13835,7 +13868,6 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
     }
 
     const ratioItems = [
-        { key: 'five_hour', label: '5h 1% token', entry: relation?.five_hour },
         { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
     ];
     ratioItems.forEach(item => {
@@ -13961,7 +13993,6 @@ function renderUsageHistoryLegend(history) {
     const workspaceDeltaTotal = Number(history?.token_delta_total_workspace);
     const accountDeltaTotal = Number(history?.token_delta_total_account);
     const resetCount = Number(history?.reset_detected_count);
-    const fiveHourResetCount = Number(history?.five_hour_reset_detected_count);
     const weeklyResetCount = Number(history?.weekly_reset_detected_count);
     const tokenCounterResetCount = Number(history?.token_counter_reset_detected_count);
     const relationScope = resolveUsageHistoryRelationScope(history);
@@ -13996,12 +14027,6 @@ function renderUsageHistoryLegend(history) {
             text: `Plan 경계 ${formatNumber(visiblePlanTransitions.length)}회`
         });
     }
-    if (Number.isFinite(fiveHourResetCount)) {
-        legendItems.push({
-            key: 'five-hour-reset',
-            text: `5h 리셋 감지 ${formatNumber(fiveHourResetCount)}회`
-        });
-    }
     if (Number.isFinite(weeklyResetCount)) {
         legendItems.push({
             key: 'weekly-reset',
@@ -14016,7 +14041,7 @@ function renderUsageHistoryLegend(history) {
     } else if (
         Number.isFinite(resetCount)
         && resetCount > 0
-        && (!Number.isFinite(fiveHourResetCount) || !Number.isFinite(weeklyResetCount))
+        && !Number.isFinite(weeklyResetCount)
     ) {
         legendItems.push({ key: '', text: `Reset 감지 ${formatNumber(resetCount)}회` });
     }
@@ -14088,7 +14113,6 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     const tokenDelta = Number(item?.delta_tokens);
     const tokenBreakdown = formatUsageHistoryTokenBreakdown(item);
     const resetLabels = [];
-    if (item?.five_hour_reset_detected) resetLabels.push('5h');
     if (item?.weekly_reset_detected) resetLabels.push('weekly');
     if (item?.token_counter_reset_detected) resetLabels.push('token counter');
 
@@ -14105,8 +14129,6 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         parts.push(`Plan ${planLabel}`);
     }
     parts.push(
-        `5h ${formatUsageHistoryPercentValue(item?.five_hour_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_five_hour_used_percent)})`,
-        `5h reset ${formatResetTimestamp(item?.five_hour_resets_at) || '--'}`,
         `Weekly ${formatUsageHistoryPercentValue(item?.weekly_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_weekly_used_percent)})`,
         `Weekly reset ${formatResetTimestamp(item?.weekly_resets_at) || '--'}`
     );
@@ -14255,9 +14277,8 @@ function renderUsageHistoryChart(history) {
     chart.setAttribute('preserveAspectRatio', 'none');
 
     const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
-    const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
     const weeklyUsed = items.map(item => normalizeUsedPercent(item?.weekly_used_percent));
-    const percentValues = [...fiveHourUsed, ...weeklyUsed].filter(value => Number.isFinite(value));
+    const percentValues = weeklyUsed.filter(value => Number.isFinite(value));
     const maxUsedPercent = percentValues.length > 0 ? Math.max(...percentValues) : 0;
     const percentScale = resolveUsageHistoryPercentScale(maxUsedPercent);
     const percentTicks = buildUsageHistoryPercentTicks(percentScale);
@@ -14511,7 +14532,6 @@ function renderUsageHistoryChart(history) {
         });
     };
 
-    appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(220, 90, 52, 0.95)', '5h used', 'five-hour-hit');
     appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
 
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);
@@ -14579,11 +14599,8 @@ function renderUsageHistoryChart(history) {
     };
 
     items.forEach((item, index) => {
-        if (item?.five_hour_reset_detected) {
-            appendResetMarker(item, index, '5h', 'five-hour-reset', mobileLayout ? 10 : 11);
-        }
         if (item?.weekly_reset_detected) {
-            appendResetMarker(item, index, 'Weekly', 'weekly-reset', mobileLayout ? 24 : 23);
+            appendResetMarker(item, index, 'Weekly', 'weekly-reset', mobileLayout ? 10 : 11);
         }
     });
 
@@ -28348,6 +28365,7 @@ function normalizeTokenUsageEntry(entry) {
 function buildTokenUsageEntry(entry, label) {
     const details = normalizeTokenUsageEntry(entry);
     if (!details) return null;
+    const uncachedInputTokens = Math.max(0, details.inputTokens - details.cachedInputTokens);
     const wrapper = document.createElement('div');
     wrapper.className = 'usage-entry';
     const row = document.createElement('div');
@@ -28359,7 +28377,11 @@ function buildTokenUsageEntry(entry, label) {
     pill.textContent = label;
     const value = document.createElement('span');
     value.className = 'usage-remaining';
-    value.textContent = `In ${formatCompactTokenCount(details.inputTokens)} · Out ${formatCompactTokenCount(details.outputTokens)}`;
+    value.textContent = [
+        `Uncached ${formatCompactTokenCount(uncachedInputTokens)}`,
+        `Cached ${formatCompactTokenCount(details.cachedInputTokens)}`,
+        `Output ${formatCompactTokenCount(details.outputTokens)}`
+    ].join(' · ');
     row.appendChild(pill);
     row.appendChild(value);
     wrapper.appendChild(row);
@@ -28367,10 +28389,9 @@ function buildTokenUsageEntry(entry, label) {
     const reset = document.createElement('div');
     reset.className = 'usage-reset';
     const totalText = formatNumber(details.totalTokens);
-    const cachedText = formatNumber(details.cachedInputTokens);
     const requestText = formatNumber(details.requests);
     const dateText = details.date ? ` (${details.date})` : '';
-    reset.textContent = `Total ${totalText} · Cached ${cachedText} · Req ${requestText}${dateText}`;
+    reset.textContent = `Ledger total ${totalText} · Req ${requestText}${dateText}`;
     wrapper.appendChild(reset);
     return wrapper;
 }

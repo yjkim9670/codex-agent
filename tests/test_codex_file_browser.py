@@ -1380,8 +1380,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=193' in template
-    assert '/static/css/app.css?v=190' in template
+    assert '/static/js/app.js?v=195' in template
+    assert '/static/css/app.css?v=191' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1403,22 +1403,47 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=190' in template
-    assert '/static/js/app.js?v=193' in template
+    assert '/static/css/app.css?v=191' in template
+    assert '/static/js/app.js?v=195' in template
 
 
-def test_usage_history_chart_keeps_missing_percent_values_as_gaps():
+def test_usage_history_chart_only_displays_weekly_limit():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
 
     assert """if (
         value === null
         || value === undefined
         || (typeof value === 'string' && !value.trim())
     ) return null;""" in app_js
-    assert (
-        "items.map(item => normalizeUsedPercent(item?.five_hour_used_percent))"
-        in app_js
-    )
+    assert "Boolean(usage?.weekly)" in app_js
+    assert "buildUsageEntry(usage?.weekly, 'Weekly')" in app_js
+    assert "buildUsageEntry(usage?.five_hour, '5h')" not in app_js
+    assert "label: 'Weekly 1% token'" in app_js
+    assert "5h 1% token" not in app_js
+    assert "item?.five_hour_used_percent" not in app_js
+    assert "item?.five_hour_reset_detected" not in app_js
+    assert "five-hour-line" not in app_js
+    assert "five-hour-reset" not in app_js
+    assert "five-hour-line" not in app_css
+    assert "five-hour-reset" not in app_css
+    assert 'Uncached ${formatCompactTokenCount(uncachedInputTokens)}' in app_js
+    assert 'Cached ${formatCompactTokenCount(details.cachedInputTokens)}' in app_js
+    assert 'Output ${formatCompactTokenCount(details.outputTokens)}' in app_js
+    assert 'Ledger total ${totalText} · Req ${requestText}' in app_js
+
+
+def test_browser_verification_mode_controls_are_available():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'id="codex-verification-mode-select"' in template
+    assert '<option value="auto">Auto · UI changes only</option>' in template
+    assert '<option value="browser">Browser · always verify</option>' in template
+    assert '<option value="off">Off · no browser prompt</option>' in template
+    assert 'verification_mode' in app_js
+    assert 'normalizeVerificationMode' in app_js
+    assert '/static/js/app.js?v=195' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():

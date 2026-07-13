@@ -1318,7 +1318,9 @@ def test_execute_codex_prompt_preserves_output_when_mcp_cancel_exit_fails(
     assert isinstance(timing, dict)
 
 
-def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspace):
+def test_build_codex_command_uses_workspace_write_sandbox(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_chat, '_codex_cli_file_candidates', lambda: ())
+
     cmd = codex_chat._build_codex_command('sync prompt')
 
     assert cmd[:8] == [
@@ -1343,7 +1345,11 @@ def test_build_codex_command_supports_standard_sandbox_override(isolated_codex_w
     assert '--full-auto' not in cmd
 
 
-def test_build_codex_command_supports_read_only_output_schema(isolated_codex_workspace, tmp_path):
+def test_build_codex_command_supports_read_only_output_schema(
+        isolated_codex_workspace,
+        tmp_path,
+        monkeypatch):
+    monkeypatch.setattr(codex_chat, '_codex_cli_file_candidates', lambda: ())
     schema_path = tmp_path / 'report.schema.json'
 
     cmd = codex_chat._build_codex_command(
@@ -1384,6 +1390,7 @@ def test_build_codex_command_supports_read_only_sandbox_override(isolated_codex_
 
 
 def test_build_codex_command_supports_company_cli_routing(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setattr(codex_chat, '_codex_cli_file_candidates', lambda: ())
     monkeypatch.setattr(codex_chat, 'CODEX_CLI_PROFILE', 'dtgpt_linux')
     monkeypatch.setattr(codex_chat, 'CODEX_CLI_MODEL_PROVIDER', 'dtgpt_linux')
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {
@@ -1479,6 +1486,36 @@ def test_build_codex_command_uses_configured_cli_bin(isolated_codex_workspace, m
     cmd = codex_chat._build_codex_command('sync prompt')
 
     assert cmd[0] == '/opt/codex/bin/codex'
+
+
+def test_build_codex_command_prefers_repo_local_cli_candidate(
+        isolated_codex_workspace,
+        tmp_path,
+        monkeypatch):
+    repo_root = tmp_path / 'repo'
+    workspace_dir = tmp_path / 'workspace'
+    repo_local_bin = repo_root / '.local' / 'bin' / 'codex'
+    path_bin = tmp_path / 'path-bin' / 'codex'
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    repo_local_bin.parent.mkdir(parents=True)
+    path_bin.parent.mkdir(parents=True)
+    repo_local_bin.write_text('#!/usr/bin/env bash\n', encoding='utf-8')
+    path_bin.write_text('#!/usr/bin/env bash\n', encoding='utf-8')
+    repo_local_bin.chmod(0o755)
+    path_bin.chmod(0o755)
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.setattr(codex_chat.sys, 'platform', 'darwin')
+    monkeypatch.setattr(codex_chat, 'REPO_ROOT', repo_root)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', workspace_dir)
+    monkeypatch.setattr(
+        codex_chat.shutil,
+        'which',
+        lambda name: str(path_bin) if name == 'codex' else None,
+    )
+
+    cmd = codex_chat._build_codex_command('sync prompt')
+
+    assert cmd[0] == str(repo_local_bin)
 
 
 def test_build_codex_command_prefers_windows_cmd_launcher(isolated_codex_workspace, monkeypatch):
@@ -2370,6 +2407,8 @@ def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):
 
     monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', tmp_path)
     monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', tmp_path / 'state')
+    monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
+    monkeypatch.setattr(codex_chat, '_codex_cli_file_candidates', lambda: ())
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
     monkeypatch.setattr(codex_chat, '_read_app_server_remote_control_running', lambda: False)
     monkeypatch.setattr(codex_chat.subprocess, 'Popen', FakePopen)

@@ -22,14 +22,21 @@ resolve_codex_cli_bin() {
     local path_candidate
     local prefix
 
+    for candidate in "${SCRIPT_DIR}/.local/bin/codex"; do
+        if codex_cli_candidate_available "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
     if codex_cli_candidate_available "${CODEX_CLI_BIN:-}"; then
         printf '%s\n' "${CODEX_CLI_BIN}"
         return 0
     fi
 
     for candidate in \
-        "${PARENT_DIR}/../.local/bin/codex" \
         "${PARENT_DIR}/.local/bin/codex" \
+        "${PARENT_DIR}/../.local/bin/codex" \
         "${HOME:-}/.local/bin/codex"; do
         if codex_cli_candidate_available "${candidate}"; then
             printf '%s\n' "${candidate}"
@@ -72,10 +79,12 @@ resolve_codex_cli_bin() {
     return 1
 }
 
-if [[ -z "${CODEX_CLI_BIN:-}" ]]; then
-    if CODEX_CLI_BIN_RESOLVED="$(resolve_codex_cli_bin)"; then
-        export CODEX_CLI_BIN="${CODEX_CLI_BIN_RESOLVED}"
-    fi
+if CODEX_CLI_BIN_RESOLVED="$(resolve_codex_cli_bin)"; then
+    export CODEX_CLI_BIN="${CODEX_CLI_BIN_RESOLVED}"
+fi
+if [[ "${CODEX_CLI_BIN:-}" == "${SCRIPT_DIR}/.local/"* ]]; then
+    export NPM_CONFIG_PREFIX="${SCRIPT_DIR}/.local"
+    export npm_config_prefix="${SCRIPT_DIR}/.local"
 fi
 if [[ -n "${CODEX_CLI_BIN:-}" ]]; then
     CODEX_CLI_DIR="$(dirname "${CODEX_CLI_BIN}")"

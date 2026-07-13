@@ -18,10 +18,17 @@ is_codex_app_bundle_cli() {
     [[ "${candidate}" == *"/Codex.app/Contents/Resources/codex" ]]
 }
 
+if [[ -x "${SCRIPT_DIR}/.local/bin/codex" ]]; then
+    export CODEX_CLI_BIN="${SCRIPT_DIR}/.local/bin/codex"
+fi
+if [[ "${CODEX_CLI_BIN:-}" == "${SCRIPT_DIR}/.local/"* ]]; then
+    export NPM_CONFIG_PREFIX="${SCRIPT_DIR}/.local"
+    export npm_config_prefix="${SCRIPT_DIR}/.local"
+fi
 if [[ -z "${CODEX_CLI_BIN:-}" ]]; then
     for candidate in \
-        "$(dirname "${SCRIPT_DIR}")/../.local/bin/codex" \
         "$(dirname "${SCRIPT_DIR}")/.local/bin/codex" \
+        "$(dirname "${SCRIPT_DIR}")/../.local/bin/codex" \
         "${HOME:-}/.local/bin/codex"; do
         if [[ -x "${candidate}" ]]; then
             export CODEX_CLI_BIN="${candidate}"

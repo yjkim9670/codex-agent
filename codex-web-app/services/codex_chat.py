@@ -1525,14 +1525,24 @@ def _is_codex_app_bundle_cli(path_text):
 
 def _codex_cli_posix_standalone_candidates():
     candidates = []
+    seen = set()
+
+    def add_candidate(path):
+        key = str(path)
+        if key in seen:
+            return
+        candidates.append(path)
+        seen.add(key)
+
+    add_candidate(REPO_ROOT / '.local' / 'bin' / 'codex')
     for parent in (WORKSPACE_DIR, *WORKSPACE_DIR.parents):
-        candidates.append(parent / '.local' / 'bin' / 'codex')
+        add_candidate(parent / '.local' / 'bin' / 'codex')
         try:
             if parent == Path.home():
                 break
         except Exception:
             pass
-    candidates.append(Path.home() / '.local' / 'bin' / 'codex')
+    add_candidate(Path.home() / '.local' / 'bin' / 'codex')
     return tuple(candidates)
 
 
@@ -1583,6 +1593,11 @@ def _codex_cli_command():
             if _codex_cli_file_available(candidate):
                 return candidate
         return 'codex.cmd'
+    for candidate in _codex_cli_file_candidates():
+        if (
+                _codex_cli_file_available(candidate)
+                and not _is_codex_app_bundle_cli(candidate)):
+            return candidate
     resolved = shutil.which('codex')
     if resolved is not None and not _is_codex_app_bundle_cli(resolved):
         return 'codex'

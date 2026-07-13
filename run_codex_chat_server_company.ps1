@@ -55,6 +55,21 @@ $env:CODEX_USE_GLOBAL_PYTHON = "1"
 # older variable is set to 0 as well so older bundled server code stays lock-free.
 $env:CODEX_CLI_EXEC_LOCK = "0"
 $env:CODEX_CLI_SERIALIZE_EXEC = "0"
+$LocalCodexCandidatePaths = @(
+    (Join-Path $ScriptDir ".local\bin\codex.cmd"),
+    (Join-Path $ScriptDir ".local\bin\codex.exe"),
+    (Join-Path $ScriptDir ".local\bin\codex"),
+    (Join-Path $ScriptDir ".local\codex.cmd"),
+    (Join-Path $ScriptDir ".local\codex.exe")
+)
+foreach ($CandidatePath in $LocalCodexCandidatePaths) {
+    if ($CandidatePath -and (Test-Path $CandidatePath)) {
+        $env:CODEX_CLI_BIN = $CandidatePath
+        $env:NPM_CONFIG_PREFIX = Join-Path $ScriptDir ".local"
+        $env:npm_config_prefix = Join-Path $ScriptDir ".local"
+        break
+    }
+}
 if (-not $env:CODEX_CLI_BIN) {
     $CodexCommand = Get-Command codex.cmd -ErrorAction SilentlyContinue
     if (-not $CodexCommand) {

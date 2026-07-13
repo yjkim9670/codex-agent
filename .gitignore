@@ -12,6 +12,7 @@ workspace/*_usage_history*.json
 workspace/*_usage_summary.json
 workspace/*_token_usage.json
 .sync_runtime/
+.local/
 .venv/
 model_agent/
 deploy/vercel/*.env

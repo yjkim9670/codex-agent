@@ -195,6 +195,63 @@ _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
 _RELOAD_FLAG_PATTERN = re.compile(r'(^|\s)--reload(\s|$)', re.IGNORECASE)
 _TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback'
 _CHAT_RESPONSE_CRYPTO_SESSION_HEADER = 'X-Codex-Chat-Crypto-Session'
+_HTML_PREVIEW_STORAGE_COMPAT = b'''<script data-codex-workbench-preview-compat="web-storage">
+(() => {
+    const createMemoryStorage = () => {
+        const values = new Map();
+        return {
+            get length() { return values.size; },
+            key(index) { return Array.from(values.keys())[Number(index)] ?? null; },
+            getItem(key) {
+                const normalized = String(key);
+                return values.has(normalized) ? values.get(normalized) : null;
+            },
+            setItem(key, value) { values.set(String(key), String(value)); },
+            removeItem(key) { values.delete(String(key)); },
+            clear() { values.clear(); }
+        };
+    };
+    for (const name of ['localStorage', 'sessionStorage']) {
+        try {
+            void window[name];
+        } catch (_error) {
+            try {
+                Object.defineProperty(window, name, {
+                    configurable: true,
+                    enumerable: true,
+                    value: createMemoryStorage()
+                });
+            } catch (_defineError) {
+                // Keep the browser's native sandbox behavior when replacement is unavailable.
+            }
+        }
+    }
+})();
+</script>'''
+
+
+def _inject_html_preview_storage_compat(content):
+    """Add a preview-only in-memory Web Storage fallback before page scripts."""
+    if not isinstance(content, bytes) or not content:
+        return content
+    if content.startswith((b'\xff\xfe', b'\xfe\xff', b'\x00\x00\xfe\xff', b'\xff\xfe\x00\x00')):
+        return content
+
+    first_script = re.search(br'<script(?:\s|>)', content, flags=re.IGNORECASE)
+    head = re.search(br'<head(?:\s[^>]*)?>', content, flags=re.IGNORECASE)
+    charset = re.search(
+        br'<meta\s+[^>]*(?:charset\s*=|http-equiv\s*=\s*["\']?content-type)[^>]*>',
+        content,
+        flags=re.IGNORECASE,
+    )
+    if charset and (not first_script or charset.start() < first_script.start()):
+        insert_at = charset.end()
+    elif head and (not first_script or head.start() < first_script.start()):
+        insert_at = head.end()
+    else:
+        doctype = re.match(br'(?:\xef\xbb\xbf)?\s*<!doctype\s+html[^>]*>', content, flags=re.IGNORECASE)
+        insert_at = doctype.end() if doctype else (3 if content.startswith(b'\xef\xbb\xbf') else 0)
+    return content[:insert_at] + _HTML_PREVIEW_STORAGE_COMPAT + content[insert_at:]
 
 
 def _format_sse_payload(data, *, event=None):
@@ -1862,10 +1919,14 @@ def codex_files_raw(root_key, relative_path):
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
 
     mime_type = result.get('mime_type') or 'application/octet-stream'
-    response = Response(result.get('content') or b'', mimetype=mime_type)
+    content = result.get('content') or b''
+    normalized_mime_type = mime_type.lower().split(';', 1)[0].strip()
+    if normalized_mime_type == 'text/html' and request.args.get('preview') == 'html':
+        content = _inject_html_preview_storage_compat(content)
+    response = Response(content, mimetype=mime_type)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    if mime_type.lower().split(';', 1)[0].strip() in {'text/html', 'application/xhtml+xml'}:
+    if normalized_mime_type in {'text/html', 'application/xhtml+xml'}:
         # Raw HTML is loaded by the file preview and can also be opened in a
         # separate tab.  This response-level sandbox remains in force in both
         # cases, so a previewed file cannot inherit the Workbench origin even

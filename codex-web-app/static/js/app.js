@@ -3878,9 +3878,9 @@ function renderPublicHtmlPreviewIntoElements(elements, root, path) {
     if (!elements?.viewerContent) return false;
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(path);
-    const previewUrl = buildFileBrowserRawFileUrl(normalizedRoot, normalizedPath);
+    const previewUrl = buildFileBrowserHtmlPreviewUrl(normalizedRoot, normalizedPath);
     if (!previewUrl) return false;
-    setFilePanelViewerMetaText(elements, `${normalizedPath || 'HTML'} · html · public raw preview`);
+    setFilePanelViewerMetaText(elements, `${normalizedPath || 'HTML'} · html · public sandbox preview`);
     elements.viewerContent.innerHTML = '';
     const iframe = document.createElement('iframe');
     iframe.className = 'file-browser-html-preview';
@@ -15206,6 +15206,13 @@ function buildFileBrowserRawFileUrl(root, relativePath) {
     return `${FILE_BROWSER_RAW_FILE_ENDPOINT}/${encodedRoot}/${encodedPath}`;
 }
 
+function buildFileBrowserHtmlPreviewUrl(root, relativePath) {
+    const rawUrl = buildFileBrowserRawFileUrl(root, relativePath);
+    if (!rawUrl) return '';
+    const separator = rawUrl.includes('?') ? '&' : '?';
+    return `${rawUrl}${separator}preview=html`;
+}
+
 function getFileBrowserParentPath(path) {
     const normalized = normalizeFileBrowserRelativePath(path);
     if (!normalized || !normalized.includes('/')) return '';
@@ -22230,7 +22237,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
 
     if (canRenderHtmlPreview) {
-        const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
+        const previewUrl = buildFileBrowserHtmlPreviewUrl(previewRoot, normalizedPath);
         if (isWorkModeViewer) {
             setWorkModeHtmlPreviewState({
                 root: previewRoot,

@@ -245,6 +245,36 @@ def test_raw_html_response_is_sandboxed(browser_test_client, isolated_browser_ro
     assert response.headers['Referrer-Policy'] == 'no-referrer'
 
 
+def test_html_preview_response_adds_memory_storage_compat_without_changing_raw_file(
+    browser_test_client,
+    isolated_browser_roots,
+):
+    server_root = isolated_browser_roots['server_root']
+    original = (
+        b'<!doctype html><html><head><meta charset="utf-8"></head>'
+        b'<body><script>localStorage.setItem("theme", "dark")</script></body></html>'
+    )
+    (server_root / 'storage.html').write_bytes(original)
+
+    raw_response = browser_test_client.get('/api/codex/files/raw/server/storage.html')
+    preview_response = browser_test_client.get(
+        '/api/codex/files/raw/server/storage.html?preview=html'
+    )
+
+    assert raw_response.data == original
+    assert b'data-codex-workbench-preview-compat="web-storage"' in preview_response.data
+    assert preview_response.data.index(b'<meta charset="utf-8">') < preview_response.data.index(
+        b'data-codex-workbench-preview-compat="web-storage"'
+    )
+    assert preview_response.data.index(
+        b'data-codex-workbench-preview-compat="web-storage"'
+    ) < preview_response.data.index(b'localStorage.setItem')
+    assert preview_response.headers['Content-Security-Policy'] == (
+        "sandbox allow-scripts allow-forms; base-uri 'none'; "
+        "object-src 'none'; frame-ancestors 'self'"
+    )
+
+
 def test_html_preview_uses_an_opaque_origin_sandbox_and_moderate_text_limit():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
 
@@ -252,6 +282,8 @@ def test_html_preview_uses_an_opaque_origin_sandbox_and_moderate_text_limit():
     assert "const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 256 * 1024;" in app_js
     assert "const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 160 * 1024;" in app_js
     assert "allow-same-origin allow-scripts allow-forms" not in app_js
+    assert 'buildFileBrowserHtmlPreviewUrl(normalizedRoot, normalizedPath)' in app_js
+    assert 'buildFileBrowserHtmlPreviewUrl(previewRoot, normalizedPath)' in app_js
 
 
 def test_read_file_marks_binary_content(isolated_browser_roots):
@@ -1348,8 +1380,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=190' in template
-    assert '/static/css/app.css?v=189' in template
+    assert '/static/js/app.js?v=192' in template
+    assert '/static/css/app.css?v=190' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1371,8 +1403,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=189' in template
-    assert '/static/js/app.js?v=190' in template
+    assert '/static/css/app.css?v=190' in template
+    assert '/static/js/app.js?v=192' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():

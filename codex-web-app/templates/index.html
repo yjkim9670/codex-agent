@@ -1324,7 +1324,9 @@
                 <select id="codex-git-message-model-select" class="model-select" aria-label="커밋 메시지 생성 모델"></select>
                 <label for="codex-git-message-reasoning-select">Reasoning effort</label>
                 <select id="codex-git-message-reasoning-select" class="model-select" aria-label="커밋 메시지 생성 reasoning effort">
+                    <option value="low">low</option>
                     <option value="medium">medium (기본값)</option>
+                    <option value="high">high</option>
                 </select>
                 <div class="git-message-model-status" id="codex-git-message-model-status">저장됨: gpt-5.4-mini · Reasoning medium</div>
             </div>
@@ -1537,6 +1539,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=197"></script>
+    <script src="/static/js/app.js?v=198"></script>
 </body>
 </html>

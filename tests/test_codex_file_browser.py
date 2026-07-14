@@ -1380,7 +1380,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=197' in template
+    assert '/static/js/app.js?v=198' in template
     assert '/static/css/app.css?v=191' in template
 
 
@@ -1404,7 +1404,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
     assert '/static/css/app.css?v=191' in template
-    assert '/static/js/app.js?v=197' in template
+    assert '/static/js/app.js?v=198' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1443,7 +1443,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=197' in template
+    assert '/static/js/app.js?v=198' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():
@@ -1462,6 +1462,10 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert '.git-message-model-overlay' in app_css
     assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';" in app_js
     assert "const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';" in app_js
+    assert "const GIT_COMMIT_MESSAGE_REASONING_OPTIONS = ['low', 'medium', 'high'];" in app_js
+    assert '<option value="low">low</option>' in template
+    assert '<option value="medium">medium (기본값)</option>' in template
+    assert '<option value="high">high</option>' in template
     assert 'git_commit_message_reasoning_effort: selectedReasoning' in app_js
     assert 'reasoning_effort: gitCommitMessageReasoningEffort' in app_js
     assert 'elements.messageModelBtn.disabled' not in app_js

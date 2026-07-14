@@ -277,6 +277,7 @@ const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
 const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';
 const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';
+const GIT_COMMIT_MESSAGE_REASONING_OPTIONS = ['low', 'medium', 'high'];
 const GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY = 'codex.gitCommitMessageModel';
 const GIT_COMMIT_MESSAGE_REASONING_STORAGE_KEY = 'codex.gitCommitMessageReasoningEffort';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
@@ -11647,7 +11648,10 @@ function getGitCommitMessageReasoningOptions(model = gitCommitMessageModel) {
     const options = entry
         ? normalizeOptionList(entry.reasoningOptions)
         : collectCatalogReasoningOptions(codexCatalog);
-    return options.length > 0 ? options : [GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT];
+    return normalizeOptionList([
+        ...GIT_COMMIT_MESSAGE_REASONING_OPTIONS,
+        ...options
+    ]);
 }
 
 function getCompatibleGitCommitMessageReasoning(reasoningEffort, model = gitCommitMessageModel) {

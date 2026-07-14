@@ -46,6 +46,7 @@ from ..config import (
     CODEX_MAX_ATTACHMENT_BYTES,
     CODEX_MAX_ATTACHMENTS_PER_TURN,
     CODEX_ENABLE_LEGACY_STATE_IMPORT,
+    CODEX_REQUIRE_ACCOUNT_LOGIN,
     CODEX_LOCAL_ACCOUNTS_DIR,
     CODEX_LOCAL_ACCOUNTS_PATH,
     LEGACY_CODEX_CHAT_STORE_PATH,
@@ -111,6 +112,7 @@ _VERIFICATION_MODES = ('auto', 'browser', 'off')
 _DEFAULT_VERIFICATION_MODE = 'auto'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
 _QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml', 'models_cache.json')
+_UNAUTHENTICATED_CODEX_HOME_SYNC_FILES = ('config.toml', 'models_cache.json')
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
 _QUEUED_CODEX_HOME_COPY_ENTRIES = ('memories',)
 _QUEUED_CODEX_RUNTIME_DIRS = {
@@ -4178,6 +4180,9 @@ def _normalize_account_id(value):
 
 
 def _default_account_codex_home():
+    if not CODEX_REQUIRE_ACCOUNT_LOGIN:
+        configured_home = str(os.environ.get('CODEX_HOME') or '').strip()
+        return Path(configured_home).expanduser() if configured_home else _CODEX_HOME
     candidates = []
     for raw_value in (
         os.environ.get('CODEX_WORKBENCH_AUTH_HOME'),
@@ -4273,7 +4278,12 @@ def _copy_account_codex_home(source, destination):
         destination_path.chmod(0o700)
     except OSError:
         pass
-    for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+    sync_files = (
+        _QUEUED_CODEX_HOME_SYNC_FILES
+        if CODEX_REQUIRE_ACCOUNT_LOGIN
+        else _UNAUTHENTICATED_CODEX_HOME_SYNC_FILES
+    )
+    for filename in sync_files:
         _copy_codex_home_file_if_available(source_path, destination_path, filename)
     for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
         _link_codex_home_entry_if_available(source_path, destination_path, entry_name)
@@ -4519,6 +4529,8 @@ def _read_auth_identity(codex_home):
 
 
 def _account_login_command(account):
+    if not CODEX_REQUIRE_ACCOUNT_LOGIN:
+        return ''
     codex_home = str((account or {}).get('codex_home') or '').strip()
     if not codex_home:
         return ''
@@ -4565,6 +4577,7 @@ def get_codex_accounts_summary():
         ],
         'shared_storage_path': str(_accounts_registry_path().parent),
         'automatic_failover': False,
+        'login_required': bool(CODEX_REQUIRE_ACCOUNT_LOGIN),
     }
 
 
@@ -4650,14 +4663,18 @@ def create_codex_account(label, plan_label='Plus', multiplier=1, source_codex_ho
         source_text = str(source_codex_home or '').strip()
         if source_text:
             source_home = Path(source_text).expanduser()
-            if not _codex_home_has_auth(source_home):
+            if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(source_home):
                 raise ValueError('지정한 CODEX_HOME에서 auth.json을 찾을 수 없습니다.')
         else:
             active_context = _account_storage_context(registry['active_account_id'])
             source_home = active_context['codex_home'] if active_context else None
 
         if source_home is not None:
-            copy_files = _QUEUED_CODEX_HOME_SYNC_FILES if source_text else ('config.toml', 'models_cache.json')
+            copy_files = (
+                _QUEUED_CODEX_HOME_SYNC_FILES
+                if source_text and CODEX_REQUIRE_ACCOUNT_LOGIN
+                else _UNAUTHENTICATED_CODEX_HOME_SYNC_FILES
+            )
             for filename in copy_files:
                 _copy_codex_home_file_if_available(source_home, codex_home, filename)
             for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
@@ -7187,7 +7204,12 @@ def _prepare_queued_codex_home(env):
     except Exception:
         same_home = False
     if not same_home:
-        for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+        sync_files = (
+            _QUEUED_CODEX_HOME_SYNC_FILES
+            if CODEX_REQUIRE_ACCOUNT_LOGIN
+            else _UNAUTHENTICATED_CODEX_HOME_SYNC_FILES
+        )
+        for filename in sync_files:
             _copy_codex_home_file_if_available(source_home, queued_home, filename)
         for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
             _link_codex_home_entry_if_available(source_home, queued_home, entry_name)
@@ -7219,6 +7241,8 @@ def _get_login_codex_home():
 def _resolve_authenticated_codex_home(env):
     configured_value = str(env.get('CODEX_HOME') or _CODEX_HOME).strip()
     configured_home = Path(configured_value).expanduser() if configured_value else _CODEX_HOME
+    if not CODEX_REQUIRE_ACCOUNT_LOGIN:
+        return configured_home
     if _codex_home_has_auth(configured_home):
         return configured_home
 
@@ -7278,7 +7302,12 @@ def _prepare_app_server_codex_home(env):
     except Exception:
         same_home = False
     if not same_home:
-        for filename in _QUEUED_CODEX_HOME_SYNC_FILES:
+        sync_files = (
+            _QUEUED_CODEX_HOME_SYNC_FILES
+            if CODEX_REQUIRE_ACCOUNT_LOGIN
+            else _UNAUTHENTICATED_CODEX_HOME_SYNC_FILES
+        )
+        for filename in sync_files:
             _copy_codex_home_file_if_available(source_home, app_server_home, filename)
     return app_server_home
 
@@ -11577,7 +11606,10 @@ def _start_codex_stream_for_session_locked(
     agent_backend = get_selected_agent_backend()
     if account_profile is None:
         return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
-    if agent_backend != 'claude' and not _codex_home_has_auth(account_profile['codex_home']):
+    if (
+            CODEX_REQUIRE_ACCOUNT_LOGIN
+            and agent_backend != 'claude'
+            and not _codex_home_has_auth(account_profile['codex_home'])):
         return {
             'ok': False,
             'error': '선택한 계정에 로그인이 필요합니다. 계정 관리에서 로그인 명령을 확인해 주세요.',

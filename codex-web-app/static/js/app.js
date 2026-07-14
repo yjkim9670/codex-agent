@@ -83,6 +83,7 @@ const state = {
     accounts: {
         activeAccountId: '',
         items: [],
+        loginRequired: true,
         automaticFailover: false
     },
     settings: {
@@ -8004,6 +8005,7 @@ function normalizeCodexAccountsSummary(value) {
             currentPlan: item.current_plan && typeof item.current_plan === 'object' ? item.current_plan : null,
             scheduledPlan: item.scheduled_plan && typeof item.scheduled_plan === 'object' ? item.scheduled_plan : null
         })).filter(item => item.id),
+        loginRequired: summary.login_required !== false,
         automaticFailover: Boolean(summary.automatic_failover)
     };
 }
@@ -8056,7 +8058,8 @@ function renderCodexAccountControls() {
         state.accounts.items.forEach(account => {
             const option = document.createElement('option');
             option.value = account.id;
-            option.textContent = `${account.label}${account.authenticated ? '' : ' · 로그인 필요'}`;
+            const loginMissing = state.accounts.loginRequired && !account.authenticated;
+            option.textContent = `${account.label}${loginMissing ? ' · 로그인 필요' : ''}`;
             select.appendChild(option);
         });
         select.value = state.accounts.activeAccountId || previousValue;
@@ -8064,10 +8067,11 @@ function renderCodexAccountControls() {
     }
     const active = getActiveCodexAccount();
     if (status) {
-        status.classList.toggle('is-warning', Boolean(active && !active.authenticated));
+        const loginMissing = Boolean(active && state.accounts.loginRequired && !active.authenticated);
+        status.classList.toggle('is-warning', loginMissing);
         const schedule = formatCodexAccountSchedule(active);
         status.textContent = active
-            ? `${formatCodexAccountPlan(active)}${schedule ? ` · ${schedule}` : ''}${active.authenticated ? '' : ' · 로그인 필요'}`
+            ? `${formatCodexAccountPlan(active)}${schedule ? ` · ${schedule}` : ''}${loginMissing ? ' · 로그인 필요' : ''}`
             : '계정 정보를 불러오는 중...';
     }
     renderCodexAccountList();
@@ -8104,9 +8108,13 @@ function renderCodexAccountList() {
         const meta = document.createElement('div');
         meta.className = 'account-list-meta';
         const schedule = formatCodexAccountSchedule(account);
-        meta.textContent = `${account.accountName || (account.authenticated ? '로그인됨' : '로그인 필요')} · ${formatCodexAccountPlan(account)}${schedule ? ` · ${schedule}` : ''}`;
+        const loginMissing = state.accounts.loginRequired && !account.authenticated;
+        const accountStatus = state.accounts.loginRequired
+            ? (account.accountName || (account.authenticated ? '로그인됨' : '로그인 필요'))
+            : '로그인 불필요';
+        meta.textContent = `${accountStatus} · ${formatCodexAccountPlan(account)}${schedule ? ` · ${schedule}` : ''}`;
         details.append(title, meta);
-        if (!account.authenticated && account.loginCommand) {
+        if (loginMissing && account.loginCommand) {
             const command = document.createElement('div');
             command.className = 'account-login-command';
             command.textContent = account.loginCommand;
@@ -8122,7 +8130,7 @@ function renderCodexAccountList() {
             activate.addEventListener('click', () => void switchActiveCodexAccount(account.id));
             actions.appendChild(activate);
         }
-        if (!account.authenticated && account.loginCommand) {
+        if (loginMissing && account.loginCommand) {
             const copy = document.createElement('button');
             copy.type = 'button';
             copy.className = 'btn ghost';
@@ -8139,7 +8147,7 @@ async function switchActiveCodexAccount(accountId) {
     const normalizedId = String(accountId || '').trim();
     if (!normalizedId || normalizedId === state.accounts.activeAccountId) return;
     const targetAccount = state.accounts.items.find(item => item.id === normalizedId);
-    if (targetAccount && !targetAccount.authenticated) {
+    if (targetAccount && state.accounts.loginRequired && !targetAccount.authenticated) {
         renderCodexAccountControls();
         await openCodexAccountOverlay();
         setCodexAccountOverlayStatus(`${targetAccount.label} 계정에 먼저 로그인해 주세요.`, true);
@@ -8207,9 +8215,11 @@ async function createCodexAccountFromForm() {
         });
         applyCodexAccountsSummary(result?.accounts);
         const created = result?.account;
-        const message = created?.authenticated
-            ? '계정을 가져왔습니다. 목록에서 전환할 수 있습니다.'
-            : '계정을 만들었습니다. 표시된 로그인 명령을 실행한 뒤 이 창을 다시 열어 상태를 확인하세요.';
+        const message = !state.accounts.loginRequired
+            ? '계정을 만들었습니다. 로그인 없이 목록에서 전환할 수 있습니다.'
+            : created?.authenticated
+                ? '계정을 가져왔습니다. 목록에서 전환할 수 있습니다.'
+                : '계정을 만들었습니다. 표시된 로그인 명령을 실행한 뒤 이 창을 다시 열어 상태를 확인하세요.';
         setCodexAccountOverlayStatus(message);
         const labelInput = document.getElementById('codex-account-label');
         const sourceInput = document.getElementById('codex-account-source-home');

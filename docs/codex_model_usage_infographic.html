@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 모델 · Terminal-Bench 가성비 가이드</title>
+  <style>
+    @font-face {
+      font-family: "IBM Plex Sans KR";
+      src: url("../codex-web-app/static/fonts/ibm-plex/IBMPlexSansKR-Regular.woff2") format("woff2");
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "IBM Plex Sans KR";
+      src: url("../codex-web-app/static/fonts/ibm-plex/IBMPlexSansKR-SemiBold.woff2") format("woff2");
+      font-style: normal;
+      font-weight: 600;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: "IBM Plex Sans KR";
+      src: url("../codex-web-app/static/fonts/ibm-plex/IBMPlexSansKR-Bold.woff2") format("woff2");
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+    }
+
+    :root {
+      --ink: #17212b;
+      --muted: #637181;
+      --line: #dce3ea;
+      --canvas: #f3f7fa;
+      --panel: #ffffff;
+      --navy: #173b57;
+      --blue: #2074ad;
+      --cyan: #30a3b9;
+      --mint: #2c9670;
+      --amber: #d98124;
+      --coral: #d45649;
+      --soft-blue: #e7f2f9;
+      --soft-amber: #fff3df;
+      --shadow: 0 18px 45px rgba(25, 56, 82, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--canvas); }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: radial-gradient(circle at 90% -10%, #dcecf4 0, rgba(220, 236, 244, 0) 34rem), var(--canvas);
+      font-family: "IBM Plex Sans KR", -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1220px; margin: 0 auto; padding: 42px 26px 72px; }
+    .hero { display: grid; grid-template-columns: 1fr auto; gap: 28px; align-items: end; padding: 18px 0 31px; }
+    .eyebrow { margin: 0 0 9px; color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { max-width: 860px; margin: 0; color: var(--navy); font-size: clamp(30px, 4vw, 50px); line-height: 1.14; letter-spacing: -.045em; }
+    .lede { max-width: 800px; margin: 15px 0 0; color: var(--muted); font-size: 16px; }
+    .date-stamp { min-width: 170px; padding: 14px 16px; border: 1px solid #cddbe5; border-radius: 12px; background: rgba(255,255,255,.75); color: var(--muted); font-size: 12px; text-align: right; }
+    .date-stamp strong { display: block; margin-top: 2px; color: var(--navy); font-size: 15px; }
+
+    .baseline {
+      display: grid; grid-template-columns: 1.15fr 1fr 1fr; overflow: hidden;
+      border-radius: 16px; background: var(--navy); box-shadow: var(--shadow);
+    }
+    .baseline > div { min-height: 145px; padding: 24px 25px; border-right: 1px solid rgba(255,255,255,.18); color: #dce8f0; }
+    .baseline > div:last-child { border: 0; }
+    .baseline .label { margin: 0 0 5px; color: #9fc7dd; font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+    .baseline .number { margin: 0; color: #fff; font-size: 35px; font-weight: 700; line-height: 1.1; letter-spacing: -.04em; }
+    .baseline .small { margin: 7px 0 0; font-size: 13px; }
+    .baseline .effort { color: #ffcf8d; }
+
+    section { margin-top: 34px; }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 14px; }
+    h2 { margin: 0; color: var(--navy); font-size: 24px; line-height: 1.2; letter-spacing: -.03em; }
+    .section-note { max-width: 620px; margin: 0; color: var(--muted); font-size: 13px; text-align: right; }
+
+    .ranking { padding: 8px 22px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
+    .rank-row { display: grid; grid-template-columns: 188px minmax(230px, 1fr) 175px; gap: 22px; align-items: center; padding: 17px 0; border-bottom: 1px solid var(--line); }
+    .rank-row:last-child { border-bottom: 0; }
+    .model { display: flex; align-items: center; gap: 10px; }
+    .rank { width: 25px; color: #91a1af; font-size: 12px; font-weight: 700; text-align: center; }
+    .model code { color: var(--navy); font-family: "IBM Plex Sans KR", sans-serif; font-size: 15px; font-weight: 700; }
+    .model span { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+    .bars { display: grid; gap: 9px; }
+    .bar-line { display: grid; grid-template-columns: 54px 1fr 45px; gap: 9px; align-items: center; font-size: 11px; }
+    .bar-line label { color: var(--muted); font-weight: 600; }
+    .track { height: 11px; overflow: hidden; border-radius: 999px; background: #e8eef2; }
+    .fill { display: block; height: 100%; min-width: 8px; border-radius: inherit; }
+    .high { background: var(--cyan); }
+    .xhigh { background: var(--coral); }
+    .bar-value { color: var(--navy); font-size: 12px; font-weight: 700; text-align: right; }
+    .price { color: var(--muted); font-size: 12px; text-align: right; }
+    .price strong { display: block; color: var(--navy); font-size: 14px; }
+
+    .cards { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 16px; }
+    .card { padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
+    .card h3 { margin: 0 0 9px; color: var(--navy); font-size: 17px; letter-spacing: -.02em; }
+    .card p { margin: 0; color: #506071; font-size: 14px; }
+    .card.primary { border-color: #b7d6e6; background: linear-gradient(145deg, #eef8fc, #fff 72%); }
+    .card .big { margin: 15px 0 3px; color: var(--blue); font-size: 36px; font-weight: 700; line-height: 1; letter-spacing: -.05em; }
+    .card .hint { margin-top: 10px; color: var(--muted); font-size: 12px; }
+
+    .performance-grid { display: grid; grid-template-columns: 1.28fr .92fr; gap: 16px; }
+    .performance-panel { padding: 8px 22px 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
+    .perf-row { display: grid; grid-template-columns: 175px minmax(180px, 1fr) 90px; gap: 15px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    .perf-row:last-child { border-bottom: 0; }
+    .perf-model { color: var(--navy); font-size: 13px; font-weight: 700; }
+    .perf-model small { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+    .perf-track { height: 13px; overflow: hidden; border-radius: 999px; background: #e8eef2; }
+    .perf-fill { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+    .perf-score { color: var(--navy); font-size: 13px; font-weight: 700; text-align: right; }
+    .cohort { margin: 18px 0 7px; color: var(--blue); font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .cohort:first-child { margin-top: 8px; }
+    .value { color: var(--mint); font-size: 12px; font-weight: 700; }
+    .value small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+    .performance-aside { padding: 23px; border: 1px solid #b7d6e6; border-radius: 16px; background: linear-gradient(145deg, #eef8fc, #fff 72%); box-shadow: var(--shadow); }
+    .performance-aside h3 { margin: 0 0 13px; color: var(--navy); font-size: 18px; letter-spacing: -.02em; }
+    .performance-aside ol { margin: 0; padding-left: 20px; color: #44586b; font-size: 13px; }
+    .performance-aside li { margin: 9px 0; padding-left: 3px; }
+    .performance-aside strong { color: var(--navy); }
+    .pill { display: inline-block; margin: 10px 0 0; padding: 4px 8px; border-radius: 999px; background: #dceef6; color: #245979; font-size: 11px; font-weight: 700; }
+
+    .example { display: grid; grid-template-columns: .9fr 1.4fr; gap: 16px; }
+    .formula { padding: 24px; border-radius: 16px; background: var(--soft-blue); }
+    .formula h2 { font-size: 21px; }
+    .formula p { margin: 9px 0 0; color: #496174; }
+    .equation { margin: 18px 0 0; padding: 14px; border: 1px solid #c8dfeb; border-radius: 9px; background: rgba(255,255,255,.72); color: var(--navy); font-size: 13px; font-weight: 600; }
+    .table-wrap { overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { background: #f8fafb; color: var(--muted); font-size: 11px; font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    td strong { color: var(--navy); }
+    .x { color: var(--coral); font-weight: 700; }
+
+    .method { margin-top: 17px; padding: 17px 19px; border-left: 4px solid var(--amber); border-radius: 0 12px 12px 0; background: var(--soft-amber); color: #714a20; font-size: 13px; }
+    .method strong { color: #5c3916; }
+    .sources { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+    .source-card { padding: 17px 19px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .source-card p { margin: 0; }
+    .source-card a { color: var(--blue); font-weight: 600; text-decoration: none; }
+    .source-card a:hover { text-decoration: underline; }
+    .footer { margin-top: 20px; color: #798797; font-size: 11px; text-align: center; }
+
+    @media (max-width: 760px) {
+      .wrap { padding: 26px 15px 48px; }
+      .hero, .baseline, .cards, .example { grid-template-columns: 1fr; }
+      .hero { gap: 16px; }
+      .date-stamp { text-align: left; }
+      .baseline > div { min-height: 0; border-right: 0; border-bottom: 1px solid rgba(255,255,255,.18); }
+      .section-head { display: block; }
+      .section-note { margin-top: 8px; text-align: left; }
+      .ranking { padding: 4px 14px 11px; }
+      .rank-row { grid-template-columns: 1fr; gap: 10px; }
+      .performance-grid { grid-template-columns: 1fr; }
+      .perf-row { grid-template-columns: 1fr; gap: 7px; }
+      .perf-score { text-align: left; }
+      .price { text-align: left; }
+      .sources { grid-template-columns: 1fr; gap: 0; }
+      th, td { padding: 11px 8px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Codex Workbench · model choice guide</p>
+        <h1>Terminal-Bench × reasoning effort,<br>사용량 대비 가성비</h1>
+        <p class="lede">현재 Workbench에 표시되는 6개 모델을 실제 터미널 작업 벤치마크와 같은 작업량의 비용 지수로 함께 읽습니다. 사용량의 100%는 <strong>gpt-5.6-sol · xhigh</strong>이며, 가성비는 <strong>Terminal-Bench 점수 ÷ 예상 사용량</strong>으로 계산했습니다.</p>
+      </div>
+      <aside class="date-stamp">가격 확인 기준<strong>2026-07-14 · Standard API</strong></aside>
+    </header>
+
+    <section class="baseline" aria-label="비교 기준">
+      <div>
+        <p class="label">사용량 100% 기준</p>
+        <p class="number">Sol · xhigh</p>
+        <p class="small">동일 작업에서 가장 높은 단가군과 가장 깊은 reasoning 조합</p>
+      </div>
+      <div>
+        <p class="label">최고 터미널 성능</p>
+        <p class="number">88.8%</p>
+        <p class="small">GPT-5.6 Sol · Terminal-Bench 2.1</p>
+      </div>
+      <div>
+        <p class="label">planning assumption</p>
+        <p class="number effort">xhigh = 1.4×</p>
+        <p class="small">high 대비 billable 토큰 볼륨을 40% 높게 잡은 계획용 가정</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>예상 사용량 지수</h2>
+        <p class="section-note">high와 xhigh는 색으로 구분했습니다. 고정된 reasoning 배수는 공식 공개값이 아니므로, 1.4× 가정은 실제 Workbench 사용 이력으로 보정하세요.</p>
+      </div>
+      <div class="ranking">
+        <div class="rank-row">
+          <div class="model"><span class="rank">01</span><div><code>gpt-5.6-sol</code><span>복잡한 전문 작업</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:71.4%"></i></div><b class="bar-value">71%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:100%"></i></div><b class="bar-value">100%</b></div></div>
+          <div class="price"><strong>$5.00 / $30.00</strong>입력 / 출력 1M tokens</div>
+        </div>
+        <div class="rank-row">
+          <div class="model"><span class="rank">01</span><div><code>gpt-5.5</code><span>복잡한 코딩·전문 작업</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:71.4%"></i></div><b class="bar-value">71%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:100%"></i></div><b class="bar-value">100%</b></div></div>
+          <div class="price"><strong>$5.00 / $30.00</strong>입력 / 출력 1M tokens</div>
+        </div>
+        <div class="rank-row">
+          <div class="model"><span class="rank">03</span><div><code>gpt-5.6-terra</code><span>성능·비용 균형</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:35.7%"></i></div><b class="bar-value">36%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:50%"></i></div><b class="bar-value">50%</b></div></div>
+          <div class="price"><strong>$2.50 / $15.00</strong>입력 / 출력 1M tokens</div>
+        </div>
+        <div class="rank-row">
+          <div class="model"><span class="rank">03</span><div><code>gpt-5.4</code><span>경제형 전문 작업</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:35.7%"></i></div><b class="bar-value">36%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:50%"></i></div><b class="bar-value">50%</b></div></div>
+          <div class="price"><strong>$2.50 / $15.00</strong>입력 / 출력 1M tokens</div>
+        </div>
+        <div class="rank-row">
+          <div class="model"><span class="rank">05</span><div><code>gpt-5.6-luna</code><span>비용 민감·고빈도 작업</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:14.3%"></i></div><b class="bar-value">14%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:20%"></i></div><b class="bar-value">20%</b></div></div>
+          <div class="price"><strong>$1.00 / $6.00</strong>입력 / 출력 1M tokens</div>
+        </div>
+        <div class="rank-row">
+          <div class="model"><span class="rank">06</span><div><code>gpt-5.4-mini</code><span>빠른 반복·보조 작업</span></div></div>
+          <div class="bars"><div class="bar-line"><label>high</label><div class="track"><i class="fill high" style="width:10.7%"></i></div><b class="bar-value">11%</b></div><div class="bar-line"><label>xhigh</label><div class="track"><i class="fill xhigh" style="width:15%"></i></div><b class="bar-value">15%</b></div></div>
+          <div class="price"><strong>$0.75 / $4.50</strong>입력 / 출력 1M tokens</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>터미널 작업 성능 × 가성비</h2>
+        <p class="section-note">성공률은 높을수록 좋습니다. 오른쪽의 가성비는 각 벤치 버전 안에서만 비교한 <strong>점수 ÷ xhigh 예상 사용량</strong> 지수입니다.</p>
+      </div>
+      <div class="performance-grid">
+        <div class="performance-panel" aria-label="Terminal-Bench 실행형 코딩 성능">
+          <p class="cohort">Terminal-Bench 2.1 · 같은 평가군</p>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.6-sol<small>성공률 88.8% · xhigh 사용량 100%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:100%"></i></div>
+            <div class="value">100<small>가성비 기준</small></div>
+          </div>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.6-terra<small>성공률 87.4% · xhigh 사용량 50%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:98.4%"></i></div>
+            <div class="value">197<small>Sol 대비 효율</small></div>
+          </div>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.6-luna<small>성공률 84.7% · xhigh 사용량 20%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:95.4%"></i></div>
+            <div class="value">477<small>Sol 대비 효율</small></div>
+          </div>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.5<small>성공률 85.6% · xhigh 사용량 100%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:96.4%"></i></div>
+            <div class="value">96<small>Sol 대비 효율</small></div>
+          </div>
+          <p class="cohort">Terminal-Bench 2.0 · 별도 평가군</p>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.4<small>성공률 75.1% · xhigh 사용량 50%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:100%"></i></div>
+            <div class="value">100<small>5.4 대비 효율</small></div>
+          </div>
+          <div class="perf-row">
+            <div class="perf-model">gpt-5.4-mini<small>성공률 60.0% · xhigh 사용량 15%</small></div>
+            <div class="perf-track"><i class="perf-fill" style="width:79.9%"></i></div>
+            <div class="value">266<small>5.4 대비 효율</small></div>
+          </div>
+        </div>
+        <aside class="performance-aside">
+          <h3>가성비 결론</h3>
+          <ol>
+            <li><strong>Luna</strong>는 Sol보다 4.1점 낮은 84.7%를 20% 비용 지수로 냅니다. 범위가 명확한 구현·수정의 1순위입니다.</li>
+            <li><strong>Terra</strong>는 Sol과 1.4점 차이인데 50% 비용 지수입니다. Luna가 막히는 일반적인 터미널 작업의 최적 승급입니다.</li>
+            <li><strong>Sol</strong>은 최고 성공률이 성공 자체의 가치보다 중요한 대형 디버깅·설계 작업에 씁니다. <strong>5.5</strong>는 같은 비용 지수에서 2.1 기준 성능이 낮아 기본 선택의 우선순위가 낮습니다.</li>
+            <li><strong>5.4-mini</strong>는 5.4 계열 안에서 높은 효율을 보이지만, 절대 성공률은 60.0%이므로 작은 패치·탐색·subagent에 맞습니다.</li>
+          </ol>
+          <span class="pill">가성비 1위 ≠ 어려운 작업의 성공률 1위</span>
+        </aside>
+      </div>
+      <aside class="method"><strong>비교 주의:</strong> 5.6/5.5는 <strong>Terminal-Bench 2.1</strong>, 5.4/mini는 <strong>Terminal-Bench 2.0</strong> 공개 점수입니다. 벤치 버전·harness가 달라 두 평가군의 점수와 가성비 지수를 서로 순위화하지 않았습니다. 5.4 계열은 xhigh 조건이 명시됐지만, 5.6/5.5 표는 effort를 명시하지 않습니다. 따라서 가성비는 공개 성공률에 이 문서의 xhigh 사용량 가정을 결합한 <strong>운영용 proxy</strong>이며, high와 xhigh의 실제 성능 차이를 추정한 값이 아닙니다.</aside>
+    </section>
+
+    <section class="cards">
+      <article class="card primary">
+        <h3>가장 실용적인 기본값</h3>
+        <div class="big">Luna · high</div>
+        <p>Terminal-Bench 2.1에서 84.7%를 기록하면서 기준의 약 14% 사용량입니다. 범위가 명확한 구현, 반복 수정, 짧은 분석의 기본값입니다.</p>
+        <p class="hint">막히면 Terra · high(36%)로 올리면, 2.1 기준 성공률 87.4%까지 빠르게 회복합니다.</p>
+      </article>
+      <article class="card">
+        <h3>xhigh를 쓸 때</h3>
+        <p>큰 설계 결정, 원인 불명 디버깅, 광범위한 리팩터처럼 한 번의 성공이 반복 시도보다 싼 경우에만 선택합니다.</p>
+        <p class="hint">같은 모델이라도 high보다 더 오래 생각하게 하므로 응답 시간도 함께 늘 수 있습니다.</p>
+      </article>
+      <article class="card">
+        <h3>우선 확인할 것</h3>
+        <p>모델 선택보다 브라우저를 여러 번 열거나, 같은 테스트를 재실행하거나, 긴 컨텍스트를 매번 다시 넣는 일이 사용량을 더 크게 키울 수 있습니다.</p>
+        <p class="hint">동일 세션·캐시·결정론적 검증을 먼저 유지하세요.</p>
+      </article>
+    </section>
+
+    <section>
+      <div class="example">
+        <article class="formula">
+          <h2>지수 계산 방식</h2>
+          <p>모델별 입력·출력 단가 비율은 모두 동일하게 1:6이므로, 같은 입·출력 비율의 작업에서는 표준 단가 비율이 그대로 비용 지수가 됩니다. 가성비는 Terminal-Bench 성공률을 xhigh 예상 사용량으로 나눈 뒤, 각 벤치 버전의 기준 모델을 100으로 맞췄습니다.</p>
+          <div class="equation">사용량 지수 = 모델 단가 비율 × effort 계수<br>high = 1.00 · xhigh = 1.40<br>100% = Sol/5.5 · xhigh</div>
+        </article>
+        <div class="table-wrap">
+          <table aria-label="예시 비용 테이블">
+            <thead><tr><th>동일 작업 1회 예시</th><th>high</th><th>xhigh</th><th>기준 대비</th></tr></thead>
+            <tbody>
+              <tr><td><strong>gpt-5.6-sol / gpt-5.5</strong></td><td>$8.00</td><td class="x">$11.20</td><td>71% / 100%</td></tr>
+              <tr><td><strong>gpt-5.6-terra / gpt-5.4</strong></td><td>$4.00</td><td class="x">$5.60</td><td>36% / 50%</td></tr>
+              <tr><td><strong>gpt-5.6-luna</strong></td><td>$1.60</td><td class="x">$2.24</td><td>14% / 20%</td></tr>
+              <tr><td><strong>gpt-5.4-mini</strong></td><td>$1.20</td><td class="x">$1.68</td><td>11% / 15%</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <aside class="method"><strong>예시의 범위:</strong> uncached input 1M + billable output/reasoning 0.1M tokens를 high 작업으로 둔 단순 비교입니다. xhigh는 이 동일 작업의 billable 토큰 총량이 1.4배가 된다고 가정했습니다. 실제 비용은 프롬프트 길이, 캐시 적중, 도구 호출, 재시도, 모델이 선택한 reasoning 길이에 따라 달라집니다. ChatGPT/Codex 구독의 quota는 API 달러 단가와 1:1로 공개되어 있지 않으므로 이 지수는 <strong>상대 사용량 계획용</strong>입니다.</aside>
+    </section>
+
+    <section class="sources">
+      <div class="source-card"><p><strong>공식 단가 및 모델 포지셔닝</strong><br><a href="https://developers.openai.com/api/docs/models/compare">OpenAI Models comparison</a> — GPT-5.6 Sol/Terra/Luna와 GPT-5.5/5.4/mini의 표준 입력·캐시·출력 단가를 확인했습니다.</p></div>
+      <div class="source-card"><p><strong>reasoning effort의 한계</strong><br><a href="https://developers.openai.com/api/docs/models/gpt-5.5">GPT-5.5 model documentation</a> — high와 xhigh 지원은 명시하지만, effort별 고정 token/비용 배수는 공개하지 않습니다. 따라서 1.4×는 조정 가능한 운영 가정입니다.</p></div>
+      <div class="source-card"><p><strong>GPT-5.6 · 5.5 터미널 성능</strong><br><a href="https://openai.com/index/gpt-5-6/">GPT-5.6 발표의 공개 평가표</a> — Terminal-Bench 2.1에서 Sol/Terra/Luna/5.5는 88.8% / 87.4% / 84.7% / 85.6%입니다. 이 문서의 5.6·5.5 가성비는 이 성공률과 xhigh 사용량 지수로 계산했습니다.</p></div>
+      <div class="source-card"><p><strong>GPT-5.4 · mini 터미널 성능</strong><br><a href="https://openai.com/index/introducing-gpt-5-4-mini-and-nano/">GPT-5.4 mini 발표의 공개 평가표</a> — Terminal-Bench 2.0에서 5.4/mini는 75.1% / 60.0%이며 xhigh 조건이 명시됩니다. 2.1과 다른 버전이므로 별도 평가군으로 표시했습니다.</p></div>
+    </section>
+    <p class="footer">Codex Workbench model picker 기준 · IBM Plex Sans KR 로컬 폰트 사용 · 성능 자료 확인 2026-07-14</p>
+  </main>
+</body>
+</html>

@@ -757,6 +757,63 @@ def test_codex_accounts_share_account_state_but_keep_workspace_runtime_isolated(
     assert context_a['queued_codex_home'] != context_b['queued_codex_home']
 
 
+def test_company_mode_allows_account_and_stream_without_codex_login(
+        isolated_codex_workspace, monkeypatch, tmp_path):
+    source = tmp_path / 'company-codex-home'
+    source.mkdir()
+    (source / 'config.toml').write_text(
+        '[model_providers.dtgpt_linux]\nbase_url = "http://company.internal/llm/v1"\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_REQUIRE_ACCOUNT_LOGIN', False)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.setenv('CODEX_WORKBENCH_AUTH_HOME', str(tmp_path / 'personal-auth-home'))
+
+    exec_env = {'CODEX_HOME': str(source), 'CODEX_WORKBENCH_AUTH_HOME': str(tmp_path / 'personal-auth-home')}
+    assert codex_chat._resolve_authenticated_codex_home(exec_env) == source
+    assert codex_chat._default_account_codex_home() == codex_chat._CODEX_HOME
+
+    account = codex_chat.create_codex_account(
+        'Company DTGPT',
+        source_codex_home=source,
+    )
+    context = codex_chat._account_storage_context(account['id'])
+    assert (context['codex_home'] / 'config.toml').is_file()
+    assert not (context['codex_home'] / 'auth.json').exists()
+    assert account['authenticated'] is False
+    assert account['login_command'] == ''
+
+    accounts = codex_chat.get_codex_accounts_summary()
+    assert accounts['login_required'] is False
+
+    session = codex_chat.create_session('Company login-free stream')
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *args, **kwargs: {
+        'id': 'company-stream',
+        'created_at': '2026-07-14T00:00:00+09:00',
+        'execution_policy': 'standard',
+        'structured_report_preset': None,
+        'worktree_task': None,
+    })
+
+    result = codex_chat._start_codex_stream_for_session_locked(
+        session['id'],
+        '사내 모델로 실행',
+        '사내 모델로 실행',
+        account_id=account['id'],
+    )
+
+    assert result['ok'] is True
+    assert result['stream_id'] == 'company-stream'
+
+
+def test_company_runners_disable_codex_account_login():
+    shell_runner = (PROJECT_ROOT / 'run_codex_chat_server_company.sh').read_text(encoding='utf-8')
+    powershell_runner = (PROJECT_ROOT / 'run_codex_chat_server_company.ps1').read_text(encoding='utf-8')
+
+    assert 'export CODEX_REQUIRE_ACCOUNT_LOGIN=0' in shell_runner
+    assert '$env:CODEX_REQUIRE_ACCOUNT_LOGIN = "0"' in powershell_runner
+
+
 def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch):
     shared_root = tmp_path / 'shared'
     local_root = tmp_path / 'local'

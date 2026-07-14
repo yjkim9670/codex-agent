@@ -47,6 +47,10 @@ Health check URL:
 | OA Windows | `https://cloud.dtgpt.samsungds.net/llm/health` |
 | Linux 폐쇄망 | `http://dtgpt.samsungds.net/llm/health` |
 
+Company runner는 이 URL을 `CODEX_DTGPT_HEALTH_URL`로 설정한다. Workbench는 응답의
+`openai_models`를 모델 목록에 반영하고 `embedding`, `embed`, `reranker`, `bge`가
+포함된 이름을 제외한다. 조회에 실패하면 아래 `CODEX_MODEL_OPTIONS`를 폴백으로 쓴다.
+
 `config.toml`의 `base_url`에는 health URL을 넣지 않는다. API root만 넣는다.
 
 | 망 | `base_url` 후보 | Codex CLI 호출 endpoint |
@@ -63,7 +67,7 @@ Codex CLI profile은 코드 작업과 에이전트 작업 기준으로 아래 �
 1. `Qwen3.6-27B`
 2. `Gemma-4-31B-IT`
 
-PowerShell에서 Workbench 모델 선택 목록에 보여줄 값:
+PowerShell에서 health 조회 실패 시 사용할 폴백 값:
 
 ```powershell
 $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
@@ -78,7 +82,7 @@ $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 4. `OpenAI-GPT-OSS-120B`
 5. `Gemma-4-31B-IT`
 
-Bash에서 Workbench 모델 선택 목록에 보여줄 값:
+Bash에서 health 조회 실패 시 사용할 폴백 값:
 
 ```bash
 export CODEX_MODEL_OPTIONS="DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT"

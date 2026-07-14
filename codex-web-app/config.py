@@ -2,8 +2,11 @@
 
 import json
 import os
+import threading
+import time
 from datetime import timedelta, timezone
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 try:
     import pwd
@@ -17,6 +20,15 @@ except ImportError:
 
 _TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
 _FALSY_VALUES = {'0', 'false', 'no', 'off'}
+_DTGPT_MODEL_EXCLUDE_TERMS = ('embedding', 'embed', 'reranker', 'bge')
+_DTGPT_HEALTH_MAX_RESPONSE_BYTES = 1024 * 1024
+_dtgpt_health_cache_lock = threading.Lock()
+_dtgpt_health_cache = {
+    'url': None,
+    'expires_at': 0.0,
+    'catalog': [],
+    'metadata': None,
+}
 
 
 def _parse_bool_env(name, default=False):
@@ -571,6 +583,105 @@ def _read_model_options_from_env():
     )
 
 
+def _get_dtgpt_health_url():
+    return str(os.environ.get('CODEX_DTGPT_HEALTH_URL') or '').strip()
+
+
+def _fetch_dtgpt_model_catalog(health_url):
+    timeout_seconds = _parse_int_env(
+        'CODEX_DTGPT_HEALTH_TIMEOUT_SECONDS',
+        5,
+        minimum=1,
+        maximum=60,
+    )
+    request = Request(
+        health_url,
+        headers={
+            'Accept': 'application/json',
+            'User-Agent': 'codex-workbench',
+        },
+    )
+    with urlopen(request, timeout=timeout_seconds) as response:
+        raw_payload = response.read(_DTGPT_HEALTH_MAX_RESPONSE_BYTES + 1)
+    if len(raw_payload) > _DTGPT_HEALTH_MAX_RESPONSE_BYTES:
+        raise ValueError('DTGPT health response is too large')
+    payload = json.loads(raw_payload.decode('utf-8'))
+    if not isinstance(payload, dict):
+        raise ValueError('DTGPT health response must be a JSON object')
+    raw_models = payload.get('openai_models')
+    if not isinstance(raw_models, list):
+        raise ValueError('DTGPT health response does not contain openai_models')
+
+    included_models = []
+    excluded_models = []
+    seen = set()
+    for raw_model in raw_models:
+        if not isinstance(raw_model, str):
+            continue
+        model_name = normalize_codex_model_name(raw_model)
+        if not model_name or model_name in seen:
+            continue
+        seen.add(model_name)
+        if any(term in model_name.lower() for term in _DTGPT_MODEL_EXCLUDE_TERMS):
+            excluded_models.append(model_name)
+            continue
+        included_models.append(model_name)
+    if not included_models:
+        raise ValueError('DTGPT health response contains no usable chat models')
+
+    return _select_model_catalog_entries(included_models, _default_model_catalog), {
+        'type': 'dtgpt_health',
+        'url': health_url,
+        'updated_datetime': str(payload.get('updated_datetime') or '').strip() or None,
+        'excluded_model_count': len(excluded_models),
+    }
+
+
+def _read_dtgpt_model_catalog_from_health():
+    health_url = _get_dtgpt_health_url()
+    if not health_url:
+        return [], None
+
+    now = time.monotonic()
+    with _dtgpt_health_cache_lock:
+        if (
+            _dtgpt_health_cache['url'] == health_url
+            and _dtgpt_health_cache['expires_at'] > now
+        ):
+            return (
+                list(_dtgpt_health_cache['catalog']),
+                dict(_dtgpt_health_cache['metadata']),
+            )
+        try:
+            catalog, metadata = _fetch_dtgpt_model_catalog(health_url)
+            cache_seconds = _parse_int_env(
+                'CODEX_DTGPT_HEALTH_CACHE_SECONDS',
+                300,
+                minimum=1,
+                maximum=86400,
+            )
+        except Exception as exc:
+            catalog = []
+            metadata = {
+                'type': 'dtgpt_health_error',
+                'url': health_url,
+                'error': f'{type(exc).__name__}: {exc}',
+            }
+            cache_seconds = _parse_int_env(
+                'CODEX_DTGPT_HEALTH_RETRY_SECONDS',
+                30,
+                minimum=1,
+                maximum=3600,
+            )
+        _dtgpt_health_cache.update({
+            'url': health_url,
+            'expires_at': now + cache_seconds,
+            'catalog': list(catalog),
+            'metadata': dict(metadata),
+        })
+        return list(catalog), dict(metadata)
+
+
 def _read_model_options_from_models_cache():
     return [
         entry['slug']
@@ -670,6 +781,9 @@ def _select_model_catalog_entries(model_options, source_catalog):
 
 
 def get_codex_model_catalog():
+    health_catalog, _health_metadata = _read_dtgpt_model_catalog_from_health()
+    if health_catalog:
+        return health_catalog
     env_options = _read_model_options_from_env()
     cache_catalog, _cache_path = _read_model_catalog_with_source_from_models_cache()
     if env_options:
@@ -683,24 +797,36 @@ def get_codex_model_catalog():
 
 
 def get_codex_model_catalog_source():
+    health_catalog, health_metadata = _read_dtgpt_model_catalog_from_health()
+    if health_catalog:
+        return health_metadata
     env_options = _read_model_options_from_env()
     cache_catalog, cache_path = _read_model_catalog_with_source_from_models_cache()
     if env_options:
-        return {
+        source = {
             'type': 'env',
             'env': 'CODEX_MODEL_OPTIONS',
             'models_cache_path': str(cache_path) if cache_path else None,
         }
+        if health_metadata:
+            source['dtgpt_health'] = health_metadata
+        return source
     if cache_catalog:
-        return {
+        source = {
             'type': 'models_cache',
             'models_cache_path': str(cache_path),
         }
-    return {
+        if health_metadata:
+            source['dtgpt_health'] = health_metadata
+        return source
+    source = {
         'type': 'fallback',
         'models_cache_path': None,
         'model_cache_candidates': [str(path) for path in _iter_model_cache_paths()],
     }
+    if health_metadata:
+        source['dtgpt_health'] = health_metadata
+    return source
 
 
 def get_codex_model_options():

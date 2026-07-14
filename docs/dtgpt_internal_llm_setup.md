@@ -50,6 +50,12 @@
 - OA Windows 망: `https://cloud.dtgpt.samsungds.net/llm/health`
 - 폐쇄 Linux 망: `http://dtgpt.samsungds.net/llm/health`
 
+회사망 실행 스크립트는 위 주소를 `CODEX_DTGPT_HEALTH_URL`로 전달한다. Workbench는
+health 응답의 `openai_models` 순서를 모델 선택 목록에 반영하며, 모델명에
+`embedding`, `embed`, `reranker`, `bge`가 포함된 항목은 대소문자 구분 없이 제외한다.
+조회 실패, 잘못된 응답, 또는 필터 후 빈 목록이면 `CODEX_MODEL_OPTIONS`의 정적 목록을
+사용한다. URL은 환경변수로 재정의할 수 있다.
+
 `base_url`에는 `/llm/health`를 넣으면 안 된다. health는 상태 확인 경로이고 Codex CLI provider에는 실제 API root를 넣어야 한다.
 
 우선 검증할 후보:
@@ -85,7 +91,7 @@ http://dtgpt.samsungds.net/llm/v1/responses
 | 4 | `OpenAI-GPT-OSS-120B` | OpenAI model card 기준 high reasoning: SWE-Bench Verified 62.4, MMLU 90.0, Aider Polyglot 44.4, Codeforces 2463/2622 | 지식/일반 추론은 강하지만 SWE 기준으로는 4위 |
 | 5 | `Gemma-4-31B-IT` | Google HF 카드 기준 MMLU-Pro 85.2, LiveCodeBench v6 80.0, Codeforces 2150, GPQA Diamond 84.3 | 공식 카드에 SWE-bench 점수가 없어 Codex agent 순위에서는 보수적으로 5위 |
 
-Linux 기본 모델 목록은 이 순서로 둔다.
+Linux health 조회 실패 시 사용할 폴백 모델 목록은 이 순서로 둔다.
 
 ```bash
 export CODEX_MODEL_OPTIONS="DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT"
@@ -99,7 +105,7 @@ export CODEX_CLI_MODEL_PROVIDER="dtgpt_linux"
 | 1 | `Qwen3.6-27B` | Qwen HF eval 기준 Swe Bench Resolved 77.2, SWE Bench Pro 53.5, TerminalBench 59.3, GPQA Diamond 87.8, MMLU-Pro 86.2 | Windows OA 망 기본값 |
 | 2 | `Gemma-4-31B-IT` | Google HF 카드 기준 MMLU-Pro 85.2, LiveCodeBench v6 80.0, Codeforces 2150, GPQA Diamond 84.3 | Qwen3.6보다 agent coding 지표가 약함 |
 
-Windows 기본 모델 목록은 이 순서로 둔다.
+Windows health 조회 실패 시 사용할 폴백 모델 목록은 이 순서로 둔다.
 
 ```powershell
 $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
@@ -110,11 +116,12 @@ $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 
 Workbench에서 모델을 바꾸는 값은 세 가지로 나뉜다.
 
-- `CODEX_MODEL_OPTIONS`: Workbench 설정 화면의 모델 선택 목록이다. Codex CLI provider나 API URL을 바꾸지 않는다.
+- `CODEX_DTGPT_HEALTH_URL`: Workbench가 `openai_models`를 조회할 health endpoint다.
+- `CODEX_MODEL_OPTIONS`: health 조회가 실패하거나 usable 모델이 없을 때 사용할 폴백 목록이다. Codex CLI provider나 API URL을 바꾸지 않는다.
 - `~/.codex/config.toml` 또는 `$HOME\.codex\config.toml`의 최상단 `model`: Workbench 저장 설정이 아직 없을 때 읽는 초기 기본값이다.
 - Workbench 설정 화면에서 저장한 `model`: 실제 `codex exec` 실행 시 `--model <선택한 모델>`로 전달된다.
 
-따라서 다른 모델을 쓰려면 먼저 해당 망에서 허용된 모델명이 `CODEX_MODEL_OPTIONS`에 들어 있어야 한다. 그 다음 Workbench 화면의 모델 선택 드롭다운에서 모델을 바꾸고 적용한다.
+정상적으로 health를 조회하면 해당 망에서 제공하는 chat 모델이 자동으로 드롭다운에 나타난다. 그 다음 Workbench 화면의 모델 선택 드롭다운에서 모델을 바꾸고 적용한다.
 
 OA Windows 망:
 
@@ -501,7 +508,9 @@ codex.cmd exec `
 - `codex-web-app/services/codex_chat.py`가 `CODEX_CLI_PROFILE`을 `--profile` 인자로 전달
 - `codex-web-app/services/codex_chat.py`가 `CODEX_CLI_BIN` 또는 Windows `codex.cmd`를 Codex CLI 실행 파일로 사용
 - `/api/codex/settings` 응답과 UI status에 현재 CLI profile/provider id를 읽기 전용으로 표시
-- `run_codex_chat_server_company.sh`의 Linux 기본 모델 목록을 폐쇄망 모델 순위로 정렬
+- `openai_models`를 health endpoint에서 읽고 embedding/reranker 계열을 제외해 DTGPT 모델 목록에 반영
+- health 조회 결과는 5분간 캐시하고, 실패 시 30초 후 재시도하며 `CODEX_MODEL_OPTIONS`로 폴백
+- `run_codex_chat_server_company.sh`의 Linux 폴백 모델 목록을 폐쇄망 모델 순위로 정렬
 - `run_codex_chat_server_company.sh`가 기본 `CODEX_CLI_MODEL_PROVIDER=dtgpt_linux`를 설정
 - `run_codex_chat_server_company.ps1` 추가: Windows PowerShell 전용 회사망 실행 스크립트
 - `run_codex_chat_server_company.ps1`이 기본 `CODEX_CLI_MODEL_PROVIDER=dtgpt_oa`를 설정
@@ -513,7 +522,7 @@ codex.cmd exec `
 - 단일 장비에서 OA/Linux provider를 동시에 전환해야 하는 경우 `CODEX_CLI_PROFILE`을 사용할 수 있다.
 - 예: `CODEX_CLI_PROFILE=linux_deepseek` 또는 PowerShell `$env:CODEX_CLI_PROFILE = "oa_qwen"`
 - Workbench에 저장된 모델이 있으면 `codex exec`에 `--model`이 함께 전달되므로, profile의 `model`보다 Workbench 저장 모델이 우선한다.
-- 현재처럼 망별 장비가 분리되어 있으면 회사망 실행 스크립트의 기본 `CODEX_CLI_MODEL_PROVIDER`, `CODEX_MODEL_OPTIONS`, user-level config의 provider 정의만으로 충분하다.
+- 현재처럼 망별 장비가 분리되어 있으면 회사망 실행 스크립트의 기본 `CODEX_CLI_MODEL_PROVIDER`, `CODEX_DTGPT_HEALTH_URL`, 폴백 `CODEX_MODEL_OPTIONS`, user-level config의 provider 정의만으로 충분하다.
 
 피해야 할 방식:
 
@@ -529,8 +538,8 @@ codex.cmd exec `
 - Linux 폐쇄망에는 Workbench source archive와 wheelhouse를 추가 반입했다.
 - Linux 폐쇄망에서 `codex --version`이 user-space PATH로 잡힌다.
 - Windows OA 망에서는 PowerShell에서 `codex.cmd --version` 또는 `& "$NPM_PREFIX\codex.cmd" --version`이 동작한다. PATH가 불안정하면 `CODEX_CLI_BIN="$NPM_PREFIX\codex.cmd"`를 지정한다. macOS에서 앱 번들로만 설치된 경우 `/Applications/Codex.app/Contents/Resources/codex`를 자동 탐색한다.
-- Windows OA 모델 목록은 `Qwen3.6-27B,Gemma-4-31B-IT` 순서다.
-- Linux 폐쇄망 모델 목록은 `DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT` 순서다.
+- Windows OA 모델 목록은 health의 `openai_models`에서 필터링되어 표시되며, 실패 시 `Qwen3.6-27B,Gemma-4-31B-IT`로 폴백한다.
+- Linux 폐쇄망 모델 목록은 health의 `openai_models`에서 필터링되어 표시되며, 실패 시 `DeepSeek-V4-Pro,Qwen3.5-397B-A17B-FP8,GLM4.7,OpenAI-GPT-OSS-120B,Gemma-4-31B-IT`로 폴백한다.
 - 회사망 실행 스크립트가 `CODEX_CLI_MODEL_PROVIDER`를 각각 `dtgpt_linux`, `dtgpt_oa`로 설정한다.
 - profile 단위 전환이 필요하면 `CODEX_CLI_PROFILE`을 별도로 지정한다.
 - Workbench 실행 전 Codex CLI 단독 smoke test가 성공한다.

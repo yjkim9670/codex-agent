@@ -14,6 +14,9 @@ $ParentDir = Split-Path -Parent $ScriptDir
 if (-not $env:CODEX_MODEL_OPTIONS) {
     $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
 }
+if (-not $env:CODEX_DTGPT_HEALTH_URL) {
+    $env:CODEX_DTGPT_HEALTH_URL = "https://cloud.dtgpt.samsungds.net/llm/health"
+}
 if (-not $env:CODEX_REASONING_OPTIONS) {
     $env:CODEX_REASONING_OPTIONS = "low,medium,high,xhigh"
 }

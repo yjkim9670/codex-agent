@@ -202,6 +202,78 @@ def test_model_catalog_env_options_keep_explicit_order(monkeypatch, tmp_path):
     assert codex_config.get_codex_model_options() == ['gpt-5.5', 'gpt-5.6-terra']
 
 
+def test_model_catalog_reads_dtgpt_health_and_filters_non_chat_models(monkeypatch):
+    health_url = 'http://dtgpt.test/llm/health?case=success'
+    payload = json.dumps({
+        'updated_datetime': '2026-07-14T09:58:34.152091',
+        'openai_models': [
+            'Qwen3.6-27B',
+            'text-embedding-v3',
+            'Qwen3-Reranker-8B',
+            'BGE-M3',
+            'custom-embed-model',
+            'Gemma-4-31B-IT',
+            'Qwen3.6-27B',
+        ],
+    }).encode('utf-8')
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return payload
+
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request.full_url, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv('CODEX_DTGPT_HEALTH_URL', health_url)
+    monkeypatch.setenv('CODEX_MODEL_OPTIONS', 'fallback-model')
+    monkeypatch.setattr(codex_config, 'urlopen', fake_urlopen)
+
+    assert codex_config.get_codex_model_options() == [
+        'Qwen3.6-27B',
+        'Gemma-4-31B-IT',
+    ]
+    assert codex_config.get_codex_model_catalog_source() == {
+        'type': 'dtgpt_health',
+        'url': health_url,
+        'updated_datetime': '2026-07-14T09:58:34.152091',
+        'excluded_model_count': 4,
+    }
+    assert calls == [(health_url, 5)]
+
+
+def test_model_catalog_uses_env_fallback_when_dtgpt_health_fails(monkeypatch, tmp_path):
+    health_url = 'http://dtgpt.test/llm/health?case=failure'
+
+    def fake_urlopen(_request, timeout):
+        raise OSError(f'unreachable after {timeout}s')
+
+    monkeypatch.setenv('CODEX_DTGPT_HEALTH_URL', health_url)
+    monkeypatch.setenv('CODEX_MODEL_OPTIONS', 'fallback-a,fallback-b')
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(tmp_path / 'missing-models-cache.json'))
+    monkeypatch.setattr(codex_config, 'urlopen', fake_urlopen)
+
+    assert codex_config.get_codex_model_options() == ['fallback-a', 'fallback-b']
+    assert codex_config.get_codex_model_catalog_source() == {
+        'type': 'env',
+        'env': 'CODEX_MODEL_OPTIONS',
+        'models_cache_path': None,
+        'dtgpt_health': {
+            'type': 'dtgpt_health_error',
+            'url': health_url,
+            'error': 'OSError: unreachable after 5s',
+        },
+    }
+
+
 def test_model_catalog_default_starts_with_gpt56(monkeypatch, tmp_path):
     missing_cache = tmp_path / 'missing-models-cache.json'
 
@@ -812,6 +884,14 @@ def test_company_runners_disable_codex_account_login():
 
     assert 'export CODEX_REQUIRE_ACCOUNT_LOGIN=0' in shell_runner
     assert '$env:CODEX_REQUIRE_ACCOUNT_LOGIN = "0"' in powershell_runner
+    assert (
+        'CODEX_DTGPT_HEALTH_URL:-http://dtgpt.samsungds.net/llm/health'
+        in shell_runner
+    )
+    assert (
+        '$env:CODEX_DTGPT_HEALTH_URL = "https://cloud.dtgpt.samsungds.net/llm/health"'
+        in powershell_runner
+    )
 
 
 def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch):

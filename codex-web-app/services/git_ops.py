@@ -10,7 +10,12 @@ import threading
 import time
 from pathlib import Path
 
-from ..config import CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL, REPO_ROOT, WORKSPACE_DIR
+from ..config import (
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
+    REPO_ROOT,
+    WORKSPACE_DIR,
+)
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
@@ -1948,19 +1953,30 @@ def _parse_commit_message_generation_output(output_text):
     return subject, body
 
 
-def _execute_commit_message_prompt(prompt, model_override=None):
+def _execute_commit_message_prompt(
+        prompt,
+        model_override=None,
+        reasoning_override=None):
     from .codex_chat import execute_codex_prompt, get_settings
 
+    settings = get_settings()
     resolved_model = str(model_override or '').strip()
     if not resolved_model:
         resolved_model = str(
-            get_settings().get('git_commit_message_model')
+            settings.get('git_commit_message_model')
             or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        ).strip()
+    resolved_reasoning = str(reasoning_override or '').strip()
+    if not resolved_reasoning:
+        resolved_reasoning = str(
+            settings.get('git_commit_message_reasoning_effort')
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         ).strip()
 
     return execute_codex_prompt(
         prompt,
         model_override=resolved_model,
+        reasoning_override=resolved_reasoning,
         question_only=True,
         agent_backend='dtgpt',
         inherit_model_settings=False,
@@ -1977,16 +1993,25 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         }
     prompt = _build_commit_message_generation_prompt(diff_context)
     model_override = str(payload.get('model') or '').strip()
-    if not model_override:
+    reasoning_override = str(payload.get('reasoning_effort') or '').strip()
+    if not model_override or not reasoning_override:
         from .codex_chat import get_settings
 
-        model_override = str(
-            get_settings().get('git_commit_message_model')
-            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
-        ).strip()
+        settings = get_settings()
+        if not model_override:
+            model_override = str(
+                settings.get('git_commit_message_model')
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            ).strip()
+        if not reasoning_override:
+            reasoning_override = str(
+                settings.get('git_commit_message_reasoning_effort')
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+            ).strip()
     output_text, error_text, token_usage, timing = _execute_commit_message_prompt(
         prompt,
         model_override=model_override,
+        reasoning_override=reasoning_override,
     )
     if error_text:
         return None, {
@@ -2015,6 +2040,7 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         'generator_agent_backend': 'dtgpt',
         'generator_execution_policy': 'read_only_ephemeral',
         'generator_model': model_override or '',
+        'generator_reasoning_effort': reasoning_override or '',
         'generator_token_usage': token_usage,
         'generator_timing': timing,
         'generator_diff_truncated': bool(diff_context.get('diff_truncated')),

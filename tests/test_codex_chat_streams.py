@@ -2460,22 +2460,33 @@ def test_verification_mode_defaults_and_round_trips(tmp_path, monkeypatch):
     assert disabled['verification_mode'] == 'off'
 
 
-def test_git_commit_message_model_defaults_and_round_trips(tmp_path, monkeypatch):
+def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeypatch):
     settings_path = tmp_path / 'settings.json'
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
 
     assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4-mini'
+    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'medium'
 
-    updated = codex_chat.update_settings(git_commit_message_model='gpt-5.4')
+    updated = codex_chat.update_settings(
+        git_commit_message_model='gpt-5.4',
+        git_commit_message_reasoning_effort='high',
+    )
 
     assert updated['git_commit_message_model'] == 'gpt-5.4'
+    assert updated['git_commit_message_reasoning_effort'] == 'high'
     assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4'
+    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'high'
     stored = json.loads(settings_path.read_text(encoding='utf-8'))
     assert stored['git_commit_message_model'] == 'gpt-5.4'
+    assert stored['git_commit_message_reasoning_effort'] == 'high'
 
-    restored = codex_chat.update_settings(git_commit_message_model='')
+    restored = codex_chat.update_settings(
+        git_commit_message_model='',
+        git_commit_message_reasoning_effort='',
+    )
     assert restored['git_commit_message_model'] == 'gpt-5.4-mini'
+    assert restored['git_commit_message_reasoning_effort'] == 'medium'
 
 
 def test_service_tier_setting_round_trips(tmp_path, monkeypatch):

@@ -225,6 +225,7 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
         'repo_target': 'workspace',
         'files': ['tracked.txt'],
         'model': 'gpt-5-codex',
+        'reasoning_effort': 'high',
     })
 
     assert result['ok'] is True
@@ -238,6 +239,7 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
     assert result['generator_agent_backend'] == 'dtgpt'
     assert result['generator_execution_policy'] == 'read_only_ephemeral'
     assert result['generator_model'] == 'gpt-5-codex'
+    assert result['generator_reasoning_effort'] == 'high'
     assert 'diff --git a/tracked.txt b/tracked.txt' in captured['prompt']
     assert 'The subject must be written in English only' in captured['prompt']
     assert 'faithful Korean translations of the body_en items' in captured['prompt']
@@ -245,6 +247,7 @@ def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeyp
     assert captured['kwargs']['question_only'] is True
     assert captured['kwargs']['inherit_model_settings'] is False
     assert captured['kwargs']['model_override'] == 'gpt-5-codex'
+    assert captured['kwargs']['reasoning_override'] == 'high'
 
 
 def test_git_message_parser_formats_bilingual_body_and_rejects_non_english_subject():
@@ -293,12 +296,16 @@ def test_git_message_uses_persisted_default_model_when_request_omits_model(monke
     monkeypatch.setattr(
         codex_chat,
         'get_settings',
-        lambda: {'git_commit_message_model': 'gpt-5.4-mini'},
+        lambda: {
+            'git_commit_message_model': 'gpt-5.4-mini',
+            'git_commit_message_reasoning_effort': 'low',
+        },
     )
 
     git_ops._execute_commit_message_prompt('commit prompt')
 
     assert captured['kwargs']['model_override'] == 'gpt-5.4-mini'
+    assert captured['kwargs']['reasoning_override'] == 'low'
     assert captured['kwargs']['agent_backend'] == 'dtgpt'
     assert captured['kwargs']['inherit_model_settings'] is False
 

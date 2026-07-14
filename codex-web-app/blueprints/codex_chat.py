@@ -18,6 +18,7 @@ from ..config import (
     CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
     CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
     CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
     CODEX_SHOW_USAGE_LIMITS,
@@ -835,6 +836,7 @@ def codex_settings_update():
     agent_backend = payload.get('agent_backend')
     verification_mode = payload.get('verification_mode')
     git_commit_message_model = payload.get('git_commit_message_model')
+    git_commit_message_reasoning_effort = payload.get('git_commit_message_reasoning_effort')
     app_server_pilot_enabled = None
     if 'app_server_pilot_enabled' in payload:
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
@@ -899,6 +901,14 @@ def codex_settings_update():
         git_commit_message_model = (
             git_commit_message_model or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
         )
+    if git_commit_message_reasoning_effort is not None:
+        git_commit_message_reasoning_effort = str(git_commit_message_reasoning_effort).strip()
+        if len(git_commit_message_reasoning_effort) > CODEX_MAX_REASONING_CHARS:
+            return jsonify({'error': 'git_commit_message_reasoning_effort가 너무 깁니다.'}), 400
+        git_commit_message_reasoning_effort = (
+            git_commit_message_reasoning_effort
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+        )
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
@@ -909,6 +919,7 @@ def codex_settings_update():
         verification_mode=verification_mode,
         app_server_pilot_enabled=app_server_pilot_enabled,
         git_commit_message_model=git_commit_message_model,
+        git_commit_message_reasoning_effort=git_commit_message_reasoning_effort,
     )
     snapshot = record_usage_snapshot_if_due()
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None

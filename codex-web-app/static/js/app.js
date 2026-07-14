@@ -276,7 +276,9 @@ const GIT_DIFF_REQUEST_TIMEOUT_MS = 60000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
 const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';
+const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';
 const GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY = 'codex.gitCommitMessageModel';
+const GIT_COMMIT_MESSAGE_REASONING_STORAGE_KEY = 'codex.gitCommitMessageReasoningEffort';
 const MESSAGE_LOG_OVERLAY_MODE_PREVIEW = 'preview';
 const MESSAGE_LOG_OVERLAY_MODE_DETAIL = 'detail';
 const MESSAGE_LOG_OVERLAY_CLASS_PREVIEW = 'is-preview-mode';
@@ -511,6 +513,7 @@ let gitSyncOverlayPreviewKeyByTarget = {
 };
 let gitSyncOverlayFullscreen = false;
 let gitCommitMessageModel = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
+let gitCommitMessageReasoningEffort = GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT;
 let gitCommitMessageGenerationInFlight = false;
 let gitCommitMessageModelSaveInFlight = false;
 let gitFileRevertingPath = '';
@@ -2210,6 +2213,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitMessageModelClearBtn = document.getElementById('codex-git-message-model-clear');
     const gitMessageModelApplyBtn = document.getElementById('codex-git-message-model-apply');
     const gitMessageModelSelect = document.getElementById('codex-git-message-model-select');
+    const gitMessageReasoningSelect = document.getElementById('codex-git-message-reasoning-select');
     const messageLogOverlay = document.getElementById('codex-message-log-overlay');
     const messageLogOverlayCopy = document.getElementById('codex-message-log-overlay-copy');
     const messageLogOverlayClose = document.getElementById('codex-message-log-overlay-close');
@@ -2996,8 +3000,29 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         gitMessageModelSelect.addEventListener('change', () => {
             const elements = getGitCommitMessageModelOverlayElements();
+            renderGitCommitMessageReasoningOptions();
             if (elements?.status) {
-                elements.status.textContent = `선택한 모델: ${normalizeGitCommitMessageModelSetting(gitMessageModelSelect.value)}`;
+                elements.status.textContent = formatGitCommitMessageSelectionStatus(
+                    gitMessageModelSelect.value,
+                    elements.reasoningSelect?.value
+                );
+                elements.status.classList.remove('is-error');
+            }
+        });
+    }
+    if (gitMessageReasoningSelect) {
+        gitMessageReasoningSelect.addEventListener('keydown', event => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            void applyGitCommitMessageModelSelection();
+        });
+        gitMessageReasoningSelect.addEventListener('change', () => {
+            const elements = getGitCommitMessageModelOverlayElements();
+            if (elements?.status) {
+                elements.status.textContent = formatGitCommitMessageSelectionStatus(
+                    elements.select?.value,
+                    gitMessageReasoningSelect.value
+                );
                 elements.status.classList.remove('is-error');
             }
         });
@@ -8298,6 +8323,9 @@ async function loadSettings({ silent = true } = {}) {
             gitCommitMessageModel: normalizeGitCommitMessageModelSetting(
                 result?.settings?.git_commit_message_model
             ),
+            gitCommitMessageReasoningEffort: normalizeGitCommitMessageReasoningSetting(
+                result?.settings?.git_commit_message_reasoning_effort
+            ),
             securityPolicy: normalizeSecurityPolicy(result?.security_policy),
             structuredReportPresets,
             usage: result?.usage || null,
@@ -8921,6 +8949,9 @@ async function updateSettings() {
         state.settings.verificationMode = normalizeVerificationMode(result?.settings?.verification_mode);
         state.settings.gitCommitMessageModel = normalizeGitCommitMessageModelSetting(
             result?.settings?.git_commit_message_model
+        );
+        state.settings.gitCommitMessageReasoningEffort = normalizeGitCommitMessageReasoningSetting(
+            result?.settings?.git_commit_message_reasoning_effort
         );
         state.settings.serviceTierOptions = serviceTierOptions.length > 0
             ? serviceTierOptions
@@ -11549,22 +11580,38 @@ function normalizeGitCommitMessageModelSetting(model) {
     return String(model || '').trim() || GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
 }
 
+function normalizeGitCommitMessageReasoningSetting(reasoningEffort) {
+    return String(reasoningEffort || '').trim() || GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT;
+}
+
 function loadGitCommitMessageModelSetting() {
     try {
-        const value = window.localStorage?.getItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY);
-        gitCommitMessageModel = normalizeGitCommitMessageModelSetting(value);
+        gitCommitMessageModel = normalizeGitCommitMessageModelSetting(
+            window.localStorage?.getItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY)
+        );
+        gitCommitMessageReasoningEffort = normalizeGitCommitMessageReasoningSetting(
+            window.localStorage?.getItem(GIT_COMMIT_MESSAGE_REASONING_STORAGE_KEY)
+        );
     } catch (error) {
         gitCommitMessageModel = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
+        gitCommitMessageReasoningEffort = GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT;
     }
     state.settings.gitCommitMessageModel = gitCommitMessageModel;
+    state.settings.gitCommitMessageReasoningEffort = gitCommitMessageReasoningEffort;
     return gitCommitMessageModel;
 }
 
-function applyGitCommitMessageModelSetting(model) {
+function applyGitCommitMessageGenerationSettings(model, reasoningEffort) {
     gitCommitMessageModel = normalizeGitCommitMessageModelSetting(model);
+    gitCommitMessageReasoningEffort = normalizeGitCommitMessageReasoningSetting(reasoningEffort);
     state.settings.gitCommitMessageModel = gitCommitMessageModel;
+    state.settings.gitCommitMessageReasoningEffort = gitCommitMessageReasoningEffort;
     try {
         window.localStorage?.setItem(GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY, gitCommitMessageModel);
+        window.localStorage?.setItem(
+            GIT_COMMIT_MESSAGE_REASONING_STORAGE_KEY,
+            gitCommitMessageReasoningEffort
+        );
     } catch (error) {
         // localStorage is only a startup cache; the server setting remains authoritative.
     }
@@ -11574,7 +11621,10 @@ function applyGitCommitMessageModelSetting(model) {
 
 function applyGitCommitMessageModelFromSettings(settings) {
     if (!settings || typeof settings !== 'object') return gitCommitMessageModel;
-    return applyGitCommitMessageModelSetting(settings.git_commit_message_model);
+    return applyGitCommitMessageGenerationSettings(
+        settings.git_commit_message_model,
+        settings.git_commit_message_reasoning_effort
+    );
 }
 
 function getGitCommitMessageModelOptions() {
@@ -11587,13 +11637,47 @@ function getGitCommitMessageModelOptions() {
     return normalizeOptionList(datasetOptions);
 }
 
+function getGitCommitMessageReasoningOptions(model = gitCommitMessageModel) {
+    const catalogs = state.settings?.modelCatalogsByBackend || {};
+    const codexCatalog = normalizeModelCatalog(
+        catalogs.dtgpt || CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND_CONFIG.dtgpt || []
+    );
+    const selectedModel = normalizeGitCommitMessageModelSetting(model);
+    const entry = codexCatalog.find(item => item.slug === selectedModel) || null;
+    const options = entry
+        ? normalizeOptionList(entry.reasoningOptions)
+        : collectCatalogReasoningOptions(codexCatalog);
+    return options.length > 0 ? options : [GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT];
+}
+
+function getCompatibleGitCommitMessageReasoning(reasoningEffort, model = gitCommitMessageModel) {
+    const selectedModel = normalizeGitCommitMessageModelSetting(model);
+    const selectedReasoning = normalizeGitCommitMessageReasoningSetting(reasoningEffort);
+    const options = getGitCommitMessageReasoningOptions(selectedModel);
+    if (options.includes(selectedReasoning)) return selectedReasoning;
+    if (options.includes(GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT)) {
+        return GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT;
+    }
+    const catalogs = state.settings?.modelCatalogsByBackend || {};
+    const codexCatalog = normalizeModelCatalog(
+        catalogs.dtgpt || CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND_CONFIG.dtgpt || []
+    );
+    const entry = codexCatalog.find(item => item.slug === selectedModel) || null;
+    return entry?.defaultReasoningEffort || options[0] || GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT;
+}
+
 function formatGitCommitMessageModelStatus() {
-    return `커밋 메시지 생성 모델: ${normalizeGitCommitMessageModelSetting(gitCommitMessageModel)}`;
+    return `커밋 메시지 생성: ${normalizeGitCommitMessageModelSetting(gitCommitMessageModel)} · ${normalizeGitCommitMessageReasoningSetting(gitCommitMessageReasoningEffort)}`;
+}
+
+function formatGitCommitMessageSelectionStatus(model, reasoningEffort) {
+    return `선택: ${normalizeGitCommitMessageModelSetting(model)} · Reasoning ${normalizeGitCommitMessageReasoningSetting(reasoningEffort)}`;
 }
 
 function syncGitCommitMessageModelLabels() {
     const model = normalizeGitCommitMessageModelSetting(gitCommitMessageModel);
-    const label = `모델: ${model}`;
+    const reasoningEffort = normalizeGitCommitMessageReasoningSetting(gitCommitMessageReasoningEffort);
+    const label = `모델: ${model} · Effort: ${reasoningEffort}`;
     [
         document.getElementById('codex-branch-overlay-message-model'),
         document.getElementById('codex-sync-overlay-message-model')
@@ -11605,7 +11689,7 @@ function syncGitCommitMessageModelLabels() {
     });
     const status = document.getElementById('codex-git-message-model-status');
     if (status) {
-        status.textContent = `저장된 모델: ${model}`;
+        status.textContent = `저장됨: ${model} · Reasoning ${reasoningEffort}`;
         status.classList.remove('is-error');
     }
 }
@@ -11616,6 +11700,7 @@ function getGitCommitMessageModelOverlayElements() {
     return {
         overlay,
         select: document.getElementById('codex-git-message-model-select'),
+        reasoningSelect: document.getElementById('codex-git-message-reasoning-select'),
         status: document.getElementById('codex-git-message-model-status'),
         closeBtn: document.getElementById('codex-git-message-model-close'),
         clearBtn: document.getElementById('codex-git-message-model-clear'),
@@ -11650,7 +11735,32 @@ function renderGitCommitMessageModelOptions() {
         select.appendChild(currentOption);
     }
     select.value = selectedModel;
+    renderGitCommitMessageReasoningOptions(gitCommitMessageReasoningEffort);
     syncGitCommitMessageModelLabels();
+}
+
+function renderGitCommitMessageReasoningOptions(preferredReasoning = null) {
+    const elements = getGitCommitMessageModelOverlayElements();
+    if (!elements?.reasoningSelect) return;
+    const selectedModel = normalizeGitCommitMessageModelSetting(
+        elements.select?.value || gitCommitMessageModel
+    );
+    const selectedReasoning = getCompatibleGitCommitMessageReasoning(
+        preferredReasoning === null
+            ? (elements.reasoningSelect.value || gitCommitMessageReasoningEffort)
+            : preferredReasoning,
+        selectedModel
+    );
+    elements.reasoningSelect.innerHTML = '';
+    getGitCommitMessageReasoningOptions(selectedModel).forEach(reasoningEffort => {
+        const option = document.createElement('option');
+        option.value = reasoningEffort;
+        option.textContent = reasoningEffort === GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+            ? `${reasoningEffort} (기본값)`
+            : reasoningEffort;
+        elements.reasoningSelect.appendChild(option);
+    });
+    elements.reasoningSelect.value = selectedReasoning;
 }
 
 function isGitCommitMessageModelOverlayOpen() {
@@ -11689,8 +11799,12 @@ function closeGitCommitMessageModelOverlay() {
 
 async function applyGitCommitMessageModelSelection() {
     const elements = getGitCommitMessageModelOverlayElements();
-    if (!elements?.select || gitCommitMessageModelSaveInFlight) return;
+    if (!elements?.select || !elements.reasoningSelect || gitCommitMessageModelSaveInFlight) return;
     const selectedModel = normalizeGitCommitMessageModelSetting(elements.select.value);
+    const selectedReasoning = getCompatibleGitCommitMessageReasoning(
+        elements.reasoningSelect.value,
+        selectedModel
+    );
     gitCommitMessageModelSaveInFlight = true;
     if (elements.applyBtn) elements.applyBtn.disabled = true;
     if (elements.clearBtn) elements.clearBtn.disabled = true;
@@ -11702,13 +11816,17 @@ async function applyGitCommitMessageModelSelection() {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ git_commit_message_model: selectedModel })
+            body: JSON.stringify({
+                git_commit_message_model: selectedModel,
+                git_commit_message_reasoning_effort: selectedReasoning
+            })
         });
         applyGitCommitMessageModelFromSettings(result?.settings || {
-            git_commit_message_model: selectedModel
+            git_commit_message_model: selectedModel,
+            git_commit_message_reasoning_effort: selectedReasoning
         });
         closeGitCommitMessageModelOverlay();
-        showToast(`커밋 메시지 모델 저장: ${gitCommitMessageModel}`, {
+        showToast(`커밋 메시지 AI 설정 저장: ${gitCommitMessageModel} · ${gitCommitMessageReasoningEffort}`, {
             tone: 'success',
             durationMs: 2400
         });
@@ -11726,10 +11844,11 @@ async function applyGitCommitMessageModelSelection() {
 
 function clearGitCommitMessageModelSelection() {
     const elements = getGitCommitMessageModelOverlayElements();
-    if (!elements?.select) return;
+    if (!elements?.select || !elements.reasoningSelect) return;
     elements.select.value = GIT_COMMIT_MESSAGE_DEFAULT_MODEL;
+    renderGitCommitMessageReasoningOptions(GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT);
     if (elements.status) {
-        elements.status.textContent = `기본값 선택: ${GIT_COMMIT_MESSAGE_DEFAULT_MODEL}`;
+        elements.status.textContent = `기본값 선택: ${GIT_COMMIT_MESSAGE_DEFAULT_MODEL} · Reasoning ${GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT}`;
         elements.status.classList.remove('is-error');
     }
 }
@@ -12424,6 +12543,9 @@ function normalizeGitCommitMessageGenerationResult(result, fallbackCount = 0) {
         ...normalized,
         full,
         model: typeof result?.generator_model === 'string' ? result.generator_model.trim() : '',
+        reasoningEffort: typeof result?.generator_reasoning_effort === 'string'
+            ? result.generator_reasoning_effort.trim()
+            : '',
         diffTruncated: Boolean(result?.generator_diff_truncated),
         omittedFilesCount: Number.isFinite(Number(result?.generator_omitted_files_count))
             ? Number(result.generator_omitted_files_count)
@@ -12480,13 +12602,15 @@ async function handleGitCommitMessageGenerate(kind, button) {
             body: JSON.stringify({
                 repo_target: context.repoTarget,
                 files: paths,
-                model: gitCommitMessageModel || ''
+                model: gitCommitMessageModel || '',
+                reasoning_effort: gitCommitMessageReasoningEffort || ''
             })
         });
         const generated = normalizeGitCommitMessageGenerationResult(result, paths.length);
         setGitCommitMessageFields(elements, generated.subject, generated.body);
         const notes = [];
         if (generated.model) notes.push(generated.model);
+        if (generated.reasoningEffort) notes.push(`Reasoning ${generated.reasoningEffort}`);
         if (generated.diffTruncated) notes.push('diff 일부 생략');
         if (generated.omittedFilesCount > 0) notes.push(`파일 ${generated.omittedFilesCount}개 생략`);
         setGitCommitMessageStatus(

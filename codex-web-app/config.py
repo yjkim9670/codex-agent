@@ -373,6 +373,9 @@ def normalize_codex_model_name(model_name):
 CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL = normalize_codex_model_name(
     os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL') or 'gpt-5.4-mini'
 )
+CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = str(
+    os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT') or 'medium'
+).strip() or 'medium'
 
 
 def _normalize_model_options(options):

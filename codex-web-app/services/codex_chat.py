@@ -35,6 +35,7 @@ from ..config import (
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
+    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
     CODEX_CLI_PROFILE,
@@ -2334,6 +2335,10 @@ def _read_workspace_settings():
         _normalize_model_setting(data.get('git_commit_message_model'))
         or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
     )
+    git_commit_message_reasoning_effort = (
+        str(data.get('git_commit_message_reasoning_effort') or '').strip()
+        or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+    )
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
@@ -2344,6 +2349,7 @@ def _read_workspace_settings():
         'verification_mode': verification_mode,
         'app_server_pilot_enabled': app_server_pilot_enabled,
         'git_commit_message_model': git_commit_message_model,
+        'git_commit_message_reasoning_effort': git_commit_message_reasoning_effort,
     }
 
 
@@ -2362,6 +2368,10 @@ def _write_workspace_settings(settings):
         'git_commit_message_model': (
             _normalize_model_setting(settings.get('git_commit_message_model'))
             or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        ),
+        'git_commit_message_reasoning_effort': (
+            str(settings.get('git_commit_message_reasoning_effort') or '').strip()
+            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         ),
     }
     CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2812,6 +2822,7 @@ def get_settings():
             or workspace_settings.get('verification_mode')
             or workspace_settings.get('app_server_pilot_enabled')
             or workspace_settings.get('git_commit_message_model')
+            or workspace_settings.get('git_commit_message_reasoning_effort')
         ):
             _write_workspace_settings(workspace_settings)
             return _merge_runtime_cli_settings(workspace_settings)
@@ -2824,6 +2835,7 @@ def get_settings():
             fallback['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             fallback['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            fallback['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             _write_workspace_settings(fallback)
             return _merge_runtime_cli_settings(_read_workspace_settings())
     return _merge_runtime_cli_settings({
@@ -2836,6 +2848,7 @@ def get_settings():
         'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
         'git_commit_message_model': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
+        'git_commit_message_reasoning_effort': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     })
 
 
@@ -2848,7 +2861,8 @@ def update_settings(
         agent_backend=None,
         verification_mode=None,
         app_server_pilot_enabled=None,
-        git_commit_message_model=None):
+        git_commit_message_model=None,
+        git_commit_message_reasoning_effort=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
         if not current and not CODEX_SETTINGS_PATH.exists():
@@ -2860,6 +2874,7 @@ def update_settings(
             current['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
             current['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            current['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
@@ -2874,6 +2889,10 @@ def update_settings(
             'git_commit_message_model': (
                 _normalize_model_setting(current.get('git_commit_message_model'))
                 or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            ),
+            'git_commit_message_reasoning_effort': (
+                str(current.get('git_commit_message_reasoning_effort') or '').strip()
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             ),
         }
         if model is not None:
@@ -2898,6 +2917,11 @@ def update_settings(
             next_settings['git_commit_message_model'] = (
                 _normalize_model_setting(git_commit_message_model)
                 or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            )
+        if git_commit_message_reasoning_effort is not None:
+            next_settings['git_commit_message_reasoning_effort'] = (
+                str(git_commit_message_reasoning_effort).strip()
+                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             )
         _write_workspace_settings(next_settings)
         return _merge_runtime_cli_settings(next_settings)

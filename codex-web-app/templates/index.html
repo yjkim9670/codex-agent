@@ -1170,7 +1170,7 @@
                         <label for="codex-branch-overlay-commit-message">Commit message</label>
                         <div class="git-message-tool-actions">
                             <button class="btn secondary git-message-generate" type="button" id="codex-branch-overlay-generate-message">AI로 상세 생성</button>
-                            <button class="btn ghost git-message-model" type="button" id="codex-branch-overlay-message-model">모델 설정</button>
+                            <button class="btn ghost git-message-model" type="button" id="codex-branch-overlay-message-model">AI 설정</button>
                         </div>
                     </div>
                     <input
@@ -1248,7 +1248,7 @@
                         <label for="codex-sync-overlay-commit-message">Commit message</label>
                         <div class="git-message-tool-actions">
                             <button class="btn secondary git-message-generate" type="button" id="codex-sync-overlay-generate-message">AI로 상세 생성</button>
-                            <button class="btn ghost git-message-model" type="button" id="codex-sync-overlay-message-model">모델 설정</button>
+                            <button class="btn ghost git-message-model" type="button" id="codex-sync-overlay-message-model">AI 설정</button>
                         </div>
                     </div>
                     <input
@@ -1312,8 +1312,8 @@
         <div class="git-message-model-card" role="dialog" aria-modal="true" aria-labelledby="codex-git-message-model-title">
             <div class="git-message-model-header">
                 <div class="git-message-model-heading">
-                    <div class="git-message-model-title" id="codex-git-message-model-title">커밋 메시지 모델 설정</div>
-                    <div class="git-message-model-subtitle" id="codex-git-message-model-subtitle">Codex CLI 모델</div>
+                    <div class="git-message-model-title" id="codex-git-message-model-title">커밋 메시지 AI 설정</div>
+                    <div class="git-message-model-subtitle" id="codex-git-message-model-subtitle">Codex CLI 모델과 reasoning effort</div>
                 </div>
                 <button class="btn ghost icon-only git-message-model-close" type="button" id="codex-git-message-model-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
@@ -1322,7 +1322,11 @@
             <div class="git-message-model-body">
                 <label for="codex-git-message-model-select">Model</label>
                 <select id="codex-git-message-model-select" class="model-select" aria-label="커밋 메시지 생성 모델"></select>
-                <div class="git-message-model-status" id="codex-git-message-model-status">저장된 모델: gpt-5.4-mini</div>
+                <label for="codex-git-message-reasoning-select">Reasoning effort</label>
+                <select id="codex-git-message-reasoning-select" class="model-select" aria-label="커밋 메시지 생성 reasoning effort">
+                    <option value="medium">medium (기본값)</option>
+                </select>
+                <div class="git-message-model-status" id="codex-git-message-model-status">저장됨: gpt-5.4-mini · Reasoning medium</div>
             </div>
             <div class="git-message-model-footer">
                 <button class="btn ghost" type="button" id="codex-git-message-model-clear">기본값 선택</button>
@@ -1533,6 +1537,6 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=196"></script>
+    <script src="/static/js/app.js?v=197"></script>
 </body>
 </html>

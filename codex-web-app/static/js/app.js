@@ -292,7 +292,9 @@ const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
 const FILE_BROWSER_DOWNLOAD_TIMEOUT_MS = 300000;
 const FILE_BROWSER_MAIL_TIMEOUT_MS = 180000;
-const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 120000;
+const FILE_BROWSER_UPLOAD_TIMEOUT_MS = 600000;
+const FILE_BROWSER_MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;
 const FILE_BROWSER_READ_FILE_ENDPOINT = getPublicPreviewConfigValue('readEndpoint', '/api/codex/files/read');
 const FILE_BROWSER_RAW_FILE_ENDPOINT = getPublicPreviewConfigValue('rawEndpoint', '/api/codex/files/raw');
 const FILE_BROWSER_CRYPTO_SESSION_ENDPOINT = '/api/codex/files/crypto-session';
@@ -18667,7 +18669,89 @@ async function createFilePanelFile(root, path, content = '') {
     });
 }
 
-async function uploadFilePanelFiles(root, path, fileList) {
+function uploadJsonWithProgress(url, formData, { timeoutMs = 0, onUploadProgress = null } = {}) {
+    return new Promise((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        let settled = false;
+        const finish = callback => value => {
+            if (settled) return;
+            settled = true;
+            callback(value);
+        };
+        const resolveOnce = finish(resolve);
+        const rejectOnce = finish(reject);
+
+        request.open('POST', url, true);
+        const normalizedTimeoutMs = Number(timeoutMs);
+        if (Number.isFinite(normalizedTimeoutMs) && normalizedTimeoutMs > 0) {
+            request.timeout = normalizedTimeoutMs;
+        }
+
+        if (typeof onUploadProgress === 'function') {
+            request.upload.addEventListener('progress', event => {
+                const loadedBytes = Math.max(0, Number(event.loaded) || 0);
+                const totalBytes = event.lengthComputable
+                    ? Math.max(loadedBytes, Number(event.total) || 0)
+                    : 0;
+                onUploadProgress({
+                    stage: 'uploading',
+                    loadedBytes,
+                    totalBytes,
+                    lengthComputable: Boolean(event.lengthComputable),
+                    percent: totalBytes > 0 ? (loadedBytes / totalBytes) * 100 : null
+                });
+            });
+            request.upload.addEventListener('load', () => {
+                onUploadProgress({ stage: 'processing', percent: 100 });
+            });
+        }
+
+        request.addEventListener('load', () => {
+            const contentType = request.getResponseHeader('content-type') || '';
+            const responseText = String(request.responseText || '');
+            let payload = responseText;
+            if (contentType.includes('application/json')) {
+                try {
+                    payload = responseText ? JSON.parse(responseText) : {};
+                } catch (error) {
+                    rejectOnce(new Error('업로드 응답을 해석하지 못했습니다.'));
+                    return;
+                }
+            }
+            if (request.status < 200 || request.status >= 300) {
+                const error = new Error(
+                    (payload && typeof payload === 'object' && payload.error)
+                    || `Request failed (${request.status})`
+                );
+                error.status = request.status;
+                error.payload = payload;
+                rejectOnce(error);
+                return;
+            }
+            if (!contentType.includes('application/json')) {
+                rejectOnce(new Error(responseText || 'Unexpected response format.'));
+                return;
+            }
+            resolveOnce(payload);
+        });
+        request.addEventListener('error', () => {
+            rejectOnce(new Error('네트워크 오류로 파일을 업로드하지 못했습니다.'));
+        });
+        request.addEventListener('abort', () => {
+            rejectOnce(new Error('파일 업로드가 취소되었습니다.'));
+        });
+        request.addEventListener('timeout', () => {
+            const seconds = Math.max(1, Math.round(normalizedTimeoutMs / 1000));
+            const error = new Error(`업로드 시간이 초과되었습니다. (${seconds}초)`);
+            error.isTimeout = true;
+            error.timeoutMs = normalizedTimeoutMs;
+            rejectOnce(error);
+        });
+        request.send(formData);
+    });
+}
+
+async function uploadFilePanelFiles(root, path, fileList, { onUploadProgress = null } = {}) {
     const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) {
         return { uploaded: [] };
@@ -18676,11 +18760,83 @@ async function uploadFilePanelFiles(root, path, fileList) {
     formData.append('root', normalizeFileBrowserRoot(root));
     formData.append('path', normalizeFileBrowserRelativePath(path));
     files.forEach(file => formData.append('files', file));
-    return fetchJson('/api/codex/files/upload', {
-        method: 'POST',
+    return uploadJsonWithProgress('/api/codex/files/upload', formData, {
         timeoutMs: FILE_BROWSER_UPLOAD_TIMEOUT_MS,
-        body: formData
+        onUploadProgress
     });
+}
+
+function getFileUploadProgressElements() {
+    return {
+        overlay: document.getElementById('codex-file-upload-progress'),
+        card: document.getElementById('codex-file-upload-progress-card'),
+        summary: document.getElementById('codex-file-upload-progress-summary'),
+        status: document.getElementById('codex-file-upload-progress-status'),
+        percent: document.getElementById('codex-file-upload-progress-percent'),
+        track: document.getElementById('codex-file-upload-progress-track'),
+        fill: document.getElementById('codex-file-upload-progress-fill'),
+        detail: document.getElementById('codex-file-upload-progress-detail')
+    };
+}
+
+function openFileUploadProgress(files) {
+    const elements = getFileUploadProgressElements();
+    if (!elements.overlay) return;
+    const normalizedFiles = Array.from(files || []).filter(Boolean);
+    const totalBytes = normalizedFiles.reduce(
+        (sum, file) => sum + Math.max(0, Number(file?.size) || 0),
+        0
+    );
+    elements.overlay._previousFocus = document.activeElement;
+    elements.summary.textContent = `파일 ${normalizedFiles.length}개 · 총 ${formatFileBrowserSize(totalBytes)}`;
+    elements.status.textContent = '업로드 준비 중...';
+    elements.percent.textContent = '0%';
+    elements.detail.textContent = `0 bytes / ${formatFileBrowserSize(totalBytes)}`;
+    elements.track?.setAttribute('aria-valuenow', '0');
+    if (elements.fill) elements.fill.style.width = '0%';
+    elements.overlay.classList.remove('is-processing');
+    elements.overlay.classList.add('is-visible');
+    elements.overlay.setAttribute('aria-hidden', 'false');
+    elements.card?.focus({ preventScroll: true });
+}
+
+function updateFileUploadProgress(progress, selectedTotalBytes = 0) {
+    const elements = getFileUploadProgressElements();
+    if (!elements.overlay?.classList.contains('is-visible')) return;
+    const stage = String(progress?.stage || 'uploading');
+    const computedPercent = Number(progress?.percent);
+    const percent = Number.isFinite(computedPercent)
+        ? Math.max(0, Math.min(100, computedPercent))
+        : 0;
+    const loadedBytes = Math.max(0, Number(progress?.loadedBytes) || 0);
+    const eventTotalBytes = Math.max(0, Number(progress?.totalBytes) || 0);
+    const displayTotalBytes = eventTotalBytes || Math.max(0, Number(selectedTotalBytes) || 0);
+    const displayLoadedBytes = eventTotalBytes > 0
+        ? Math.min(loadedBytes, displayTotalBytes)
+        : Math.round(displayTotalBytes * (percent / 100));
+
+    elements.overlay.classList.toggle('is-processing', stage === 'processing');
+    elements.status.textContent = stage === 'processing'
+        ? '전송 완료 · 서버에서 파일 처리 중...'
+        : '파일 전송 중...';
+    elements.percent.textContent = `${Math.round(percent)}%`;
+    elements.track?.setAttribute('aria-valuenow', String(Math.round(percent)));
+    if (elements.fill) elements.fill.style.width = `${percent}%`;
+    elements.detail.textContent = stage === 'processing'
+        ? `${formatFileBrowserSize(displayTotalBytes)} 전송 완료`
+        : `${formatFileBrowserSize(displayLoadedBytes)} / ${formatFileBrowserSize(displayTotalBytes)}`;
+}
+
+function closeFileUploadProgress() {
+    const elements = getFileUploadProgressElements();
+    if (!elements.overlay) return;
+    elements.overlay.classList.remove('is-visible', 'is-processing');
+    elements.overlay.setAttribute('aria-hidden', 'true');
+    const previousFocus = elements.overlay._previousFocus;
+    elements.overlay._previousFocus = null;
+    if (previousFocus && document.contains(previousFocus) && typeof previousFocus.focus === 'function') {
+        previousFocus.focus({ preventScroll: true });
+    }
 }
 
 async function fetchFilePanelDownload(root, paths, { onDownloadProgress = null } = {}) {
@@ -18874,12 +19030,35 @@ async function uploadFilesToFilePanel(variant, fileList) {
         return false;
     }
 
+    const oversizedFile = files.find(file => Number(file?.size) > FILE_BROWSER_MAX_UPLOAD_BYTES);
+    if (oversizedFile) {
+        showToast(
+            `업로드 파일 크기 제한(${formatFileBrowserSize(FILE_BROWSER_MAX_UPLOAD_BYTES)})을 초과했습니다: ${oversizedFile.name}`,
+            { tone: 'error', durationMs: 4200 }
+        );
+        return false;
+    }
+    const selectedTotalBytes = files.reduce(
+        (sum, file) => sum + Math.max(0, Number(file?.size) || 0),
+        0
+    );
+    if (selectedTotalBytes > FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES) {
+        showToast(
+            `전체 업로드 크기 제한(${formatFileBrowserSize(FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES)})을 초과했습니다.`,
+            { tone: 'error', durationMs: 4200 }
+        );
+        return false;
+    }
+
     const root = getFilePanelCurrentRoot(normalizedVariant);
     const currentPath = getFilePanelCurrentPath(normalizedVariant);
     const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
     setFilePanelBulkActionInFlight(normalizedVariant, true);
+    openFileUploadProgress(files);
     try {
-        const result = await uploadFilePanelFiles(root, currentPath, files);
+        const result = await uploadFilePanelFiles(root, currentPath, files, {
+            onUploadProgress: progress => updateFileUploadProgress(progress, selectedTotalBytes)
+        });
         const uploaded = Array.isArray(result?.uploaded) ? result.uploaded : [];
         const uploadedPaths = uploaded
             .map(item => normalizeFileBrowserRelativePath(item?.path || ''))
@@ -18907,6 +19086,7 @@ async function uploadFilesToFilePanel(variant, fileList) {
         });
         return false;
     } finally {
+        closeFileUploadProgress();
         setFilePanelBulkActionInFlight(normalizedVariant, false);
     }
 }

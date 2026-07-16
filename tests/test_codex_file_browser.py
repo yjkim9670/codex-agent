@@ -929,6 +929,36 @@ def test_upload_route_rejects_existing_file(browser_test_client, isolated_browse
     assert (server_root / 'docs' / 'alpha.txt').read_text(encoding='utf-8') == 'existing'
 
 
+def test_file_upload_limits_are_256mb_per_file_and_512mb_total():
+    assert file_browser._MAX_FILE_UPLOAD_BYTES == 256 * 1024 * 1024
+    assert file_browser._MAX_MULTI_UPLOAD_TOTAL_BYTES == 512 * 1024 * 1024
+
+
+def test_upload_route_reports_dynamic_file_size_limit(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs').mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(file_browser, '_MAX_FILE_UPLOAD_BYTES', 4)
+    monkeypatch.setattr(file_browser, '_MAX_MULTI_UPLOAD_TOTAL_BYTES', 8)
+
+    response = browser_test_client.post(
+        '/api/codex/files/upload',
+        data={
+            'root': 'server',
+            'path': 'docs',
+            'files': (io.BytesIO(b'12345'), 'large.bin'),
+        },
+        content_type='multipart/form-data',
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()['error'] == '업로드 파일 크기 제한(4 bytes)을 초과했습니다: large.bin'
+    assert not (server_root / 'docs' / 'large.bin').exists()
+
+
 def test_delete_directory_route_removes_folder(browser_test_client, isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     target = server_root / 'docs' / 'remove-me'
@@ -1380,8 +1410,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=198' in template
-    assert '/static/css/app.css?v=191' in template
+    assert '/static/js/app.js?v=199' in template
+    assert '/static/css/app.css?v=192' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1403,8 +1433,26 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=191' in template
-    assert '/static/js/app.js?v=198' in template
+    assert '/static/css/app.css?v=192' in template
+    assert '/static/js/app.js?v=199' in template
+
+
+def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'id="codex-file-upload-progress"' in template
+    assert 'role="progressbar"' in template
+    assert 'function uploadJsonWithProgress(' in app_js
+    assert "request.upload.addEventListener('progress'" in app_js
+    assert 'onUploadProgress: progress => updateFileUploadProgress(progress, selectedTotalBytes)' in app_js
+    assert 'const FILE_BROWSER_MAX_UPLOAD_BYTES = 256 * 1024 * 1024;' in app_js
+    assert 'const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;' in app_js
+    assert '.file-upload-progress-overlay.is-visible' in app_css
+    assert '.file-upload-progress-fill' in app_css
+    assert '/static/css/app.css?v=192' in template
+    assert '/static/js/app.js?v=199' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1443,7 +1491,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=198' in template
+    assert '/static/js/app.js?v=199' in template
 
 
 def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overlays():

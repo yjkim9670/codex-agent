@@ -4040,6 +4040,118 @@ body.is-mermaid-diagram-viewer-open {
     overflow: hidden;
 }
 
+.file-upload-progress-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 2570;
+}
+
+.file-upload-progress-overlay.is-visible {
+    display: flex;
+}
+
+.file-upload-progress-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.48);
+    backdrop-filter: blur(1.5px);
+}
+
+.file-upload-progress-card {
+    position: relative;
+    width: min(460px, calc(100vw - 40px));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    overflow: hidden;
+}
+
+.file-upload-progress-card:focus {
+    outline: none;
+}
+
+.file-upload-progress-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.file-upload-progress-title {
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.file-upload-progress-summary,
+.file-upload-progress-detail {
+    color: var(--text-tertiary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.file-upload-progress-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px 20px 20px;
+}
+
+.file-upload-progress-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.file-upload-progress-status {
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.file-upload-progress-percent {
+    flex: 0 0 auto;
+    color: var(--accent);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+}
+
+.file-upload-progress-track {
+    position: relative;
+    height: 10px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-muted);
+    box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.file-upload-progress-fill {
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, var(--accent), var(--accent-dark));
+    transition: width 0.12s ease-out;
+}
+
+.file-upload-progress-overlay.is-processing .file-upload-progress-fill {
+    animation: file-upload-progress-pulse 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes file-upload-progress-pulse {
+    from { opacity: 0.62; }
+    to { opacity: 1; }
+}
+
 .mail-compose-header {
     display: flex;
     align-items: flex-start;

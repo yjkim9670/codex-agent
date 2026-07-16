@@ -31,8 +31,8 @@ _MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES)
-_MAX_FILE_UPLOAD_BYTES = 64 * 1024 * 1024
-_MAX_MULTI_UPLOAD_TOTAL_BYTES = 128 * 1024 * 1024
+_MAX_FILE_UPLOAD_BYTES = 256 * 1024 * 1024
+_MAX_MULTI_UPLOAD_TOTAL_BYTES = 512 * 1024 * 1024
 _DELETE_QUARANTINE_PREFIX = '.codex-delete-'
 
 _LANGUAGE_BY_SUFFIX = {
@@ -1223,13 +1223,15 @@ def upload_files(root_key=None, relative_path='', file_storages=None):
                         total_size += len(chunk)
                         if bytes_written > _MAX_FILE_UPLOAD_BYTES:
                             raise FileBrowserError(
-                                f'업로드 파일 크기 제한(64MB)을 초과했습니다: {item["filename"]}',
+                                f'업로드 파일 크기 제한({_format_byte_limit(_MAX_FILE_UPLOAD_BYTES)})을 '
+                                f'초과했습니다: {item["filename"]}',
                                 error_code='file_too_large',
                                 status_code=413,
                             )
                         if total_size > _MAX_MULTI_UPLOAD_TOTAL_BYTES:
                             raise FileBrowserError(
-                                '전체 업로드 크기 제한(128MB)을 초과했습니다.',
+                                f'전체 업로드 크기 제한'
+                                f'({_format_byte_limit(_MAX_MULTI_UPLOAD_TOTAL_BYTES)})을 초과했습니다.',
                                 error_code='file_too_large',
                                 status_code=413,
                             )

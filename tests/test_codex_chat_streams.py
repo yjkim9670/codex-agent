@@ -699,6 +699,51 @@ def test_extract_limits_preserves_legacy_primary_secondary_order_without_windows
     assert limits['weekly']['used_percent'] == 9
 
 
+def test_usage_summary_reads_newest_limits_from_isolated_runtime_home(tmp_path, monkeypatch):
+    auth_home = tmp_path / 'auth-home'
+    queued_home = tmp_path / 'queued-home'
+    app_server_home = tmp_path / 'app-server-home'
+    token_usage_path = tmp_path / 'token-usage.json'
+    account_token_usage_path = tmp_path / 'account-token-usage.json'
+
+    def write_limit(home, timestamp, used_percent):
+        session_path = home / 'sessions' / '2026' / '07' / '21' / 'rollout.jsonl'
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        session_path.write_text(json.dumps({
+            'timestamp': timestamp,
+            'payload': {
+                'rate_limits': {
+                    'limit_id': 'codex',
+                    'primary': {
+                        'used_percent': used_percent,
+                        'window_minutes': 10080,
+                        'resets_at': 1784989130,
+                    },
+                },
+            },
+        }) + '\n', encoding='utf-8')
+
+    write_limit(auth_home, '2026-07-20T14:57:12.641Z', 11)
+    write_limit(queued_home, '2026-07-20T16:25:22.066Z', 28)
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda account_id=None: {
+        'account': {'id': 'default', 'label': 'Default account'},
+        'codex_home': auth_home,
+        'queued_codex_home': queued_home,
+        'app_server_codex_home': app_server_home,
+        'token_usage_path': token_usage_path,
+        'account_token_usage_path': account_token_usage_path,
+    })
+    monkeypatch.setattr(codex_chat, '_read_account_name', lambda account_id: 'Test User')
+
+    usage = codex_chat.get_usage_summary()
+
+    assert usage['weekly']['used_percent'] == 28
+    assert codex_chat._usage_session_roots(codex_chat._account_storage_context()) == [
+        auth_home / 'sessions',
+        queued_home / 'sessions',
+    ]
+
+
 def test_usage_history_splits_limit_relations_at_plan_boundary(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     plan_path = isolated_codex_workspace['usage_plan_path']

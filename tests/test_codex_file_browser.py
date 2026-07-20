@@ -1411,7 +1411,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
     assert '/static/js/app.js?v=201' in template
-    assert '/static/css/app.css?v=193' in template
+    assert '/static/css/app.css?v=194' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1433,7 +1433,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=193' in template
+    assert '/static/css/app.css?v=194' in template
     assert '/static/js/app.js?v=201' in template
 
 
@@ -1451,7 +1451,7 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert 'const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;' in app_js
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
-    assert '/static/css/app.css?v=193' in template
+    assert '/static/css/app.css?v=194' in template
     assert '/static/js/app.js?v=201' in template
 
 
@@ -1512,6 +1512,14 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     assert "renderer.code = token => renderGfmMarkdownCodeBlock" in app_js
     assert '<div class="markdown-table-scroll">${defaultTableRenderer(token)}</div>' in app_js
     assert "renderMarkdownLinkHtml(labelHtml, token.href, token.title)" in app_js
+
+
+def test_chat_markdown_uses_html_whitespace_without_expanding_blank_lines():
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+    message_bubble_rule = app_css.split('.message-bubble {', 1)[1].split('}', 1)[0]
+
+    assert 'white-space: normal;' in message_bubble_rule
+    assert 'white-space: pre-wrap;' not in message_bubble_rule
 
 
 def test_gfm_markdown_sample_covers_preview_regression_cases():

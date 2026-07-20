@@ -6516,6 +6516,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
             'workspace_token_usage_path': str(context['token_usage_path']),
             'account_token_usage_path': str(context['account_token_usage_path']),
             'limits_source_path': str(context['codex_home'] / 'sessions'),
+            'limits_source_paths': [str(path) for path in _usage_session_roots(context)],
             'relation_scope': relation_scope,
             'token_delta_key': token_delta_key,
         },
@@ -6548,12 +6549,36 @@ def ensure_usage_snapshot_background_worker():
     return True
 
 
+def _usage_session_roots(context):
+    candidates = (
+        context.get('codex_home'),
+        context.get('queued_codex_home'),
+        context.get('app_server_codex_home'),
+    )
+    roots = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        sessions_path = Path(candidate).expanduser() / 'sessions'
+        try:
+            key = str(sessions_path.resolve())
+        except OSError:
+            key = str(sessions_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if sessions_path.is_dir():
+            roots.append(sessions_path)
+    return roots
+
+
 def get_usage_summary(account_id=None):
     context = _account_storage_context(account_id)
     if context is None:
         context = _account_storage_context()
     resolved_account_id = context['account']['id']
-    sessions_path = context['codex_home'] / 'sessions'
+    sessions_paths = _usage_session_roots(context)
     account_name = _read_account_name(resolved_account_id)
     token_usage = get_token_usage_summary(ledger_path=context['token_usage_path'])
     account_token_usage = get_account_token_usage_summary(account_id=resolved_account_id)
@@ -6562,7 +6587,7 @@ def get_usage_summary(account_id=None):
         'account_label': context['account']['label'],
         'authenticated': _codex_home_has_auth(context['codex_home']),
     }
-    if not sessions_path.exists():
+    if not sessions_paths:
         return {
             'five_hour': None,
             'weekly': None,
@@ -6572,11 +6597,10 @@ def get_usage_summary(account_id=None):
             **account_metadata,
         }
     try:
-        files = sorted(
-            sessions_path.rglob('*.jsonl'),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True
-        )
+        files = []
+        for sessions_path in sessions_paths:
+            files.extend(sessions_path.rglob('*.jsonl'))
+        files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     except Exception:
         return {
             'five_hour': None,

@@ -9440,7 +9440,7 @@ body.is-work-mode-resizing * {
     max-width: 100%;
     max-height: var(--streaming-bubble-height);
     overflow: auto;
-    white-space: pre-wrap;
+    white-space: normal;
     word-break: break-word;
 }
 

@@ -28764,7 +28764,124 @@ function normalizeMarkdownRenderOptions(options = {}) {
 
 function renderMarkdown(text, options = {}) {
     const normalized = String(text || '').replace(/\r\n/g, '\n');
-    return renderInlineMarkdown(normalized, options);
+    const renderOptions = normalizeMarkdownRenderOptions(options);
+    const markedApi = window.marked;
+    if (!markedApi || typeof markedApi.parse !== 'function' || typeof markedApi.Renderer !== 'function') {
+        return renderInlineMarkdown(normalized, renderOptions);
+    }
+
+    const renderer = new markedApi.Renderer();
+    const defaultTableRenderer = renderer.table.bind(renderer);
+    const defaultListRenderer = renderer.list.bind(renderer);
+    const defaultImageRenderer = renderer.image.bind(renderer);
+
+    renderer.link = function renderWorkbenchMarkdownLink(token) {
+        const labelHtml = this.parser.parseInline(token.tokens || []);
+        return renderMarkdownLinkHtml(labelHtml, token.href, token.title);
+    };
+    renderer.code = token => renderGfmMarkdownCodeBlock(token, renderOptions);
+    renderer.table = token => (
+        `<div class="markdown-table-scroll">${defaultTableRenderer(token)}</div>`
+    );
+    renderer.list = token => {
+        const html = defaultListRenderer(token);
+        if (!token.items?.some(item => item.task)) return html;
+        return html
+            .replace(/^<(ul|ol)(?=[ >])/, '<$1 class="markdown-task-list"')
+            .replace(/<li(?=[ >])/g, '<li class="markdown-task-item"');
+    };
+    renderer.image = token => {
+        const href = normalizeMarkdownLinkHref(token.href);
+        if (!isHttpMarkdownHref(href)) {
+            return escapeHtml(token.text || '이미지');
+        }
+        return defaultImageRenderer({ ...token, href });
+    };
+
+    const parsed = markedApi.parse(normalized, {
+        async: false,
+        breaks: false,
+        gfm: true,
+        pedantic: false,
+        renderer
+    });
+    return sanitizeMarkdownHtml(parsed);
+}
+
+const MARKDOWN_ALLOWED_TAGS = [
+    'a', 'blockquote', 'br', 'code', 'del', 'details', 'div', 'em', 'h1', 'h2', 'h3',
+    'h4', 'h5', 'h6', 'hr', 'img', 'input', 'kbd', 'li', 'mark', 'ol', 'p', 'pre',
+    's', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'th',
+    'thead', 'tr', 'ul'
+];
+
+const MARKDOWN_ALLOWED_ATTRIBUTES = [
+    'align', 'alt', 'aria-hidden', 'checked', 'class', 'data-file-column', 'data-file-line',
+    'data-file-path', 'data-mermaid-rendered', 'data-mermaid-source', 'data-tooltip',
+    'disabled', 'href', 'rel', 'src', 'start', 'target', 'title', 'type'
+];
+
+function sanitizeMarkdownHtml(value) {
+    const html = String(value || '');
+    const purifier = window.DOMPurify;
+    if (!purifier || typeof purifier.sanitize !== 'function') {
+        return escapeHtml(html);
+    }
+    const clean = purifier.sanitize(html, {
+        ALLOW_DATA_ATTR: false,
+        ALLOWED_ATTR: MARKDOWN_ALLOWED_ATTRIBUTES,
+        ALLOWED_TAGS: MARKDOWN_ALLOWED_TAGS,
+        KEEP_CONTENT: true
+    });
+    const template = document.createElement('template');
+    template.innerHTML = clean;
+    template.content.querySelectorAll('a').forEach(link => {
+        const href = normalizeMarkdownLinkHref(link.getAttribute('href'));
+        if (isHttpMarkdownHref(href)) {
+            link.setAttribute('target', '_blank');
+            link.setAttribute('rel', 'noopener noreferrer');
+            return;
+        }
+        if (/^mailto:/i.test(href)) {
+            link.setAttribute('rel', 'noreferrer');
+            return;
+        }
+        if (href === '#' && link.classList.contains('message-label-link')) return;
+        link.removeAttribute('href');
+        link.removeAttribute('target');
+        link.removeAttribute('rel');
+    });
+    return template.innerHTML;
+}
+
+function renderGfmMarkdownCodeBlock(token, options = {}) {
+    const language = String(token?.lang || '')
+        .trim()
+        .split(/\s+/)[0]
+        .replace(/^\{?\.?/, '')
+        .replace(/\}?$/, '')
+        .toLowerCase();
+    const codeText = String(token?.text || '');
+    if (isMermaidFenceLanguage(language)) {
+        const mermaidSource = normalizeMermaidFenceSource(language, codeText);
+        return [
+            `<div class="file-browser-mermaid" data-mermaid-source="${escapeHtml(encodeMermaidDiagramSource(mermaidSource))}" data-mermaid-rendered="0">`,
+            `<pre class="file-browser-mermaid-source"><code>${escapeHtml(mermaidSource)}</code></pre>`,
+            '</div>'
+        ].join('');
+    }
+    const codeHtml = language ? highlightScriptContent(codeText, language) : escapeHtml(codeText);
+    const languageClass = language ? ` class="language-${escapeHtml(language)}"` : '';
+    if (!options.showCodeLineNumbers) {
+        return `<pre><code${languageClass}>${codeHtml}</code></pre>`;
+    }
+    const lineCount = Math.max(1, codeText.split('\n').length);
+    return [
+        '<pre class="markdown-code-block">',
+        `<span class="markdown-code-gutter" aria-hidden="true">${parseMarkdownCodeBlockLineNumbers(lineCount)}</span>`,
+        `<code${languageClass}>${codeHtml}</code>`,
+        '</pre>'
+    ].join('');
 }
 
 function encodeMermaidDiagramSource(value) {
@@ -29728,6 +29845,29 @@ function renderMarkdownLink(label, href) {
     const shortenedPathWithLocation = formatFilesystemPathWithLocation(shortenedPath, line, column);
     const tooltipText = `파일 경로: ${shortenedPathWithLocation}`;
     return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${safeVisibleLabel}</a>`;
+}
+
+function renderMarkdownLinkHtml(labelHtml, href, title = '') {
+    const safeLabelHtml = String(labelHtml || '').trim() || '링크';
+    const normalizedHref = normalizeMarkdownLinkHref(href);
+    if (!normalizedHref) return safeLabelHtml;
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+
+    if (isHttpMarkdownHref(normalizedHref)) {
+        return `<a href="${escapeHtml(normalizedHref)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${safeLabelHtml}</a>`;
+    }
+    if (/^mailto:/i.test(normalizedHref)) {
+        return `<a href="${escapeHtml(normalizedHref)}" rel="noreferrer"${titleAttr}>${safeLabelHtml}</a>`;
+    }
+
+    const fileTarget = resolveAbsoluteFilesystemTargetFromMarkdownHref(normalizedHref);
+    if (!fileTarget?.absolutePath) return safeLabelHtml;
+    const absolutePath = fileTarget.absolutePath;
+    const line = normalizeSourceLineNumber(fileTarget.line);
+    const column = normalizeSourceColumnNumber(fileTarget.column);
+    const shortenedPath = shortenAbsoluteFilesystemPath(absolutePath, getMessageLogPathRoots()) || absolutePath;
+    const tooltipText = `파일 경로: ${formatFilesystemPathWithLocation(shortenedPath, line, column)}`;
+    return `<a href="#" class="message-label-link hover-tooltip" data-file-path="${escapeHtml(absolutePath)}" data-file-line="${line || ''}" data-file-column="${column || ''}" data-tooltip="${escapeHtml(tooltipText)}" title="${escapeHtml(tooltipText)}">${safeLabelHtml}</a>`;
 }
 
 function hydrateMessageLabelLinks(container) {

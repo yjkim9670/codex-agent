@@ -3129,6 +3129,38 @@ textarea {
     overflow-wrap: anywhere;
 }
 
+.file-browser-markdown img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 10px 0;
+    border-radius: var(--radius-sm);
+}
+
+.file-browser-markdown details {
+    margin: 8px 0 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-raised);
+}
+
+.file-browser-markdown summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.file-browser-markdown kbd,
+.message-bubble kbd {
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    background: var(--surface-raised);
+    font-family: var(--font-code-block);
+    font-size: 0.9em;
+}
+
 .file-browser-markdown code {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
@@ -9760,6 +9792,26 @@ body.is-work-mode-resizing * {
 
 .message-bubble p + p {
     margin-top: 4px;
+}
+
+.message-bubble img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 8px 0;
+    border-radius: var(--radius-sm);
+}
+
+.message-bubble details {
+    margin: 8px 0;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.message-bubble summary {
+    cursor: pointer;
+    font-weight: 600;
 }
 
 .message-bubble hr {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=192">
+    <link rel="stylesheet" href="/static/css/app.css?v=193">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1575,6 +1575,8 @@
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
     </script>
-    <script src="/static/js/app.js?v=199"></script>
+    <script src="/static/vendor/marked-18.0.6.umd.js"></script>
+    <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
+    <script src="/static/js/app.js?v=200"></script>
 </body>
 </html>

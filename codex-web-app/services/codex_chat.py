@@ -34,7 +34,6 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_CONTEXT_MAX_CHARS,
-    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_CLI_MODEL_PROVIDER,
     CODEX_CLI_PROTECTED_PATHS,
@@ -77,6 +76,7 @@ from ..config import (
     resolve_claude_cli_model_name,
     resolve_claude_reasoning_effort,
     resolve_codex_reasoning_effort,
+    resolve_codex_git_commit_message_model,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
 
@@ -2389,8 +2389,7 @@ def _read_workspace_settings():
         data.get('app_server_pilot_enabled')
     )
     git_commit_message_model = (
-        _normalize_model_setting(data.get('git_commit_message_model'))
-        or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+        resolve_codex_git_commit_message_model(data.get('git_commit_message_model'))
     )
     git_commit_message_reasoning_effort = (
         str(data.get('git_commit_message_reasoning_effort') or '').strip()
@@ -2423,8 +2422,7 @@ def _write_workspace_settings(settings):
             settings.get('app_server_pilot_enabled')
         ),
         'git_commit_message_model': (
-            _normalize_model_setting(settings.get('git_commit_message_model'))
-            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            resolve_codex_git_commit_message_model(settings.get('git_commit_message_model'))
         ),
         'git_commit_message_reasoning_effort': (
             str(settings.get('git_commit_message_reasoning_effort') or '').strip()
@@ -2891,7 +2889,7 @@ def get_settings():
             fallback['agent_backend'] = _normalize_agent_backend_setting(None)
             fallback['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
-            fallback['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            fallback['git_commit_message_model'] = resolve_codex_git_commit_message_model()
             fallback['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             _write_workspace_settings(fallback)
             return _merge_runtime_cli_settings(_read_workspace_settings())
@@ -2904,7 +2902,7 @@ def get_settings():
         'agent_backend': _normalize_agent_backend_setting(None),
         'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
-        'git_commit_message_model': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
+        'git_commit_message_model': resolve_codex_git_commit_message_model(),
         'git_commit_message_reasoning_effort': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     })
 
@@ -2930,7 +2928,7 @@ def update_settings(
             current['agent_backend'] = _normalize_agent_backend_setting(None)
             current['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
-            current['git_commit_message_model'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            current['git_commit_message_model'] = resolve_codex_git_commit_message_model()
             current['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         next_settings = {
             'model': current.get('model'),
@@ -2944,8 +2942,7 @@ def update_settings(
                 current.get('app_server_pilot_enabled')
             ),
             'git_commit_message_model': (
-                _normalize_model_setting(current.get('git_commit_message_model'))
-                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+                resolve_codex_git_commit_message_model(current.get('git_commit_message_model'))
             ),
             'git_commit_message_reasoning_effort': (
                 str(current.get('git_commit_message_reasoning_effort') or '').strip()
@@ -2972,8 +2969,7 @@ def update_settings(
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         if git_commit_message_model is not None:
             next_settings['git_commit_message_model'] = (
-                _normalize_model_setting(git_commit_message_model)
-                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+                resolve_codex_git_commit_message_model(git_commit_message_model)
             )
         if git_commit_message_reasoning_effort is not None:
             next_settings['git_commit_message_reasoning_effort'] = (

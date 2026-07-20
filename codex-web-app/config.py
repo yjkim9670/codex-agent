@@ -359,6 +359,8 @@ _AGENT_BACKEND_ALIASES = {
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
     'gpt-5.3-codex-mini': 'gpt-5.3-codex-spark',
+    'gpt-5.4': 'gpt-5.6-terra',
+    'gpt-5.4-mini': 'gpt-5.6-luna',
     'gpt-5.6': 'gpt-5.6-sol',
 }
 
@@ -371,7 +373,7 @@ def normalize_codex_model_name(model_name):
 
 
 CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL = normalize_codex_model_name(
-    os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL') or 'gpt-5.4-mini'
+    os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL') or 'gpt-5.6-luna'
 )
 CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = str(
     os.environ.get('CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT') or 'medium'
@@ -837,6 +839,17 @@ def get_codex_model_options():
         entry['slug']
         for entry in get_codex_model_catalog()
     ]
+
+
+def resolve_codex_git_commit_message_model(model_name=None):
+    """Keep the summary model on the same live catalog used by chat controls."""
+    model_options = get_codex_model_options()
+    requested_model = normalize_codex_model_name(model_name)
+    if requested_model in model_options:
+        return requested_model
+    if CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL in model_options:
+        return CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+    return model_options[0] if model_options else CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
 
 
 def get_codex_model_metadata(model_name):

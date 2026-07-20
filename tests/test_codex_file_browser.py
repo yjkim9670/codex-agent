@@ -1410,7 +1410,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=200' in template
+    assert '/static/js/app.js?v=201' in template
     assert '/static/css/app.css?v=193' in template
 
 
@@ -1434,7 +1434,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
     assert '/static/css/app.css?v=193' in template
-    assert '/static/js/app.js?v=200' in template
+    assert '/static/js/app.js?v=201' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1452,7 +1452,7 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
     assert '/static/css/app.css?v=193' in template
-    assert '/static/js/app.js?v=200' in template
+    assert '/static/js/app.js?v=201' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1491,7 +1491,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=200' in template
+    assert '/static/js/app.js?v=201' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1503,7 +1503,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=200')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=201')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js
@@ -1543,7 +1543,10 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert "fetchJson('/api/codex/git/message'" in app_js
     assert "agent_backend='dtgpt'" in (CODEX_APP_ROOT / 'services' / 'git_ops.py').read_text(encoding='utf-8')
     assert '.git-message-model-overlay' in app_css
-    assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.4-mini';" in app_js
+    assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.6-luna';" in app_js
+    assert 'const normalizedOptions = options.length > 0 ? options : [GIT_COMMIT_MESSAGE_DEFAULT_MODEL];' in app_js
+    assert '[GIT_COMMIT_MESSAGE_DEFAULT_MODEL, ...options]' not in app_js
+    assert 'currentOption.textContent' not in app_js
     assert "const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';" in app_js
     assert "const GIT_COMMIT_MESSAGE_REASONING_OPTIONS = ['low', 'medium', 'high'];" in app_js
     assert '<option value="low">low</option>' in template
@@ -1552,7 +1555,7 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert 'git_commit_message_reasoning_effort: selectedReasoning' in app_js
     assert 'reasoning_effort: gitCommitMessageReasoningEffort' in app_js
     assert 'elements.messageModelBtn.disabled' not in app_js
-    assert '저장됨: gpt-5.4-mini · Reasoning medium' in template
+    assert '모델 목록을 불러오는 중...' in template
 
 
 def test_git_remote_history_stays_in_sync_overlay_and_opens_detail_overlay():

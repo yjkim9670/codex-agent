@@ -11,10 +11,10 @@ import time
 from pathlib import Path
 
 from ..config import (
-    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     REPO_ROOT,
     WORKSPACE_DIR,
+    resolve_codex_git_commit_message_model,
 )
 
 GIT_TIMEOUT_SECONDS = 600
@@ -1964,7 +1964,7 @@ def _execute_commit_message_prompt(
     if not resolved_model:
         resolved_model = str(
             settings.get('git_commit_message_model')
-            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            or resolve_codex_git_commit_message_model()
         ).strip()
     resolved_reasoning = str(reasoning_override or '').strip()
     if not resolved_reasoning:
@@ -2001,7 +2001,7 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         if not model_override:
             model_override = str(
                 settings.get('git_commit_message_model')
-                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+                or resolve_codex_git_commit_message_model()
             ).strip()
         if not reasoning_override:
             reasoning_override = str(

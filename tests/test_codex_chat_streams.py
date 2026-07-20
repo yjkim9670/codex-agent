@@ -185,6 +185,17 @@ def test_model_catalog_reads_workbench_auth_home_cache(monkeypatch, tmp_path):
     }
 
 
+def test_git_summary_model_tracks_live_chat_catalog(monkeypatch):
+    monkeypatch.setattr(
+        codex_config,
+        'get_codex_model_options',
+        lambda: ['future-summary-model', 'future-general-model'],
+    )
+
+    assert codex_config.resolve_codex_git_commit_message_model('gpt-5.4-mini') == 'future-summary-model'
+    assert codex_config.resolve_codex_git_commit_message_model('future-general-model') == 'future-general-model'
+
+
 def test_model_catalog_falls_back_to_login_home_cache(monkeypatch, tmp_path):
     stale_home = tmp_path / 'works' / '.codex'
     login_home = tmp_path / 'login' / '.codex'
@@ -2487,27 +2498,27 @@ def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeyp
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
 
-    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4-mini'
+    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.6-luna'
     assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'medium'
 
     updated = codex_chat.update_settings(
-        git_commit_message_model='gpt-5.4',
+        git_commit_message_model='gpt-5.6-terra',
         git_commit_message_reasoning_effort='high',
     )
 
-    assert updated['git_commit_message_model'] == 'gpt-5.4'
+    assert updated['git_commit_message_model'] == 'gpt-5.6-terra'
     assert updated['git_commit_message_reasoning_effort'] == 'high'
-    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.4'
+    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.6-terra'
     assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'high'
     stored = json.loads(settings_path.read_text(encoding='utf-8'))
-    assert stored['git_commit_message_model'] == 'gpt-5.4'
+    assert stored['git_commit_message_model'] == 'gpt-5.6-terra'
     assert stored['git_commit_message_reasoning_effort'] == 'high'
 
     restored = codex_chat.update_settings(
         git_commit_message_model='',
         git_commit_message_reasoning_effort='',
     )
-    assert restored['git_commit_message_model'] == 'gpt-5.4-mini'
+    assert restored['git_commit_message_model'] == 'gpt-5.6-luna'
     assert restored['git_commit_message_reasoning_effort'] == 'medium'
 
 

@@ -17,7 +17,6 @@ from ..config import (
     CODEX_ENABLE_GIT_API,
     CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
     CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
-    CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS,
     CODEX_REQUIRE_ENCRYPTED_FILE_WRITES,
@@ -49,6 +48,7 @@ from ..config import (
     get_codex_security_policy,
     normalize_codex_agent_backend,
     normalize_codex_service_tier,
+    resolve_codex_git_commit_message_model,
 )
 from ..services.codex_chat import (
     append_message,
@@ -899,7 +899,7 @@ def codex_settings_update():
         if len(git_commit_message_model) > CODEX_MAX_MODEL_CHARS:
             return jsonify({'error': 'git_commit_message_model이 너무 깁니다.'}), 400
         git_commit_message_model = (
-            git_commit_message_model or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_MODEL
+            resolve_codex_git_commit_message_model(git_commit_message_model)
         )
     if git_commit_message_reasoning_effort is not None:
         git_commit_message_reasoning_effort = str(git_commit_message_reasoning_effort).strip()

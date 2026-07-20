@@ -452,6 +452,12 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "missing field `supports_reasoning_summaries`",
     ),
 )
+_CHAT_HIDDEN_CODEX_STDERR_FRAGMENT_GROUPS = (
+    (
+        "ERROR codex_core::tools::router:",
+        "error=exec_command failed for",
+    ),
+)
 _APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
     r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
     re.IGNORECASE,
@@ -10256,6 +10262,17 @@ def _persist_stream_progress(stream_id, force=False):
     return saved_message
 
 
+def _append_stream_raw_stderr(stream_id, chunk):
+    if not chunk:
+        return
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if not stream or stream.get('cancelled'):
+            return
+        stream['raw_stderr'] = (stream.get('raw_stderr') or '') + str(chunk)
+        stream['updated_at'] = time.time()
+
+
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
@@ -10356,6 +10373,35 @@ def _filter_benign_codex_stderr(text):
             continue
         lines.append(line)
     return '\n'.join(lines).strip()
+
+
+def _is_chat_hidden_codex_stderr_line(line):
+    normalized = str(line or '').strip()
+    if _is_benign_codex_stderr_line(normalized):
+        return True
+    return any(
+        all(fragment in normalized for fragment in fragment_group)
+        for fragment_group in _CHAT_HIDDEN_CODEX_STDERR_FRAGMENT_GROUPS
+    )
+
+
+def _merge_stream_stderr_for_work_details(raw_stderr, visible_error):
+    raw_value = _normalize_stream_log_text(raw_stderr)
+    visible_value = _normalize_stream_log_text(visible_error)
+    if not raw_value:
+        return visible_value
+    if not visible_value:
+        return raw_value
+
+    raw_lines = set(raw_value.splitlines())
+    additional_visible_lines = [
+        line for line in visible_value.splitlines()
+        if line not in raw_lines
+    ]
+    if not additional_visible_lines:
+        return raw_value
+    additional_visible_value = '\n'.join(additional_visible_lines)
+    return f"{raw_value}\n{additional_visible_value}"
 
 
 def _event_stream_incomplete_message(dropped_event_count=0):
@@ -10808,6 +10854,7 @@ def _stream_reader(stream_id, pipe, key):
         for line in iter(pipe.readline, ''):
             _apply_auth_failure_guard(line)
             if key == 'error':
+                _append_stream_raw_stderr(stream_id, line)
                 dropped_events = _extract_app_server_event_stream_lag_count(line)
                 if dropped_events is not None:
                     _record_stream_app_server_event_lag(stream_id, dropped_events)
@@ -10818,7 +10865,7 @@ def _stream_reader(stream_id, pipe, key):
             if key == 'error' and _is_sampling_stream_retry_warning(line):
                 _record_stream_sampling_retry_warning(stream_id)
                 continue
-            if key == 'error' and _is_benign_codex_stderr_line(line):
+            if key == 'error' and _is_chat_hidden_codex_stderr_line(line):
                 continue
             if key == 'output':
                 with state.codex_streams_lock:
@@ -11447,6 +11494,7 @@ def create_codex_stream(
         'session_id': session_id,
         'output': '',
         'error': '',
+        'raw_stderr': '',
         'done': False,
         'saved': False,
         'exit_code': None,
@@ -12300,6 +12348,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         output = (stream.get('output') or '').strip()
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
+        raw_stderr = (stream.get('raw_stderr') or '').strip()
         session_id = stream.get('session_id')
         account_id = _normalize_account_id(stream.get('account_id')) or get_active_account_id()
         assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
@@ -12458,7 +12507,13 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             stream = state.codex_streams.get(stream_id)
             if stream:
                 stream['finalize_reason'] = finalize_reason
-    work_details = _build_work_details(output, final_output, error, exec_details=exec_details)
+    work_details_stderr = _merge_stream_stderr_for_work_details(raw_stderr, error)
+    work_details = _build_work_details(
+        output,
+        final_output,
+        work_details_stderr,
+        exec_details=exec_details,
+    )
     if work_details:
         metadata['work_details'] = work_details
     if exit_code == 0 and not codex_error_seen and not mcp_cancel_without_final_output:
@@ -12533,6 +12588,7 @@ def stop_codex_stream(stream_id):
         output = (stream.get('output') or '').strip()
         output_last_message = (stream.get('output_last_message') or '').strip()
         error = (stream.get('error') or '').strip()
+        raw_stderr = (stream.get('raw_stderr') or '').strip()
         started_at = stream.get('started_at') or stream.get('created_at')
         cli_started_at = stream.get('cli_started_at')
         completed_at = stream.get('completed_at')
@@ -12607,7 +12663,7 @@ def stop_codex_stream(stream_id):
     work_details = _build_work_details(
         output,
         output_last_message or output,
-        error,
+        _merge_stream_stderr_for_work_details(raw_stderr, error),
         exec_details=exec_details,
     )
     if work_details:

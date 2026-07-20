@@ -375,6 +375,7 @@ def _build_stream_state(stream_id, session_id, started_at, output_path):
         'session_id': session_id,
         'output': '',
         'error': '',
+        'raw_stderr': '',
         'done': False,
         'saved': False,
         'exit_code': None,
@@ -4054,6 +4055,11 @@ _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE = (
     '2026-05-29T05:51:40.451768Z  WARN codex_exec: '
     'in-process app-server event stream lagged; dropped 6475 events'
 )
+_EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE = (
+    "2026-07-20T15:33:43.132150Z ERROR codex_core::tools::router: "
+    "error=exec_command failed for `/bin/zsh -lc 'rm -rf /tmp/example'`: "
+    'CreateProcess { message: "Rejected(unsafe command)" }'
+)
 
 
 class _ExitedWithBenignStderrAndFinalMessageProcess:
@@ -4073,6 +4079,7 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
             'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
             _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
             _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE + '\n',
+            _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE + '\n',
         ])
 
     def poll(self):
@@ -4443,6 +4450,15 @@ def test_benign_stderr_filter_ignores_closed_stdin_tool_router_log():
     assert codex_chat._is_benign_codex_stderr_line(_STDIN_CLOSED_BENIGN_STDERR_LINE) is True
 
 
+def test_chat_hidden_stderr_filter_only_hides_structured_tool_router_failure():
+    assert codex_chat._is_chat_hidden_codex_stderr_line(
+        _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE
+    ) is True
+    assert codex_chat._is_chat_hidden_codex_stderr_line(
+        'The final answer discusses ERROR codex_core::tools::router: as plain text.'
+    ) is False
+
+
 def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
     stderr_text = '\n'.join([
         _QUEUE_FULL_BENIGN_STDERR_LINE,
@@ -4492,6 +4508,7 @@ def test_stream_reader_records_stderr_app_server_event_lag(isolated_codex_worksp
         assert stream.get('dropped_event_count') == 6475
         assert stream.get('codex_error_seen') is False
         assert stream.get('error') == ''
+        assert _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE in stream.get('raw_stderr', '')
 
 
 def test_codex_exec_gate_can_serialize_cli_runs(monkeypatch, tmp_path):
@@ -4586,7 +4603,9 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
     assert saved_message['finalize_reason'] == 'process_exit'
     assert 'Reading additional input' not in saved_message['content']
     assert 'write_stdin failed' not in saved_message['content']
-    assert 'write_stdin failed' not in (saved_message.get('work_details') or '')
+    assert 'exec_command failed' not in saved_message['content']
+    assert 'write_stdin failed' in (saved_message.get('work_details') or '')
+    assert 'exec_command failed' in (saved_message.get('work_details') or '')
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -4594,7 +4613,38 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
         assert stream.get('saved') is True
         assert stream.get('done') is True
         assert stream.get('error') == ''
+        assert 'exec_command failed' in stream.get('raw_stderr', '')
         assert stream.get('codex_error_seen') is False
+
+
+def test_finalize_failed_stream_hides_internal_stderr_but_keeps_work_details(
+        isolated_codex_workspace):
+    session = codex_chat.create_session('failed-stream-hidden-internal-stderr')
+    stream_id = 'stream-failed-hidden-internal-stderr'
+    started_at = time.time()
+    stream = _build_stream_state(
+        stream_id,
+        session['id'],
+        started_at=started_at,
+        output_path=isolated_codex_workspace['workspace_dir'] / 'failed-hidden-stderr.txt',
+    )
+    stream.update({
+        'done': True,
+        'exit_code': 1,
+        'raw_stderr': _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE,
+        'completed_at': started_at + 0.01,
+        'finalize_reason': 'process_exit_error',
+    })
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = stream
+
+    saved_message = codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+
+    assert saved_message is not None
+    assert saved_message['role'] == 'error'
+    assert saved_message['content'] == 'Codex 실행에 실패했습니다.'
+    assert 'exec_command failed' not in saved_message['content']
+    assert 'exec_command failed' in (saved_message.get('work_details') or '')
 
 
 def test_run_codex_stream_errors_when_event_stream_lag_hides_final_response(

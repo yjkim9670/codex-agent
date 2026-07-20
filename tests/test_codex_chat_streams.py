@@ -69,6 +69,20 @@ def _isolate_shared_account_state(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', shared_root / 'accounts')
     monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_root / 'codex_accounts.json')
     monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_root / 'accounts')
+    monkeypatch.setattr(codex_chat, '_current_codex_cli_identity', lambda: {
+        'executable_path': '/test/bin/codex',
+        'cli_version': 'codex-cli test',
+        'executable_fingerprint': 'test-fingerprint',
+    })
+    for env_name in (
+            'CODEX_CLI_BIN',
+            'CODEX_MODEL_CACHE_PATH',
+            'CODEX_QUEUE_CODEX_HOME',
+            'CODEX_WORKBENCH_AUTH_HOME',
+            'NPM_PREFIX',
+            'npm_config_prefix',
+            'NPM_CONFIG_PREFIX'):
+        monkeypatch.delenv(env_name, raising=False)
 
 
 @pytest.fixture
@@ -2299,7 +2313,15 @@ def test_structured_report_preset_rejects_unexpected_fields():
     assert 'unexpected field(s): extra' in output
 
 
-def test_execution_policy_presets_keep_danger_access_hidden():
+def test_execution_policy_presets_keep_danger_access_hidden(monkeypatch):
+    monkeypatch.setattr(codex_chat, '_EXECUTION_POLICY_PRESETS', tuple(
+        {
+            **item,
+            'sandbox': 'workspace-write',
+            'risk': 'medium',
+        } if item['id'] in {'standard', 'worktree_isolated'} else item
+        for item in codex_chat._EXECUTION_POLICY_PRESETS
+    ))
     presets = codex_chat.get_execution_policy_presets()
 
     assert any(item['sandbox'] == 'workspace-write' for item in presets)
@@ -2575,6 +2597,7 @@ def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(mon
     source_home = tmp_path / 'source-codex-home'
     source_home.mkdir()
     (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+    (source_home / 'models_cache.json').write_text('{"models": ["external"]}', encoding='utf-8')
     (source_home / 'skills').mkdir()
     storage_dir = tmp_path / 'state'
 
@@ -2586,8 +2609,10 @@ def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(mon
 
     app_server_home = storage_dir / 'app_server_codex_home'
     assert env['CODEX_HOME'] == str(app_server_home)
+    assert env['CODEX_MODEL_CACHE_PATH'] == str(app_server_home / 'models_cache.json')
     assert env['HOME'] == str(app_server_home)
     assert (app_server_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
+    assert not (app_server_home / 'models_cache.json').exists()
     assert (app_server_home / 'skills').is_dir()
     assert not (app_server_home / 'skills').is_symlink()
 
@@ -2595,6 +2620,7 @@ def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(mon
 def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path):
     explicit_home = tmp_path / 'explicit-codex-home'
     explicit_home.mkdir()
+    (explicit_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
     default_home = tmp_path / 'default-codex-home'
     default_home.mkdir()
     home = tmp_path / 'home'
@@ -2608,6 +2634,7 @@ def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path)
     monkeypatch.setenv('CODEX_TURN_ID', 'turn-from-parent')
     monkeypatch.setenv('CODEX_APP_SERVER_PILOT_ENABLED', '1')
     monkeypatch.setenv('CODEX_TRACE_ID', 'trace-from-parent')
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(tmp_path / 'shared-models-cache.json'))
 
     env = codex_chat._build_codex_exec_env()
 
@@ -2622,6 +2649,7 @@ def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path)
             'CODEX_APP_SERVER_PILOT_ENABLED',
             'CODEX_TRACE_ID'):
         assert key not in env
+    assert env['CODEX_MODEL_CACHE_PATH'] == str(explicit_home / 'models_cache.json')
 
 
 def test_app_server_blocks_unallowlisted_methods(monkeypatch):
@@ -3352,6 +3380,8 @@ def test_encrypted_chat_queue_route_accepts_prompt_and_encrypts_response(
 
 def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatch, tmp_path):
     explicit_home = tmp_path / 'explicit-codex-home'
+    explicit_home.mkdir()
+    (explicit_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
     default_home = tmp_path / 'default-codex-home'
     default_home.mkdir()
     home = tmp_path / 'home'
@@ -3363,6 +3393,39 @@ def test_build_codex_exec_env_keeps_default_home_for_direct_execution(monkeypatc
     env = codex_chat._build_codex_exec_env()
 
     assert env.get('CODEX_HOME') == str(explicit_home)
+    assert env.get('CODEX_MODEL_CACHE_PATH') == str(explicit_home / 'models_cache.json')
+
+
+def test_build_codex_exec_env_isolates_legacy_account_model_cache(monkeypatch, tmp_path):
+    source_home = tmp_path / 'shared-codex-home'
+    source_home.mkdir()
+    (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+    (source_home / 'models_cache.json').write_text('{"models": ["external"]}', encoding='utf-8')
+    storage_dir = tmp_path / 'agent-state'
+    registry_path = tmp_path / 'shared-state' / 'codex_accounts.json'
+    registry_path.parent.mkdir()
+    registry_path.write_text(json.dumps({
+        'active_account_id': 'legacy',
+        'accounts': [{
+            'id': 'legacy',
+            'label': 'Legacy',
+            'codex_home': str(source_home),
+            'legacy_storage': True,
+        }],
+    }), encoding='utf-8')
+
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', registry_path)
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', storage_dir)
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(source_home / 'models_cache.json'))
+
+    env = codex_chat._build_codex_exec_env()
+
+    queued_home = storage_dir / 'queued_codex_home'
+    assert env['CODEX_HOME'] == str(queued_home)
+    assert env['CODEX_MODEL_CACHE_PATH'] == str(queued_home / 'models_cache.json')
+    assert (queued_home / 'auth.json').is_file()
+    assert not (queued_home / 'models_cache.json').exists()
+    assert (source_home / 'models_cache.json').is_file()
 
 
 def test_build_codex_exec_env_uses_authenticated_default_home(monkeypatch, tmp_path):
@@ -3412,6 +3475,7 @@ def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_executi
     storage_dir = tmp_path / 'agent-state'
 
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.delenv('CODEX_QUEUE_CODEX_HOME', raising=False)
     monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', storage_dir)
 
     original_probe = codex_chat._path_is_writable_directory
@@ -3427,9 +3491,10 @@ def test_build_codex_exec_env_redirects_unwritable_codex_home_for_direct_executi
 
     queued_home = storage_dir / 'queued_codex_home'
     assert env.get('CODEX_HOME') == str(queued_home)
+    assert env.get('CODEX_MODEL_CACHE_PATH') == str(queued_home / 'models_cache.json')
     assert (queued_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
     assert (queued_home / 'config.toml').read_text(encoding='utf-8') == 'model = "test"\n'
-    assert (queued_home / 'models_cache.json').read_text(encoding='utf-8') == '{"models": []}\n'
+    assert not (queued_home / 'models_cache.json').exists()
 
 
 def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch, tmp_path):
@@ -3466,14 +3531,46 @@ def test_build_codex_exec_env_uses_storage_home_for_queued_execution(monkeypatch
     assert (queued_home / 'config').is_dir()
     assert (queued_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
     assert (queued_home / 'config.toml').read_text(encoding='utf-8') == 'model = "test"\n'
-    assert (queued_home / 'models_cache.json').read_text(encoding='utf-8') == '{"models": []}\n'
+    assert env.get('CODEX_MODEL_CACHE_PATH') == str(queued_home / 'models_cache.json')
+    assert not (queued_home / 'models_cache.json').exists()
     assert (queued_home / 'skills').is_symlink()
     assert (queued_home / 'skills').resolve() == source_home / 'skills'
+
+
+def test_managed_codex_home_cache_is_invalidated_only_when_cli_identity_changes(
+        monkeypatch,
+        tmp_path):
+    codex_home = tmp_path / 'managed-codex-home'
+    codex_home.mkdir()
+    cache_path = codex_home / 'models_cache.json'
+    cache_path.write_text('{"models": ["old"]}', encoding='utf-8')
+    identity = {
+        'executable_path': '/test/bin/codex',
+        'cli_version': 'codex-cli 1.0.0',
+        'executable_fingerprint': 'fingerprint-1',
+    }
+    monkeypatch.setattr(codex_chat, '_current_codex_cli_identity', lambda: dict(identity))
+
+    assert codex_chat._prepare_managed_codex_home_cache(codex_home) is True
+    assert not cache_path.exists()
+    metadata_path = codex_home / codex_chat._CODEX_CLI_IDENTITY_FILENAME
+    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    assert metadata['cli_version'] == 'codex-cli 1.0.0'
+
+    cache_path.write_text('{"models": ["current"]}', encoding='utf-8')
+    assert codex_chat._prepare_managed_codex_home_cache(codex_home) is False
+    assert cache_path.is_file()
+
+    identity['cli_version'] = 'codex-cli 1.1.0'
+    identity['executable_fingerprint'] = 'fingerprint-2'
+    assert codex_chat._prepare_managed_codex_home_cache(codex_home) is True
+    assert not cache_path.exists()
 
 
 def test_build_codex_exec_env_copies_memories_for_queued_execution(monkeypatch, tmp_path):
     source_home = tmp_path / 'source-codex-home'
     source_home.mkdir()
+    (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
     memories_dir = source_home / 'memories'
     (memories_dir / '.git').mkdir(parents=True)
     (memories_dir / '.git' / 'config').write_text('[core]\n', encoding='utf-8')
@@ -3937,6 +4034,11 @@ _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE = (
     'marketplace=openai-curated missing_remote_plugin_count=5 '
     'missing_remote_plugin_examples=["chatgpt-apps", "codex-security-victor-0528b"]'
 )
+_MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE = (
+    '2026-07-20T14:08:36.531710Z ERROR codex_models_manager::manager: '
+    'failed to renew cache TTL: missing field `supports_reasoning_summaries` '
+    'at line 88 column 5'
+)
 _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE = (
     '2026-05-29T05:51:40.451768Z  WARN codex_exec: '
     'in-process app-server event stream lagged; dropped 6475 events'
@@ -3959,6 +4061,7 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
             'Reading additional input from stdin...\n',
             'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
             _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
+            _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE + '\n',
         ])
 
     def poll(self):
@@ -4334,12 +4437,14 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
         _QUEUE_FULL_BENIGN_STDERR_LINE,
         _SAMPLING_RETRY_BENIGN_STDERR_LINE,
         _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE,
+        _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE,
         _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE,
     ])
 
     assert codex_chat._is_benign_codex_stderr_line(_QUEUE_FULL_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_SAMPLING_RETRY_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE) is True
+    assert codex_chat._is_benign_codex_stderr_line(_MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE) is True
     assert codex_chat._filter_benign_codex_stderr(stderr_text) == ''
     assert codex_chat._extract_codex_stderr_diagnostics(stderr_text) == {

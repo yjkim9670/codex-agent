@@ -105,6 +105,8 @@ _SESSION_SUBMIT_LOCKS_GUARD = threading.Lock()
 _SESSION_SUBMIT_LOCKS = {}
 _AUTH_STATE_LOCK = threading.Lock()
 _ACCOUNTS_LOCK = threading.RLock()
+_CODEX_CLI_IDENTITY_LOCK = threading.Lock()
+_CODEX_CLI_IDENTITY_CACHE = {}
 _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
@@ -112,8 +114,10 @@ _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
 _VERIFICATION_MODES = ('auto', 'browser', 'off')
 _DEFAULT_VERIFICATION_MODE = 'auto'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
-_QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml', 'models_cache.json')
-_UNAUTHENTICATED_CODEX_HOME_SYNC_FILES = ('config.toml', 'models_cache.json')
+_QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
+_UNAUTHENTICATED_CODEX_HOME_SYNC_FILES = ('config.toml',)
+_CODEX_CLI_IDENTITY_FILENAME = '.codex-workbench-cli.json'
+_CODEX_MODELS_CACHE_FILENAME = 'models_cache.json'
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
 _QUEUED_CODEX_HOME_COPY_ENTRIES = ('memories',)
 _QUEUED_CODEX_RUNTIME_DIRS = {
@@ -442,6 +446,11 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "WARN codex_core_plugins::manager:",
         "ignoring remote plugins missing from local marketplace during sync",
     ),
+    (
+        "ERROR codex_models_manager::manager:",
+        "failed to renew cache TTL:",
+        "missing field `supports_reasoning_summaries`",
+    ),
 )
 _APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
     r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
@@ -459,6 +468,7 @@ _CODEX_CHILD_ENV_STRIP_KEYS = frozenset({
     'CODEX_RUN_ID',
     'CODEX_SESSION_ID',
     'CODEX_EVENT_STREAM_ID',
+    'CODEX_MODEL_CACHE_PATH',
 })
 _CODEX_CHILD_ENV_STRIP_PREFIXES = (
     'CODEX_APP_SERVER_',
@@ -1610,6 +1620,53 @@ def _codex_cli_command():
     if resolved is not None:
         return resolved
     return 'codex'
+
+
+def _current_codex_cli_identity():
+    command = _codex_cli_command()
+    resolved = shutil.which(command) or command
+    try:
+        executable_path = str(Path(resolved).expanduser().resolve())
+    except Exception:
+        executable_path = str(resolved)
+    try:
+        stat_result = Path(executable_path).stat()
+        fingerprint = ':'.join((
+            str(getattr(stat_result, 'st_dev', '')),
+            str(getattr(stat_result, 'st_ino', '')),
+            str(stat_result.st_size),
+            str(stat_result.st_mtime_ns),
+        ))
+    except OSError:
+        fingerprint = ''
+    cache_key = (executable_path, fingerprint)
+    with _CODEX_CLI_IDENTITY_LOCK:
+        cached = _CODEX_CLI_IDENTITY_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
+        version = ''
+        try:
+            result = subprocess.run(
+                [command, '--version'],
+                capture_output=True,
+                text=True,
+                encoding=_CODEX_EXEC_TEXT_ENCODING,
+                errors=_CODEX_EXEC_TEXT_ERRORS,
+                timeout=5,
+                check=False,
+            )
+            version = str(result.stdout or result.stderr or '').strip().splitlines()[0]
+        except Exception:
+            _LOGGER.debug('Failed to read Codex CLI version: %s', command, exc_info=True)
+        identity = {
+            'executable_path': executable_path,
+            'cli_version': version,
+            'executable_fingerprint': fingerprint,
+        }
+        _CODEX_CLI_IDENTITY_CACHE.clear()
+        _CODEX_CLI_IDENTITY_CACHE[cache_key] = dict(identity)
+        return identity
 
 
 def _codex_cli_available():
@@ -7171,6 +7228,50 @@ def _remove_codex_home_entry(target_path):
         _LOGGER.debug('Failed to remove queued Codex home entry: %s', target_path, exc_info=True)
 
 
+def _prepare_managed_codex_home_cache(codex_home):
+    home_path = Path(codex_home).expanduser()
+    metadata_path = home_path / _CODEX_CLI_IDENTITY_FILENAME
+    identity = _current_codex_cli_identity()
+    comparison_keys = (
+        'executable_path',
+        'cli_version',
+        'executable_fingerprint',
+    )
+    try:
+        home_path.mkdir(parents=True, exist_ok=True)
+        with _acquire_path_file_lock(metadata_path):
+            try:
+                previous = json.loads(metadata_path.read_text(encoding='utf-8'))
+            except Exception:
+                previous = {}
+            unchanged = isinstance(previous, dict) and all(
+                str(previous.get(key) or '') == str(identity.get(key) or '')
+                for key in comparison_keys
+            )
+            if unchanged:
+                return False
+
+            cache_path = home_path / _CODEX_MODELS_CACHE_FILENAME
+            cache_existed = cache_path.exists() or cache_path.is_symlink()
+            if cache_existed:
+                _remove_codex_home_entry(cache_path)
+            payload = {
+                'version': 1,
+                **identity,
+                'last_checked_at': normalize_timestamp(None),
+            }
+            _write_json_atomic(metadata_path, payload)
+            if cache_existed:
+                _LOGGER.info(
+                    'Invalidated Codex model cache after CLI identity change: %s',
+                    cache_path,
+                )
+            return cache_existed
+    except Exception:
+        _LOGGER.exception('Failed to prepare managed Codex home cache: %s', home_path)
+        return False
+
+
 def _link_codex_home_entry_if_available(source_home, target_home, entry_name):
     try:
         source_path = Path(source_home) / entry_name
@@ -7239,6 +7340,7 @@ def _prepare_queued_codex_home(env):
             _link_codex_home_entry_if_available(source_home, queued_home, entry_name)
         for entry_name in _QUEUED_CODEX_HOME_COPY_ENTRIES:
             _copy_codex_home_entry_if_available(source_home, queued_home, entry_name)
+    _prepare_managed_codex_home_cache(queued_home)
     return queued_home
 
 
@@ -7333,6 +7435,7 @@ def _prepare_app_server_codex_home(env):
         )
         for filename in sync_files:
             _copy_codex_home_file_if_available(source_home, app_server_home, filename)
+    _prepare_managed_codex_home_cache(app_server_home)
     return app_server_home
 
 
@@ -7600,10 +7703,19 @@ def _build_codex_exec_env(queued_execution=False, account_id=None):
         env[_QUEUED_CODEX_HOME_ENV] = str(context['queued_codex_home'])
     else:
         env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
-    if queued_execution or _codex_home_needs_queued_redirect(env):
+    legacy_account = bool(
+        context is not None
+        and (context.get('account') or {}).get('legacy_storage')
+    )
+    if queued_execution or legacy_account or _codex_home_needs_queued_redirect(env):
         queued_home = _prepare_queued_codex_home(env)
         env['CODEX_HOME'] = str(queued_home)
         _prepare_queued_codex_runtime_env(env, queued_home)
+    elif context is not None:
+        _prepare_managed_codex_home_cache(env['CODEX_HOME'])
+    env['CODEX_MODEL_CACHE_PATH'] = str(
+        Path(env['CODEX_HOME']).expanduser() / _CODEX_MODELS_CACHE_FILENAME
+    )
     return env
 
 
@@ -7618,6 +7730,9 @@ def _build_codex_app_server_env(account_id=None):
         env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
     app_server_home = _prepare_app_server_codex_home(env)
     env['CODEX_HOME'] = str(app_server_home)
+    env['CODEX_MODEL_CACHE_PATH'] = str(
+        app_server_home / _CODEX_MODELS_CACHE_FILENAME
+    )
     _prepare_queued_codex_runtime_env(env, app_server_home)
     return env
 

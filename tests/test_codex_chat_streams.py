@@ -79,6 +79,10 @@ def _isolate_shared_account_state(tmp_path, monkeypatch):
             'CODEX_MODEL_CACHE_PATH',
             'CODEX_QUEUE_CODEX_HOME',
             'CODEX_WORKBENCH_AUTH_HOME',
+            'CODEX_WORKBENCH_SPREADSHEET_RUNTIME_ROOT',
+            'CODEX_WORKBENCH_SPREADSHEET_NODE',
+            'CODEX_WORKBENCH_SPREADSHEET_NODE_MODULES',
+            'CODEX_WORKBENCH_SPREADSHEET_PYTHON',
             'NPM_PREFIX',
             'npm_config_prefix',
             'NPM_CONFIG_PREFIX'):
@@ -2650,7 +2654,7 @@ def test_app_server_model_list_uses_allowlisted_json_rpc(monkeypatch, tmp_path):
     assert result['models'][0]['id'] == 'gpt-5.4'
 
 
-def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(monkeypatch, tmp_path):
+def test_build_codex_app_server_env_uses_writable_home_with_linked_skills(monkeypatch, tmp_path):
     source_home = tmp_path / 'source-codex-home'
     source_home.mkdir()
     (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
@@ -2670,8 +2674,33 @@ def test_build_codex_app_server_env_uses_writable_home_without_linked_skills(mon
     assert env['HOME'] == str(app_server_home)
     assert (app_server_home / 'auth.json').read_text(encoding='utf-8') == '{"token": "test"}'
     assert not (app_server_home / 'models_cache.json').exists()
-    assert (app_server_home / 'skills').is_dir()
-    assert not (app_server_home / 'skills').is_symlink()
+    assert (app_server_home / 'skills').is_symlink()
+    assert (app_server_home / 'skills').resolve() == source_home / 'skills'
+
+
+def test_prepare_codex_home_extensions_heals_isolated_account_home(monkeypatch, tmp_path):
+    source_home = tmp_path / 'login-codex-home'
+    target_home = tmp_path / 'isolated-account-home'
+    source_home.mkdir()
+    target_home.mkdir()
+    (source_home / 'config.toml').write_text('[plugins."spreadsheets@test"]\nenabled = true\n', encoding='utf-8')
+    for entry_name in ('skills', 'plugins', 'rules'):
+        (source_home / entry_name).mkdir()
+    monkeypatch.setattr(codex_chat, '_get_login_codex_home', lambda: source_home)
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', source_home)
+
+    prepared = codex_chat._prepare_codex_home_extensions(
+        target_home,
+        {'CODEX_HOME': str(target_home)},
+    )
+
+    assert prepared is True
+    assert (target_home / 'config.toml').read_text(encoding='utf-8') == (
+        '[plugins."spreadsheets@test"]\nenabled = true\n'
+    )
+    for entry_name in ('skills', 'plugins', 'rules'):
+        assert (target_home / entry_name).is_symlink()
+        assert (target_home / entry_name).resolve() == source_home / entry_name
 
 
 def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path):
@@ -2996,6 +3025,55 @@ def test_imagegen_overlay_points_to_workbench_managed_dirs(isolated_codex_worksp
     assert 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR' in prompt
     assert str(workspace_dir / 'output' / 'imagegen') in prompt
     assert str(workspace_dir / 'tmp' / 'imagegen') in prompt
+
+
+def test_spreadsheet_overlay_uses_prevalidated_runtime_without_install_request(
+        isolated_codex_workspace):
+    prompt = codex_chat.build_codex_prompt([], '엑셀 xlsx 파일을 만들어줘')
+
+    assert '## Spreadsheet Workbench Runtime' in prompt
+    assert 'CODEX_WORKBENCH_SPREADSHEET_NODE' in prompt
+    assert 'CODEX_WORKBENCH_SPREADSHEET_NODE_MODULES' in prompt
+    assert 'CODEX_WORKBENCH_SPREADSHEET_PYTHON' in prompt
+    assert 'Do not request permission to install openpyxl' in prompt
+    assert 'Do not defer the task merely because that tool name is absent' in prompt
+
+
+def test_spreadsheet_overlay_is_omitted_for_unrelated_prompt(isolated_codex_workspace):
+    prompt = codex_chat.build_codex_prompt([], '파이썬 API 라우트를 수정해줘')
+
+    assert '## Spreadsheet Workbench Runtime' not in prompt
+
+
+def test_build_codex_exec_env_exposes_validated_spreadsheet_runtime(monkeypatch, tmp_path):
+    runtime_root = tmp_path / 'codex-primary-runtime'
+    node_path = runtime_root / 'dependencies' / 'node' / 'bin' / 'node'
+    node_modules = runtime_root / 'dependencies' / 'node' / 'node_modules'
+    python_path = runtime_root / 'dependencies' / 'python' / 'bin' / 'python3'
+    for file_path in (runtime_root / 'runtime.json', node_path, python_path):
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text('{}\n', encoding='utf-8')
+    (node_modules / '@oai' / 'artifact-tool').mkdir(parents=True)
+    (runtime_root / 'dependencies' / 'python' / 'lib' / 'python3.12' / 'site-packages' / 'openpyxl').mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    source_home.mkdir()
+    (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')
+    (source_home / 'plugins').mkdir()
+    (source_home / 'config.toml').write_text(
+        '[marketplaces.openai-primary-runtime]\n'
+        f'source = {json.dumps(str(runtime_root / "plugins" / "openai-primary-runtime"))}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_chat, '_CODEX_HOME', source_home)
+    monkeypatch.setattr(codex_chat, '_get_login_codex_home', lambda: source_home)
+
+    env = codex_chat._build_codex_exec_env()
+
+    assert env[codex_chat._SPREADSHEET_RUNTIME_ROOT_ENV] == str(runtime_root)
+    assert env[codex_chat._SPREADSHEET_NODE_ENV] == str(node_path)
+    assert env[codex_chat._SPREADSHEET_NODE_MODULES_ENV] == str(node_modules)
+    assert env[codex_chat._SPREADSHEET_PYTHON_ENV] == str(python_path)
 
 
 def test_build_codex_prompt_includes_powershell_rules_on_windows(monkeypatch):

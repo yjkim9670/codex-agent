@@ -219,6 +219,10 @@ _SESSION_METADATA_RESERVED_KEYS = {
 }
 _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
+_SPREADSHEET_RUNTIME_ROOT_ENV = 'CODEX_WORKBENCH_SPREADSHEET_RUNTIME_ROOT'
+_SPREADSHEET_NODE_ENV = 'CODEX_WORKBENCH_SPREADSHEET_NODE'
+_SPREADSHEET_NODE_MODULES_ENV = 'CODEX_WORKBENCH_SPREADSHEET_NODE_MODULES'
+_SPREADSHEET_PYTHON_ENV = 'CODEX_WORKBENCH_SPREADSHEET_PYTHON'
 _CODEX_CLI_RUNTIME_RW_ENV_PATHS = (
     'CODEX_HOME',
     *tuple(_QUEUED_CODEX_RUNTIME_DIRS.keys()),
@@ -386,6 +390,26 @@ _IMAGEGEN_WORKBENCH_TRIGGER_RE = re.compile(
     r'캐릭터\s*(?:그려|생성|만들|디자인)|썸네일\s*(?:만들|생성|그려|디자인)'
     r')',
     re.IGNORECASE,
+)
+_SPREADSHEET_WORKBENCH_TRIGGER_RE = re.compile(
+    r'(?:\b(?:excel|spreadsheet|workbook|worksheet|openpyxl|artifact-tool|xlsx|xlsm?|csv|tsv)\b|'
+    r'엑셀|스프레드시트|워크북|워크시트)',
+    re.IGNORECASE,
+)
+_SPREADSHEET_WORKBENCH_OVERLAY = (
+    "Apply these extra rules when the current task reads, creates, edits, or verifies spreadsheet files:\n"
+    f"- Workbench has already resolved and validated its bundled spreadsheet runtime. Use the executable "
+    f"and dependency paths in `{_SPREADSHEET_NODE_ENV}`, `{_SPREADSHEET_NODE_MODULES_ENV}`, and "
+    f"`{_SPREADSHEET_PYTHON_ENV}`; treat them as the Workbench-provided equivalent of "
+    "`load_workspace_dependencies`. Do not defer the task merely because that tool name is absent.\n"
+    f"- For standalone workbook authoring, run the bundled Node executable from `{_SPREADSHEET_NODE_ENV}` "
+    f"and resolve `@oai/artifact-tool` from `{_SPREADSHEET_NODE_MODULES_ENV}`. Follow the installed "
+    "spreadsheets skill for authoring and verification.\n"
+    f"- When repository code itself requires openpyxl and the project environment lacks it, run that code "
+    f"with `{_SPREADSHEET_PYTHON_ENV}`. Do not request permission to install openpyxl before trying this "
+    "validated bundled interpreter.\n"
+    "- Do not modify the bundled runtime or install packages into it. Create only a task-local node_modules "
+    "symlink when the spreadsheets skill requires one."
 )
 _AUTH_REFRESH_ERROR_RE = re.compile(
     r'(failed to refresh token|refresh_token_reused|refresh token.*already used|sign in again)',
@@ -7213,6 +7237,13 @@ def _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
     return bool(_IMAGEGEN_WORKBENCH_TRIGGER_RE.search(haystack))
 
 
+def _should_include_spreadsheet_workbench_overlay(prompt_text, recent_blocks):
+    haystack_parts = [prompt_text or '']
+    if recent_blocks:
+        haystack_parts.extend(recent_blocks[-3:])
+    return bool(_SPREADSHEET_WORKBENCH_TRIGGER_RE.search('\n'.join(haystack_parts)))
+
+
 def _is_imagegen_workbench_request(prompt_text):
     return _should_include_imagegen_workbench_overlay(prompt_text, [])
 
@@ -7333,6 +7364,57 @@ def _copy_codex_home_entry_if_available(source_home, target_home, entry_name):
         _LOGGER.debug('Failed to copy queued Codex home entry: %s', entry_name, exc_info=True)
 
 
+def _codex_extension_source_home(env, target_home=None):
+    candidates = []
+    for raw_value in (
+            env.get('CODEX_WORKBENCH_AUTH_HOME'),
+            env.get('CODEX_HOME')):
+        token = str(raw_value or '').strip()
+        if token:
+            candidates.append(Path(token).expanduser())
+    login_home = _get_login_codex_home()
+    if login_home is not None:
+        candidates.append(login_home)
+    candidates.append(_CODEX_HOME)
+    target_path = Path(target_home).expanduser() if target_home is not None else None
+    seen = set()
+    for candidate in candidates:
+        try:
+            candidate_key = str(candidate.resolve())
+        except OSError:
+            candidate_key = str(candidate)
+        if candidate_key in seen:
+            continue
+        seen.add(candidate_key)
+        if target_path is not None:
+            try:
+                if candidate.resolve() == target_path.resolve():
+                    continue
+            except OSError:
+                pass
+        if (candidate / 'config.toml').is_file() and any(
+                (candidate / entry_name).exists()
+                for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES):
+            return candidate
+    return None
+
+
+def _prepare_codex_home_extensions(target_home, env):
+    target_path = Path(target_home).expanduser()
+    source_home = _codex_extension_source_home(env, target_home=target_path)
+    if source_home is None:
+        return False
+    target_path.mkdir(parents=True, exist_ok=True)
+    target_config = target_path / 'config.toml'
+    if not target_config.exists():
+        _copy_codex_home_file_if_available(source_home, target_path, 'config.toml')
+    for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
+        target_entry = target_path / entry_name
+        if not target_entry.exists() and not target_entry.is_symlink():
+            _link_codex_home_entry_if_available(source_home, target_path, entry_name)
+    return True
+
+
 def _prepare_queued_codex_home(env):
     configured_home = str(env.get(_QUEUED_CODEX_HOME_ENV) or '').strip()
     if configured_home:
@@ -7364,6 +7446,7 @@ def _prepare_queued_codex_home(env):
             _link_codex_home_entry_if_available(source_home, queued_home, entry_name)
         for entry_name in _QUEUED_CODEX_HOME_COPY_ENTRIES:
             _copy_codex_home_entry_if_available(source_home, queued_home, entry_name)
+    _prepare_codex_home_extensions(queued_home, env)
     _prepare_managed_codex_home_cache(queued_home)
     return queued_home
 
@@ -7459,6 +7542,9 @@ def _prepare_app_server_codex_home(env):
         )
         for filename in sync_files:
             _copy_codex_home_file_if_available(source_home, app_server_home, filename)
+        for entry_name in _QUEUED_CODEX_HOME_LINK_ENTRIES:
+            _link_codex_home_entry_if_available(source_home, app_server_home, entry_name)
+    _prepare_codex_home_extensions(app_server_home, env)
     _prepare_managed_codex_home_cache(app_server_home)
     return app_server_home
 
@@ -7718,6 +7804,7 @@ def _build_codex_child_base_env():
 
 def _build_codex_exec_env(queued_execution=False, account_id=None):
     env = _build_codex_child_base_env()
+    _apply_spreadsheet_runtime_env(env)
     use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
     context = _account_storage_context(account_id) if use_account_context else None
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
@@ -7727,6 +7814,7 @@ def _build_codex_exec_env(queued_execution=False, account_id=None):
         env[_QUEUED_CODEX_HOME_ENV] = str(context['queued_codex_home'])
     else:
         env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
+    _prepare_codex_home_extensions(env['CODEX_HOME'], env)
     legacy_account = bool(
         context is not None
         and (context.get('account') or {}).get('legacy_storage')
@@ -7745,6 +7833,7 @@ def _build_codex_exec_env(queued_execution=False, account_id=None):
 
 def _build_codex_app_server_env(account_id=None):
     env = _build_codex_child_base_env()
+    _apply_spreadsheet_runtime_env(env)
     use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
     context = _account_storage_context(account_id) if use_account_context else None
     if context is not None:
@@ -7752,6 +7841,7 @@ def _build_codex_app_server_env(account_id=None):
         env['CODEX_WORKBENCH_APP_SERVER_HOME'] = str(context['app_server_codex_home'])
     else:
         env['CODEX_HOME'] = str(_resolve_authenticated_codex_home(env))
+    _prepare_codex_home_extensions(env['CODEX_HOME'], env)
     app_server_home = _prepare_app_server_codex_home(env)
     env['CODEX_HOME'] = str(app_server_home)
     env['CODEX_MODEL_CACHE_PATH'] = str(
@@ -7782,6 +7872,97 @@ def _build_imagegen_workbench_overlay():
         f"- Workbench-managed imagegen temporary directory: `{tmp_dir}` "
         f"(`{_IMAGEGEN_WORKBENCH_TMP_ENV}`)."
     )
+
+
+def _primary_runtime_root_from_config(config_path):
+    try:
+        lines = Path(config_path).read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return None
+    in_primary_runtime = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith('[') and line.endswith(']'):
+            in_primary_runtime = line == '[marketplaces.openai-primary-runtime]'
+            continue
+        if not in_primary_runtime or not line.startswith('source') or '=' not in line:
+            continue
+        raw_value = line.split('=', 1)[1].strip()
+        try:
+            source_path = Path(json.loads(raw_value)).expanduser()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            source_path = Path(raw_value.strip("'\"")).expanduser()
+        if source_path.name == 'openai-primary-runtime' and source_path.parent.name == 'plugins':
+            return source_path.parent.parent
+    return None
+
+
+def _spreadsheet_runtime_paths(env=None):
+    environment = env or os.environ
+    runtime_candidates = []
+    explicit_root = str(environment.get(_SPREADSHEET_RUNTIME_ROOT_ENV) or '').strip()
+    if explicit_root:
+        runtime_candidates.append(Path(explicit_root).expanduser())
+    home_candidates = []
+    for raw_home in (
+            environment.get('CODEX_WORKBENCH_AUTH_HOME'),
+            environment.get('CODEX_HOME')):
+        token = str(raw_home or '').strip()
+        if token:
+            home_candidates.append(Path(token).expanduser())
+    login_home = _get_login_codex_home()
+    if login_home is not None:
+        home_candidates.append(login_home)
+    home_candidates.append(_CODEX_HOME)
+    seen_homes = set()
+    for home_path in home_candidates:
+        home_key = str(home_path)
+        if home_key in seen_homes:
+            continue
+        seen_homes.add(home_key)
+        runtime_root = _primary_runtime_root_from_config(home_path / 'config.toml')
+        if runtime_root is not None:
+            runtime_candidates.append(runtime_root)
+
+    seen_roots = set()
+    for runtime_root in runtime_candidates:
+        root_key = str(runtime_root)
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        node_path = runtime_root / 'dependencies' / 'node' / 'bin' / ('node.exe' if os.name == 'nt' else 'node')
+        node_modules = runtime_root / 'dependencies' / 'node' / 'node_modules'
+        python_bin_dir = runtime_root / 'dependencies' / 'python' / ('Scripts' if os.name == 'nt' else 'bin')
+        python_names = ('python.exe',) if os.name == 'nt' else ('python3', 'python')
+        python_path = next((python_bin_dir / name for name in python_names if (python_bin_dir / name).is_file()), None)
+        artifact_tool = node_modules / '@oai' / 'artifact-tool'
+        python_root = runtime_root / 'dependencies' / 'python'
+        openpyxl_available = any(p.is_dir() for p in python_root.glob('lib/python*/site-packages/openpyxl'))
+        if (
+                (runtime_root / 'runtime.json').is_file()
+                and node_path.is_file()
+                and node_modules.is_dir()
+                and artifact_tool.exists()
+                and python_path is not None
+                and openpyxl_available):
+            return {
+                'root': runtime_root,
+                'node': node_path,
+                'node_modules': node_modules,
+                'python': python_path,
+            }
+    return None
+
+
+def _apply_spreadsheet_runtime_env(env):
+    runtime = _spreadsheet_runtime_paths(env)
+    if runtime is None:
+        return False
+    env[_SPREADSHEET_RUNTIME_ROOT_ENV] = str(runtime['root'])
+    env[_SPREADSHEET_NODE_ENV] = str(runtime['node'])
+    env[_SPREADSHEET_NODE_MODULES_ENV] = str(runtime['node_modules'])
+    env[_SPREADSHEET_PYTHON_ENV] = str(runtime['python'])
+    return True
 
 
 def _codex_host_platform():
@@ -7883,6 +8064,8 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
     )
     if _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
         sections.append(f'## Image Generation Workbench Overlay\n{_build_imagegen_workbench_overlay()}')
+    if _should_include_spreadsheet_workbench_overlay(prompt_text, recent_blocks):
+        sections.append(f'## Spreadsheet Workbench Runtime\n{_SPREADSHEET_WORKBENCH_OVERLAY}')
     execution_environment = _build_execution_environment_overlay()
     if execution_environment:
         sections.append(f'## Execution Environment\n{execution_environment}')

@@ -4105,6 +4105,11 @@ _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE = (
     "error=exec_command failed for `/bin/zsh -lc 'rm -rf /tmp/example'`: "
     'CreateProcess { message: "Rejected(unsafe command)" }'
 )
+_APPLY_PATCH_FAILED_HIDDEN_STDERR_LINE = (
+    '2026-07-21T00:25:08.231821Z ERROR codex_core::tools::router: '
+    'error=apply_patch verification failed: Failed to find expected lines in '
+    '/tmp/example/README.md: ## 운영 시 주의사항'
+)
 
 
 class _ExitedWithBenignStderrAndFinalMessageProcess:
@@ -4125,6 +4130,7 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
             _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
             _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE + '\n',
             _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE + '\n',
+            _APPLY_PATCH_FAILED_HIDDEN_STDERR_LINE + '\n',
         ])
 
     def poll(self):
@@ -4495,9 +4501,15 @@ def test_benign_stderr_filter_ignores_closed_stdin_tool_router_log():
     assert codex_chat._is_benign_codex_stderr_line(_STDIN_CLOSED_BENIGN_STDERR_LINE) is True
 
 
-def test_chat_hidden_stderr_filter_only_hides_structured_tool_router_failure():
+def test_chat_hidden_stderr_filter_hides_all_structured_tool_router_errors():
     assert codex_chat._is_chat_hidden_codex_stderr_line(
         _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE
+    ) is True
+    assert codex_chat._is_chat_hidden_codex_stderr_line(
+        _APPLY_PATCH_FAILED_HIDDEN_STDERR_LINE
+    ) is True
+    assert codex_chat._is_chat_hidden_codex_stderr_line(
+        _APPLY_PATCH_FAILED_HIDDEN_STDERR_LINE.removeprefix('2026-07-')
     ) is True
     assert codex_chat._is_chat_hidden_codex_stderr_line(
         'The final answer discusses ERROR codex_core::tools::router: as plain text.'
@@ -4649,8 +4661,10 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
     assert 'Reading additional input' not in saved_message['content']
     assert 'write_stdin failed' not in saved_message['content']
     assert 'exec_command failed' not in saved_message['content']
+    assert 'apply_patch verification failed' not in saved_message['content']
     assert 'write_stdin failed' in (saved_message.get('work_details') or '')
     assert 'exec_command failed' in (saved_message.get('work_details') or '')
+    assert 'apply_patch verification failed' in (saved_message.get('work_details') or '')
 
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -4659,6 +4673,7 @@ def test_run_codex_stream_ignores_benign_stderr_when_final_message_exists(
         assert stream.get('done') is True
         assert stream.get('error') == ''
         assert 'exec_command failed' in stream.get('raw_stderr', '')
+        assert 'apply_patch verification failed' in stream.get('raw_stderr', '')
         assert stream.get('codex_error_seen') is False
 
 

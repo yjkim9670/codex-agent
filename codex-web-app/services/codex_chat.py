@@ -452,11 +452,9 @@ _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
         "missing field `supports_reasoning_summaries`",
     ),
 )
-_CHAT_HIDDEN_CODEX_STDERR_FRAGMENT_GROUPS = (
-    (
-        "ERROR codex_core::tools::router:",
-        "error=exec_command failed for",
-    ),
+_CHAT_HIDDEN_CODEX_TOOL_ROUTER_ERROR_RE = re.compile(
+    r'^(?:\d{4}-\d{2}-)?\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+'
+    r'ERROR\s+codex_core::tools::router:\s+',
 )
 _APP_SERVER_EVENT_STREAM_LAG_RE = re.compile(
     r'in-process app-server event stream lagged;\s*dropped\s+([0-9]+)\s+events',
@@ -10403,10 +10401,7 @@ def _is_chat_hidden_codex_stderr_line(line):
     normalized = str(line or '').strip()
     if _is_benign_codex_stderr_line(normalized):
         return True
-    return any(
-        all(fragment in normalized for fragment in fragment_group)
-        for fragment_group in _CHAT_HIDDEN_CODEX_STDERR_FRAGMENT_GROUPS
-    )
+    return bool(_CHAT_HIDDEN_CODEX_TOOL_ROUTER_ERROR_RE.match(normalized))
 
 
 def _merge_stream_stderr_for_work_details(raw_stderr, visible_error):

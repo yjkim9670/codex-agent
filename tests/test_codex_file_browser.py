@@ -22,10 +22,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from codex_agent import codex_app
 from codex_agent.blueprints import codex_chat as codex_chat_blueprint
-from codex_agent.services import file_browser, terminal_sessions
+from codex_agent.services import company_credentials, file_browser, terminal_sessions
 
 CODEX_APP_ROOT = Path(codex_app.__file__).resolve().parent
 FILE_CRYPTO_INFO = b'codex-workbench-file-browser-v1'
+COMPANY_CREDENTIAL_CRYPTO_INFO = b'codex-workbench-company-credential-v1'
 
 
 @pytest.fixture(autouse=True)
@@ -131,12 +132,160 @@ def _decrypt_test_file_payload(session, envelope):
     return json.loads(raw.decode('utf-8'))
 
 
+def _open_test_company_credential_crypto_session(client, origin='http://localhost'):
+    client_private = ec.generate_private_key(ec.SECP256R1())
+    client_public_key = client_private.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    response = client.post(
+        '/api/codex/company-credentials/crypto-session',
+        headers={'Origin': origin},
+        json={'client_public_key': _b64encode(client_public_key)},
+    )
+    assert response.status_code == 200
+    handshake = response.get_json()
+    server_public = ec.EllipticCurvePublicKey.from_encoded_point(
+        ec.SECP256R1(), _b64decode(handshake['server_public_key']),
+    )
+    shared_secret = client_private.exchange(ec.ECDH(), server_public)
+    key_material = HKDF(
+        algorithm=hashes.SHA256(), length=64,
+        salt=_b64decode(handshake['salt']),
+        info=COMPANY_CREDENTIAL_CRYPTO_INFO,
+    ).derive(shared_secret)
+    return {'id': handshake['crypto_session_id'], 'request_key': key_material[:32]}
+
+
+def _encrypt_test_company_credential_payload(session, payload):
+    iv = os.urandom(12)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ciphertext = AESGCM(session['request_key']).encrypt(
+        iv, raw, session['id'].encode('ascii'),
+    )
+    return {
+        'encrypted': True,
+        'crypto_session_id': session['id'],
+        'iv': _b64encode(iv),
+        'ciphertext': _b64encode(ciphertext),
+    }
+
+
 def test_root_page_exposes_tmp_path(browser_test_client, isolated_browser_roots):
     response = browser_test_client.get('/')
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert f'data-tmp-path="{isolated_browser_roots["tmp_root"]}"' in body
+
+
+def test_company_api_key_requires_encrypted_admin_session_and_never_returns_secret(
+    browser_test_client, monkeypatch, tmp_path,
+):
+    monkeypatch.setenv('CODEX_COMPANY_ADMIN_PASSWORD', 'admin-test-secret')
+    monkeypatch.setenv('CODEX_COMPANY_CREDENTIAL_PATH', str(tmp_path / 'company.dpapi'))
+    for name in ('DTGPT_API_KEY', 'CODEX_CLAUDE_AUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(company_credentials, '_session_api_key', '')
+    codex_chat_blueprint._company_admin_attempts.clear()
+
+    status_response = browser_test_client.get('/api/codex/company-credentials/status')
+    assert status_response.status_code == 200
+    status = status_response.get_json()
+    assert status['auth_configured'] is True
+    assert status['authenticated'] is False
+    assert status['credential'] is None
+    csrf_token = status['csrf_token']
+
+    crypto_session = _open_test_company_credential_crypto_session(browser_test_client)
+    auth_response = browser_test_client.post(
+        '/api/codex/company-credentials/auth',
+        headers={'Origin': 'http://localhost'},
+        json=_encrypt_test_company_credential_payload(crypto_session, {
+            'secret': 'admin-test-secret',
+            'csrf_token': csrf_token,
+        }),
+    )
+    assert auth_response.status_code == 200
+    assert auth_response.get_json()['authenticated'] is True
+
+    rejected = browser_test_client.put(
+        '/api/codex/company-credentials',
+        headers={'X-Codex-CSRF-Token': csrf_token},
+        json=_encrypt_test_company_credential_payload(crypto_session, {
+            'api_key': 'must-not-be-saved', 'storage': 'session',
+        }),
+    )
+    assert rejected.status_code == 403
+    assert rejected.get_json()['error_code'] == 'company_origin_rejected'
+
+    save_response = browser_test_client.put(
+        '/api/codex/company-credentials',
+        headers={
+            'Origin': 'http://localhost',
+            'X-Codex-CSRF-Token': csrf_token,
+        },
+        json=_encrypt_test_company_credential_payload(crypto_session, {
+            'api_key': 'company-api-secret-value', 'storage': 'session',
+        }),
+    )
+    assert save_response.status_code == 200
+    save_body = save_response.get_data(as_text=True)
+    assert 'company-api-secret-value' not in save_body
+    saved_status = save_response.get_json()['credential']
+    assert saved_status == {
+        'configured': True,
+        'error': None,
+        'persistent': False,
+        'persistent_supported': sys.platform == 'win32',
+        'source': 'session',
+    }
+    assert company_credentials.resolve_company_api_key() == ('company-api-secret-value', 'session')
+
+
+def test_company_api_key_persistent_storage_uses_dpapi_blob(monkeypatch, tmp_path):
+    credential_path = tmp_path / 'company.dpapi'
+    monkeypatch.setenv('CODEX_COMPANY_CREDENTIAL_PATH', str(credential_path))
+    monkeypatch.setattr(company_credentials.sys, 'platform', 'win32')
+    monkeypatch.setattr(company_credentials, '_session_api_key', '')
+    monkeypatch.setattr(company_credentials, '_protect_windows', lambda value: b'protected:' + value[::-1])
+    monkeypatch.setattr(
+        company_credentials,
+        '_unprotect_windows',
+        lambda value: value.removeprefix(b'protected:')[::-1],
+    )
+
+    status = company_credentials.store_company_api_key('persistent-secret', persistent=True)
+
+    assert credential_path.read_bytes() != b'persistent-secret'
+    assert status['source'] == 'windows_dpapi'
+    assert status['persistent'] is True
+    assert company_credentials.resolve_company_api_key() == ('persistent-secret', 'windows_dpapi')
+
+
+def test_company_api_key_environment_fallback_is_injected_without_exposure(monkeypatch, tmp_path):
+    monkeypatch.setenv('CODEX_COMPANY_CREDENTIAL_PATH', str(tmp_path / 'missing.dpapi'))
+    monkeypatch.setenv('DTGPT_API_KEY', 'environment-company-secret')
+    monkeypatch.setattr(company_credentials, '_session_api_key', '')
+    child_env = {}
+
+    assert company_credentials.apply_company_api_key(child_env) is True
+    assert child_env['DTGPT_API_KEY'] == 'environment-company-secret'
+    assert company_credentials.get_company_credential_status()['source'] == 'environment'
+
+
+def test_company_credential_controls_are_present_and_do_not_use_browser_storage():
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert 'id="codex-company-credential-card"' in template
+    assert 'id="codex-company-admin-secret"' in template
+    assert 'id="codex-company-api-key"' in template
+    assert 'value="windows_dpapi"' in template
+    credential_section = app_js[app_js.index('let companyCredentialCryptoSession'):app_js.index('async function loadSettings')]
+    assert 'localStorage' not in credential_section
+    assert 'sessionStorage' not in credential_section
+    assert "const COMPANY_CREDENTIAL_CRYPTO_INFO = 'codex-workbench-company-credential-v1';" in app_js
 
 
 def _wait_for_terminal_snapshot(fetch_snapshot, predicate, timeout_seconds=6.0):
@@ -1410,8 +1559,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=202' in template
-    assert '/static/css/app.css?v=194' in template
+    assert '/static/js/app.js?v=204' in template
+    assert '/static/css/app.css?v=195' in template
 
 
 def test_file_preview_download_supports_selected_directories():
@@ -1433,8 +1582,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=194' in template
-    assert '/static/js/app.js?v=202' in template
+    assert '/static/css/app.css?v=195' in template
+    assert '/static/js/app.js?v=204' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1451,8 +1600,8 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert 'const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;' in app_js
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
-    assert '/static/css/app.css?v=194' in template
-    assert '/static/js/app.js?v=202' in template
+    assert '/static/css/app.css?v=195' in template
+    assert '/static/js/app.js?v=204' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1491,7 +1640,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=202' in template
+    assert '/static/js/app.js?v=204' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1503,7 +1652,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=202')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=204')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js
@@ -1520,6 +1669,18 @@ def test_chat_markdown_uses_html_whitespace_without_expanding_blank_lines():
 
     assert 'white-space: normal;' in message_bubble_rule
     assert 'white-space: pre-wrap;' not in message_bubble_rule
+
+
+def test_chat_assistant_label_uses_response_agent_backend():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    index_html = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert 'message?.response_agent_backend || message?.agent_backend' in app_js
+    assert 'return responseBackend ? formatAgentBackendStatus(responseBackend)' in app_js
+    assert 'let label = getRoleLabel(role, message);' in app_js
+    assert 'response_agent_backend: responseMetadata?.response_agent_backend' in app_js
+    assert 'responseAgentBackend: result?.response_agent_backend' in app_js
+    assert '/static/js/app.js?v=204' in index_html
 
 
 def test_gfm_markdown_sample_covers_preview_regression_cases():

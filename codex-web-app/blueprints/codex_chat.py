@@ -3,12 +3,16 @@
 from fnmatch import fnmatchcase
 from ipaddress import ip_address, ip_network
 import json
+import logging
 import re
+import secrets
+import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
+from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, session, stream_with_context
 
 from ..config import (
     CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK,
@@ -149,14 +153,25 @@ from ..services.file_browser import (
 from ..services.file_crypto import (
     FileCryptoError,
     create_chat_crypto_session,
+    create_credential_crypto_session,
     create_file_crypto_session,
     decrypt_chat_payload,
+    decrypt_credential_payload,
     decrypt_file_payload,
     encrypt_chat_payload,
     encrypt_file_payload,
     is_encrypted_chat_payload,
     is_encrypted_file_payload,
     validate_chat_crypto_session,
+)
+from ..services.company_credentials import (
+    CompanyCredentialError,
+    delete_company_api_key,
+    get_company_credential_status,
+    is_admin_auth_configured,
+    store_company_api_key,
+    test_company_api_key,
+    verify_admin_secret,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
 from ..services.mail_sender import MailSendError, send_mail_with_archive
@@ -172,6 +187,7 @@ from ..services.terminal_sessions import (
 )
 
 bp = Blueprint('codex_chat', __name__)
+_LOGGER = logging.getLogger(__name__)
 
 _PLAN_MODE_TRUTHY_VALUES = {'1', 'true', 'yes', 'on'}
 _PLAN_MODE_FALSY_VALUES = {'0', 'false', 'no', 'off'}
@@ -198,6 +214,12 @@ _DEBUG_FLAG_PATTERN = re.compile(r'(^|\s)--debug(\s|$)', re.IGNORECASE)
 _RELOAD_FLAG_PATTERN = re.compile(r'(^|\s)--reload(\s|$)', re.IGNORECASE)
 _TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback'
 _CHAT_RESPONSE_CRYPTO_SESSION_HEADER = 'X-Codex-Chat-Crypto-Session'
+_COMPANY_ADMIN_SESSION_TTL_SECONDS = 15 * 60
+_COMPANY_ADMIN_RATE_WINDOW_SECONDS = 5 * 60
+_COMPANY_ADMIN_RATE_LOCK_SECONDS = 10 * 60
+_COMPANY_ADMIN_RATE_MAX_FAILURES = 5
+_company_admin_attempts = {}
+_company_admin_attempts_lock = threading.Lock()
 _HTML_PREVIEW_STORAGE_COMPAT = b'''<script data-codex-workbench-preview-compat="web-storage">
 (() => {
     const createMemoryStorage = () => {
@@ -693,6 +715,211 @@ def codex_attachment_upload():
     except CodexAttachmentError as exc:
         return _attachment_error_response(exc)
     return jsonify({'attachments': attachments})
+
+
+def _company_credential_error_response(exc):
+    return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+
+def _company_request_is_same_origin():
+    origin = str(request.headers.get('Origin') or '').strip()
+    if not origin:
+        return False
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return False
+    return parsed.scheme in {'http', 'https'} and parsed.netloc.lower() == request.host.lower()
+
+
+def _company_admin_csrf_token():
+    token = str(session.get('company_admin_csrf') or '').strip()
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['company_admin_csrf'] = token
+    return token
+
+
+def _company_admin_authenticated():
+    authenticated_at = session.get('company_admin_authenticated_at')
+    try:
+        age = time.time() - float(authenticated_at)
+    except (TypeError, ValueError):
+        return False
+    if age < 0 or age > _COMPANY_ADMIN_SESSION_TTL_SECONDS:
+        session.pop('company_admin_authenticated_at', None)
+        return False
+    return True
+
+
+def _require_company_admin(*, csrf=True):
+    if not is_admin_auth_configured():
+        return jsonify({
+            'error': '회사 API Key 관리용 관리자 인증이 설정되지 않았습니다.',
+            'error_code': 'company_admin_auth_not_configured',
+        }), 503
+    if not _company_admin_authenticated():
+        return jsonify({'error': '관리자 로그인이 필요합니다.', 'error_code': 'company_admin_auth_required'}), 401
+    if not _company_request_is_same_origin():
+        return jsonify({'error': '동일 출처 요청만 허용됩니다.', 'error_code': 'company_origin_rejected'}), 403
+    if csrf:
+        provided = str(request.headers.get('X-Codex-CSRF-Token') or '').strip()
+        expected = str(session.get('company_admin_csrf') or '').strip()
+        if not provided or not expected or not secrets.compare_digest(provided, expected):
+            return jsonify({'error': 'CSRF 토큰이 올바르지 않습니다.', 'error_code': 'company_csrf_rejected'}), 403
+    return None
+
+
+def _company_admin_rate_key():
+    return str(request.remote_addr or 'unknown')
+
+
+def _company_admin_rate_limited(now=None):
+    timestamp = time.time() if now is None else float(now)
+    key = _company_admin_rate_key()
+    with _company_admin_attempts_lock:
+        entry = _company_admin_attempts.get(key) or {'failures': [], 'locked_until': 0.0}
+        if float(entry.get('locked_until') or 0) > timestamp:
+            return True
+        failures = [
+            item for item in entry.get('failures', [])
+            if timestamp - float(item) <= _COMPANY_ADMIN_RATE_WINDOW_SECONDS
+        ]
+        entry['failures'] = failures
+        entry['locked_until'] = 0.0
+        _company_admin_attempts[key] = entry
+        return False
+
+
+def _record_company_admin_failure(now=None):
+    timestamp = time.time() if now is None else float(now)
+    key = _company_admin_rate_key()
+    with _company_admin_attempts_lock:
+        entry = _company_admin_attempts.get(key) or {'failures': [], 'locked_until': 0.0}
+        failures = [
+            item for item in entry.get('failures', [])
+            if timestamp - float(item) <= _COMPANY_ADMIN_RATE_WINDOW_SECONDS
+        ]
+        failures.append(timestamp)
+        entry['failures'] = failures
+        if len(failures) >= _COMPANY_ADMIN_RATE_MAX_FAILURES:
+            entry['locked_until'] = timestamp + _COMPANY_ADMIN_RATE_LOCK_SECONDS
+        _company_admin_attempts[key] = entry
+    _LOGGER.warning('Company credential admin authentication failed for remote address %s', key)
+
+
+def _clear_company_admin_failures():
+    with _company_admin_attempts_lock:
+        _company_admin_attempts.pop(_company_admin_rate_key(), None)
+
+
+@bp.route('/api/codex/company-credentials/status')
+def company_credentials_status():
+    authenticated = _company_admin_authenticated()
+    return jsonify({
+        'auth_configured': is_admin_auth_configured(),
+        'authenticated': authenticated,
+        'csrf_token': _company_admin_csrf_token(),
+        'credential': get_company_credential_status() if authenticated else None,
+    })
+
+
+@bp.route('/api/codex/company-credentials/crypto-session', methods=['POST'])
+def company_credentials_crypto_session():
+    if not _company_request_is_same_origin():
+        return jsonify({'error': '동일 출처 요청만 허용됩니다.', 'error_code': 'company_origin_rejected'}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        return jsonify(create_credential_crypto_session(payload.get('client_public_key')))
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+
+
+@bp.route('/api/codex/company-credentials/auth', methods=['POST'])
+def company_credentials_auth():
+    if not is_admin_auth_configured():
+        return jsonify({
+            'error': '관리자 암호 또는 토큰을 서버 환경변수로 먼저 설정하세요.',
+            'error_code': 'company_admin_auth_not_configured',
+        }), 503
+    if not _company_request_is_same_origin():
+        return jsonify({'error': '동일 출처 요청만 허용됩니다.', 'error_code': 'company_origin_rejected'}), 403
+    if _company_admin_rate_limited():
+        return jsonify({
+            'error': '로그인 시도가 너무 많습니다. 잠시 후 다시 시도하세요.',
+            'error_code': 'company_admin_rate_limited',
+        }), 429
+    try:
+        payload, _crypto_session_id = decrypt_credential_payload(request.get_json(silent=True) or {})
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    if not isinstance(payload, dict):
+        return jsonify({
+            'error': '관리자 인증 요청 형식이 올바르지 않습니다.',
+            'error_code': 'invalid_company_credential_payload',
+        }), 400
+    provided_csrf = str(payload.get('csrf_token') or '').strip()
+    expected_csrf = str(session.get('company_admin_csrf') or '').strip()
+    if not provided_csrf or not expected_csrf or not secrets.compare_digest(provided_csrf, expected_csrf):
+        return jsonify({'error': 'CSRF 토큰이 올바르지 않습니다.', 'error_code': 'company_csrf_rejected'}), 403
+    if not verify_admin_secret(payload.get('secret')):
+        _record_company_admin_failure()
+        return jsonify({'error': '관리자 인증에 실패했습니다.', 'error_code': 'company_admin_auth_failed'}), 401
+    _clear_company_admin_failures()
+    session['company_admin_authenticated_at'] = time.time()
+    session.permanent = False
+    return jsonify({
+        'authenticated': True,
+        'credential': get_company_credential_status(),
+        'csrf_token': _company_admin_csrf_token(),
+    })
+
+
+@bp.route('/api/codex/company-credentials/auth', methods=['DELETE'])
+def company_credentials_logout():
+    rejected = _require_company_admin()
+    if rejected:
+        return rejected
+    session.pop('company_admin_authenticated_at', None)
+    return jsonify({'authenticated': False})
+
+
+@bp.route('/api/codex/company-credentials', methods=['PUT', 'DELETE'])
+def company_credentials_update():
+    rejected = _require_company_admin()
+    if rejected:
+        return rejected
+    try:
+        if request.method == 'DELETE':
+            status = delete_company_api_key()
+        else:
+            payload, _crypto_session_id = decrypt_credential_payload(request.get_json(silent=True) or {})
+            if not isinstance(payload, dict):
+                return jsonify({
+                    'error': 'API Key 저장 요청 형식이 올바르지 않습니다.',
+                    'error_code': 'invalid_company_credential_payload',
+                }), 400
+            status = store_company_api_key(
+                payload.get('api_key'),
+                persistent=str(payload.get('storage') or '').strip() == 'windows_dpapi',
+            )
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    except CompanyCredentialError as exc:
+        return _company_credential_error_response(exc)
+    return jsonify({'credential': status})
+
+
+@bp.route('/api/codex/company-credentials/test', methods=['POST'])
+def company_credentials_test():
+    rejected = _require_company_admin()
+    if rejected:
+        return rejected
+    try:
+        result = test_company_api_key()
+    except CompanyCredentialError as exc:
+        return _company_credential_error_response(exc)
+    return jsonify(result)
 
 
 @bp.route('/api/codex/settings')

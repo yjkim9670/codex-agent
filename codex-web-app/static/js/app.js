@@ -303,6 +303,9 @@ const FILE_BROWSER_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
 const CHAT_PROMPT_CRYPTO_SESSION_ENDPOINT = '/api/codex/chat/crypto-session';
 const CHAT_PROMPT_CRYPTO_INFO = 'codex-workbench-chat-prompt-v1';
 const CHAT_PROMPT_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
+const COMPANY_CREDENTIAL_CRYPTO_SESSION_ENDPOINT = '/api/codex/company-credentials/crypto-session';
+const COMPANY_CREDENTIAL_CRYPTO_INFO = 'codex-workbench-company-credential-v1';
+const COMPANY_CREDENTIAL_CRYPTO_SESSION_REFRESH_SKEW_MS = 30000;
 const CHAT_RESPONSE_CRYPTO_SESSION_HEADER = 'X-Codex-Chat-Crypto-Session';
 const TRUSTED_HTTP_CRYPTO_FALLBACK_HEADER = 'X-Codex-Trusted-Http-Fallback';
 const FILE_BROWSER_VIEWER_IFRAME_SCROLL_RESTORE_RETRY_MS = 70;
@@ -1514,7 +1517,8 @@ function attachSessionStreamEntry(sessionId) {
             id: stream.messageId || '',
             role: 'assistant',
             content: '',
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            response_agent_backend: stream.agentBackend || ''
         }, 'assistant');
     }
     if (!assistantEntry) return;
@@ -1541,7 +1545,8 @@ function createStreamState({
     errorOffset = 0,
     eventOffset = 0,
     startedAt = null,
-    messageId = ''
+    messageId = '',
+    agentBackend = ''
 }) {
     if (!id || !sessionId) return null;
     const normalizedStartedAt = normalizeStartedAt(startedAt) || Date.now();
@@ -1549,6 +1554,7 @@ function createStreamState({
         id,
         sessionId,
         messageId: typeof messageId === 'string' ? messageId.trim() : '',
+        agentBackend: normalizeAgentBackendValue(agentBackend),
         outputOffset,
         errorOffset,
         eventOffset,
@@ -3858,6 +3864,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startRunningJobsMonitorTicker();
     initializeTheme(themeToggle, themeMedia);
     initializeLiveWeatherPanel(compactMedia);
+    initializeCompanyCredentialPanel();
     if (streamMonitor) {
         setStreamMonitorCollapsed(streamMonitor.classList.contains('is-collapsed'));
     }
@@ -7540,7 +7547,8 @@ function persistActiveStream(stream) {
             id: stream.id,
             sessionId: stream.sessionId,
             startedAt,
-            messageId
+            messageId,
+            agentBackend: normalizeAgentBackendValue(stream.agentBackend)
         });
         localStorage.setItem(ACTIVE_STREAM_KEY, JSON.stringify(existing));
     } catch (error) {
@@ -8279,6 +8287,290 @@ async function appendActiveCodexAccountPlanFromForm() {
     } catch (error) {
         setCodexAccountOverlayStatus(normalizeError(error, '요금제 변경 기록에 실패했습니다.'), true);
     }
+}
+
+let companyCredentialCryptoSession = null;
+let companyCredentialCryptoSessionPromise = null;
+let companyCredentialCsrfToken = '';
+
+function setCompanyCredentialStatus(message, isError = false) {
+    const element = document.getElementById('codex-company-credential-status');
+    if (!element) return;
+    element.textContent = String(message || '');
+    element.classList.toggle('is-error', Boolean(isError));
+}
+
+function formatCompanyCredentialSource(source) {
+    if (source === 'session') return '이번 실행 메모리';
+    if (source === 'windows_dpapi') return 'Windows DPAPI';
+    if (source === 'environment') return '서버 환경변수';
+    return '설정되지 않음';
+}
+
+function renderCompanyCredentialState(payload) {
+    const authConfigured = Boolean(payload?.auth_configured);
+    const authenticated = Boolean(payload?.authenticated);
+    const credential = payload?.credential && typeof payload.credential === 'object'
+        ? payload.credential
+        : null;
+    companyCredentialCsrfToken = String(payload?.csrf_token || companyCredentialCsrfToken || '');
+
+    const summary = document.getElementById('codex-company-credential-summary');
+    const login = document.getElementById('codex-company-admin-login');
+    const editor = document.getElementById('codex-company-credential-editor');
+    const logout = document.getElementById('codex-company-credential-logout');
+    const loginButton = document.getElementById('codex-company-admin-login-button');
+    const adminSecret = document.getElementById('codex-company-admin-secret');
+    const persistentOption = document.getElementById('codex-company-persistent-option');
+    const persistentRadio = document.querySelector('input[name="codex-company-credential-storage"][value="windows_dpapi"]');
+
+    if (summary) {
+        if (!authConfigured) {
+            summary.textContent = '관리자 인증 미설정 · 환경변수 키만 사용 가능';
+        } else if (!authenticated) {
+            summary.textContent = '관리자 로그인 후 API Key를 관리할 수 있습니다.';
+        } else if (credential?.configured) {
+            summary.textContent = `설정됨 · ${formatCompanyCredentialSource(credential.source)}`;
+        } else {
+            summary.textContent = `미설정 · ${formatCompanyCredentialSource(credential?.source)}`;
+        }
+    }
+    login?.classList.toggle('is-hidden', authenticated);
+    editor?.classList.toggle('is-hidden', !authenticated);
+    logout?.classList.toggle('is-hidden', !authenticated);
+    if (loginButton) loginButton.disabled = !authConfigured;
+    if (adminSecret) adminSecret.disabled = !authConfigured;
+    const persistentSupported = Boolean(credential?.persistent_supported);
+    persistentOption?.classList.toggle('is-disabled', !persistentSupported);
+    if (persistentRadio) {
+        persistentRadio.disabled = !persistentSupported;
+        if (!persistentSupported && persistentRadio.checked) {
+            const sessionRadio = document.querySelector('input[name="codex-company-credential-storage"][value="session"]');
+            if (sessionRadio) sessionRadio.checked = true;
+        }
+    }
+    if (!authConfigured) {
+        setCompanyCredentialStatus('서버 시작 전에 CODEX_COMPANY_ADMIN_PASSWORD 또는 CODEX_COMPANY_ADMIN_TOKEN을 설정하세요.');
+    } else if (credential?.error) {
+        setCompanyCredentialStatus('저장된 자격 증명 상태를 확인하지 못했습니다.', true);
+    }
+}
+
+async function loadCompanyCredentialStatus() {
+    try {
+        const payload = await fetchJson('/api/codex/company-credentials/status');
+        renderCompanyCredentialState(payload);
+        return payload;
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, 'API Key 보안 상태를 불러오지 못했습니다.'), true);
+        return null;
+    }
+}
+
+function isCompanyCredentialCryptoSessionUsable(session) {
+    if (!session?.id || !session?.requestKey) return false;
+    return Number(session.expiresAtMs || 0) - Date.now() > COMPANY_CREDENTIAL_CRYPTO_SESSION_REFRESH_SKEW_MS;
+}
+
+async function createCompanyCredentialCryptoSession() {
+    if (!isFileBrowserCryptoSupported()) {
+        throw new Error('이 브라우저 연결에서는 API Key 암호화 전송을 사용할 수 없습니다. HTTPS로 접속하세요.');
+    }
+    const encoder = new TextEncoder();
+    const keyPair = await window.crypto.subtle.generateKey(
+        { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']
+    );
+    const clientPublicKey = await window.crypto.subtle.exportKey('raw', keyPair.publicKey);
+    const handshake = await fetchJson(COMPANY_CREDENTIAL_CRYPTO_SESSION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_public_key: fileBrowserBytesToBase64(clientPublicKey) })
+    });
+    const sessionId = String(handshake?.crypto_session_id || '').trim();
+    if (!sessionId) throw new Error('API Key 암호화 세션을 만들지 못했습니다.');
+    const serverPublicKey = await window.crypto.subtle.importKey(
+        'raw', fileBrowserBase64ToBytes(handshake.server_public_key),
+        { name: 'ECDH', namedCurve: 'P-256' }, false, []
+    );
+    const sharedBits = await window.crypto.subtle.deriveBits(
+        { name: 'ECDH', public: serverPublicKey }, keyPair.privateKey, 256
+    );
+    const hkdfBaseKey = await window.crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveBits']);
+    const keyMaterial = await window.crypto.subtle.deriveBits({
+        name: 'HKDF', hash: 'SHA-256',
+        salt: fileBrowserBase64ToBytes(handshake.salt),
+        info: encoder.encode(COMPANY_CREDENTIAL_CRYPTO_INFO)
+    }, hkdfBaseKey, 512);
+    const keyBytes = new Uint8Array(keyMaterial);
+    const requestKey = await window.crypto.subtle.importKey(
+        'raw', keyBytes.slice(0, 32), 'AES-GCM', false, ['encrypt']
+    );
+    return {
+        id: sessionId,
+        requestKey,
+        expiresAtMs: Number(handshake.expires_at || 0) * 1000
+    };
+}
+
+async function getCompanyCredentialCryptoSession() {
+    if (isCompanyCredentialCryptoSessionUsable(companyCredentialCryptoSession)) {
+        return companyCredentialCryptoSession;
+    }
+    if (!companyCredentialCryptoSessionPromise) {
+        companyCredentialCryptoSessionPromise = createCompanyCredentialCryptoSession()
+            .then(session => {
+                companyCredentialCryptoSession = session;
+                return session;
+            })
+            .finally(() => { companyCredentialCryptoSessionPromise = null; });
+    }
+    return companyCredentialCryptoSessionPromise;
+}
+
+async function encryptCompanyCredentialPayload(payload) {
+    const session = await getCompanyCredentialCryptoSession();
+    const encoder = new TextEncoder();
+    const iv = new Uint8Array(12);
+    window.crypto.getRandomValues(iv);
+    const ciphertext = await window.crypto.subtle.encrypt({
+        name: 'AES-GCM', iv, additionalData: encoder.encode(session.id)
+    }, session.requestKey, encoder.encode(JSON.stringify(payload || {})));
+    return {
+        encrypted: true,
+        crypto_session_id: session.id,
+        iv: fileBrowserBytesToBase64(iv),
+        ciphertext: fileBrowserBytesToBase64(ciphertext)
+    };
+}
+
+function companyCredentialCsrfHeaders(json = false) {
+    const headers = { 'X-Codex-CSRF-Token': companyCredentialCsrfToken };
+    if (json) headers['Content-Type'] = 'application/json';
+    return headers;
+}
+
+async function loginCompanyCredentialAdmin() {
+    const input = document.getElementById('codex-company-admin-secret');
+    const secret = String(input?.value || '');
+    if (!secret) {
+        setCompanyCredentialStatus('관리자 암호 또는 토큰을 입력하세요.', true);
+        return;
+    }
+    setCompanyCredentialStatus('관리자 인증 중...');
+    try {
+        const encrypted = await encryptCompanyCredentialPayload({
+            secret,
+            csrf_token: companyCredentialCsrfToken
+        });
+        const payload = await fetchJson('/api/codex/company-credentials/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(encrypted)
+        });
+        if (input) input.value = '';
+        renderCompanyCredentialState({
+            auth_configured: true,
+            authenticated: true,
+            csrf_token: payload?.csrf_token,
+            credential: payload?.credential
+        });
+        setCompanyCredentialStatus('관리자 로그인이 완료되었습니다.');
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, '관리자 인증에 실패했습니다.'), true);
+    }
+}
+
+async function saveCompanyApiKey() {
+    const input = document.getElementById('codex-company-api-key');
+    const apiKey = String(input?.value || '').trim();
+    const storage = document.querySelector('input[name="codex-company-credential-storage"]:checked')?.value || 'session';
+    if (!apiKey) {
+        setCompanyCredentialStatus('새 API Key를 입력하세요.', true);
+        return;
+    }
+    setCompanyCredentialStatus('API Key를 안전하게 저장하는 중...');
+    try {
+        const encrypted = await encryptCompanyCredentialPayload({ api_key: apiKey, storage });
+        const payload = await fetchJson('/api/codex/company-credentials', {
+            method: 'PUT',
+            headers: companyCredentialCsrfHeaders(true),
+            body: JSON.stringify(encrypted)
+        });
+        if (input) input.value = '';
+        renderCompanyCredentialState({
+            auth_configured: true, authenticated: true,
+            csrf_token: companyCredentialCsrfToken, credential: payload?.credential
+        });
+        setCompanyCredentialStatus('API Key를 저장했습니다. Codex와 Claude의 다음 실행부터 적용됩니다.');
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, 'API Key를 저장하지 못했습니다.'), true);
+    }
+}
+
+async function deleteCompanyApiKey() {
+    if (!window.confirm('Workbench가 저장한 Company API Key를 삭제할까요?')) return;
+    setCompanyCredentialStatus('저장된 API Key를 삭제하는 중...');
+    try {
+        const payload = await fetchJson('/api/codex/company-credentials', {
+            method: 'DELETE', headers: companyCredentialCsrfHeaders()
+        });
+        renderCompanyCredentialState({
+            auth_configured: true, authenticated: true,
+            csrf_token: companyCredentialCsrfToken, credential: payload?.credential
+        });
+        setCompanyCredentialStatus('Workbench가 저장한 API Key를 삭제했습니다. 서버 환경변수는 변경하지 않았습니다.');
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, 'API Key를 삭제하지 못했습니다.'), true);
+    }
+}
+
+async function testCompanyApiKeyConnection() {
+    setCompanyCredentialStatus('회사 /health 엔드포인트 연결을 확인하는 중...');
+    try {
+        const payload = await fetchJson('/api/codex/company-credentials/test', {
+            method: 'POST', headers: companyCredentialCsrfHeaders()
+        });
+        setCompanyCredentialStatus(`연결 성공 · HTTP ${payload?.status_code || 200} · ${formatCompanyCredentialSource(payload?.source)}`);
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, '연결 테스트에 실패했습니다.'), true);
+    }
+}
+
+async function logoutCompanyCredentialAdmin() {
+    try {
+        await fetchJson('/api/codex/company-credentials/auth', {
+            method: 'DELETE', headers: companyCredentialCsrfHeaders()
+        });
+        await loadCompanyCredentialStatus();
+        setCompanyCredentialStatus('관리자 세션에서 로그아웃했습니다.');
+    } catch (error) {
+        setCompanyCredentialStatus(normalizeError(error, '로그아웃하지 못했습니다.'), true);
+    }
+}
+
+function initializeCompanyCredentialPanel() {
+    const adminSecret = document.getElementById('codex-company-admin-secret');
+    document.getElementById('codex-company-admin-login-button')?.addEventListener('click', () => void loginCompanyCredentialAdmin());
+    adminSecret?.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            void loginCompanyCredentialAdmin();
+        }
+    });
+    document.getElementById('codex-company-api-key-save')?.addEventListener('click', () => void saveCompanyApiKey());
+    document.getElementById('codex-company-api-key-delete')?.addEventListener('click', () => void deleteCompanyApiKey());
+    document.getElementById('codex-company-api-key-test')?.addEventListener('click', () => void testCompanyApiKeyConnection());
+    document.getElementById('codex-company-credential-logout')?.addEventListener('click', () => void logoutCompanyCredentialAdmin());
+    document.getElementById('codex-company-api-key-toggle')?.addEventListener('click', event => {
+        const input = document.getElementById('codex-company-api-key');
+        const button = event.currentTarget;
+        if (!input || !button) return;
+        const visible = input.type === 'text';
+        input.type = visible ? 'password' : 'text';
+        button.textContent = visible ? '표시' : '숨김';
+        button.setAttribute('aria-pressed', String(!visible));
+    });
+    void loadCompanyCredentialStatus();
 }
 
 async function loadSettings({ silent = true } = {}) {
@@ -23815,7 +24107,8 @@ async function resumeStreamsFromStorage(pendingStreams) {
                         created_at: new Date().toISOString(),
                         response_mode: result?.response_mode,
                         response_model: result?.response_model,
-                        response_reasoning_effort: result?.response_reasoning_effort
+                        response_reasoning_effort: result?.response_reasoning_effort,
+                        response_agent_backend: result?.response_agent_backend
                     }, 'assistant');
                 }
                 if (assistantEntry) {
@@ -23833,6 +24126,7 @@ async function resumeStreamsFromStorage(pendingStreams) {
                 eventOffset,
                 entry: assistantEntry,
                 messageId,
+                agentBackend: result?.response_agent_backend || pending?.agentBackend,
                 startedAt: normalizeStartedAt(result?.started_at)
                     || normalizeStartedAt(result?.created_at)
                     || normalizeStartedAt(pending.startedAt)
@@ -26485,6 +26779,7 @@ function processStartedStreamResponse(
             response_mode: responseMetadata?.response_mode,
             response_model: responseMetadata?.response_model,
             response_reasoning_effort: responseMetadata?.response_reasoning_effort,
+            response_agent_backend: responseMetadata?.response_agent_backend,
             structured_report_preset: responseMetadata?.structured_report_preset || '',
             worktree_task: responseMetadata?.worktree_task || null
         }, 'assistant');
@@ -26498,7 +26793,8 @@ function processStartedStreamResponse(
         setMessageStreaming(assistantEntry.wrapper, true);
     }
     startStream(streamId, sessionId, assistantEntry, result?.started_at || startedAtFallback, {
-        messageId: assistantMessageId
+        messageId: assistantMessageId,
+        agentBackend: result?.response_agent_backend || responseMetadata?.response_agent_backend
     });
     if (result?.worktree_task) {
         void refreshWorktreeTasks({ silent: true });
@@ -26567,6 +26863,7 @@ async function sendPrompt(
                 responseMode: result?.response_mode,
                 responseModel: result?.response_model,
                 responseReasoningEffort: result?.response_reasoning_effort,
+                responseAgentBackend: result?.response_agent_backend,
                 structuredReportPreset,
                 worktreeTask: result?.worktree_task || null
             })
@@ -26688,6 +26985,7 @@ function startStream(streamId, sessionId, assistantEntry, startedAt, options = {
         errorOffset: 0,
         output: '',
         error: '',
+        agentBackend: options?.agentBackend,
         startedAt: startedAt || Date.now()
     });
     if (!stream) return;
@@ -27070,9 +27368,14 @@ function setMessageMetaLabel(meta, role, timestampValue, message = null) {
     syncMessageResponseModeClass(wrapper, role, message);
 }
 
-function getRoleLabel(role) {
+function getRoleLabel(role, message = null) {
     if (role === 'user') return 'You';
-    if (role === 'assistant') return 'Codex';
+    if (role === 'assistant') {
+        const responseBackend = normalizeAgentBackendValue(
+            message?.response_agent_backend || message?.agent_backend
+        );
+        return responseBackend ? formatAgentBackendStatus(responseBackend) : 'Codex';
+    }
     if (role === 'system') return 'System';
     if (role === 'error') return 'Error';
     return 'Message';
@@ -27185,6 +27488,7 @@ function resolveRequestResponseMetadata({
     responseMode = '',
     responseModel = '',
     responseReasoningEffort = '',
+    responseAgentBackend = '',
     structuredReportPreset = '',
     worktreeTask = null
 } = {}) {
@@ -27201,13 +27505,15 @@ function resolveRequestResponseMetadata({
         response_model: resolvedModel,
         response_reasoning_effort: normalizedReasoningEffort
             || resolveReasoningEffortForRequest(normalizedMode === 'plan', resolvedModel),
+        response_agent_backend: normalizeAgentBackendValue(responseAgentBackend)
+            || getActiveAgentBackend(),
         structured_report_preset: structuredReportPreset || '',
         worktree_task: normalizeWorktreeTask(worktreeTask)
     };
 }
 
 function buildMessageMetaText(role, timestampValue, message = null) {
-    let label = getRoleLabel(role);
+    let label = getRoleLabel(role, message);
     if ((role === 'assistant' || role === 'error') && message && typeof message === 'object') {
         const hasResponseMetadata = Object.prototype.hasOwnProperty.call(message, 'response_mode')
             || Object.prototype.hasOwnProperty.call(message, 'response_model')
@@ -28309,7 +28615,7 @@ function setMessageDetailLogLink(footer, message) {
         return;
     }
     const timestamp = formatTimestamp(getMessageTimestampValue(message));
-    const roleLabel = getRoleLabel(message?.role);
+    const roleLabel = getRoleLabel(message?.role, message);
     footer.dataset.detailText = detailText;
     footer.dataset.detailTitle = timestamp
         ? `${roleLabel} · ${timestamp} · 상세 로그`
@@ -28340,8 +28646,8 @@ function setMessageWrapperIdentity(wrapper, role, timestampValue, messageId = un
     }
 }
 
-function buildMessagePreviewTitle(role, timestampValue) {
-    const roleLabel = getRoleLabel(role);
+function buildMessagePreviewTitle(role, timestampValue, message = null) {
+    const roleLabel = getRoleLabel(role, message);
     const timestamp = formatTimestamp(timestampValue);
     return timestamp
         ? `${roleLabel} · ${timestamp} · 전체 메시지`
@@ -28382,7 +28688,7 @@ function setMessagePreviewLink(footer, content, message = null, wrapper = null) 
     const timestampValue = messageTimestamp || wrapperTimestamp;
 
     footer.dataset.previewText = normalizedText;
-    footer.dataset.previewTitle = buildMessagePreviewTitle(role, timestampValue);
+    footer.dataset.previewTitle = buildMessagePreviewTitle(role, timestampValue, message);
     footer.dataset.previewSubtitle = '메시지 전체 보기';
     syncMessageFooter(footer);
 }

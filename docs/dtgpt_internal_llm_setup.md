@@ -366,7 +366,7 @@ Workbench를 실행한다. 영구 PATH가 불안정하면 실행 직전에 `$env
 cd "$WORK_ROOT\codex_workbench"
 
 $env:Path = "$NODE_HOME;$NPM_PREFIX;$env:Path"
-$env:DTGPT_API_KEY = "replace-with-token"
+$env:CODEX_COMPANY_ADMIN_PASSWORD = "replace-with-admin-password"
 $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
 $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 $env:CODEX_STORAGE_SUBDIR = ".agent_state_company"
@@ -375,6 +375,17 @@ $env:CODEX_CLI_SERIALIZE_EXEC = "0"
 
 .\run_codex_chat_server_company.ps1
 ```
+
+실행 후 `Usage & Model`을 펼쳐 `Company API Key`에서 관리자 로그인한 뒤 키를
+입력할 수 있다. `이번 실행에서만 사용`은 서버 프로세스 메모리에만 보관하고,
+`이 Windows 계정에 저장`은 `%LOCALAPPDATA%\CodexWorkbench\credentials`에 현재
+Windows 사용자 전용 DPAPI 암호문만 저장한다. 저장된 값은 화면이나 API 응답으로
+다시 반환하지 않으며 Codex와 Claude의 다음 CLI 실행 환경에 동일하게 주입된다.
+
+`0.0.0.0` 바인딩은 유지되므로 Windows Firewall에서 승인된 사내 대역만 포트에
+접근하도록 제한한다. 다른 PC에서 API Key를 입력할 때는 사내 인증서 또는 reverse
+proxy로 HTTPS를 구성해야 한다. 관리자 암호/토큰이 설정되지 않으면 Key 관리 UI는
+비활성화되고 기존 `DTGPT_API_KEY` 환경변수만 사용할 수 있다.
 
 ExecutionPolicy로 막히면 현재 실행에 한해서 우회한다.
 

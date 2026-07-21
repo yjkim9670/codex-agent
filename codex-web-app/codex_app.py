@@ -1,6 +1,7 @@
 """Codex Workbench Flask application."""
 
 from fnmatch import fnmatchcase
+import os
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request
@@ -53,6 +54,11 @@ def create_codex_app():
     app = Flask(__name__)
     app.config['JSON_AS_ASCII'] = False
     app.config['SECRET_KEY'] = SECRET_KEY
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
+    app.config['SESSION_COOKIE_SECURE'] = str(
+        os.environ.get('CODEX_SESSION_COOKIE_SECURE') or ''
+    ).strip().lower() in {'1', 'true', 'yes', 'on'}
     allowed_origins = _get_allowed_origins()
 
     app.register_blueprint(codex_chat.bp)
@@ -148,7 +154,9 @@ def create_codex_app():
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Vary'] = 'Origin'
         response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PATCH,DELETE,OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Headers'] = (
+            'Content-Type, Authorization, X-Codex-CSRF-Token'
+        )
         response.headers['Access-Control-Max-Age'] = '600'
         return response
 

@@ -11,6 +11,26 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ParentDir = Split-Path -Parent $ScriptDir
 
+if (-not $env:CODEX_CHAT_SECRET_KEY) {
+    $SecretBytes = New-Object byte[] 48
+    $SecretGenerator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $SecretGenerator.GetBytes($SecretBytes)
+    } finally {
+        $SecretGenerator.Dispose()
+    }
+    $env:CODEX_CHAT_SECRET_KEY = [Convert]::ToBase64String($SecretBytes)
+}
+if (-not $env:CODEX_COMPANY_ADMIN_PASSWORD -and -not $env:CODEX_COMPANY_ADMIN_TOKEN) {
+    foreach ($AdminVariableName in @("CODEX_COMPANY_ADMIN_PASSWORD", "CODEX_COMPANY_ADMIN_TOKEN")) {
+        $StoredAdminValue = [Environment]::GetEnvironmentVariable($AdminVariableName, "User")
+        if (-not [string]::IsNullOrWhiteSpace($StoredAdminValue)) {
+            [Environment]::SetEnvironmentVariable($AdminVariableName, $StoredAdminValue, "Process")
+            break
+        }
+    }
+}
+
 if (-not $env:CODEX_MODEL_OPTIONS) {
     $env:CODEX_MODEL_OPTIONS = "Qwen3.6-27B,Gemma-4-31B-IT"
 }
@@ -180,6 +200,12 @@ if (
     -not $env:ANTHROPIC_API_KEY
 ) {
     Write-Warning "Claude company authentication is not configured. Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN before selecting Claude."
+}
+if (-not $env:CODEX_COMPANY_ADMIN_PASSWORD -and -not $env:CODEX_COMPANY_ADMIN_TOKEN) {
+    Write-Warning "Company API Key UI is disabled. Set CODEX_COMPANY_ADMIN_PASSWORD or CODEX_COMPANY_ADMIN_TOKEN before starting Workbench."
+}
+if ($BindHost -eq "0.0.0.0") {
+    Write-Warning "Workbench is listening on all interfaces. Restrict the port to approved intranet ranges with Windows Firewall; use HTTPS before entering credentials from another PC."
 }
 if (-not $env:CODEX_CLAUDE_PERMISSION_MODE) {
     $env:CODEX_CLAUDE_PERMISSION_MODE = "acceptEdits"

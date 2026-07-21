@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=194">
+    <link rel="stylesheet" href="/static/css/app.css?v=195">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -608,6 +608,37 @@
                                 </button>
                             </div>
                         </div>
+                        <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
+                            <div class="company-credential-header">
+                                <div>
+                                    <div class="model-label" id="codex-company-credential-title">Company API Key</div>
+                                    <div class="company-credential-summary" id="codex-company-credential-summary">보안 상태 확인 중...</div>
+                                </div>
+                                <button class="btn ghost company-credential-logout is-hidden" type="button" id="codex-company-credential-logout">로그아웃</button>
+                            </div>
+                            <div class="company-admin-login" id="codex-company-admin-login">
+                                <label class="sr-only" for="codex-company-admin-secret">관리자 암호 또는 토큰</label>
+                                <input class="model-input" id="codex-company-admin-secret" type="password" autocomplete="current-password" placeholder="관리자 암호 또는 토큰">
+                                <button class="btn secondary" type="button" id="codex-company-admin-login-button">관리자 로그인</button>
+                            </div>
+                            <div class="company-credential-editor is-hidden" id="codex-company-credential-editor">
+                                <div class="company-credential-input-row">
+                                    <label class="sr-only" for="codex-company-api-key">Company API Key</label>
+                                    <input class="model-input" id="codex-company-api-key" type="password" autocomplete="new-password" placeholder="새 API Key 입력">
+                                    <button class="btn ghost company-secret-toggle" type="button" id="codex-company-api-key-toggle" aria-pressed="false">표시</button>
+                                </div>
+                                <div class="company-credential-storage" role="radiogroup" aria-label="API Key 저장 방식">
+                                    <label><input type="radio" name="codex-company-credential-storage" value="session" checked> 이번 실행에서만 사용</label>
+                                    <label id="codex-company-persistent-option"><input type="radio" name="codex-company-credential-storage" value="windows_dpapi"> 이 Windows 계정에 저장 (DPAPI)</label>
+                                </div>
+                                <div class="company-credential-actions">
+                                    <button class="btn primary" type="button" id="codex-company-api-key-save">저장</button>
+                                    <button class="btn secondary" type="button" id="codex-company-api-key-test">연결 테스트</button>
+                                    <button class="btn ghost" type="button" id="codex-company-api-key-delete">저장된 키 삭제</button>
+                                </div>
+                            </div>
+                            <div class="company-credential-status" id="codex-company-credential-status" aria-live="polite"></div>
+                        </section>
                     </div>
                 </div>
 
@@ -1577,6 +1608,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=202"></script>
+    <script src="/static/js/app.js?v=204"></script>
 </body>
 </html>

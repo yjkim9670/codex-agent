@@ -21,12 +21,14 @@ _SESSION_PRUNE_INTERVAL_SECONDS = 60
 _ECDH_CURVE = ec.SECP256R1()
 _FILE_KEY_INFO = b'codex-workbench-file-browser-v1'
 _CHAT_KEY_INFO = b'codex-workbench-chat-prompt-v1'
+_CREDENTIAL_KEY_INFO = b'codex-workbench-company-credential-v1'
 _KEY_MATERIAL_BYTES = 64
 _AES_GCM_KEY_BYTES = 32
 _AES_GCM_IV_BYTES = 12
 _MAX_ENCRYPTED_PAYLOAD_BYTES = 1024 * 1024
 _PURPOSE_FILE = 'file'
 _PURPOSE_CHAT = 'chat'
+_PURPOSE_CREDENTIAL = 'credential'
 
 
 class FileCryptoError(RuntimeError):
@@ -225,6 +227,16 @@ def create_chat_crypto_session(client_public_key):
     )
 
 
+def create_credential_crypto_session(client_public_key):
+    """Create an ECDH session for administrator and credential payloads."""
+
+    return _create_crypto_session(
+        client_public_key,
+        key_info=_CREDENTIAL_KEY_INFO,
+        purpose=_PURPOSE_CREDENTIAL,
+    )
+
+
 def is_encrypted_file_payload(payload) -> bool:
     return isinstance(payload, dict) and payload.get('encrypted') is True
 
@@ -293,6 +305,12 @@ def decrypt_chat_payload(envelope):
     """Decrypt an encrypted chat prompt request and return ``(payload, session_id)``."""
 
     return _decrypt_payload(envelope, purpose=_PURPOSE_CHAT)
+
+
+def decrypt_credential_payload(envelope):
+    """Decrypt an administrator or credential request payload."""
+
+    return _decrypt_payload(envelope, purpose=_PURPOSE_CREDENTIAL)
 
 
 def validate_chat_crypto_session(session_id: str) -> str:

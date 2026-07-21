@@ -7811,6 +7811,8 @@ def _build_codex_child_base_env():
 
 def _build_codex_exec_env(queued_execution=False, account_id=None):
     env = _build_codex_child_base_env()
+    from .company_credentials import apply_company_api_key
+    apply_company_api_key(env)
     _apply_spreadsheet_runtime_env(env)
     use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
     context = _account_storage_context(account_id) if use_account_context else None
@@ -7896,6 +7898,8 @@ def _apply_agent_backend_exec_env(env, agent_backend, model_override=None):
 
 def _build_codex_app_server_env(account_id=None):
     env = _build_codex_child_base_env()
+    from .company_credentials import apply_company_api_key
+    apply_company_api_key(env)
     _apply_spreadsheet_runtime_env(env)
     use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
     context = _account_storage_context(account_id) if use_account_context else None

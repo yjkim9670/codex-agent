@@ -7725,7 +7725,8 @@ body.is-work-mode-resizing * {
 }
 
 .usage-card,
-.model-card {
+.model-card,
+.company-credential-card {
     border: 1px solid var(--border);
     background: var(--surface-muted);
     border-radius: var(--radius-md);
@@ -7737,6 +7738,64 @@ body.is-work-mode-resizing * {
     flex-direction: column;
     justify-content: flex-start;
     min-width: 0;
+}
+
+.company-credential-card {
+    grid-column: 1 / -1;
+    min-height: 0;
+    gap: 8px;
+}
+
+.company-credential-header,
+.company-admin-login,
+.company-credential-input-row,
+.company-credential-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.company-credential-header {
+    justify-content: space-between;
+}
+
+.company-credential-summary,
+.company-credential-status {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.company-credential-status.is-error {
+    color: var(--danger);
+}
+
+.company-admin-login .model-input,
+.company-credential-input-row .model-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.company-credential-storage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+
+.company-credential-storage label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.company-credential-storage label.is-disabled {
+    opacity: 0.55;
+}
+
+.company-credential-actions {
+    flex-wrap: wrap;
 }
 
 .usage-label {

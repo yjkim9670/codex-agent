@@ -1642,7 +1642,7 @@ function normalizeAgentBackendOptions(options) {
         const rawId = typeof item?.id === 'string' ? item.id : (typeof item === 'string' ? item : '');
         const id = normalizeAgentBackendValue(rawId);
         if (!id || seen.has(id)) return;
-        const fallbackName = id === 'claude' ? 'Claude' : 'DTGPT';
+        const fallbackName = id === 'claude' ? 'Claude' : 'Codex';
         const name = typeof item?.name === 'string'
             ? item.name.trim()
             : (typeof item?.label === 'string' ? item.label.trim() : fallbackName);
@@ -8716,7 +8716,7 @@ function formatAgentBackendStatus(agentBackend) {
     if (!normalized) return '';
     const option = getAgentBackendOption(normalized);
     if (option) return option.name;
-    return normalized === 'claude' ? 'Claude' : 'DTGPT';
+    return normalized === 'claude' ? 'Claude' : 'Codex';
 }
 
 function updateServiceTierControls(serviceTier, options) {

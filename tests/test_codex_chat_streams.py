@@ -279,6 +279,36 @@ def test_model_catalog_reads_dtgpt_health_and_filters_non_chat_models(monkeypatc
     assert calls == [(health_url, 5)]
 
 
+def test_company_claude_backend_uses_same_health_model_catalog(monkeypatch):
+    health_url = 'http://dtgpt.test/llm/health?case=shared-backends'
+    payload = json.dumps({
+        'openai_models': ['Qwen3.6-27B', 'Gemma-4-31B-IT'],
+    }).encode('utf-8')
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return payload
+
+    monkeypatch.setenv('CODEX_DTGPT_HEALTH_URL', health_url)
+    monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'must-not-win')
+    monkeypatch.setattr(codex_config, 'urlopen', lambda _request, timeout: FakeResponse())
+
+    codex_catalog = codex_config.get_codex_model_catalog_for_backend('dtgpt')
+    claude_catalog = codex_config.get_codex_model_catalog_for_backend('claude')
+
+    assert claude_catalog == codex_catalog
+    assert [entry['slug'] for entry in claude_catalog] == [
+        'Qwen3.6-27B',
+        'Gemma-4-31B-IT',
+    ]
+
+
 def test_model_catalog_uses_env_fallback_when_dtgpt_health_fails(monkeypatch, tmp_path):
     health_url = 'http://dtgpt.test/llm/health?case=failure'
 
@@ -967,6 +997,13 @@ def test_company_runners_disable_codex_account_login():
         '$env:CODEX_DTGPT_HEALTH_URL = "https://cloud.dtgpt.samsungds.net/llm/health"'
         in powershell_runner
     )
+    assert (
+        '$env:CODEX_CLAUDE_BASE_URL = "https://cloud.dtgpt.samsungds.net/llm"'
+        in powershell_runner
+    )
+    assert '[Environment]::GetEnvironmentVariable("DTGPT_API_KEY", "User")' in powershell_runner
+    assert 'Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN' in powershell_runner
+    assert 'CODEX_CLAUDE_MODEL_OPTIONS = ($ClaudeAvailableModels -join ",")' not in powershell_runner
 
 
 def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch):
@@ -1819,6 +1856,7 @@ def test_agent_backend_options_include_company_choices(monkeypatch):
     options = codex_config.get_codex_agent_backend_options()
 
     assert [item['id'] for item in options] == ['dtgpt', 'claude']
+    assert [item['name'] for item in options] == ['Codex', 'Claude']
     assert codex_config.normalize_codex_agent_backend('claude-cli') == 'claude'
     assert codex_config.normalize_codex_agent_backend('codex') == 'dtgpt'
 
@@ -2005,6 +2043,20 @@ def test_resolve_claude_cli_model_name_reads_model_overrides(monkeypatch, tmp_pa
     assert codex_config.resolve_claude_cli_model_name('sonnet') == 'sonnet'
 
 
+def test_company_claude_model_ignores_local_claude_override(monkeypatch, tmp_path):
+    settings_path = tmp_path / '.claude' / 'settings.json'
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({
+        'modelOverrides': {
+            'Qwen3.6-27B': 'unrelated.local-model-alias',
+        },
+    }), encoding='utf-8')
+    monkeypatch.setenv('CODEX_DTGPT_HEALTH_URL', 'https://company.test/llm/health')
+    monkeypatch.setenv('CODEX_CLAUDE_SETTINGS_PATH', str(settings_path))
+
+    assert codex_config.resolve_claude_cli_model_name('Qwen3.6-27B') == 'Qwen3.6-27B'
+
+
 def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, monkeypatch):
     monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
     monkeypatch.setenv('CODEX_CLAUDE_MAX_TURNS', '2')
@@ -2033,6 +2085,50 @@ def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, m
     ]
     assert '--sandbox' not in cmd
     assert '--config' not in cmd
+
+
+def test_company_claude_exec_env_maps_gateway_token_and_selected_model(monkeypatch):
+    monkeypatch.setattr(codex_chat, '_resolve_claude_model', lambda model_override=None: model_override)
+    env = {
+        'CODEX_DTGPT_HEALTH_URL': 'https://company.test/llm/health?verbose=1',
+        'DTGPT_API_KEY': 'secret-company-token',
+        'ANTHROPIC_API_KEY': 'stale-anthropic-key',
+        'CLAUDE_CODE_USE_BEDROCK': '1',
+        'CLAUDE_CODE_USE_VERTEX': '1',
+    }
+
+    codex_chat._apply_agent_backend_exec_env(
+        env,
+        'claude',
+        model_override='Qwen3.6-27B',
+    )
+
+    assert env['CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] == '1'
+    assert env['ANTHROPIC_BASE_URL'] == 'https://company.test/llm'
+    assert env['ANTHROPIC_AUTH_TOKEN'] == 'secret-company-token'
+    assert 'ANTHROPIC_API_KEY' not in env
+    assert 'CLAUDE_CODE_USE_BEDROCK' not in env
+    assert 'CLAUDE_CODE_USE_VERTEX' not in env
+    for key in (
+            'ANTHROPIC_MODEL',
+            'ANTHROPIC_DEFAULT_OPUS_MODEL',
+            'ANTHROPIC_DEFAULT_SONNET_MODEL',
+            'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+            'CLAUDE_CODE_SUBAGENT_MODEL'):
+        assert env[key] == 'Qwen3.6-27B'
+
+
+def test_codex_exec_env_does_not_apply_claude_gateway(monkeypatch):
+    monkeypatch.setattr(codex_chat, '_resolve_claude_model', lambda model_override=None: model_override)
+    env = {
+        'CODEX_CLAUDE_BASE_URL': 'https://company.test/llm',
+        'DTGPT_API_KEY': 'secret-company-token',
+    }
+
+    codex_chat._apply_agent_backend_exec_env(env, 'dtgpt', model_override='Qwen3.6-27B')
+
+    assert 'ANTHROPIC_BASE_URL' not in env
+    assert 'ANTHROPIC_AUTH_TOKEN' not in env
 
 
 def test_build_agent_command_uses_claude_permission_mode(isolated_codex_workspace, monkeypatch):

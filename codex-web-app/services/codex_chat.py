@@ -504,6 +504,13 @@ _CODEX_CHILD_ENV_STRIP_PREFIXES = (
     'CODEX_TRACE_',
     'CODEX_INTERNAL_',
 )
+_CLAUDE_PROVIDER_MODE_ENV_KEYS = (
+    'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_MANTLE',
+    'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY',
+)
 _WORKTREE_TASK_ID_RE = re.compile(r'^wt-[A-Za-z0-9-]{8,80}$')
 _WORKTREE_BRANCH_PREFIX = 'codex-workbench'
 _WORKTREE_ROOT_ENV = 'CODEX_WORKTREE_ROOT'
@@ -7831,6 +7838,62 @@ def _build_codex_exec_env(queued_execution=False, account_id=None):
     return env
 
 
+def _company_claude_base_url(env):
+    explicit_base_url = str(env.get('CODEX_CLAUDE_BASE_URL') or '').strip()
+    if explicit_base_url:
+        return explicit_base_url.rstrip('/')
+    health_url = str(env.get('CODEX_DTGPT_HEALTH_URL') or '').strip()
+    if not health_url:
+        return ''
+    health_url = health_url.split('#', 1)[0].split('?', 1)[0].rstrip('/')
+    if health_url.lower().endswith('/health'):
+        return health_url[:-len('/health')].rstrip('/')
+    return ''
+
+
+def _apply_claude_company_exec_env(env, model_override=None):
+    """Route Claude CLI through the same company gateway used by Codex CLI."""
+    base_url = _company_claude_base_url(env)
+    if not base_url:
+        return env
+
+    auth_token = next((
+        str(env.get(key) or '').strip()
+        for key in (
+            'CODEX_CLAUDE_AUTH_TOKEN',
+            'DTGPT_API_KEY',
+            'ANTHROPIC_AUTH_TOKEN',
+            'ANTHROPIC_API_KEY',
+        )
+        if str(env.get(key) or '').strip()
+    ), '')
+    for key in _CLAUDE_PROVIDER_MODE_ENV_KEYS:
+        env.pop(key, None)
+    env['CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] = '1'
+    env['ANTHROPIC_BASE_URL'] = base_url
+    if auth_token:
+        env['ANTHROPIC_AUTH_TOKEN'] = auth_token
+        env.pop('ANTHROPIC_API_KEY', None)
+
+    selected_model = _resolve_claude_model(model_override=model_override)
+    if selected_model:
+        for key in (
+            'ANTHROPIC_MODEL',
+            'ANTHROPIC_DEFAULT_OPUS_MODEL',
+            'ANTHROPIC_DEFAULT_SONNET_MODEL',
+            'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+            'CLAUDE_CODE_SUBAGENT_MODEL',
+        ):
+            env[key] = selected_model
+    return env
+
+
+def _apply_agent_backend_exec_env(env, agent_backend, model_override=None):
+    if normalize_codex_agent_backend(agent_backend) == 'claude':
+        return _apply_claude_company_exec_env(env, model_override=model_override)
+    return env
+
+
 def _build_codex_app_server_env(account_id=None):
     env = _build_codex_child_base_env()
     _apply_spreadsheet_runtime_env(env)
@@ -8817,6 +8880,11 @@ def execute_codex_prompt(
     exec_details = None
     try:
         exec_env = _build_codex_exec_env(account_id=account_id)
+        _apply_agent_backend_exec_env(
+            exec_env,
+            agent_backend,
+            model_override=model_override,
+        )
         _prepare_imagegen_workbench_dirs(prompt)
         cmd = _wrap_codex_cli_command(cmd, env=exec_env)
         exec_details = _build_codex_exec_input_details(
@@ -11171,6 +11239,11 @@ def _run_codex_stream(stream_id, prompt):
         question_only=question_only,
         execution_cwd=execution_cwd,
         agent_backend=agent_backend,
+    )
+    _apply_agent_backend_exec_env(
+        exec_env,
+        agent_backend,
+        model_override=model_override,
     )
     if not worktree_task:
         execution_cwd.mkdir(parents=True, exist_ok=True)

@@ -1410,7 +1410,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=201' in template
+    assert '/static/js/app.js?v=202' in template
     assert '/static/css/app.css?v=194' in template
 
 
@@ -1434,7 +1434,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
     assert '/static/css/app.css?v=194' in template
-    assert '/static/js/app.js?v=201' in template
+    assert '/static/js/app.js?v=202' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1452,7 +1452,7 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
     assert '/static/css/app.css?v=194' in template
-    assert '/static/js/app.js?v=201' in template
+    assert '/static/js/app.js?v=202' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1491,7 +1491,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=201' in template
+    assert '/static/js/app.js?v=202' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1503,7 +1503,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=201')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=202')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js

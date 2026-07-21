@@ -29,6 +29,15 @@ if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
 if (-not $env:CODEX_AGENT_BACKEND) {
     $env:CODEX_AGENT_BACKEND = "dtgpt"
 }
+if (-not $env:CODEX_CLAUDE_BASE_URL) {
+    $env:CODEX_CLAUDE_BASE_URL = "https://cloud.dtgpt.samsungds.net/llm"
+}
+if (-not $env:DTGPT_API_KEY) {
+    $StoredDtgptApiKey = [Environment]::GetEnvironmentVariable("DTGPT_API_KEY", "User")
+    if (-not [string]::IsNullOrWhiteSpace($StoredDtgptApiKey)) {
+        $env:DTGPT_API_KEY = $StoredDtgptApiKey
+    }
+}
 if (-not $env:CODEX_CLAUDE_SETTINGS_PATH) {
     $env:CODEX_CLAUDE_SETTINGS_PATH = Join-Path $HOME ".claude\settings.json"
 }
@@ -164,43 +173,13 @@ if ($env:CODEX_CLAUDE_CLI_BIN) {
 } else {
     Write-Warning "Claude CLI was not found. Claude backend requests will fail until claude is installed or CODEX_CLAUDE_CLI_BIN is set."
 }
-if (-not $env:CODEX_CLAUDE_MODEL_OPTIONS -and (Test-Path $env:CODEX_CLAUDE_SETTINGS_PATH)) {
-    try {
-        $ClaudeSettings = Get-Content $env:CODEX_CLAUDE_SETTINGS_PATH -Raw -Encoding UTF8 | ConvertFrom-Json
-        $ClaudeAvailableModels = @()
-        $SeenClaudeModels = @{}
-        foreach ($Model in @($ClaudeSettings.availableModels)) {
-            $ModelName = ""
-            if ($null -eq $Model) {
-                continue
-            }
-            if ($Model -is [string]) {
-                $ModelName = $Model.Trim()
-            } else {
-                foreach ($ModelNameKey in @("model", "name", "id", "slug")) {
-                    $ModelNameProperty = $Model.PSObject.Properties[$ModelNameKey]
-                    if ($ModelNameProperty -and $null -ne $ModelNameProperty.Value) {
-                        $ModelName = "$($ModelNameProperty.Value)".Trim()
-                        if ($ModelName) {
-                            break
-                        }
-                    }
-                }
-            }
-            if ($ModelName -and -not $SeenClaudeModels.ContainsKey($ModelName)) {
-                $ClaudeAvailableModels += $ModelName
-                $SeenClaudeModels[$ModelName] = $true
-            }
-        }
-        if ($ClaudeAvailableModels.Count -gt 0) {
-            $env:CODEX_CLAUDE_MODEL_OPTIONS = ($ClaudeAvailableModels -join ",")
-            if (-not $env:CODEX_CLAUDE_MODEL) {
-                $env:CODEX_CLAUDE_MODEL = $ClaudeAvailableModels[0]
-            }
-        }
-    } catch {
-        Write-Warning ("Failed to read Claude availableModels from {0}: {1}" -f $env:CODEX_CLAUDE_SETTINGS_PATH, $_.Exception.Message)
-    }
+if (
+    -not $env:DTGPT_API_KEY -and
+    -not $env:CODEX_CLAUDE_AUTH_TOKEN -and
+    -not $env:ANTHROPIC_AUTH_TOKEN -and
+    -not $env:ANTHROPIC_API_KEY
+) {
+    Write-Warning "Claude company authentication is not configured. Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN before selecting Claude."
 }
 if (-not $env:CODEX_CLAUDE_PERMISSION_MODE) {
     $env:CODEX_CLAUDE_PERMISSION_MODE = "acceptEdits"

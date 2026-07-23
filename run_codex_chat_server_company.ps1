@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ParentDir = Split-Path -Parent $ScriptDir
+$env:CODEX_COMPANY_MODE = "1"
 
 if (-not $env:CODEX_CHAT_SECRET_KEY) {
     $SecretBytes = New-Object byte[] 48

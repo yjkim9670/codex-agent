@@ -8549,6 +8549,7 @@ async function logoutCompanyCredentialAdmin() {
 }
 
 function initializeCompanyCredentialPanel() {
+    if (!document.getElementById('codex-company-credential-card')) return;
     const adminSecret = document.getElementById('codex-company-admin-secret');
     document.getElementById('codex-company-admin-login-button')?.addEventListener('click', () => void loginCompanyCredentialAdmin());
     adminSecret?.addEventListener('keydown', event => {

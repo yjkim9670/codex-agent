@@ -608,6 +608,7 @@
                                 </button>
                             </div>
                         </div>
+                        {% if company_mode_enabled %}
                         <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
                             <div class="company-credential-header">
                                 <div>
@@ -639,6 +640,7 @@
                             </div>
                             <div class="company-credential-status" id="codex-company-credential-status" aria-live="polite"></div>
                         </section>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -1608,6 +1610,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=204"></script>
+    <script src="/static/js/app.js?v=205"></script>
 </body>
 </html>

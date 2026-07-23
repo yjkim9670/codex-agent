@@ -274,10 +274,27 @@ def test_company_api_key_environment_fallback_is_injected_without_exposure(monke
     assert company_credentials.get_company_credential_status()['source'] == 'environment'
 
 
-def test_company_credential_controls_are_present_and_do_not_use_browser_storage():
+def test_company_credential_panel_is_only_rendered_in_company_mode(
+    browser_test_client, monkeypatch,
+):
+    monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
+    response = browser_test_client.get('/')
+    assert 'id="codex-company-credential-card"' not in response.get_data(as_text=True)
+
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    response = browser_test_client.get('/')
+    body = response.get_data(as_text=True)
+    assert 'id="codex-company-credential-card"' in body
+    assert 'id="codex-company-admin-secret"' in body
+    assert 'id="codex-company-api-key"' in body
+    assert 'value="windows_dpapi"' in body
+
+
+def test_company_credential_controls_do_not_use_browser_storage():
     template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
 
+    assert '{% if company_mode_enabled %}' in template
     assert 'id="codex-company-credential-card"' in template
     assert 'id="codex-company-admin-secret"' in template
     assert 'id="codex-company-api-key"' in template
@@ -286,6 +303,7 @@ def test_company_credential_controls_are_present_and_do_not_use_browser_storage(
     assert 'localStorage' not in credential_section
     assert 'sessionStorage' not in credential_section
     assert "const COMPANY_CREDENTIAL_CRYPTO_INFO = 'codex-workbench-company-credential-v1';" in app_js
+    assert "if (!document.getElementById('codex-company-credential-card')) return;" in app_js
 
 
 def _wait_for_terminal_snapshot(fetch_snapshot, predicate, timeout_seconds=6.0):
@@ -1559,7 +1577,7 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=204' in template
+    assert '/static/js/app.js?v=205' in template
     assert '/static/css/app.css?v=195' in template
 
 
@@ -1583,7 +1601,7 @@ def test_file_preview_download_shows_progress_toast():
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
     assert '/static/css/app.css?v=195' in template
-    assert '/static/js/app.js?v=204' in template
+    assert '/static/js/app.js?v=205' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1601,7 +1619,7 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
     assert '/static/css/app.css?v=195' in template
-    assert '/static/js/app.js?v=204' in template
+    assert '/static/js/app.js?v=205' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1640,7 +1658,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=204' in template
+    assert '/static/js/app.js?v=205' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1652,7 +1670,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=204')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=205')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js
@@ -1680,7 +1698,7 @@ def test_chat_assistant_label_uses_response_agent_backend():
     assert 'let label = getRoleLabel(role, message);' in app_js
     assert 'response_agent_backend: responseMetadata?.response_agent_backend' in app_js
     assert 'responseAgentBackend: result?.response_agent_backend' in app_js
-    assert '/static/js/app.js?v=204' in index_html
+    assert '/static/js/app.js?v=205' in index_html
 
 
 def test_gfm_markdown_sample_covers_preview_regression_cases():

@@ -50,6 +50,12 @@ def _is_origin_allowed(origin: str, allowed_origins) -> bool:
     return False
 
 
+def _is_company_mode_enabled() -> bool:
+    return str(os.environ.get('CODEX_COMPANY_MODE') or '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
 def create_codex_app():
     app = Flask(__name__)
     app.config['JSON_AS_ASCII'] = False
@@ -109,6 +115,7 @@ def create_codex_app():
             workspace_directory_name=runtime_context['workspace_directory_name'],
             workspace_directory_path=runtime_context['workspace_directory_path'],
             current_branch_name=runtime_context['current_branch_name'],
+            company_mode_enabled=_is_company_mode_enabled(),
         )
 
     @app.route('/health')

@@ -140,17 +140,6 @@ _CODEX_CLI_BIN_ENV = 'CODEX_CLI_BIN'
 _CLAUDE_CLI_BIN_ENV = 'CODEX_CLAUDE_CLI_BIN'
 _CLAUDE_PERMISSION_MODE_ENV = 'CODEX_CLAUDE_PERMISSION_MODE'
 _CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS_ENV = 'CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS'
-_CLAUDE_TOOL_RESULT_MODE_ENV = 'CODEX_CLAUDE_TOOL_RESULT_MODE'
-_CLAUDE_MCP_POWERSHELL_BIN_ENV = 'CODEX_CLAUDE_MCP_POWERSHELL_BIN'
-_CLAUDE_STRUCTURED_MCP_SERVER_NAME = 'workbench_workspace'
-_CLAUDE_STRUCTURED_MCP_TOOL_NAMES = (
-    'read_text_file',
-    'write_text_file',
-    'edit_text_file',
-    'list_directory',
-    'search_text',
-    'run_command',
-)
 _CODEX_CLI_SELF_PROTECT_UNAVAILABLE_WARNED = False
 _FINALIZE_LAG_WARNING_MS = 5000
 _WORK_DETAILS_MAX_CHARS = 12000
@@ -1876,101 +1865,6 @@ def _resolve_claude_dangerously_skip_permissions():
     return bool(_coerce_optional_bool(
         os.environ.get(_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS_ENV)
     ))
-
-
-def _is_company_claude_structured_mcp_enabled():
-    """Use the Gateway-compatible tool path only for company Claude on Windows."""
-    if sys.platform != 'win32':
-        return False
-    if not bool(_coerce_optional_bool(os.environ.get('CODEX_COMPANY_MODE'))):
-        return False
-    mode = str(os.environ.get(_CLAUDE_TOOL_RESULT_MODE_ENV) or '').strip().lower()
-    return mode == 'structured_mcp'
-
-
-def _claude_structured_mcp_helper_path():
-    return REPO_ROOT / 'scripts' / 'claude_structured_workspace_mcp.ps1'
-
-
-def _claude_structured_mcp_allowed_tools():
-    prefix = f'mcp__{_CLAUDE_STRUCTURED_MCP_SERVER_NAME}__'
-    return [f'{prefix}{tool_name}' for tool_name in _CLAUDE_STRUCTURED_MCP_TOOL_NAMES]
-
-
-def _create_claude_structured_mcp_config(execution_cwd):
-    allowed_root = Path(execution_cwd or WORKSPACE_DIR).expanduser().resolve()
-    helper_path = _claude_structured_mcp_helper_path().resolve()
-    if not helper_path.is_file():
-        raise FileNotFoundError(f'Claude structured MCP helper not found: {helper_path}')
-
-    powershell_bin = str(
-        os.environ.get(_CLAUDE_MCP_POWERSHELL_BIN_ENV) or 'powershell.exe'
-    ).strip()
-    if not powershell_bin or '\x00' in powershell_bin:
-        powershell_bin = 'powershell.exe'
-
-    protected_paths = [
-        str(path)
-        for path in _codex_cli_protected_paths()
-        if _path_contains(allowed_root, path)
-    ]
-    protected_paths_json = json.dumps(protected_paths, ensure_ascii=False)
-    protected_paths_base64 = base64.b64encode(
-        protected_paths_json.encode('utf-8')
-    ).decode('ascii')
-    config = {
-        'mcpServers': {
-            _CLAUDE_STRUCTURED_MCP_SERVER_NAME: {
-                'type': 'stdio',
-                'command': powershell_bin,
-                'args': [
-                    '-NoLogo',
-                    '-NoProfile',
-                    '-NonInteractive',
-                    '-ExecutionPolicy',
-                    'Bypass',
-                    '-File',
-                    str(helper_path),
-                    '-AllowedRoot',
-                    str(allowed_root),
-                    '-ProtectedPathsBase64',
-                    protected_paths_base64,
-                ],
-            },
-        },
-    }
-    config_dir = CODEX_STORAGE_DIR / 'claude_mcp_configs'
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / f'claude_mcp_{uuid.uuid4().hex}.json'
-    config_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2),
-        encoding='utf-8',
-    )
-    try:
-        config_path.chmod(0o600)
-    except OSError:
-        pass
-    return config_path
-
-
-def _claude_mcp_config_path_from_command(cmd):
-    try:
-        index = list(cmd).index('--mcp-config')
-        value = str(cmd[index + 1] or '').strip()
-    except (ValueError, IndexError, TypeError):
-        return None
-    return Path(value) if value else None
-
-
-def _cleanup_claude_mcp_config(path):
-    if not path:
-        return
-    try:
-        Path(path).unlink()
-    except FileNotFoundError:
-        pass
-    except Exception:
-        _LOGGER.debug('Failed to remove Claude MCP config: %s', path, exc_info=True)
 
 
 def _normalize_claude_model_candidate(value):
@@ -8409,6 +8303,8 @@ def _build_claude_command(
     del output_schema_path
     del attachments
     del question_only
+    del execution_cwd
+
     cmd = [_claude_cli_command(), '-p']
     claude_model = _resolve_claude_model(model_override=model_override)
     cli_claude_model = resolve_claude_cli_model_name(claude_model)
@@ -8435,17 +8331,6 @@ def _build_claude_command(
     max_turns = _parse_claude_max_turns()
     if max_turns:
         cmd.extend(['--max-turns', str(max_turns)])
-    if _is_company_claude_structured_mcp_enabled():
-        mcp_config_path = _create_claude_structured_mcp_config(execution_cwd)
-        cmd.extend([
-            '--tools',
-            '',
-            '--strict-mcp-config',
-            '--mcp-config',
-            str(mcp_config_path),
-            '--allowedTools',
-            *_claude_structured_mcp_allowed_tools(),
-        ])
     if stream_json:
         cmd.extend(['--output-format', 'stream-json', '--verbose'])
     elif json_output:
@@ -8990,11 +8875,9 @@ def execute_codex_prompt(
         reasoning_override=reasoning_override,
         attachments=normalized_attachments,
         question_only=question_only,
-        execution_cwd=WORKSPACE_DIR,
         agent_backend=agent_backend,
         inherit_model_settings=inherit_model_settings,
     )
-    claude_mcp_config_path = _claude_mcp_config_path_from_command(cmd)
     queued_at = time.time()
     cli_started_at = None
     completed_at = None
@@ -9030,15 +8913,12 @@ def execute_codex_prompt(
             )
             completed_at = time.time()
     except FileNotFoundError:
-        _cleanup_claude_mcp_config(claude_mcp_config_path)
         command_label = 'claude' if agent_backend == 'claude' else 'codex'
         return None, f'{command_label} 명령을 찾을 수 없습니다.', None, None
     except Exception as exc:
-        _cleanup_claude_mcp_config(claude_mcp_config_path)
         command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
         return None, f'{command_label} 실행 중 오류가 발생했습니다: {exc}', None, None
 
-    _cleanup_claude_mcp_config(claude_mcp_config_path)
     if agent_backend == 'claude':
         json_summary = _extract_claude_json_summary(result.stdout or '')
         token_usage = json_summary.get('usage')
@@ -11364,12 +11244,6 @@ def _run_codex_stream(stream_id, prompt):
         execution_cwd=execution_cwd,
         agent_backend=agent_backend,
     )
-    claude_mcp_config_path = _claude_mcp_config_path_from_command(cmd)
-    if claude_mcp_config_path:
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if stream:
-                stream['claude_mcp_config_path'] = str(claude_mcp_config_path)
     _apply_agent_backend_exec_env(
         exec_env,
         agent_backend,
@@ -11417,7 +11291,6 @@ def _run_codex_stream(stream_id, prompt):
             )
             _write_codex_prompt_to_stdin(process, prompt)
         except FileNotFoundError:
-            _cleanup_claude_mcp_config(claude_mcp_config_path)
             command_label = 'claude' if agent_backend == 'claude' else 'codex'
             _append_stream_chunk(stream_id, 'error', f'{command_label} 명령을 찾을 수 없습니다.\n')
             with state.codex_streams_lock:
@@ -11432,7 +11305,6 @@ def _run_codex_stream(stream_id, prompt):
             _cleanup_output_schema(output_schema_path)
             return
         except Exception as exc:
-            _cleanup_claude_mcp_config(claude_mcp_config_path)
             command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
             _append_stream_chunk(stream_id, 'error', f'{command_label} 실행 중 오류가 발생했습니다: {exc}\n')
             with state.codex_streams_lock:
@@ -11818,7 +11690,6 @@ def _run_codex_stream(stream_id, prompt):
 
         _cleanup_output_last_message(output_path)
         _cleanup_output_schema(output_schema_path)
-        _cleanup_claude_mcp_config(claude_mcp_config_path)
 
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
@@ -11959,7 +11830,6 @@ def create_codex_stream(
         'work_item_completed_seen': False,
         'final_agent_message_after_work_seen': False,
         'codex_session_id': '',
-        'claude_mcp_config_path': '',
         'codex_home': '',
         'assistant_final_empty': False,
         'turn_completed_seen': False,
@@ -12763,7 +12633,6 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
         exit_code = stream.get('exit_code')
         output_path = stream.get('output_path')
-        claude_mcp_config_path = stream.get('claude_mcp_config_path')
         token_usage = _normalize_token_usage(stream.get('token_usage'))
         codex_events = _copy_codex_events(stream.get('codex_events'))
         assistant_final_empty = bool(stream.get('assistant_final_empty'))
@@ -12821,7 +12690,6 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     elif untrusted_output_suppressed or output_file_untrusted_after_work_item:
         output_last_message = ''
     _cleanup_output_last_message(output_path)
-    _cleanup_claude_mcp_config(claude_mcp_config_path)
 
     metadata = _build_stream_message_metadata(
         started_at,

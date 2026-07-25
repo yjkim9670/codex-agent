@@ -317,35 +317,6 @@ helper는 절대 경로, 하위 경로, `..`, 다른 파일명, 비문자열/빈
 모드는 Gateway 전체 트래픽을 중계하지 않으며 모델별 API stream의 지연이나
 NDJSON buffering을 추가하지 않는다.
 
-### 6.1 Workbench 적용 방식
-
-`run_codex_chat_server_company.ps1`로 시작한 Windows Workbench는 기본적으로
-다음 값을 설정한다.
-
-```powershell
-$env:CODEX_CLAUDE_TOOL_RESULT_MODE = "structured_mcp"
-```
-
-이 모드는 선택한 backend가 Claude일 때만 적용된다. Claude 내장 도구는
-비활성화되고 `scripts\claude_structured_workspace_mcp.ps1`의 작업공간 도구가
-대신 노출된다. 파일 읽기·쓰기·편집·목록·검색 및 PowerShell 명령 실행 결과는
-성공과 실패 모두 MCP content-block 배열로 반환된다. 턴별 MCP 설정 파일은
-Workbench 상태 폴더에 만들고 CLI 종료 또는 stream finalize 시 삭제한다.
-DTGPT/Codex backend, 일반 Workbench 실행기, 비Windows 환경에는 이 경로를
-적용하지 않는다.
-
-기존 Claude 내장 도구 방식과 비교하거나 즉시 원복하려면 Workbench 시작 전에
-다음처럼 지정한다. 회사 실행 스크립트는 이미 설정된 값을 덮어쓰지 않는다.
-
-```powershell
-$env:CODEX_CLAUDE_TOOL_RESULT_MODE = "builtin"
-.\run_codex_chat_server_company.ps1
-```
-
-구조화 모드에서 MCP helper 누락 또는 초기화 실패가 발생하면 내장 도구로
-자동 전환하지 않고 해당 Claude 실행을 실패 처리한다. 자동 전환 시 원래의
-422 문제가 성공처럼 숨겨질 수 있기 때문이다.
-
 ## 7. 모든 모델을 high effort 실시간 모드로 일괄 테스트
 
 워크스페이스 루트의 `test_claude_all_models_windows.ps1`을 사용한다. 긴 실행

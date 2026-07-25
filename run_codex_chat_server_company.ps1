@@ -11,17 +11,6 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ParentDir = Split-Path -Parent $ScriptDir
 $env:CODEX_COMPANY_MODE = "1"
-if (-not $env:CODEX_CLAUDE_TOOL_RESULT_MODE) {
-    # The company Gateway requires tool_result.content to remain a content-block
-    # array. Callers can set this to "builtin" to restore Claude's native tools.
-    $env:CODEX_CLAUDE_TOOL_RESULT_MODE = "structured_mcp"
-}
-if (-not $env:CODEX_CLAUDE_MCP_POWERSHELL_BIN) {
-    $CurrentPowerShell = Get-Process -Id $PID
-    if ($CurrentPowerShell -and $CurrentPowerShell.Path) {
-        $env:CODEX_CLAUDE_MCP_POWERSHELL_BIN = $CurrentPowerShell.Path
-    }
-}
 
 if (-not $env:CODEX_CHAT_SECRET_KEY) {
     $SecretBytes = New-Object byte[] 48

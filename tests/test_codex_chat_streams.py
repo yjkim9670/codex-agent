@@ -10,6 +10,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
@@ -130,6 +131,9 @@ def isolated_codex_workspace(tmp_path, monkeypatch):
     monkeypatch.delenv('CODEX_CLI_BIN', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_PERMISSION_MODE', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_TOOL_RESULT_MODE', raising=False)
+    monkeypatch.delenv('CODEX_CLAUDE_MCP_POWERSHELL_BIN', raising=False)
+    monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_SETTINGS_PATH', raising=False)
     monkeypatch.delenv('CODEX_CLAUDE_EFFORT_OPTIONS', raising=False)
 
@@ -1004,6 +1008,29 @@ def test_company_runners_disable_codex_account_login():
     assert '[Environment]::GetEnvironmentVariable("DTGPT_API_KEY", "User")' in powershell_runner
     assert 'Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN' in powershell_runner
     assert 'CODEX_CLAUDE_MODEL_OPTIONS = ($ClaudeAvailableModels -join ",")' not in powershell_runner
+    assert '$env:CODEX_CLAUDE_TOOL_RESULT_MODE = "structured_mcp"' in powershell_runner
+    assert 'CODEX_CLAUDE_MCP_POWERSHELL_BIN' in powershell_runner
+
+
+def test_claude_structured_workspace_mcp_contract_is_present():
+    helper = (
+        PROJECT_ROOT / 'scripts' / 'claude_structured_workspace_mcp.ps1'
+    ).read_text(encoding='utf-8')
+
+    for tool_name in (
+            'read_text_file',
+            'write_text_file',
+            'edit_text_file',
+            'list_directory',
+            'search_text',
+            'run_command'):
+        assert f'name = "{tool_name}"' in helper
+    assert 'content = @(' in helper
+    assert 'isError = $IsError' in helper
+    assert '[IO.Path]::IsPathRooted($RelativePath)' in helper
+    assert '[IO.FileAttributes]::ReparsePoint' in helper
+    assert 'Path is protected by Workbench policy.' in helper
+    assert '$MaxCommandOutputChars = 1MB' in helper
 
 
 def test_local_account_registry_migrates_to_shared_storage(tmp_path, monkeypatch):
@@ -2085,6 +2112,97 @@ def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, m
     ]
     assert '--sandbox' not in cmd
     assert '--config' not in cmd
+
+
+def test_company_claude_structured_mcp_command_is_windows_only(
+        isolated_codex_workspace,
+        monkeypatch):
+    monkeypatch.setenv('CODEX_CLAUDE_CLI_BIN', r'C:\tools\claude.cmd')
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    monkeypatch.setenv('CODEX_CLAUDE_TOOL_RESULT_MODE', 'structured_mcp')
+    monkeypatch.setenv(
+        'CODEX_CLAUDE_MCP_POWERSHELL_BIN',
+        r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+    )
+    monkeypatch.setattr(
+        codex_chat,
+        '_is_company_claude_structured_mcp_enabled',
+        lambda: True,
+    )
+    monkeypatch.setattr(codex_chat, 'CODEX_CLI_SELF_PROTECT', False)
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': 'dtgpt', 'name': 'DTGPT', 'description': 'Codex CLI'},
+        {'id': 'claude', 'name': 'Claude', 'description': 'Claude CLI'},
+    ])
+    execution_cwd = isolated_codex_workspace['workspace_dir']
+
+    backend, cmd = codex_chat._build_agent_command(
+        'sync prompt',
+        json_output=True,
+        agent_backend='claude',
+        execution_cwd=execution_cwd,
+    )
+    config_path = codex_chat._claude_mcp_config_path_from_command(cmd)
+    try:
+        assert backend == 'claude'
+        assert cmd[cmd.index('--tools') + 1] == ''
+        assert '--strict-mcp-config' in cmd
+        allowed_tools_index = cmd.index('--allowedTools')
+        assert cmd[allowed_tools_index + 1:] == [
+            'mcp__workbench_workspace__read_text_file',
+            'mcp__workbench_workspace__write_text_file',
+            'mcp__workbench_workspace__edit_text_file',
+            'mcp__workbench_workspace__list_directory',
+            'mcp__workbench_workspace__search_text',
+            'mcp__workbench_workspace__run_command',
+            '--output-format',
+            'json',
+        ]
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        server = config['mcpServers']['workbench_workspace']
+        assert server['type'] == 'stdio'
+        assert server['command'].endswith('powershell.exe')
+        assert server['args'][server['args'].index('-AllowedRoot') + 1] == str(
+            execution_cwd.resolve()
+        )
+        assert (
+            Path(server['args'][server['args'].index('-File') + 1]).name
+            == 'claude_structured_workspace_mcp.ps1'
+        )
+    finally:
+        codex_chat._cleanup_claude_mcp_config(config_path)
+
+
+@pytest.mark.parametrize(
+    ('platform_name', 'company_mode', 'tool_result_mode'),
+    [
+        ('darwin', '1', 'structured_mcp'),
+        ('win32', '0', 'structured_mcp'),
+        ('win32', '1', 'builtin'),
+        ('win32', '1', ''),
+    ],
+)
+def test_claude_structured_mcp_preserves_builtin_command_outside_company_mode(
+        monkeypatch,
+        platform_name,
+        company_mode,
+        tool_result_mode):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', company_mode)
+    if tool_result_mode:
+        monkeypatch.setenv('CODEX_CLAUDE_TOOL_RESULT_MODE', tool_result_mode)
+    else:
+        monkeypatch.delenv('CODEX_CLAUDE_TOOL_RESULT_MODE', raising=False)
+    monkeypatch.setattr(codex_chat, 'sys', SimpleNamespace(platform=platform_name))
+
+    assert codex_chat._is_company_claude_structured_mcp_enabled() is False
+
+
+def test_claude_structured_mcp_enables_for_company_windows(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    monkeypatch.setenv('CODEX_CLAUDE_TOOL_RESULT_MODE', 'structured_mcp')
+    monkeypatch.setattr(codex_chat, 'sys', SimpleNamespace(platform='win32'))
+
+    assert codex_chat._is_company_claude_structured_mcp_enabled() is True
 
 
 def test_company_claude_exec_env_maps_gateway_token_and_selected_model(monkeypatch):

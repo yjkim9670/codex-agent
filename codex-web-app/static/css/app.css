@@ -6249,10 +6249,80 @@ body.is-work-mode-resizing .work-mode-divider::before {
     gap: 3px;
 }
 
+.work-mode-preview-title-row {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
 .work-mode-preview-title {
     font-size: 12px;
     font-weight: 700;
     color: var(--text-secondary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.work-mode-preview-root-switch {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    height: 20px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+}
+
+.work-mode-preview-root-target {
+    appearance: none;
+    width: 23px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--border);
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-tertiary);
+    font: inherit;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.work-mode-preview-root-target:first-child {
+    border-left: 0;
+}
+
+.work-mode-preview-root-target:hover:not(:disabled) {
+    background: var(--surface-muted);
+    color: var(--text-primary);
+}
+
+.work-mode-preview-root-target:focus-visible {
+    position: relative;
+    z-index: 1;
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.work-mode-preview-root-target.is-active {
+    background: var(--accent);
+    color: #ffffff;
+}
+
+.work-mode-preview-root-target:disabled {
+    cursor: wait;
+    opacity: 0.58;
+}
+
+.work-mode-preview.is-terminal-mode .work-mode-preview-root-switch {
+    display: none;
 }
 
 .work-mode-preview-actions {
@@ -11889,8 +11959,12 @@ label.hover-tooltip,
         display: contents;
     }
 
-    .app.is-work-mode .work-mode-preview-title {
+    .app.is-work-mode .work-mode-preview-title-row {
         grid-area: title;
+        min-width: 0;
+    }
+
+    .app.is-work-mode .work-mode-preview-title {
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;

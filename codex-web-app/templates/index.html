@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=195">
+    <link rel="stylesheet" href="/static/css/app.css?v=196">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -962,7 +962,35 @@
                         </div>
                     </div>
                     <div class="work-mode-preview-heading">
-                        <div class="work-mode-preview-title" id="codex-work-mode-preview-title">File Preview</div>
+                        <div class="work-mode-preview-title-row">
+                            <div class="work-mode-preview-title" id="codex-work-mode-preview-title">File Preview</div>
+                            <div class="work-mode-preview-root-switch" role="group" aria-label="파일 미리보기 루트 바로가기">
+                                <button
+                                    class="work-mode-preview-root-target is-active"
+                                    type="button"
+                                    data-work-mode-root-target="workspace"
+                                    aria-label="Workspace 루트로 이동"
+                                    aria-pressed="true"
+                                    title="Workspace 루트로 이동"
+                                >W</button>
+                                <button
+                                    class="work-mode-preview-root-target"
+                                    type="button"
+                                    data-work-mode-root-target="server"
+                                    aria-label="Server 루트로 이동"
+                                    aria-pressed="false"
+                                    title="Server 루트로 이동"
+                                >S</button>
+                                <button
+                                    class="work-mode-preview-root-target"
+                                    type="button"
+                                    data-work-mode-root-target="tmp"
+                                    aria-label="Tmp 루트로 이동"
+                                    aria-pressed="false"
+                                    title="Tmp 루트로 이동"
+                                >T</button>
+                            </div>
+                        </div>
                         <div class="work-mode-preview-path" id="codex-work-mode-file-path">$workspace</div>
                     </div>
                     <div class="work-mode-preview-actions">
@@ -1610,6 +1638,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=205"></script>
+    <script src="/static/js/app.js?v=206"></script>
 </body>
 </html>

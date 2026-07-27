@@ -2162,6 +2162,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeDivider = document.getElementById('codex-work-mode-divider');
     const workModeFileRefreshBtn = document.getElementById('codex-work-mode-file-refresh');
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
+    const workModeFileRootButtons = Array.from(
+        document.querySelectorAll('.work-mode-preview-root-target[data-work-mode-root-target]')
+    );
     const workModeFolderContextBtn = document.getElementById('codex-work-mode-folder-context');
     const workModeFileBackBtn = document.getElementById('codex-work-mode-file-back');
     const workModeChatBackBtn = document.getElementById('codex-work-mode-chat-back');
@@ -2604,6 +2607,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+    workModeFileRootButtons.forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            void navigateWorkModeFileRoot(button.dataset?.workModeRootTarget);
+        });
+    });
     if (workModeFileNewFileBtn) {
         workModeFileNewFileBtn.addEventListener('click', () => {
             void createFileInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
@@ -5179,7 +5188,10 @@ function getWorkModeFileElements() {
         backBtn: document.getElementById('codex-work-mode-file-back'),
         chatBtn: document.getElementById('codex-work-mode-chat-back'),
         openNewBtn: document.getElementById('codex-work-mode-file-open-new'),
-        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen')
+        fullscreenBtn: document.getElementById('codex-work-mode-file-fullscreen'),
+        rootButtons: Array.from(
+            preview.querySelectorAll('.work-mode-preview-root-target[data-work-mode-root-target]')
+        )
     };
 }
 
@@ -16703,6 +16715,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
         disableColumnResize: loading || !isWorkModeEnabled() || mobile || fold || workModeFileViewerFullscreen,
         disableDivider: loading || workModeFileViewerFullscreen || mobile || fold || !isWorkModeEnabled(),
         onAfterToggle: () => {
+            syncWorkModeFileRootButtons({ loading });
             if (elements.chatBtn) {
                 const canMoveToChat = isWorkModeEnabled()
                     && mobile
@@ -16719,6 +16732,19 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     syncFilePanelSelectionBar(FILE_PANEL_VARIANT_WORK_MODE);
     syncFilePanelViewerActionState(FILE_PANEL_VARIANT_WORK_MODE);
     syncFilePanelFolderContextButton(FILE_PANEL_VARIANT_WORK_MODE, { loading });
+}
+
+function syncWorkModeFileRootButtons({ loading = false } = {}) {
+    const elements = getWorkModeFileElements();
+    if (!elements || !Array.isArray(elements.rootButtons)) return;
+    const activeRoot = normalizeFileBrowserRoot(workModeFileRoot);
+    elements.rootButtons.forEach(button => {
+        const buttonRoot = normalizeFileBrowserRoot(button.dataset?.workModeRootTarget);
+        const isActive = buttonRoot === activeRoot;
+        button.classList.toggle('is-active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        button.disabled = Boolean(loading);
+    });
 }
 
 function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목록을 불러오는 중...') {
@@ -17627,6 +17653,7 @@ async function refreshWorkModeFileDirectory(
         const result = await fetchFileBrowserDirectory(normalizedRoot, normalizedPath);
         workModeFileRoot = normalizeFileBrowserRoot(result?.root || normalizedRoot);
         workModeFilePath = normalizeFileBrowserRelativePath(result?.path || normalizedPath);
+        syncWorkModeFileRootButtons();
         setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath, result?.root_path || '');
 
         const entries = Array.isArray(result?.entries) ? result.entries : [];
@@ -17676,6 +17703,30 @@ async function refreshWorkModeFileDirectory(
     } finally {
         setWorkModeFileDirectoryLoading(false);
     }
+}
+
+async function navigateWorkModeFileRoot(root) {
+    const nextRoot = normalizeFileBrowserRoot(root);
+    if (nextRoot === workModeFileRoot && !workModeFilePath) {
+        return true;
+    }
+    const listed = await refreshWorkModeFileDirectory({
+        root: nextRoot,
+        path: '',
+        force: true
+    });
+    if (!listed) return false;
+
+    workModeFileSelectedPath = '';
+    clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
+    if (isMobileLayout()) {
+        setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
+    } else if (isFoldLayout()) {
+        setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
+    }
+    clearWorkModeFileViewer('파일을 선택하세요.');
+    schedulePersistWorkModeFileViewState();
+    return true;
 }
 
 async function openFileInWorkModePanel(

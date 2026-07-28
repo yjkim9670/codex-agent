@@ -1577,8 +1577,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=206' in template
-    assert '/static/css/app.css?v=196' in template
+    assert '/static/js/app.js?v=207' in template
+    assert '/static/css/app.css?v=197' in template
 
 
 def test_work_mode_file_preview_has_compact_root_shortcuts():
@@ -1615,8 +1615,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=196' in template
-    assert '/static/js/app.js?v=206' in template
+    assert '/static/css/app.css?v=197' in template
+    assert '/static/js/app.js?v=207' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1633,8 +1633,8 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert 'const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;' in app_js
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
-    assert '/static/css/app.css?v=196' in template
-    assert '/static/js/app.js?v=206' in template
+    assert '/static/css/app.css?v=197' in template
+    assert '/static/js/app.js?v=207' in template
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1663,6 +1663,26 @@ def test_usage_history_chart_only_displays_weekly_limit():
     assert 'Ledger total ${totalText} · Req ${requestText}' in app_js
 
 
+def test_usage_history_chart_shows_hover_and_click_cursor_guides():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+    template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
+
+    assert "class: 'cursor-grid-guide cursor-grid-guide-vertical'" in app_js
+    assert "class: 'cursor-grid-guide cursor-grid-guide-horizontal'" in app_js
+    assert 'chart.onpointermove = event =>' in app_js
+    assert 'chart.onpointerleave = () =>' in app_js
+    assert 'chart.onclick = event =>' in app_js
+    assert 'chart.focus({ preventScroll: true });' in app_js
+    assert "if (event.key !== 'Escape') return;" in app_js
+    assert "chart.setAttribute('tabindex', '0');" in app_js
+    assert "chart.dataset.cursorGuide = 'hover-click';" in app_js
+    assert '.usage-history-chart .cursor-grid-guide.is-visible' in app_css
+    assert '.usage-history-chart .cursor-grid-guide.is-pinned' in app_css
+    assert '/static/css/app.css?v=197' in template
+    assert '/static/js/app.js?v=207' in template
+
+
 def test_browser_verification_mode_controls_are_available():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
     template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
@@ -1673,7 +1693,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=206' in template
+    assert '/static/js/app.js?v=207' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1685,7 +1705,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=206')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=207')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js
@@ -1713,7 +1733,7 @@ def test_chat_assistant_label_uses_response_agent_backend():
     assert 'let label = getRoleLabel(role, message);' in app_js
     assert 'response_agent_backend: responseMetadata?.response_agent_backend' in app_js
     assert 'responseAgentBackend: result?.response_agent_backend' in app_js
-    assert '/static/js/app.js?v=206' in index_html
+    assert '/static/js/app.js?v=207' in index_html
 
 
 def test_gfm_markdown_sample_covers_preview_regression_cases():

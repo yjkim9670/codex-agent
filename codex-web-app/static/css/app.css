@@ -5425,6 +5425,25 @@ body.is-mermaid-diagram-viewer-open {
     opacity: 0.95;
 }
 
+.usage-history-chart .cursor-grid-guide {
+    stroke: color-mix(in srgb, #0f62fe 82%, var(--text-primary) 18%);
+    stroke-width: 1.25;
+    stroke-dasharray: 4 4;
+    opacity: 0;
+    pointer-events: none;
+    vector-effect: non-scaling-stroke;
+}
+
+.usage-history-chart .cursor-grid-guide.is-visible {
+    opacity: 0.82;
+}
+
+.usage-history-chart .cursor-grid-guide.is-pinned {
+    stroke-width: 1.5;
+    stroke-dasharray: 6 3;
+    opacity: 1;
+}
+
 .usage-history-chart .axis-label {
     fill: var(--text-tertiary);
     font-size: var(--usage-history-chart-axis-font-size, 11px);

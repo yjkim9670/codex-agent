@@ -14805,6 +14805,102 @@ function renderUsageHistoryChart(history) {
             class: `grid-line ${className}`.trim()
         }));
     };
+    const cursorGuideVertical = createUsageHistorySvgNode('line', {
+        x1: margin.left,
+        y1: margin.top,
+        x2: margin.left,
+        y2: percentBottom,
+        class: 'cursor-grid-guide cursor-grid-guide-vertical'
+    });
+    const cursorGuideHorizontal = createUsageHistorySvgNode('line', {
+        x1: margin.left,
+        y1: margin.top,
+        x2: margin.left + plotWidth,
+        y2: margin.top,
+        class: 'cursor-grid-guide cursor-grid-guide-horizontal'
+    });
+    chart.append(cursorGuideVertical, cursorGuideHorizontal);
+
+    let cursorGuidePinned = false;
+    const setCursorGuideVisible = visible => {
+        [cursorGuideVertical, cursorGuideHorizontal].forEach(guide => {
+            guide.classList.toggle('is-visible', Boolean(visible));
+            guide.classList.toggle('is-pinned', Boolean(visible && cursorGuidePinned));
+        });
+    };
+    const updateCursorGuide = (x, y) => {
+        const normalizedX = Math.max(margin.left, Math.min(margin.left + plotWidth, Number(x)));
+        const normalizedY = Math.max(margin.top, Math.min(percentBottom, Number(y)));
+        if (!Number.isFinite(normalizedX) || !Number.isFinite(normalizedY)) return false;
+        cursorGuideVertical.setAttribute('x1', String(normalizedX));
+        cursorGuideVertical.setAttribute('x2', String(normalizedX));
+        cursorGuideHorizontal.setAttribute('y1', String(normalizedY));
+        cursorGuideHorizontal.setAttribute('y2', String(normalizedY));
+        setCursorGuideVisible(true);
+        return true;
+    };
+    const resolveCursorGuidePoint = event => {
+        const bounds = chart.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0) return null;
+        const x = ((Number(event?.clientX) - bounds.left) / bounds.width) * width;
+        const y = ((Number(event?.clientY) - bounds.top) / bounds.height) * height;
+        if (
+            !Number.isFinite(x)
+            || !Number.isFinite(y)
+            || x < margin.left
+            || x > margin.left + plotWidth
+            || y < margin.top
+            || y > percentBottom
+        ) {
+            return null;
+        }
+        return { x, y };
+    };
+    const clearCursorGuidePin = () => {
+        cursorGuidePinned = false;
+        setCursorGuideVisible(false);
+    };
+    chart.onpointermove = event => {
+        if (cursorGuidePinned) return;
+        const point = resolveCursorGuidePoint(event);
+        if (point) {
+            updateCursorGuide(point.x, point.y);
+        } else {
+            setCursorGuideVisible(false);
+        }
+    };
+    chart.onpointerleave = () => {
+        if (!cursorGuidePinned) setCursorGuideVisible(false);
+    };
+    chart.onclick = event => {
+        const point = resolveCursorGuidePoint(event);
+        if (!point) {
+            clearCursorGuidePin();
+            return;
+        }
+        cursorGuidePinned = true;
+        updateCursorGuide(point.x, point.y);
+        chart.focus({ preventScroll: true });
+    };
+    chart.onkeydown = event => {
+        if (event.key !== 'Escape') return;
+        clearCursorGuidePin();
+        event.stopPropagation();
+    };
+    chart.onfocusin = event => {
+        const target = event.target;
+        if (target === chart || !(target instanceof SVGGraphicsElement)) return;
+        const box = target.getBBox();
+        if (!box || (!box.width && !box.height)) return;
+        cursorGuidePinned = false;
+        updateCursorGuide(box.x + (box.width / 2), box.y + (box.height / 2));
+    };
+    chart.onfocusout = event => {
+        if (cursorGuidePinned || chart.contains(event.relatedTarget)) return;
+        setCursorGuideVisible(false);
+    };
+    chart.setAttribute('tabindex', '0');
+    chart.dataset.cursorGuide = 'hover-click';
     const buildTimeGridIndexes = () => {
         const lastIndex = items.length - 1;
         if (lastIndex <= 0) return [0];

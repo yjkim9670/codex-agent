@@ -656,6 +656,100 @@ def _read_commit_history(repo_root, env, ref_name='HEAD', max_count=20):
     return history, None
 
 
+def _parse_commit_name_status_z(raw_output):
+    tokens = (raw_output or '').split('\0')
+    entries = []
+    index = 0
+    while index < len(tokens):
+        status_code = tokens[index].strip()
+        index += 1
+        if not status_code:
+            continue
+        status = _normalize_status_marker(status_code)
+        is_path_pair = status in {'R', 'C'}
+        required_paths = 2 if is_path_pair else 1
+        if index + required_paths > len(tokens):
+            break
+        original_path = tokens[index] if is_path_pair else ''
+        path = tokens[index + 1] if is_path_pair else tokens[index]
+        index += required_paths
+        path = str(path or '').replace('\\', '/')
+        original_path = str(original_path or '').replace('\\', '/')
+        if not path:
+            continue
+        entry = {
+            'path': path,
+            'status': status,
+            'raw_status': status_code
+        }
+        if original_path:
+            entry['original_path'] = original_path
+        entries.append(entry)
+    return entries
+
+
+def _read_commit_changed_files(repo_root, env, commit_hash):
+    commit = str(commit_hash or '').strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        return None, {
+            'error': '커밋 해시는 40자리 SHA-1 형식이어야 합니다.',
+            'error_code': 'git_commit_hash_invalid'
+        }
+
+    verify_result, verify_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'cat-file', '-e', f'{commit}^{{commit}}'],
+        repo_root,
+        10,
+        env
+    )
+    if verify_error or not verify_result or verify_result.returncode != 0:
+        return None, {
+            'error': '선택한 커밋을 현재 저장소에서 찾을 수 없습니다.',
+            'error_code': 'git_commit_not_found'
+        }
+
+    parent_result, parent_error = _run_git_command(
+        ['git', '-C', str(repo_root), 'rev-list', '--parents', '-n', '1', commit],
+        repo_root,
+        10,
+        env
+    )
+    if parent_error or not parent_result or parent_result.returncode != 0:
+        return None, {
+            'error': '커밋의 부모 정보를 확인할 수 없습니다.',
+            'error_code': 'git_commit_parent_failed'
+        }
+    revision_parts = (parent_result.stdout or '').strip().split()
+    parents = revision_parts[1:] if revision_parts and revision_parts[0].lower() == commit else []
+    base_commit = parents[0] if parents else _GIT_EMPTY_TREE_HASH
+    diff_cmd = [
+        'git', '-C', str(repo_root), 'diff',
+        '--name-status', '-z', '--find-renames', '--find-copies',
+        base_commit, commit, '--'
+    ]
+    diff_result, diff_error = _run_git_command(diff_cmd, repo_root, 30, env)
+    if diff_error or not diff_result or diff_result.returncode != 0:
+        message = (diff_result.stderr or diff_result.stdout or '').strip() if diff_result else ''
+        return None, {
+            'error': message or '커밋의 변경 파일 목록을 불러오지 못했습니다.',
+            'error_code': 'git_commit_detail_failed'
+        }
+
+    changed_files_detail = _parse_commit_name_status_z(diff_result.stdout or '')
+    return {
+        'commit_hash': commit,
+        'parent_hash': parents[0] if parents else '',
+        'parent_count': len(parents),
+        'is_initial_commit': not parents,
+        'is_merge_commit': len(parents) > 1,
+        'comparison_basis': 'first_parent' if parents else 'empty_tree',
+        'changed_files_count': len(changed_files_detail),
+        'changed_files': [entry['path'] for entry in changed_files_detail],
+        'changed_files_detail': changed_files_detail,
+        'command': ' '.join(diff_cmd)
+    }, None
+
+
 def _read_divergence_counts(repo_root, env, left_ref, right_ref):
     left = str(left_ref or '').strip()
     right = str(right_ref or '').strip()
@@ -2338,7 +2432,7 @@ def run_git_action(action, payload=None):
         action = (action or '').strip().lower()
         payload = payload if isinstance(payload, dict) else {}
         if action not in {
-            'status', 'preview', 'message', 'history', 'stage', 'commit', 'push',
+            'status', 'preview', 'message', 'history', 'commit-detail', 'stage', 'commit', 'push',
             'sync', 'sync-preflight', 'sync_preflight', 'revert', 'cancel', 'submit', 'diff'
         }:
             return {'error': '지원하지 않는 git 작업입니다.'}
@@ -2843,6 +2937,31 @@ def run_git_action(action, payload=None):
                         'remote_main_history_error': remote_history_error,
                         'ahead_count': ahead_count,
                         'behind_count': behind_count
+                    }
+                )
+
+            if action == 'commit-detail':
+                detail_payload, detail_error = _read_commit_changed_files(
+                    repo_root,
+                    env,
+                    payload.get('commit_hash') or payload.get('commitHash') or payload.get('sha')
+                )
+                if detail_error:
+                    return {
+                        **detail_error,
+                        'repo_target': repo_target
+                    }
+                return _build_result(
+                    repo_root,
+                    env,
+                    started_at,
+                    command=detail_payload.get('command') or 'git diff --name-status <commit>',
+                    exit_code=0,
+                    stdout='',
+                    stderr='',
+                    extra={
+                        **detail_payload,
+                        'repo_target': repo_target
                     }
                 )
 

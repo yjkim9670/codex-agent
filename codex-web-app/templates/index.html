@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=197">
+    <link rel="stylesheet" href="/static/css/app.css?v=199">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1359,8 +1359,17 @@
                 </button>
             </div>
             <div class="git-history-detail-body">
-                <div class="git-history-detail-label">Comment</div>
-                <pre class="git-history-detail-comment" id="codex-git-history-detail-comment">Comment 내용이 없습니다.</pre>
+                <section class="git-history-detail-section">
+                    <div class="git-history-detail-label">Comment</div>
+                    <pre class="git-history-detail-comment" id="codex-git-history-detail-comment">Comment 내용이 없습니다.</pre>
+                </section>
+                <section class="git-history-detail-section git-history-detail-files">
+                    <div class="git-history-detail-files-heading">
+                        <div class="git-history-detail-label" id="codex-git-history-detail-files-label">Changed files</div>
+                        <div class="git-history-detail-files-status" id="codex-git-history-detail-files-status">변경 파일을 불러오는 중...</div>
+                    </div>
+                    <ul class="git-history-detail-files-list git-file-tree-list is-hidden" id="codex-git-history-detail-files-list"></ul>
+                </section>
             </div>
             <div class="git-history-detail-footer">
                 <button class="btn primary" type="button" id="codex-git-history-detail-close-footer">닫기</button>
@@ -1638,6 +1647,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=207"></script>
+    <script src="/static/js/app.js?v=209"></script>
 </body>
 </html>

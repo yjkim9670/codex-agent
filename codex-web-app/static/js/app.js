@@ -499,6 +499,9 @@ let gitBranchOverlayCollapsedFolders = new Set();
 let gitBranchOverlayPreviewKey = '';
 let gitBranchOverlayFullscreen = false;
 let gitHistoryDetailReturnFocus = null;
+let gitHistoryDetailRequestId = 0;
+let gitHistoryDetailCollapsedFolders = new Set();
+const gitHistoryDetailCache = new Map();
 let gitMutationInFlight = false;
 let gitSyncOverlayRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitSyncHistoryCacheByTarget = {
@@ -12226,9 +12229,22 @@ function normalizeGitChangedFiles(files) {
         const rawStatus = typeof file === 'string'
             ? ''
             : (typeof file.status === 'string' ? file.status.trim() : '');
+        const rawOriginalPath = typeof file === 'string'
+            ? ''
+            : (typeof file.original_path === 'string'
+                ? file.original_path.trim()
+                : (typeof file.originalPath === 'string' ? file.originalPath.trim() : ''));
+        const originalPath = rawOriginalPath.replace(/\\/g, '/').replace(/^\.\//, '');
+        const rawStatusDetail = typeof file === 'string'
+            ? ''
+            : (typeof file.raw_status === 'string'
+                ? file.raw_status.trim()
+                : (typeof file.rawStatus === 'string' ? file.rawStatus.trim() : ''));
         normalized.push({
             path,
-            status: rawStatus.toUpperCase()
+            status: rawStatus.toUpperCase(),
+            originalPath,
+            rawStatus: rawStatusDetail
         });
     });
     return normalized;
@@ -12277,7 +12293,9 @@ function buildGitChangedFileTree(files) {
         cursor.childFiles.push({
             name: fileName,
             path: file.path,
-            status: file.status
+            status: file.status,
+            originalPath: file.originalPath,
+            rawStatus: file.rawStatus
         });
     });
 
@@ -12546,6 +12564,14 @@ function renderGitChangedFileTreeList(options = {}) {
             fileName.className = 'git-file-tree-file-name';
             fileName.textContent = file?.name || file?.path || '(unknown)';
             textWrap.appendChild(fileName);
+
+            if (file?.originalPath && file.originalPath !== file.path) {
+                const originalPath = document.createElement('span');
+                originalPath.className = 'git-file-tree-file-origin';
+                originalPath.textContent = `← ${file.originalPath}`;
+                originalPath.title = `이전 경로: ${file.originalPath}`;
+                textWrap.appendChild(originalPath);
+            }
 
             rowNode.appendChild(textWrap);
 
@@ -13512,6 +13538,9 @@ function getGitHistoryDetailOverlayElements() {
         title: document.getElementById('codex-git-history-detail-title'),
         subtitle: document.getElementById('codex-git-history-detail-subtitle'),
         comment: document.getElementById('codex-git-history-detail-comment'),
+        filesLabel: document.getElementById('codex-git-history-detail-files-label'),
+        filesStatus: document.getElementById('codex-git-history-detail-files-status'),
+        filesList: document.getElementById('codex-git-history-detail-files-list'),
         closeBtn: document.getElementById('codex-git-history-detail-close')
     };
 }
@@ -13521,7 +13550,110 @@ function isGitHistoryDetailOverlayOpen() {
     return overlay ? overlay.classList.contains('is-visible') : false;
 }
 
-function openGitHistoryDetailOverlay(entry, returnFocusElement = null) {
+function getGitHistoryDetailCacheKey(repoTarget, commitHash) {
+    const target = normalizeGitSyncRepoTarget(repoTarget);
+    const commit = String(commitHash || '').trim().toLowerCase();
+    return commit ? `${target}:${commit}` : '';
+}
+
+function renderGitHistoryDetailFiles(detail) {
+    const elements = getGitHistoryDetailOverlayElements();
+    if (!elements) return;
+    const files = normalizeGitChangedFiles(detail?.changed_files_detail || detail?.changedFilesDetail);
+    const declaredCount = normalizeGitChangedFilesCount(
+        detail?.changed_files_count ?? detail?.changedFilesCount
+    );
+    const fileCount = Number.isFinite(declaredCount) ? declaredCount : files.length;
+    const isMergeCommit = Boolean(detail?.is_merge_commit ?? detail?.isMergeCommit);
+    if (elements.filesLabel) {
+        elements.filesLabel.textContent = `Changed files · ${fileCount}`;
+        elements.filesLabel.title = isMergeCommit
+            ? 'Merge commit: 첫 번째 부모를 기준으로 계산한 변경 파일입니다.'
+            : '';
+    }
+    if (elements.filesList) {
+        renderGitChangedFileTreeList({
+            listElement: elements.filesList,
+            files,
+            collapsedFolders: gitHistoryDetailCollapsedFolders,
+            selectable: false,
+            onFolderCollapseToggle: (folderPath, shouldCollapse) => {
+                if (!folderPath) return;
+                if (shouldCollapse) {
+                    gitHistoryDetailCollapsedFolders.add(folderPath);
+                } else {
+                    gitHistoryDetailCollapsedFolders.delete(folderPath);
+                }
+                renderGitHistoryDetailFiles(detail);
+            }
+        });
+        elements.filesList.classList.toggle('is-hidden', files.length === 0);
+    }
+    if (elements.filesStatus) {
+        elements.filesStatus.textContent = files.length
+            ? (isMergeCommit ? '첫 번째 부모 기준' : '')
+            : '변경된 파일이 없습니다.';
+        elements.filesStatus.classList.toggle('is-hidden', files.length > 0 && !isMergeCommit);
+        elements.filesStatus.classList.toggle('is-error', false);
+    }
+}
+
+async function loadGitHistoryDetailFiles(entry, repoTarget, requestId) {
+    const commitHash = typeof entry?.commitHash === 'string' ? entry.commitHash.trim() : '';
+    const cacheKey = getGitHistoryDetailCacheKey(repoTarget, commitHash);
+    const elements = getGitHistoryDetailOverlayElements();
+    if (!elements || !cacheKey) {
+        if (elements?.filesStatus) {
+            elements.filesStatus.textContent = '전체 커밋 해시를 확인할 수 없습니다.';
+            elements.filesStatus.classList.remove('is-hidden');
+            elements.filesStatus.classList.add('is-error');
+        }
+        return;
+    }
+    const cached = gitHistoryDetailCache.get(cacheKey);
+    if (cached) {
+        renderGitHistoryDetailFiles(cached);
+        return;
+    }
+    if (elements.filesStatus) {
+        elements.filesStatus.textContent = '변경 파일을 불러오는 중...';
+        elements.filesStatus.classList.remove('is-hidden', 'is-error');
+    }
+    if (elements.filesList) {
+        elements.filesList.innerHTML = '';
+        elements.filesList.classList.add('is-hidden');
+    }
+    try {
+        const result = await fetchJson('/api/codex/git/commit-detail', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_HISTORY_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({
+                repo_target: normalizeGitSyncRepoTarget(repoTarget),
+                commit_hash: commitHash
+            })
+        });
+        if (requestId !== gitHistoryDetailRequestId || !isGitHistoryDetailOverlayOpen()) {
+            return;
+        }
+        gitHistoryDetailCache.set(cacheKey, result);
+        renderGitHistoryDetailFiles(result);
+    } catch (error) {
+        if (requestId !== gitHistoryDetailRequestId || !isGitHistoryDetailOverlayOpen()) {
+            return;
+        }
+        if (elements.filesLabel) {
+            elements.filesLabel.textContent = 'Changed files';
+        }
+        if (elements.filesStatus) {
+            elements.filesStatus.textContent = error?.message || '변경 파일을 불러오지 못했습니다.';
+            elements.filesStatus.classList.remove('is-hidden');
+            elements.filesStatus.classList.add('is-error');
+        }
+    }
+}
+
+function openGitHistoryDetailOverlay(entry, returnFocusElement = null, repoTarget = gitSyncOverlayRepoTarget) {
     const elements = getGitHistoryDetailOverlayElements();
     if (!elements) return;
     const subject = typeof entry?.subject === 'string' && entry.subject.trim()
@@ -13535,6 +13667,8 @@ function openGitHistoryDetailOverlay(entry, returnFocusElement = null) {
         : 'unknown';
     const timestamp = formatGitHistoryTimestamp(entry?.committedAt);
     const comment = getGitHistoryComment(entry);
+    const requestId = ++gitHistoryDetailRequestId;
+    gitHistoryDetailCollapsedFolders = new Set();
     gitHistoryDetailReturnFocus = returnFocusElement instanceof HTMLElement
         ? returnFocusElement
         : document.activeElement;
@@ -13549,15 +13683,28 @@ function openGitHistoryDetailOverlay(entry, returnFocusElement = null) {
         elements.comment.classList.toggle('is-empty', !comment);
         elements.comment.scrollTop = 0;
     }
+    if (elements.filesLabel) {
+        elements.filesLabel.textContent = 'Changed files';
+    }
+    if (elements.filesStatus) {
+        elements.filesStatus.textContent = '변경 파일을 불러오는 중...';
+        elements.filesStatus.classList.remove('is-hidden', 'is-error');
+    }
+    if (elements.filesList) {
+        elements.filesList.innerHTML = '';
+        elements.filesList.classList.add('is-hidden');
+    }
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
     elements.closeBtn?.focus();
+    void loadGitHistoryDetailFiles(entry, repoTarget, requestId);
 }
 
 function closeGitHistoryDetailOverlay() {
     const elements = getGitHistoryDetailOverlayElements();
     if (!elements) return;
+    gitHistoryDetailRequestId += 1;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
     if (
@@ -13584,6 +13731,7 @@ function renderGitRemoteHistoryList(options = {}) {
     const listElement = options.listElement;
     const emptyElement = options.emptyElement;
     const remoteHistory = normalizeGitHistoryEntries(options.history).slice(0, 10);
+    const repoTarget = normalizeGitSyncRepoTarget(options.repoTarget || gitSyncOverlayRepoTarget);
     const remoteHistoryError = typeof options.error === 'string' ? options.error.trim() : '';
     if (listElement) {
         listElement.innerHTML = '';
@@ -13592,7 +13740,7 @@ function renderGitRemoteHistoryList(options = {}) {
             item.className = 'sync-overlay-history-item';
             item.tabIndex = 0;
             item.setAttribute('role', 'button');
-            item.title = '클릭하면 커밋 제목과 Comment를 표시합니다.';
+            item.title = '클릭하면 Comment와 변경 파일을 표시합니다.';
             const main = document.createElement('div');
             main.className = 'sync-overlay-item-main';
 
@@ -13616,7 +13764,7 @@ function renderGitRemoteHistoryList(options = {}) {
 
             item.appendChild(main);
             item.appendChild(meta);
-            const showDetailOverlay = () => openGitHistoryDetailOverlay(entry, item);
+            const showDetailOverlay = () => openGitHistoryDetailOverlay(entry, item, repoTarget);
             item.addEventListener('click', showDetailOverlay);
             item.addEventListener('keydown', event => {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -13792,7 +13940,8 @@ function renderGitSyncOverlay(history) {
         listElement: elements.list,
         emptyElement: elements.empty,
         history: remoteHistory,
-        error: remoteHistoryError
+        error: remoteHistoryError,
+        repoTarget
     });
     updateGitSyncOverlayActionButtonState({
         repoMissing,
@@ -14774,6 +14923,23 @@ function renderUsageHistoryChart(history) {
         return percentBottom - ((normalized / percentScale) * percentPlotHeight);
     };
     const relationScope = resolveUsageHistoryRelationScope(history);
+    const cursorGuideSnapPointsByIndex = items.map((item, index) => {
+        const points = [{
+            x: xAt(index),
+            y: yToken(tokenDeltas[index]),
+            index,
+            metric: 'tokens'
+        }];
+        if (Number.isFinite(weeklyUsed[index])) {
+            points.push({
+                x: xAt(index),
+                y: yPercent(weeklyUsed[index]),
+                index,
+                metric: 'weekly'
+            });
+        }
+        return points;
+    });
     const appendTooltipHitCircle = (x, y, tooltipText, className = '') => {
         const hit = createUsageHistorySvgNode('circle', {
             cx: x,
@@ -14828,14 +14994,30 @@ function renderUsageHistoryChart(history) {
             guide.classList.toggle('is-pinned', Boolean(visible && cursorGuidePinned));
         });
     };
+    const snapCursorGuidePoint = point => {
+        if (!point || cursorGuideSnapPointsByIndex.length === 0) return null;
+        const nearestIndex = Math.max(
+            0,
+            Math.min(items.length - 1, Math.round((point.x - margin.left) / Math.max(xStep, 1)))
+        );
+        const samplePoints = cursorGuideSnapPointsByIndex[nearestIndex] || [];
+        if (samplePoints.length === 0) return null;
+        return samplePoints.reduce((nearest, candidate) => (
+            Math.abs(candidate.y - point.y) < Math.abs(nearest.y - point.y)
+                ? candidate
+                : nearest
+        ));
+    };
     const updateCursorGuide = (x, y) => {
         const normalizedX = Math.max(margin.left, Math.min(margin.left + plotWidth, Number(x)));
         const normalizedY = Math.max(margin.top, Math.min(percentBottom, Number(y)));
         if (!Number.isFinite(normalizedX) || !Number.isFinite(normalizedY)) return false;
-        cursorGuideVertical.setAttribute('x1', String(normalizedX));
-        cursorGuideVertical.setAttribute('x2', String(normalizedX));
-        cursorGuideHorizontal.setAttribute('y1', String(normalizedY));
-        cursorGuideHorizontal.setAttribute('y2', String(normalizedY));
+        const snappedPoint = snapCursorGuidePoint({ x: normalizedX, y: normalizedY });
+        if (!snappedPoint) return false;
+        cursorGuideVertical.setAttribute('x1', String(snappedPoint.x));
+        cursorGuideVertical.setAttribute('x2', String(snappedPoint.x));
+        cursorGuideHorizontal.setAttribute('y1', String(snappedPoint.y));
+        cursorGuideHorizontal.setAttribute('y2', String(snappedPoint.y));
         setCursorGuideVisible(true);
         return true;
     };
@@ -14901,6 +15083,7 @@ function renderUsageHistoryChart(history) {
     };
     chart.setAttribute('tabindex', '0');
     chart.dataset.cursorGuide = 'hover-click';
+    chart.dataset.cursorGuideSnap = 'records';
     const buildTimeGridIndexes = () => {
         const lastIndex = items.length - 1;
         if (lastIndex <= 0) return [0];

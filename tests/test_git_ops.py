@@ -8,6 +8,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from codex_agent import codex_app
+from codex_agent.blueprints import codex_chat as codex_chat_blueprint
 from codex_agent.services import codex_chat, git_ops
 
 
@@ -197,6 +199,118 @@ def test_git_diff_returns_untracked_file_changes(tmp_path, monkeypatch):
     assert result['is_untracked'] is True
     assert 'new file mode' in result['diff']
     assert '+scratch' in result['diff']
+
+
+def test_git_commit_detail_lists_initial_commit_files(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'docs/초기 문서.txt', 'initial\n')
+    commit_hash = _run_git(repo_root, 'rev-parse', 'HEAD').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('commit-detail', {
+        'repo_target': 'workspace',
+        'commit_hash': commit_hash,
+    })
+
+    assert result['ok'] is True
+    assert result['commit_hash'] == commit_hash
+    assert result['is_initial_commit'] is True
+    assert result['comparison_basis'] == 'empty_tree'
+    assert result['changed_files_count'] == 1
+    assert result['changed_files_detail'] == [{
+        'path': 'docs/초기 문서.txt',
+        'status': 'A',
+        'raw_status': 'A',
+    }]
+
+
+def test_git_commit_detail_preserves_rename_paths(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'old name.txt', 'same content\n')
+    (repo_root / 'nested').mkdir()
+    _run_git(repo_root, 'mv', 'old name.txt', 'nested/new name.txt')
+    _run_git(repo_root, 'commit', '-qm', 'rename file')
+    commit_hash = _run_git(repo_root, 'rev-parse', 'HEAD').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('commit-detail', {
+        'repo_target': 'workspace',
+        'commit_hash': commit_hash,
+    })
+
+    assert result['ok'] is True
+    assert result['changed_files_detail'] == [{
+        'path': 'nested/new name.txt',
+        'status': 'R',
+        'raw_status': 'R100',
+        'original_path': 'old name.txt',
+    }]
+
+
+def test_git_commit_detail_uses_first_parent_for_merge_commit(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'base.txt', 'base\n')
+    main_branch = _run_git(repo_root, 'branch', '--show-current').stdout.strip()
+    _run_git(repo_root, 'checkout', '-qb', 'feature')
+    _commit_file(repo_root, 'feature.txt', 'feature\n')
+    _run_git(repo_root, 'checkout', '-q', main_branch)
+    _commit_file(repo_root, 'main.txt', 'main\n')
+    _run_git(repo_root, 'merge', '--no-ff', '-qm', 'merge feature', 'feature')
+    commit_hash = _run_git(repo_root, 'rev-parse', 'HEAD').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('commit-detail', {
+        'repo_target': 'workspace',
+        'commit_hash': commit_hash,
+    })
+
+    assert result['ok'] is True
+    assert result['is_merge_commit'] is True
+    assert result['parent_count'] == 2
+    assert result['comparison_basis'] == 'first_parent'
+    assert result['changed_files'] == ['feature.txt']
+
+
+def test_git_commit_detail_rejects_non_full_sha(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'tracked.txt')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+
+    result = git_ops.run_git_action('commit-detail', {
+        'repo_target': 'workspace',
+        'commit_hash': 'deadbeef',
+    })
+
+    assert result['error_code'] == 'git_commit_hash_invalid'
+
+
+def test_git_commit_detail_api_returns_changed_file_tree_data(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'workspace'
+    _init_repo(repo_root)
+    _commit_file(repo_root, 'src/nested/app.py', 'print("ok")\n')
+    commit_hash = _run_git(repo_root, 'rev-parse', 'HEAD').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', repo_root)
+    monkeypatch.setattr(codex_app, 'ensure_usage_snapshot_background_worker', lambda: None)
+    monkeypatch.setattr(codex_app, 'ensure_pending_queue_background_worker', lambda: None)
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ENABLE_GIT_API', True)
+    app = codex_app.create_codex_app()
+    app.config['TESTING'] = True
+
+    with app.test_client() as client:
+        response = client.post('/api/codex/git/commit-detail', json={
+            'repo_target': 'workspace',
+            'commit_hash': commit_hash,
+        })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['commit_hash'] == commit_hash
+    assert payload['changed_files_count'] == 1
+    assert payload['changed_files_detail'][0]['path'] == 'src/nested/app.py'
 
 
 def test_git_message_generates_detailed_message_with_codex_cli(tmp_path, monkeypatch):

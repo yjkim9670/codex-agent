@@ -655,6 +655,7 @@ let remoteStreamStatusInFlight = false;
 let sessionLoadLockStartedAt = 0;
 let streamMonitorState = null;
 let usageHistoryLastRequestedHours = USAGE_HISTORY_DEFAULT_HOURS;
+let usageHistoryLastRequestedScope = 'account';
 let usageHistoryResizeRaf = 0;
 let answerCompleteNoticeDismissHandler = null;
 let hoverTooltipInteractionsBound = false;
@@ -3086,6 +3087,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const hours = normalizeUsageHistoryRangeHours(button.dataset?.hours);
             if (hours === usageHistoryLastRequestedHours) return;
             void refreshUsageHistory({ hours, silent: false });
+        });
+    });
+    document.querySelectorAll('#codex-usage-history-scope-tabs [data-scope]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            const scope = normalizeUsageHistoryScope(button.dataset?.scope);
+            if (scope === usageHistoryLastRequestedScope) return;
+            void refreshUsageHistory({ scope, silent: false });
         });
     });
     if (usageRefreshBtn) {
@@ -14044,6 +14053,8 @@ function getUsageHistoryOverlayElements() {
         meta: document.getElementById('codex-usage-history-overlay-meta'),
         rangeTabs: document.getElementById('codex-usage-history-range-tabs'),
         rangeButtons: Array.from(document.querySelectorAll('#codex-usage-history-range-tabs [data-hours]')),
+        scopeTabs: document.getElementById('codex-usage-history-scope-tabs'),
+        scopeButtons: Array.from(document.querySelectorAll('#codex-usage-history-scope-tabs [data-scope]')),
         costSummary: document.getElementById('codex-usage-history-cost-summary'),
         summaryDetails: document.getElementById('codex-usage-history-summary-details'),
         summaryToggleMeta: document.getElementById('codex-usage-history-summary-toggle-meta'),
@@ -14169,6 +14180,12 @@ function normalizeUsageHistoryRangeHours(hours) {
     return USAGE_HISTORY_DEFAULT_HOURS;
 }
 
+function normalizeUsageHistoryScope(scope) {
+    return String(scope || '').trim().toLowerCase() === 'workspace'
+        ? 'workspace'
+        : 'account';
+}
+
 function syncUsageHistoryRangeControls(hours) {
     const elements = getUsageHistoryOverlayElements();
     if (!elements?.rangeButtons) return;
@@ -14176,6 +14193,18 @@ function syncUsageHistoryRangeControls(hours) {
     elements.rangeButtons.forEach(button => {
         const buttonHours = normalizeUsageHistoryRangeHours(button.dataset?.hours);
         const active = buttonHours === activeHours;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+
+function syncUsageHistoryScopeControls(scope) {
+    const elements = getUsageHistoryOverlayElements();
+    if (!elements?.scopeButtons) return;
+    const activeScope = normalizeUsageHistoryScope(scope);
+    elements.scopeButtons.forEach(button => {
+        const buttonScope = normalizeUsageHistoryScope(button.dataset?.scope);
+        const active = buttonScope === activeScope;
         button.classList.toggle('is-active', active);
         button.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
@@ -15379,6 +15408,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         ? normalizeUsageHistoryRangeHours(requestedHours)
         : USAGE_HISTORY_DEFAULT_HOURS;
     syncUsageHistoryRangeControls(usageHistoryLastRequestedHours);
+    usageHistoryLastRequestedScope = normalizeUsageHistoryScope(
+        history?.requested_scope || usageHistoryLastRequestedScope
+    );
+    syncUsageHistoryScopeControls(usageHistoryLastRequestedScope);
     const itemCount = Number(history?.count);
     const updatedAt = formatResetTimestamp(history?.updated_at);
     const hoursText = usageHistoryLastRequestedHours;
@@ -15445,13 +15478,22 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
     renderUsageHistoryLegend(history);
 }
 
-async function refreshUsageHistory({ hours = USAGE_HISTORY_DEFAULT_HOURS, silent = true } = {}) {
+async function refreshUsageHistory({
+    hours = usageHistoryLastRequestedHours,
+    scope = usageHistoryLastRequestedScope,
+    silent = true
+} = {}) {
     const normalizedHours = Number.isFinite(Number(hours)) && Number(hours) > 0
         ? normalizeUsageHistoryRangeHours(hours)
         : USAGE_HISTORY_DEFAULT_HOURS;
     usageHistoryLastRequestedHours = normalizedHours;
+    usageHistoryLastRequestedScope = normalizeUsageHistoryScope(scope);
     syncUsageHistoryRangeControls(normalizedHours);
-    const query = new URLSearchParams({ hours: String(normalizedHours) }).toString();
+    syncUsageHistoryScopeControls(usageHistoryLastRequestedScope);
+    const query = new URLSearchParams({
+        hours: String(normalizedHours),
+        scope: usageHistoryLastRequestedScope
+    }).toString();
     try {
         const result = await fetchJson(`/api/codex/usage/history?${query}`, {
             cache: 'no-store',
@@ -15556,7 +15598,12 @@ async function openUsageHistoryOverlay() {
         elements.empty.classList.add('is-hidden');
     }
     syncUsageHistoryRangeControls(usageHistoryLastRequestedHours);
-    await refreshUsageHistory({ hours: usageHistoryLastRequestedHours, silent: true });
+    syncUsageHistoryScopeControls(usageHistoryLastRequestedScope);
+    await refreshUsageHistory({
+        hours: usageHistoryLastRequestedHours,
+        scope: usageHistoryLastRequestedScope,
+        silent: true
+    });
 }
 
 function closeUsageHistoryOverlay() {

@@ -684,7 +684,10 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     loaded = codex_chat._load_usage_history_ledger(path=history_path)
     assert len(loaded['items']) == expected_hours
 
-    summary = codex_chat.get_usage_history_summary(hours=expected_hours)
+    summary = codex_chat.get_usage_history_summary(
+        hours=expected_hours,
+        scope='workspace',
+    )
 
     assert summary['requested_hours'] == expected_hours
     assert summary['retention_days'] == expected_days
@@ -697,6 +700,131 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     assert summary['averages']['weekly']['avg_tokens_per_hour'] == pytest.approx(120)
     assert summary['averages']['weekly']['token_total'] == 120 * (24 * 7)
     assert summary['averages']['weekly']['sample_count'] == 24 * 7
+
+
+def test_usage_history_v2_separates_account_and_current_workspace_series(
+        isolated_codex_workspace):
+    history_path = isolated_codex_workspace['usage_history_path']
+    start = datetime(2026, 7, 20, 10, 0, tzinfo=codex_chat.KST)
+    buckets = [
+        codex_chat.normalize_timestamp(start + timedelta(hours=index))
+        for index in range(3)
+    ]
+    limit_samples = [
+        {
+            'bucket_start': bucket,
+            'recorded_at': bucket,
+            'limits_observed_at': bucket,
+            'weekly_used_percent': 10 + index,
+        }
+        for index, bucket in enumerate(buckets)
+    ]
+    account_samples = [
+        {
+            'bucket_start': bucket,
+            'recorded_at': bucket,
+            'token_account_total': total,
+        }
+        for bucket, total in zip(buckets, (100, 200, 350))
+    ]
+    workspace_samples = []
+    for bucket, current_total, other_total in zip(
+            buckets, (10, 30, 60), (1000, 1400, 1900)):
+        workspace_samples.extend([
+            {
+                'bucket_start': bucket,
+                'recorded_at': bucket,
+                'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
+                'workspace_path': str(isolated_codex_workspace['workspace_dir']),
+                'token_workspace_total': current_total,
+            },
+            {
+                'bucket_start': bucket,
+                'recorded_at': bucket,
+                'workspace_scope_id': 'other-workspace',
+                'workspace_path': '/tmp/other-workspace',
+                'token_workspace_total': other_total,
+            },
+        ])
+
+    codex_chat._save_usage_history_ledger({
+        **codex_chat._empty_usage_history_ledger(),
+        'account_limit_samples': limit_samples,
+        'account_token_samples': account_samples,
+        'workspace_token_samples': workspace_samples,
+    }, path=history_path)
+
+    account_summary = codex_chat.get_usage_history_summary(hours=24)
+    workspace_summary = codex_chat.get_usage_history_summary(
+        hours=24,
+        scope='workspace',
+    )
+
+    assert account_summary['requested_scope'] == 'account'
+    assert account_summary['token_delta_scope'] == 'account'
+    assert account_summary['token_delta_total'] == 250
+    assert workspace_summary['requested_scope'] == 'workspace'
+    assert workspace_summary['token_delta_scope'] == 'workspace'
+    assert workspace_summary['token_delta_total'] == 50
+    assert [
+        item['token_workspace_total'] for item in workspace_summary['items']
+    ] == [10, 30, 60]
+    assert account_summary['scope']['workspace_sample_count'] == 3
+    assert account_summary['scope']['account_sample_count'] == 3
+    assert account_summary['scope']['limit_sample_count'] == 3
+
+
+def test_usage_history_places_limits_in_the_actual_observation_bucket():
+    snapshot = {
+        'bucket_start': '2026-07-20T12:00:00+09:00',
+        'recorded_at': '2026-07-20T12:30:00+09:00',
+        'limits_observed_at': '2026-07-20T10:45:00+09:00',
+        'weekly_used_percent': 42,
+    }
+
+    limit_sample, account_sample, workspace_sample = (
+        codex_chat._split_usage_history_snapshot(snapshot)
+    )
+
+    assert limit_sample['bucket_start'] == '2026-07-20T10:00:00+09:00'
+    assert limit_sample['limits_observed_at'] == '2026-07-20T10:45:00+09:00'
+    assert account_sample['bucket_start'] == '2026-07-20T12:00:00+09:00'
+    assert workspace_sample['bucket_start'] == '2026-07-20T12:00:00+09:00'
+
+
+def test_usage_history_does_not_count_pre_scope_limits_as_token_growth():
+    limit_samples = [
+        {
+            'bucket_start': '2026-07-20T09:00:00+09:00',
+            'recorded_at': '2026-07-20T09:10:00+09:00',
+            'limits_observed_at': '2026-07-20T09:05:00+09:00',
+            'weekly_used_percent': 10,
+        },
+        {
+            'bucket_start': '2026-07-20T10:00:00+09:00',
+            'recorded_at': '2026-07-20T10:10:00+09:00',
+            'limits_observed_at': '2026-07-20T10:05:00+09:00',
+            'weekly_used_percent': 11,
+        },
+    ]
+    workspace_samples = [{
+        'bucket_start': '2026-07-20T10:00:00+09:00',
+        'recorded_at': '2026-07-20T10:10:00+09:00',
+        'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
+        'workspace_path': '/tmp/current-workspace',
+        'token_workspace_total': 500,
+    }]
+
+    merged = codex_chat._merge_usage_history_series(
+        limit_samples,
+        workspace_samples,
+        scope='workspace',
+    )
+    derived = codex_chat._build_usage_history_items(merged)
+
+    assert len(derived) == 1
+    assert derived[0]['bucket_start'] == '2026-07-20T10:00:00+09:00'
+    assert derived[0]['delta_workspace_tokens'] == 0
 
 
 def test_extract_limits_does_not_reuse_weekly_only_window_for_five_hour():
@@ -840,7 +968,7 @@ def test_usage_history_splits_limit_relations_at_plan_boundary(isolated_codex_wo
         'items': items,
     }, path=history_path)
 
-    summary = codex_chat.get_usage_history_summary(hours=24)
+    summary = codex_chat.get_usage_history_summary(hours=24, scope='workspace')
 
     assert summary['current_plan']['id'] == 'pro-5x'
     assert summary['relation']['plan_period_id'] == 'pro-5x'

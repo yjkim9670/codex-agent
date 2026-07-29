@@ -5272,9 +5272,16 @@ body.is-mermaid-diagram-viewer-open {
     gap: 10px;
 }
 
+.usage-history-filter-groups {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.usage-history-scope-tabs,
 .usage-history-range-tabs {
     display: inline-grid;
-    grid-template-columns: repeat(5, minmax(48px, 1fr));
     gap: 2px;
     padding: 2px;
     border: 1px solid var(--border);
@@ -5282,6 +5289,15 @@ body.is-mermaid-diagram-viewer-open {
     background: var(--surface-muted);
 }
 
+.usage-history-scope-tabs {
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
+}
+
+.usage-history-range-tabs {
+    grid-template-columns: repeat(5, minmax(48px, 1fr));
+}
+
+.usage-history-scope-btn,
 .usage-history-range-btn {
     appearance: none;
     min-height: 28px;
@@ -5297,12 +5313,15 @@ body.is-mermaid-diagram-viewer-open {
     white-space: nowrap;
 }
 
+.usage-history-scope-btn:hover,
+.usage-history-scope-btn:focus-visible,
 .usage-history-range-btn:hover,
 .usage-history-range-btn:focus-visible {
     color: var(--text-primary);
     background: var(--surface);
 }
 
+.usage-history-scope-btn.is-active,
 .usage-history-range-btn.is-active {
     color: var(--text-primary);
     background: var(--surface);
@@ -5482,7 +5501,7 @@ body.is-mermaid-diagram-viewer-open {
 
 .usage-history-chart .cursor-grid-guide {
     stroke: color-mix(in srgb, #0f62fe 46%, var(--border) 54%);
-    stroke-width: 0.75;
+    stroke-width: 1;
     stroke-dasharray: 3 5;
     opacity: 0;
     pointer-events: none;
@@ -11160,6 +11179,15 @@ label.hover-tooltip,
     }
 
     .usage-history-range-tabs {
+        width: 100%;
+    }
+
+    .usage-history-filter-groups {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .usage-history-scope-tabs {
         width: 100%;
     }
 

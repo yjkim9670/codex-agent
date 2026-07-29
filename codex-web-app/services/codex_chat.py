@@ -190,7 +190,7 @@ _TOKEN_PART_KEYS = (
 
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
-_USAGE_HISTORY_VERSION = 1
+_USAGE_HISTORY_VERSION = 2
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_RETENTION_DAYS = 90
@@ -4714,7 +4714,9 @@ def import_codex_account_usage_histories(account_id, source_paths):
     with _USAGE_HISTORY_LOCK:
         with _acquire_path_file_lock(context['usage_history_path']):
             target = _load_usage_history_ledger(path=context['usage_history_path'])
-            snapshots = list(target.get('items') or [])
+            limit_samples = list(target.get('account_limit_samples') or [])
+            account_samples = list(target.get('account_token_samples') or [])
+            workspace_samples = list(target.get('workspace_token_samples') or [])
             for path in paths:
                 try:
                     if not path.is_file():
@@ -4722,31 +4724,51 @@ def import_codex_account_usage_histories(account_id, source_paths):
                 except OSError:
                     continue
                 source = _load_usage_history_ledger(path=path)
-                source_items = list(source.get('items') or [])
-                if not source_items:
+                source_limit_samples = list(source.get('account_limit_samples') or [])
+                source_account_samples = list(source.get('account_token_samples') or [])
+                source_workspace_samples = list(source.get('workspace_token_samples') or [])
+                if not (
+                    source_limit_samples
+                    or source_account_samples
+                    or source_workspace_samples
+                ):
                     continue
-                snapshots.extend(source_items)
+                limit_samples.extend(source_limit_samples)
+                account_samples.extend(source_account_samples)
+                workspace_samples.extend(source_workspace_samples)
                 imported_paths.append(str(path))
 
-            deduped = {}
-            for raw_snapshot in snapshots:
-                snapshot = _normalize_usage_history_snapshot(raw_snapshot)
-                if snapshot is None:
-                    continue
-                key = snapshot['bucket_start']
-                current = deduped.get(key)
-                if current is None or snapshot['recorded_at'] >= current['recorded_at']:
-                    deduped[key] = snapshot
-            items = sorted(deduped.values(), key=lambda item: item['bucket_start'])
-            if len(items) > _USAGE_HISTORY_MAX_ITEMS:
-                items = items[-_USAGE_HISTORY_MAX_ITEMS:]
-            target['items'] = items
+            target['account_limit_samples'] = _usage_history_latest_by_key(
+                limit_samples,
+                lambda item: item.get('bucket_start') or '',
+                lambda item: (
+                    item.get('limits_observed_at')
+                    or item.get('recorded_at')
+                    or ''
+                ),
+            )[-_USAGE_HISTORY_MAX_ITEMS:]
+            target['account_token_samples'] = _usage_history_latest_by_key(
+                account_samples,
+                lambda item: item.get('bucket_start') or '',
+            )[-_USAGE_HISTORY_MAX_ITEMS:]
+            target['workspace_token_samples'] = _usage_history_latest_by_key(
+                workspace_samples,
+                lambda item: (
+                    item.get('bucket_start') or '',
+                    item.get('workspace_scope_id') or '',
+                ),
+            )
+            target['items'] = _merge_usage_history_series(
+                target['account_limit_samples'],
+                target['account_token_samples'],
+                scope='account',
+            )[-_USAGE_HISTORY_MAX_ITEMS:]
             target['updated_at'] = normalize_timestamp(None)
             _save_usage_history_ledger(target, path=context['usage_history_path'])
     return {
         'account_id': context['account']['id'],
         'path': str(context['usage_history_path']),
-        'count': len(target.get('items') or []),
+        'count': len(target.get('account_token_samples') or []),
         'imported_paths': imported_paths,
     }
 
@@ -5600,7 +5622,11 @@ def _empty_usage_history_ledger():
         'updated_at': normalize_timestamp(None),
         'bucket_hours': _USAGE_HISTORY_BUCKET_HOURS,
         'timezone': 'Asia/Seoul',
-        'items': []
+        'account_limit_samples': [],
+        'account_token_samples': [],
+        'workspace_token_samples': [],
+        # Kept as a synthesized compatibility view for older callers and exports.
+        'items': [],
     }
 
 
@@ -5668,9 +5694,13 @@ def _normalize_usage_history_snapshot(value):
 
     workspace_scope_id = str(value.get('workspace_scope_id') or '').strip() or _WORKSPACE_SCOPE_ID
     workspace_path = str(value.get('workspace_path') or '').strip() or str(WORKSPACE_DIR)
+    limits_observed_at = _normalize_optional_timestamp(
+        value.get('limits_observed_at') or value.get('rate_limits_observed_at')
+    )
     return {
         'bucket_start': bucket_start,
         'recorded_at': recorded_at,
+        'limits_observed_at': limits_observed_at,
         'workspace_scope_id': workspace_scope_id,
         'workspace_path': workspace_path,
         'token_total': workspace_token_total or 0,
@@ -5698,6 +5728,153 @@ def _normalize_usage_history_snapshot(value):
     }
 
 
+def _usage_history_latest_by_key(items, key_builder, timestamp_builder=None):
+    deduped = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = key_builder(item)
+        timestamp = (
+            timestamp_builder(item)
+            if timestamp_builder is not None
+            else item.get('recorded_at') or item.get('bucket_start') or ''
+        )
+        current = deduped.get(key)
+        current_timestamp = (
+            timestamp_builder(current)
+            if current is not None and timestamp_builder is not None
+            else (current or {}).get('recorded_at') or (current or {}).get('bucket_start') or ''
+        )
+        if current is None or timestamp >= current_timestamp:
+            deduped[key] = item
+    return sorted(
+        deduped.values(),
+        key=lambda item: (
+            item.get('bucket_start') or '',
+            item.get('workspace_scope_id') or '',
+        ),
+    )
+
+
+def _split_usage_history_snapshot(snapshot):
+    normalized = _normalize_usage_history_snapshot(snapshot)
+    if normalized is None:
+        return None, None, None
+
+    limit_sample = {
+        'bucket_start': _usage_history_bucket_start_text(
+            normalized.get('limits_observed_at') or normalized.get('bucket_start')
+        ),
+        'recorded_at': normalized['recorded_at'],
+        'limits_observed_at': (
+            normalized.get('limits_observed_at') or normalized['recorded_at']
+        ),
+        'five_hour_used_percent': normalized.get('five_hour_used_percent'),
+        'weekly_used_percent': normalized.get('weekly_used_percent'),
+        'five_hour_resets_at': normalized.get('five_hour_resets_at') or '',
+        'weekly_resets_at': normalized.get('weekly_resets_at') or '',
+    }
+    has_limits = (
+        limit_sample['five_hour_used_percent'] is not None
+        or limit_sample['weekly_used_percent'] is not None
+    )
+
+    account_sample = {
+        'bucket_start': normalized['bucket_start'],
+        'recorded_at': normalized['recorded_at'],
+        'token_account_total': normalized['token_account_total'],
+        'token_account_input': normalized['token_account_input'],
+        'token_account_cached_input': normalized['token_account_cached_input'],
+        'token_account_output': normalized['token_account_output'],
+        'token_account_reasoning_output': normalized['token_account_reasoning_output'],
+        'token_account_requests': normalized['token_account_requests'],
+    }
+    workspace_sample = {
+        'bucket_start': normalized['bucket_start'],
+        'recorded_at': normalized['recorded_at'],
+        'workspace_scope_id': normalized['workspace_scope_id'],
+        'workspace_path': normalized['workspace_path'],
+        'token_workspace_total': normalized['token_workspace_total'],
+        'token_workspace_input': normalized['token_workspace_input'],
+        'token_workspace_cached_input': normalized['token_workspace_cached_input'],
+        'token_workspace_output': normalized['token_workspace_output'],
+        'token_workspace_reasoning_output': normalized['token_workspace_reasoning_output'],
+        'token_workspace_requests': normalized['token_workspace_requests'],
+    }
+    return limit_sample if has_limits else None, account_sample, workspace_sample
+
+
+def _merge_usage_history_series(limit_samples, token_samples, scope='account'):
+    normalized_scope = 'workspace' if scope == 'workspace' else 'account'
+    token_prefix = 'token_workspace_' if normalized_scope == 'workspace' else 'token_account_'
+    token_samples = list(token_samples or [])
+    first_token_bucket = min(
+        (
+            str(item.get('bucket_start') or '').strip()
+            for item in token_samples
+            if str(item.get('bucket_start') or '').strip()
+        ),
+        default='',
+    )
+    buckets = {}
+    for limit in limit_samples or []:
+        bucket = str(limit.get('bucket_start') or '').strip()
+        if bucket and (not first_token_bucket or bucket >= first_token_bucket):
+            buckets.setdefault(bucket, {})['limit'] = limit
+    for token in token_samples:
+        bucket = str(token.get('bucket_start') or '').strip()
+        if bucket:
+            buckets.setdefault(bucket, {})['token'] = token
+
+    merged = []
+    last_token = None
+    for bucket in sorted(buckets):
+        parts = buckets[bucket]
+        if parts.get('token') is not None:
+            last_token = parts['token']
+        token = last_token or {}
+        limit = parts.get('limit') or {}
+        recorded_at = max(
+            str(token.get('recorded_at') or bucket),
+            str(limit.get('recorded_at') or bucket),
+        )
+        workspace_scope_id = (
+            str(token.get('workspace_scope_id') or '').strip()
+            if normalized_scope == 'workspace'
+            else _WORKSPACE_SCOPE_ID
+        )
+        workspace_path = (
+            str(token.get('workspace_path') or '').strip()
+            if normalized_scope == 'workspace'
+            else str(WORKSPACE_DIR)
+        )
+        snapshot = {
+            'bucket_start': bucket,
+            'recorded_at': recorded_at,
+            'limits_observed_at': limit.get('limits_observed_at') or '',
+            'workspace_scope_id': workspace_scope_id or _WORKSPACE_SCOPE_ID,
+            'workspace_path': workspace_path or str(WORKSPACE_DIR),
+            'five_hour_used_percent': limit.get('five_hour_used_percent'),
+            'weekly_used_percent': limit.get('weekly_used_percent'),
+            'five_hour_resets_at': limit.get('five_hour_resets_at') or '',
+            'weekly_resets_at': limit.get('weekly_resets_at') or '',
+        }
+        for suffix in (
+            'total',
+            'input',
+            'cached_input',
+            'output',
+            'reasoning_output',
+            'requests',
+        ):
+            value = _coerce_non_negative_int(token.get(f'{token_prefix}{suffix}')) or 0
+            snapshot[f'{token_prefix}{suffix}'] = value
+            if normalized_scope == 'workspace':
+                snapshot[f'token_{suffix}'] = value
+        merged.append(_normalize_usage_history_snapshot(snapshot))
+    return [item for item in merged if item is not None]
+
+
 def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
     legacy_path = LEGACY_CODEX_USAGE_HISTORY_PATH if path == CODEX_USAGE_HISTORY_PATH else path
     source_path = _resolve_existing_path(path, legacy_path)
@@ -5715,7 +5892,7 @@ def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
         return _empty_usage_history_ledger()
 
     ledger = _empty_usage_history_ledger()
-    ledger['version'] = _coerce_non_negative_int(data.get('version')) or _USAGE_HISTORY_VERSION
+    ledger['version'] = _USAGE_HISTORY_VERSION
     ledger['updated_at'] = normalize_timestamp(data.get('updated_at'))
     bucket_hours = _coerce_non_negative_int(data.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS
     ledger['bucket_hours'] = max(1, bucket_hours)
@@ -5723,28 +5900,84 @@ def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
     if timezone_text:
         ledger['timezone'] = timezone_text
 
+    limit_samples = []
+    account_samples = []
+    workspace_samples = []
+
     raw_items = data.get('items')
     if raw_items is None:
         raw_items = data.get('snapshots')
     if isinstance(raw_items, list):
-        deduped = {}
         for entry in raw_items:
-            snapshot = _normalize_usage_history_snapshot(entry)
-            if not snapshot:
-                continue
-            key = snapshot['bucket_start']
-            current = deduped.get(key)
-            if not current or snapshot['recorded_at'] >= current['recorded_at']:
-                deduped[key] = snapshot
-        items = sorted(deduped.values(), key=lambda item: item.get('bucket_start', ''))
-        if len(items) > _USAGE_HISTORY_MAX_ITEMS:
-            items = items[-_USAGE_HISTORY_MAX_ITEMS:]
-        ledger['items'] = items
+            limit, account, workspace = _split_usage_history_snapshot(entry)
+            if limit is not None:
+                limit_samples.append(limit)
+            if account is not None:
+                account_samples.append(account)
+            if workspace is not None:
+                workspace_samples.append(workspace)
+
+    for entry in data.get('account_limit_samples') or []:
+        limit, _account, _workspace = _split_usage_history_snapshot(entry)
+        if limit is not None:
+            limit_samples.append(limit)
+    for entry in data.get('account_token_samples') or []:
+        _limit, account, _workspace = _split_usage_history_snapshot(entry)
+        if account is not None:
+            account_samples.append(account)
+    for entry in data.get('workspace_token_samples') or []:
+        _limit, _account, workspace = _split_usage_history_snapshot(entry)
+        if workspace is not None:
+            workspace_samples.append(workspace)
+
+    limit_samples = _usage_history_latest_by_key(
+        limit_samples,
+        lambda item: item.get('bucket_start') or '',
+        lambda item: item.get('limits_observed_at') or item.get('recorded_at') or '',
+    )[-_USAGE_HISTORY_MAX_ITEMS:]
+    account_samples = _usage_history_latest_by_key(
+        account_samples,
+        lambda item: item.get('bucket_start') or '',
+    )[-_USAGE_HISTORY_MAX_ITEMS:]
+    workspace_samples = _usage_history_latest_by_key(
+        workspace_samples,
+        lambda item: (
+            item.get('bucket_start') or '',
+            item.get('workspace_scope_id') or '',
+        ),
+    )
+    workspace_ids = {
+        str(item.get('workspace_scope_id') or '').strip()
+        for item in workspace_samples
+    }
+    workspace_limit = _USAGE_HISTORY_MAX_ITEMS * max(1, len(workspace_ids))
+    workspace_samples = workspace_samples[-workspace_limit:]
+
+    ledger['account_limit_samples'] = limit_samples
+    ledger['account_token_samples'] = account_samples
+    ledger['workspace_token_samples'] = workspace_samples
+    ledger['items'] = _merge_usage_history_series(
+        limit_samples,
+        account_samples,
+        scope='account',
+    )[-_USAGE_HISTORY_MAX_ITEMS:]
     return ledger
 
 
 def _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH):
-    _write_json_atomic(path, ledger)
+    payload = dict(ledger or {})
+    if any(
+        key in payload
+        for key in (
+            'account_limit_samples',
+            'account_token_samples',
+            'workspace_token_samples',
+        )
+    ):
+        payload['version'] = _USAGE_HISTORY_VERSION
+        payload.pop('items', None)
+        payload.pop('snapshots', None)
+    _write_json_atomic(path, payload)
 
 
 def _build_usage_history_snapshot(usage_summary):
@@ -5758,6 +5991,7 @@ def _build_usage_history_snapshot(usage_summary):
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
         'recorded_at': normalize_timestamp(None),
+        'limits_observed_at': usage.get('limits_observed_at'),
         'workspace_scope_id': _WORKSPACE_SCOPE_ID,
         'workspace_path': str(WORKSPACE_DIR),
         'token_total': workspace_all_time.get('total_tokens', 0),
@@ -5805,28 +6039,91 @@ def record_usage_snapshot_if_due(force=False, usage_summary=None, account_id=Non
         try:
             with _acquire_path_file_lock(context['usage_history_path']):
                 ledger = _load_usage_history_ledger(path=context['usage_history_path'])
-                items = list(ledger.get('items') or [])
-                existing_index = -1
-                for idx, item in enumerate(items):
-                    if item.get('bucket_start') == snapshot['bucket_start']:
-                        existing_index = idx
-                        break
-                if existing_index >= 0:
-                    if requested_force:
-                        if items[existing_index] != snapshot:
-                            items[existing_index] = snapshot
-                            recorded = True
-                    else:
-                        snapshot = items[existing_index]
-                else:
-                    items.append(snapshot)
-                    recorded = True
+                limit_sample, account_sample, workspace_sample = (
+                    _split_usage_history_snapshot(snapshot)
+                )
+
+                def upsert_sample(collection, candidate, key_builder, force_update=False):
+                    if candidate is None:
+                        return False
+                    key = key_builder(candidate)
+                    existing_index = next(
+                        (
+                            index for index, item in enumerate(collection)
+                            if key_builder(item) == key
+                        ),
+                        -1,
+                    )
+                    if existing_index < 0:
+                        collection.append(candidate)
+                        return True
+                    existing = collection[existing_index]
+                    candidate_timestamp = (
+                        candidate.get('limits_observed_at')
+                        or candidate.get('recorded_at')
+                        or ''
+                    )
+                    existing_timestamp = (
+                        existing.get('limits_observed_at')
+                        or existing.get('recorded_at')
+                        or ''
+                    )
+                    if force_update or candidate_timestamp > existing_timestamp:
+                        if existing != candidate:
+                            collection[existing_index] = candidate
+                            return True
+                    return False
+
+                limit_samples = list(ledger.get('account_limit_samples') or [])
+                account_samples = list(ledger.get('account_token_samples') or [])
+                workspace_samples = list(ledger.get('workspace_token_samples') or [])
+                recorded = upsert_sample(
+                    limit_samples,
+                    limit_sample,
+                    lambda item: item.get('bucket_start') or '',
+                )
+                recorded = upsert_sample(
+                    account_samples,
+                    account_sample,
+                    lambda item: item.get('bucket_start') or '',
+                    force_update=requested_force,
+                ) or recorded
+                recorded = upsert_sample(
+                    workspace_samples,
+                    workspace_sample,
+                    lambda item: (
+                        item.get('bucket_start') or '',
+                        item.get('workspace_scope_id') or '',
+                    ),
+                    force_update=requested_force,
+                ) or recorded
 
                 if recorded:
-                    items.sort(key=lambda item: item.get('bucket_start', ''))
-                    if len(items) > _USAGE_HISTORY_MAX_ITEMS:
-                        items = items[-_USAGE_HISTORY_MAX_ITEMS:]
-                    ledger['items'] = items
+                    ledger['account_limit_samples'] = _usage_history_latest_by_key(
+                        limit_samples,
+                        lambda item: item.get('bucket_start') or '',
+                        lambda item: (
+                            item.get('limits_observed_at')
+                            or item.get('recorded_at')
+                            or ''
+                        ),
+                    )[-_USAGE_HISTORY_MAX_ITEMS:]
+                    ledger['account_token_samples'] = _usage_history_latest_by_key(
+                        account_samples,
+                        lambda item: item.get('bucket_start') or '',
+                    )[-_USAGE_HISTORY_MAX_ITEMS:]
+                    ledger['workspace_token_samples'] = _usage_history_latest_by_key(
+                        workspace_samples,
+                        lambda item: (
+                            item.get('bucket_start') or '',
+                            item.get('workspace_scope_id') or '',
+                        ),
+                    )
+                    ledger['items'] = _merge_usage_history_series(
+                        ledger['account_limit_samples'],
+                        ledger['account_token_samples'],
+                        scope='account',
+                    )[-_USAGE_HISTORY_MAX_ITEMS:]
                     ledger['updated_at'] = normalize_timestamp(None)
                     _save_usage_history_ledger(ledger, path=context['usage_history_path'])
         except Exception:
@@ -6304,7 +6601,10 @@ def _build_usage_history_average_set(
     }
 
 
-def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=None):
+def get_usage_history_summary(
+        hours=_USAGE_HISTORY_DEFAULT_HOURS,
+        account_id=None,
+        scope='account'):
     context = _account_storage_context(account_id)
     if context is None:
         context = _account_storage_context()
@@ -6312,6 +6612,11 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
     if requested_hours is None or requested_hours <= 0:
         requested_hours = _USAGE_HISTORY_DEFAULT_HOURS
     requested_hours = min(requested_hours, _USAGE_HISTORY_MAX_ITEMS)
+    requested_scope = (
+        'workspace'
+        if str(scope or '').strip().lower() == 'workspace'
+        else 'account'
+    )
 
     with _USAGE_HISTORY_LOCK:
         try:
@@ -6325,7 +6630,19 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
         plan_periods = _normalize_usage_plan_periods(ledger.get('plan_periods'))
     plan_transitions = _build_usage_plan_transitions(plan_periods)
 
-    items = list(ledger.get('items') or [])
+    limit_samples = list(ledger.get('account_limit_samples') or [])
+    if requested_scope == 'workspace':
+        token_samples = [
+            item for item in ledger.get('workspace_token_samples') or []
+            if item.get('workspace_scope_id') == _WORKSPACE_SCOPE_ID
+        ]
+    else:
+        token_samples = list(ledger.get('account_token_samples') or [])
+    items = _merge_usage_history_series(
+        limit_samples,
+        token_samples,
+        scope=requested_scope,
+    )
     if requested_hours > 0 and len(items) > requested_hours:
         items = items[-requested_hours:]
     history_items = _build_usage_history_items(items, plan_periods=plan_periods)
@@ -6341,7 +6658,7 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
         (_coerce_non_negative_int(item.get('delta_account_tokens')) or 0)
         for item in history_items
     )
-    relation_scope = 'account' if account_token_delta_total > 0 else 'workspace'
+    relation_scope = requested_scope
     token_delta_total = account_token_delta_total if relation_scope == 'account' else workspace_token_delta_total
     token_delta_key = 'delta_account_tokens' if relation_scope == 'account' else 'delta_workspace_tokens'
 
@@ -6497,6 +6814,8 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
         'bucket_hours': max(1, _coerce_non_negative_int(ledger.get('bucket_hours')) or _USAGE_HISTORY_BUCKET_HOURS),
         'timezone': str(ledger.get('timezone') or 'Asia/Seoul'),
         'requested_hours': requested_hours,
+        'requested_scope': requested_scope,
+        'available_scopes': ['account', 'workspace'],
         'retention_hours': _USAGE_HISTORY_MAX_ITEMS,
         'retention_days': _USAGE_HISTORY_RETENTION_DAYS,
         'count': len(history_items),
@@ -6548,6 +6867,12 @@ def get_usage_history_summary(hours=_USAGE_HISTORY_DEFAULT_HOURS, account_id=Non
             'limits_source_paths': [str(path) for path in _usage_session_roots(context)],
             'relation_scope': relation_scope,
             'token_delta_key': token_delta_key,
+            'workspace_sample_count': len([
+                item for item in ledger.get('workspace_token_samples') or []
+                if item.get('workspace_scope_id') == _WORKSPACE_SCOPE_ID
+            ]),
+            'account_sample_count': len(ledger.get('account_token_samples') or []),
+            'limit_sample_count': len(ledger.get('account_limit_samples') or []),
         },
         'averages': averages,
         'items': history_items
@@ -6655,6 +6980,7 @@ def get_usage_summary(account_id=None):
             best_limits = limits
             best_timestamp = event_timestamp
     if best_limits and (best_limits.get('five_hour') or best_limits.get('weekly')):
+        best_limits['limits_observed_at'] = normalize_timestamp(best_timestamp)
         best_limits['account_name'] = account_name
         best_limits['token_usage'] = token_usage
         best_limits['account_token_usage'] = account_token_usage

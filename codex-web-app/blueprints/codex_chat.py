@@ -976,13 +976,14 @@ def codex_usage():
 def codex_usage_history():
     ensure_usage_snapshot_background_worker()
     hours = request.args.get('hours')
+    scope = request.args.get('scope')
     snapshot = record_usage_snapshot_if_due()
     usage = snapshot.get('usage') if isinstance(snapshot, dict) else None
     if not isinstance(usage, dict):
         usage = get_usage_summary()
     return jsonify({
         'usage': usage,
-        'usage_history': get_usage_history_summary(hours=hours),
+        'usage_history': get_usage_history_summary(hours=hours, scope=scope),
         'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'feature_flags': {

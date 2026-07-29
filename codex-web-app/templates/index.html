@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=199">
+    <link rel="stylesheet" href="/static/css/app.css?v=201">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1119,12 +1119,18 @@
             <div class="usage-history-overlay-body">
                 <div class="usage-history-meta" id="codex-usage-history-overlay-meta">사용량 이력을 불러오는 중...</div>
                 <div class="usage-history-toolbar">
-                    <div class="usage-history-range-tabs" id="codex-usage-history-range-tabs" role="group" aria-label="Usage history period">
-                        <button class="usage-history-range-btn is-active" type="button" data-hours="72" aria-pressed="true">3일</button>
-                        <button class="usage-history-range-btn" type="button" data-hours="168" aria-pressed="false">7일</button>
-                        <button class="usage-history-range-btn" type="button" data-hours="336" aria-pressed="false">14일</button>
-                        <button class="usage-history-range-btn" type="button" data-hours="720" aria-pressed="false">30일</button>
-                        <button class="usage-history-range-btn" type="button" data-hours="2160" aria-pressed="false">90일</button>
+                    <div class="usage-history-filter-groups">
+                        <div class="usage-history-scope-tabs" id="codex-usage-history-scope-tabs" role="group" aria-label="Usage token scope">
+                            <button class="usage-history-scope-btn is-active" type="button" data-scope="account" aria-pressed="true">Account total</button>
+                            <button class="usage-history-scope-btn" type="button" data-scope="workspace" aria-pressed="false">Current workspace</button>
+                        </div>
+                        <div class="usage-history-range-tabs" id="codex-usage-history-range-tabs" role="group" aria-label="Usage history period">
+                            <button class="usage-history-range-btn is-active" type="button" data-hours="72" aria-pressed="true">3일</button>
+                            <button class="usage-history-range-btn" type="button" data-hours="168" aria-pressed="false">7일</button>
+                            <button class="usage-history-range-btn" type="button" data-hours="336" aria-pressed="false">14일</button>
+                            <button class="usage-history-range-btn" type="button" data-hours="720" aria-pressed="false">30일</button>
+                            <button class="usage-history-range-btn" type="button" data-hours="2160" aria-pressed="false">90일</button>
+                        </div>
                     </div>
                     <div class="usage-history-cost-inline" id="codex-usage-history-cost-summary">API estimate --</div>
                 </div>
@@ -1647,6 +1653,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=209"></script>
+    <script src="/static/js/app.js?v=210"></script>
 </body>
 </html>

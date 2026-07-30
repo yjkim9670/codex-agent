@@ -3278,7 +3278,7 @@ def test_build_codex_exec_env_exposes_validated_spreadsheet_runtime(monkeypatch,
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text('{}\n', encoding='utf-8')
     (node_modules / '@oai' / 'artifact-tool').mkdir(parents=True)
-    (runtime_root / 'dependencies' / 'python' / 'lib' / 'python3.12' / 'site-packages' / 'openpyxl').mkdir(parents=True)
+    (runtime_root / 'dependencies' / 'python' / 'lib' / 'python3.14' / 'site-packages' / 'openpyxl').mkdir(parents=True)
     source_home = tmp_path / 'source-home'
     source_home.mkdir()
     (source_home / 'auth.json').write_text('{"token": "test"}', encoding='utf-8')

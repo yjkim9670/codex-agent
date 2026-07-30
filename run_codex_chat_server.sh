@@ -138,7 +138,7 @@ resolve_global_python() {
 
     local fallback=""
     local resolved=""
-    for candidate in /opt/homebrew/opt/python@3.12/bin/python3.12 python3.12 python3 python; do
+    for candidate in /opt/homebrew/opt/python@3.14/bin/python3.14 python3.14 python3 python; do
         if command -v "${candidate}" >/dev/null 2>&1; then
             resolved="$(command -v "${candidate}")"
             [[ -n "${fallback}" ]] || fallback="${resolved}"

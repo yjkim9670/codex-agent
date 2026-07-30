@@ -7,13 +7,13 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     exit 1
 fi
 
-GLOBAL_PYTHON_BIN="${CODEX_PYTHON_BIN:-${PYTHON_BIN:-/opt/homebrew/opt/python@3.12/bin/python3.12}}"
-GLOBAL_PYTHON_USER_BIN="/Users/dinya/Library/Python/3.12/bin"
-GLOBAL_PYTHON_USER_SITE="/Users/dinya/Library/Python/3.12/lib/python/site-packages"
+GLOBAL_PYTHON_BIN="${CODEX_PYTHON_BIN:-${PYTHON_BIN:-/opt/homebrew/opt/python@3.14/bin/python3.14}}"
+GLOBAL_PYTHON_USER_BIN="/Users/dinya/Library/Python/3.14/bin"
+GLOBAL_PYTHON_USER_SITE="/Users/dinya/Library/Python/3.14/lib/python/site-packages"
 
 if [[ ! -x "${GLOBAL_PYTHON_BIN}" ]]; then
-    if command -v python3.12 >/dev/null 2>&1; then
-        GLOBAL_PYTHON_BIN="$(command -v python3.12)"
+    if command -v python3.14 >/dev/null 2>&1; then
+        GLOBAL_PYTHON_BIN="$(command -v python3.14)"
     elif command -v python3 >/dev/null 2>&1; then
         GLOBAL_PYTHON_BIN="$(command -v python3)"
     elif command -v python >/dev/null 2>&1; then

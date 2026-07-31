@@ -16421,6 +16421,67 @@ function filePanelMarkdownPreviewRuntime() {
         }
         return button;
     };
+    const copyText = async text => {
+        const source = String(text || '');
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(source);
+                return;
+            } catch (error) {
+                void error;
+            }
+        }
+        const textarea = document.createElement('textarea');
+        textarea.value = source;
+        textarea.setAttribute('readonly', 'readonly');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+        } catch (error) {
+            void error;
+        }
+        textarea.remove();
+    };
+    const hydrateCodeCopyButtons = root => {
+        const codeBlocks = Array.from(root.querySelectorAll(
+            'pre:not(.file-browser-mermaid-source)'
+        ));
+        for (const pre of codeBlocks) {
+            if (!(pre instanceof HTMLElement) || pre.closest('.markdown-code-shell')) continue;
+            const code = pre.querySelector(':scope > code');
+            if (!(code instanceof HTMLElement)) continue;
+            const shell = document.createElement('div');
+            shell.className = 'markdown-code-shell';
+            pre.parentNode?.insertBefore(shell, pre);
+            shell.appendChild(pre);
+            const button = createButton('markdown-code-copy', '코드 복사', '복사');
+            button.addEventListener('click', async event => {
+                event.preventDefault();
+                event.stopPropagation();
+                await copyText(code.textContent || '');
+                const previousTimer = Number(button.dataset.copyFeedbackTimer || 0);
+                if (previousTimer) {
+                    window.clearTimeout(previousTimer);
+                }
+                button.classList.add('is-copied');
+                button.textContent = '복사됨';
+                button.setAttribute('aria-label', '코드 복사됨');
+                button.title = '복사됨';
+                const timer = window.setTimeout(() => {
+                    button.classList.remove('is-copied');
+                    button.textContent = '복사';
+                    button.setAttribute('aria-label', '코드 복사');
+                    button.title = '코드 복사';
+                    delete button.dataset.copyFeedbackTimer;
+                }, 1500);
+                button.dataset.copyFeedbackTimer = String(timer);
+            });
+            shell.appendChild(button);
+        }
+    };
     const getTitle = node => {
         const source = decodeSource(node?.dataset?.mermaidSource || '');
         const firstLine = source.split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
@@ -16734,6 +16795,7 @@ function filePanelMarkdownPreviewRuntime() {
         }
     };
     const hydrate = async () => {
+        hydrateCodeCopyButtons(document);
         const diagrams = Array.from(document.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
         if (!diagrams.length) return;
         try {
@@ -29666,9 +29728,61 @@ function getMermaidThemeName() {
 function hydrateRenderedMarkdown(container) {
     if (!container || !(container instanceof Element)) return;
     hydrateMessageLabelLinks(container);
+    hydrateMarkdownCodeCopyButtons(container);
     if (container.querySelector('.file-browser-mermaid[data-mermaid-source]')) {
         void hydrateMermaidDiagrams(container);
     }
+}
+
+function hydrateMarkdownCodeCopyButtons(container) {
+    if (!container || !(container instanceof Element)) return;
+    const codeBlocks = Array.from(container.querySelectorAll(
+        'pre:not(.file-browser-mermaid-source)'
+    ));
+    codeBlocks.forEach(pre => {
+        if (!(pre instanceof HTMLElement) || pre.closest('.markdown-code-shell')) return;
+        const code = pre.querySelector(':scope > code');
+        if (!(code instanceof HTMLElement)) return;
+
+        const shell = document.createElement('div');
+        shell.className = 'markdown-code-shell';
+        pre.parentNode?.insertBefore(shell, pre);
+        shell.appendChild(pre);
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'markdown-code-copy';
+        button.setAttribute('aria-label', '코드 복사');
+        button.title = '코드 복사';
+        button.textContent = '복사';
+        button.addEventListener('click', async event => {
+            event.preventDefault();
+            event.stopPropagation();
+            await writeTextToClipboard(code.textContent || '');
+            showMarkdownCodeCopyFeedback(button);
+        });
+        shell.appendChild(button);
+    });
+}
+
+function showMarkdownCodeCopyFeedback(button) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const previousTimer = Number(button.dataset.copyFeedbackTimer || 0);
+    if (previousTimer) {
+        window.clearTimeout(previousTimer);
+    }
+    button.classList.add('is-copied');
+    button.textContent = '복사됨';
+    button.setAttribute('aria-label', '코드 복사됨');
+    button.title = '복사됨';
+    const timer = window.setTimeout(() => {
+        button.classList.remove('is-copied');
+        button.textContent = '복사';
+        button.setAttribute('aria-label', '코드 복사');
+        button.title = '코드 복사';
+        delete button.dataset.copyFeedbackTimer;
+    }, 1500);
+    button.dataset.copyFeedbackTimer = String(timer);
 }
 
 async function hydrateMermaidDiagrams(container) {

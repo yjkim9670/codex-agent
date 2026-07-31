@@ -205,6 +205,8 @@ _TOKENS_PER_PERCENT_HIGH_PERCENT_SUM = 4.0
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
+_LOCAL_USAGE_HISTORY_MIGRATION_LOCK = threading.Lock()
+_LOCAL_USAGE_HISTORY_MIGRATION_SIGNATURES = {}
 _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest()[:12]
 _PENDING_QUEUE_KEY = 'pending_queue'
 _PENDING_QUEUE_BOOTSTRAP_LOCK = threading.Lock()
@@ -4450,14 +4452,18 @@ def _migrate_local_accounts_to_shared_storage():
             added_accounts = []
             for account in accounts:
                 account_id = account['id']
-                if account_id in shared_ids:
-                    continue
-                shared_root = Path(CODEX_ACCOUNTS_DIR) / account_id
                 local_root = (
                     Path(CODEX_STORAGE_DIR)
                     if account.get('legacy_storage')
                     else Path(CODEX_LOCAL_ACCOUNTS_DIR) / account_id
                 )
+                if account_id in shared_ids:
+                    _merge_local_usage_history_into_shared_account(
+                        local_root / 'codex_usage_history.json',
+                        Path(CODEX_ACCOUNTS_DIR) / account_id / 'codex_usage_history.json',
+                    )
+                    continue
+                shared_root = Path(CODEX_ACCOUNTS_DIR) / account_id
                 source_codex_home = Path(account['codex_home']).expanduser()
                 if not account.get('legacy_storage'):
                     shared_codex_home = shared_root / 'codex_home'
@@ -5978,6 +5984,88 @@ def _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH):
         payload.pop('items', None)
         payload.pop('snapshots', None)
     _write_json_atomic(path, payload)
+
+
+def _merge_local_usage_history_into_shared_account(source_path, destination_path):
+    source = Path(source_path)
+    destination = Path(destination_path)
+    try:
+        if source.resolve() == destination.resolve() or not source.is_file():
+            return False
+        source_stat = source.stat()
+    except OSError:
+        return False
+
+    cache_key = (str(source), str(destination))
+    source_signature = (source_stat.st_mtime_ns, source_stat.st_size)
+    with _LOCAL_USAGE_HISTORY_MIGRATION_LOCK:
+        if _LOCAL_USAGE_HISTORY_MIGRATION_SIGNATURES.get(cache_key) == source_signature:
+            return False
+
+    changed = False
+    try:
+        with _USAGE_HISTORY_LOCK:
+            with _acquire_path_file_lock(destination):
+                source_ledger = _load_usage_history_ledger(path=source)
+                target_ledger = _load_usage_history_ledger(path=destination)
+                limit_samples = _usage_history_latest_by_key(
+                    [
+                        *(target_ledger.get('account_limit_samples') or []),
+                        *(source_ledger.get('account_limit_samples') or []),
+                    ],
+                    lambda item: item.get('bucket_start') or '',
+                    lambda item: (
+                        item.get('limits_observed_at')
+                        or item.get('recorded_at')
+                        or ''
+                    ),
+                )[-_USAGE_HISTORY_MAX_ITEMS:]
+                account_samples = _usage_history_latest_by_key(
+                    [
+                        *(target_ledger.get('account_token_samples') or []),
+                        *(source_ledger.get('account_token_samples') or []),
+                    ],
+                    lambda item: item.get('bucket_start') or '',
+                )[-_USAGE_HISTORY_MAX_ITEMS:]
+                workspace_samples = _usage_history_latest_by_key(
+                    [
+                        *(target_ledger.get('workspace_token_samples') or []),
+                        *(source_ledger.get('workspace_token_samples') or []),
+                    ],
+                    lambda item: (
+                        item.get('bucket_start') or '',
+                        item.get('workspace_scope_id') or '',
+                    ),
+                )
+                workspace_ids = {
+                    str(item.get('workspace_scope_id') or '').strip()
+                    for item in workspace_samples
+                }
+                workspace_limit = _USAGE_HISTORY_MAX_ITEMS * max(1, len(workspace_ids))
+                workspace_samples = workspace_samples[-workspace_limit:]
+                changed = any((
+                    limit_samples != (target_ledger.get('account_limit_samples') or []),
+                    account_samples != (target_ledger.get('account_token_samples') or []),
+                    workspace_samples != (target_ledger.get('workspace_token_samples') or []),
+                ))
+                if changed:
+                    target_ledger['account_limit_samples'] = limit_samples
+                    target_ledger['account_token_samples'] = account_samples
+                    target_ledger['workspace_token_samples'] = workspace_samples
+                    target_ledger['updated_at'] = normalize_timestamp(None)
+                    _save_usage_history_ledger(target_ledger, path=destination)
+    except Exception:
+        _LOGGER.debug(
+            'local usage history merge skipped: %s -> %s',
+            source,
+            destination,
+            exc_info=True,
+        )
+        return False
+
+    with _LOCAL_USAGE_HISTORY_MIGRATION_LOCK:
+        _LOCAL_USAGE_HISTORY_MIGRATION_SIGNATURES[cache_key] = source_signature
+    return changed
 
 
 def _build_usage_history_snapshot(usage_summary):

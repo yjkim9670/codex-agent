@@ -8016,23 +8016,32 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
         state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
         state.sessionStorage = result?.session_storage || null;
         updateSessionStorageSummary(state.sessionStorage);
-        renderSessions();
 
-        let activeId = selectSessionId || (preserveActive ? state.activeSessionId : null);
-        if (!activeId && state.sessions.length > 0) {
-            activeId = state.sessions[0].id;
+        const requestedActiveId = selectSessionId || (preserveActive ? state.activeSessionId : null);
+        const requestedSummary = requestedActiveId
+            ? state.sessions.find(session => session.id === requestedActiveId) || null
+            : null;
+        const activeSummary = requestedSummary || state.sessions[0] || null;
+        const activeId = activeSummary?.id || null;
+        if (requestedActiveId && !requestedSummary && activeId) {
+            console.warn(
+                `[codex-ui] requested session ${requestedActiveId} is no longer available; `
+                + `falling back to recent session ${activeId}`
+            );
         }
-        state.activeSessionId = activeId || null;
+        state.activeSessionId = activeId;
         if (state.activeSessionId) {
             ensureSessionState(state.activeSessionId);
         }
+        renderSessions();
 
         if (activeId) {
+            // Restore the visible selection from the list response immediately. If
+            // the larger detail request times out, the UI still identifies the
+            // selected recent session instead of remaining at "Select a session".
+            updateHeader(activeSummary);
             if (reloadActive) {
                 await loadSession(activeId);
-            } else {
-                const summary = state.sessions.find(session => session.id === activeId) || null;
-                updateHeader(summary);
             }
         } else {
             renderMessages([]);
@@ -15273,6 +15282,35 @@ function renderUsageHistoryChart(history) {
                 class: className
             }));
         });
+        const hasSeriesBoundaryBetween = (leftIndex, rightIndex) => {
+            for (let index = leftIndex + 1; index <= rightIndex; index += 1) {
+                const item = items[index] || {};
+                const previousItem = items[index - 1] || {};
+                const planChanged = Boolean(
+                    item?.plan_period_id
+                    && previousItem?.plan_period_id
+                    && item.plan_period_id !== previousItem.plan_period_id
+                );
+                if (item?.plan_transition_detected || item?.weekly_reset_detected || planChanged) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (let index = 1; index < points.length; index += 1) {
+            const previousPoint = points[index - 1];
+            const currentPoint = points[index];
+            if (
+                currentPoint.index - previousPoint.index <= 1
+                || hasSeriesBoundaryBetween(previousPoint.index, currentPoint.index)
+            ) {
+                continue;
+            }
+            chart.appendChild(createUsageHistorySvgNode('path', {
+                d: `M${previousPoint.x} ${previousPoint.y} L${currentPoint.x} ${currentPoint.y}`,
+                class: `${className} interpolation-line`
+            }));
+        }
         points.forEach(point => {
             chart.appendChild(createUsageHistorySvgNode('circle', {
                 cx: point.x,

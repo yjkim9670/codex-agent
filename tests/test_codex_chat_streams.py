@@ -1230,6 +1230,74 @@ def test_local_account_registry_merges_into_existing_shared_storage(tmp_path, mo
     assert (migrated_home / 'auth.json').is_file()
 
 
+def test_existing_shared_account_imports_its_local_usage_history(tmp_path, monkeypatch):
+    account_id = 'same-account'
+    shared_root = tmp_path / 'shared'
+    shared_account_root = shared_root / 'accounts' / account_id
+    shared_account_root.mkdir(parents=True)
+    shared_registry = shared_root / 'codex_accounts.json'
+    shared_registry.write_text(json.dumps({
+        'active_account_id': account_id,
+        'accounts': [{
+            'id': account_id,
+            'label': 'Same account',
+            'codex_home': str(tmp_path / 'shared-home'),
+            'legacy_storage': False,
+        }],
+    }), encoding='utf-8')
+    (shared_account_root / 'codex_usage_history.json').write_text(json.dumps({
+        'version': 2,
+        'account_token_samples': [{
+            'bucket_start': '2026-07-01T11:00:00+09:00',
+            'recorded_at': '2026-07-01T11:05:00+09:00',
+            'token_account_total': 30,
+        }],
+    }), encoding='utf-8')
+
+    local_root = tmp_path / 'local'
+    local_account_root = local_root / 'accounts' / account_id
+    local_account_root.mkdir(parents=True)
+    local_registry = local_root / 'codex_accounts.json'
+    local_registry.write_text(json.dumps({
+        'active_account_id': account_id,
+        'accounts': [{
+            'id': account_id,
+            'label': 'Same account',
+            'codex_home': str(tmp_path / 'local-home'),
+            'legacy_storage': False,
+        }],
+    }), encoding='utf-8')
+    (local_account_root / 'codex_usage_history.json').write_text(json.dumps({
+        'version': 1,
+        'items': [{
+            'bucket_start': '2026-07-01T10:00:00+09:00',
+            'recorded_at': '2026-07-01T10:05:00+09:00',
+            'token_account_total': 25,
+            'weekly_used_percent': 8,
+        }],
+    }), encoding='utf-8')
+
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_PATH', shared_registry)
+    monkeypatch.setattr(codex_chat, 'CODEX_ACCOUNTS_DIR', shared_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_PATH', local_registry)
+    monkeypatch.setattr(codex_chat, 'CODEX_LOCAL_ACCOUNTS_DIR', local_root / 'accounts')
+    monkeypatch.setattr(codex_chat, 'CODEX_STORAGE_DIR', local_root)
+
+    codex_chat._load_accounts_registry()
+    merged_history = codex_chat._load_usage_history_ledger(
+        shared_account_root / 'codex_usage_history.json'
+    )
+
+    assert [
+        item['bucket_start']
+        for item in merged_history['account_token_samples']
+    ] == [
+        '2026-07-01T10:00:00+09:00',
+        '2026-07-01T11:00:00+09:00',
+    ]
+    assert merged_history['account_limit_samples'][0]['weekly_used_percent'] == 8.0
+
+
 def test_import_codex_account_histories_deduplicates_by_latest_snapshot(
         isolated_codex_workspace, tmp_path):
     source = tmp_path / 'history-source-home'

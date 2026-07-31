@@ -1577,8 +1577,8 @@ def test_file_preview_context_can_enter_file_selection_mode():
     assert "classList.toggle(\n            'is-selection-mode-entry'," in app_js
     assert app_js.count('if (isFilePanelSelectionMode(normalizedVariant)) {\n        return [];\n    }') >= 2
     assert '.file-panel-selection-btn-clear.is-selection-mode-entry' in app_css
-    assert '/static/js/app.js?v=210' in template
-    assert '/static/css/app.css?v=201' in template
+    assert '/static/js/app.js?v=211' in template
+    assert '/static/css/app.css?v=203' in template
 
 
 def test_work_mode_file_preview_has_compact_root_shortcuts():
@@ -1615,8 +1615,8 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=201' in template
-    assert '/static/js/app.js?v=210' in template
+    assert '/static/css/app.css?v=203' in template
+    assert '/static/js/app.js?v=211' in template
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
@@ -1633,8 +1633,35 @@ def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():
     assert 'const FILE_BROWSER_MAX_MULTI_UPLOAD_BYTES = 512 * 1024 * 1024;' in app_js
     assert '.file-upload-progress-overlay.is-visible' in app_css
     assert '.file-upload-progress-fill' in app_css
-    assert '/static/css/app.css?v=201' in template
-    assert '/static/js/app.js?v=210' in template
+    assert '/static/css/app.css?v=203' in template
+    assert '/static/js/app.js?v=211' in template
+
+
+def test_usage_history_interpolates_missing_weekly_samples_with_dashed_line():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+
+    assert 'const hasSeriesBoundaryBetween = (leftIndex, rightIndex) =>' in app_js
+    assert 'currentPoint.index - previousPoint.index <= 1' in app_js
+    assert 'item?.plan_transition_detected || item?.weekly_reset_detected || planChanged' in app_js
+    assert 'class: `${className} interpolation-line`' in app_js
+    assert '.usage-history-chart .weekly-line.interpolation-line' in app_css
+    assert 'stroke-dasharray: 4 4;' in app_css
+
+
+def test_session_reload_falls_back_when_persisted_stream_session_is_stale():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    requested_lookup = 'state.sessions.find(session => session.id === requestedActiveId) || null'
+    recent_fallback = 'const activeSummary = requestedSummary || state.sessions[0] || null;'
+    header_restore = 'updateHeader(activeSummary);'
+    detail_reload = 'await loadSession(activeId);'
+
+    assert requested_lookup in app_js
+    assert recent_fallback in app_js
+    assert 'falling back to recent session ${activeId}' in app_js
+    restore_index = app_js.index(header_restore)
+    assert restore_index < app_js.index(detail_reload, restore_index)
 
 
 def test_usage_history_chart_only_displays_weekly_limit():
@@ -1684,9 +1711,9 @@ def test_usage_history_chart_shows_hover_and_click_cursor_guides():
     assert '.usage-history-chart .cursor-grid-guide.is-visible' in app_css
     assert '.usage-history-chart .cursor-grid-guide.is-pinned' in app_css
     assert 'stroke-width: 1;' in app_css
-    assert 'opacity: 0.48;' in app_css
-    assert '/static/css/app.css?v=201' in template
-    assert '/static/js/app.js?v=210' in template
+    assert '.cursor-grid-guide.is-visible {\n    stroke-dasharray: 4 4;\n    opacity: 0.68;' in app_css
+    assert '/static/css/app.css?v=203' in template
+    assert '/static/js/app.js?v=211' in template
 
 
 def test_usage_history_can_switch_account_and_workspace_scope():
@@ -1714,7 +1741,7 @@ def test_browser_verification_mode_controls_are_available():
     assert '<option value="off">Off · no browser prompt</option>' in template
     assert 'verification_mode' in app_js
     assert 'normalizeVerificationMode' in app_js
-    assert '/static/js/app.js?v=210' in template
+    assert '/static/js/app.js?v=211' in template
 
 
 def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
@@ -1726,7 +1753,7 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=210')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=211')
     assert "gfm: true" in app_js
     assert "breaks: false" in app_js
     assert "purifier.sanitize(html" in app_js
@@ -1754,7 +1781,7 @@ def test_chat_assistant_label_uses_response_agent_backend():
     assert 'let label = getRoleLabel(role, message);' in app_js
     assert 'response_agent_backend: responseMetadata?.response_agent_backend' in app_js
     assert 'responseAgentBackend: result?.response_agent_backend' in app_js
-    assert '/static/js/app.js?v=210' in index_html
+    assert '/static/js/app.js?v=211' in index_html
 
 
 def test_gfm_markdown_sample_covers_preview_regression_cases():

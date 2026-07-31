@@ -5509,7 +5509,8 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .usage-history-chart .cursor-grid-guide.is-visible {
-    opacity: 0.48;
+    stroke-dasharray: 4 4;
+    opacity: 0.68;
 }
 
 .usage-history-chart .cursor-grid-guide.is-pinned {
@@ -5538,6 +5539,13 @@ body.is-mermaid-diagram-viewer-open {
     fill: none;
     stroke: rgba(61, 130, 197, 0.95);
     stroke-width: 2;
+}
+
+.usage-history-chart .weekly-line.interpolation-line {
+    stroke-dasharray: 4 4;
+    opacity: 0.7;
+    pointer-events: none;
+    vector-effect: non-scaling-stroke;
 }
 
 .usage-history-chart .line-point {

@@ -10031,8 +10031,19 @@ body.is-work-mode-resizing * {
     background: rgba(255, 255, 255, 0.24);
 }
 
-.message.user .message-bubble a.message-label-link {
+.message.user .message-bubble a,
+.message.user .message-bubble a:visited {
     color: rgba(255, 255, 255, 0.96);
+}
+
+.message.user .message-bubble a:hover {
+    color: #fff;
+}
+
+.message.user .message-bubble a:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+    border-radius: 2px;
 }
 
 .message-attachments {

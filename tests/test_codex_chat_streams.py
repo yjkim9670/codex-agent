@@ -721,6 +721,27 @@ def test_six_hour_account_api_refresh_persists_exact_limits_without_model_reques
     assert summary['account_usage']['total_tokens'] == 12_317_920_501
 
 
+def test_account_usage_auto_refresh_runs_only_at_even_kst_hour_boundaries():
+    no_snapshot = {}
+    assert codex_chat._account_usage_refresh_is_due(
+        no_snapshot, datetime(2026, 8, 4, 14, 0, tzinfo=codex_chat.KST)
+    ) is True
+    assert codex_chat._account_usage_refresh_is_due(
+        no_snapshot, datetime(2026, 8, 4, 14, 1, tzinfo=codex_chat.KST)
+    ) is False
+    assert codex_chat._account_usage_refresh_is_due(
+        no_snapshot, datetime(2026, 8, 4, 15, 0, tzinfo=codex_chat.KST)
+    ) is False
+
+    snapshot = {'last_automatic_attempt_slot_at': '2026-08-04T14:00:00+09:00'}
+    assert codex_chat._account_usage_refresh_is_due(
+        snapshot, datetime(2026, 8, 4, 14, 0, 45, tzinfo=codex_chat.KST)
+    ) is False
+    assert codex_chat._account_usage_refresh_is_due(
+        snapshot, datetime(2026, 8, 4, 16, 0, tzinfo=codex_chat.KST)
+    ) is True
+
+
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)

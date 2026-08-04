@@ -7281,12 +7281,22 @@ def _normalize_account_usage_api_result(value):
     }
 
 
-def _account_usage_refresh_is_due(snapshot, now=None):
-    last_success = parse_timestamp((snapshot or {}).get('last_success_at'))
-    if last_success is None:
-        return True
+def _account_usage_refresh_slot(now=None):
+    """Return the current KST two-hour boundary, or None outside its minute."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
-    return (current - last_success).total_seconds() >= _USAGE_ACCOUNT_REFRESH_SECONDS
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    if current.hour % 2 or current.minute != 0:
+        return None
+    return current.replace(minute=0, second=0, microsecond=0)
+
+
+def _account_usage_refresh_is_due(snapshot, now=None):
+    """Run automatic account reads once at each even KST hour, on the hour."""
+    slot = _account_usage_refresh_slot(now)
+    if slot is None:
+        return False
+    last_slot = parse_timestamp((snapshot or {}).get('last_automatic_attempt_slot_at'))
+    return last_slot is None or last_slot < slot
 
 
 def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
@@ -7300,6 +7310,7 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
         if not force and not _account_usage_refresh_is_due(previous):
             return {'refreshed': False, 'snapshot': previous}
         attempted_at = normalize_timestamp(None)
+        automatic_slot = _account_usage_refresh_slot() if not force else None
         try:
             rate_response = call_codex_app_server_method(
                 'account/rateLimits/read', {}, account_id=context['account']['id'],
@@ -7325,6 +7336,13 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst',
+                'last_automatic_refresh_slot_at': (
+                    normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
+                ),
+                'last_automatic_attempt_slot_at': (
+                    normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
+                ),
                 'five_hour': limits.get('five_hour'),
                 'weekly': limits.get('weekly'),
                 'account_usage': normalized_usage,
@@ -7347,6 +7365,10 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst',
+                'last_automatic_attempt_slot_at': (
+                    normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
+                ),
                 'error': str(exc)[:1000],
             }
             _write_json_atomic(context['account_usage_snapshot_path'], failed)

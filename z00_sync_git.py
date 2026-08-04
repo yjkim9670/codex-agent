@@ -6,6 +6,7 @@ Refactored Sync Helper with Responsive Layout, Directory Info, and Async GUI.
 
 import argparse
 import ctypes
+import ctypes.util
 import hashlib
 import logging
 import os
@@ -88,6 +89,9 @@ UI_FONT_FAMILY_DISPLAY = "Segoe UI"
 UI_FONT_FAMILY_TEXT = "Segoe UI"
 DEFAULT_ARCHIVE_DIR = "D:/Multimedia/SendFiles"
 UI_FONT_FAMILY_MONO = "Consolas"
+APP_FONT_FAMILY = "IBM Plex Sans KR"
+APP_FONT_RESOURCE_DIR = Path("resources") / "fonts" / "ibm_plex_sans_kr"
+APP_FONT_FILES = ("IBMPlexSansKR-Regular.ttf", "IBMPlexSansKR-SemiBold.ttf", "IBMPlexSansKR-Bold.ttf")
 
 ARCHIVE_TEXT_EXTENSIONS = {
     ".bat",
@@ -212,6 +216,73 @@ GIT_CLONE_TIMEOUT = 240   # Clone/sync operation (avg 35s, generous buffer for n
 KST = timezone(timedelta(hours=9))  # Korea Standard Time (GMT+9)
 SUBPROCESS_TEXT_ENCODING = "utf-8"
 SUBPROCESS_TEXT_ERRORS = "replace"
+
+
+def _register_font_file(font_path: Path) -> bool:
+    """Register one bundled font for the current process."""
+    if not font_path.is_file():
+        return False
+    try:
+        if sys.platform.startswith("win"):
+            add_font = ctypes.windll.gdi32.AddFontResourceExW
+            add_font.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_void_p]
+            add_font.restype = ctypes.c_int
+            return bool(add_font(str(font_path), 0x10, None))
+        if sys.platform == "darwin":
+            core_foundation = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            core_text = ctypes.CDLL("/System/Library/Frameworks/CoreText.framework/CoreText")
+            create_url = core_foundation.CFURLCreateFromFileSystemRepresentation
+            create_url.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+            create_url.restype = ctypes.c_void_p
+            release = core_foundation.CFRelease
+            release.argtypes = [ctypes.c_void_p]
+            register_fonts = core_text.CTFontManagerRegisterFontsForURL
+            register_fonts.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+            register_fonts.restype = ctypes.c_bool
+            encoded_path = str(font_path).encode("utf-8")
+            font_url = create_url(None, encoded_path, len(encoded_path), False)
+            if not font_url:
+                return False
+            try:
+                return bool(register_fonts(font_url, 1, None))
+            finally:
+                release(font_url)
+        fontconfig_name = ctypes.util.find_library("fontconfig")
+        if fontconfig_name:
+            fontconfig = ctypes.CDLL(fontconfig_name)
+            get_current = fontconfig.FcConfigGetCurrent
+            get_current.restype = ctypes.c_void_p
+            add_app_font = fontconfig.FcConfigAppFontAddFile
+            add_app_font.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            add_app_font.restype = ctypes.c_bool
+            build_fonts = fontconfig.FcConfigBuildFonts
+            build_fonts.argtypes = [ctypes.c_void_p]
+            build_fonts.restype = ctypes.c_bool
+            config = get_current()
+            added = bool(add_app_font(config, str(font_path).encode("utf-8")))
+            if added:
+                build_fonts(config)
+            return added
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    return False
+
+
+def configure_gui_fonts(root: "tk.Misc") -> bool:
+    """Use bundled IBM Plex Sans KR when Tk can resolve it; otherwise retain safe defaults."""
+    global UI_FONT_FAMILY_DISPLAY, UI_FONT_FAMILY_TEXT
+    font_dir = Path(__file__).resolve().parent / APP_FONT_RESOURCE_DIR
+    for file_name in APP_FONT_FILES:
+        _register_font_file(font_dir / file_name)
+    try:
+        import tkinter.font as tkfont
+        if APP_FONT_FAMILY in set(tkfont.families(root)):
+            UI_FONT_FAMILY_DISPLAY = APP_FONT_FAMILY
+            UI_FONT_FAMILY_TEXT = APP_FONT_FAMILY
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -2505,6 +2576,7 @@ class GuiApp:
                 self.root = tk.Tk()
         else:
             self.root = tk.Tk()
+        configure_gui_fonts(self.root)
         self.branch_map = []  # Stores plain branch names
         self.branch_dates = {} # Stores branch -> date string
         self.branch_heads = {} # Stores branch -> remote commit SHA

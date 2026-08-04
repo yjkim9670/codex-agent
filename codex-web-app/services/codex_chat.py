@@ -206,6 +206,7 @@ _TOKENS_PER_PERCENT_MEDIUM_PERCENT_SUM = 2.0
 _TOKENS_PER_PERCENT_HIGH_SAMPLES = 6
 _TOKENS_PER_PERCENT_HIGH_PERCENT_SUM = 4.0
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
+_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS = 30 * 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
 _LOCAL_USAGE_HISTORY_MIGRATION_LOCK = threading.Lock()
@@ -7282,16 +7283,17 @@ def _normalize_account_usage_api_result(value):
 
 
 def _account_usage_refresh_slot(now=None):
-    """Return the current KST two-hour boundary, or None outside its minute."""
+    """Return the current KST two-hour slot during its 30-minute grace window."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    if current.hour % 2 or current.minute != 0:
+    slot = current.replace(minute=0, second=0, microsecond=0)
+    if current.hour % 2 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
         return None
-    return current.replace(minute=0, second=0, microsecond=0)
+    return slot
 
 
 def _account_usage_refresh_is_due(snapshot, now=None):
-    """Run automatic account reads once at each even KST hour, on the hour."""
+    """Run once per even KST hour, allowing a 30-minute missed-slot catch-up."""
     slot = _account_usage_refresh_slot(now)
     if slot is None:
         return False
@@ -7336,7 +7338,7 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst',
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_refresh_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
                 ),
@@ -7365,7 +7367,7 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst',
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_attempt_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
                 ),

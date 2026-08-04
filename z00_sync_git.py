@@ -338,8 +338,6 @@ GIT_SYNC_IO_SLOTS = _read_int_env("GIT_SYNC_IO_SLOTS", 1, minimum=1)
 GIT_SYNC_IO_STALE_SECONDS = _read_int_env("GIT_SYNC_IO_STALE_SECONDS", 60, minimum=60)
 GIT_SYNC_IO_POLL_SECONDS = _read_float_env("GIT_SYNC_IO_POLL_SECONDS", 0.5, minimum=0.2)
 GIT_SYNC_IO_RELEASE_RETRY_SECONDS = _read_int_env("GIT_SYNC_IO_RELEASE_RETRY_SECONDS", 60, minimum=1)
-AUTO_REFRESH_INTERVAL_DEFAULT_SECONDS = 60
-AUTO_SYNC_MIRROR_DEFAULT = _read_bool_env("GIT_SYNC_AUTO_MIRROR", True)
 CLI_AUTO_UPDATE_INTERVAL_DEFAULT_SECONDS = _read_float_env(
     "GIT_SYNC_CLI_WATCH_INTERVAL",
     60.0,
@@ -1557,10 +1555,14 @@ class GitManager:
 
             log_fn("Running optimized sync: selected-branch fetch -> checkout -> reset -> mirror-clean")
             refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            self._run_git_checked(
-                ["git", "fetch", "--depth", "1", "--prune", "origin", refspec],
-                timeout=GIT_FETCH_TIMEOUT,
-            )
+            fetch_started_at = time.monotonic()
+            try:
+                self._run_git_checked(
+                    ["git", "fetch", "--no-tags", "--depth", "1", "--prune", "origin", refspec],
+                    timeout=GIT_FETCH_TIMEOUT,
+                )
+            finally:
+                log_fn(f"[Timing] Git fetch: {time.monotonic() - fetch_started_at:.1f}s")
             target_ref = f"origin/{branch}"
             snapshot = self.get_local_ref_snapshot(target_ref)
             log_fn(
@@ -1573,24 +1575,38 @@ class GitManager:
                 log_fn,
             )
             try:
-                with suspend_repo_file_handlers(self.cwd) as suspended_count:
-                    if suspended_count:
-                        log_fn(
-                            "Temporarily suspended repository-local file logging "
-                            "during checkout/reset."
-                        )
+                checkout_reset_started_at = time.monotonic()
+                try:
+                    with suspend_repo_file_handlers(self.cwd) as suspended_count:
+                        if suspended_count:
+                            log_fn(
+                                "Temporarily suspended repository-local file logging "
+                                "during checkout/reset."
+                            )
 
-                    self._run_git_checked(
-                        ["git", "checkout", "-f", "-B", "__sync_work", target_ref],
-                        timeout=GIT_CLONE_TIMEOUT,
-                    )
-                    self._run_git_checked(
-                        ["git", "reset", "--hard", target_ref],
-                        timeout=GIT_CLONE_TIMEOUT,
+                        self._run_git_checked(
+                            ["git", "checkout", "-f", "-B", "__sync_work", target_ref],
+                            timeout=GIT_CLONE_TIMEOUT,
+                        )
+                        self._run_git_checked(
+                            ["git", "reset", "--hard", target_ref],
+                            timeout=GIT_CLONE_TIMEOUT,
+                        )
+                finally:
+                    log_fn(
+                        "[Timing] Checkout/reset: "
+                        f"{time.monotonic() - checkout_reset_started_at:.1f}s"
                     )
 
                 if mirror:
-                    self._run_mirror_cleanup_incremental(log_fn)
+                    mirror_cleanup_started_at = time.monotonic()
+                    try:
+                        self._run_mirror_cleanup_incremental(log_fn)
+                    finally:
+                        log_fn(
+                            "[Timing] Mirror cleanup: "
+                            f"{time.monotonic() - mirror_cleanup_started_at:.1f}s"
+                        )
                 else:
                     log_fn("Mirror OFF: Skipping local cleanup.")
             finally:
@@ -2642,19 +2658,6 @@ class GuiApp:
         self.is_refreshing = False
         self.cancel_refresh = False  # Flag to cancel ongoing refresh
 
-        # Auto-refresh timer
-        self.auto_refresh_job = None
-        self.auto_refresh_enabled = False
-        self.auto_refresh_interval = AUTO_REFRESH_INTERVAL_DEFAULT_SECONDS
-
-        # Auto-sync state (triggered by auto-refresh update detection only)
-        self.auto_sync_enabled = False
-        self.last_synced_branch = None  # Track last synced branch for auto-sync
-        self.auto_sync_mirror_default = AUTO_SYNC_MIRROR_DEFAULT
-        self.auto_sync_tracking_branch = None
-        self.auto_sync_last_synced_commit = ""
-        self.auto_sync_pending_commit = None
-
         # Archive backup settings
         self.archive_dir = DEFAULT_ARCHIVE_DIR
         self.auto_backup_after_sync = False  # Auto backup after sync
@@ -2904,35 +2907,6 @@ class GuiApp:
             command=self.open_archive_drm_targets_overlay,
         ).grid(row=1, column=3, sticky="w", padx=5, pady=(4, 0))
 
-        # Auto-refresh controls
-        auto_refresh_frame = ttk.Frame(self.root)
-        auto_refresh_frame.pack(fill="x", padx=20, pady=5)
-
-        ttk.Label(auto_refresh_frame, text="Auto-Refresh:", style="LabelBold.TLabel").grid(row=0, column=0, sticky="w")
-
-        self.auto_refresh_var = tk.BooleanVar(value=False)
-        self.auto_refresh_check = ttk.Checkbutton(
-            auto_refresh_frame,
-            text="Enable",
-            variable=self.auto_refresh_var,
-            command=self._toggle_auto_refresh
-        )
-        self.auto_refresh_check.grid(row=0, column=1, sticky="w", padx=(10, 5))
-
-        ttk.Label(auto_refresh_frame, text="Interval:", style="LabelMuted.TLabel").grid(row=0, column=2, sticky="w", padx=(20, 5))
-
-        self.auto_refresh_interval_var = tk.StringVar(value=str(AUTO_REFRESH_INTERVAL_DEFAULT_SECONDS))
-        interval_spinbox = ttk.Spinbox(
-            auto_refresh_frame,
-            from_=60,
-            to=3600,
-            increment=60,
-            textvariable=self.auto_refresh_interval_var,
-            width=8
-        )
-        interval_spinbox.grid(row=0, column=3, sticky="w", padx=5)
-        ttk.Label(auto_refresh_frame, text="seconds", style="LabelMuted.TLabel").grid(row=0, column=4, sticky="w")
-
         # Branch List (Treeview with columns)
         list_frame = ttk.Frame(self.root)
         list_frame.pack(fill="both", expand=False, padx=20, pady=10)
@@ -2971,7 +2945,7 @@ class GuiApp:
         action_frame.pack(fill="x", padx=20, pady=10)
         action_frame.columnconfigure(0, weight=1)
 
-        self.status_var = tk.StringVar(value="Select a branch and click Start Sync. Refresh is optional.")
+        self.status_var = tk.StringVar(value="Select a branch, refresh if needed, then click Start Sync.")
         ttk.Label(action_frame, textvariable=self.status_var, style="LabelMuted.TLabel").grid(row=0, column=0, sticky="w")
 
         # Archive Backup Button
@@ -2981,34 +2955,6 @@ class GuiApp:
         # Sync Button always visible on right
         self.btn_sync = ttk.Button(action_frame, text="Start Sync", command=self.start_sync, style="Accent.TButton")
         self.btn_sync.grid(row=0, column=2, sticky="e")
-
-        # Auto-sync controls (below Start Sync button)
-        auto_sync_frame = ttk.Frame(self.root)
-        auto_sync_frame.pack(fill="x", padx=20, pady=5)
-
-        ttk.Label(auto_sync_frame, text="Auto-Sync:", style="LabelBold.TLabel").grid(row=0, column=0, sticky="w")
-
-        self.auto_sync_var = tk.BooleanVar(value=False)
-        self.auto_sync_check = ttk.Checkbutton(
-            auto_sync_frame,
-            text="Enable",
-            variable=self.auto_sync_var,
-            command=self._toggle_auto_sync
-        )
-        self.auto_sync_check.grid(row=0, column=1, sticky="w", padx=(10, 5))
-        self.auto_sync_check.config(state="disabled")
-        ttk.Label(
-            auto_sync_frame,
-            text="(Auto-Refresh ON + selected branch update detected only)",
-            style="LabelMuted.TLabel",
-        ).grid(row=0, column=2, columnspan=4, sticky="w", padx=(20, 0))
-
-        self.auto_sync_mirror_var = tk.BooleanVar(value=self.auto_sync_mirror_default)
-        ttk.Checkbutton(
-            auto_sync_frame,
-            text="Auto-Sync Mirror (Clean Extras)",
-            variable=self.auto_sync_mirror_var,
-        ).grid(row=1, column=1, sticky="w", padx=(10, 5), pady=(4, 0))
 
         # Log Area
         log_frame = ttk.LabelFrame(self.root, text="Activity Log", padding=5)
@@ -3648,9 +3594,6 @@ class GuiApp:
         sync_enabled = not self.is_syncing and len(self.branch_map) > 0
         self.btn_sync.config(state="normal" if sync_enabled else "disabled")
 
-        # Auto-sync toggle is available only when auto-refresh is enabled
-        self.auto_sync_check.config(state="normal" if self.auto_refresh_enabled else "disabled")
-
         # Branch tree: always enabled (can select even during operations)
         # Treeview doesn't have a state property like Listbox, so no action needed
 
@@ -3671,21 +3614,13 @@ class GuiApp:
             logging.info("[Refresh] Cancellation requested by user")
         else:
             # Start refresh
-            self.refresh_branches(auto_refresh=False)
+            self.refresh_branches()
 
-    def refresh_branches(self, auto_refresh=False, metadata_only=False, trigger_auto_sync=True):
-        """
-        Fetch branch list or selected-branch HEAD from the remote repository.
-
-        Args:
-            auto_refresh: If True, this is an automatic refresh (no user interaction)
-            metadata_only: If True, skip branch list fetch and check only the selected branch HEAD
-            trigger_auto_sync: If True, auto-refresh completion may trigger auto-sync detection
-        """
+    def refresh_branches(self, metadata_only=False):
+        """Fetch the branch list or the selected branch's HEAD on user request."""
         # Prevent concurrent refresh operations
         if self.is_refreshing:
-            if not auto_refresh:
-                logging.warning("[Refresh] Already in progress, skipping")
+            logging.warning("[Refresh] Already in progress, skipping")
             return
 
         if metadata_only:
@@ -3699,39 +3634,27 @@ class GuiApp:
         self._update_controls()
 
         if metadata_only:
-            if auto_refresh:
-                self.status_var.set("Auto-refreshing selected branch HEAD...")
-            else:
-                self.status_var.set("Checking selected branch HEAD...")
+            self.status_var.set("Checking selected branch HEAD...")
         else:
             # [CHANGE] Do NOT clear branch list - preserve existing branches
-            if auto_refresh:
-                self.status_var.set("Auto-refreshing branch list...")
-            else:
-                self.status_var.set("Fetching branch list...")
+            self.status_var.set("Fetching branch list...")
 
         repo = self.repo_var.get()
         if metadata_only:
-            if auto_refresh:
-                logging.info(f"[Auto-Refresh] Starting selected branch HEAD check from: {repo}")
-            else:
-                logging.info(f"[Refresh] Starting selected branch HEAD check from: {repo}")
+            logging.info(f"[Refresh] Starting selected branch HEAD check from: {repo}")
         else:
-            if auto_refresh:
-                logging.info(f"[Auto-Refresh] Starting branch fetch from: {repo}")
-            else:
-                logging.info(f"[Refresh] Starting branch fetch from: {repo}")
+            logging.info(f"[Refresh] Starting branch fetch from: {repo}")
 
         def task():
             try:
                 if metadata_only:
                     selected_branch = self._get_selected_branch()
                     if not selected_branch:
-                        self.root.after(0, lambda: self._on_refresh_error("Fetch Error", "No branch selected.", auto_refresh))
+                        self.root.after(0, lambda: self._on_refresh_error("Fetch Error", "No branch selected."))
                         return
 
                     if self.cancel_refresh:
-                        self.root.after(0, lambda: self._on_refresh_cancelled(auto_refresh))
+                        self.root.after(0, self._on_refresh_cancelled)
                         return
 
                     head_start = time.time()
@@ -3739,7 +3662,7 @@ class GuiApp:
                     head_duration = time.time() - head_start
 
                     if self.cancel_refresh:
-                        self.root.after(0, lambda: self._on_refresh_cancelled(auto_refresh))
+                        self.root.after(0, self._on_refresh_cancelled)
                         return
 
                     self.root.after(
@@ -3747,15 +3670,13 @@ class GuiApp:
                         lambda: self._on_branch_head_checked(
                             selected_branch,
                             head,
-                            auto_refresh,
                             head_duration,
-                            trigger_auto_sync=trigger_auto_sync,
                         ),
                     )
                     return
 
                 if self.cancel_refresh:
-                    self.root.after(0, lambda: self._on_refresh_cancelled(auto_refresh))
+                    self.root.after(0, self._on_refresh_cancelled)
                     return
 
                 branch_start = time.time()
@@ -3764,14 +3685,13 @@ class GuiApp:
                 branch_duration = time.time() - branch_start
 
                 if self.cancel_refresh:
-                    self.root.after(0, lambda: self._on_refresh_cancelled(auto_refresh))
+                    self.root.after(0, self._on_refresh_cancelled)
                     return
 
                 self.root.after(
                     0,
                     lambda: self._on_branches_loaded(
                         branches,
-                        auto_refresh,
                         branch_duration,
                         branch_heads=branch_heads,
                     ),
@@ -3779,7 +3699,7 @@ class GuiApp:
 
             except Exception as e:
                 error_msg = str(e)
-                self.root.after(0, lambda: self._on_refresh_error("Fetch Error", error_msg, auto_refresh))
+                self.root.after(0, lambda: self._on_refresh_error("Fetch Error", error_msg))
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -3822,7 +3742,6 @@ class GuiApp:
     def _on_branches_loaded(
         self,
         branches: List[str],
-        auto_refresh=False,
         duration=None,
         branch_heads: Optional[Dict[str, str]] = None,
     ):
@@ -3873,12 +3792,8 @@ class GuiApp:
 
         self._persist_gui_state()
 
-        if auto_refresh:
-            self.status_var.set("Auto-refresh: Branch list updated.")
-            logging.info("[Auto-Refresh] Branch list updated without all-head metadata fetch.")
-        else:
-            self.status_var.set("Branch list loaded. Start Sync uses the selected branch directly.")
-            logging.info("[Refresh] Branch list loaded without all-head metadata fetch.")
+        self.status_var.set("Branch list loaded. Start Sync uses the selected branch directly.")
+        logging.info("[Refresh] Branch list loaded without all-head metadata fetch.")
 
         self.is_refreshing = False
 
@@ -3889,9 +3804,7 @@ class GuiApp:
         self,
         branch: str,
         head: str,
-        auto_refresh=False,
         duration=None,
-        trigger_auto_sync=True,
     ):
         """Handle selected-branch HEAD check completion."""
         if duration is not None:
@@ -3905,96 +3818,24 @@ class GuiApp:
         self.is_refreshing = False
         self._update_controls()
 
-        if auto_refresh:
-            self.status_var.set("Auto-refresh completed.")
-            logging.info(f"[Auto-Refresh] Selected branch HEAD: {branch} {_short_sha(head)}")
-            if trigger_auto_sync:
-                self._detect_and_trigger_auto_sync()
-        else:
-            self.status_var.set("Selected branch HEAD checked.")
-            logging.info(f"[Refresh] Selected branch HEAD: {branch} {_short_sha(head)}")
+        self.status_var.set("Selected branch HEAD checked.")
+        logging.info(f"[Refresh] Selected branch HEAD: {branch} {_short_sha(head)}")
 
-    def _on_dates_loaded(
-        self,
-        dates: Dict[str, str],
-        auto_refresh=False,
-        duration=None,
-        trigger_auto_sync=True,
-    ):
-        """Handle successful commit date fetch."""
-        # Record metadata fetch time
-        if duration is not None:
-            self.metadata_fetch_times.append(duration)
-            if len(self.metadata_fetch_times) > self.max_samples:
-                self.metadata_fetch_times.pop(0)
-            self._update_avg_times()
-
-        # Update branch_dates with new information (preserves old dates for branches not in new fetch)
-        self.branch_dates.update(dates)
-
-        # Preserve current selection
-        current_selection = self.branch_tree.selection()
-        selected_index = None
-        if current_selection:
-            items = self.branch_tree.get_children()
-            selected_index = items.index(current_selection[0])
-
-        # Update tree items with dates
-        for item in self.branch_tree.get_children():
-            branch_name = self.branch_tree.item(item)["values"][0]
-            commit_date = self.branch_dates.get(branch_name, "")
-            self.branch_tree.item(item, values=(branch_name, commit_date))
-
-        # Restore selection
-        if selected_index is not None:
-            items = self.branch_tree.get_children()
-            if selected_index < len(items):
-                self.branch_tree.selection_set(items[selected_index])
-                self.branch_tree.see(items[selected_index])
-
-        # Update state
-        self.is_refreshing = False
-        self._update_controls()
-
-        self.last_metadata_time = datetime.now(KST)
-
-        if auto_refresh:
-            if trigger_auto_sync:
-                self.status_var.set("Auto-refresh completed.")
-                logging.info("[Auto-Refresh] Completed successfully")
-            else:
-                self.status_var.set("Metadata refresh completed.")
-                logging.info("[Refresh] Metadata-only refresh completed.")
-            if trigger_auto_sync:
-                self._detect_and_trigger_auto_sync()
-        else:
-            self.status_var.set("Ready.")
-
-    def _on_refresh_error(self, title: str, message: str, auto_refresh=False):
+    def _on_refresh_error(self, title: str, message: str):
         """Handle refresh error."""
         self.is_refreshing = False
         self._update_controls()
 
-        if auto_refresh:
-            # Silent logging for auto-refresh errors (don't show popup)
-            logging.error(f"[Auto-Refresh] {title}: {message}")
-            self.status_var.set("Auto-refresh failed (see log)")
-        else:
-            # Show error popup for manual refresh
-            self._on_error(title, message)
+        self._on_error(title, message)
 
-    def _on_refresh_cancelled(self, auto_refresh=False):
+    def _on_refresh_cancelled(self):
         """Handle refresh cancellation."""
         self.is_refreshing = False
         self.cancel_refresh = False
         self._update_controls()
 
-        if auto_refresh:
-            logging.info("[Auto-Refresh] Cancelled")
-            self.status_var.set("Auto-refresh cancelled")
-        else:
-            logging.info("[Refresh] Cancelled by user")
-            self.status_var.set("Refresh cancelled")
+        logging.info("[Refresh] Cancelled by user")
+        self.status_var.set("Refresh cancelled")
 
     def _update_avg_times(self):
         """Update average times display."""
@@ -4012,16 +3853,12 @@ class GuiApp:
         self.avg_metadata_var.set(f"Avg Remote Check: {metadata_str}")
         self.avg_sync_var.set(f"Avg Sync: {sync_str}")
 
-    def _refresh_branch_dates_only(self, auto_refresh=False, trigger_auto_sync=False):
+    def _refresh_branch_dates_only(self):
         """Check the selected branch HEAD without reloading all branch metadata."""
         if not self.branch_map:
             logging.info("[Refresh] Branch list is empty, skipping selected branch HEAD check.")
             return
-        self.refresh_branches(
-            auto_refresh=auto_refresh,
-            metadata_only=True,
-            trigger_auto_sync=trigger_auto_sync,
-        )
+        self.refresh_branches(metadata_only=True)
 
     def _get_selected_branch(self) -> Optional[str]:
         """Return currently selected branch from treeview."""
@@ -4034,64 +3871,6 @@ class GuiApp:
             return None
 
         return str(values[0])
-
-    def _disable_auto_sync(self, reason: Optional[str] = None):
-        """Disable auto-sync and reset tracking state."""
-        self.auto_sync_enabled = False
-        self.auto_sync_var.set(False)
-        self.auto_sync_tracking_branch = None
-        self.auto_sync_last_synced_commit = ""
-        self.auto_sync_pending_commit = None
-        if reason:
-            logging.info(reason)
-        self._update_controls()
-
-    def _detect_and_trigger_auto_sync(self):
-        """Trigger auto-sync only when selected branch commit changes."""
-        if not self.auto_sync_enabled or not self.auto_refresh_enabled:
-            return
-
-        selected_branch = self._get_selected_branch()
-        if not selected_branch:
-            return
-
-        latest_commit = self.branch_heads.get(selected_branch, "")
-        if not latest_commit:
-            return
-
-        if selected_branch != self.auto_sync_tracking_branch:
-            self.auto_sync_tracking_branch = selected_branch
-            self.auto_sync_last_synced_commit = latest_commit
-            self.auto_sync_pending_commit = None
-            logging.info(
-                f"[Auto-Sync] Tracking selected branch '{selected_branch}' "
-                f"(baseline commit: {_short_sha(latest_commit)})"
-            )
-            return
-
-        if not self.auto_sync_last_synced_commit:
-            self.auto_sync_last_synced_commit = latest_commit
-            return
-
-        if latest_commit == self.auto_sync_last_synced_commit:
-            return
-
-        if self.auto_sync_pending_commit == latest_commit:
-            return
-
-        if self.is_syncing:
-            logging.warning(
-                f"[Auto-Sync] Update detected on '{selected_branch}' "
-                f"({_short_sha(self.auto_sync_last_synced_commit)} -> {_short_sha(latest_commit)}), "
-                "but sync is already in progress. Will retry on next auto-refresh."
-            )
-            return
-
-        logging.info(
-            f"[Auto-Sync] Update detected on '{selected_branch}' "
-            f"({_short_sha(self.auto_sync_last_synced_commit)} -> {_short_sha(latest_commit)}). Starting sync."
-        )
-        self._execute_auto_sync(selected_branch, latest_commit)
 
     def start_sync(self):
         # Check if branches are loaded
@@ -4114,9 +3893,6 @@ class GuiApp:
         repo = self.repo_var.get()
         mirror = self.mirror_var.get()
         method = self.download_method_var.get()
-
-        # [CHANGE] Record last synced branch for auto-sync
-        self.last_synced_branch = branch
 
         # ZIP mode still replaces local git metadata and files, so keep explicit confirmation.
         if method == "zip" and self.manager._path_lexists(self.manager.cwd / ".git"):
@@ -4208,9 +3984,6 @@ class GuiApp:
         self.last_metadata_time = self.last_sync_time
         if branch and snapshot is not None:
             self._update_branch_remote_info(branch, snapshot=snapshot)
-            if snapshot.commit_sha:
-                self.auto_sync_last_synced_commit = snapshot.commit_sha
-
         self.status_var.set("Sync completed successfully.")
 
         # Auto-backup after sync if enabled
@@ -4414,256 +4187,6 @@ class GuiApp:
 
         if self.mode == "Normal":
             self._on_close()
-
-    def _perform_auto_backup_silent(self):
-        """Perform automatic backup after auto-sync (silent, no popup)."""
-        target_dir = self.archive_dir_var.get()
-
-        if not target_dir:
-            logging.warning("[Auto-Sync Backup] No archive directory set, skipping auto-backup")
-            logging.info("[Auto-Sync] Skipped post-sync remote metadata refresh; using fetched branch ref.")
-            return
-
-        self.status_var.set("Creating automatic backup after auto-sync...")
-        logging.info(f"[Auto-Sync Backup] Creating backup to: {target_dir}")
-        skip_office_drm = self._skip_office_drm_for_archive()
-        logging.info(
-            "[Auto-Sync Backup] Office DRM handling: %s",
-            "exclude targets" if skip_office_drm else "use cache; re-save misses",
-        )
-
-        def task():
-            error_message = None
-            archive_path = None
-            try:
-                archive_path = self.manager.create_archive_backup(
-                    Path(target_dir),
-                    logging.info,
-                    skip_office_drm=skip_office_drm,
-                )
-            except Exception as e:
-                error_message = str(e)
-            finally:
-                self.root.after(0, lambda msg=error_message, path=archive_path:
-                    self._on_auto_backup_silent_complete(msg, path))
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _on_auto_backup_silent_complete(self, error_message: Optional[str], archive_path: Optional[Path]):
-        """Handle automatic backup completion for auto-sync (silent)."""
-        if error_message:
-            self.status_var.set("Auto-sync backup failed")
-            logging.error(f"[Auto-Sync Backup] Failed: {error_message}")
-        else:
-            self.status_var.set("Auto-sync and backup completed successfully")
-            logging.info(f"[Auto-Sync Backup] Completed: {archive_path}")
-
-        logging.info("[Auto-Sync] Skipped post-backup remote metadata refresh.")
-
-    # --- Auto-Refresh ---
-
-    def _toggle_auto_refresh(self):
-        """Toggle auto-refresh on/off."""
-        self.auto_refresh_enabled = self.auto_refresh_var.get()
-
-        if self.auto_refresh_enabled:
-            # Start auto-refresh
-            try:
-                interval = int(self.auto_refresh_interval_var.get())
-                self.auto_refresh_interval = interval
-                logging.info(f"[Auto-Refresh] Enabled with interval: {interval} seconds")
-                self._schedule_auto_refresh()
-            except ValueError:
-                messagebox.showerror("Invalid Interval", "Please enter a valid number for interval.")
-                self.auto_refresh_var.set(False)
-                self.auto_refresh_enabled = False
-        else:
-            # Stop auto-refresh
-            if self.auto_refresh_job:
-                self.root.after_cancel(self.auto_refresh_job)
-                self.auto_refresh_job = None
-            logging.info("[Auto-Refresh] Disabled")
-            if self.auto_sync_enabled:
-                self._disable_auto_sync("[Auto-Sync] Disabled because Auto-Refresh was turned off")
-                self.status_var.set("Auto-Sync disabled (requires Auto-Refresh).")
-
-        self._update_controls()
-
-    # --- Auto-Sync ---
-
-    def _toggle_auto_sync(self):
-        """Toggle auto-sync on/off."""
-        self.auto_sync_enabled = self.auto_sync_var.get()
-
-        if self.auto_sync_enabled:
-            if not self.auto_refresh_enabled:
-                messagebox.showwarning(
-                    "Auto-Refresh Required",
-                    "Auto-Sync works only when Auto-Refresh is enabled.\n\n"
-                    "Please enable Auto-Refresh first."
-                )
-                self._disable_auto_sync()
-                return
-
-            selected_branch = self._get_selected_branch()
-            if not selected_branch:
-                messagebox.showwarning(
-                    "No Branch Selected",
-                    "Select a branch first. Auto-Sync monitors updates on the selected branch."
-                )
-                self._disable_auto_sync()
-                return
-
-            baseline_commit = self.branch_heads.get(selected_branch, "")
-            self.auto_sync_tracking_branch = selected_branch
-            self.auto_sync_last_synced_commit = baseline_commit
-            self.auto_sync_pending_commit = None
-            logging.info(
-                f"[Auto-Sync] Enabled. Tracking branch: {selected_branch}, "
-                f"baseline commit: {_short_sha(baseline_commit) if baseline_commit else '(unknown)'}, "
-                f"mirror: {self.auto_sync_mirror_var.get()}"
-            )
-            self.status_var.set(f"Auto-Sync enabled for '{selected_branch}' (waiting for updates).")
-        else:
-            self._disable_auto_sync("[Auto-Sync] Disabled")
-            self.status_var.set("Auto-Sync disabled.")
-
-    def _schedule_auto_refresh(self):
-        """Schedule the next auto-refresh."""
-        if not self.auto_refresh_enabled:
-            return
-
-        # Cancel previous job if exists
-        if self.auto_refresh_job:
-            self.root.after_cancel(self.auto_refresh_job)
-
-        # Schedule next refresh
-        interval_ms = self.auto_refresh_interval * 1000
-        self.auto_refresh_job = self.root.after(interval_ms, self._execute_auto_refresh)
-
-    def _execute_auto_refresh(self):
-        """Execute auto-refresh and reschedule."""
-        if not self.auto_refresh_enabled:
-            return
-
-        # Only refresh if branches are already loaded
-        if self.branch_map:
-            logging.info(f"[Auto-Refresh] Executing automatic refresh (interval: {self.auto_refresh_interval}s)")
-            self.refresh_branches(auto_refresh=True, metadata_only=True, trigger_auto_sync=True)
-
-        # Reschedule next refresh
-        self._schedule_auto_refresh()
-
-    def _execute_auto_sync(self, branch: str, target_commit: str):
-        """Execute auto-sync immediately for a detected commit update."""
-        if not self.auto_sync_enabled or not self.auto_refresh_enabled:
-            return
-
-        if self.is_syncing:
-            logging.warning("[Auto-Sync] Sync already in progress, skipping update trigger")
-            return
-
-        self.auto_sync_pending_commit = target_commit
-        self.last_sync_try_time = datetime.now(KST)
-
-        repo = self.repo_var.get()
-        mirror = self.auto_sync_mirror_var.get()
-        method = self.download_method_var.get()
-
-        auto_sync_start_time = time.time()
-
-        # Update state
-        self.is_syncing = True
-        self._update_controls()
-
-        method_text = "ZIP Download" if method == "zip" else "Git Incremental"
-        self.status_var.set(f"Auto-syncing {branch}... ({method_text})")
-
-        if mirror != self.mirror_var.get():
-            logging.info(
-                f"[Auto-Sync] Mirror policy split active "
-                f"(manual_mirror={self.mirror_var.get()}, auto_sync_mirror={mirror})"
-            )
-        logging.info(
-            f"[Auto-Sync] Starting sync - Repo: {repo}, Branch: {branch}, Method: {method}, "
-            f"Mirror: {mirror}, target_commit: {target_commit}"
-        )
-
-        def task():
-            error_message = None
-            snapshot = RemoteBranchSnapshot(commit_sha="", committed_at="-")
-            try:
-                snapshot = self.manager.sync(repo, branch, mirror, logging.info, method=method)
-            except Exception as e:
-                logging.exception(
-                    "[Auto-Sync] Failed - Repo: %s, Branch: %s, Method: %s, Mirror: %s, Target: %s",
-                    repo,
-                    branch,
-                    method,
-                    mirror,
-                    target_commit,
-                )
-                error_message = f"{type(e).__name__}: {e}"
-            finally:
-                sync_duration = time.time() - auto_sync_start_time
-                self.root.after(
-                    0,
-                    lambda msg=error_message, dur=sync_duration, b=branch, c=target_commit, snap=snapshot:
-                        self._on_auto_sync_complete(msg, dur, b, c, snap),
-                )
-
-        threading.Thread(target=task, daemon=True).start()
-
-    def _on_auto_sync_complete(
-        self,
-        error_message: Optional[str],
-        duration: float = None,
-        branch: Optional[str] = None,
-        target_commit: Optional[str] = None,
-        snapshot: Optional[RemoteBranchSnapshot] = None,
-    ):
-        """Handle auto-sync completion."""
-        # Update state
-        self.is_syncing = False
-        self._update_controls()
-
-        if error_message:
-            # Log error but don't show popup for auto-sync
-            logging.error(f"[Auto-Sync] Failed: {error_message}")
-            self.status_var.set("Auto-sync failed (see log)")
-            self.auto_sync_pending_commit = None
-        else:
-            # Record sync time on success
-            if duration is not None:
-                self.sync_times.append(duration)
-                if len(self.sync_times) > self.max_samples:
-                    self.sync_times.pop(0)
-                self._update_avg_times()
-
-            self.last_sync_time = datetime.now(KST)
-            if branch:
-                self.last_synced_branch = branch
-            if branch and snapshot is not None:
-                self._update_branch_remote_info(branch, snapshot=snapshot)
-            if (
-                branch
-                and branch == self.auto_sync_tracking_branch
-            ):
-                if snapshot is not None and snapshot.commit_sha:
-                    self.auto_sync_last_synced_commit = snapshot.commit_sha
-                elif target_commit:
-                    self.auto_sync_last_synced_commit = target_commit
-            self.auto_sync_pending_commit = None
-
-            self.status_var.set("Auto-sync completed successfully.")
-            logging.info("[Auto-Sync] Completed successfully")
-
-            # Auto-backup after auto-sync if enabled
-            if self.auto_backup_var.get():
-                logging.info("[Auto-Sync] Auto-backup enabled, starting backup...")
-                self._perform_auto_backup_silent()
-            else:
-                logging.info("[Auto-Sync] Skipped post-sync remote metadata refresh; using fetched branch ref.")
 
     def run(self):
         self.root.mainloop()

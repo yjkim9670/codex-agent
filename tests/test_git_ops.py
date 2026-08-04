@@ -139,6 +139,41 @@ def test_git_status_lists_files_inside_untracked_directory(tmp_path, monkeypatch
     assert all(entry['status'] == 'U' for entry in result['changed_files_detail'])
 
 
+def test_header_branch_falls_back_to_labeled_workbench_repository(tmp_path, monkeypatch):
+    parent_directory = tmp_path / 'parent-without-git'
+    workbench_repo = tmp_path / 'codex_workbench'
+    parent_directory.mkdir()
+    _init_repo(workbench_repo)
+    _commit_file(workbench_repo, 'tracked.txt')
+    workbench_branch = _run_git(workbench_repo, 'branch', '--show-current').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', parent_directory)
+    monkeypatch.setattr(git_ops, 'REPO_ROOT', workbench_repo)
+    original_resolve_repo_root = git_ops._resolve_repo_root
+
+    def resolve_repo_root(repo_target):
+        if repo_target == 'workspace':
+            return None, 'workspace repository is unavailable'
+        return original_resolve_repo_root(repo_target)
+
+    monkeypatch.setattr(git_ops, '_resolve_repo_root', resolve_repo_root)
+
+    assert git_ops.get_current_branch_name() == f'WB · {workbench_branch}'
+
+
+def test_header_branch_prefers_parent_workspace_repository(tmp_path, monkeypatch):
+    workspace_repo = tmp_path / 'workspace'
+    workbench_repo = tmp_path / 'codex_workbench'
+    _init_repo(workspace_repo)
+    _commit_file(workspace_repo, 'workspace.txt')
+    _init_repo(workbench_repo)
+    _commit_file(workbench_repo, 'workbench.txt')
+    workspace_branch = _run_git(workspace_repo, 'branch', '--show-current').stdout.strip()
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', workspace_repo)
+    monkeypatch.setattr(git_ops, 'REPO_ROOT', workbench_repo)
+
+    assert git_ops.get_current_branch_name() == workspace_branch
+
+
 def test_git_status_decodes_korean_untracked_excel_filename(tmp_path, monkeypatch):
     repo_root = tmp_path / 'workspace'
     _init_repo(repo_root)

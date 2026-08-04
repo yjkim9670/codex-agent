@@ -919,12 +919,27 @@ def _abort_merge_if_needed(repo_root, env):
 
 
 def get_current_branch_name():
+    """Return the header branch label, preferring the parent workspace repo.
+
+    The header normally represents the repository in ``WORKSPACE_DIR``.  A
+    Workbench checkout is often used directly under a non-git parent,
+    however; in that case keep the branch indicator useful and make the
+    fallback repository explicit rather than presenting its branch as though
+    it belonged to the parent workspace.  Keep the header label compact: the
+    branch pill is space-constrained and ``WB`` is sufficient to distinguish
+    the bundled Workbench repository from the parent workspace.
+    """
     repo_root, error = _resolve_repo_root(_GIT_REPO_TARGET_WORKSPACE)
-    if error:
-        return ''
     env = os.environ.copy()
     env.setdefault('GIT_TERMINAL_PROMPT', '0')
-    return _read_current_branch(repo_root, env)
+    if not error:
+        return _read_current_branch(repo_root, env)
+
+    workbench_repo_root, workbench_error = _resolve_repo_root(_GIT_REPO_TARGET_CODEX_AGENT)
+    if workbench_error:
+        return ''
+    workbench_branch = _read_current_branch(workbench_repo_root, env)
+    return f'WB · {workbench_branch}' if workbench_branch else ''
 
 
 def _is_history_file(path):

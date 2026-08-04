@@ -468,7 +468,7 @@ const GIT_SYNC_TARGET_ORDER = Object.freeze([
 ]);
 const GIT_SYNC_TARGET_LABELS = Object.freeze({
     [GIT_SYNC_TARGET_WORKSPACE]: '상위 디렉토리 Repo',
-    [GIT_SYNC_TARGET_CODEX_AGENT]: 'Codex Workbench Repo'
+    [GIT_SYNC_TARGET_CODEX_AGENT]: 'codex_workbench'
 });
 const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
@@ -490,6 +490,10 @@ let gitBranchStatusCache = {
     isStale: false,
     fetchedAt: 0
 };
+// The header normally represents the parent workspace repository.  If that
+// directory is not a Git repository, the header falls back to this Workbench
+// checkout; keep the branch overlay and every mutation on that same target.
+let gitBranchRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitBranchToastAt = 0;
 let gitBranchStatusInFlight = false;
 let gitBranchPollTimer = null;
@@ -11872,11 +11876,14 @@ function applyGitBranchStatusToElement(element, status) {
     if (!element || !status) return;
     const branchName = typeof status.branch === 'string' ? status.branch.trim() : '';
     if (!branchName) return;
-    if (element.textContent.trim() !== branchName) {
-        element.textContent = branchName;
+    const displayName = normalizeGitSyncRepoTarget(status.repoTarget || gitBranchRepoTarget) === GIT_SYNC_TARGET_CODEX_AGENT
+        ? `WB · ${branchName}`
+        : branchName;
+    if (element.textContent.trim() !== displayName) {
+        element.textContent = displayName;
     }
-    element.dataset.branchFull = branchName;
-    syncHoverTooltipFromLabel(element, branchName);
+    element.dataset.branchFull = displayName;
+    syncHoverTooltipFromLabel(element, displayName);
 }
 
 function syncGitOverlayFullscreenButton(button, isFullscreen) {
@@ -12988,10 +12995,11 @@ function getGitCommitMessageGenerationContext(kind) {
         };
     }
     const paths = getGitSelectedFilePathsInOrder(gitBranchStatusCache.changedFiles);
+    const repoTarget = normalizeGitSyncRepoTarget(gitBranchRepoTarget);
     return {
         kind: 'branch',
-        repoTarget: GIT_SYNC_TARGET_WORKSPACE,
-        repoLabel: getGitSyncRepoLabel(GIT_SYNC_TARGET_WORKSPACE),
+        repoTarget,
+        repoLabel: getGitSyncRepoLabel(repoTarget),
         paths,
         elements: getGitBranchOverlayElements()
     };
@@ -13105,7 +13113,8 @@ function updateGitBranchOverlayCommitPreview(status) {
         elements.latestCommit.textContent = '커밋 예정 메시지: 파일 선택 시 자동 생성됩니다.';
         return;
     }
-    const request = buildGitCommitPreviewCacheKey(GIT_SYNC_TARGET_WORKSPACE, selectedPaths);
+    const repoTarget = normalizeGitSyncRepoTarget(gitBranchRepoTarget);
+    const request = buildGitCommitPreviewCacheKey(repoTarget, selectedPaths);
     gitBranchOverlayPreviewKey = request.key;
     const freshEntry = getGitCommitPreviewCacheEntry(request.key);
     if (freshEntry) {
@@ -13121,7 +13130,7 @@ function updateGitBranchOverlayCommitPreview(status) {
     if (gitCommitPreviewInFlightByKey.has(request.key)) {
         return;
     }
-    void ensureGitCommitPreview(GIT_SYNC_TARGET_WORKSPACE, selectedPaths).then(({ key, entry }) => {
+    void ensureGitCommitPreview(repoTarget, selectedPaths).then(({ key, entry }) => {
         if (!entry) return;
         if (!isGitBranchOverlayOpen()) return;
         if (gitBranchOverlayPreviewKey !== key) return;
@@ -13165,7 +13174,10 @@ function renderGitBranchOverlay(status) {
         windowsInvalidCount
     );
     if (elements.subtitle) {
-        elements.subtitle.textContent = branchName ? `브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
+        const repoLabel = normalizeGitSyncRepoTarget(status?.repoTarget || gitBranchRepoTarget) === GIT_SYNC_TARGET_CODEX_AGENT
+            ? 'codex_workbench · '
+            : '';
+        elements.subtitle.textContent = branchName ? `${repoLabel}브랜치: ${branchName}` : '브랜치 정보를 불러오는 중...';
     }
     const files = normalizeGitChangedFiles(status?.changedFiles);
     const count = Number.isFinite(status?.count) ? status.count : files.length;
@@ -13228,10 +13240,10 @@ function renderGitBranchOverlay(status) {
                 renderGitBranchOverlay(gitBranchStatusCache);
             },
             onFileRevert: (path, file, button) => {
-                void handleGitFileRevert(button, path, GIT_SYNC_TARGET_WORKSPACE);
+                void handleGitFileRevert(button, path, gitBranchRepoTarget);
             },
             onFileOpen: (path, file) => {
-                openGitChangedFileInFilePreview(path, GIT_SYNC_TARGET_WORKSPACE, file);
+                openGitChangedFileInFilePreview(path, gitBranchRepoTarget, file);
             }
         });
         renderedFileCount = rendered.fileCount;
@@ -23952,6 +23964,14 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
         const history = await fetchGitSyncHistory(force, target, {
             branch: statusBranch
         });
+        // The parent workspace repository is the default target.  When it does
+        // not exist, immediately present this Workbench's own repository rather
+        // than leaving the Sync overlay with an empty branch/status.
+        if (target === GIT_SYNC_TARGET_WORKSPACE && history?.repoMissing) {
+            resetGitCommitMessageFields(elements);
+            setGitSyncOverlayRepoTarget(GIT_SYNC_TARGET_CODEX_AGENT);
+            return await refreshGitSyncOverlayHistory({ force, silent });
+        }
         const statusFiles = normalizeGitChangedFiles(status?.changedFiles);
         const historyFiles = normalizeGitChangedFiles(history?.changedFiles);
         const mergedFiles = statusFiles.length ? statusFiles : historyFiles;
@@ -24047,11 +24067,31 @@ async function fetchGitStatus(force = false) {
             windowsInvalidCount,
             hasWindowsPathIssues,
             changedFiles,
+            repoTarget: GIT_SYNC_TARGET_WORKSPACE,
             isStale: false,
             fetchedAt: Date.now()
         };
+        gitBranchRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
         return gitBranchStatusCache;
     } catch (error) {
+        // A branch pill can legitimately be shown for the Workbench checkout
+        // when the parent directory is not a Git repository.  Retrieve that
+        // repository's real status as well, so the overlay actions operate on
+        // exactly what the header represents.
+        try {
+            const fallbackStatus = await fetchGitStatusForRepoTarget(GIT_SYNC_TARGET_CODEX_AGENT, true);
+            gitBranchRepoTarget = GIT_SYNC_TARGET_CODEX_AGENT;
+            gitBranchStatusCache = {
+                ...fallbackStatus,
+                repoTarget: GIT_SYNC_TARGET_CODEX_AGENT,
+                isStale: false,
+                fetchedAt: Date.now()
+            };
+            return gitBranchStatusCache;
+        } catch (fallbackError) {
+            // Preserve the last usable display state below when neither target
+            // can be reached.
+        }
         gitBranchStatusCache = {
             count: null,
             branch: gitBranchStatusCache.branch || '',
@@ -24063,6 +24103,7 @@ async function fetchGitStatus(force = false) {
             windowsInvalidCount: 0,
             hasWindowsPathIssues: false,
             changedFiles: [],
+            repoTarget: gitBranchRepoTarget,
             isStale: true,
             fetchedAt: Date.now()
         };
@@ -24213,6 +24254,7 @@ async function fetchGitStatusForRepoTarget(repoTarget, force = false) {
         windowsInvalidCount,
         hasWindowsPathIssues,
         changedFiles,
+        repoTarget: target,
         isStale: false,
         fetchedAt: Date.now()
     };
@@ -24326,6 +24368,8 @@ async function handleGitCommit(button) {
     }
 
     const elements = getGitBranchOverlayElements();
+    const repoTarget = normalizeGitSyncRepoTarget(gitBranchRepoTarget);
+    const repoLabel = getGitSyncRepoLabel(repoTarget);
     const commitFields = getGitCommitMessageFields(elements);
     const commitButton = elements?.commitBtn;
     gitMutationInFlight = true;
@@ -24339,6 +24383,7 @@ async function handleGitCommit(button) {
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_STAGE_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
+                repo_target: repoTarget,
                 files: selectedFiles,
                 replace: true
             })
@@ -24348,6 +24393,7 @@ async function handleGitCommit(button) {
             headers: { 'Content-Type': 'application/json' },
             timeoutMs: GIT_COMMIT_REQUEST_TIMEOUT_MS,
             body: JSON.stringify({
+                repo_target: repoTarget,
                 message_subject: commitFields.subject,
                 message_body: commitFields.body,
                 message: commitFields.full
@@ -24358,17 +24404,17 @@ async function handleGitCommit(button) {
             : '';
         const commitSummary = summarizeGitOutput(result?.stdout || result?.stderr);
         const commitSuffix = commitSummary ? `: ${commitSummary}` : '';
-        showToast(`git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
+        showToast(`${repoLabel} · git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
         resetGitCommitMessageFields(elements);
         gitOverlaySelectionTouched = false;
         gitOverlaySelectedFiles = new Set();
     } catch (error) {
         let message = normalizeGitActionError(error, 'git commit 작업에 실패했습니다.');
-        const cancelNotice = await requestGitCancelAfterTimeout(error, GIT_SYNC_TARGET_WORKSPACE);
+        const cancelNotice = await requestGitCancelAfterTimeout(error, repoTarget);
         if (cancelNotice) {
             message = `${message} · ${cancelNotice}`;
         }
-        showToast(`git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
+        showToast(`${repoLabel} · git commit 실패: ${message}`, { tone: 'error', durationMs: 5200 });
     } finally {
         gitMutationInFlight = false;
         setGitButtonBusy(button, false);
@@ -24501,7 +24547,7 @@ async function handleGitPush(button, options = {}) {
         return;
     }
     const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
-    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || gitBranchRepoTarget);
     const repoLabel = getGitSyncRepoLabel(repoTarget);
     const confirmed = window.confirm(
         `${repoLabel} 기준으로 현재 브랜치를 원격 저장소로 push하고, 이어서 fetch까지 실행할까요?`

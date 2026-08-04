@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=207">
+    <link rel="stylesheet" href="/static/css/app.css?v=208">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -1295,7 +1295,7 @@
                 <div class="sync-overlay-last-commit" id="codex-sync-overlay-last-commit">커밋 예정 메시지: 계산 중...</div>
                 <div class="sync-overlay-targets" role="group" aria-label="Sync repository target">
                     <button class="btn secondary sync-overlay-target is-active" type="button" id="codex-sync-target-workspace" data-repo-target="workspace">상위 디렉토리 Repo</button>
-                    <button class="btn ghost sync-overlay-target" type="button" id="codex-sync-target-codex-agent" data-repo-target="codex_agent">Codex Workbench Repo</button>
+                    <button class="btn ghost sync-overlay-target" type="button" id="codex-sync-target-codex-agent" data-repo-target="codex_agent">codex_workbench</button>
                 </div>
                 <div class="sync-overlay-tools">
                     <button class="btn primary sync-overlay-fetch" type="button" id="codex-sync-overlay-fetch" aria-label="Fetch only" title="Fetch only">Fetch only</button>
@@ -1653,6 +1653,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=216"></script>
+    <script src="/static/js/app.js?v=218"></script>
 </body>
 </html>

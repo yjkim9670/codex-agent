@@ -28,14 +28,6 @@ VARIANTS = {
             "https://github.com/yjkim9670/CommonTG-Verification-Platform",
         ],
     ),
-    "documents": (
-        Path("../../../Documents/Codex/2026-05-28/yjkim9670-codex-agent-git-https-github/z00_sync_git.py"),
-        [
-            "https://github.com/yjkim9670/CommonTG-Verification-Platform",
-            "https://github.com/yjkim9670/GL-FW-DV-Constraint-Review",
-            "https://github.com/yjkim9670/codex-agent",
-        ],
-    ),
 }
 
 REPO_BLOCK = re.compile(r"REPO_CHOICES = \[.*?\n\]", re.DOTALL)

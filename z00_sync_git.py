@@ -8,6 +8,7 @@ import argparse
 import ctypes
 import ctypes.util
 import hashlib
+import json
 import logging
 import os
 import re
@@ -92,6 +93,9 @@ UI_FONT_FAMILY_MONO = "Consolas"
 APP_FONT_FAMILY = "IBM Plex Sans KR"
 APP_FONT_RESOURCE_DIR = Path("resources") / "fonts" / "ibm_plex_sans_kr"
 APP_FONT_FILES = ("IBMPlexSansKR-Regular.ttf", "IBMPlexSansKR-SemiBold.ttf", "IBMPlexSansKR-Bold.ttf")
+TIMESTAMP_FONT_SIZE = 9
+TIMESTAMP_FONT_STYLE = "italic"
+WINDOWS_APP_USER_MODEL_ID = "yjkim9670.GitSyncPro"
 
 ARCHIVE_TEXT_EXTENSIONS = {
     ".bat",
@@ -268,21 +272,40 @@ def _register_font_file(font_path: Path) -> bool:
     return False
 
 
-def configure_gui_fonts(root: "tk.Misc") -> bool:
-    """Use bundled IBM Plex Sans KR when Tk can resolve it; otherwise retain safe defaults."""
-    global UI_FONT_FAMILY_DISPLAY, UI_FONT_FAMILY_TEXT
+def register_gui_font_resources() -> bool:
+    """Register bundled IBM Plex Sans KR faces before creating the Tk root window."""
     font_dir = Path(__file__).resolve().parent / APP_FONT_RESOURCE_DIR
-    for file_name in APP_FONT_FILES:
-        _register_font_file(font_dir / file_name)
+    results = [_register_font_file(font_dir / file_name) for file_name in APP_FONT_FILES]
+    return bool(results) and any(results)
+
+
+def configure_gui_fonts(root: "tk.Misc") -> bool:
+    """Apply IBM Plex Sans KR to Tk's named UI fonts when it is available."""
+    global UI_FONT_FAMILY_DISPLAY, UI_FONT_FAMILY_TEXT
     try:
         import tkinter.font as tkfont
-        if APP_FONT_FAMILY in set(tkfont.families(root)):
-            UI_FONT_FAMILY_DISPLAY = APP_FONT_FAMILY
-            UI_FONT_FAMILY_TEXT = APP_FONT_FAMILY
-            return True
+        families = {family.casefold(): family for family in tkfont.families(root)}
+        resolved_family = families.get(APP_FONT_FAMILY.casefold())
+        if not resolved_family:
+            logging.warning("IBM Plex Sans KR is unavailable to Tk; using the system fallback font.")
+            return False
+        UI_FONT_FAMILY_DISPLAY = resolved_family
+        UI_FONT_FAMILY_TEXT = resolved_family
+        for named_font in (
+            "TkDefaultFont", "TkTextFont", "TkFixedFont", "TkMenuFont",
+            "TkHeadingFont", "TkCaptionFont", "TkSmallCaptionFont",
+            "TkIconFont", "TkTooltipFont",
+        ):
+            try:
+                tkfont.nametofont(named_font, root=root).configure(family=resolved_family)
+            except tk.TclError:
+                pass
+        root.option_add("*Font", (resolved_family, 10))
+        logging.info("Applied Tk UI font: %s", resolved_family)
+        return True
     except Exception:
-        pass
-    return False
+        logging.exception("Unable to configure Tk UI fonts.")
+        return False
 
 
 def _read_int_env(name: str, default: int, minimum: int = 1) -> int:
@@ -327,7 +350,9 @@ LOG_PATH_ENV = "GIT_SYNC_LOG_PATH"
 DEFAULT_RUNTIME_LOG_DIR = ".sync_runtime"
 DEFAULT_LOG_FILENAME = "sync_run.log"
 DEFAULT_EXTERNAL_LOG_ROOT = "git-sync"
-LOCAL_PRESERVE_DIRS: Tuple[str, ...] = ("summary",)
+GUI_STATE_FILENAME = "gui_state.json"
+GUI_STATE_VERSION = 1
+LOCAL_PRESERVE_DIRS: Tuple[str, ...] = ("summary", DEFAULT_RUNTIME_LOG_DIR)
 
 
 class RemoteBranchSnapshot(NamedTuple):
@@ -2561,13 +2586,19 @@ class TkTextHandler(logging.Handler):
 class GuiApp:
     def __init__(self, manager: GitManager, initial_repo: str, mode: str):
         self.manager = manager
-        self.repo_url = initial_repo
+        self.gui_state_path = self.manager.cwd / DEFAULT_RUNTIME_LOG_DIR / GUI_STATE_FILENAME
+        self.gui_state = self._load_gui_state()
+        saved_repo = str(self.gui_state.get("selected_repo", ""))
+        self.repo_url = saved_repo if saved_repo in REPO_CHOICES else initial_repo
         self.mode = mode
+        self._closing = False
         self.using_ttkbootstrap = False
         self.bootstrap_theme = os.environ.get(
             TTKBOOTSTRAP_THEME_ENV,
             TTKBOOTSTRAP_DEFAULT_THEME,
         ).strip() or TTKBOOTSTRAP_DEFAULT_THEME
+        register_gui_font_resources()
+        self._set_windows_app_user_model_id()
         if _HAVE_TTKBOOTSTRAP and tb is not None:
             try:
                 self.root = tb.Window(themename=self.bootstrap_theme)
@@ -2634,20 +2665,93 @@ class GuiApp:
         self._setup_ui()
         self._setup_logging()
         self._start_timestamp_updates()
+        self._initialize_saved_branches()
 
-        # [CHANGE] Initialize with 'main' branch by default
-        self._initialize_main_branch()
+    def _set_windows_app_user_model_id(self) -> None:
+        """Keep this Python app distinct from the generic Python taskbar group on Windows."""
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_USER_MODEL_ID)
+        except (AttributeError, OSError):
+            pass
+
+    def _load_gui_state(self) -> Dict[str, object]:
+        try:
+            state = json.loads(self.gui_state_path.read_text(encoding="utf-8"))
+            if isinstance(state, dict) and state.get("version") == GUI_STATE_VERSION:
+                return state
+        except (OSError, ValueError, TypeError):
+            pass
+        return {"version": GUI_STATE_VERSION, "branches_by_repo": {}}
+
+    def _saved_branch_state(self, repo: Optional[str] = None) -> Dict[str, object]:
+        branches_by_repo = self.gui_state.get("branches_by_repo", {})
+        if not isinstance(branches_by_repo, dict):
+            return {}
+        state = branches_by_repo.get(repo or self.repo_url, {})
+        return state if isinstance(state, dict) else {}
+
+    def _persist_gui_state(self, repo: Optional[str] = None) -> None:
+        if not hasattr(self, "branch_tree"):
+            return
+        branches_by_repo = self.gui_state.setdefault("branches_by_repo", {})
+        if not isinstance(branches_by_repo, dict):
+            branches_by_repo = {}
+            self.gui_state["branches_by_repo"] = branches_by_repo
+        active_repo = repo or self.repo_var.get()
+        selected_branch = self._get_selected_branch()
+        branches_by_repo[active_repo] = {
+            "branches": list(self.branch_map),
+            "selected_branch": selected_branch or "",
+        }
+        self.gui_state["version"] = GUI_STATE_VERSION
+        self.gui_state["selected_repo"] = self.repo_var.get()
+        try:
+            self.gui_state_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self.gui_state_path.with_suffix(".tmp")
+            temp_path.write_text(
+                json.dumps(self.gui_state, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            temp_path.replace(self.gui_state_path)
+        except OSError as exc:
+            logging.warning("Unable to save GUI state: %s", exc)
+
+    def _initialize_saved_branches(self) -> None:
+        """Restore the latest successfully fetched branch list before any network request."""
+        saved = self._saved_branch_state()
+        branches = saved.get("branches", [])
+        if not isinstance(branches, list):
+            branches = []
+        clean_branches = [branch for branch in branches if isinstance(branch, str) and branch]
+        selected_branch = saved.get("selected_branch", "")
+        if not isinstance(selected_branch, str):
+            selected_branch = ""
+        if not clean_branches:
+            clean_branches = ["main"]
+        self.branch_map = clean_branches
+        selected_item = None
+        for branch in clean_branches:
+            item = self.branch_tree.insert("", "end", values=(branch, ""))
+            if branch == selected_branch:
+                selected_item = item
+        if selected_item is None:
+            selected_item = self.branch_tree.get_children()[0]
+        self.branch_tree.selection_set(selected_item)
+        self.branch_tree.see(selected_item)
+        logging.info("Restored %d cached branch(es) for %s", len(clean_branches), self.repo_url)
+
+    def _on_close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._persist_gui_state()
+        self.root.destroy()
 
     def _is_network_error(self, error_msg: str) -> bool:
         """Check whether the error is network-related."""
         return is_network_error(error_msg)
-
-    def _initialize_main_branch(self):
-        """Initialize branch list with 'main' branch by default."""
-        self.branch_map = ["main"]
-        item = self.branch_tree.insert("", "end", values=("main", ""))
-        self.branch_tree.selection_set(item)
-        logging.info("Initialized with 'main' branch")
 
     def _setup_ui(self):
         # [CHANGE] Updated Window Title to include Current Directory Name
@@ -2658,6 +2762,7 @@ class GuiApp:
         self.root.geometry("1100x920")
         self.root.minsize(1020, 820)
         self.root.configure(bg=self.ui_bg)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Apply modern theme
         self._apply_theme()
@@ -2851,6 +2956,7 @@ class GuiApp:
         style.configure("Treeview.Heading", font=(UI_FONT_FAMILY_TEXT, 10, "bold"))
 
         self.branch_tree.grid(row=1, column=0, sticky="nsew")
+        self.branch_tree.bind("<<TreeviewSelect>>", self._on_branch_selected)
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.branch_tree.yview)
         scrollbar.grid(row=1, column=1, sticky="ns")
@@ -2933,22 +3039,22 @@ class GuiApp:
         return self.skip_office_drm_var.get()
 
     def _apply_app_icon(self) -> None:
-        """Apply a simple carbon diamond icon without requiring external files."""
+        """Apply a high-contrast window icon that Tk retains for the app lifetime."""
         try:
-            icons = [self._build_app_icon(32), self._build_app_icon(16)]
+            icons = [self._build_app_icon(64), self._build_app_icon(32), self._build_app_icon(16)]
             self.root.iconphoto(True, *icons)
             self._app_icon_images = icons
-        except Exception:
+        except tk.TclError:
             self._app_icon_images = []
 
     def _build_app_icon(self, size: int):
         icon = tk.PhotoImage(width=size, height=size)
-        icon.put(BG_COLOR, to=(0, 0, size, size))
+        icon.put("#101214", to=(0, 0, size, size))
 
         center = (size - 1) / 2
         radius = max(5, int(size * 0.36))
-        fill_color = "#2a2f33"
-        edge_color = "#c7cdd1"
+        fill_color = "#0f62fe"
+        edge_color = "#d0e2ff"
 
         for y in range(size):
             dy = abs(y - center)
@@ -2962,7 +3068,7 @@ class GuiApp:
             icon.put(edge_color, to=(x1, y, min(size, x1 + 1), y + 1))
 
         line_width = max(1, size // 13)
-        accent_color = ACCENT_COLOR
+        accent_color = "#ffffff"
 
         def put_block(x: int, y: int) -> None:
             icon.put(
@@ -3043,7 +3149,7 @@ class GuiApp:
             )
             style.configure(
                 "Title.TLabel",
-                font=(UI_FONT_FAMILY_DISPLAY, 18, "bold"),
+                font=(UI_FONT_FAMILY_DISPLAY, 24, "bold"),
                 background=self.ui_bg,
                 foreground=self.ui_text,
                 padding=(0, 10, 0, 5),
@@ -3069,19 +3175,19 @@ class GuiApp:
             )
             style.configure(
                 "Timestamp.TLabel",
-                font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                 foreground=self.ui_accent,
                 background=self.ui_bg,
             )
             style.configure(
                 "TimestampSuccess.TLabel",
-                font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                 foreground=self.ui_success,
                 background=self.ui_bg,
             )
             style.configure(
                 "TimestampPerf.TLabel",
-                font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                 foreground=self.ui_warning,
                 background=self.ui_bg,
             )
@@ -3219,7 +3325,7 @@ class GuiApp:
 
         # Label styles
         style.configure("Title.TLabel",
-                       font=(UI_FONT_FAMILY_DISPLAY, 18, "bold"),
+                       font=(UI_FONT_FAMILY_DISPLAY, 24, "bold"),
                        background=BG_COLOR,
                        foreground=TEXT_COLOR,
                        padding=(0, 10, 0, 5))
@@ -3241,17 +3347,17 @@ class GuiApp:
                        background=BG_COLOR)
 
         style.configure("Timestamp.TLabel",
-                       font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                       font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                        foreground=ACCENT_COLOR,
                        background=BG_COLOR)
 
         style.configure("TimestampSuccess.TLabel",
-                       font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                       font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                        foreground=SUCCESS_COLOR,
                        background=BG_COLOR)
 
         style.configure("TimestampPerf.TLabel",
-                       font=(UI_FONT_FAMILY_TEXT, 9, "italic"),
+                       font=(UI_FONT_FAMILY_TEXT, TIMESTAMP_FONT_SIZE, TIMESTAMP_FONT_STYLE),
                        foreground=WARNING_COLOR,
                        background=BG_COLOR)
 
@@ -3502,7 +3608,9 @@ class GuiApp:
                 messagebox.showerror("Browser Error", f"Failed to open browser:\n{e}")
 
     def _on_repo_changed(self, _event):
-        """Reset the branch list when the repository changes without auto-loading."""
+        """Restore cached branches for the newly selected repository without auto-loading."""
+        self._persist_gui_state(self.repo_url)
+        self.repo_url = self.repo_var.get()
         # Clear branch list
         for item in self.branch_tree.get_children():
             self.branch_tree.delete(item)
@@ -3510,11 +3618,14 @@ class GuiApp:
         self.branch_dates = {}
         self.branch_heads = {}
 
-        # [CHANGE] Re-initialize with main branch
-        self._initialize_main_branch()
+        self._initialize_saved_branches()
+        self._persist_gui_state()
 
         # Update status message
-        self.status_var.set("Repository changed. Select main or click Refresh to load branches.")
+        self.status_var.set("Repository changed. Cached branches restored; click Refresh to update them.")
+
+    def _on_branch_selected(self, _event=None) -> None:
+        self._persist_gui_state()
 
     def _update_controls(self):
         """
@@ -3759,6 +3870,8 @@ class GuiApp:
             items = self.branch_tree.get_children()
             self.branch_tree.selection_set(items[0])
             self.branch_tree.see(items[0])
+
+        self._persist_gui_state()
 
         if auto_refresh:
             self.status_var.set("Auto-refresh: Branch list updated.")
@@ -4016,7 +4129,12 @@ class GuiApp:
             if not confirm:
                 return
 
-        self.last_sync_try_time = datetime.now(KST)
+        # A sync fetches the selected branch from the remote, so it is also a
+        # remote HEAD check.  Keep the timestamp visible even when automatic
+        # refresh is disabled (the usual manual-sync workflow).
+        sync_started_at = datetime.now(KST)
+        self.last_sync_try_time = sync_started_at
+        self.last_metadata_try_time = sync_started_at
 
         # Record sync start time for duration measurement
         self.sync_start_time = time.time()
@@ -4084,6 +4202,10 @@ class GuiApp:
         snapshot: Optional[RemoteBranchSnapshot] = None,
     ):
         self.last_sync_time = datetime.now(KST)
+        # Both Git fetch and ZIP download obtain the selected branch from the
+        # remote.  Count every successful sync as a completed remote check;
+        # ZIP mode intentionally has no commit SHA to retain.
+        self.last_metadata_time = self.last_sync_time
         if branch and snapshot is not None:
             self._update_branch_remote_info(branch, snapshot=snapshot)
             if snapshot.commit_sha:
@@ -4099,7 +4221,7 @@ class GuiApp:
             logging.info("[Sync] Skipped post-sync remote metadata refresh; using fetched branch ref.")
             messagebox.showinfo("Success", "Repository sync finished!")
             if self.mode == "Normal":
-                self.root.destroy()
+                self._on_close()
 
     def _on_error(self, title, message):
         # Note: State is managed by caller (_on_sync_complete or _on_refresh_error)
@@ -4243,7 +4365,7 @@ class GuiApp:
             logging.info("[Sync] Skipped post-sync remote metadata refresh; using fetched branch ref.")
             messagebox.showinfo("Success", "Repository sync finished!")
             if self.mode == "Normal":
-                self.root.destroy()
+                self._on_close()
             return
 
         self.status_var.set("Creating automatic backup...")
@@ -4291,7 +4413,7 @@ class GuiApp:
         logging.info("[Sync] Skipped post-sync remote metadata refresh after backup.")
 
         if self.mode == "Normal":
-            self.root.destroy()
+            self._on_close()
 
     def _perform_auto_backup_silent(self):
         """Perform automatic backup after auto-sync (silent, no popup)."""

@@ -14759,7 +14759,7 @@ function renderUsageHistoryLegend(history) {
     if (automaticSampleCount > 0) {
         legendItems.push({
             key: 'automatic-sample',
-            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (6시간 주기)`
+            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (2시간 주기)`
         });
     }
     if (visiblePlanTransitions.length > 0) {
@@ -14863,7 +14863,7 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         `Token Δ (${scopeLabel}) ${Number.isFinite(tokenDelta) ? formatCompactTokenCount(tokenDelta) : '--'}`
     ];
     if (item?.limit_sample_source === 'automatic') {
-        parts.push('자동 조회 (6시간 주기)');
+        parts.push('자동 조회 (2시간 주기)');
     } else if (item?.limit_sample_source === 'manual') {
         parts.push('수동 조회');
     }

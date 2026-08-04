@@ -192,7 +192,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
-_USAGE_ACCOUNT_REFRESH_SECONDS = 6 * 60 * 60
+_USAGE_ACCOUNT_REFRESH_SECONDS = 2 * 60 * 60
 _USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
@@ -7293,62 +7293,65 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
     context = _account_storage_context(account_id)
     if context is None:
         return {'refreshed': False, 'error': 'account_not_found'}
-    previous = _load_account_usage_snapshot(context)
-    if not force and not _account_usage_refresh_is_due(previous):
-        return {'refreshed': False, 'snapshot': previous}
-    attempted_at = normalize_timestamp(None)
-    try:
-        rate_response = call_codex_app_server_method(
-            'account/rateLimits/read', {}, account_id=context['account']['id'],
-            require_pilot=False, force_process=True,
-        )
-        usage_response = call_codex_app_server_method(
-            'account/usage/read', {}, account_id=context['account']['id'],
-            require_pilot=False, force_process=True,
-        )
-        rate_result = rate_response.get('result') if isinstance(rate_response, dict) else {}
-        usage_result = usage_response.get('result') if isinstance(usage_response, dict) else {}
-        raw_limits = (
-            rate_result.get('rateLimits')
-            or rate_result.get('rate_limits')
-            or rate_result
-        ) if isinstance(rate_result, dict) else {}
-        limits = _extract_limits(raw_limits) or {'five_hour': None, 'weekly': None}
-        normalized_usage = _normalize_account_usage_api_result(usage_result)
-        snapshot = {
-            'version': 1,
-            'account_id': context['account']['id'],
-            'last_attempt_at': attempted_at,
-            'last_success_at': attempted_at,
-            'source': 'codex_app_server',
-            'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-            'five_hour': limits.get('five_hour'),
-            'weekly': limits.get('weekly'),
-            'account_usage': normalized_usage,
-            'rate_limits_raw': raw_limits,
-            'elapsed_ms': int(rate_response.get('elapsed_ms') or 0) + int(usage_response.get('elapsed_ms') or 0),
-            'error': '',
-        }
-        _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
-        record_usage_snapshot_if_due(
-            force=True,
-            usage_summary=get_usage_summary(account_id=context['account']['id']),
-            account_id=context['account']['id'],
-            limit_sample_source='manual' if force else 'automatic',
-        )
-        return {'refreshed': True, 'snapshot': snapshot}
-    except Exception as exc:
-        failed = {
-            **previous,
-            'version': 1,
-            'account_id': context['account']['id'],
-            'last_attempt_at': attempted_at,
-            'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-            'error': str(exc)[:1000],
-        }
-        _write_json_atomic(context['account_usage_snapshot_path'], failed)
-        _LOGGER.warning('account usage App Server refresh failed: %s', exc)
-        return {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
+    # This file lives in the shared account state, so the lock also coordinates
+    # workers started by Workbench copies in other directories.
+    with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+        previous = _load_account_usage_snapshot(context)
+        if not force and not _account_usage_refresh_is_due(previous):
+            return {'refreshed': False, 'snapshot': previous}
+        attempted_at = normalize_timestamp(None)
+        try:
+            rate_response = call_codex_app_server_method(
+                'account/rateLimits/read', {}, account_id=context['account']['id'],
+                require_pilot=False, force_process=True,
+            )
+            usage_response = call_codex_app_server_method(
+                'account/usage/read', {}, account_id=context['account']['id'],
+                require_pilot=False, force_process=True,
+            )
+            rate_result = rate_response.get('result') if isinstance(rate_response, dict) else {}
+            usage_result = usage_response.get('result') if isinstance(usage_response, dict) else {}
+            raw_limits = (
+                rate_result.get('rateLimits')
+                or rate_result.get('rate_limits')
+                or rate_result
+            ) if isinstance(rate_result, dict) else {}
+            limits = _extract_limits(raw_limits) or {'five_hour': None, 'weekly': None}
+            normalized_usage = _normalize_account_usage_api_result(usage_result)
+            snapshot = {
+                'version': 1,
+                'account_id': context['account']['id'],
+                'last_attempt_at': attempted_at,
+                'last_success_at': attempted_at,
+                'source': 'codex_app_server',
+                'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'five_hour': limits.get('five_hour'),
+                'weekly': limits.get('weekly'),
+                'account_usage': normalized_usage,
+                'rate_limits_raw': raw_limits,
+                'elapsed_ms': int(rate_response.get('elapsed_ms') or 0) + int(usage_response.get('elapsed_ms') or 0),
+                'error': '',
+            }
+            _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+            record_usage_snapshot_if_due(
+                force=True,
+                usage_summary=get_usage_summary(account_id=context['account']['id']),
+                account_id=context['account']['id'],
+                limit_sample_source='manual' if force else 'automatic',
+            )
+            return {'refreshed': True, 'snapshot': snapshot}
+        except Exception as exc:
+            failed = {
+                **previous,
+                'version': 1,
+                'account_id': context['account']['id'],
+                'last_attempt_at': attempted_at,
+                'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'error': str(exc)[:1000],
+            }
+            _write_json_atomic(context['account_usage_snapshot_path'], failed)
+            _LOGGER.warning('account usage App Server refresh failed: %s', exc)
+            return {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
 
 
 def _usage_snapshot_worker_loop():

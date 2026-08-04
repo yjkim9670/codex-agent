@@ -424,6 +424,43 @@ def test_git_message_uses_persisted_default_model_when_request_omits_model(monke
     assert captured['kwargs']['inherit_model_settings'] is False
 
 
+def test_git_commit_message_generation_records_unified_usage_event(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(git_ops, '_build_commit_message_diff_context', lambda *args: {
+        'paths': ['tracked.txt'],
+        'included_paths': ['tracked.txt'],
+        'analysis': {},
+        'analysis_lines': [],
+        'diff_truncated': False,
+        'diff_errors': [],
+        'omitted_count': 0,
+    })
+    monkeypatch.setattr(git_ops, '_build_commit_message_generation_prompt', lambda value: 'prompt')
+    monkeypatch.setattr(git_ops, '_execute_commit_message_prompt', lambda *args, **kwargs: (
+        '{"subject":"fix: track usage",'
+        '"body_en":["Record commit usage"],'
+        '"body_ko":["커밋 사용량 기록"]}',
+        None,
+        {'input_tokens': 100, 'cached_input_tokens': 40, 'output_tokens': 20, 'total_tokens': 120},
+        {'cli_runtime_ms': 12},
+    ))
+    monkeypatch.setattr(codex_chat, 'get_active_account_id', lambda: 'default')
+    monkeypatch.setattr(codex_chat, 'record_usage_event', lambda **kwargs: captured.update(kwargs) or True)
+
+    result, error = git_ops._build_generated_commit_message_payload(
+        tmp_path,
+        {},
+        {'files': ['tracked.txt'], 'model': 'gpt-5.6-luna', 'reasoning_effort': 'low'},
+    )
+
+    assert error is None
+    assert result['generator_token_usage']['total_tokens'] == 120
+    assert captured['operation'] == 'git_commit_message'
+    assert captured['model'] == 'gpt-5.6-luna'
+    assert captured['reasoning_effort'] == 'low'
+    assert captured['usage']['output_tokens'] == 20
+
+
 def test_git_commit_accepts_subject_and_body(tmp_path, monkeypatch):
     repo_root = tmp_path / 'workspace'
     _init_repo(repo_root)

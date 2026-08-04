@@ -98,6 +98,7 @@ except ImportError:  # pragma: no cover - POSIX fallback
 _DATA_LOCK = threading.Lock()
 _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
+_USAGE_EVENT_LOCK = threading.Lock()
 _USAGE_HISTORY_LOCK = threading.Lock()
 _WORKTREE_TASKS_LOCK = threading.Lock()
 _APP_SERVER_LOCK = threading.Lock()
@@ -190,7 +191,9 @@ _TOKEN_PART_KEYS = (
 
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
-_USAGE_HISTORY_VERSION = 2
+_USAGE_EVENT_VERSION = 2
+_USAGE_ACCOUNT_REFRESH_SECONDS = 6 * 60 * 60
+_USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_RETENTION_DAYS = 90
@@ -525,6 +528,8 @@ _APP_SERVER_CLIENT_INFO = {
     'version': '0.1.0',
 }
 _APP_SERVER_READ_METHODS = {
+    'account/rateLimits/read',
+    'account/usage/read',
     'model/list',
     'experimentalFeature/list',
     'thread/list',
@@ -3323,7 +3328,8 @@ def _read_app_server_stderr(process):
         return ''
 
 
-def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
+def _call_codex_app_server_process(
+        command, method, params, *, timeout_seconds, account_id=None):
     messages = _build_app_server_messages(method, params)
     request_body = '\n'.join(json.dumps(message, ensure_ascii=False) for message in messages) + '\n'
     started_at = time.time()
@@ -3334,7 +3340,7 @@ def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=_build_codex_app_server_env(),
+            env=_build_codex_app_server_env(account_id=account_id),
             text=True,
         )
     except FileNotFoundError as exc:
@@ -3407,8 +3413,11 @@ def _call_codex_app_server_process(command, method, params, *, timeout_seconds):
     }
 
 
-def call_codex_app_server_method(method, params=None, *, timeout_seconds=None):
-    _require_codex_app_server_pilot_enabled()
+def call_codex_app_server_method(
+        method, params=None, *, timeout_seconds=None, account_id=None,
+        require_pilot=True, force_process=False):
+    if require_pilot:
+        _require_codex_app_server_pilot_enabled()
     method = str(method or '').strip()
     if method not in _APP_SERVER_ALLOWED_METHODS:
         raise CodexAppServerError(
@@ -3418,7 +3427,7 @@ def call_codex_app_server_method(method, params=None, *, timeout_seconds=None):
         )
     timeout_seconds = max(1.0, float(timeout_seconds or _APP_SERVER_RPC_TIMEOUT_SECONDS))
     attempts = []
-    if _read_app_server_remote_control_running():
+    if _read_app_server_remote_control_running() and not force_process and account_id is None:
         attempts.append(('remote_control_proxy', [_codex_cli_command(), 'app-server', 'proxy']))
     attempts.append(('stdio', [_codex_cli_command(), 'app-server']))
 
@@ -3430,6 +3439,7 @@ def call_codex_app_server_method(method, params=None, *, timeout_seconds=None):
                 method,
                 params or {},
                 timeout_seconds=timeout_seconds,
+                account_id=account_id,
             )
             payload['transport'] = transport
             return payload
@@ -4614,6 +4624,8 @@ def _account_storage_context(account_id=None):
         'codex_home': codex_home,
         'token_usage_path': root / 'workspaces' / _WORKSPACE_SCOPE_ID / 'codex_token_usage.json',
         'account_token_usage_path': root / 'codex_account_token_usage.json',
+        'usage_events_path': root / 'codex_usage_events.jsonl',
+        'account_usage_snapshot_path': root / 'codex_account_usage_snapshot.json',
         'usage_history_path': root / 'codex_usage_history.json',
         'usage_plan_path': root / 'codex_usage_plans.json',
         'queued_codex_home': runtime_root / 'queued_codex_home',
@@ -4992,6 +5004,184 @@ def _add_token_usage(base, delta):
     }
 
 
+def _calculate_usage_credit_equivalent(model, usage, service_tier='standard'):
+    """Return the published Luna credit-equivalent, not a Plus quota percentage."""
+    model_name = str(model or '').strip().lower()
+    normalized = _normalize_token_usage(usage)
+    if not normalized or 'luna' not in model_name:
+        return None
+    rates = {
+        'uncached_input_per_million': 5.0,
+        'cached_input_per_million': 0.5,
+        'output_per_million': 30.0,
+    }
+    cached = min(normalized['input_tokens'], normalized['cached_input_tokens'])
+    uncached = max(0, normalized['input_tokens'] - cached)
+    value = (
+        uncached * rates['uncached_input_per_million']
+        + cached * rates['cached_input_per_million']
+        + normalized['output_tokens'] * rates['output_per_million']
+    ) / 1_000_000
+    return {
+        'value': round(value, 9),
+        'unit': 'credits',
+        'kind': 'rate_card_equivalent',
+        'service_tier': str(service_tier or 'standard'),
+        'rates': rates,
+    }
+
+
+def _append_usage_event(path, event):
+    event_id = str((event or {}).get('event_id') or '').strip()
+    if not event_id:
+        return False
+    path = Path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _USAGE_EVENT_LOCK, _acquire_path_file_lock(path):
+            if path.is_file():
+                with path.open('r', encoding='utf-8') as handle:
+                    for line in handle:
+                        try:
+                            existing = json.loads(line)
+                        except Exception:
+                            continue
+                        if str(existing.get('event_id') or '') == event_id:
+                            return False
+            with path.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + '\n')
+                handle.flush()
+                try:
+                    os.fsync(handle.fileno())
+                except OSError:
+                    pass
+        return True
+    except Exception:
+        _LOGGER.debug('usage event append skipped: %s', path, exc_info=True)
+        return False
+
+
+def _migrate_legacy_usage_events(context):
+    path = context.get('usage_events_path') or Path(
+        context['account_token_usage_path']
+    ).with_name('codex_usage_events.jsonl')
+    existing_by_day = {}
+    try:
+        if path.is_file():
+            for line in path.read_text(encoding='utf-8').splitlines():
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                event_id = str(event.get('event_id') or '')
+                if event_id.startswith(f'legacy:{context["account"]["id"]}:'):
+                    return
+                day = str(event.get('recorded_at') or '').split('T', 1)[0]
+                if not day:
+                    continue
+                aggregate = existing_by_day.setdefault(day, {
+                    **_zero_token_usage(),
+                    'requests': 0,
+                })
+                for key in _zero_token_usage():
+                    aggregate[key] += int(event.get(key) or 0)
+                aggregate['requests'] += max(1, int(event.get('request_count') or 1))
+    except OSError:
+        return
+    ledger = _load_token_usage_ledger(path=context['account_token_usage_path'])
+    for day, usage in sorted((ledger.get('by_day') or {}).items()):
+        normalized = _normalize_token_usage_ledger_entry(usage)
+        existing = existing_by_day.get(day) or {}
+        for key in _zero_token_usage():
+            normalized[key] = max(0, normalized[key] - int(existing.get(key) or 0))
+        remaining_requests = max(
+            0,
+            int(normalized.get('requests') or 0) - int(existing.get('requests') or 0),
+        )
+        if not _token_usage_has_data(normalized) and remaining_requests <= 0:
+            continue
+        _append_usage_event(path, {
+            'schema_version': _USAGE_EVENT_VERSION,
+            'event_id': f'legacy:{context["account"]["id"]}:{day}',
+            'recorded_at': f'{day}T23:59:59+09:00',
+            'account_id': context['account']['id'],
+            'workspace_id': '',
+            'workspace_path': '',
+            'session_id': '__legacy__',
+            'message_id': '',
+            'operation': 'legacy_unknown',
+            'source': 'token_ledger_v1_migration',
+            'model': '',
+            'reasoning_effort': '',
+            'service_tier': '',
+            'backend': '',
+            'status': 'completed',
+            'duration_ms': None,
+            'request_count': remaining_requests,
+            'input_tokens': normalized['input_tokens'],
+            'cached_input_tokens': normalized['cached_input_tokens'],
+            'uncached_input_tokens': max(0, normalized['input_tokens'] - normalized['cached_input_tokens']),
+            'output_tokens': normalized['output_tokens'],
+            'reasoning_output_tokens': normalized['reasoning_output_tokens'],
+            'total_tokens': normalized['total_tokens'],
+            'credit_equivalent': None,
+            'metadata': {'migrated_aggregate': True, 'day': day},
+        })
+
+
+def get_usage_event_summary(account_id=None, recent_limit=100):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return {'path': '', 'count': 0, 'by_operation': {}, 'recent': []}
+    path = context.get('usage_events_path') or Path(
+        context['account_token_usage_path']
+    ).with_name('codex_usage_events.jsonl')
+    _migrate_legacy_usage_events(context)
+    events = []
+    try:
+        with _USAGE_EVENT_LOCK, _acquire_path_file_lock(path):
+            if path.is_file():
+                for line in path.read_text(encoding='utf-8').splitlines():
+                    try:
+                        value = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(value, dict):
+                        events.append(value)
+    except Exception:
+        _LOGGER.debug('usage events summary load skipped', exc_info=True)
+    by_operation = {}
+    credit_total = 0.0
+    request_total = 0
+    for event in events:
+        operation = str(event.get('operation') or 'legacy_unknown')
+        entry = by_operation.setdefault(operation, {
+            'requests': 0,
+            'total_tokens': 0,
+            'credit_equivalent': 0.0,
+        })
+        request_count = max(1, int(event.get('request_count') or 1))
+        entry['requests'] += request_count
+        request_total += request_count
+        entry['total_tokens'] += int(event.get('total_tokens') or 0)
+        credit = event.get('credit_equivalent')
+        credit_value = _coerce_float(credit.get('value')) if isinstance(credit, dict) else None
+        if credit_value is not None:
+            entry['credit_equivalent'] += credit_value
+            credit_total += credit_value
+    for entry in by_operation.values():
+        entry['credit_equivalent'] = round(entry['credit_equivalent'], 9)
+    limit = max(1, min(500, _coerce_non_negative_int(recent_limit) or 100))
+    return {
+        'path': str(path),
+        'count': request_total,
+        'event_count': len(events),
+        'credit_equivalent': round(credit_total, 9),
+        'by_operation': by_operation,
+        'recent': events[-limit:],
+    }
+
+
 def _extract_token_usage_from_message(message):
     if not isinstance(message, dict):
         return None
@@ -5196,11 +5386,12 @@ def _record_token_usage_to_path(
         return False
 
 
-def _record_token_usage(event_id, session_id, usage, source='stream', account_id=None):
+def record_usage_event(
+        event_id, session_id, usage, source='stream', account_id=None,
+        operation='chat', message_id=None, model='', reasoning_effort='',
+        service_tier='standard', backend='dtgpt', status='completed',
+        duration_ms=None, metadata=None):
     normalized_usage = _normalize_token_usage(usage)
-    if not normalized_usage or not _token_usage_has_data(normalized_usage):
-        return False
-
     event_key = str(event_id or '').strip()
     if not event_key:
         event_key = uuid.uuid4().hex
@@ -5213,26 +5404,63 @@ def _record_token_usage(event_id, session_id, usage, source='stream', account_id
     context = _account_storage_context(account_id)
     if context is None:
         return False
+    _migrate_legacy_usage_events(context)
+    has_usage = bool(normalized_usage and _token_usage_has_data(normalized_usage))
+    recorded_workspace = False
+    recorded_account = False
     with _TOKEN_USAGE_LOCK:
-        recorded_workspace = _record_token_usage_to_path(
-            ledger_path=context['token_usage_path'],
-            event_key=event_key,
-            session_key=session_key,
-            usage=normalized_usage,
-            source=source,
-            now_iso=now_iso,
-            day_key=day_key,
-        )
-        recorded_account = _record_token_usage_to_path(
-            ledger_path=context['account_token_usage_path'],
-            event_key=account_event_key,
-            session_key=account_session_key,
-            usage=normalized_usage,
-            source=source,
-            now_iso=now_iso,
-            day_key=day_key,
-        )
-    return recorded_workspace or recorded_account
+        if has_usage:
+            recorded_workspace = _record_token_usage_to_path(
+                ledger_path=context['token_usage_path'], event_key=event_key,
+                session_key=session_key, usage=normalized_usage, source=source,
+                now_iso=now_iso, day_key=day_key,
+            )
+            recorded_account = _record_token_usage_to_path(
+                ledger_path=context['account_token_usage_path'],
+                event_key=account_event_key, session_key=account_session_key,
+                usage=normalized_usage, source=source, now_iso=now_iso,
+                day_key=day_key,
+            )
+    normalized_usage = normalized_usage or _zero_token_usage()
+    event = {
+        'schema_version': _USAGE_EVENT_VERSION,
+        'event_id': account_event_key,
+        'recorded_at': now_iso,
+        'account_id': context['account']['id'],
+        'workspace_id': _WORKSPACE_SCOPE_ID,
+        'workspace_path': str(WORKSPACE_DIR),
+        'session_id': session_key,
+        'message_id': str(message_id or ''),
+        'operation': str(operation or 'chat'),
+        'source': str(source or 'stream'),
+        'model': str(model or ''),
+        'reasoning_effort': str(reasoning_effort or ''),
+        'service_tier': str(service_tier or 'standard'),
+        'backend': str(backend or 'dtgpt'),
+        'status': str(status or 'completed'),
+        'duration_ms': _coerce_non_negative_int(duration_ms),
+        'input_tokens': normalized_usage['input_tokens'],
+        'cached_input_tokens': normalized_usage['cached_input_tokens'],
+        'uncached_input_tokens': max(0, normalized_usage['input_tokens'] - normalized_usage['cached_input_tokens']),
+        'output_tokens': normalized_usage['output_tokens'],
+        'reasoning_output_tokens': normalized_usage['reasoning_output_tokens'],
+        'total_tokens': normalized_usage['total_tokens'],
+        'credit_equivalent': _calculate_usage_credit_equivalent(
+            model, normalized_usage, service_tier=service_tier,
+        ),
+        'metadata': metadata if isinstance(metadata, dict) else {},
+    }
+    event_recorded = _append_usage_event(context['usage_events_path'], event)
+    if recorded_workspace or recorded_account:
+        record_usage_snapshot_if_due(force=True, account_id=context['account']['id'])
+    return recorded_workspace or recorded_account or event_recorded
+
+
+def _record_token_usage(event_id, session_id, usage, source='stream', account_id=None):
+    return record_usage_event(
+        event_id=event_id, session_id=session_id, usage=usage,
+        source=source, account_id=account_id, operation='chat',
+    )
 
 
 def get_token_usage_summary(recent_days=7, ledger_path=CODEX_TOKEN_USAGE_PATH):
@@ -5280,14 +5508,24 @@ def get_account_token_usage_summary(recent_days=7, account_id=None):
 
 
 def record_token_usage_for_message(
-        session_id, message_id, token_usage, source='message', account_id=None):
+        session_id, message_id, token_usage, source='message', account_id=None,
+        operation='chat', model='', reasoning_effort='', service_tier='standard',
+        backend='dtgpt', status='completed', duration_ms=None):
     message_key = str(message_id or '').strip() or uuid.uuid4().hex
-    return _record_token_usage(
+    return record_usage_event(
         event_id=f'message:{message_key}',
         session_id=session_id,
         usage=token_usage,
         source=source,
         account_id=account_id,
+        operation=operation,
+        message_id=message_key,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
+        backend=backend,
+        status=status,
+        duration_ms=duration_ms,
     )
 
 
@@ -5342,11 +5580,17 @@ def _extract_limits(rate_limits):
         used_percent = _normalize_used_percent(
             entry.get(
                 'used_percent',
-                entry.get('usedPercentage', entry.get('used_percentage'))
+                entry.get(
+                    'usedPercent',
+                    entry.get('usedPercentage', entry.get('used_percentage')),
+                )
             )
         )
         window_minutes = _coerce_int(
-            entry.get('window_minutes', entry.get('windowMinutes'))
+            entry.get(
+                'window_minutes',
+                entry.get('windowMinutes', entry.get('windowDurationMins')),
+            )
         )
         entries.append({
             'used_percent': used_percent,
@@ -5703,10 +5947,16 @@ def _normalize_usage_history_snapshot(value):
     limits_observed_at = _normalize_optional_timestamp(
         value.get('limits_observed_at') or value.get('rate_limits_observed_at')
     )
+    limit_sample_source = str(
+        value.get('limit_sample_source') or value.get('limits_sample_source') or ''
+    ).strip().lower()
+    if limit_sample_source not in {'automatic', 'manual'}:
+        limit_sample_source = ''
     return {
         'bucket_start': bucket_start,
         'recorded_at': recorded_at,
         'limits_observed_at': limits_observed_at,
+        'limit_sample_source': limit_sample_source,
         'workspace_scope_id': workspace_scope_id,
         'workspace_path': workspace_path,
         'token_total': workspace_token_total or 0,
@@ -5775,6 +6025,7 @@ def _split_usage_history_snapshot(snapshot):
         'limits_observed_at': (
             normalized.get('limits_observed_at') or normalized['recorded_at']
         ),
+        'limit_sample_source': normalized.get('limit_sample_source') or '',
         'five_hour_used_percent': normalized.get('five_hour_used_percent'),
         'weekly_used_percent': normalized.get('weekly_used_percent'),
         'five_hour_resets_at': normalized.get('five_hour_resets_at') or '',
@@ -5858,6 +6109,7 @@ def _merge_usage_history_series(limit_samples, token_samples, scope='account'):
             'bucket_start': bucket,
             'recorded_at': recorded_at,
             'limits_observed_at': limit.get('limits_observed_at') or '',
+            'limit_sample_source': limit.get('limit_sample_source') or '',
             'workspace_scope_id': workspace_scope_id or _WORKSPACE_SCOPE_ID,
             'workspace_path': workspace_path or str(WORKSPACE_DIR),
             'five_hour_used_percent': limit.get('five_hour_used_percent'),
@@ -6068,7 +6320,7 @@ def _merge_local_usage_history_into_shared_account(source_path, destination_path
     return changed
 
 
-def _build_usage_history_snapshot(usage_summary):
+def _build_usage_history_snapshot(usage_summary, limit_sample_source=None):
     usage = usage_summary if isinstance(usage_summary, dict) else {}
     token_usage = usage.get('token_usage') if isinstance(usage.get('token_usage'), dict) else {}
     account_token_usage = usage.get('account_token_usage') if isinstance(usage.get('account_token_usage'), dict) else {}
@@ -6076,10 +6328,14 @@ def _build_usage_history_snapshot(usage_summary):
     account_all_time = _normalize_token_usage_ledger_entry(account_token_usage.get('all_time'))
     five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
     weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
+    normalized_limit_source = str(limit_sample_source or '').strip().lower()
+    if normalized_limit_source not in {'automatic', 'manual'}:
+        normalized_limit_source = ''
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
         'recorded_at': normalize_timestamp(None),
         'limits_observed_at': usage.get('limits_observed_at'),
+        'limit_sample_source': normalized_limit_source,
         'workspace_scope_id': _WORKSPACE_SCOPE_ID,
         'workspace_path': str(WORKSPACE_DIR),
         'token_total': workspace_all_time.get('total_tokens', 0),
@@ -6107,13 +6363,17 @@ def _build_usage_history_snapshot(usage_summary):
     })
 
 
-def record_usage_snapshot_if_due(force=False, usage_summary=None, account_id=None):
+def record_usage_snapshot_if_due(
+    force=False, usage_summary=None, account_id=None, limit_sample_source=None,
+):
     context = _account_storage_context(account_id)
     if context is None:
         return {'recorded': False, 'usage': usage_summary, 'snapshot': None}
     if usage_summary is None:
         usage_summary = get_usage_summary(account_id=account_id)
-    snapshot = _build_usage_history_snapshot(usage_summary)
+    snapshot = _build_usage_history_snapshot(
+        usage_summary, limit_sample_source=limit_sample_source,
+    )
     if not snapshot:
         return {
             'recorded': False,
@@ -6967,9 +7227,134 @@ def get_usage_history_summary(
     }
 
 
+def _load_account_usage_snapshot(context):
+    path = context.get('account_usage_snapshot_path') if isinstance(context, dict) else None
+    if not path:
+        return {}
+    try:
+        value = json.loads(Path(path).read_text(encoding='utf-8'))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _find_usage_number(value, keys):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = re.sub(r'[^a-z0-9]', '', str(key).lower())
+            if normalized_key in keys:
+                number = _coerce_non_negative_int(item)
+                if number is not None:
+                    return number
+        for item in value.values():
+            found = _find_usage_number(item, keys)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_usage_number(item, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _normalize_account_usage_api_result(value):
+    payload = value if isinstance(value, dict) else {}
+    total = _find_usage_number(payload, {
+        'totaltokens', 'lifetimetokens', 'alltimetokens', 'tokenstotal',
+    })
+    buckets = payload.get('dailyUsageBuckets')
+    if not isinstance(buckets, list):
+        buckets = payload.get('daily_usage_buckets')
+    daily_usage = []
+    for bucket in buckets if isinstance(buckets, list) else []:
+        if not isinstance(bucket, dict):
+            continue
+        day = str(bucket.get('startDate') or bucket.get('start_date') or '').strip()
+        tokens = _coerce_non_negative_int(bucket.get('tokens'))
+        if day and tokens is not None:
+            daily_usage.append({'date': day, 'tokens': tokens})
+    return {
+        'total_tokens': total,
+        'daily_usage': daily_usage,
+        'raw': payload,
+    }
+
+
+def _account_usage_refresh_is_due(snapshot, now=None):
+    last_success = parse_timestamp((snapshot or {}).get('last_success_at'))
+    if last_success is None:
+        return True
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    return (current - last_success).total_seconds() >= _USAGE_ACCOUNT_REFRESH_SECONDS
+
+
+def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return {'refreshed': False, 'error': 'account_not_found'}
+    previous = _load_account_usage_snapshot(context)
+    if not force and not _account_usage_refresh_is_due(previous):
+        return {'refreshed': False, 'snapshot': previous}
+    attempted_at = normalize_timestamp(None)
+    try:
+        rate_response = call_codex_app_server_method(
+            'account/rateLimits/read', {}, account_id=context['account']['id'],
+            require_pilot=False, force_process=True,
+        )
+        usage_response = call_codex_app_server_method(
+            'account/usage/read', {}, account_id=context['account']['id'],
+            require_pilot=False, force_process=True,
+        )
+        rate_result = rate_response.get('result') if isinstance(rate_response, dict) else {}
+        usage_result = usage_response.get('result') if isinstance(usage_response, dict) else {}
+        raw_limits = (
+            rate_result.get('rateLimits')
+            or rate_result.get('rate_limits')
+            or rate_result
+        ) if isinstance(rate_result, dict) else {}
+        limits = _extract_limits(raw_limits) or {'five_hour': None, 'weekly': None}
+        normalized_usage = _normalize_account_usage_api_result(usage_result)
+        snapshot = {
+            'version': 1,
+            'account_id': context['account']['id'],
+            'last_attempt_at': attempted_at,
+            'last_success_at': attempted_at,
+            'source': 'codex_app_server',
+            'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+            'five_hour': limits.get('five_hour'),
+            'weekly': limits.get('weekly'),
+            'account_usage': normalized_usage,
+            'rate_limits_raw': raw_limits,
+            'elapsed_ms': int(rate_response.get('elapsed_ms') or 0) + int(usage_response.get('elapsed_ms') or 0),
+            'error': '',
+        }
+        _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+        record_usage_snapshot_if_due(
+            force=True,
+            usage_summary=get_usage_summary(account_id=context['account']['id']),
+            account_id=context['account']['id'],
+            limit_sample_source='manual' if force else 'automatic',
+        )
+        return {'refreshed': True, 'snapshot': snapshot}
+    except Exception as exc:
+        failed = {
+            **previous,
+            'version': 1,
+            'account_id': context['account']['id'],
+            'last_attempt_at': attempted_at,
+            'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+            'error': str(exc)[:1000],
+        }
+        _write_json_atomic(context['account_usage_snapshot_path'], failed)
+        _LOGGER.warning('account usage App Server refresh failed: %s', exc)
+        return {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
+
+
 def _usage_snapshot_worker_loop():
     while True:
         try:
+            refresh_account_usage_snapshot_if_due()
             record_usage_snapshot_if_due()
         except Exception:
             _LOGGER.exception('usage snapshot worker failed')
@@ -7024,11 +7409,45 @@ def get_usage_summary(account_id=None):
     account_name = _read_account_name(resolved_account_id)
     token_usage = get_token_usage_summary(ledger_path=context['token_usage_path'])
     account_token_usage = get_account_token_usage_summary(account_id=resolved_account_id)
+    api_snapshot = _load_account_usage_snapshot(context)
+    stored_api_usage = (
+        api_snapshot.get('account_usage')
+        if isinstance(api_snapshot.get('account_usage'), dict)
+        else {}
+    )
+    api_account_usage = {
+        key: value for key, value in stored_api_usage.items()
+        if key != 'raw'
+    }
+    usage_events = get_usage_event_summary(account_id=resolved_account_id)
     account_metadata = {
         'account_id': resolved_account_id,
         'account_label': context['account']['label'],
         'authenticated': _codex_home_has_auth(context['codex_home']),
+        'account_usage': api_account_usage,
+        'account_usage_refresh': {
+            'source': api_snapshot.get('source') or '',
+            'last_attempt_at': api_snapshot.get('last_attempt_at'),
+            'last_success_at': api_snapshot.get('last_success_at'),
+            'refresh_interval_seconds': api_snapshot.get('refresh_interval_seconds') or _USAGE_ACCOUNT_REFRESH_SECONDS,
+            'error': api_snapshot.get('error') or '',
+            'path': str(
+                context.get('account_usage_snapshot_path')
+                or Path(context['account_token_usage_path']).with_name('codex_account_usage_snapshot.json')
+            ),
+        },
+        'usage_events': usage_events,
     }
+    if api_snapshot.get('five_hour') or api_snapshot.get('weekly'):
+        return {
+            'five_hour': api_snapshot.get('five_hour'),
+            'weekly': api_snapshot.get('weekly'),
+            'limits_observed_at': api_snapshot.get('last_success_at'),
+            'account_name': account_name,
+            'token_usage': token_usage,
+            'account_token_usage': account_token_usage,
+            **account_metadata,
+        }
     if not sessions_paths:
         return {
             'five_hour': None,
@@ -13246,12 +13665,23 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             created_at=created_at_value,
         )
 
-    _record_token_usage(
+    record_usage_event(
         event_id=f'stream:{stream_id}',
         session_id=session_id,
         usage=token_usage,
         source=usage_source,
         account_id=account_id,
+        operation='subjob' if execution_policy == 'read_only_ephemeral' else 'chat',
+        message_id=(saved_message or {}).get('id'),
+        model=response_model,
+        reasoning_effort=response_reasoning_effort,
+        service_tier=normalize_codex_service_tier(get_settings().get('service_tier')) or 'standard',
+        backend=agent_backend,
+        status='completed' if message_role == 'assistant' else (
+            'cancelled' if finalize_reason == 'user_cancelled' else 'failed'
+        ),
+        duration_ms=metadata.get('duration_ms'),
+        metadata={'finalize_reason': finalize_reason, 'execution_policy': execution_policy},
     )
     if trigger_queue:
         trigger_next_queued_codex_stream(session_id)

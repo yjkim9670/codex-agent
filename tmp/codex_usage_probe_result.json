@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "started_at_epoch": 1785836767.186764,
+  "duration_seconds": 6.008,
+  "codex_cli": "/Users/dinya/works/dev_workspace/codex_workbench/.local/lib/node_modules/@openai/codex/bin/codex.js",
+  "codex_home": "/Users/dinya/works/dev_workspace/codex_workbench/workspace/.agent_state/queued_codex_home",
+  "model": "gpt-5.6-luna",
+  "reasoning_effort": "low",
+  "ephemeral": false,
+  "return_code": 0,
+  "event_count": 4,
+  "invalid_jsonl_lines": [],
+  "thread_id": "019fcc2a-8811-7d31-8537-aabe60f1dfde",
+  "response": "OK",
+  "usage": {
+    "input_tokens": 13117,
+    "cached_input_tokens": 8960,
+    "output_tokens": 5,
+    "reasoning_output_tokens": 0,
+    "total_tokens": 13122
+  },
+  "turn_status": "turn.completed",
+  "errors": [],
+  "usage_status": {
+    "observed_at": "2026-08-04T09:46:10.716Z",
+    "rate_limits": {
+      "limit_id": "codex",
+      "limit_name": null,
+      "primary": {
+        "used_percent": 8.0,
+        "window_minutes": 10080,
+        "resets_at": 1786432248
+      },
+      "secondary": null,
+      "credits": {
+        "has_credits": false,
+        "unlimited": false,
+        "balance": "0"
+      },
+      "individual_limit": null,
+      "plan_type": "plus",
+      "rate_limit_reached_type": null
+    },
+    "session_file": "/Users/dinya/works/dev_workspace/codex_workbench/workspace/.agent_state/queued_codex_home/sessions/2026/08/04/rollout-2026-08-04T18-46-07-019fcc2a-8811-7d31-8537-aabe60f1dfde.jsonl",
+    "thread_id": "019fcc2a-8811-7d31-8537-aabe60f1dfde"
+  },
+  "checks": {
+    "process_succeeded": true,
+    "response_received": true,
+    "token_usage_received": true,
+    "fresh_rate_limits_received": true
+  },
+  "stderr": ""
+}

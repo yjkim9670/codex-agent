@@ -3101,9 +3101,16 @@ document.addEventListener('DOMContentLoaded', () => {
         usageRefreshBtn.addEventListener('click', async () => {
             usageRefreshBtn.classList.add('is-spinning');
             usageRefreshBtn.disabled = true;
-            await refreshUsageSummary({ silent: false, showSuccessToast: true });
-            usageRefreshBtn.classList.remove('is-spinning');
-            usageRefreshBtn.disabled = false;
+            try {
+                await refreshUsageSummary({
+                    silent: false,
+                    showSuccessToast: true,
+                    forceAccountRefresh: true
+                });
+            } finally {
+                usageRefreshBtn.classList.remove('is-spinning');
+                usageRefreshBtn.disabled = false;
+            }
         });
     }
     if (usageHistoryOverlay) {
@@ -8703,9 +8710,28 @@ async function loadSettings({ silent = true } = {}) {
     }
 }
 
-async function refreshUsageSummary({ silent = true, showSuccessToast = false } = {}) {
+async function refreshUsageSummary({
+    silent = true,
+    showSuccessToast = false,
+    forceAccountRefresh = false
+} = {}) {
     try {
-        const result = await fetchJson('/api/codex/usage', { cache: 'no-store' });
+        const requestUrl = forceAccountRefresh
+            ? '/api/codex/usage/refresh'
+            : '/api/codex/usage';
+        const requestOptions = forceAccountRefresh
+            ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    hours: usageHistoryLastRequestedHours,
+                    scope: usageHistoryLastRequestedScope
+                }),
+                cache: 'no-store',
+                timeoutMs: USAGE_HISTORY_REQUEST_TIMEOUT_MS
+            }
+            : { cache: 'no-store' };
+        const result = await fetchJson(requestUrl, requestOptions);
         const usage = result?.usage ?? null;
         const usageHistory = result?.usage_history ?? null;
         state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
@@ -8723,13 +8749,48 @@ async function refreshUsageSummary({ silent = true, showSuccessToast = false } =
         }
         updateUsageSummary(usage);
         updateRenderedLimitUsageEstimates();
+        if (forceAccountRefresh && isUsageHistoryOverlayOpen()) {
+            renderUsageHistoryOverlay(
+                usageHistory,
+                normalizeUsageHistoryRangeHours(usageHistoryLastRequestedHours)
+            );
+        }
         if (showSuccessToast) {
-            showToast('사용량을 갱신했습니다.', { tone: 'default', durationMs: 3000 });
+            showToast(
+                forceAccountRefresh
+                    ? buildAccountUsageRefreshToastMessage(usage)
+                    : '사용량을 갱신했습니다.',
+                { tone: 'default', durationMs: 3000 }
+            );
         }
     } catch (error) {
         const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
         setStatus(message, true);
     }
+}
+
+function buildAccountUsageRefreshToastMessage(usage) {
+    const fiveHourUsed = Number(usage?.five_hour?.used_percent);
+    const weeklyUsed = Number(usage?.weekly?.used_percent);
+    const accountTotalTokens = Number(
+        usage?.account_usage?.total_tokens
+        ?? usage?.account_token_usage?.all_time?.total_tokens
+    );
+    const details = [];
+
+    if (Number.isFinite(fiveHourUsed)) {
+        details.push(`5시간 ${formatUsageHistoryPercentTick(fiveHourUsed)}`);
+    }
+    if (Number.isFinite(weeklyUsed)) {
+        details.push(`주간 ${formatUsageHistoryPercentTick(weeklyUsed)}`);
+    }
+    if (Number.isFinite(accountTotalTokens) && accountTotalTokens >= 0) {
+        details.push(`누적 ${formatCompactTokenCount(accountTotalTokens)} tokens`);
+    }
+
+    return details.length > 0
+        ? `현재 계정 사용량을 조회했습니다. ${details.join(' · ')}`
+        : '현재 계정 사용량을 조회했습니다.';
 }
 
 function updateUsageSummary(usage) {
@@ -14487,6 +14548,8 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
 
     const relationScope = resolveUsageHistoryRelationScope(history);
     const relation = history?.relation || {};
+    const usageSummary = history?.usage_summary || state.settings?.usage || {};
+    const usageEvents = usageSummary?.usage_events || {};
     const relationPlanLabel = String(relation?.plan_label || history?.current_plan?.label || '').trim();
     if (costEstimate) {
         const projectedTokens = Number(costEstimate.projectedTokens);
@@ -14501,6 +14564,38 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
                     : ''
             ].filter(Boolean).join(' · '),
             lowConfidence: !costEstimate.available || Boolean(costEstimate.cost && !costEstimate.cost.hasBreakdown)
+        });
+    }
+
+    const accountApiUsage = usageSummary?.account_usage || {};
+    const accountApiTotal = Number(accountApiUsage?.total_tokens);
+    if (Number.isFinite(accountApiTotal) && accountApiTotal >= 0) {
+        const dailyBucketCount = Array.isArray(accountApiUsage?.daily_usage)
+            ? accountApiUsage.daily_usage.length
+            : 0;
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: 'Account API lifetime',
+            value: `${formatCompactTokenCount(Math.round(accountApiTotal))} tok`,
+            meta: `exact account total · ${formatNumber(dailyBucketCount)} daily buckets`,
+            lowConfidence: false
+        });
+    }
+
+    const operationEntries = Object.entries(usageEvents?.by_operation || {});
+    if (operationEntries.length > 0) {
+        const operationText = operationEntries
+            .sort((left, right) => Number(right?.[1]?.total_tokens || 0) - Number(left?.[1]?.total_tokens || 0))
+            .map(([name, entry]) => `${name} ${formatNumber(Number(entry?.requests || 0))}`)
+            .join(' · ');
+        const creditEquivalent = Number(usageEvents?.credit_equivalent);
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: 'Workbench recorded usage',
+            value: `${formatNumber(Number(usageEvents?.count || 0))} req`,
+            subvalue: Number.isFinite(creditEquivalent)
+                ? `${creditEquivalent.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} credit-eq`
+                : '',
+            meta: operationText || 'No operation breakdown',
+            lowConfidence: false
         });
     }
 
@@ -14639,6 +14734,9 @@ function renderUsageHistoryLegend(history) {
         history,
         Array.isArray(history?.items) ? history.items : []
     );
+    const automaticSampleCount = Array.isArray(history?.items)
+        ? history.items.filter(item => item?.limit_sample_source === 'automatic').length
+        : 0;
 
     const legendItems = [
         {
@@ -14656,6 +14754,12 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: '',
             text: `Current plan ${currentPlanLabel}`
+        });
+    }
+    if (automaticSampleCount > 0) {
+        legendItems.push({
+            key: 'automatic-sample',
+            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (6시간 주기)`
         });
     }
     if (visiblePlanTransitions.length > 0) {
@@ -14758,6 +14862,11 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         formatUsageHistoryTimestamp(item?.bucket_start),
         `Token Δ (${scopeLabel}) ${Number.isFinite(tokenDelta) ? formatCompactTokenCount(tokenDelta) : '--'}`
     ];
+    if (item?.limit_sample_source === 'automatic') {
+        parts.push('자동 조회 (6시간 주기)');
+    } else if (item?.limit_sample_source === 'manual') {
+        parts.push('수동 조회');
+    }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
     }
@@ -15330,6 +15439,26 @@ function renderUsageHistoryChart(history) {
 
     appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
 
+    items.forEach((item, index) => {
+        if (item?.limit_sample_source !== 'automatic' || !Number.isFinite(weeklyUsed[index])) {
+            return;
+        }
+        const x = xAt(index);
+        const y = yPercent(weeklyUsed[index]);
+        const size = mobileLayout ? 5.8 : 4.8;
+        const marker = createUsageHistorySvgNode('path', {
+            d: `M${x} ${y - size} L${x + size} ${y} L${x} ${y + size} L${x - size} ${y} Z`,
+            class: 'automatic-sample-marker',
+            tabindex: '0'
+        });
+        const tooltip = buildUsageHistoryPointTooltip(
+            item, '자동 조회 사용량', relationScope,
+        );
+        attachUsageHistoryTooltip(marker, tooltip);
+        chart.appendChild(marker);
+        appendTooltipHitCircle(x, y, tooltip, 'automatic-sample-hit');
+    });
+
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);
     visiblePlanTransitions.forEach((transition, index) => {
         const x = xAtTimestamp(transition?.at);
@@ -15479,6 +15608,14 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         if (currentPlanLabel) {
             metaParts.push(`Plan ${currentPlanLabel}`);
         }
+        const refresh = history?.usage_summary?.account_usage_refresh || state.settings?.usage?.account_usage_refresh || {};
+        const refreshAt = formatResetTimestamp(refresh?.last_success_at);
+        if (refreshAt) {
+            metaParts.push(`Account API ${refreshAt}`);
+        }
+        if (refresh?.error) {
+            metaParts.push('Account API retry pending');
+        }
         const pathText = typeof history?.path === 'string' ? history.path.trim() : '';
         const planPathText = typeof history?.plan_config_path === 'string'
             ? history.plan_config_path.trim()
@@ -15539,6 +15676,9 @@ async function refreshUsageHistory({
         });
         const usage = result?.usage ?? null;
         const usageHistory = result?.usage_history ?? null;
+        if (usageHistory && typeof usageHistory === 'object') {
+            usageHistory.usage_summary = usage;
+        }
         state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
             result?.feature_flags?.usage_limits_enabled,
             state.settings.usageLimitsEnabled !== false

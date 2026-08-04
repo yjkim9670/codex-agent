@@ -112,6 +112,7 @@ from ..services.codex_chat import (
     normalize_verification_mode,
     normalize_structured_report_preset_id,
     read_codex_app_server_thread,
+    refresh_account_usage_snapshot_if_due,
     rename_session,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
@@ -972,6 +973,43 @@ def codex_usage():
     })
 
 
+@bp.route('/api/codex/usage/refresh', methods=['POST'])
+def codex_usage_refresh():
+    """Fetch the active account's current limits and token usage on demand."""
+    ensure_usage_snapshot_background_worker()
+    payload = request.get_json(silent=True) or {}
+    account_id = get_active_account_id()
+    refresh = refresh_account_usage_snapshot_if_due(
+        account_id=account_id,
+        force=True,
+    )
+    usage = get_usage_summary(account_id=account_id)
+    hours = payload.get('hours')
+    scope = payload.get('scope')
+    response = {
+        'usage': usage,
+        'usage_history': get_usage_history_summary(
+            hours=hours,
+            scope=scope,
+            account_id=account_id,
+        ),
+        'accounts': get_codex_accounts_summary(),
+        'session_storage': get_session_storage_summary(),
+        'feature_flags': {
+            'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
+        },
+        'account_usage_refresh': {
+            'refreshed': bool(refresh.get('refreshed')),
+            'error': refresh.get('error') or '',
+        },
+    }
+    # Preserve the last known snapshot in the UI when the live App Server
+    # request fails, while making the failure visible to the caller.
+    if not refresh.get('refreshed'):
+        response['error'] = refresh.get('error') or '현재 계정 사용량을 조회하지 못했습니다.'
+    return jsonify(response), (200 if refresh.get('refreshed') else 502)
+
+
 @bp.route('/api/codex/usage/history')
 def codex_usage_history():
     ensure_usage_snapshot_background_worker()
@@ -1671,6 +1709,9 @@ def codex_session_message(session_id):
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    response_service_tier = normalize_codex_service_tier(
+        get_settings().get('service_tier')
+    ) or 'standard'
     account_id = get_active_account_id()
     user_metadata = {'account_id': account_id}
     if attachments:
@@ -1740,6 +1781,13 @@ def codex_session_message(session_id):
             token_usage=token_usage,
             source='sync_message',
             account_id=account_id,
+            operation='chat',
+            model=response_model,
+            reasoning_effort=response_reasoning_effort,
+            service_tier=response_service_tier,
+            backend=response_agent_backend,
+            status='failed' if error else 'completed',
+            duration_ms=duration_ms,
         )
 
     session = get_session(session_id)

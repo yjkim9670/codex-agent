@@ -640,6 +640,87 @@ def test_token_usage_ledger_tracks_input_output_and_deduplicates(isolated_codex_
     assert isolated_codex_workspace['token_usage_path'].exists()
 
 
+def test_usage_event_v2_records_operation_model_credit_and_deduplicates(
+        isolated_codex_workspace):
+    saved = codex_chat.record_usage_event(
+        event_id='commit-001',
+        session_id='__git_commit_message__',
+        usage={
+            'input_tokens': 13_117,
+            'cached_input_tokens': 8_960,
+            'output_tokens': 5,
+        },
+        operation='git_commit_message',
+        model='gpt-5.6-luna',
+        reasoning_effort='low',
+        source='unit_test',
+    )
+    duplicate = codex_chat.record_usage_event(
+        event_id='commit-001',
+        session_id='__git_commit_message__',
+        usage={'input_tokens': 13_117, 'cached_input_tokens': 8_960, 'output_tokens': 5},
+        operation='git_commit_message',
+        model='gpt-5.6-luna',
+        source='unit_test',
+    )
+
+    assert saved is True
+    assert duplicate is False
+    summary = codex_chat.get_usage_event_summary()
+    assert summary['count'] == 1
+    assert summary['by_operation']['git_commit_message']['requests'] == 1
+    event = summary['recent'][0]
+    assert event['schema_version'] == 2
+    assert event['uncached_input_tokens'] == 4_157
+    assert event['credit_equivalent']['value'] == pytest.approx(0.025415)
+
+
+def test_six_hour_account_api_refresh_persists_exact_limits_without_model_request(
+        isolated_codex_workspace, monkeypatch):
+    calls = []
+
+    def fake_call(method, params=None, **kwargs):
+        calls.append((method, kwargs))
+        if method == 'account/rateLimits/read':
+            result = {
+                'rateLimits': {
+                    'primary': {
+                        'usedPercent': 9,
+                        'windowMinutes': 10_080,
+                        'resetsAt': 1_786_432_248,
+                    },
+                    'secondary': None,
+                }
+            }
+        else:
+            result = {'usage': {'totalTokens': 12_317_920_501}}
+        return {'result': result, 'elapsed_ms': 3}
+
+    snapshot_calls = []
+
+    monkeypatch.setattr(codex_chat, 'call_codex_app_server_method', fake_call)
+    monkeypatch.setattr(
+        codex_chat,
+        'record_usage_snapshot_if_due',
+        lambda **kwargs: snapshot_calls.append(kwargs) or {'recorded': True},
+    )
+
+    result = codex_chat.refresh_account_usage_snapshot_if_due(force=True)
+
+    assert result['refreshed'] is True
+    assert [item[0] for item in calls] == [
+        'account/rateLimits/read',
+        'account/usage/read',
+    ]
+    assert all(item[1]['require_pilot'] is False for item in calls)
+    assert result['snapshot']['weekly']['used_percent'] == 9.0
+    assert result['snapshot']['account_usage']['total_tokens'] == 12_317_920_501
+    assert snapshot_calls[-1]['limit_sample_source'] == 'manual'
+    summary = codex_chat.get_usage_summary()
+    assert summary['weekly']['used_percent'] == 9.0
+    assert summary['account_usage']['total_tokens'] == 12_317_920_501
+
+
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)
@@ -790,6 +871,24 @@ def test_usage_history_places_limits_in_the_actual_observation_bucket():
     assert limit_sample['limits_observed_at'] == '2026-07-20T10:45:00+09:00'
     assert account_sample['bucket_start'] == '2026-07-20T12:00:00+09:00'
     assert workspace_sample['bucket_start'] == '2026-07-20T12:00:00+09:00'
+
+
+def test_usage_history_preserves_automatic_limit_sample_source():
+    snapshot = {
+        'bucket_start': '2026-07-20T12:00:00+09:00',
+        'recorded_at': '2026-07-20T12:30:00+09:00',
+        'limits_observed_at': '2026-07-20T12:30:00+09:00',
+        'limit_sample_source': 'automatic',
+        'weekly_used_percent': 42,
+    }
+
+    limit_sample, _account_sample, _workspace_sample = (
+        codex_chat._split_usage_history_snapshot(snapshot)
+    )
+    merged = codex_chat._merge_usage_history_series([limit_sample], [])
+
+    assert limit_sample['limit_sample_source'] == 'automatic'
+    assert merged[0]['limit_sample_source'] == 'automatic'
 
 
 def test_usage_history_does_not_count_pre_scope_limits_as_token_growth():

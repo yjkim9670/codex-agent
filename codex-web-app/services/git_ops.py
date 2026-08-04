@@ -3,6 +3,7 @@
 import ast
 from collections import Counter
 import json
+import logging
 import os
 import re
 import subprocess
@@ -16,6 +17,8 @@ from ..config import (
     WORKSPACE_DIR,
     resolve_codex_git_commit_message_model,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 GIT_TIMEOUT_SECONDS = 600
 GIT_NETWORK_TIMEOUT_SECONDS = 180
@@ -2107,6 +2110,30 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    try:
+        from .codex_chat import get_active_account_id, record_usage_event
+
+        record_usage_event(
+            event_id=f'git-commit-message:{time.time_ns()}',
+            session_id='__git_commit_message__',
+            usage=token_usage,
+            source='git_commit_message',
+            account_id=get_active_account_id(),
+            operation='git_commit_message',
+            model=model_override,
+            reasoning_effort=reasoning_override,
+            service_tier='standard',
+            backend='dtgpt',
+            status='failed' if error_text else 'completed',
+            duration_ms=(timing or {}).get('cli_runtime_ms') if isinstance(timing, dict) else None,
+            metadata={
+                'included_files': len(diff_context.get('included_paths') or []),
+                'diff_truncated': bool(diff_context.get('diff_truncated')),
+            },
+        )
+    except Exception:
+        # Commit message generation must remain available if usage persistence fails.
+        _LOGGER.exception('git commit message usage event persistence failed')
     if error_text:
         return None, {
             'error': error_text,

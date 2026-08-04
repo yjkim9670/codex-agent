@@ -5633,6 +5633,13 @@ body.is-mermaid-diagram-viewer-open {
     stroke-width: 1.2;
 }
 
+.usage-history-chart .automatic-sample-marker {
+    fill: #8a3ffc;
+    stroke: var(--surface);
+    stroke-width: 1.4;
+    cursor: crosshair;
+}
+
 .usage-history-chart .usage-history-hit-area {
     fill: transparent;
     stroke: transparent;
@@ -5714,6 +5721,12 @@ body.is-mermaid-diagram-viewer-open {
 
 .usage-history-legend-swatch.weekly {
     background: rgba(61, 130, 197, 0.95);
+}
+
+.usage-history-legend-swatch.automatic-sample {
+    background: #8a3ffc;
+    border-radius: 1px;
+    transform: rotate(45deg);
 }
 
 .usage-history-legend-swatch.weekly-reset {

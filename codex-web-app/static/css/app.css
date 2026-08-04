@@ -5616,6 +5616,20 @@ body.is-mermaid-diagram-viewer-open {
     fill: rgba(15, 76, 129, 0.24);
 }
 
+.usage-history-chart .missing-interval {
+    fill: rgba(122, 132, 148, 0.12);
+    stroke: rgba(122, 132, 148, 0.3);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    cursor: help;
+}
+
+.usage-history-chart .missing-interval:focus-visible {
+    fill: rgba(122, 132, 148, 0.2);
+    stroke: rgba(35, 111, 176, 0.72);
+    stroke-width: 2;
+}
+
 .usage-history-chart .weekly-line {
     fill: none;
     stroke: rgba(61, 130, 197, 0.95);
@@ -5727,6 +5741,12 @@ body.is-mermaid-diagram-viewer-open {
     background: #8a3ffc;
     border-radius: 1px;
     transform: rotate(45deg);
+}
+
+.usage-history-legend-swatch.missing-sample {
+    background: rgba(122, 132, 148, 0.2);
+    border: 1px dashed rgba(122, 132, 148, 0.7);
+    border-radius: 1px;
 }
 
 .usage-history-legend-swatch.weekly-reset {

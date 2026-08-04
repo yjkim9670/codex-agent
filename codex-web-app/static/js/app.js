@@ -14730,12 +14730,15 @@ function renderUsageHistoryLegend(history) {
     const relationScope = resolveUsageHistoryRelationScope(history);
     const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
     const currentPlanLabel = String(history?.current_plan?.label || history?.relation?.plan_label || '').trim();
-    const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(
-        history,
-        Array.isArray(history?.items) ? history.items : []
-    );
-    const automaticSampleCount = Array.isArray(history?.items)
-        ? history.items.filter(item => item?.limit_sample_source === 'automatic').length
+    const chartItems = Array.isArray(history?.chart_items)
+        ? history.chart_items
+        : (Array.isArray(history?.items) ? history.items : []);
+    const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, chartItems);
+    const automaticSampleCount = chartItems
+        ? chartItems.filter(item => item?.limit_sample_source === 'automatic').length
+        : 0;
+    const missingSampleCount = chartItems
+        ? chartItems.filter(item => item?.is_padding || item?.is_missing).length
         : 0;
 
     const legendItems = [
@@ -14760,6 +14763,12 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: 'automatic-sample',
             text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 짝수시 정각 · 최대 30분 보정)`
+        });
+    }
+    if (missingSampleCount > 0) {
+        legendItems.push({
+            key: 'missing-sample',
+            text: `미측정 ${formatNumber(missingSampleCount)}시간 (0 사용량으로 계산하지 않음)`
         });
     }
     if (visiblePlanTransitions.length > 0) {
@@ -14850,6 +14859,9 @@ function formatUsageHistoryTokenBreakdown(item) {
 }
 
 function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relationScope = 'workspace') {
+    if (item?.is_padding || item?.is_missing) {
+        return `${metricLabel} · ${formatUsageHistoryTimestamp(item?.bucket_start)} · 미측정 (사용량 0이 아님)`;
+    }
     const scopeLabel = relationScope === 'account' ? 'account' : 'workspace';
     const tokenDelta = Number(item?.delta_tokens);
     const tokenBreakdown = formatUsageHistoryTokenBreakdown(item);
@@ -14988,8 +15000,11 @@ function renderUsageHistoryChart(history) {
     const chartWrap = elements.chartWrap || chart.parentElement;
     chart.innerHTML = '';
 
-    const items = Array.isArray(history?.items) ? history.items : [];
-    if (items.length < 2) {
+    const items = Array.isArray(history?.chart_items)
+        ? history.chart_items
+        : (Array.isArray(history?.items) ? history.items : []);
+    const measuredItems = items.filter(item => !item?.is_padding && !item?.is_missing);
+    if (items.length < 2 || measuredItems.length < 2) {
         resetUsageHistoryChartPresentation(chartWrap, chart);
         return { rendered: false, percentScale: 100 };
     }
@@ -15042,28 +15057,21 @@ function renderUsageHistoryChart(history) {
     const percentTop = mobileLayout ? tokenBottom + stackedGap : margin.top;
     const percentBottom = percentTop + percentPlotHeight;
 
-    const xStep = items.length > 1 ? plotWidth / (items.length - 1) : 0;
-    const barWidth = Math.max(2, Math.min(14, plotWidth / Math.max(items.length * 1.8, 1)));
-    const xAt = index => margin.left + (xStep * index);
     const itemTimestamps = items.map(item => new Date(item?.bucket_start || item?.recorded_at || '').getTime());
+    const firstTimestamp = itemTimestamps[0];
+    const lastTimestamp = itemTimestamps[itemTimestamps.length - 1];
+    const timeSpan = Math.max(1, lastTimestamp - firstTimestamp);
     const xAtTimestamp = value => {
         const target = new Date(value || '').getTime();
-        if (!Number.isFinite(target)) return null;
-        if (!Number.isFinite(itemTimestamps[0]) || target <= itemTimestamps[0]) return xAt(0);
-        const lastIndex = itemTimestamps.length - 1;
-        if (!Number.isFinite(itemTimestamps[lastIndex]) || target >= itemTimestamps[lastIndex]) return xAt(lastIndex);
-        for (let index = 1; index < itemTimestamps.length; index += 1) {
-            const previousTime = itemTimestamps[index - 1];
-            const currentTime = itemTimestamps[index];
-            if (!Number.isFinite(previousTime) || !Number.isFinite(currentTime) || target > currentTime) {
-                continue;
-            }
-            const duration = Math.max(1, currentTime - previousTime);
-            const ratio = Math.max(0, Math.min(1, (target - previousTime) / duration));
-            return xAt(index - 1) + (xStep * ratio);
+        if (!Number.isFinite(target) || !Number.isFinite(firstTimestamp) || !Number.isFinite(lastTimestamp)) {
+            return null;
         }
-        return xAt(lastIndex);
+        const ratio = Math.max(0, Math.min(1, (target - firstTimestamp) / timeSpan));
+        return margin.left + (plotWidth * ratio);
     };
+    const xAt = index => xAtTimestamp(items[index]?.bucket_start || items[index]?.recorded_at) ?? margin.left;
+    const slotWidth = items.length > 1 ? plotWidth / (items.length - 1) : plotWidth;
+    const barWidth = Math.max(2, Math.min(14, slotWidth / 1.8));
     const yToken = value => tokenBottom - ((Math.max(0, value) / maxTokenDelta) * tokenPlotHeight);
     const yPercent = value => {
         const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
@@ -15071,6 +15079,7 @@ function renderUsageHistoryChart(history) {
     };
     const relationScope = resolveUsageHistoryRelationScope(history);
     const cursorGuideSnapPointsByIndex = items.map((item, index) => {
+        if (item?.is_padding || item?.is_missing) return [];
         const points = [{
             x: xAt(index),
             y: yToken(tokenDeltas[index]),
@@ -15143,11 +15152,13 @@ function renderUsageHistoryChart(history) {
     };
     const snapCursorGuidePoint = point => {
         if (!point || cursorGuideSnapPointsByIndex.length === 0) return null;
-        const nearestIndex = Math.max(
-            0,
-            Math.min(items.length - 1, Math.round((point.x - margin.left) / Math.max(xStep, 1)))
-        );
-        const samplePoints = cursorGuideSnapPointsByIndex[nearestIndex] || [];
+        const nearestIndex = cursorGuideSnapPointsByIndex.reduce((nearest, samplePoints, index) => {
+            if (samplePoints.length === 0) return nearest;
+            return nearest === null || Math.abs(xAt(index) - point.x) < Math.abs(xAt(nearest) - point.x)
+                ? index
+                : nearest;
+        }, null);
+        const samplePoints = nearestIndex === null ? [] : (cursorGuideSnapPointsByIndex[nearestIndex] || []);
         if (samplePoints.length === 0) return null;
         return samplePoints.reduce((nearest, candidate) => (
             Math.abs(candidate.y - point.y) < Math.abs(nearest.y - point.y)
@@ -15313,6 +15324,35 @@ function renderUsageHistoryChart(history) {
             })).textContent = formatUsageHistoryPercentTick(percent);
         });
     }
+    const missingIntervals = [];
+    let missingStartIndex = null;
+    items.forEach((item, index) => {
+        const missing = Boolean(item?.is_padding || item?.is_missing);
+        if (missing && missingStartIndex === null) missingStartIndex = index;
+        if ((!missing || index === items.length - 1) && missingStartIndex !== null) {
+            const endIndex = missing && index === items.length - 1 ? index : index - 1;
+            missingIntervals.push({ startIndex: missingStartIndex, endIndex });
+            missingStartIndex = null;
+        }
+    });
+    missingIntervals.forEach(({ startIndex, endIndex }) => {
+        const startX = Math.max(margin.left, xAt(startIndex) - (slotWidth / 2));
+        const endX = Math.min(margin.left + plotWidth, xAt(endIndex) + (slotWidth / 2));
+        if (endX <= startX) return;
+        const interval = createUsageHistorySvgNode('rect', {
+            x: startX,
+            y: margin.top,
+            width: endX - startX,
+            height: percentBottom - margin.top,
+            class: 'missing-interval',
+            tabindex: '0'
+        });
+        attachUsageHistoryTooltip(
+            interval,
+            `미측정 구간 · ${formatUsageHistoryTimestamp(items[startIndex]?.bucket_start)} ~ ${formatUsageHistoryTimestamp(items[endIndex]?.bucket_start)} · 사용량 0이 아님`
+        );
+        chart.appendChild(interval);
+    });
     buildTimeGridIndexes().forEach(index => {
         const x = xAt(index);
         const isEdge = index === 0 || index === items.length - 1;
@@ -15391,35 +15431,6 @@ function renderUsageHistoryChart(history) {
                 class: className
             }));
         });
-        const hasSeriesBoundaryBetween = (leftIndex, rightIndex) => {
-            for (let index = leftIndex + 1; index <= rightIndex; index += 1) {
-                const item = items[index] || {};
-                const previousItem = items[index - 1] || {};
-                const planChanged = Boolean(
-                    item?.plan_period_id
-                    && previousItem?.plan_period_id
-                    && item.plan_period_id !== previousItem.plan_period_id
-                );
-                if (item?.plan_transition_detected || item?.weekly_reset_detected || planChanged) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        for (let index = 1; index < points.length; index += 1) {
-            const previousPoint = points[index - 1];
-            const currentPoint = points[index];
-            if (
-                currentPoint.index - previousPoint.index <= 1
-                || hasSeriesBoundaryBetween(previousPoint.index, currentPoint.index)
-            ) {
-                continue;
-            }
-            chart.appendChild(createUsageHistorySvgNode('path', {
-                d: `M${previousPoint.x} ${previousPoint.y} L${currentPoint.x} ${currentPoint.y}`,
-                class: `${className} interpolation-line`
-            }));
-        }
         points.forEach(point => {
             chart.appendChild(createUsageHistorySvgNode('circle', {
                 cx: point.x,
@@ -15529,9 +15540,9 @@ function renderUsageHistoryChart(history) {
         }
     });
 
-    const firstLabel = formatUsageHistoryTickLabel(items[0]?.bucket_start);
+    const firstLabel = formatUsageHistoryTickLabel(history?.window_start || items[0]?.bucket_start);
     const middleLabel = formatUsageHistoryTickLabel(items[Math.floor((items.length - 1) / 2)]?.bucket_start);
-    const lastLabel = formatUsageHistoryTickLabel(items[items.length - 1]?.bucket_start);
+    const lastLabel = formatUsageHistoryTickLabel(history?.window_end || items[items.length - 1]?.bucket_start);
     [
         { x: margin.left, anchor: 'start', text: firstLabel },
         { x: margin.left + (plotWidth / 2), anchor: 'middle', text: middleLabel },
@@ -15590,6 +15601,10 @@ function renderUsageHistoryOverlay(history, requestedHours = USAGE_HISTORY_DEFAU
         const metaParts = [];
         if (Number.isFinite(itemCount)) {
             metaParts.push(`Samples ${formatNumber(itemCount)}`);
+        }
+        const slotCount = Number(history?.slot_count);
+        if (Number.isFinite(slotCount) && slotCount > 0) {
+            metaParts.push(`Timeline ${formatNumber(slotCount)}h`);
         }
         if (updatedAt) {
             metaParts.push(`Updated ${updatedAt}`);

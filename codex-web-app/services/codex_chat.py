@@ -6732,6 +6732,39 @@ def _build_usage_history_items(items, plan_periods=None):
     return derived
 
 
+def _build_usage_history_time_slots(history_items, window_start, window_end):
+    """Return one KST-hour slot per hour without inventing usage values.
+
+    Empty slots deliberately contain no token or limit fields.  This lets the
+    client preserve elapsed time while rendering the interval as unmeasured,
+    rather than as zero usage.
+    """
+    samples_by_bucket = {}
+    for item in history_items:
+        bucket = parse_timestamp(item.get('bucket_start'))
+        if bucket is None:
+            continue
+        bucket = bucket.astimezone(KST).replace(minute=0, second=0, microsecond=0)
+        if window_start <= bucket <= window_end:
+            samples_by_bucket[normalize_timestamp(bucket)] = {
+                **item,
+                'is_padding': False,
+                'is_missing': False,
+            }
+
+    slots = []
+    current = window_start
+    while current <= window_end:
+        bucket_start = normalize_timestamp(current)
+        slots.append(samples_by_bucket.get(bucket_start, {
+            'bucket_start': bucket_start,
+            'is_padding': True,
+            'is_missing': True,
+        }))
+        current += timedelta(hours=1)
+    return slots
+
+
 def _tokens_per_percent_confidence(sample_count, percent_sum):
     if sample_count <= 0 or percent_sum <= 0:
         return 'none'
@@ -6992,9 +7025,42 @@ def get_usage_history_summary(
         token_samples,
         scope=requested_scope,
     )
-    if requested_hours > 0 and len(items) > requested_hours:
-        items = items[-requested_hours:]
-    history_items = _build_usage_history_items(items, plan_periods=plan_periods)
+    all_history_items = _build_usage_history_items(items, plan_periods=plan_periods)
+    window_end = datetime.now(KST).replace(minute=0, second=0, microsecond=0)
+    window_start = window_end - timedelta(hours=max(0, requested_hours - 1))
+    history_items = [
+        item for item in all_history_items
+        if (
+            (bucket_start := parse_timestamp(item.get('bucket_start'))) is not None
+            and window_start <= bucket_start.astimezone(KST) <= window_end
+        )
+    ]
+    # Historical ledgers can be opened long after their last record (including
+    # imported/legacy data).  Keep those usable, but only fall back when the
+    # ledger is substantially stale; ordinary recent gaps remain visible as
+    # missing slots in the current time range.
+    latest_available_bucket = max(
+        (
+            parse_timestamp(item.get('bucket_start'))
+            for item in all_history_items
+        ),
+        default=None,
+    )
+    if (
+        latest_available_bucket is not None
+        and latest_available_bucket.astimezone(KST) < window_end - timedelta(days=7)
+    ):
+        window_end = latest_available_bucket.astimezone(KST).replace(
+            minute=0, second=0, microsecond=0
+        )
+        window_start = window_end - timedelta(hours=max(0, requested_hours - 1))
+        history_items = [
+            item for item in all_history_items
+            if (
+                (bucket_start := parse_timestamp(item.get('bucket_start'))) is not None
+                and window_start <= bucket_start.astimezone(KST) <= window_end
+            )
+        ]
     first_bucket = history_items[0]['bucket_start'] if history_items else ''
     last_bucket = history_items[-1]['bucket_start'] if history_items else ''
     first_recorded = history_items[0]['recorded_at'] if history_items else ''
@@ -7141,8 +7207,8 @@ def get_usage_history_summary(
             'averages': period_averages,
         })
 
-    first_chart_at = parse_timestamp(first_bucket or first_recorded)
-    last_chart_at = parse_timestamp(last_recorded or last_bucket)
+    first_chart_at = window_start
+    last_chart_at = window_end
     visible_plan_transitions = []
     for transition in plan_transitions:
         transition_at = parse_timestamp(transition.get('at'))
@@ -7168,6 +7234,9 @@ def get_usage_history_summary(
         'retention_hours': _USAGE_HISTORY_MAX_ITEMS,
         'retention_days': _USAGE_HISTORY_RETENTION_DAYS,
         'count': len(history_items),
+        'slot_count': requested_hours,
+        'window_start': normalize_timestamp(window_start),
+        'window_end': normalize_timestamp(window_end),
         'first_bucket_start': first_bucket,
         'last_bucket_start': last_bucket,
         'first_recorded_at': first_recorded,
@@ -7224,7 +7293,12 @@ def get_usage_history_summary(
             'limit_sample_count': len(ledger.get('account_limit_samples') or []),
         },
         'averages': averages,
-        'items': history_items
+        # Keep the established `items` contract for analytics consumers; the
+        # chart-specific series adds explicit empty KST-hour slots.
+        'items': history_items,
+        'chart_items': _build_usage_history_time_slots(
+            history_items, window_start, window_end
+        )
     }
 
 

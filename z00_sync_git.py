@@ -86,7 +86,7 @@ TEXT_MUTED = "#8f989f"      # Muted text
 
 UI_FONT_FAMILY_DISPLAY = "Segoe UI"
 UI_FONT_FAMILY_TEXT = "Segoe UI"
-DEFAULT_ARCHIVE_DIR = str(Path.cwd().parent / "archive_backups")
+DEFAULT_ARCHIVE_DIR = "D:/Multimedia/SendFiles"
 UI_FONT_FAMILY_MONO = "Consolas"
 
 ARCHIVE_TEXT_EXTENSIONS = {
@@ -198,9 +198,9 @@ TTKBOOTSTRAP_THEME_ENV = "GIT_SYNC_TTKBOOTSTRAP_THEME"
 TTKBOOTSTRAP_DEFAULT_THEME = "darkly"
 
 REPO_CHOICES = [
+    "https://github.com/yjkim9670/codex-agent",
     "https://github.com/yjkim9670/CommonTG-Verification-Platform",
     "https://github.com/yjkim9670/GL-FW-DV-Constraint-Review",
-    "https://github.com/yjkim9670/codex-agent",
 ]
 
 # Timeout settings (based on avg times: Branch ~30s, Metadata ~45s, Sync ~35s)

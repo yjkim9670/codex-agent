@@ -300,8 +300,14 @@ def configure_gui_fonts(root: "tk.Misc") -> bool:
                 tkfont.nametofont(named_font, root=root).configure(family=resolved_family)
             except tk.TclError:
                 pass
-        root.option_add("*Font", (resolved_family, 10))
-        logging.info("Applied Tk UI font: %s", resolved_family)
+        # Do not set ``*Font`` here.  It has a higher-priority option-database
+        # value that can flatten ttkbootstrap/ttk styles to one 10 pt face.
+        # The theme configures the base ttk style, while these narrowly scoped
+        # defaults cover the remaining classic Tk controls.
+        root.option_add("*Text.Font", (resolved_family, 10))
+        root.option_add("*Listbox.Font", (resolved_family, 10))
+        root.option_add("*Menu.Font", (resolved_family, 10))
+        logging.info("Applied Tk UI font family: %s", resolved_family)
         return True
     except Exception:
         logging.exception("Unable to configure Tk UI fonts.")
@@ -1257,6 +1263,86 @@ class GitManager:
             detail = stderr or stdout or "No additional details."
             raise RuntimeError(f"Git command failed: {' '.join(command)}\n{detail}") from e
 
+    def _get_git_object_store_stats(self) -> Dict[str, str]:
+        """Return lightweight local object-store counters for fetch diagnostics."""
+        raw = self._run_git_checked(["git", "count-objects", "-vH"], timeout=15)
+        return {
+            key.strip(): value.strip()
+            for line in raw.splitlines()
+            if ":" in line
+            for key, value in [line.split(":", 1)]
+        }
+
+    @staticmethod
+    def _format_git_object_store_stats(stats: Dict[str, str]) -> str:
+        return (
+            f"packs={stats.get('packs', '?')}, in-pack={stats.get('in-pack', '?')}, "
+            f"pack-size={stats.get('size-pack', '?')}, loose={stats.get('count', '?')}"
+        )
+
+    def _run_fetch_with_diagnostics(
+        self,
+        branch: str,
+        refspec: str,
+        log_fn: Callable[[str], None],
+    ) -> None:
+        """Fetch once while logging enough evidence to isolate a persistent delay.
+
+        The short ls-remote probe measures connection, authentication and remote
+        ref advertisement separately from the actual pack negotiation/download.
+        It is diagnostic only: failure is logged but never blocks the real fetch.
+        """
+        probe_started_at = time.monotonic()
+        try:
+            self._run_git_checked(
+                ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
+                timeout=GIT_BRANCH_TIMEOUT,
+            )
+            log_fn(
+                "[Fetch diagnostic] Remote connection/auth/ref lookup: "
+                f"{time.monotonic() - probe_started_at:.1f}s"
+            )
+        except Exception as exc:
+            log_fn(f"[Fetch diagnostic] Remote probe unavailable: {type(exc).__name__}: {exc}")
+
+        before_stats: Dict[str, str] = {}
+        try:
+            before_stats = self._get_git_object_store_stats()
+            log_fn(
+                "[Fetch diagnostic] Object store before: "
+                f"{self._format_git_object_store_stats(before_stats)}"
+            )
+        except Exception as exc:
+            log_fn(f"[Fetch diagnostic] Object-store baseline unavailable: {type(exc).__name__}: {exc}")
+
+        fetch_started_at = time.monotonic()
+        try:
+            self._run_git_checked(
+                ["git", "fetch", "--no-tags", "--depth", "1", "--prune", "--progress", "origin", refspec],
+                timeout=GIT_FETCH_TIMEOUT,
+            )
+        finally:
+            log_fn(f"[Timing] Git fetch: {time.monotonic() - fetch_started_at:.1f}s")
+
+        try:
+            after_stats = self._get_git_object_store_stats()
+            log_fn(
+                "[Fetch diagnostic] Object store after: "
+                f"{self._format_git_object_store_stats(after_stats)}"
+            )
+            if before_stats and after_stats == before_stats:
+                log_fn(
+                    "[Fetch diagnostic] Interpretation: no local pack growth. A slow fetch here points "
+                    "to remote negotiation/server response or the corporate network path."
+                )
+            elif before_stats:
+                log_fn(
+                    "[Fetch diagnostic] Interpretation: local pack data changed. Compare this fetch time "
+                    "with the remote-probe time to distinguish object transfer/pack processing from connection delay."
+                )
+        except Exception as exc:
+            log_fn(f"[Fetch diagnostic] Object-store result unavailable: {type(exc).__name__}: {exc}")
+
     def _snapshot_local_dir(self, rel_dir: str, log_fn: Callable[[str], None]) -> Optional[Path]:
         target = self.cwd / rel_dir
         if not self._path_is_dir(target):
@@ -1555,14 +1641,7 @@ class GitManager:
 
             log_fn("Running optimized sync: selected-branch fetch -> checkout -> reset -> mirror-clean")
             refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            fetch_started_at = time.monotonic()
-            try:
-                self._run_git_checked(
-                    ["git", "fetch", "--no-tags", "--depth", "1", "--prune", "origin", refspec],
-                    timeout=GIT_FETCH_TIMEOUT,
-                )
-            finally:
-                log_fn(f"[Timing] Git fetch: {time.monotonic() - fetch_started_at:.1f}s")
+            self._run_fetch_with_diagnostics(branch, refspec, log_fn)
             target_ref = f"origin/{branch}"
             snapshot = self.get_local_ref_snapshot(target_ref)
             log_fn(
@@ -2657,6 +2736,7 @@ class GuiApp:
         self.is_syncing = False
         self.is_refreshing = False
         self.cancel_refresh = False  # Flag to cancel ongoing refresh
+        self._progress_animating = False
 
         # Archive backup settings
         self.archive_dir = DEFAULT_ARCHIVE_DIR
@@ -3077,6 +3157,7 @@ class GuiApp:
                 ".",
                 background=self.ui_bg,
                 foreground=self.ui_text,
+                font=(UI_FONT_FAMILY_TEXT, 10),
                 bordercolor=self.ui_border,
                 focuscolor=self.ui_accent,
             )
@@ -3254,6 +3335,7 @@ class GuiApp:
         style.configure(".",
                        background=BG_COLOR,
                        foreground=TEXT_COLOR,
+                       font=(UI_FONT_FAMILY_TEXT, 10),
                        borderwidth=0,
                        relief="flat")
 
@@ -3597,11 +3679,16 @@ class GuiApp:
         # Branch tree: always enabled (can select even during operations)
         # Treeview doesn't have a state property like Listbox, so no action needed
 
-        # Progress bar: show if any task is running
-        if self.is_syncing or self.is_refreshing:
-            self.progress.start(10)
-        else:
+        # Progressbar.start() schedules a recurring Tk timer.  Guard it so
+        # repeated control updates cannot create competing animation callbacks;
+        # 50 ms (20 fps) remains smooth while several app windows are syncing.
+        should_animate = self.is_syncing or self.is_refreshing
+        if should_animate and not self._progress_animating:
+            self.progress.start(50)
+            self._progress_animating = True
+        elif not should_animate and self._progress_animating:
             self.progress.stop()
+            self._progress_animating = False
 
     # --- Async Tasks ---
 

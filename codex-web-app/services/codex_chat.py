@@ -2447,6 +2447,7 @@ def _read_workspace_settings():
         'agent_backend': agent_backend,
         'verification_mode': verification_mode,
         'app_server_pilot_enabled': app_server_pilot_enabled,
+        'usage_keepalive_enabled': bool(data.get('usage_keepalive_enabled', False)),
         'git_commit_message_model': git_commit_message_model,
         'git_commit_message_reasoning_effort': git_commit_message_reasoning_effort,
     }
@@ -2464,6 +2465,7 @@ def _write_workspace_settings(settings):
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
+        'usage_keepalive_enabled': bool(settings.get('usage_keepalive_enabled', False)),
         'git_commit_message_model': (
             resolve_codex_git_commit_message_model(settings.get('git_commit_message_model'))
         ),
@@ -2945,6 +2947,7 @@ def get_settings():
         'agent_backend': _normalize_agent_backend_setting(None),
         'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
+        'usage_keepalive_enabled': False,
         'git_commit_message_model': resolve_codex_git_commit_message_model(),
         'git_commit_message_reasoning_effort': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     })
@@ -2959,6 +2962,7 @@ def update_settings(
         agent_backend=None,
         verification_mode=None,
         app_server_pilot_enabled=None,
+        usage_keepalive_enabled=None,
         git_commit_message_model=None,
         git_commit_message_reasoning_effort=None):
     with _CONFIG_LOCK:
@@ -2984,6 +2988,7 @@ def update_settings(
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
+            'usage_keepalive_enabled': bool(current.get('usage_keepalive_enabled', False)),
             'git_commit_message_model': (
                 resolve_codex_git_commit_message_model(current.get('git_commit_message_model'))
             ),
@@ -3010,6 +3015,8 @@ def update_settings(
             next_settings['verification_mode'] = normalize_verification_mode(verification_mode)
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
+        if usage_keepalive_enabled is not None:
+            next_settings['usage_keepalive_enabled'] = bool(usage_keepalive_enabled)
         if git_commit_message_model is not None:
             next_settings['git_commit_message_model'] = (
                 resolve_codex_git_commit_message_model(git_commit_message_model)
@@ -5951,7 +5958,7 @@ def _normalize_usage_history_snapshot(value):
     limit_sample_source = str(
         value.get('limit_sample_source') or value.get('limits_sample_source') or ''
     ).strip().lower()
-    if limit_sample_source not in {'automatic', 'manual', 'post_task'}:
+    if limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
         limit_sample_source = ''
     return {
         'bucket_start': bucket_start,
@@ -6026,7 +6033,7 @@ def _split_usage_history_snapshot(snapshot):
     observed_time = parse_timestamp(limit_observed_at)
     limit_bucket = (
         normalize_timestamp(observed_time)
-        if limit_source == 'post_task' and observed_time is not None
+        if limit_source in {'post_task', 'post_keepalive'} and observed_time is not None
         else _usage_history_bucket_start_text(limit_observed_at)
     )
     limit_sample = {
@@ -6337,7 +6344,7 @@ def _build_usage_history_snapshot(usage_summary, limit_sample_source=None):
     five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
     weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
     normalized_limit_source = str(limit_sample_source or '').strip().lower()
-    if normalized_limit_source not in {'automatic', 'manual', 'post_task'}:
+    if normalized_limit_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
         normalized_limit_source = ''
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
@@ -7390,6 +7397,133 @@ def _account_usage_refresh_is_due(snapshot, now=None):
     return last_slot is None or last_slot < slot
 
 
+_USAGE_KEEPALIVE_MODEL = 'gpt-5.6-luna'
+_USAGE_KEEPALIVE_REASONING_EFFORT = 'low'
+_USAGE_KEEPALIVE_PROMPT = (
+    'Respond with exactly: ok\n'
+    'Do not use tools, inspect files, or make any changes.'
+)
+
+
+def _usage_keepalive_reset_key(snapshot):
+    five_hour = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
+    if not isinstance(five_hour, dict):
+        return ''
+    used_percent = _normalize_used_percent(five_hour.get('used_percent'))
+    reset_at = _normalize_optional_timestamp(five_hour.get('resets_at'))
+    # A reset timestamp is required for automatic mode: without it, a rounded
+    # 0% response could otherwise create a request at every scheduled refresh.
+    return reset_at if used_percent == 0 and reset_at else ''
+
+
+def _account_has_active_codex_stream(account_id):
+    with state.codex_streams_lock:
+        for stream in state.codex_streams.values():
+            if stream.get('account_id') != account_id:
+                continue
+            if not stream.get('done') and not stream.get('cancelled'):
+                return True
+    return False
+
+
+def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
+    """Submit one isolated Luna/low request while account snapshot lock is held."""
+    account_id = context['account']['id']
+    previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
+    previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}
+    attempted_at = normalize_timestamp(None)
+    reset_key = _usage_keepalive_reset_key(snapshot)
+    if automatic:
+        if not get_settings().get('usage_keepalive_enabled'):
+            return {'submitted': False, 'reason': 'disabled'}
+        if not reset_key:
+            return {'submitted': False, 'reason': 'five_hour_not_zero'}
+        if previous_keepalive.get('automatic_reset_key') == reset_key:
+            return {'submitted': False, 'reason': 'already_attempted_for_reset'}
+    if get_selected_agent_backend() != 'dtgpt':
+        return {'submitted': False, 'reason': 'luna_requires_codex_backend'}
+    if _account_has_active_codex_stream(account_id):
+        return {'submitted': False, 'reason': 'account_busy'}
+    if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(context['codex_home']):
+        return {'submitted': False, 'reason': 'account_login_required'}
+
+    session = create_session(
+        title='Usage keepalive',
+        metadata={'session_type': 'usage_keepalive', 'internal': True},
+    )
+    try:
+        started = create_codex_stream(
+            session['id'],
+            _USAGE_KEEPALIVE_PROMPT,
+            model_override=_USAGE_KEEPALIVE_MODEL,
+            reasoning_override=_USAGE_KEEPALIVE_REASONING_EFFORT,
+            question_only=True,
+            account_id=account_id,
+            usage_operation='usage_keepalive',
+        )
+    except Exception as exc:
+        delete_session(session['id'])
+        started = None
+        error = str(exc)[:1000]
+    else:
+        error = ''
+    keepalive_state = {
+        **previous_keepalive,
+        'last_attempt_at': attempted_at,
+        'last_submission_at': attempted_at if started else previous_keepalive.get('last_submission_at'),
+        'last_mode': 'automatic' if automatic else 'manual',
+        'last_status': 'submitted' if started else 'failed',
+        'last_error': error,
+        'model': _USAGE_KEEPALIVE_MODEL,
+        'reasoning_effort': _USAGE_KEEPALIVE_REASONING_EFFORT,
+    }
+    if automatic:
+        # Mark before starting the process so a second Workbench copy cannot
+        # race this process during the same reset period.
+        keepalive_state['automatic_reset_key'] = reset_key
+    snapshot['usage_keepalive'] = keepalive_state
+    return {
+        'submitted': bool(started),
+        'stream': started or {},
+        'reason': '' if started else 'start_failed',
+        'state': keepalive_state,
+    }
+
+
+def submit_usage_keepalive(account_id=None):
+    """Manually submit the same isolated keepalive request used by automation."""
+    context = _account_storage_context(account_id)
+    if context is None:
+        return {'submitted': False, 'reason': 'account_not_found'}
+    with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+        snapshot = _load_account_usage_snapshot(context)
+        result = _submit_usage_keepalive_locked(context, snapshot, automatic=False)
+        if result.get('submitted'):
+            snapshot['version'] = snapshot.get('version') or 1
+            snapshot['account_id'] = context['account']['id']
+            _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+        return result
+
+
+def _record_usage_keepalive_completion(account_id, succeeded, error=''):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return
+    completed_at = normalize_timestamp(None)
+    with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+        snapshot = _load_account_usage_snapshot(context)
+        keepalive = snapshot.get('usage_keepalive')
+        if not isinstance(keepalive, dict):
+            return
+        keepalive['last_completed_at'] = completed_at
+        keepalive['last_status'] = 'completed' if succeeded else 'failed'
+        keepalive['last_error'] = '' if succeeded else str(error or '')[:1000]
+        snapshot['usage_keepalive'] = keepalive
+        snapshot['version'] = snapshot.get('version') or 1
+        snapshot['account_id'] = context['account']['id']
+        _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+
+
 def refresh_account_usage_snapshot_if_due(
         account_id=None, force=False, limit_sample_source=None):
     context = _account_storage_context(account_id)
@@ -7441,10 +7575,11 @@ def refresh_account_usage_snapshot_if_due(
                 'rate_limits_raw': raw_limits,
                 'elapsed_ms': int(rate_response.get('elapsed_ms') or 0) + int(usage_response.get('elapsed_ms') or 0),
                 'error': '',
+                'usage_keepalive': previous.get('usage_keepalive') if isinstance(previous.get('usage_keepalive'), dict) else {},
             }
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
-            if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task'}:
+            if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
                 resolved_limit_sample_source = 'manual' if force else 'automatic'
             record_usage_snapshot_if_due(
                 force=True,
@@ -7452,7 +7587,11 @@ def refresh_account_usage_snapshot_if_due(
                 account_id=context['account']['id'],
                 limit_sample_source=resolved_limit_sample_source,
             )
-            return {'refreshed': True, 'snapshot': snapshot}
+            keepalive = {'submitted': False, 'reason': 'not_automatic'}
+            if resolved_limit_sample_source == 'automatic':
+                keepalive = _submit_usage_keepalive_locked(context, snapshot, automatic=True)
+                _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+            return {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
         except Exception as exc:
             failed = {
                 **previous,
@@ -7556,6 +7695,11 @@ def get_usage_summary(account_id=None):
                 or Path(context['account_token_usage_path']).with_name('codex_account_usage_snapshot.json')
             ),
         },
+        'usage_keepalive': (
+            api_snapshot.get('usage_keepalive')
+            if isinstance(api_snapshot.get('usage_keepalive'), dict)
+            else {}
+        ),
         'usage_events': usage_events,
     }
     if api_snapshot.get('five_hour') or api_snapshot.get('weekly'):
@@ -7771,6 +7915,8 @@ def list_sessions():
     sessions = _sort_sessions(data.get('sessions', []))
     summary = []
     for session in sessions:
+        if session.get('internal'):
+            continue
         usage = _estimate_session_token_usage(session)
         pending_queue_count = _count_pending_queue_items(session)
         last_response_mode = _resolve_session_last_response_mode(session)
@@ -12691,7 +12837,8 @@ def create_codex_stream(
         user_prompt=None,
         structured_report_preset=None,
         worktree_task=None,
-        account_id=None):
+        account_id=None,
+        usage_operation='chat'):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -12749,6 +12896,7 @@ def create_codex_stream(
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
         'account_id': resolved_account_id,
+        'usage_operation': str(usage_operation or 'chat'),
         'question_only': bool(question_only or structured_report_preset_id),
         'attachments': normalized_attachments,
         'user_prompt': str(user_prompt or '').strip(),
@@ -13791,7 +13939,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         usage=token_usage,
         source=usage_source,
         account_id=account_id,
-        operation='subjob' if execution_policy == 'read_only_ephemeral' else 'chat',
+        operation=(
+            str(stream.get('usage_operation') or 'chat')
+            if str(stream.get('usage_operation') or 'chat') != 'chat'
+            else ('subjob' if execution_policy == 'read_only_ephemeral' else 'chat')
+        ),
         message_id=(saved_message or {}).get('id'),
         model=response_model,
         reasoning_effort=response_reasoning_effort,
@@ -13803,6 +13955,12 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         duration_ms=metadata.get('duration_ms'),
         metadata={'finalize_reason': finalize_reason, 'execution_policy': execution_policy},
     )
+    if stream.get('usage_operation') == 'usage_keepalive':
+        _record_usage_keepalive_completion(
+            account_id,
+            succeeded=message_role == 'assistant',
+            error=error if message_role != 'assistant' else '',
+        )
     # Store a fresh account-limit observation for every completed Codex task.
     # This intentionally bypasses the two-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.
@@ -13810,7 +13968,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         refresh_account_usage_snapshot_if_due(
             account_id=account_id,
             force=True,
-            limit_sample_source='post_task',
+            limit_sample_source=(
+                'post_keepalive'
+                if stream.get('usage_operation') == 'usage_keepalive'
+                else 'post_task'
+            ),
         )
     except Exception:
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)

@@ -113,6 +113,7 @@ from ..services.codex_chat import (
     normalize_structured_report_preset_id,
     read_codex_app_server_thread,
     refresh_account_usage_snapshot_if_due,
+    submit_usage_keepalive,
     rename_session,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
@@ -1010,6 +1011,30 @@ def codex_usage_refresh():
     return jsonify(response), (200 if refresh.get('refreshed') else 502)
 
 
+@bp.route('/api/codex/usage/keepalive', methods=['POST'])
+def codex_usage_keepalive():
+    """Submit a user-requested minimal Luna/low usage keepalive task."""
+    ensure_usage_snapshot_background_worker()
+    account_id = get_active_account_id()
+    result = submit_usage_keepalive(account_id=account_id)
+    usage = get_usage_summary(account_id=account_id)
+    response = {
+        'usage': usage,
+        'usage_history': get_usage_history_summary(account_id=account_id),
+        'accounts': get_codex_accounts_summary(),
+        'usage_keepalive': result,
+    }
+    if not result.get('submitted'):
+        reasons = {
+            'account_busy': '현재 계정에서 Codex 작업이 실행 중입니다. 완료 후 다시 시도해 주세요.',
+            'account_login_required': '선택한 계정에 로그인이 필요합니다.',
+            'luna_requires_codex_backend': '경량 작업은 Codex backend에서만 실행할 수 있습니다.',
+        }
+        response['error'] = reasons.get(result.get('reason'), '경량 작업을 제출하지 못했습니다.')
+        return jsonify(response), 409
+    return jsonify(response), 202
+
+
 @bp.route('/api/codex/usage/history')
 def codex_usage_history():
     ensure_usage_snapshot_background_worker()
@@ -1108,6 +1133,11 @@ def codex_settings_update():
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
         if app_server_pilot_enabled is None:
             return jsonify({'error': 'app_server_pilot_enabled 값이 올바르지 않습니다.'}), 400
+    usage_keepalive_enabled = None
+    if 'usage_keepalive_enabled' in payload:
+        usage_keepalive_enabled = _to_optional_bool(payload.get('usage_keepalive_enabled'))
+        if usage_keepalive_enabled is None:
+            return jsonify({'error': 'usage_keepalive_enabled 값이 올바르지 않습니다.'}), 400
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
@@ -1184,6 +1214,7 @@ def codex_settings_update():
         agent_backend=agent_backend,
         verification_mode=verification_mode,
         app_server_pilot_enabled=app_server_pilot_enabled,
+        usage_keepalive_enabled=usage_keepalive_enabled,
         git_commit_message_model=git_commit_message_model,
         git_commit_message_reasoning_effort=git_commit_message_reasoning_effort,
     )

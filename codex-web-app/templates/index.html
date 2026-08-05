@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=208">
+    <link rel="stylesheet" href="/static/css/app.css?v=210">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}">
@@ -529,8 +529,19 @@
                                     >
                                         <span class="sr-only">Usage 추이 그래프 열기</span>
                                     </button>
+                                    <button
+                                        class="btn ghost usage-keepalive-submit"
+                                        type="button"
+                                        id="codex-usage-keepalive-submit"
+                                        title="Luna low effort 경량 작업 제출"
+                                    >경량 작업</button>
                                 </div>
                             </div>
+                            <label class="usage-keepalive-toggle" title="정시 자동 조회에서 5시간 사용률 0%를 감지하면 리셋 구간마다 한 번만 Luna low effort 경량 작업을 제출합니다.">
+                                <input type="checkbox" id="codex-usage-keepalive-toggle">
+                                <span>0% 감지 시 경량 작업 자동 실행</span>
+                            </label>
+                            <div class="usage-keepalive-status" id="codex-usage-keepalive-status"></div>
                             <div class="account-switcher">
                                 <label class="sr-only" for="codex-account-select">실행 계정</label>
                                 <select id="codex-account-select" class="model-select account-select" aria-label="실행 계정 선택" disabled>
@@ -1653,6 +1664,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=219"></script>
+    <script src="/static/js/app.js?v=220"></script>
 </body>
 </html>

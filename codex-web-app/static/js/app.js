@@ -112,6 +112,7 @@ const state = {
         usage: null,
         usageHistory: null,
         usageLimitsEnabled: true,
+        usageKeepaliveEnabled: false,
         loaded: false
     }
 };
@@ -2154,6 +2155,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const controls = document.getElementById('codex-controls');
     const usageHistoryOpen = document.getElementById('codex-usage-history-open');
     const usageRefreshBtn = document.getElementById('codex-usage-refresh');
+    const usageKeepaliveSubmitBtn = document.getElementById('codex-usage-keepalive-submit');
+    const usageKeepaliveToggle = document.getElementById('codex-usage-keepalive-toggle');
     const accountSelect = document.getElementById('codex-account-select');
     const accountManageOpen = document.getElementById('codex-account-manage-open');
     const accountOverlay = document.getElementById('codex-account-overlay');
@@ -3114,6 +3117,44 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 usageRefreshBtn.classList.remove('is-spinning');
                 usageRefreshBtn.disabled = false;
+            }
+        });
+    }
+    if (usageKeepaliveSubmitBtn) {
+        usageKeepaliveSubmitBtn.addEventListener('click', async () => {
+            usageKeepaliveSubmitBtn.disabled = true;
+            try {
+                const result = await fetchJson('/api/codex/usage/keepalive', {
+                    method: 'POST', cache: 'no-store'
+                });
+                state.settings.usage = result?.usage || state.settings.usage;
+                state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
+                updateUsageSummary(state.settings.usage);
+                showToast('Luna low effort 경량 작업을 제출했습니다.', { type: 'success' });
+            } catch (error) {
+                showToast(normalizeError(error, '경량 작업을 제출하지 못했습니다.'), { type: 'error' });
+            } finally {
+                usageKeepaliveSubmitBtn.disabled = false;
+            }
+        });
+    }
+    if (usageKeepaliveToggle) {
+        usageKeepaliveToggle.addEventListener('change', async () => {
+            const enabled = Boolean(usageKeepaliveToggle.checked);
+            usageKeepaliveToggle.disabled = true;
+            try {
+                const result = await fetchJson('/api/codex/settings', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ usage_keepalive_enabled: enabled })
+                });
+                state.settings.usageKeepaliveEnabled = Boolean(result?.settings?.usage_keepalive_enabled);
+                updateUsageSummary(state.settings.usage);
+            } catch (error) {
+                usageKeepaliveToggle.checked = !enabled;
+                showToast(normalizeError(error, '자동 경량 작업 설정을 저장하지 못했습니다.'), { type: 'error' });
+            } finally {
+                usageKeepaliveToggle.disabled = false;
             }
         });
     }
@@ -8671,6 +8712,7 @@ async function loadSettings({ silent = true } = {}) {
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
             usageLimitsEnabled: normalizeBooleanPolicyFlag(result?.feature_flags?.usage_limits_enabled, true),
+            usageKeepaliveEnabled: Boolean(result?.settings?.usage_keepalive_enabled),
             loaded: true
         };
         applyCodexAccountsSummary(result?.accounts);
@@ -8802,11 +8844,32 @@ function updateUsageSummary(usage) {
     if (!element) return;
     const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
+    const keepaliveButton = document.getElementById('codex-usage-keepalive-submit');
+    const keepaliveToggle = document.getElementById('codex-usage-keepalive-toggle');
+    const keepaliveStatus = document.getElementById('codex-usage-keepalive-status');
     if (historyButton) {
         const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
             && state.settings.usageHistory.items.length > 1;
         historyButton.classList.toggle('is-hidden', !showUsageLimits);
         historyButton.classList.toggle('is-ready', hasHistory);
+    }
+    if (keepaliveButton) {
+        keepaliveButton.classList.toggle('is-hidden', !showUsageLimits);
+    }
+    if (keepaliveToggle) {
+        keepaliveToggle.checked = Boolean(state.settings?.usageKeepaliveEnabled);
+        keepaliveToggle.closest('.usage-keepalive-toggle')?.classList.toggle('is-hidden', !showUsageLimits);
+    }
+    if (keepaliveStatus) {
+        const keepalive = usage?.usage_keepalive || {};
+        const status = String(keepalive?.last_status || '').trim();
+        const timestamp = formatResetTimestamp(keepalive?.last_completed_at || keepalive?.last_submission_at || keepalive?.last_attempt_at);
+        keepaliveStatus.classList.toggle('is-hidden', !showUsageLimits || (!status && !timestamp));
+        keepaliveStatus.textContent = status || timestamp
+            ? `경량 작업: ${status || '기록됨'}${timestamp ? ` · ${timestamp}` : ''}`
+            : '';
+        if (keepalive?.last_error) keepaliveStatus.title = String(keepalive.last_error);
+        else keepaliveStatus.removeAttribute('title');
     }
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     const tokenUsage = usage?.token_usage || null;
@@ -9335,6 +9398,7 @@ async function updateSettings() {
             : state.settings.agentBackendOptions;
         state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
+        state.settings.usageKeepaliveEnabled = Boolean(result?.settings?.usage_keepalive_enabled);
         state.settings.modelProvider = result?.settings?.model_provider || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
@@ -14752,6 +14816,9 @@ function renderUsageHistoryLegend(history) {
     const postTaskSampleCount = chartItems
         ? chartItems.filter(item => item?.limit_sample_source === 'post_task').length
         : 0;
+    const keepaliveSampleCount = chartItems
+        ? chartItems.filter(item => item?.limit_sample_source === 'post_keepalive').length
+        : 0;
     const missingSampleCount = chartItems
         ? chartItems.filter(item => item?.is_padding || item?.is_missing).length
         : 0;
@@ -14784,6 +14851,12 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: '',
             text: `작업 후 조회 ${formatNumber(postTaskSampleCount)}회`
+        });
+    }
+    if (keepaliveSampleCount > 0) {
+        legendItems.push({
+            key: '',
+            text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Luna low)`
         });
     }
     if (missingSampleCount > 0) {
@@ -14901,6 +14974,8 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         parts.push('수동 조회');
     } else if (item?.limit_sample_source === 'post_task') {
         parts.push('Codex 작업 완료 후 조회');
+    } else if (item?.limit_sample_source === 'post_keepalive') {
+        parts.push('0% 감지/수동 경량 작업 완료 후 조회 (Luna low)');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);

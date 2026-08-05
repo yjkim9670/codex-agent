@@ -1327,17 +1327,13 @@ class GitManager:
         refspec: str,
         log_fn: Callable[[str], None],
     ) -> None:
-        """Run exactly one fetch and derive diagnostics from its real result."""
+        """Fetch one selected branch and emit concise, actionable diagnostics."""
 
         before_stats: Dict[str, str] = {}
         try:
             before_stats = self._get_git_object_store_stats()
-            log_fn(
-                "[Fetch diagnostic] Object store before: "
-                f"{self._format_git_object_store_stats(before_stats)}"
-            )
             cache_state = "warm" if int(before_stats.get("in-pack", "0")) else "cold"
-            log_fn(f"[Fetch diagnostic] Local Git cache: {cache_state} (no extra remote probe)")
+            log_fn(f"[Fetch] cache={cache_state}; protocol=v2; selected branch only; remote prune=deferred")
         except Exception as exc:
             log_fn(f"[Fetch diagnostic] Object-store baseline unavailable: {type(exc).__name__}: {exc}")
 
@@ -1348,7 +1344,7 @@ class GitManager:
         fetch_started_at = time.monotonic()
         try:
             self._run_git_checked(
-                ["git", "fetch", "--no-tags", "--depth", "1", "--prune", "--progress", "origin", refspec],
+                ["git", "-c", "protocol.version=2", "fetch", "--no-tags", "--depth", "1", "--progress", "origin", refspec],
                 timeout=GIT_FETCH_TIMEOUT,
                 env_overrides={"GIT_TRACE2_EVENT": str(trace_path)},
             )
@@ -1362,11 +1358,14 @@ class GitManager:
                 pass
 
         if trace_phases:
-            for phase in ("remote helper", "remote refs", "negotiation", "remote fetch/pack", "fetch-pack", "pack indexing"):
-                if phase in trace_phases:
-                    log_fn(f"[Fetch diagnostic] Trace phase - {phase}: {trace_phases[phase]:.1f}s")
             remote_wait = trace_phases.get("remote helper", 0.0)
             ref_wait = trace_phases.get("remote refs", 0.0)
+            phase_summary = ", ".join(
+                f"{label}={trace_phases[label]:.1f}s"
+                for label in ("remote helper", "remote refs", "negotiation", "remote fetch/pack", "fetch-pack", "pack indexing")
+                if label in trace_phases
+            )
+            log_fn(f"[Fetch diagnostic] {phase_summary or 'Trace2 completed without matched remote phases.'}")
             if remote_wait >= 5.0 and ref_wait >= 5.0:
                 log_fn("[Fetch analysis] Remote refs consumed most of the remote-helper time; inspect GitHub/proxy response before pack transfer.")
             elif remote_wait >= 5.0:
@@ -1376,20 +1375,16 @@ class GitManager:
 
         try:
             after_stats = self._get_git_object_store_stats()
-            log_fn(
-                "[Fetch diagnostic] Object store after: "
-                f"{self._format_git_object_store_stats(after_stats)}"
-            )
             if before_stats and after_stats == before_stats:
                 log_fn(
-                    "[Fetch analysis] No new pack data. A slow fetch is likely remote negotiation, "
+                    "[Fetch result] No new pack data; fetch time was spent on remote negotiation, "
                     "server response, or the corporate network/proxy path."
                 )
             elif before_stats:
                 before_pack = before_stats.get("size-pack", "?")
                 after_pack = after_stats.get("size-pack", "?")
                 log_fn(
-                    "[Fetch analysis] Pack data changed "
+                    "[Fetch result] Pack data changed "
                     f"({before_pack} -> {after_pack}). Compare this with fetch time: large pack growth "
                     "indicates object transfer/pack processing; small growth with a long fetch indicates "
                     "remote response or the network path."

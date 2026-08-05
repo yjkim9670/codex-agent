@@ -918,6 +918,23 @@ def test_usage_history_preserves_automatic_limit_sample_source():
     assert merged[0]['limit_sample_source'] == 'automatic'
 
 
+def test_usage_history_preserves_exact_timestamp_for_post_task_limit_sample():
+    snapshot = {
+        'bucket_start': '2026-07-20T12:00:00+09:00',
+        'recorded_at': '2026-07-20T12:31:02+09:00',
+        'limits_observed_at': '2026-07-20T12:31:02+09:00',
+        'limit_sample_source': 'post_task',
+        'weekly_used_percent': 42,
+    }
+
+    limit_sample, _account_sample, _workspace_sample = (
+        codex_chat._split_usage_history_snapshot(snapshot)
+    )
+
+    assert limit_sample['limit_sample_source'] == 'post_task'
+    assert limit_sample['bucket_start'] == '2026-07-20T12:31:02+09:00'
+
+
 def test_usage_history_does_not_count_pre_scope_limits_as_token_growth():
     limit_samples = [
         {

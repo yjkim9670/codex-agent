@@ -5951,7 +5951,7 @@ def _normalize_usage_history_snapshot(value):
     limit_sample_source = str(
         value.get('limit_sample_source') or value.get('limits_sample_source') or ''
     ).strip().lower()
-    if limit_sample_source not in {'automatic', 'manual'}:
+    if limit_sample_source not in {'automatic', 'manual', 'post_task'}:
         limit_sample_source = ''
     return {
         'bucket_start': bucket_start,
@@ -6018,15 +6018,22 @@ def _split_usage_history_snapshot(snapshot):
     if normalized is None:
         return None, None, None
 
+    limit_source = normalized.get('limit_sample_source') or ''
+    limit_observed_at = normalized.get('limits_observed_at') or normalized['recorded_at']
+    # A chat-completion refresh is an event, not an hourly roll-up. Preserve
+    # its exact observation time so several completed tasks in one hour do not
+    # overwrite one another in the account-limit history.
+    observed_time = parse_timestamp(limit_observed_at)
+    limit_bucket = (
+        normalize_timestamp(observed_time)
+        if limit_source == 'post_task' and observed_time is not None
+        else _usage_history_bucket_start_text(limit_observed_at)
+    )
     limit_sample = {
-        'bucket_start': _usage_history_bucket_start_text(
-            normalized.get('limits_observed_at') or normalized.get('bucket_start')
-        ),
+        'bucket_start': limit_bucket,
         'recorded_at': normalized['recorded_at'],
-        'limits_observed_at': (
-            normalized.get('limits_observed_at') or normalized['recorded_at']
-        ),
-        'limit_sample_source': normalized.get('limit_sample_source') or '',
+        'limits_observed_at': limit_observed_at,
+        'limit_sample_source': limit_source,
         'five_hour_used_percent': normalized.get('five_hour_used_percent'),
         'weekly_used_percent': normalized.get('weekly_used_percent'),
         'five_hour_resets_at': normalized.get('five_hour_resets_at') or '',
@@ -6330,7 +6337,7 @@ def _build_usage_history_snapshot(usage_summary, limit_sample_source=None):
     five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
     weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
     normalized_limit_source = str(limit_sample_source or '').strip().lower()
-    if normalized_limit_source not in {'automatic', 'manual'}:
+    if normalized_limit_source not in {'automatic', 'manual', 'post_task'}:
         normalized_limit_source = ''
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
@@ -6739,30 +6746,35 @@ def _build_usage_history_time_slots(history_items, window_start, window_end):
     client preserve elapsed time while rendering the interval as unmeasured,
     rather than as zero usage.
     """
-    samples_by_bucket = {}
+    samples_by_timestamp = {}
     for item in history_items:
         bucket = parse_timestamp(item.get('bucket_start'))
         if bucket is None:
             continue
-        bucket = bucket.astimezone(KST).replace(minute=0, second=0, microsecond=0)
+        bucket = bucket.astimezone(KST)
         if window_start <= bucket <= window_end:
-            samples_by_bucket[normalize_timestamp(bucket)] = {
+            samples_by_timestamp[normalize_timestamp(bucket)] = {
                 **item,
                 'is_padding': False,
                 'is_missing': False,
             }
 
-    slots = []
+    # Preserve exact post-task observations alongside the one-hour timeline.
+    # Hour markers with no sample remain explicit missing data instead of a
+    # fabricated zero, while several task completions in the same hour remain
+    # separate graph points.
+    slots = list(samples_by_timestamp.values())
     current = window_start
     while current <= window_end:
         bucket_start = normalize_timestamp(current)
-        slots.append(samples_by_bucket.get(bucket_start, {
-            'bucket_start': bucket_start,
-            'is_padding': True,
-            'is_missing': True,
-        }))
+        if bucket_start not in samples_by_timestamp:
+            slots.append({
+                'bucket_start': bucket_start,
+                'is_padding': True,
+                'is_missing': True,
+            })
         current += timedelta(hours=1)
-    return slots
+    return sorted(slots, key=lambda item: item.get('bucket_start') or '')
 
 
 def _tokens_per_percent_confidence(sample_count, percent_sum):
@@ -7026,8 +7038,13 @@ def get_usage_history_summary(
         scope=requested_scope,
     )
     all_history_items = _build_usage_history_items(items, plan_periods=plan_periods)
-    window_end = datetime.now(KST).replace(minute=0, second=0, microsecond=0)
-    window_start = window_end - timedelta(hours=max(0, requested_hours - 1))
+    # Keep the live portion of the current KST hour in view so a task that
+    # just completed is visible immediately rather than waiting for the next
+    # hourly boundary.
+    window_end = datetime.now(KST)
+    window_start = window_end.replace(minute=0, second=0, microsecond=0) - timedelta(
+        hours=max(0, requested_hours - 1)
+    )
     history_items = [
         item for item in all_history_items
         if (
@@ -7050,9 +7067,7 @@ def get_usage_history_summary(
         latest_available_bucket is not None
         and latest_available_bucket.astimezone(KST) < window_end - timedelta(days=7)
     ):
-        window_end = latest_available_bucket.astimezone(KST).replace(
-            minute=0, second=0, microsecond=0
-        )
+        window_end = latest_available_bucket.astimezone(KST)
         window_start = window_end - timedelta(hours=max(0, requested_hours - 1))
         history_items = [
             item for item in all_history_items
@@ -7375,7 +7390,8 @@ def _account_usage_refresh_is_due(snapshot, now=None):
     return last_slot is None or last_slot < slot
 
 
-def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
+def refresh_account_usage_snapshot_if_due(
+        account_id=None, force=False, limit_sample_source=None):
     context = _account_storage_context(account_id)
     if context is None:
         return {'refreshed': False, 'error': 'account_not_found'}
@@ -7427,11 +7443,14 @@ def refresh_account_usage_snapshot_if_due(account_id=None, force=False):
                 'error': '',
             }
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+            resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
+            if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task'}:
+                resolved_limit_sample_source = 'manual' if force else 'automatic'
             record_usage_snapshot_if_due(
                 force=True,
                 usage_summary=get_usage_summary(account_id=context['account']['id']),
                 account_id=context['account']['id'],
-                limit_sample_source='manual' if force else 'automatic',
+                limit_sample_source=resolved_limit_sample_source,
             )
             return {'refreshed': True, 'snapshot': snapshot}
         except Exception as exc:
@@ -13784,6 +13803,17 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         duration_ms=metadata.get('duration_ms'),
         metadata={'finalize_reason': finalize_reason, 'execution_policy': execution_policy},
     )
+    # Store a fresh account-limit observation for every completed Codex task.
+    # This intentionally bypasses the two-hour scheduler; the scheduler still
+    # owns only its KST on-the-hour automatic samples.
+    try:
+        refresh_account_usage_snapshot_if_due(
+            account_id=account_id,
+            force=True,
+            limit_sample_source='post_task',
+        )
+    except Exception:
+        _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
     if trigger_queue:
         trigger_next_queued_codex_stream(session_id)
     return saved_message

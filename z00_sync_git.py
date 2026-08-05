@@ -1216,12 +1216,10 @@ class GitManager:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                 self.io_semaphore.release(io_lock, log_callback)
         finally:
-            git_dir = self.cwd / ".git"
-            try:
-                if self._path_lexists(git_dir):
-                    self._remove_git_dir(git_dir, "post-sync cleanup", log_callback)
-            except Exception as e:
-                log_callback(f"Warning: Failed to remove .git folder after sync: {e}")
+            # The Git method intentionally retains .git as an on-disk fetch cache.
+            # ZIP sync owns no reusable Git state and continues to remove it above.
+            if method == "git":
+                log_callback("Retained .git metadata for the next incremental sync.")
             for rel_dir, snapshot_root in reversed(preserved_dirs):
                 self._restore_local_dir(rel_dir, snapshot_root, log_callback)
 
@@ -1282,28 +1280,10 @@ class GitManager:
 
     def _run_fetch_with_diagnostics(
         self,
-        branch: str,
         refspec: str,
         log_fn: Callable[[str], None],
     ) -> None:
-        """Fetch once while logging enough evidence to isolate a persistent delay.
-
-        The short ls-remote probe measures connection, authentication and remote
-        ref advertisement separately from the actual pack negotiation/download.
-        It is diagnostic only: failure is logged but never blocks the real fetch.
-        """
-        probe_started_at = time.monotonic()
-        try:
-            self._run_git_checked(
-                ["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"],
-                timeout=GIT_BRANCH_TIMEOUT,
-            )
-            log_fn(
-                "[Fetch diagnostic] Remote connection/auth/ref lookup: "
-                f"{time.monotonic() - probe_started_at:.1f}s"
-            )
-        except Exception as exc:
-            log_fn(f"[Fetch diagnostic] Remote probe unavailable: {type(exc).__name__}: {exc}")
+        """Run exactly one fetch and derive diagnostics from its real result."""
 
         before_stats: Dict[str, str] = {}
         try:
@@ -1312,6 +1292,8 @@ class GitManager:
                 "[Fetch diagnostic] Object store before: "
                 f"{self._format_git_object_store_stats(before_stats)}"
             )
+            cache_state = "warm" if int(before_stats.get("in-pack", "0")) else "cold"
+            log_fn(f"[Fetch diagnostic] Local Git cache: {cache_state} (no extra remote probe)")
         except Exception as exc:
             log_fn(f"[Fetch diagnostic] Object-store baseline unavailable: {type(exc).__name__}: {exc}")
 
@@ -1322,7 +1304,8 @@ class GitManager:
                 timeout=GIT_FETCH_TIMEOUT,
             )
         finally:
-            log_fn(f"[Timing] Git fetch: {time.monotonic() - fetch_started_at:.1f}s")
+            fetch_seconds = time.monotonic() - fetch_started_at
+            log_fn(f"[Timing] Git fetch: {fetch_seconds:.1f}s")
 
         try:
             after_stats = self._get_git_object_store_stats()
@@ -1332,13 +1315,17 @@ class GitManager:
             )
             if before_stats and after_stats == before_stats:
                 log_fn(
-                    "[Fetch diagnostic] Interpretation: no local pack growth. A slow fetch here points "
-                    "to remote negotiation/server response or the corporate network path."
+                    "[Fetch analysis] No new pack data. A slow fetch is likely remote negotiation, "
+                    "server response, or the corporate network/proxy path."
                 )
             elif before_stats:
+                before_pack = before_stats.get("size-pack", "?")
+                after_pack = after_stats.get("size-pack", "?")
                 log_fn(
-                    "[Fetch diagnostic] Interpretation: local pack data changed. Compare this fetch time "
-                    "with the remote-probe time to distinguish object transfer/pack processing from connection delay."
+                    "[Fetch analysis] Pack data changed "
+                    f"({before_pack} -> {after_pack}). Compare this with fetch time: large pack growth "
+                    "indicates object transfer/pack processing; small growth with a long fetch indicates "
+                    "remote response or the network path."
                 )
         except Exception as exc:
             log_fn(f"[Fetch diagnostic] Object-store result unavailable: {type(exc).__name__}: {exc}")
@@ -1641,7 +1628,7 @@ class GitManager:
 
             log_fn("Running optimized sync: selected-branch fetch -> checkout -> reset -> mirror-clean")
             refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-            self._run_fetch_with_diagnostics(branch, refspec, log_fn)
+            self._run_fetch_with_diagnostics(refspec, log_fn)
             target_ref = f"origin/{branch}"
             snapshot = self.get_local_ref_snapshot(target_ref)
             log_fn(
@@ -2736,7 +2723,6 @@ class GuiApp:
         self.is_syncing = False
         self.is_refreshing = False
         self.cancel_refresh = False  # Flag to cancel ongoing refresh
-        self._progress_animating = False
 
         # Archive backup settings
         self.archive_dir = DEFAULT_ARCHIVE_DIR
@@ -3016,8 +3002,9 @@ class GuiApp:
         scrollbar.grid(row=1, column=1, sticky="ns")
         self.branch_tree.config(yscrollcommand=scrollbar.set)
 
-        # Progress Bar (Indeterminate)
-        self.progress = ttk.Progressbar(self.root, mode="indeterminate")
+        # A state indicator is intentionally static.  Repeated animated Tk timers
+        # compete with file updates when several app windows sync at once.
+        self.progress = ttk.Progressbar(self.root, mode="determinate", maximum=100, value=0)
         self.progress.pack(fill="x", padx=20, pady=(0, 5))
 
         # Action Area
@@ -3037,8 +3024,13 @@ class GuiApp:
         self.btn_sync.grid(row=0, column=2, sticky="e")
 
         # Log Area
-        log_frame = ttk.LabelFrame(self.root, text="Activity Log", padding=5)
+        log_frame = ttk.Frame(self.root)
         log_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        log_header = ttk.Frame(log_frame)
+        log_header.pack(fill="x", pady=(0, 5))
+        ttk.Label(log_header, text="Activity Log", style="LabelBold.TLabel").pack(side="left")
+        ttk.Button(log_header, text="Clear", command=self.clear_activity_log).pack(side="right")
 
         self.log_widget = scrolledtext.ScrolledText(
             log_frame,
@@ -3056,6 +3048,13 @@ class GuiApp:
             pady=10
         )
         self.log_widget.pack(fill="both", expand=True)
+
+    def clear_activity_log(self) -> None:
+        """Clear only the on-screen log; Python's normal logging remains active."""
+        self.log_widget.configure(state="normal")
+        self.log_widget.delete("1.0", "end")
+        self.log_widget.configure(state="disabled")
+        self.status_var.set("Activity log cleared.")
 
     def _on_office_drm_mode_changed(self) -> None:
         self.skip_office_drm_var.set(self.office_drm_mode_var.get() == "exclude")
@@ -3679,16 +3678,14 @@ class GuiApp:
         # Branch tree: always enabled (can select even during operations)
         # Treeview doesn't have a state property like Listbox, so no action needed
 
-        # Progressbar.start() schedules a recurring Tk timer.  Guard it so
-        # repeated control updates cannot create competing animation callbacks;
-        # 50 ms (20 fps) remains smooth while several app windows are syncing.
-        should_animate = self.is_syncing or self.is_refreshing
-        if should_animate and not self._progress_animating:
-            self.progress.start(50)
-            self._progress_animating = True
-        elif not should_animate and self._progress_animating:
-            self.progress.stop()
-            self._progress_animating = False
+        # Static state feedback avoids per-window animation timers while sync
+        # workers are doing I/O.  Sync wins when refresh and sync overlap.
+        if self.is_syncing:
+            self.progress.configure(value=65)
+        elif self.is_refreshing:
+            self.progress.configure(value=35)
+        else:
+            self.progress.configure(value=0)
 
     # --- Async Tasks ---
 

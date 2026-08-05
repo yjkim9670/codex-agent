@@ -14749,6 +14749,9 @@ function renderUsageHistoryLegend(history) {
     const automaticSampleCount = chartItems
         ? chartItems.filter(item => item?.limit_sample_source === 'automatic').length
         : 0;
+    const postTaskSampleCount = chartItems
+        ? chartItems.filter(item => item?.limit_sample_source === 'post_task').length
+        : 0;
     const missingSampleCount = chartItems
         ? chartItems.filter(item => item?.is_padding || item?.is_missing).length
         : 0;
@@ -14775,6 +14778,12 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: 'automatic-sample',
             text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 짝수시 정각 · 최대 30분 보정)`
+        });
+    }
+    if (postTaskSampleCount > 0) {
+        legendItems.push({
+            key: '',
+            text: `작업 후 조회 ${formatNumber(postTaskSampleCount)}회`
         });
     }
     if (missingSampleCount > 0) {
@@ -14890,6 +14899,8 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         parts.push('자동 조회 (KST 짝수시 정각 · 최대 30분 보정)');
     } else if (item?.limit_sample_source === 'manual') {
         parts.push('수동 조회');
+    } else if (item?.limit_sample_source === 'post_task') {
+        parts.push('Codex 작업 완료 후 조회');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
@@ -15412,8 +15423,10 @@ function renderUsageHistoryChart(history) {
         let segment = [];
         values.forEach((value, index) => {
             if (!Number.isFinite(value)) {
-                if (segment.length > 0) segments.push(segment);
-                segment = [];
+                // Missing hourly slots are a time-axis aid, not a zero or a
+                // discontinuity in the observed account-limit series. Keep
+                // the last segment open so scheduled automatic samples (and
+                // task-completion samples) remain connected across gaps.
                 return;
             }
             const item = items[index] || {};

@@ -1228,8 +1228,11 @@ class GitManager:
         command: List[str],
         timeout: int,
         cwd: Optional[Path] = None,
+        env_overrides: Optional[Dict[str, str]] = None,
     ) -> str:
         env = _git_env()
+        if env_overrides:
+            env.update(env_overrides)
         workdir = cwd or self.cwd
         try:
             completed = subprocess.run(
@@ -1278,6 +1281,47 @@ class GitManager:
             f"pack-size={stats.get('size-pack', '?')}, loose={stats.get('count', '?')}"
         )
 
+    @staticmethod
+    def _read_fetch_trace(trace_path: Path) -> Dict[str, float]:
+        """Extract stable phase timings from the Trace2 output of one fetch."""
+        phases: Dict[str, float] = {}
+        children: Dict[Tuple[str, int], str] = {}
+        try:
+            for line in trace_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                elapsed = event.get("t_rel")
+                if not isinstance(elapsed, (int, float)):
+                    elapsed = None
+                if event.get("event") == "child_start":
+                    child_key = (str(event.get("sid", "")), int(event.get("child_id", -1)))
+                    children[child_key] = f"{' '.join(str(part) for part in event.get('argv', []))} {event.get('child_class', '')}".lower()
+                elif elapsed is None:
+                    continue
+                elif event.get("event") == "region_leave":
+                    category = str(event.get("category", "")).lower()
+                    label = str(event.get("label", "")).lower()
+                    if category == "fetch" and label == "fetch_refs":
+                        phases["remote fetch/pack"] = max(phases.get("remote fetch/pack", 0.0), elapsed)
+                    elif "remote_ref" in label or (category == "fetch" and "ref" in label):
+                        phases["remote refs"] = max(phases.get("remote refs", 0.0), elapsed)
+                    elif "negotiat" in label or "negotiat" in category:
+                        phases["negotiation"] = max(phases.get("negotiation", 0.0), elapsed)
+                elif event.get("event") == "child_exit":
+                    child_key = (str(event.get("sid", "")), int(event.get("child_id", -1)))
+                    description = children.get(child_key, "")
+                    if "remote-http" in description or "remote-curl" in description or "transport/http" in description:
+                        phases["remote helper"] = max(phases.get("remote helper", 0.0), elapsed)
+                    elif "index-pack" in description:
+                        phases["pack indexing"] = max(phases.get("pack indexing", 0.0), elapsed)
+                    elif "fetch-pack" in description:
+                        phases["fetch-pack"] = max(phases.get("fetch-pack", 0.0), elapsed)
+        except OSError:
+            return {}
+        return phases
+
     def _run_fetch_with_diagnostics(
         self,
         refspec: str,
@@ -1297,15 +1341,38 @@ class GitManager:
         except Exception as exc:
             log_fn(f"[Fetch diagnostic] Object-store baseline unavailable: {type(exc).__name__}: {exc}")
 
+        trace_fd, trace_name = tempfile.mkstemp(prefix="git_fetch_trace2_", suffix=".json")
+        os.close(trace_fd)
+        trace_path = Path(trace_name)
+        trace_phases: Dict[str, float] = {}
         fetch_started_at = time.monotonic()
         try:
             self._run_git_checked(
                 ["git", "fetch", "--no-tags", "--depth", "1", "--prune", "--progress", "origin", refspec],
                 timeout=GIT_FETCH_TIMEOUT,
+                env_overrides={"GIT_TRACE2_EVENT": str(trace_path)},
             )
         finally:
             fetch_seconds = time.monotonic() - fetch_started_at
             log_fn(f"[Timing] Git fetch: {fetch_seconds:.1f}s")
+            trace_phases = self._read_fetch_trace(trace_path)
+            try:
+                trace_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        if trace_phases:
+            for phase in ("remote helper", "remote refs", "negotiation", "remote fetch/pack", "fetch-pack", "pack indexing"):
+                if phase in trace_phases:
+                    log_fn(f"[Fetch diagnostic] Trace phase - {phase}: {trace_phases[phase]:.1f}s")
+            remote_wait = trace_phases.get("remote helper", 0.0)
+            ref_wait = trace_phases.get("remote refs", 0.0)
+            if remote_wait >= 5.0 and ref_wait >= 5.0:
+                log_fn("[Fetch analysis] Remote refs consumed most of the remote-helper time; inspect GitHub/proxy response before pack transfer.")
+            elif remote_wait >= 5.0:
+                log_fn("[Fetch analysis] The remote helper was slow; this includes connection, authentication, server response, and any pack transfer.")
+        else:
+            log_fn("[Fetch diagnostic] Trace2 phase markers were unavailable; fetch behavior was unchanged.")
 
         try:
             after_stats = self._get_git_object_store_stats()

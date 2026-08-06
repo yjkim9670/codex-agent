@@ -192,7 +192,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
-_USAGE_ACCOUNT_REFRESH_SECONDS = 4 * 60 * 60
+_USAGE_ACCOUNT_REFRESH_SECONDS = 2 * 60 * 60
 _USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
@@ -7372,17 +7372,17 @@ def _normalize_account_usage_api_result(value):
 
 
 def _account_usage_refresh_slot(now=None):
-    """Return the current KST four-hour slot during its 30-minute grace window."""
+    """Return the current KST two-hour slot during its 30-minute grace window."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
     slot = current.replace(minute=0, second=0, microsecond=0)
-    if current.hour % 4 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
+    if current.hour % 2 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
         return None
     return slot
 
 
 def _account_usage_refresh_is_due(snapshot, now=None):
-    """Run once per four-hour KST slot, allowing a 30-minute missed-slot catch-up."""
+    """Run once per two-hour KST slot, allowing a 30-minute missed-slot catch-up."""
     slot = _account_usage_refresh_slot(now)
     if slot is None:
         return False
@@ -7596,7 +7596,7 @@ def refresh_account_usage_snapshot_if_due(
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_4_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_refresh_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
                 ),
@@ -7633,7 +7633,7 @@ def refresh_account_usage_snapshot_if_due(
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_4_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_attempt_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
                 ),

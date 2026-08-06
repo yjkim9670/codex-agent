@@ -226,7 +226,10 @@ check_global_requirements() {
         return 1
     fi
 
-    if "${python_bin}" -c "import flask, cryptography" >/dev/null 2>&1; then
+    # cryptography may import successfully even when its CFFI extension was built
+    # for another Python minor version.  Verify that extension explicitly so a
+    # manager restart fails fast instead of entering an auto-restart loop.
+    if "${python_bin}" -c "import flask, cryptography, _cffi_backend" >/dev/null 2>&1; then
         return 0
     fi
 

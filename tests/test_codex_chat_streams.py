@@ -936,6 +936,41 @@ def test_usage_history_preserves_automatic_limit_sample_source():
     assert merged[0]['limit_sample_source'] == 'automatic'
 
 
+def test_usage_history_keeps_automatic_limit_sample_when_later_source_is_empty(
+        isolated_codex_workspace, monkeypatch):
+    automatic_snapshot = {
+        'bucket_start': '2026-07-20T12:00:00+09:00',
+        'recorded_at': '2026-07-20T12:05:00+09:00',
+        'limits_observed_at': '2026-07-20T12:05:00+09:00',
+        'limit_sample_source': 'automatic',
+        'weekly_used_percent': 42,
+    }
+    passive_snapshot = {
+        **automatic_snapshot,
+        'recorded_at': '2026-07-20T12:51:00+09:00',
+        'limits_observed_at': '2026-07-20T12:51:00+09:00',
+        'limit_sample_source': '',
+        'weekly_used_percent': 43,
+    }
+    snapshots = iter((automatic_snapshot, passive_snapshot))
+    monkeypatch.setattr(
+        codex_chat,
+        '_build_usage_history_snapshot',
+        lambda _usage, limit_sample_source=None: next(snapshots),
+    )
+
+    codex_chat.record_usage_snapshot_if_due(usage_summary={})
+    codex_chat.record_usage_snapshot_if_due(usage_summary={})
+
+    ledger = codex_chat._load_usage_history_ledger(
+        path=isolated_codex_workspace['usage_history_path'],
+    )
+    limit_sample = ledger['account_limit_samples'][0]
+    assert limit_sample['limit_sample_source'] == 'automatic'
+    assert limit_sample['limits_observed_at'] == automatic_snapshot['limits_observed_at']
+    assert limit_sample['weekly_used_percent'] == 42
+
+
 def test_usage_history_preserves_exact_timestamp_for_post_task_limit_sample():
     snapshot = {
         'bucket_start': '2026-07-20T12:00:00+09:00',

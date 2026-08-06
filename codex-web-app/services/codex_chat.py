@@ -6424,6 +6424,18 @@ def record_usage_snapshot_if_due(
                         or existing.get('recorded_at')
                         or ''
                     )
+                    # The background worker and passive Usage-panel reads can
+                    # refresh token totals without identifying a rate-limit
+                    # sample source.  They must not replace an on-schedule
+                    # automatic sample in the same hourly bucket: doing so
+                    # would make the scheduled sample lose its graph marker.
+                    # Explicitly sourced samples (manual/post-task/etc.) keep
+                    # their normal latest-observation behaviour.
+                    if (
+                        existing.get('limit_sample_source') == 'automatic'
+                        and not candidate.get('limit_sample_source')
+                    ):
+                        return False
                     if force_update or candidate_timestamp > existing_timestamp:
                         if existing != candidate:
                             collection[existing_index] = candidate

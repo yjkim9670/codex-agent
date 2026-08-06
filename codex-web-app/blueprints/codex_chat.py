@@ -141,6 +141,7 @@ from ..services.file_browser import (
     FileBrowserError,
     build_download_payload,
     build_mail_archive_payload,
+    create_directory,
     create_file,
     delete_directory,
     delete_files,
@@ -2210,6 +2211,23 @@ def codex_files_create():
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
             content=payload.get('content', ''),
+        )
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+    return jsonify(result)
+
+
+@bp.route('/api/codex/files/create-directory', methods=['POST'])
+def codex_files_create_directory():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        result = create_directory(
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
         )
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code

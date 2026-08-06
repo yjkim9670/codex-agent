@@ -1019,6 +1019,19 @@ def test_create_file_creates_blank_text_file(isolated_browser_roots):
     assert (server_root / 'docs' / 'new-note.txt').read_text(encoding='utf-8') == ''
 
 
+def test_create_directory_creates_folder_in_existing_parent(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs').mkdir(parents=True, exist_ok=True)
+
+    created = file_browser.create_directory(
+        root_key='server',
+        relative_path='docs/new-folder',
+    )
+
+    assert created == {'created': True, 'path': 'docs/new-folder', 'type': 'directory'}
+    assert (server_root / 'docs' / 'new-folder').is_dir()
+
+
 def test_delete_directory_removes_nested_folder(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     target = server_root / 'docs' / 'nested'
@@ -1049,6 +1062,24 @@ def test_create_route_creates_file(browser_test_client, isolated_browser_roots):
     assert payload['created'] is True
     assert payload['content'] == 'print("ok")\n'
     assert (server_root / 'docs' / 'from-route.py').read_text(encoding='utf-8') == 'print("ok")\n'
+
+
+def test_create_directory_route_creates_folder(browser_test_client, isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs').mkdir(parents=True, exist_ok=True)
+
+    response = browser_test_client.post(
+        '/api/codex/files/create-directory',
+        json={'root': 'server', 'path': 'docs/from-route'},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        'created': True,
+        'path': 'docs/from-route',
+        'type': 'directory',
+    }
+    assert (server_root / 'docs' / 'from-route').is_dir()
 
 
 def test_upload_route_saves_files_to_current_folder(browser_test_client, isolated_browser_roots):

@@ -2189,6 +2189,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeMobileBrowserBtn = document.getElementById('codex-work-mode-mobile-browser');
     const workModeFileFullscreenBtn = document.getElementById('codex-work-mode-file-fullscreen');
     const workModeFileNewFileBtn = document.getElementById('codex-work-mode-file-new-file');
+    const workModeFileNewFolderBtn = document.getElementById('codex-work-mode-file-new-folder');
     const workModeFileUploadBtn = document.getElementById('codex-work-mode-file-upload');
     const workModeFileUploadInput = document.getElementById('codex-work-mode-file-upload-input');
     const workModeFileDeleteDirectoryBtn = document.getElementById('codex-work-mode-file-delete-directory');
@@ -2261,6 +2262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserRenameCurrentBtn = document.getElementById('codex-file-browser-rename-current');
     const fileBrowserDeleteCurrentBtn = document.getElementById('codex-file-browser-delete-current');
     const fileBrowserNewFileBtn = document.getElementById('codex-file-browser-new-file');
+    const fileBrowserNewFolderBtn = document.getElementById('codex-file-browser-new-folder');
     const fileBrowserUploadBtn = document.getElementById('codex-file-browser-upload');
     const fileBrowserUploadInput = document.getElementById('codex-file-browser-upload-input');
     const fileBrowserDeleteDirectoryBtn = document.getElementById('codex-file-browser-delete-directory');
@@ -2625,6 +2627,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileNewFileBtn) {
         workModeFileNewFileBtn.addEventListener('click', () => {
             void createFileInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileNewFolderBtn) {
+        workModeFileNewFolderBtn.addEventListener('click', () => {
+            void createDirectoryInFilePanel(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileUploadBtn && workModeFileUploadInput) {
@@ -3251,6 +3258,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserNewFileBtn) {
         fileBrowserNewFileBtn.addEventListener('click', () => {
             void createFileInFilePanel(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserNewFolderBtn) {
+        fileBrowserNewFolderBtn.addEventListener('click', () => {
+            void createDirectoryInFilePanel(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserUploadBtn && fileBrowserUploadInput) {
@@ -5176,6 +5188,7 @@ function getFilePanelElementsByPrefix({
         selectionSummary: byId('selection-summary'),
         selectionActions: byId('selection-actions'),
         newFileBtn: byId('new-file'),
+        newFolderBtn: byId('new-folder'),
         deleteDirectoryBtn: byId('delete-directory'),
         addContextBtn: byId('add-context'),
         moveBtn: byId('move'),
@@ -18039,6 +18052,14 @@ function syncFilePanelSelectionBar(variant) {
         elements.newFileBtn.disabled = isBusy;
         syncHoverTooltipFromLabel(elements.newFileBtn);
     }
+    if (elements.newFolderBtn) {
+        updateFilePanelActionButtonLabel(
+            elements.newFolderBtn,
+            `현재 폴더에 새 폴더 만들기 (${currentDisplayPath})`
+        );
+        elements.newFolderBtn.disabled = isBusy;
+        syncHoverTooltipFromLabel(elements.newFolderBtn);
+    }
     if (elements.uploadBtn) {
         updateFilePanelActionButtonLabel(
             elements.uploadBtn,
@@ -19742,6 +19763,18 @@ async function createFilePanelFile(root, path, content = '') {
     });
 }
 
+async function createFilePanelDirectory(root, path) {
+    return fetchJson('/api/codex/files/create-directory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
+        body: JSON.stringify({
+            root: normalizeFileBrowserRoot(root),
+            path: normalizeFileBrowserRelativePath(path)
+        })
+    });
+}
+
 function uploadJsonWithProgress(url, formData, { timeoutMs = 0, onUploadProgress = null } = {}) {
     return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
@@ -20086,6 +20119,56 @@ async function createFileInFilePanel(variant) {
         return true;
     } catch (error) {
         showToast(normalizeError(error, '새 파일 생성에 실패했습니다.'), {
+            tone: 'error',
+            durationMs: 4200
+        });
+        return false;
+    } finally {
+        setFilePanelBulkActionInFlight(normalizedVariant, false);
+    }
+}
+
+async function createDirectoryInFilePanel(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) {
+        return false;
+    }
+
+    const root = getFilePanelCurrentRoot(normalizedVariant);
+    const currentPath = getFilePanelCurrentPath(normalizedVariant);
+    const requestedName = window.prompt(
+        '현재 폴더 기준 새 폴더 이름을 입력하세요.',
+        '새 폴더'
+    );
+    if (requestedName === null) return false;
+
+    const targetPath = buildFileBrowserChildPath(currentPath, requestedName);
+    if (!targetPath) {
+        showToast('새 폴더 이름을 입력하세요.', {
+            tone: 'error',
+            durationMs: 3200
+        });
+        return false;
+    }
+
+    const scrollSnapshot = captureFilePanelListScrollSnapshot(normalizedVariant);
+    setFilePanelBulkActionInFlight(normalizedVariant, true);
+    try {
+        await createFilePanelDirectory(root, targetPath);
+        clearFilePanelSelection(normalizedVariant);
+        await refreshFilePanelDirectoryForVariant(normalizedVariant, {
+            root,
+            path: currentPath,
+            force: true,
+            restoreScrollSnapshot: scrollSnapshot
+        });
+        showToast(`새 폴더를 만들었습니다: ${targetPath}`, {
+            tone: 'success',
+            durationMs: 2600
+        });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '새 폴더 생성에 실패했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });

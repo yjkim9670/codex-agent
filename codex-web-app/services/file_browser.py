@@ -1174,6 +1174,54 @@ def create_file(root_key=None, relative_path='', content=''):
     return created_state
 
 
+def create_directory(root_key=None, relative_path=''):
+    normalized_root, root_path = _normalize_root_key(root_key)
+    _ensure_mutable_root(normalized_root)
+    normalized_path = _normalize_relative_path(relative_path)
+    if not normalized_path:
+        raise FileBrowserError(
+            '폴더 경로를 입력해주세요.',
+            error_code='invalid_path',
+            status_code=400,
+        )
+
+    target_path = _resolve_target_path(root_path, normalized_path)
+    if target_path.exists():
+        raise FileBrowserError(
+            f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {normalized_path}',
+            error_code='path_conflict',
+            status_code=409,
+        )
+    parent_path = target_path.parent
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise FileBrowserError(
+            '대상 폴더를 찾을 수 없습니다.',
+            error_code='path_not_found',
+            status_code=404,
+        )
+
+    try:
+        target_path.mkdir()
+    except FileExistsError as exc:
+        raise FileBrowserError(
+            f'같은 경로의 파일 또는 폴더가 이미 존재합니다: {normalized_path}',
+            error_code='path_conflict',
+            status_code=409,
+        ) from exc
+    except OSError as exc:
+        raise FileBrowserError(
+            f'폴더를 만들지 못했습니다: {exc}',
+            error_code='write_error',
+            status_code=500,
+        ) from exc
+
+    return {
+        'created': True,
+        'path': normalized_path,
+        'type': 'directory',
+    }
+
+
 def upload_files(root_key=None, relative_path='', file_storages=None):
     normalized_root, root_path = _normalize_root_key(root_key)
     _ensure_mutable_root(normalized_root)

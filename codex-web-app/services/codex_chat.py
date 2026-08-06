@@ -192,7 +192,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
-_USAGE_ACCOUNT_REFRESH_SECONDS = 2 * 60 * 60
+_USAGE_ACCOUNT_REFRESH_SECONDS = 4 * 60 * 60
 _USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
@@ -2447,7 +2447,6 @@ def _read_workspace_settings():
         'agent_backend': agent_backend,
         'verification_mode': verification_mode,
         'app_server_pilot_enabled': app_server_pilot_enabled,
-        'usage_keepalive_enabled': bool(data.get('usage_keepalive_enabled', False)),
         'git_commit_message_model': git_commit_message_model,
         'git_commit_message_reasoning_effort': git_commit_message_reasoning_effort,
     }
@@ -2465,7 +2464,6 @@ def _write_workspace_settings(settings):
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
-        'usage_keepalive_enabled': bool(settings.get('usage_keepalive_enabled', False)),
         'git_commit_message_model': (
             resolve_codex_git_commit_message_model(settings.get('git_commit_message_model'))
         ),
@@ -2947,7 +2945,6 @@ def get_settings():
         'agent_backend': _normalize_agent_backend_setting(None),
         'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
-        'usage_keepalive_enabled': False,
         'git_commit_message_model': resolve_codex_git_commit_message_model(),
         'git_commit_message_reasoning_effort': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     })
@@ -2962,7 +2959,6 @@ def update_settings(
         agent_backend=None,
         verification_mode=None,
         app_server_pilot_enabled=None,
-        usage_keepalive_enabled=None,
         git_commit_message_model=None,
         git_commit_message_reasoning_effort=None):
     with _CONFIG_LOCK:
@@ -2988,7 +2984,6 @@ def update_settings(
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
-            'usage_keepalive_enabled': bool(current.get('usage_keepalive_enabled', False)),
             'git_commit_message_model': (
                 resolve_codex_git_commit_message_model(current.get('git_commit_message_model'))
             ),
@@ -3015,8 +3010,6 @@ def update_settings(
             next_settings['verification_mode'] = normalize_verification_mode(verification_mode)
         if app_server_pilot_enabled is not None:
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
-        if usage_keepalive_enabled is not None:
-            next_settings['usage_keepalive_enabled'] = bool(usage_keepalive_enabled)
         if git_commit_message_model is not None:
             next_settings['git_commit_message_model'] = (
                 resolve_codex_git_commit_message_model(git_commit_message_model)
@@ -5958,7 +5951,7 @@ def _normalize_usage_history_snapshot(value):
     limit_sample_source = str(
         value.get('limit_sample_source') or value.get('limits_sample_source') or ''
     ).strip().lower()
-    if limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
+    if limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
         limit_sample_source = ''
     return {
         'bucket_start': bucket_start,
@@ -6033,7 +6026,7 @@ def _split_usage_history_snapshot(snapshot):
     observed_time = parse_timestamp(limit_observed_at)
     limit_bucket = (
         normalize_timestamp(observed_time)
-        if limit_source in {'post_task', 'post_keepalive'} and observed_time is not None
+        if limit_source in {'post_task', 'post_keepalive', 'post_keepalive_automatic'} and observed_time is not None
         else _usage_history_bucket_start_text(limit_observed_at)
     )
     limit_sample = {
@@ -6344,7 +6337,7 @@ def _build_usage_history_snapshot(usage_summary, limit_sample_source=None):
     five_hour = usage.get('five_hour') if isinstance(usage.get('five_hour'), dict) else {}
     weekly = usage.get('weekly') if isinstance(usage.get('weekly'), dict) else {}
     normalized_limit_source = str(limit_sample_source or '').strip().lower()
-    if normalized_limit_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
+    if normalized_limit_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
         normalized_limit_source = ''
     return _normalize_usage_history_snapshot({
         'bucket_start': _usage_history_bucket_start_text(None),
@@ -7379,17 +7372,17 @@ def _normalize_account_usage_api_result(value):
 
 
 def _account_usage_refresh_slot(now=None):
-    """Return the current KST two-hour slot during its 30-minute grace window."""
+    """Return the current KST four-hour slot during its 30-minute grace window."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
     slot = current.replace(minute=0, second=0, microsecond=0)
-    if current.hour % 2 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
+    if current.hour % 4 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
         return None
     return slot
 
 
 def _account_usage_refresh_is_due(snapshot, now=None):
-    """Run once per even KST hour, allowing a 30-minute missed-slot catch-up."""
+    """Run once per four-hour KST slot, allowing a 30-minute missed-slot catch-up."""
     slot = _account_usage_refresh_slot(now)
     if slot is None:
         return False
@@ -7405,15 +7398,19 @@ _USAGE_KEEPALIVE_PROMPT = (
 )
 
 
-def _usage_keepalive_reset_key(snapshot):
-    five_hour = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
-    if not isinstance(five_hour, dict):
+def _usage_keepalive_daily_key(snapshot, now=None):
+    weekly = snapshot.get('weekly') if isinstance(snapshot, dict) else None
+    if not isinstance(weekly, dict):
         return ''
-    used_percent = _normalize_used_percent(five_hour.get('used_percent'))
-    reset_at = _normalize_optional_timestamp(five_hour.get('resets_at'))
-    # A reset timestamp is required for automatic mode: without it, a rounded
-    # 0% response could otherwise create a request at every scheduled refresh.
-    return reset_at if used_percent == 0 and reset_at else ''
+    used_percent = _normalize_used_percent(weekly.get('used_percent'))
+    if used_percent != 0:
+        return ''
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    # A global reset can occur without changing weekly.resets_at.  Limit the
+    # automatic task to once per KST calendar day instead of one weekly-reset
+    # timestamp, so a later reset is eligible again on the following day.
+    return current.date().isoformat()
 
 
 def _account_has_active_codex_stream(account_id):
@@ -7432,14 +7429,12 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
     previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}
     attempted_at = normalize_timestamp(None)
-    reset_key = _usage_keepalive_reset_key(snapshot)
+    daily_key = _usage_keepalive_daily_key(snapshot)
     if automatic:
-        if not get_settings().get('usage_keepalive_enabled'):
-            return {'submitted': False, 'reason': 'disabled'}
-        if not reset_key:
-            return {'submitted': False, 'reason': 'five_hour_not_zero'}
-        if previous_keepalive.get('automatic_reset_key') == reset_key:
-            return {'submitted': False, 'reason': 'already_attempted_for_reset'}
+        if not daily_key:
+            return {'submitted': False, 'reason': 'weekly_not_zero'}
+        if previous_keepalive.get('automatic_daily_key') == daily_key:
+            return {'submitted': False, 'reason': 'already_attempted_today'}
     if get_selected_agent_backend() != 'dtgpt':
         return {'submitted': False, 'reason': 'luna_requires_codex_backend'}
     if _account_has_active_codex_stream(account_id):
@@ -7467,20 +7462,37 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
         error = str(exc)[:1000]
     else:
         error = ''
+    history = previous_keepalive.get('history')
+    history = history if isinstance(history, list) else []
+    history = [item for item in history[-49:] if isinstance(item, dict)]
+    history.append({
+        'at': attempted_at,
+        'event': 'submitted' if started else 'submission_failed',
+        'mode': 'automatic' if automatic else 'manual',
+        'stream_id': (started or {}).get('id') if started else '',
+        'error': error,
+    })
     keepalive_state = {
         **previous_keepalive,
         'last_attempt_at': attempted_at,
         'last_submission_at': attempted_at if started else previous_keepalive.get('last_submission_at'),
+        'last_stream_id': (started or {}).get('id') if started else previous_keepalive.get('last_stream_id'),
         'last_mode': 'automatic' if automatic else 'manual',
         'last_status': 'submitted' if started else 'failed',
         'last_error': error,
         'model': _USAGE_KEEPALIVE_MODEL,
         'reasoning_effort': _USAGE_KEEPALIVE_REASONING_EFFORT,
+        'history': history,
     }
     if automatic:
         # Mark before starting the process so a second Workbench copy cannot
-        # race this process during the same reset period.
-        keepalive_state['automatic_reset_key'] = reset_key
+        # race this process during the same KST calendar day.
+        keepalive_state['automatic_daily_key'] = daily_key
+        _LOGGER.info(
+            'Automatic usage keepalive %s (account_id=%s, stream_id=%s, weekly_usage=0%%)',
+            'submitted' if started else 'failed to submit', account_id,
+            (started or {}).get('id') if started else '',
+        )
     snapshot['usage_keepalive'] = keepalive_state
     return {
         'submitted': bool(started),
@@ -7505,7 +7517,7 @@ def submit_usage_keepalive(account_id=None):
         return result
 
 
-def _record_usage_keepalive_completion(account_id, succeeded, error=''):
+def _record_usage_keepalive_completion(account_id, succeeded, error='', token_usage=None):
     context = _account_storage_context(account_id)
     if context is None:
         return
@@ -7514,14 +7526,36 @@ def _record_usage_keepalive_completion(account_id, succeeded, error=''):
         snapshot = _load_account_usage_snapshot(context)
         keepalive = snapshot.get('usage_keepalive')
         if not isinstance(keepalive, dict):
-            return
+            return ''
+        mode = str(keepalive.get('last_mode') or 'manual').strip().lower()
+        if mode not in {'automatic', 'manual'}:
+            mode = 'manual'
+        history = keepalive.get('history')
+        history = history if isinstance(history, list) else []
+        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history.append({
+            'at': completed_at,
+            'event': 'completed' if succeeded else 'failed',
+            'mode': mode,
+            'stream_id': str(keepalive.get('last_stream_id') or ''),
+            'token_usage': _normalize_token_usage(token_usage) or _zero_token_usage(),
+            'error': '' if succeeded else str(error or '')[:1000],
+        })
         keepalive['last_completed_at'] = completed_at
         keepalive['last_status'] = 'completed' if succeeded else 'failed'
         keepalive['last_error'] = '' if succeeded else str(error or '')[:1000]
+        keepalive['history'] = history
         snapshot['usage_keepalive'] = keepalive
         snapshot['version'] = snapshot.get('version') or 1
         snapshot['account_id'] = context['account']['id']
         _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+        if mode == 'automatic':
+            _LOGGER.info(
+                'Automatic usage keepalive %s (account_id=%s, total_tokens=%s)',
+                'completed' if succeeded else 'failed', account_id,
+                (_normalize_token_usage(token_usage) or _zero_token_usage()).get('total_tokens', 0),
+            )
+        return mode
 
 
 def refresh_account_usage_snapshot_if_due(
@@ -7562,7 +7596,7 @@ def refresh_account_usage_snapshot_if_due(
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_4_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_refresh_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
                 ),
@@ -7579,7 +7613,7 @@ def refresh_account_usage_snapshot_if_due(
             }
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
-            if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive'}:
+            if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
                 resolved_limit_sample_source = 'manual' if force else 'automatic'
             record_usage_snapshot_if_due(
                 force=True,
@@ -7599,7 +7633,7 @@ def refresh_account_usage_snapshot_if_due(
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_4_hours_on_the_hour_kst_with_30_minute_grace',
                 'last_automatic_attempt_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
                 ),
@@ -13955,21 +13989,23 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         duration_ms=metadata.get('duration_ms'),
         metadata={'finalize_reason': finalize_reason, 'execution_policy': execution_policy},
     )
+    keepalive_mode = ''
     if stream.get('usage_operation') == 'usage_keepalive':
-        _record_usage_keepalive_completion(
+        keepalive_mode = _record_usage_keepalive_completion(
             account_id,
             succeeded=message_role == 'assistant',
             error=error if message_role != 'assistant' else '',
+            token_usage=token_usage,
         )
     # Store a fresh account-limit observation for every completed Codex task.
-    # This intentionally bypasses the two-hour scheduler; the scheduler still
+    # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.
     try:
         refresh_account_usage_snapshot_if_due(
             account_id=account_id,
             force=True,
             limit_sample_source=(
-                'post_keepalive'
+                ('post_keepalive_automatic' if keepalive_mode == 'automatic' else 'post_keepalive')
                 if stream.get('usage_operation') == 'usage_keepalive'
                 else 'post_task'
             ),

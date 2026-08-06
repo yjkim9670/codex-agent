@@ -112,7 +112,6 @@ const state = {
         usage: null,
         usageHistory: null,
         usageLimitsEnabled: true,
-        usageKeepaliveEnabled: false,
         loaded: false
     }
 };
@@ -2156,7 +2155,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageHistoryOpen = document.getElementById('codex-usage-history-open');
     const usageRefreshBtn = document.getElementById('codex-usage-refresh');
     const usageKeepaliveSubmitBtn = document.getElementById('codex-usage-keepalive-submit');
-    const usageKeepaliveToggle = document.getElementById('codex-usage-keepalive-toggle');
     const accountSelect = document.getElementById('codex-account-select');
     const accountManageOpen = document.getElementById('codex-account-manage-open');
     const accountOverlay = document.getElementById('codex-account-overlay');
@@ -3122,6 +3120,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (usageKeepaliveSubmitBtn) {
         usageKeepaliveSubmitBtn.addEventListener('click', async () => {
+            const confirmed = window.confirm(
+                'Luna low effort 경량 작업을 제출할까요? 짧은 Codex 요청이 실행되어 사용량이 발생합니다.'
+            );
+            if (!confirmed) return;
             usageKeepaliveSubmitBtn.disabled = true;
             try {
                 const result = await fetchJson('/api/codex/usage/keepalive', {
@@ -3131,30 +3133,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
                 updateUsageSummary(state.settings.usage);
                 showToast('Luna low effort 경량 작업을 제출했습니다.', { type: 'success' });
+                const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
+                if (streamId) void watchManualUsageKeepalive(streamId);
             } catch (error) {
                 showToast(normalizeError(error, '경량 작업을 제출하지 못했습니다.'), { type: 'error' });
             } finally {
                 usageKeepaliveSubmitBtn.disabled = false;
-            }
-        });
-    }
-    if (usageKeepaliveToggle) {
-        usageKeepaliveToggle.addEventListener('change', async () => {
-            const enabled = Boolean(usageKeepaliveToggle.checked);
-            usageKeepaliveToggle.disabled = true;
-            try {
-                const result = await fetchJson('/api/codex/settings', {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ usage_keepalive_enabled: enabled })
-                });
-                state.settings.usageKeepaliveEnabled = Boolean(result?.settings?.usage_keepalive_enabled);
-                updateUsageSummary(state.settings.usage);
-            } catch (error) {
-                usageKeepaliveToggle.checked = !enabled;
-                showToast(normalizeError(error, '자동 경량 작업 설정을 저장하지 못했습니다.'), { type: 'error' });
-            } finally {
-                usageKeepaliveToggle.disabled = false;
             }
         });
     }
@@ -8712,7 +8696,6 @@ async function loadSettings({ silent = true } = {}) {
             usage: result?.usage || null,
             usageHistory: state.settings?.usageHistory || null,
             usageLimitsEnabled: normalizeBooleanPolicyFlag(result?.feature_flags?.usage_limits_enabled, true),
-            usageKeepaliveEnabled: Boolean(result?.settings?.usage_keepalive_enabled),
             loaded: true
         };
         applyCodexAccountsSummary(result?.accounts);
@@ -8845,7 +8828,6 @@ function updateUsageSummary(usage) {
     const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
     const keepaliveButton = document.getElementById('codex-usage-keepalive-submit');
-    const keepaliveToggle = document.getElementById('codex-usage-keepalive-toggle');
     const keepaliveStatus = document.getElementById('codex-usage-keepalive-status');
     if (historyButton) {
         const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
@@ -8855,10 +8837,6 @@ function updateUsageSummary(usage) {
     }
     if (keepaliveButton) {
         keepaliveButton.classList.toggle('is-hidden', !showUsageLimits);
-    }
-    if (keepaliveToggle) {
-        keepaliveToggle.checked = Boolean(state.settings?.usageKeepaliveEnabled);
-        keepaliveToggle.closest('.usage-keepalive-toggle')?.classList.toggle('is-hidden', !showUsageLimits);
     }
     if (keepaliveStatus) {
         const keepalive = usage?.usage_keepalive || {};
@@ -9336,6 +9314,41 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
 }
 
+async function watchManualUsageKeepalive(streamId, attempts = 0) {
+    if (!streamId || attempts >= 180) {
+        if (attempts >= 180) {
+            showToast('경량 작업 완료 상태를 확인하는 시간이 초과되었습니다.', { type: 'error' });
+        }
+        return;
+    }
+    try {
+        const result = await fetchChatResponseJson(
+            `/api/codex/streams/${encodeURIComponent(streamId)}?offset=0&error_offset=0&event_offset=0`,
+            { cache: 'no-store' }
+        );
+        if (!result?.done) {
+            window.setTimeout(() => { void watchManualUsageKeepalive(streamId, attempts + 1); }, 1000);
+            return;
+        }
+        const totalTokens = Number(result?.token_usage?.total_tokens);
+        const tokenText = Number.isFinite(totalTokens)
+            ? ` · ${formatCompactTokenCount(totalTokens)} tokens`
+            : '';
+        if (Number(result?.exit_code) === 0 && !result?.error) {
+            showToast(`Luna low effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
+        } else {
+            showToast(`Luna low effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
+        }
+        await refreshUsageSummary({ silent: true, forceAccountRefresh: false });
+    } catch (error) {
+        if (attempts < 5) {
+            window.setTimeout(() => { void watchManualUsageKeepalive(streamId, attempts + 1); }, 1000);
+            return;
+        }
+        showToast(normalizeError(error, '경량 작업 완료 상태를 확인하지 못했습니다.'), { type: 'error' });
+    }
+}
+
 async function updateSettings() {
     const input = document.getElementById('codex-model-input');
     const status = document.getElementById('codex-model-status');
@@ -9398,7 +9411,6 @@ async function updateSettings() {
             : state.settings.agentBackendOptions;
         state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
-        state.settings.usageKeepaliveEnabled = Boolean(result?.settings?.usage_keepalive_enabled);
         state.settings.modelProvider = result?.settings?.model_provider || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
@@ -14819,6 +14831,9 @@ function renderUsageHistoryLegend(history) {
     const keepaliveSampleCount = chartItems
         ? chartItems.filter(item => item?.limit_sample_source === 'post_keepalive').length
         : 0;
+    const automaticKeepaliveSampleCount = chartItems
+        ? chartItems.filter(item => item?.limit_sample_source === 'post_keepalive_automatic').length
+        : 0;
     const missingSampleCount = chartItems
         ? chartItems.filter(item => item?.is_padding || item?.is_missing).length
         : 0;
@@ -14844,7 +14859,7 @@ function renderUsageHistoryLegend(history) {
     if (automaticSampleCount > 0) {
         legendItems.push({
             key: 'automatic-sample',
-            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 짝수시 정각 · 최대 30분 보정)`
+            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 4시간 정시 · 최대 30분 보정)`
         });
     }
     if (postTaskSampleCount > 0) {
@@ -14857,6 +14872,12 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: '',
             text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Luna low)`
+        });
+    }
+    if (automaticKeepaliveSampleCount > 0) {
+        legendItems.push({
+            key: 'automatic-keepalive-sample',
+            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (주간 0% 감지 · Luna low)`
         });
     }
     if (missingSampleCount > 0) {
@@ -14969,13 +14990,15 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         `Token Δ (${scopeLabel}) ${Number.isFinite(tokenDelta) ? formatCompactTokenCount(tokenDelta) : '--'}`
     ];
     if (item?.limit_sample_source === 'automatic') {
-        parts.push('자동 조회 (KST 짝수시 정각 · 최대 30분 보정)');
+        parts.push('자동 조회 (KST 4시간 정시 · 최대 30분 보정)');
     } else if (item?.limit_sample_source === 'manual') {
         parts.push('수동 조회');
     } else if (item?.limit_sample_source === 'post_task') {
         parts.push('Codex 작업 완료 후 조회');
     } else if (item?.limit_sample_source === 'post_keepalive') {
-        parts.push('0% 감지/수동 경량 작업 완료 후 조회 (Luna low)');
+        parts.push('주간 0% 감지/수동 경량 작업 완료 후 조회 (Luna low)');
+    } else if (item?.limit_sample_source === 'post_keepalive_automatic') {
+        parts.push('주간 0% 감지 후 자동 경량 작업 완료 및 기록 (Luna low)');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
@@ -15568,6 +15591,26 @@ function renderUsageHistoryChart(history) {
         attachUsageHistoryTooltip(marker, tooltip);
         chart.appendChild(marker);
         appendTooltipHitCircle(x, y, tooltip, 'automatic-sample-hit');
+    });
+
+    items.forEach((item, index) => {
+        if (item?.limit_sample_source !== 'post_keepalive_automatic' || !Number.isFinite(weeklyUsed[index])) {
+            return;
+        }
+        const x = xAt(index);
+        const y = yPercent(weeklyUsed[index]);
+        const size = mobileLayout ? 4.8 : 4;
+        const marker = createUsageHistorySvgNode('path', {
+            d: `M${x - size} ${y - size} H${x + size} V${y + size} H${x - size} Z`,
+            class: 'automatic-keepalive-sample-marker',
+            tabindex: '0'
+        });
+        const tooltip = buildUsageHistoryPointTooltip(
+            item, '자동 경량 작업 사용량', relationScope,
+        );
+        attachUsageHistoryTooltip(marker, tooltip);
+        chart.appendChild(marker);
+        appendTooltipHitCircle(x, y, tooltip, 'automatic-keepalive-sample-hit');
     });
 
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);

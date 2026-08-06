@@ -382,6 +382,7 @@
     --icon-folder-x: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d92d4c' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7A2.2 2.2 0 0 1 18 19.4H6A2.2 2.2 0 0 1 3.8 17.2z'/><path d='m9.7 12.2 4.6 4.6'/><path d='m14.3 12.2-4.6 4.6'/></svg>");
     --icon-move-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h8.2l4.2 4.2v10.2H5.2z'/><path d='M13.4 4.8V9h4.2'/><path d='M8.6 14h6.5'/><path d='m12.8 11.7 2.3 2.3-2.3 2.3'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
+    --icon-usage-keepalive: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M13.2 3.8 6.9 13h4.7L10.8 20.2l6.3-9.2h-4.7z'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
     --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
@@ -535,6 +536,7 @@
     --icon-folder-x: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8977f' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M3.8 8.2A2.2 2.2 0 0 1 6 6h4l1.7 2h6.3A2.2 2.2 0 0 1 20.2 10.2v7A2.2 2.2 0 0 1 18 19.4H6A2.2 2.2 0 0 1 3.8 17.2z'/><path d='m9.7 12.2 4.6 4.6'/><path d='m14.3 12.2-4.6 4.6'/></svg>");
     --icon-move-file: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5.2 4.8h8.2l4.2 4.2v10.2H5.2z'/><path d='M13.4 4.8V9h4.2'/><path d='M8.6 14h6.5'/><path d='m12.8 11.7 2.3 2.3-2.3 2.3'/></svg>");
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
+    --icon-usage-keepalive: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M13.2 3.8 6.9 13h4.7L10.8 20.2l6.3-9.2h-4.7z'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
     --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
@@ -5658,6 +5660,13 @@ body.is-mermaid-diagram-viewer-open {
     cursor: crosshair;
 }
 
+.usage-history-chart .automatic-keepalive-sample-marker {
+    fill: #e07a24;
+    stroke: var(--surface);
+    stroke-width: 1.4;
+    cursor: crosshair;
+}
+
 .usage-history-chart .usage-history-hit-area {
     fill: transparent;
     stroke: transparent;
@@ -5745,6 +5754,11 @@ body.is-mermaid-diagram-viewer-open {
     background: #8a3ffc;
     border-radius: 1px;
     transform: rotate(45deg);
+}
+
+.usage-history-legend-swatch.automatic-keepalive-sample {
+    background: #e07a24;
+    border-radius: 1px;
 }
 
 .usage-history-legend-swatch.missing-sample {
@@ -8122,24 +8136,10 @@ body.is-work-mode-resizing * {
 }
 
 .usage-keepalive-submit {
-    min-height: 26px;
-    padding: 3px 7px;
-    font-size: 11px;
-    white-space: nowrap;
-}
-
-.usage-keepalive-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: -2px 0 8px;
-    color: var(--text-muted);
-    font-size: 11px;
-    cursor: pointer;
-}
-
-.usage-keepalive-toggle input {
-    margin: 0;
+    background-image: var(--icon-usage-keepalive);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 15px 15px;
 }
 
 .usage-keepalive-status {

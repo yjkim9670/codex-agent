@@ -1133,11 +1133,6 @@ def codex_settings_update():
         app_server_pilot_enabled = _to_optional_bool(payload.get('app_server_pilot_enabled'))
         if app_server_pilot_enabled is None:
             return jsonify({'error': 'app_server_pilot_enabled 값이 올바르지 않습니다.'}), 400
-    usage_keepalive_enabled = None
-    if 'usage_keepalive_enabled' in payload:
-        usage_keepalive_enabled = _to_optional_bool(payload.get('usage_keepalive_enabled'))
-        if usage_keepalive_enabled is None:
-            return jsonify({'error': 'usage_keepalive_enabled 값이 올바르지 않습니다.'}), 400
     if model is not None:
         model = str(model).strip()
         if len(model) > CODEX_MAX_MODEL_CHARS:
@@ -1214,7 +1209,6 @@ def codex_settings_update():
         agent_backend=agent_backend,
         verification_mode=verification_mode,
         app_server_pilot_enabled=app_server_pilot_enabled,
-        usage_keepalive_enabled=usage_keepalive_enabled,
         git_commit_message_model=git_commit_message_model,
         git_commit_message_reasoning_effort=git_commit_message_reasoning_effort,
     )

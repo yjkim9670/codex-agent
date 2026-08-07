@@ -562,6 +562,33 @@ def test_load_session_payload_unwraps_nested_message_wrapper(isolated_codex_work
     assert not isinstance(messages[0].get('message'), dict)
 
 
+def test_session_store_rejects_invalid_json_instead_of_returning_empty_sessions(isolated_codex_workspace):
+    store_path = isolated_codex_workspace['store_path']
+    store_path.write_text('{"sessions": [', encoding='utf-8')
+
+    with pytest.raises(codex_chat.SessionStoreReadError, match='invalid JSON'):
+        codex_chat._load_data()
+
+
+def test_session_store_save_uses_atomic_replacement(isolated_codex_workspace):
+    store_path = isolated_codex_workspace['store_path']
+    codex_chat._save_data({'sessions': [{'id': 'atomic-session', 'messages': []}]})
+
+    assert json.loads(store_path.read_text(encoding='utf-8'))['sessions'][0]['id'] == 'atomic-session'
+    assert not list(store_path.parent.glob(f'.{store_path.name}.*.tmp'))
+
+
+def test_session_list_route_returns_unavailable_when_store_is_invalid(
+        isolated_codex_workspace, chat_route_client, monkeypatch):
+    isolated_codex_workspace['store_path'].write_text('{"sessions": [', encoding='utf-8')
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', False)
+
+    response = chat_route_client.get('/api/codex/sessions')
+
+    assert response.status_code == 503
+    assert response.get_json()['code'] == 'session_store_unavailable'
+
+
 def test_candidate_paths_skip_legacy_when_primary_exists(monkeypatch, tmp_path):
     primary = tmp_path / 'primary' / 'codex_chat_sessions.json'
     primary.parent.mkdir(parents=True, exist_ok=True)

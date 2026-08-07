@@ -95,7 +95,7 @@ try:
 except ImportError:  # pragma: no cover - POSIX fallback
     msvcrt = None
 
-_DATA_LOCK = threading.Lock()
+_DATA_LOCK = threading.RLock()
 _CONFIG_LOCK = threading.Lock()
 _TOKEN_USAGE_LOCK = threading.Lock()
 _USAGE_EVENT_LOCK = threading.Lock()
@@ -1176,15 +1176,24 @@ def _read_json_object_from_path(path):
         raw = Path(path).read_text(encoding='utf-8')
     except FileNotFoundError:
         return None
-    except Exception:
-        return None
+    except Exception as exc:
+        raise SessionStoreReadError(path, 'read failed') from exc
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        raise SessionStoreReadError(path, 'invalid JSON') from exc
     if isinstance(payload, dict):
         return payload
-    return None
+    raise SessionStoreReadError(path, 'top-level JSON value is not an object')
+
+
+class SessionStoreReadError(RuntimeError):
+    """Raised when an existing session store cannot be read safely."""
+
+    def __init__(self, path, reason):
+        self.path = Path(path)
+        self.reason = str(reason or 'unknown error')
+        super().__init__(f'Unable to read session store {self.path}: {self.reason}')
 
 
 def _is_blank_merge_value(value):
@@ -1428,8 +1437,8 @@ def _merge_session_records(existing, incoming):
 
 def _load_session_store_payload_from_path(path):
     payload = _read_json_object_from_path(path)
-    if not isinstance(payload, dict):
-        return {'sessions': []}
+    if payload is None:
+        return None
     sessions = payload.get('sessions')
     if not isinstance(sessions, list):
         sessions = []
@@ -1489,6 +1498,7 @@ def _merge_session_store_payloads(payloads):
 
 def _load_data():
     payloads = []
+    read_errors = []
     for candidate_path in _iter_codex_state_candidate_paths(
             CODEX_CHAT_STORE_PATH,
             LEGACY_CODEX_CHAT_STORE_PATH):
@@ -1498,18 +1508,55 @@ def _load_data():
             exists = False
         if not exists:
             continue
-        payloads.append(_load_session_store_payload_from_path(candidate_path))
+        try:
+            payload = _load_session_store_payload_from_path(candidate_path)
+        except SessionStoreReadError as exc:
+            read_errors.append(exc)
+            _LOGGER.warning('Session store read failed (path=%s, reason=%s)', exc.path, exc.reason)
+            continue
+        if payload is not None:
+            payloads.append(payload)
+    # A corrupt primary file must not hide an intact legacy copy. This is only a
+    # recovery path; a valid primary (including a deliberately empty one) still
+    # remains authoritative under the normal candidate rules above.
+    if read_errors and not payloads:
+        fallback_paths = [
+            LEGACY_CODEX_CHAT_STORE_PATH,
+            WORKSPACE_DIR / '.agent_state' / CODEX_CHAT_STORE_PATH.name,
+        ]
+        if _uses_parent_workspace_storage_layout():
+            fallback_paths.append(_standard_workspace_storage_dir() / CODEX_CHAT_STORE_PATH.name)
+        for fallback_path in fallback_paths:
+            if any(_paths_match(fallback_path, candidate) for candidate in _iter_codex_state_candidate_paths(
+                    CODEX_CHAT_STORE_PATH, LEGACY_CODEX_CHAT_STORE_PATH)):
+                continue
+            try:
+                if not fallback_path.exists():
+                    continue
+                payload = _load_session_store_payload_from_path(fallback_path)
+            except SessionStoreReadError as exc:
+                read_errors.append(exc)
+                _LOGGER.warning('Session store recovery read failed (path=%s, reason=%s)', exc.path, exc.reason)
+                continue
+            if payload is not None:
+                _LOGGER.warning('Recovered session data from fallback store: %s', fallback_path)
+                payloads.append(payload)
     if not payloads:
+        if read_errors:
+            raise read_errors[0]
         return {'sessions': []}
     return _merge_session_store_payloads(payloads)
 
 
 def _save_data(data):
-    CODEX_CHAT_STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CODEX_CHAT_STORE_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding='utf-8'
-    )
+    session_count = len(data.get('sessions', [])) if isinstance(data, dict) else 0
+    _LOGGER.debug('Saving session store atomically (path=%s, sessions=%s)', CODEX_CHAT_STORE_PATH, session_count)
+    try:
+        _write_json_atomic(CODEX_CHAT_STORE_PATH, data)
+    except Exception:
+        _LOGGER.exception('Atomic session-store replacement failed (path=%s)', CODEX_CHAT_STORE_PATH)
+        raise
+    _LOGGER.debug('Saved session store atomically (path=%s, sessions=%s)', CODEX_CHAT_STORE_PATH, session_count)
 
 
 def _write_json_atomic(path, payload):
@@ -1548,6 +1595,13 @@ def _acquire_path_file_lock(path):
         except Exception:
             pass
         lock_handle.close()
+
+
+@contextmanager
+def _session_store_transaction():
+    """Serialize all session-store reads and writes across local processes."""
+    with _DATA_LOCK, _acquire_path_file_lock(CODEX_CHAT_STORE_PATH):
+        yield
 
 
 _TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
@@ -7865,7 +7919,8 @@ def _collect_session_storage_summary(data):
 
 
 def get_session_storage_summary():
-    data = _load_data()
+    with _session_store_transaction():
+        data = _load_data()
     return _collect_session_storage_summary(data)
 
 
@@ -7882,7 +7937,7 @@ def _count_pending_queue_items(session):
 
 
 def _peek_pending_queue_entry(session_id):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         session = _find_session(data.get('sessions', []), session_id)
         if not session:
@@ -7894,7 +7949,7 @@ def _peek_pending_queue_entry(session_id):
 
 
 def _remove_pending_queue_entry(session_id, entry_id):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session = _find_session(sessions, session_id)
@@ -7919,7 +7974,7 @@ def _remove_pending_queue_entry(session_id, entry_id):
 
 
 def get_pending_queue_count_for_session(session_id):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         session = _find_session(data.get('sessions', []), session_id)
         if not session:
@@ -7957,7 +8012,8 @@ def generate_session_title(prompt):
 
 
 def list_sessions():
-    data = _load_data()
+    with _session_store_transaction():
+        data = _load_data()
     sessions = _sort_sessions(data.get('sessions', []))
     summary = []
     for session in sessions:
@@ -7987,7 +8043,8 @@ def list_sessions():
 
 
 def get_session(session_id):
-    data = _load_data()
+    with _session_store_transaction():
+        data = _load_data()
     session = _find_session(data.get('sessions', []), session_id)
     if not session:
         return None
@@ -8033,7 +8090,7 @@ def create_session(title=None, metadata=None):
             if value is None:
                 continue
             session[normalized_key] = deepcopy(value)
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         sessions.append(session)
@@ -8045,7 +8102,7 @@ def create_session(title=None, metadata=None):
 def update_session_title(session_id, title):
     if not title:
         return None
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         session = _find_session(data.get('sessions', []), session_id)
         if not session:
@@ -8071,7 +8128,7 @@ def append_message(session_id, role, content, metadata=None, created_at=None):
             if key in message:
                 continue
             message[key] = value
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session = _find_session(sessions, session_id)
@@ -8090,7 +8147,7 @@ def update_message(session_id, message_id, content=None, role=None, metadata=Non
     if not session_key or not message_key:
         return None
 
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session = _find_session(sessions, session_key)
@@ -8138,7 +8195,7 @@ def update_message(session_id, message_id, content=None, role=None, metadata=Non
 
 
 def ensure_default_title(session_id, prompt):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         session = _find_session(data.get('sessions', []), session_id)
         if not session:
@@ -8158,7 +8215,7 @@ def ensure_default_title(session_id, prompt):
 def rename_session(session_id, title):
     if not title:
         return None
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         session = _find_session(data.get('sessions', []), session_id)
         if not session:
@@ -8171,7 +8228,7 @@ def rename_session(session_id, title):
 
 
 def delete_session(session_id):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         remaining = [session for session in sessions if session.get('id') != session_id]
@@ -8189,7 +8246,7 @@ def delete_session_message(session_id, message_id):
         return None
 
     updated_session = None
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session = _find_session(sessions, session_key)
@@ -8249,7 +8306,7 @@ def branch_session_from_message(session_id, message_id, title=None):
         return None
 
     branched_session = None
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         source_session = _find_session(sessions, session_key)
@@ -13354,7 +13411,7 @@ def _enqueue_pending_queue_entry(
         structured_report_preset=None,
         worktree_mode=False,
         account_id=None):
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session = _find_session(sessions, session_id)
@@ -13589,7 +13646,7 @@ def trigger_next_queued_codex_stream(session_id):
 
 
 def _resume_pending_codex_queues_worker():
-    with _DATA_LOCK:
+    with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
         session_ids = []

@@ -64,6 +64,7 @@ from ..services.codex_chat import (
     build_structured_report_prompt,
     CodexAppServerError,
     CodexAttachmentError,
+    SessionStoreReadError,
     CodexToolingError,
     CodexWorktreeError,
     cleanup_git_worktree_task,
@@ -1554,9 +1555,18 @@ def codex_sessions():
         crypto_session_id = _get_chat_response_crypto_session_id()
     except FileCryptoError as exc:
         return _file_crypto_error_response(exc)
+    try:
+        sessions = list_sessions()
+        storage = get_session_storage_summary()
+    except SessionStoreReadError as exc:
+        _LOGGER.exception('Session list unavailable because its store could not be read')
+        return jsonify({
+            'error': '세션 저장소를 일시적으로 읽을 수 없습니다. 기존 화면을 유지한 뒤 다시 시도하세요.',
+            'code': 'session_store_unavailable',
+        }), 503
     return _jsonify_chat_payload_or_crypto_error({
-        'sessions': list_sessions(),
-        'session_storage': get_session_storage_summary(),
+        'sessions': sessions,
+        'session_storage': storage,
     }, crypto_session_id)
 
 

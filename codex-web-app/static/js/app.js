@@ -8059,10 +8059,28 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
     sessionLoadLockStartedAt = Date.now();
     setStatus('Loading sessions...');
     try {
-        const result = await fetchChatResponseJson('/api/codex/sessions', {
+        let result = await fetchChatResponseJson('/api/codex/sessions', {
             timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
         });
-        state.sessions = Array.isArray(result?.sessions) ? result.sessions : [];
+        if (!Array.isArray(result?.sessions)) {
+            throw new Error('세션 목록 응답이 올바르지 않습니다.');
+        }
+        // A single empty response must never erase a populated UI. This also
+        // protects against stale proxy responses; only a matching storage
+        // summary confirms that the server really has no sessions.
+        const hasVisibleSessions = state.sessions.length > 0 || Boolean(state.activeSessionId);
+        const emptyConfirmed = Number(result?.session_storage?.session_count) === 0;
+        if (hasVisibleSessions && result.sessions.length === 0 && !emptyConfirmed) {
+            await new Promise(resolve => window.setTimeout(resolve, 300));
+            result = await fetchChatResponseJson('/api/codex/sessions', {
+                timeoutMs: SESSION_LIST_REQUEST_TIMEOUT_MS
+            });
+            const retryEmptyConfirmed = Number(result?.session_storage?.session_count) === 0;
+            if (!Array.isArray(result?.sessions) || (result.sessions.length === 0 && !retryEmptyConfirmed)) {
+                throw new Error('세션 목록을 안전하게 갱신하지 못했습니다. 기존 대화를 유지합니다.');
+            }
+        }
+        state.sessions = result.sessions;
         state.sessionStorage = result?.session_storage || null;
         updateSessionStorageSummary(state.sessionStorage);
 
@@ -8100,7 +8118,9 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
         syncActiveSessionControls();
         syncActiveSessionStatus();
     } catch (error) {
-        setStatus(normalizeError(error, 'Failed to load sessions.'), true);
+        const message = normalizeError(error, 'Failed to load sessions.');
+        setStatus(message, true);
+        showToast(message, { tone: 'error', durationMs: 4200 });
     } finally {
         state.loading = false;
         sessionLoadLockStartedAt = 0;

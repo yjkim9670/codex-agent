@@ -1695,6 +1695,14 @@ def test_session_reload_falls_back_when_persisted_stream_session_is_stale():
     assert restore_index < app_js.index(detail_reload, restore_index)
 
 
+def test_session_list_refresh_preserves_populated_ui_on_unconfirmed_empty_response():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert 'const hasVisibleSessions = state.sessions.length > 0 || Boolean(state.activeSessionId);' in app_js
+    assert 'const emptyConfirmed = Number(result?.session_storage?.session_count) === 0;' in app_js
+    assert '세션 목록을 안전하게 갱신하지 못했습니다. 기존 대화를 유지합니다.' in app_js
+
+
 def test_usage_history_chart_only_displays_weekly_limit():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')

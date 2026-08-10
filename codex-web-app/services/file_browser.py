@@ -623,6 +623,16 @@ def _is_editable_text_path(path: Path):
     lowered_name = path.name.lower()
     if lowered_name in _EDITABLE_TEXT_FILENAMES:
         return True
+    # Environment files commonly carry an environment-specific suffix
+    # (for example, .env.local or .env.production).  They are UTF-8 text in
+    # normal use, but Path treats the final segment as an unknown extension.
+    if lowered_name.startswith('.env.'):
+        return True
+    # Conventional text files such as LICENSE, README, or a project Procfile
+    # may not have an extension at all.  Content safety is still enforced by
+    # read_file: binary, non-UTF-8, truncated, and tmp-root files are blocked.
+    if not path.suffixes:
+        return True
     for suffix in reversed(path.suffixes):
         if suffix.lower() in _EDITABLE_TEXT_SUFFIXES:
             return True

@@ -476,6 +476,32 @@ def test_read_file_reports_editable_text_metadata(isolated_browser_roots):
     assert str(result['modified_ns']).isdigit()
 
 
+def test_extensionless_and_environment_text_files_are_editable_from_preview(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    cases = {
+        '.env.local': 'FEATURE_FLAG=true\n',
+        'LICENSE': 'Example license text\n',
+    }
+
+    for filename, initial_content in cases.items():
+        target = server_root / filename
+        target.write_text(initial_content, encoding='utf-8')
+
+        original = file_browser.read_file(root_key='server', relative_path=filename)
+        updated_content = f'{initial_content}updated=true\n'
+        updated = file_browser.write_file(
+            root_key='server',
+            relative_path=filename,
+            content=updated_content,
+            expected_modified_ns=original['modified_ns'],
+        )
+
+        assert original['editable'] is True
+        assert updated['editable'] is True
+        assert updated['saved'] is True
+        assert target.read_text(encoding='utf-8') == updated_content
+
+
 def test_write_file_updates_content_and_returns_latest_metadata(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     target = server_root / 'script.py'

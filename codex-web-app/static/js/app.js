@@ -14855,18 +14855,22 @@ function renderUsageHistoryLegend(history) {
         ? history.chart_items
         : (Array.isArray(history?.items) ? history.items : []);
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, chartItems);
-    const automaticSampleCount = chartItems
-        ? chartItems.filter(item => item?.limit_sample_source === 'automatic').length
-        : 0;
-    const postTaskSampleCount = chartItems
-        ? chartItems.filter(item => item?.limit_sample_source === 'post_task').length
-        : 0;
-    const keepaliveSampleCount = chartItems
-        ? chartItems.filter(item => item?.limit_sample_source === 'post_keepalive').length
-        : 0;
-    const automaticKeepaliveSampleCount = chartItems
-        ? chartItems.filter(item => item?.limit_sample_source === 'post_keepalive_automatic').length
-        : 0;
+    const countSampleEvents = source => chartItems.reduce(
+        (count, item) => count + usageHistorySampleEvents(item)
+            .filter(event => event.source === source).length,
+        0
+    );
+    const automaticSampleCount = countSampleEvents('automatic');
+    const postTaskSampleCount = chartItems.reduce(
+        (count, item) => count + (
+            Number(item?.delta_weekly_used_percent) > 0
+                ? usageHistorySampleEvents(item).filter(event => event.source === 'post_task').length
+                : 0
+        ),
+        0
+    );
+    const keepaliveSampleCount = countSampleEvents('post_keepalive');
+    const automaticKeepaliveSampleCount = countSampleEvents('post_keepalive_automatic');
     const missingSampleCount = chartItems
         ? chartItems.filter(item => item?.is_padding || item?.is_missing).length
         : 0;
@@ -14897,8 +14901,8 @@ function renderUsageHistoryLegend(history) {
     }
     if (postTaskSampleCount > 0) {
         legendItems.push({
-            key: '',
-            text: `작업 후 조회 ${formatNumber(postTaskSampleCount)}회`
+            key: 'post-task-sample',
+            text: `사용량 변동 작업 ${formatNumber(postTaskSampleCount)}회`
         });
     }
     if (keepaliveSampleCount > 0) {
@@ -15004,6 +15008,22 @@ function formatUsageHistoryTokenBreakdown(item) {
     if (Number.isFinite(reasoning) && reasoning > 0) parts.push(`reasoning ${formatCompactTokenCount(reasoning)}`);
     if (Number.isFinite(requests) && requests > 0) parts.push(`req ${formatNumber(requests)}`);
     return parts.join(', ');
+}
+
+function usageHistorySampleEvents(item) {
+    const legacySource = String(item?.limit_sample_source || '').trim();
+    const legacyObservedAt = item?.limits_observed_at || item?.recorded_at || item?.bucket_start || '';
+    const rawEvents = Array.isArray(item?.limit_sample_events) ? item.limit_sample_events : [];
+    const events = rawEvents
+        .map(event => ({
+            source: String(event?.source || '').trim(),
+            observedAt: event?.observed_at || ''
+        }))
+        .filter(event => event.source);
+    if (legacySource && !events.some(event => event.source === legacySource && event.observedAt === legacyObservedAt)) {
+        events.push({ source: legacySource, observedAt: legacyObservedAt });
+    }
+    return events;
 }
 
 function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relationScope = 'workspace') {
@@ -15606,12 +15626,16 @@ function renderUsageHistoryChart(history) {
 
     appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
 
+    // Marker events are deliberately independent from the latest sample
+    // source.  A later sample in the same bucket must not erase a scheduled
+    // read or an automatic keepalive completion from the chart.
     items.forEach((item, index) => {
-        if (item?.limit_sample_source !== 'automatic' || !Number.isFinite(weeklyUsed[index])) {
-            return;
-        }
-        const x = xAt(index);
-        const y = yPercent(weeklyUsed[index]);
+        if (!Number.isFinite(weeklyUsed[index])) return;
+        usageHistorySampleEvents(item)
+            .filter(event => event.source === 'automatic')
+            .forEach(event => {
+        const x = xAt(index) - (mobileLayout ? 3.5 : 3);
+        const y = yPercent(weeklyUsed[index]) + (mobileLayout ? 3.5 : 3);
         const size = mobileLayout ? 5.8 : 4.8;
         const marker = createUsageHistorySvgNode('path', {
             d: `M${x} ${y - size} L${x + size} ${y} L${x} ${y + size} L${x - size} ${y} Z`,
@@ -15619,19 +15643,48 @@ function renderUsageHistoryChart(history) {
             tabindex: '0'
         });
         const tooltip = buildUsageHistoryPointTooltip(
-            item, '자동 조회 사용량', relationScope,
+            { ...item, limit_sample_source: event.source, limits_observed_at: event.observedAt },
+            '자동 조회 사용량', relationScope,
         );
         attachUsageHistoryTooltip(marker, tooltip);
         chart.appendChild(marker);
         appendTooltipHitCircle(x, y, tooltip, 'automatic-sample-hit');
+            });
     });
 
     items.forEach((item, index) => {
-        if (item?.limit_sample_source !== 'post_keepalive_automatic' || !Number.isFinite(weeklyUsed[index])) {
-            return;
-        }
+        if (!Number.isFinite(weeklyUsed[index])) return;
+        if (Number(item?.delta_weekly_used_percent) <= 0) return;
+        usageHistorySampleEvents(item)
+            .filter(event => event.source === 'post_task')
+            .forEach(event => {
         const x = xAt(index);
         const y = yPercent(weeklyUsed[index]);
+        const size = mobileLayout ? 4.6 : 3.8;
+        const marker = createUsageHistorySvgNode('circle', {
+            cx: x,
+            cy: y,
+            r: size,
+            class: 'post-task-sample-marker',
+            tabindex: '0'
+        });
+        const tooltip = buildUsageHistoryPointTooltip(
+            { ...item, limit_sample_source: event.source, limits_observed_at: event.observedAt },
+            '사용량 변동 작업', relationScope,
+        );
+        attachUsageHistoryTooltip(marker, tooltip);
+        chart.appendChild(marker);
+        appendTooltipHitCircle(x, y, tooltip, 'post-task-sample-hit');
+            });
+    });
+
+    items.forEach((item, index) => {
+        if (!Number.isFinite(weeklyUsed[index])) return;
+        usageHistorySampleEvents(item)
+            .filter(event => ['post_keepalive', 'post_keepalive_automatic'].includes(event.source))
+            .forEach(event => {
+        const x = xAt(index) + (mobileLayout ? 3.5 : 3);
+        const y = yPercent(weeklyUsed[index]) - (mobileLayout ? 3.5 : 3);
         const size = mobileLayout ? 4.8 : 4;
         const marker = createUsageHistorySvgNode('path', {
             d: `M${x - size} ${y - size} H${x + size} V${y + size} H${x - size} Z`,
@@ -15639,11 +15692,16 @@ function renderUsageHistoryChart(history) {
             tabindex: '0'
         });
         const tooltip = buildUsageHistoryPointTooltip(
-            item, '자동 경량 작업 사용량', relationScope,
+            { ...item, limit_sample_source: event.source, limits_observed_at: event.observedAt },
+            event.source === 'post_keepalive_automatic'
+                ? '자동 경량 작업 사용량'
+                : '경량 작업 사용량',
+            relationScope,
         );
         attachUsageHistoryTooltip(marker, tooltip);
         chart.appendChild(marker);
         appendTooltipHitCircle(x, y, tooltip, 'automatic-keepalive-sample-hit');
+            });
     });
 
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);

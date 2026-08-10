@@ -1023,6 +1023,72 @@ def test_usage_history_preserves_exact_timestamp_for_post_task_limit_sample():
     assert limit_sample['bucket_start'] == '2026-07-20T12:31:02+09:00'
 
 
+def test_usage_history_keeps_marker_events_when_a_limit_sample_is_replaced(
+        isolated_codex_workspace, monkeypatch):
+    automatic_snapshot = {
+        'bucket_start': '2026-07-20T12:00:00+09:00',
+        'recorded_at': '2026-07-20T12:05:00+09:00',
+        'limits_observed_at': '2026-07-20T12:05:00+09:00',
+        'limit_sample_source': 'automatic',
+        'weekly_used_percent': 0,
+    }
+    manual_snapshot = {
+        **automatic_snapshot,
+        'recorded_at': '2026-07-20T12:10:00+09:00',
+        'limits_observed_at': '2026-07-20T12:10:00+09:00',
+        'limit_sample_source': 'manual',
+        'weekly_used_percent': 1,
+    }
+    snapshots = iter((automatic_snapshot, manual_snapshot))
+    monkeypatch.setattr(
+        codex_chat,
+        '_build_usage_history_snapshot',
+        lambda _usage, limit_sample_source=None: next(snapshots),
+    )
+
+    codex_chat.record_usage_snapshot_if_due(usage_summary={})
+    codex_chat.record_usage_snapshot_if_due(usage_summary={})
+
+    ledger = codex_chat._load_usage_history_ledger(
+        path=isolated_codex_workspace['usage_history_path'],
+    )
+    events = ledger['account_limit_samples'][0]['limit_sample_events']
+    assert {(event['source'], event['observed_at']) for event in events} == {
+        ('automatic', automatic_snapshot['limits_observed_at']),
+        ('manual', manual_snapshot['limits_observed_at']),
+    }
+
+
+def test_limit_reset_detection_requires_a_nonzero_observed_usage_decline():
+    assert not codex_chat._limit_reset_detected(
+        '2026-08-10T00:00:00+09:00', '2026-08-17T00:00:00+09:00', 0, 0,
+    )
+    assert not codex_chat._limit_reset_detected(
+        '2026-08-10T00:00:00+09:00', '2026-08-17T00:00:00+09:00', 0.1, 0,
+    )
+    assert codex_chat._limit_reset_detected(
+        '2026-08-10T00:00:00+09:00', '2026-08-17T00:00:00+09:00', 4, 0,
+    )
+
+
+def test_usage_history_does_not_mark_repeated_zero_percent_as_weekly_resets():
+    items = codex_chat._build_usage_history_items([
+        {
+            'bucket_start': '2026-08-10T00:00:00+09:00',
+            'recorded_at': '2026-08-10T00:00:00+09:00',
+            'weekly_used_percent': 0,
+            'weekly_resets_at': '2026-08-17T00:00:00+09:00',
+        },
+        {
+            'bucket_start': '2026-08-10T02:00:00+09:00',
+            'recorded_at': '2026-08-10T02:00:00+09:00',
+            'weekly_used_percent': 0,
+            'weekly_resets_at': '2026-08-17T02:00:00+09:00',
+        },
+    ])
+    assert not any(item['weekly_reset_detected'] for item in items)
+
+
 def test_usage_history_does_not_count_pre_scope_limits_as_token_growth():
     limit_samples = [
         {

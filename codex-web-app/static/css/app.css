@@ -5673,6 +5673,13 @@ body.is-mermaid-diagram-viewer-open {
     cursor: crosshair;
 }
 
+.usage-history-chart .post-task-sample-marker {
+    fill: #1769aa;
+    stroke: var(--surface);
+    stroke-width: 1.4;
+    cursor: crosshair;
+}
+
 .usage-history-chart .usage-history-hit-area {
     fill: transparent;
     stroke: transparent;
@@ -5765,6 +5772,11 @@ body.is-mermaid-diagram-viewer-open {
 .usage-history-legend-swatch.automatic-keepalive-sample {
     background: #e07a24;
     border-radius: 1px;
+}
+
+.usage-history-legend-swatch.post-task-sample {
+    background: #1769aa;
+    border-radius: 999px;
 }
 
 .usage-history-legend-swatch.missing-sample {

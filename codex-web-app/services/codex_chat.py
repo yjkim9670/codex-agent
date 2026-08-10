@@ -6007,11 +6007,17 @@ def _normalize_usage_history_snapshot(value):
     ).strip().lower()
     if limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
         limit_sample_source = ''
+    limit_sample_events = _normalize_limit_sample_events(
+        value.get('limit_sample_events'),
+        fallback_source=limit_sample_source,
+        fallback_observed_at=limits_observed_at or recorded_at,
+    )
     return {
         'bucket_start': bucket_start,
         'recorded_at': recorded_at,
         'limits_observed_at': limits_observed_at,
         'limit_sample_source': limit_sample_source,
+        'limit_sample_events': limit_sample_events,
         'workspace_scope_id': workspace_scope_id,
         'workspace_path': workspace_path,
         'token_total': workspace_token_total or 0,
@@ -6037,6 +6043,32 @@ def _normalize_usage_history_snapshot(value):
         'five_hour_resets_at': _normalize_optional_timestamp(value.get('five_hour_resets_at')),
         'weekly_resets_at': _normalize_optional_timestamp(value.get('weekly_resets_at')),
     }
+
+
+def _normalize_limit_sample_events(value, fallback_source='', fallback_observed_at=''):
+    """Normalize independent graph-marker events attached to a limit sample."""
+    valid_sources = {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}
+    candidates = value if isinstance(value, list) else []
+    normalized = []
+    seen = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source = str(candidate.get('source') or '').strip().lower()
+        observed_at = _normalize_optional_timestamp(candidate.get('observed_at'))
+        if source not in valid_sources or not observed_at:
+            continue
+        key = (source, observed_at)
+        if key not in seen:
+            seen.add(key)
+            normalized.append({'source': source, 'observed_at': observed_at})
+    fallback_source = str(fallback_source or '').strip().lower()
+    fallback_observed_at = _normalize_optional_timestamp(fallback_observed_at)
+    if fallback_source in valid_sources and fallback_observed_at:
+        key = (fallback_source, fallback_observed_at)
+        if key not in seen:
+            normalized.append({'source': fallback_source, 'observed_at': fallback_observed_at})
+    return sorted(normalized, key=lambda event: (event['observed_at'], event['source']))
 
 
 def _usage_history_latest_by_key(items, key_builder, timestamp_builder=None):
@@ -6088,6 +6120,11 @@ def _split_usage_history_snapshot(snapshot):
         'recorded_at': normalized['recorded_at'],
         'limits_observed_at': limit_observed_at,
         'limit_sample_source': limit_source,
+        'limit_sample_events': _normalize_limit_sample_events(
+            normalized.get('limit_sample_events'),
+            fallback_source=limit_source,
+            fallback_observed_at=limit_observed_at,
+        ),
         'five_hour_used_percent': normalized.get('five_hour_used_percent'),
         'weekly_used_percent': normalized.get('weekly_used_percent'),
         'five_hour_resets_at': normalized.get('five_hour_resets_at') or '',
@@ -6172,6 +6209,7 @@ def _merge_usage_history_series(limit_samples, token_samples, scope='account'):
             'recorded_at': recorded_at,
             'limits_observed_at': limit.get('limits_observed_at') or '',
             'limit_sample_source': limit.get('limit_sample_source') or '',
+            'limit_sample_events': limit.get('limit_sample_events') or [],
             'workspace_scope_id': workspace_scope_id or _WORKSPACE_SCOPE_ID,
             'workspace_path': workspace_path or str(WORKSPACE_DIR),
             'five_hour_used_percent': limit.get('five_hour_used_percent'),
@@ -6468,6 +6506,18 @@ def record_usage_snapshot_if_due(
                         collection.append(candidate)
                         return True
                     existing = collection[existing_index]
+                    merged_events = _normalize_limit_sample_events(
+                        list(existing.get('limit_sample_events') or [])
+                        + list(candidate.get('limit_sample_events') or []),
+                        fallback_source=existing.get('limit_sample_source'),
+                        fallback_observed_at=(
+                            existing.get('limits_observed_at') or existing.get('recorded_at')
+                        ),
+                    )
+                    candidate = {
+                        **candidate,
+                        'limit_sample_events': merged_events,
+                    }
                     candidate_timestamp = (
                         candidate.get('limits_observed_at')
                         or candidate.get('recorded_at')
@@ -6489,11 +6539,23 @@ def record_usage_snapshot_if_due(
                         existing.get('limit_sample_source') == 'automatic'
                         and not candidate.get('limit_sample_source')
                     ):
+                        if existing.get('limit_sample_events') != merged_events:
+                            collection[existing_index] = {
+                                **existing,
+                                'limit_sample_events': merged_events,
+                            }
+                            return True
                         return False
                     if force_update or candidate_timestamp > existing_timestamp:
                         if existing != candidate:
                             collection[existing_index] = candidate
                             return True
+                    if existing.get('limit_sample_events') != merged_events:
+                        collection[existing_index] = {
+                            **existing,
+                            'limit_sample_events': merged_events,
+                        }
+                        return True
                     return False
 
                 limit_samples = list(ledger.get('account_limit_samples') or [])
@@ -6560,32 +6622,18 @@ def record_usage_snapshot_if_due(
 
 
 def _limit_reset_detected(previous_reset, current_reset, previous_used, current_used):
+    """Detect an observed usage-window reset, not a reset-time recalculation.
+
+    Rate-limit APIs can revise a future reset timestamp while the reported
+    usage remains 0%.  That is scheduling metadata, not evidence a window was
+    reset.  Require a meaningful observed decline from a non-zero value.
+    """
     if not (
         isinstance(previous_used, (int, float))
         and isinstance(current_used, (int, float))
     ):
         return False
-
-    previous_reset_text = str(previous_reset or '').strip()
-    current_reset_text = str(current_reset or '').strip()
-    previous_reset_at = parse_timestamp(previous_reset_text) if previous_reset_text else None
-    current_reset_at = parse_timestamp(current_reset_text) if current_reset_text else None
-    if (
-        previous_reset_at is not None
-        and current_reset_at is not None
-        and current_reset_at > previous_reset_at + timedelta(seconds=1)
-    ):
-        return True
-
-    if (
-        previous_reset_text
-        and current_reset_text
-        and previous_reset_text != current_reset_text
-        and current_used <= previous_used
-    ):
-        return True
-
-    return current_used + 0.1 < previous_used
+    return previous_used > 0.1 and current_used + 0.1 < previous_used
 
 
 def _build_usage_history_items(items, plan_periods=None):

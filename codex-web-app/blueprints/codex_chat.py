@@ -1015,7 +1015,7 @@ def codex_usage_refresh():
 
 @bp.route('/api/codex/usage/keepalive', methods=['POST'])
 def codex_usage_keepalive():
-    """Submit a user-requested minimal Luna/low usage keepalive task."""
+    """Submit a user-requested concise Terra/low usage keepalive task."""
     ensure_usage_snapshot_background_worker()
     account_id = get_active_account_id()
     result = submit_usage_keepalive(account_id=account_id)
@@ -1030,7 +1030,7 @@ def codex_usage_keepalive():
         reasons = {
             'account_busy': '현재 계정에서 Codex 작업이 실행 중입니다. 완료 후 다시 시도해 주세요.',
             'account_login_required': '선택한 계정에 로그인이 필요합니다.',
-            'luna_requires_codex_backend': '경량 작업은 Codex backend에서만 실행할 수 있습니다.',
+            'terra_requires_codex_backend': '경량 작업은 Codex backend에서만 실행할 수 있습니다.',
         }
         response['error'] = reasons.get(result.get('reason'), '경량 작업을 제출하지 못했습니다.')
         return jsonify(response), 409

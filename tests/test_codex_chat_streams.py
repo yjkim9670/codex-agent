@@ -793,6 +793,14 @@ def test_usage_keepalive_automatic_daily_key_requires_weekly_usage_at_zero():
     }, now) == ''
 
 
+def test_usage_keepalive_uses_terra_with_a_concise_reasoning_prompt():
+    assert codex_chat._USAGE_KEEPALIVE_MODEL == 'gpt-5.6-terra'
+    assert codex_chat._USAGE_KEEPALIVE_REASONING_EFFORT == 'low'
+    assert 'internally consistent' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'exactly three short bullet points' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'Do not use tools, inspect files, or make any changes.' in codex_chat._USAGE_KEEPALIVE_PROMPT
+
+
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)

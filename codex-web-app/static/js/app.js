@@ -3128,7 +3128,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (usageKeepaliveSubmitBtn) {
         usageKeepaliveSubmitBtn.addEventListener('click', async () => {
             const confirmed = window.confirm(
-                'Luna low effort 경량 작업을 제출할까요? 짧은 Codex 요청이 실행되어 사용량이 발생합니다.'
+                'Terra low effort 경량 작업을 제출할까요? 짧은 일관성 검토 요청이 실행되어 사용량이 발생합니다.'
             );
             if (!confirmed) return;
             usageKeepaliveSubmitBtn.disabled = true;
@@ -3139,7 +3139,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.settings.usage = result?.usage || state.settings.usage;
                 state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
                 updateUsageSummary(state.settings.usage);
-                showToast('Luna low effort 경량 작업을 제출했습니다.', { type: 'success' });
+                showToast('Terra low effort 경량 작업을 제출했습니다.', { type: 'success' });
                 const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
                 if (streamId) void watchManualUsageKeepalive(streamId);
             } catch (error) {
@@ -9368,9 +9368,9 @@ async function watchManualUsageKeepalive(streamId, attempts = 0) {
             ? ` · ${formatCompactTokenCount(totalTokens)} tokens`
             : '';
         if (Number(result?.exit_code) === 0 && !result?.error) {
-            showToast(`Luna low effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
+            showToast(`Terra low effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
         } else {
-            showToast(`Luna low effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
+            showToast(`Terra low effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
         }
         await refreshUsageSummary({ silent: true, forceAccountRefresh: false });
     } catch (error) {
@@ -14904,13 +14904,13 @@ function renderUsageHistoryLegend(history) {
     if (keepaliveSampleCount > 0) {
         legendItems.push({
             key: '',
-            text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Luna low)`
+            text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Terra low)`
         });
     }
     if (automaticKeepaliveSampleCount > 0) {
         legendItems.push({
             key: 'automatic-keepalive-sample',
-            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (주간 0% 감지 · Luna low)`
+            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (주간 0% 감지 · Terra low)`
         });
     }
     if (missingSampleCount > 0) {
@@ -15029,9 +15029,9 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     } else if (item?.limit_sample_source === 'post_task') {
         parts.push('Codex 작업 완료 후 조회');
     } else if (item?.limit_sample_source === 'post_keepalive') {
-        parts.push('주간 0% 감지/수동 경량 작업 완료 후 조회 (Luna low)');
+        parts.push('주간 0% 감지/수동 경량 작업 완료 후 조회 (Terra low)');
     } else if (item?.limit_sample_source === 'post_keepalive_automatic') {
-        parts.push('주간 0% 감지 후 자동 경량 작업 완료 및 기록 (Luna low)');
+        parts.push('주간 0% 감지 후 자동 경량 작업 완료 및 기록 (Terra low)');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);

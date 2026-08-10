@@ -7456,11 +7456,14 @@ def _account_usage_refresh_is_due(snapshot, now=None):
     return last_slot is None or last_slot < slot
 
 
-_USAGE_KEEPALIVE_MODEL = 'gpt-5.6-luna'
+_USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
 _USAGE_KEEPALIVE_REASONING_EFFORT = 'low'
 _USAGE_KEEPALIVE_PROMPT = (
-    'Respond with exactly: ok\n'
-    'Do not use tools, inspect files, or make any changes.'
+    'Perform this concise reasoning check:\n'
+    '1. State whether this statement is internally consistent: "A system records a timestamp after each completed job."\n'
+    '2. Name one possible edge case.\n'
+    '3. Name one verification step.\n\n'
+    'Respond with exactly three short bullet points. Do not use tools, inspect files, or make any changes.'
 )
 
 
@@ -7490,7 +7493,7 @@ def _account_has_active_codex_stream(account_id):
 
 
 def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
-    """Submit one isolated Luna/low request while account snapshot lock is held."""
+    """Submit one isolated Terra/low request while account snapshot lock is held."""
     account_id = context['account']['id']
     previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}
@@ -7502,7 +7505,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
         if previous_keepalive.get('automatic_daily_key') == daily_key:
             return {'submitted': False, 'reason': 'already_attempted_today'}
     if get_selected_agent_backend() != 'dtgpt':
-        return {'submitted': False, 'reason': 'luna_requires_codex_backend'}
+        return {'submitted': False, 'reason': 'terra_requires_codex_backend'}
     if _account_has_active_codex_stream(account_id):
         return {'submitted': False, 'reason': 'account_busy'}
     if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(context['codex_home']):

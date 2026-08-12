@@ -14,7 +14,15 @@
 
 ## 2. 서버 설정과 시작
 
-사내 서버에 다음 환경 변수를 지정하고 Flask 서버를 재시작합니다.
+Windows 사내 서버에서는 전용 PowerShell 스크립트로 시작하는 것을 권장합니다. 최초 실행 시 사용자 맵이 없으면 관리자 `12.80.214.204 → dinya`를 자동으로 생성합니다.
+
+```powershell
+.\run_codex_chat_server_internal_multiuser.ps1
+# 선택: 기본 데이터 경로 대신 별도 보호 볼륨을 사용
+.\run_codex_chat_server_internal_multiuser.ps1 -InternalDataDir 'D:\CodexWorkbench\internal-state'
+```
+
+스크립트는 다음 환경 변수를 설정한 뒤 기존 회사망 실행기를 호출합니다. Linux 등 다른 환경에서는 아래 환경 변수를 직접 지정하고 Flask 서버를 재시작합니다.
 
 ```sh
 export CODEX_WORKBENCH_MODE=internal-multiuser
@@ -36,13 +44,13 @@ export CODEX_TRUSTED_PROXY_CIDRS=10.0.0.10/32
 
 ## 3. 최초 사용자 등록
 
-최초에는 아래 파일을 만들고 서버를 시작합니다. 최소 한 명의 `admin`이 필요합니다.
+최초에는 아래 파일을 만들고 서버를 시작합니다. Windows 전용 시작 스크립트를 사용하면 동일한 내용의 초기 파일을 자동으로 만듭니다. 최소 한 명의 `admin`이 필요합니다.
 
 ```json
 {
   "version": 1,
   "users": [
-    { "ip": "10.20.0.11", "username": "rtl-admin", "role": "admin" },
+    { "ip": "12.80.214.204", "username": "dinya", "role": "admin" },
     { "ip": "10.20.0.12", "username": "alice", "role": "maintainer" },
     { "ip": "10.20.0.13", "username": "bob", "role": "member" }
   ]

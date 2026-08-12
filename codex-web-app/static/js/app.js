@@ -287,6 +287,7 @@ const MESSAGE_LOG_OVERLAY_CLASS_DETAIL = 'is-detail-mode';
 const FILE_BROWSER_ROOT_SERVER = 'server';
 const FILE_BROWSER_ROOT_TMP = 'tmp';
 const FILE_BROWSER_ROOT_WORKSPACE = 'workspace';
+const FILE_BROWSER_ROOT_SHARED = 'shared';
 const FILE_BROWSER_REQUEST_TIMEOUT_MS = 30000;
 const FILE_BROWSER_READ_TIMEOUT_MS = 30000;
 const FILE_BROWSER_MUTATION_TIMEOUT_MS = 45000;
@@ -412,7 +413,8 @@ const WORK_MODE_MOBILE_VIEW_VIEWER = 'viewer';
 const FILE_BROWSER_ROOT_LABELS = Object.freeze({
     [FILE_BROWSER_ROOT_SERVER]: 'Server',
     [FILE_BROWSER_ROOT_TMP]: 'Tmp',
-    [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace'
+    [FILE_BROWSER_ROOT_WORKSPACE]: 'Workspace',
+    [FILE_BROWSER_ROOT_SHARED]: 'Shared RTL Knowledge'
 });
 const CODEX_PUBLIC_PREVIEW_HTML_EXTENSIONS = new Set(['.html', '.htm', '.xhtml']);
 const ABSOLUTE_PATH_HINT_PREFIXES = Object.freeze([
@@ -16384,6 +16386,9 @@ function normalizeFileBrowserRoot(value) {
     if (requestedRoot === FILE_BROWSER_ROOT_TMP) {
         return FILE_BROWSER_ROOT_TMP;
     }
+    if (requestedRoot === FILE_BROWSER_ROOT_SHARED) {
+        return FILE_BROWSER_ROOT_SHARED;
+    }
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
         const normalized = String(value || CODEX_PUBLIC_PREVIEW_CONFIG.root || '').trim().toLowerCase();
         if (normalized === FILE_BROWSER_ROOT_SERVER) return FILE_BROWSER_ROOT_SERVER;
@@ -16460,7 +16465,7 @@ function formatFileBrowserDisplayPath(root, relativePath = '') {
         ? '$workspace'
         : (normalizedRoot === FILE_BROWSER_ROOT_SERVER
             ? '$server'
-            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot)));
+            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : (normalizedRoot === FILE_BROWSER_ROOT_SHARED ? '$shared' : getFileBrowserRootLabel(normalizedRoot))));
     return normalizedPath ? `${displayPrefix}/${normalizedPath}` : displayPrefix;
 }
 
@@ -16471,7 +16476,7 @@ function formatFileBrowserCompactDisplayPath(root, relativePath = '', { keepTail
         ? '$workspace'
         : (normalizedRoot === FILE_BROWSER_ROOT_SERVER
             ? '$server'
-            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : getFileBrowserRootLabel(normalizedRoot)));
+            : (normalizedRoot === FILE_BROWSER_ROOT_TMP ? '$tmp' : (normalizedRoot === FILE_BROWSER_ROOT_SHARED ? '$shared' : getFileBrowserRootLabel(normalizedRoot))));
     if (!normalizedPath) return displayPrefix;
 
     const segments = normalizedPath.split('/').filter(Boolean);
@@ -16490,6 +16495,7 @@ function getFileBrowserAbsoluteRoots() {
     const serverPath = normalizeFilesystemPath(document.body.dataset?.serverPath || '');
     const workspacePath = normalizeFilesystemPath(document.body.dataset?.workspacePath || '');
     const tmpPath = normalizeFilesystemPath(document.body.dataset?.tmpPath || '');
+    const sharedPath = normalizeFilesystemPath(document.body.dataset?.sharedPath || '');
     if (serverPath) {
         roots.push({
             root: FILE_BROWSER_ROOT_SERVER,
@@ -16503,6 +16509,9 @@ function getFileBrowserAbsoluteRoots() {
             path: workspacePath,
             display: '$workspace'
         });
+    }
+    if (sharedPath) {
+        roots.push({ root: FILE_BROWSER_ROOT_SHARED, path: sharedPath, display: '$shared' });
     }
     [tmpPath, '/tmp'].forEach(path => {
         if (path && !roots.some(root => root.path === path)) {

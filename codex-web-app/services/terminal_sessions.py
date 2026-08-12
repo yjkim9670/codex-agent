@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import file_browser
+from .multiuser import get_active_user
 
 _IS_WINDOWS = os.name == 'nt'
 
@@ -85,6 +86,7 @@ class _TerminalSession:
     created_ts: float
     updated_ts: float
     last_output_ts: float
+    owner_username: str = ''
     output_base_offset: int = 0
     output_buffer: str = ''
     process_running: bool = True
@@ -107,6 +109,14 @@ def _format_timestamp(value):
     if timestamp <= 0:
         return ''
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone().isoformat(timespec='seconds')
+
+
+def _assert_terminal_owner(session):
+    current_user = get_active_user()
+    if current_user is not None and session.owner_username != current_user.username:
+        # Deliberately use not-found so a member cannot probe another user's
+        # terminal IDs.
+        raise TerminalSessionError('터미널 세션을 찾을 수 없습니다.', error_code='session_not_found', status_code=404)
 
 
 def _normalize_dimension(value, default, minimum, maximum):
@@ -563,6 +573,7 @@ def iter_terminal_session_events(
             error_code='session_not_found',
             status_code=404,
         )
+    _assert_terminal_owner(existing_session)
 
     try:
         requested_offset = int(offset)
@@ -736,6 +747,7 @@ def create_terminal_session(root_key=None, relative_path='', cols=None, rows=Non
         created_ts=now,
         updated_ts=now,
         last_output_ts=now,
+        owner_username=(get_active_user().username if get_active_user() is not None else ''),
         master_fd=master_fd,
         process=process,
     )
@@ -750,6 +762,9 @@ def create_terminal_session(root_key=None, relative_path='', cols=None, rows=Non
 def list_terminal_sessions():
     with _SESSIONS_LOCK:
         sessions = list(_TERMINAL_SESSIONS.values())
+    current_user = get_active_user()
+    if current_user is not None:
+        sessions = [item for item in sessions if item.owner_username == current_user.username]
     sessions.sort(key=lambda item: item.created_ts)
     summaries = []
     for session in sessions:
@@ -775,6 +790,7 @@ def read_terminal_session(session_id, offset=None, tail_chars=None):
             error_code='session_not_found',
             status_code=404,
         )
+    _assert_terminal_owner(session)
     with session.lock:
         _sync_process_state(session)
         return _build_session_snapshot(session, offset=offset, tail_chars=tail_chars)
@@ -804,6 +820,7 @@ def write_terminal_input(session_id, data=''):
             error_code='session_not_found',
             status_code=404,
         )
+    _assert_terminal_owner(session)
 
     terminal_error = None
     closed_fd = None
@@ -873,6 +890,7 @@ def resize_terminal_session(session_id, cols=None, rows=None):
             error_code='session_not_found',
             status_code=404,
         )
+    _assert_terminal_owner(session)
 
     normalized_cols = _normalize_cols(cols)
     normalized_rows = _normalize_rows(rows)
@@ -989,6 +1007,12 @@ def close_terminal_session(session_id):
             error_code='session_not_found',
             status_code=404,
         )
+    try:
+        _assert_terminal_owner(session)
+    except TerminalSessionError:
+        with _SESSIONS_LOCK:
+            _TERMINAL_SESSIONS[terminal_id] = session
+        raise
 
     summary = _close_terminal_session_object(session)
     summary['closed'] = True

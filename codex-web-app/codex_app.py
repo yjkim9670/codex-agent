@@ -4,7 +4,7 @@ from fnmatch import fnmatchcase
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 
 from .blueprints import codex_chat
 from .config import (
@@ -15,6 +15,10 @@ from .config import (
     CODEX_REASONING_OPTIONS,
     CODEX_SERVICE_TIER_OPTIONS,
     SECRET_KEY,
+    CODEX_INTERNAL_USER_MAP_PATH,
+    CODEX_SHARED_KNOWLEDGE_DIR,
+    CODEX_TRUSTED_PROXY_NETWORKS,
+    is_internal_multiuser_mode,
     WORKSPACE_DIR,
     get_codex_agent_backend_options,
     get_codex_model_catalogs_by_agent_backend,
@@ -27,6 +31,7 @@ from .services.codex_chat import (
 )
 from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
+from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map
 
 
 def _get_allowed_origins():
@@ -67,19 +72,59 @@ def create_codex_app():
     ).strip().lower() in {'1', 'true', 'yes', 'on'}
     allowed_origins = _get_allowed_origins()
 
+    def _client_ip():
+        remote = str(request.remote_addr or '').strip()
+        # Forwarded client addresses are honored only when the TCP peer belongs
+        # to a configured proxy network; otherwise this header is forgeable.
+        try:
+            trusted_proxy = any(__import__('ipaddress').ip_address(remote) in network for network in CODEX_TRUSTED_PROXY_NETWORKS)
+        except ValueError:
+            trusted_proxy = False
+        if trusted_proxy:
+            forwarded = str(request.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+            if forwarded:
+                return forwarded
+        return remote
+
+    @app.before_request
+    def establish_internal_user_context():
+        if not is_internal_multiuser_mode():
+            return None
+        client_ip = _client_ip()
+        mapping = load_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH)
+        record = mapping.get(client_ip)
+        if record is None:
+            return jsonify({'error': '등록되지 않은 내부 사용자 IP입니다.', 'error_code': 'internal_user_not_registered'}), 403
+        user = InternalUser(record['username'], record['role'], client_ip)
+        g.codex_current_user = user
+        g.codex_user_context_token = activate_user(user)
+        # Provision only this user's empty workspace on first access.  The
+        # scoped path prevents this from creating or exposing a shared root.
+        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+        return None
+
+    @app.teardown_request
+    def clear_internal_user_context(_error=None):
+        token = g.pop('codex_user_context_token', None)
+        if token is not None:
+            deactivate_user(token)
+
     app.register_blueprint(codex_chat.bp)
-    ensure_usage_snapshot_background_worker()
-    ensure_pending_queue_background_worker()
+    if not is_internal_multiuser_mode():
+        ensure_usage_snapshot_background_worker()
+        ensure_pending_queue_background_worker()
 
     def _build_runtime_context():
         server_directory = Path.cwd().resolve()
         workspace_directory = WORKSPACE_DIR.resolve()
+        internal_mode = is_internal_multiuser_mode()
         return {
-            'server_directory_name': server_directory.name or str(server_directory),
-            'server_directory_path': str(server_directory),
-            'tmp_directory_path': str(get_tmp_root_path()),
+            'server_directory_name': 'Restricted' if internal_mode else (server_directory.name or str(server_directory)),
+            'server_directory_path': '' if internal_mode else str(server_directory),
+            'tmp_directory_path': '' if internal_mode else str(get_tmp_root_path()),
             'workspace_directory_name': workspace_directory.name or str(workspace_directory),
             'workspace_directory_path': str(workspace_directory),
+            'shared_knowledge_directory_path': str(CODEX_SHARED_KNOWLEDGE_DIR.resolve()) if internal_mode else '',
             'current_branch_name': get_current_branch_name(),
             'mode': 'api-only' if CODEX_API_ONLY_MODE else 'ui+api',
             'feature_flags': {
@@ -87,6 +132,7 @@ def create_codex_app():
                 'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
             },
             'security_policy': get_codex_security_policy(),
+            'deployment_mode': 'internal-multiuser' if internal_mode else 'standalone',
         }
 
     @app.route('/')
@@ -114,6 +160,8 @@ def create_codex_app():
             tmp_directory_path=runtime_context['tmp_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],
             workspace_directory_path=runtime_context['workspace_directory_path'],
+            shared_knowledge_directory_path=runtime_context['shared_knowledge_directory_path'],
+            internal_multiuser_mode=is_internal_multiuser_mode(),
             current_branch_name=runtime_context['current_branch_name'],
             company_mode_enabled=_is_company_mode_enabled(),
         )

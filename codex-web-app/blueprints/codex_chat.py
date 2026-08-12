@@ -41,9 +41,11 @@ from ..config import (
     CODEX_MAX_REASONING_CHARS,
     CODEX_MAX_SERVICE_TIER_CHARS,
     CODEX_MAX_TITLE_CHARS,
+    CODEX_INTERNAL_USER_MAP_PATH,
     CODEX_SERVICE_TIER_OPTIONS,
     REPO_ROOT,
     WORKSPACE_DIR,
+    is_internal_multiuser_mode,
     get_codex_model_catalog_for_backend,
     get_codex_model_catalog_source,
     get_codex_model_catalogs_by_agent_backend,
@@ -178,6 +180,15 @@ from ..services.company_credentials import (
     verify_admin_secret,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
+from ..services.multiuser import get_active_user, load_ip_user_map, save_ip_user_map
+from ..services.shared_knowledge import (
+    SharedKnowledgeError,
+    build_knowledge_prompt_context,
+    create_revision as create_shared_knowledge_revision,
+    get_revision as get_shared_knowledge_revision,
+    import_revision_to_workspace,
+    list_revisions as list_shared_knowledge_revisions,
+)
 from ..services.mail_sender import MailSendError, send_mail_with_archive
 from ..services.terminal_sessions import (
     TerminalSessionError,
@@ -685,6 +696,10 @@ def _build_runtime_info():
             'max_single_bytes': int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES),
             'max_archive_bytes': int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES),
         },
+        'current_user': (
+            {'username': get_active_user().username, 'role': get_active_user().role}
+            if get_active_user() is not None else None
+        ),
         'mail': {
             'configured': bool(CODEX_MAIL_USERNAME and CODEX_MAIL_PASSWORD),
             'from': CODEX_MAIL_FROM or CODEX_MAIL_USERNAME,
@@ -698,6 +713,94 @@ def _build_runtime_info():
 @bp.route('/api/codex/runtime/info')
 def codex_runtime_info():
     return jsonify(_build_runtime_info())
+
+
+@bp.route('/api/codex/internal/users', methods=['GET', 'PUT'])
+def codex_internal_users():
+    if not is_internal_multiuser_mode():
+        return jsonify({'error': '내부 다중 사용자 모드에서만 사용할 수 있습니다.'}), 404
+    current_user = get_active_user()
+    if current_user is None or current_user.role != 'admin':
+        return jsonify({'error': '관리자 권한이 필요합니다.', 'error_code': 'internal_admin_required'}), 403
+    if request.method == 'GET':
+        mapping = load_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH)
+        users = [
+            {'ip': ip, 'username': value['username'], 'role': value['role']}
+            for ip, value in sorted(mapping.items())
+        ]
+        return jsonify({'users': users})
+    payload = request.get_json(silent=True) or {}
+    try:
+        users = save_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH, payload.get('users'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc), 'error_code': 'invalid_internal_user_map'}), 400
+    return jsonify({'users': users})
+
+
+def _shared_knowledge_error_response(exc):
+    return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+
+def _require_internal_role(*roles):
+    if not is_internal_multiuser_mode():
+        return jsonify({'error': '내부 다중 사용자 모드에서만 사용할 수 있습니다.'}), 404
+    current_user = get_active_user()
+    if current_user is None or current_user.role not in roles:
+        return jsonify({'error': '요청한 작업의 내부 권한이 필요합니다.', 'error_code': 'internal_role_required'}), 403
+    return None
+
+
+def _append_shared_knowledge_context(payload, prompt):
+    """Stage an explicitly selected internal revision into this user's workspace."""
+    revision_id = payload.get('knowledge_revision') if isinstance(payload, dict) else None
+    if not revision_id:
+        return prompt, None
+    if not is_internal_multiuser_mode():
+        raise SharedKnowledgeError('공용 RTL 지식은 내부 다중 사용자 모드에서만 사용할 수 있습니다.', 400, 'shared_knowledge_unavailable')
+    context, manifest = build_knowledge_prompt_context(revision_id)
+    return prompt + context, manifest.get('revision_id')
+
+
+@bp.route('/api/codex/shared-knowledge/revisions', methods=['GET', 'POST'])
+def codex_shared_knowledge_revisions():
+    denied = _require_internal_role('admin', 'maintainer', 'member')
+    if denied:
+        return denied
+    if request.method == 'GET':
+        return jsonify({'revisions': list_shared_knowledge_revisions()})
+    denied = _require_internal_role('admin', 'maintainer')
+    if denied:
+        return denied
+    try:
+        result = create_shared_knowledge_revision(
+            request.form.get('revision_id'), request.form.get('title'), request.form.get('description'),
+            request.files.getlist('files'),
+        )
+    except SharedKnowledgeError as exc:
+        return _shared_knowledge_error_response(exc)
+    return jsonify(result), 201
+
+
+@bp.route('/api/codex/shared-knowledge/revisions/<revision_id>')
+def codex_shared_knowledge_revision(revision_id):
+    denied = _require_internal_role('admin', 'maintainer', 'member')
+    if denied:
+        return denied
+    try:
+        return jsonify(get_shared_knowledge_revision(revision_id))
+    except SharedKnowledgeError as exc:
+        return _shared_knowledge_error_response(exc)
+
+
+@bp.route('/api/codex/shared-knowledge/revisions/<revision_id>/import', methods=['POST'])
+def codex_shared_knowledge_import(revision_id):
+    denied = _require_internal_role('admin', 'maintainer', 'member')
+    if denied:
+        return denied
+    try:
+        return jsonify(import_revision_to_workspace(revision_id))
+    except SharedKnowledgeError as exc:
+        return _shared_knowledge_error_response(exc)
 
 
 @bp.route('/api/codex/attachments', methods=['POST'])
@@ -757,6 +860,11 @@ def _company_admin_authenticated():
 
 
 def _require_company_admin(*, csrf=True):
+    # In internal multi-user mode this endpoint manages only the caller's
+    # scoped key, so the fixed server-wide credential secret is neither needed
+    # nor appropriate.  Standalone retains its existing administrator gate.
+    if is_internal_multiuser_mode() and get_active_user() is not None:
+        return None
     if not is_admin_auth_configured():
         return jsonify({
             'error': '회사 API Key 관리용 관리자 인증이 설정되지 않았습니다.',
@@ -1734,6 +1842,10 @@ def codex_session_message(session_id):
     ensure_default_title(session_id, prompt)
 
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+    try:
+        prompt_with_context, knowledge_revision = _append_shared_knowledge_context(payload, prompt_with_context)
+    except SharedKnowledgeError as exc:
+        return _shared_knowledge_error_response(exc)
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
     model_override = _resolve_model_override(plan_mode=plan_mode)
@@ -1750,6 +1862,8 @@ def codex_session_message(session_id):
     ) or 'standard'
     account_id = get_active_account_id()
     user_metadata = {'account_id': account_id}
+    if knowledge_revision:
+        user_metadata['knowledge_revision'] = knowledge_revision
     if attachments:
         user_metadata['attachments'] = attachments
     user_message = append_message(session_id, 'user', prompt, user_metadata)
@@ -1882,6 +1996,10 @@ def codex_session_message_stream(session_id):
 
     ensure_default_title(session_id, prompt)
     prompt_with_context = build_codex_prompt(session.get('messages', []), prompt)
+    try:
+        prompt_with_context, _knowledge_revision = _append_shared_knowledge_context(payload, prompt_with_context)
+    except SharedKnowledgeError as exc:
+        return _shared_knowledge_error_response(exc)
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
     if structured_report_preset:

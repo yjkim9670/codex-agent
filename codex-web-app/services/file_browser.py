@@ -13,12 +13,16 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from ..config import (
     CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES,
     CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES,
+    CODEX_SHARED_KNOWLEDGE_DIR,
     WORKSPACE_DIR,
+    is_internal_multiuser_mode,
 )
+from .multiuser import get_active_user
 
 BROWSER_ROOT_SERVER = 'server'
 BROWSER_ROOT_TMP = 'tmp'
 BROWSER_ROOT_WORKSPACE = 'workspace'
+BROWSER_ROOT_SHARED = 'shared'
 
 _MAX_LIST_ENTRIES = 2000
 # Text is sent as JSON and may be highlighted or rendered client-side.  Keep the
@@ -204,6 +208,14 @@ def get_tmp_root_path():
 
 
 def _get_browser_roots():
+    # In internal mode an active user is always set by Flask before routes run.
+    # Do not provide server or /tmp roots there: hiding them in the UI alone
+    # would leave the file APIs able to cross user boundaries.
+    if get_active_user() is not None:
+        return {
+            BROWSER_ROOT_WORKSPACE: WORKSPACE_DIR.resolve(),
+            BROWSER_ROOT_SHARED: CODEX_SHARED_KNOWLEDGE_DIR.resolve(),
+        }
     return {
         BROWSER_ROOT_SERVER: _get_server_root(),
         BROWSER_ROOT_TMP: _get_tmp_root(),
@@ -212,9 +224,9 @@ def _get_browser_roots():
 
 
 def _ensure_mutable_root(root_key):
-    if root_key == BROWSER_ROOT_TMP:
+    if root_key in {BROWSER_ROOT_TMP, BROWSER_ROOT_SHARED}:
         raise FileBrowserError(
-            '/tmp 파일 브라우징 루트는 미리보기만 지원합니다.',
+            '이 파일 브라우징 루트는 미리보기만 지원합니다.',
             error_code='read_only_root',
             status_code=403,
         )

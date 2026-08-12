@@ -4,9 +4,12 @@ import json
 import os
 import threading
 import time
+from ipaddress import ip_network
 from datetime import timedelta, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
+
+from .services.multiuser import ScopedPath
 
 try:
     import pwd
@@ -232,6 +235,70 @@ CODEX_SHARED_ACCOUNT_STATE_DIR = (
 )
 CODEX_ACCOUNTS_PATH = CODEX_SHARED_ACCOUNT_STATE_DIR / 'codex_accounts.json'
 CODEX_ACCOUNTS_DIR = CODEX_SHARED_ACCOUNT_STATE_DIR / 'accounts'
+
+# Internal multi-user mode is opt-in.  Keeping the default standalone avoids
+# changing the public/external deployment's storage or authentication model.
+CODEX_WORKBENCH_MODE = _parse_choice_env(
+    'CODEX_WORKBENCH_MODE', 'standalone', ('standalone', 'internal-multiuser')
+)
+CODEX_INTERNAL_DATA_DIR = _expand_path_value(os.environ.get('CODEX_INTERNAL_DATA_DIR')) or (
+    CODEX_STORAGE_DIR / 'internal'
+)
+CODEX_INTERNAL_USER_MAP_PATH = _expand_path_value(os.environ.get('CODEX_INTERNAL_USER_MAP_PATH')) or (
+    CODEX_INTERNAL_DATA_DIR / 'user_map.json'
+)
+# This directory is intentionally outside an individual user's scoped state.
+# It is only exposed by the internal-mode knowledge APIs and as a read-only
+# File Preview root.
+CODEX_SHARED_KNOWLEDGE_DIR = _expand_path_value(os.environ.get('CODEX_SHARED_KNOWLEDGE_DIR')) or (
+    CODEX_INTERNAL_DATA_DIR / 'organization' / 'shared-knowledge'
+)
+def _parse_network_list(raw_value):
+    networks = []
+    for token in str(raw_value or '').split(','):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            networks.append(ip_network(token, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+CODEX_TRUSTED_PROXY_NETWORKS = _parse_network_list(os.environ.get('CODEX_TRUSTED_PROXY_CIDRS'))
+
+
+def is_internal_multiuser_mode():
+    return CODEX_WORKBENCH_MODE == 'internal-multiuser'
+
+
+def _internal_user_root(user):
+    return CODEX_INTERNAL_DATA_DIR / 'users' / user.username
+
+
+def _scoped_internal_path(relative_path):
+    return lambda user: _internal_user_root(user) / relative_path
+
+
+if is_internal_multiuser_mode():
+    # All mutable request data resolves below a user root.  Deliberately do not
+    # expose legacy standalone files as migration fallbacks in this mode.
+    WORKSPACE_DIR = ScopedPath(WORKSPACE_DIR, _scoped_internal_path('workspace'))
+    CODEX_STORAGE_DIR = ScopedPath(CODEX_STORAGE_DIR, _scoped_internal_path('.agent_state'))
+    CODEX_CHAT_STORE_PATH = ScopedPath(CODEX_CHAT_STORE_PATH, _scoped_internal_path('.agent_state/codex_chat_sessions.json'))
+    CODEX_SETTINGS_PATH = ScopedPath(CODEX_SETTINGS_PATH, _scoped_internal_path('.agent_state/codex_settings.json'))
+    CODEX_TOKEN_USAGE_PATH = ScopedPath(CODEX_TOKEN_USAGE_PATH, _scoped_internal_path('.agent_state/codex_token_usage.json'))
+    CODEX_USAGE_HISTORY_PATH = ScopedPath(CODEX_USAGE_HISTORY_PATH, _scoped_internal_path('.agent_state/codex_usage_history.json'))
+    CODEX_USAGE_PLAN_PATH = ScopedPath(CODEX_USAGE_PLAN_PATH, _scoped_internal_path('.agent_state/codex_usage_plans.json'))
+    CODEX_LOCAL_ACCOUNTS_PATH = ScopedPath(CODEX_LOCAL_ACCOUNTS_PATH, _scoped_internal_path('.agent_state/codex_accounts.json'))
+    CODEX_LOCAL_ACCOUNTS_DIR = ScopedPath(CODEX_LOCAL_ACCOUNTS_DIR, _scoped_internal_path('.agent_state/accounts'))
+    CODEX_ACCOUNTS_PATH = ScopedPath(CODEX_ACCOUNTS_PATH, _scoped_internal_path('.agent_state/codex_accounts.json'))
+    CODEX_ACCOUNTS_DIR = ScopedPath(CODEX_ACCOUNTS_DIR, _scoped_internal_path('.agent_state/accounts'))
+    LEGACY_CODEX_CHAT_STORE_PATH = ScopedPath(LEGACY_CODEX_CHAT_STORE_PATH, _scoped_internal_path('.legacy/codex_chat_sessions.json'))
+    LEGACY_CODEX_SETTINGS_PATH = ScopedPath(LEGACY_CODEX_SETTINGS_PATH, _scoped_internal_path('.legacy/codex_settings.json'))
+    LEGACY_CODEX_TOKEN_USAGE_PATH = ScopedPath(LEGACY_CODEX_TOKEN_USAGE_PATH, _scoped_internal_path('.legacy/codex_token_usage.json'))
+    LEGACY_CODEX_USAGE_HISTORY_PATH = ScopedPath(LEGACY_CODEX_USAGE_HISTORY_PATH, _scoped_internal_path('.legacy/codex_usage_history.json'))
 CODEX_MAX_PROMPT_CHARS = 4000
 CODEX_CONTEXT_MAX_CHARS = 12000
 CODEX_MAX_ATTACHMENTS_PER_TURN = _parse_int_env('CODEX_MAX_ATTACHMENTS_PER_TURN', 8, minimum=0, maximum=32)

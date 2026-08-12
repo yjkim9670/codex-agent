@@ -12,6 +12,9 @@ import threading
 import urllib.error
 import urllib.request
 
+from ..config import CODEX_STORAGE_DIR, is_internal_multiuser_mode
+from .multiuser import get_active_user
+
 
 class CompanyCredentialError(RuntimeError):
     def __init__(self, message, *, error_code='company_credential_error', status_code=400):
@@ -21,12 +24,19 @@ class CompanyCredentialError(RuntimeError):
 
 
 _lock = threading.RLock()
+# Kept for standalone backward compatibility (including existing deployments
+# which set this module attribute directly).  Internal mode never reads it.
 _session_api_key = ''
+_session_api_keys = {}
 _DPAPI_ENTROPY = b'CodexWorkbench.CompanyApiKey.v1'
 _MAX_API_KEY_CHARS = 8192
 
 
 def _credential_path() -> Path:
+    if is_internal_multiuser_mode() and get_active_user() is not None:
+        # Per-user credentials stay below the same private state root as chat
+        # history.  The filename is intentionally not shared with standalone.
+        return Path(CODEX_STORAGE_DIR) / 'credentials' / 'company_api_key.dpapi'
     override = str(os.environ.get('CODEX_COMPANY_CREDENTIAL_PATH') or '').strip()
     if override:
         return Path(override).expanduser()
@@ -125,8 +135,11 @@ def _read_persistent_key() -> str:
 def resolve_company_api_key() -> tuple[str, str]:
     """Return ``(secret, source)`` using session > DPAPI > environment priority."""
     with _lock:
-        if _session_api_key:
+        session_key = _credential_session_key()
+        if session_key == 'standalone' and _session_api_key:
             return _session_api_key, 'session'
+        if _session_api_keys.get(session_key):
+            return _session_api_keys[session_key], 'session'
         if _credential_path().is_file():
             return _read_persistent_key(), 'windows_dpapi'
         environment_value = _environment_api_key()
@@ -158,6 +171,7 @@ def store_company_api_key(api_key, *, persistent=False) -> dict:
         raise CompanyCredentialError('API Key가 너무 깁니다.', error_code='api_key_too_long')
     global _session_api_key
     with _lock:
+        session_key = _credential_session_key()
         if persistent:
             protected = _protect_windows(value.encode('utf-8'))
             path = _credential_path()
@@ -175,16 +189,22 @@ def store_company_api_key(api_key, *, persistent=False) -> dict:
                     '암호화된 API Key 파일을 저장하지 못했습니다.',
                     error_code='credential_write_failed', status_code=500,
                 ) from exc
-            _session_api_key = ''
+            _session_api_keys.pop(session_key, None)
+            if session_key == 'standalone':
+                _session_api_key = ''
         else:
-            _session_api_key = value
+            _session_api_keys[session_key] = value
+            if session_key == 'standalone':
+                _session_api_key = value
         return get_company_credential_status()
 
 
 def delete_company_api_key() -> dict:
     global _session_api_key
     with _lock:
-        _session_api_key = ''
+        _session_api_keys.pop(_credential_session_key(), None)
+        if _credential_session_key() == 'standalone':
+            _session_api_key = ''
         path = _credential_path()
         try:
             if path.is_file():
@@ -195,6 +215,11 @@ def delete_company_api_key() -> dict:
                 error_code='credential_delete_failed', status_code=500,
             ) from exc
         return get_company_credential_status()
+
+
+def _credential_session_key() -> str:
+    user = get_active_user()
+    return f'user:{user.username}' if user is not None else 'standalone'
 
 
 def apply_company_api_key(env: dict) -> bool:

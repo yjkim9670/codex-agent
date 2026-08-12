@@ -1,6 +1,7 @@
 """Codex chat session storage and execution helpers."""
 
 import base64
+from contextvars import copy_context
 import hashlib
 import json
 import logging
@@ -79,6 +80,7 @@ from ..config import (
     resolve_codex_git_commit_message_model,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
+from .multiuser import get_active_user
 
 try:
     import fcntl
@@ -426,8 +428,12 @@ _RESPONSE_MODE_PLAN = 'plan'
 _RESPONSE_MODE_REPORT = 'report'
 _STREAM_PROGRESS_SAVE_INTERVAL_SECONDS = 0.75
 _STREAM_PROGRESS_SAVE_MIN_CHARS = 96
-_ATTACHMENTS_DIR = CODEX_STORAGE_DIR / 'attachments'
-_OUTPUT_SCHEMA_DIR = CODEX_STORAGE_DIR / 'output_schemas'
+def _attachments_dir():
+    return Path(CODEX_STORAGE_DIR) / 'attachments'
+
+
+def _output_schema_dir():
+    return Path(CODEX_STORAGE_DIR) / 'output_schemas'
 _IMAGE_ATTACHMENT_EXTENSIONS = {
     '.avif',
     '.bmp',
@@ -891,7 +897,7 @@ def _attachment_is_under_allowed_root(path):
         resolved = Path(path).resolve(strict=False)
     except Exception:
         return False
-    allowed_roots = (WORKSPACE_DIR.resolve(), _ATTACHMENTS_DIR.resolve())
+    allowed_roots = (WORKSPACE_DIR.resolve(), _attachments_dir().resolve())
     for root in allowed_roots:
         try:
             resolved.relative_to(root)
@@ -1004,7 +1010,7 @@ def save_codex_attachment(file_storage):
         raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
 
     attachment_id = uuid.uuid4().hex
-    target_dir = _ATTACHMENTS_DIR / datetime.now().strftime('%Y%m%d')
+    target_dir = _attachments_dir() / datetime.now().strftime('%Y%m%d')
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f'{attachment_id}-{safe_name}'
 
@@ -7772,6 +7778,12 @@ def _usage_snapshot_worker_loop():
 
 
 def ensure_usage_snapshot_background_worker():
+    # A process-wide worker has no request identity.  Starting it in internal
+    # mode would resolve paths outside the requesting user's scope.  Usage is
+    # still recorded/refreshable on each user's request; a scoped scheduler is
+    # deliberately a later internal-operations concern.
+    if get_active_user() is not None:
+        return False
     global _USAGE_SNAPSHOT_WORKER_STARTED
     with _USAGE_SNAPSHOT_WORKER_LOCK:
         if _USAGE_SNAPSHOT_WORKER_STARTED:
@@ -8976,9 +8988,10 @@ def _new_codex_output_path(identifier=None):
 
 
 def _new_codex_output_schema_path(identifier=None):
-    _OUTPUT_SCHEMA_DIR.mkdir(parents=True, exist_ok=True)
+    output_schema_dir = _output_schema_dir()
+    output_schema_dir.mkdir(parents=True, exist_ok=True)
     suffix = str(identifier or uuid.uuid4().hex)
-    return _OUTPUT_SCHEMA_DIR / f"codex_output_schema_{suffix}.json"
+    return output_schema_dir / f"codex_output_schema_{suffix}.json"
 
 
 def _write_codex_output_schema(identifier, schema):
@@ -13024,6 +13037,7 @@ def create_codex_stream(
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     stream = {
         'id': stream_id,
+        'owner_username': (get_active_user().username if get_active_user() is not None else ''),
         'session_id': session_id,
         'output': '',
         'error': '',
@@ -13104,9 +13118,9 @@ def create_codex_stream(
     if worktree_task_payload:
         update_git_worktree_task(worktree_task_payload.get('id'), stream_id=stream_id)
 
+    request_context = copy_context()
     thread = threading.Thread(
-        target=_run_codex_stream,
-        args=(stream_id, prompt),
+        target=lambda: request_context.run(_run_codex_stream, stream_id, prompt),
         daemon=True
     )
     thread.start()
@@ -13735,13 +13749,22 @@ def ensure_pending_queue_background_worker():
 def get_codex_stream(stream_id):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
+        if stream and not _stream_belongs_to_current_user(stream):
+            return None
         return deepcopy(stream) if stream else None
+
+
+def _stream_belongs_to_current_user(stream):
+    user = get_active_user()
+    return user is None or stream.get('owner_username', '') == user.username
 
 
 def list_codex_streams(include_done=False):
     streams = []
     with state.codex_streams_lock:
         for stream in state.codex_streams.values():
+            if not _stream_belongs_to_current_user(stream):
+                continue
             runtime = _snapshot_stream_runtime_locked(stream)
             if not include_done:
                 if stream.get('done') or stream.get('cancelled'):
@@ -13795,7 +13818,7 @@ def list_codex_streams(include_done=False):
 def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
-        if not stream:
+        if not stream or not _stream_belongs_to_current_user(stream):
             return None
         runtime = _snapshot_stream_runtime_locked(stream)
         output = stream['output']
@@ -14140,7 +14163,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
 def stop_codex_stream(stream_id):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
-        if not stream:
+        if not stream or not _stream_belongs_to_current_user(stream):
             return None
         if stream.get('cancelled'):
             return {'status': 'already_cancelled'}

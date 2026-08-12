@@ -54,7 +54,11 @@ def load_ip_user_map(path: Path) -> dict[str, dict[str, str]]:
     single line cannot accidentally grant access.
     """
     try:
-        raw = json.loads(Path(path).read_text(encoding='utf-8'))
+        # Windows PowerShell 5.1 writes a UTF-8 BOM for ``Set-Content
+        # -Encoding UTF8``.  The internal multi-user launcher uses that
+        # command to create its initial map, so accept both BOM and plain
+        # UTF-8 rather than treating every mapped user as unregistered.
+        raw = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     except (OSError, ValueError, TypeError):
         return {}
     entries = raw.get('users', []) if isinstance(raw, dict) else raw

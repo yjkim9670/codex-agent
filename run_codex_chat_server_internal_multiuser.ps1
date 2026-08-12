@@ -10,7 +10,7 @@ does not yet exist.
 param(
     [Alias("Host")]
     [string]$BindHost = "0.0.0.0",
-    [int]$Port = 3000,
+    [int]$Port = 3300,
     [string]$InternalDataDir,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$RemainingArgs

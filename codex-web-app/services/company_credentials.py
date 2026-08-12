@@ -219,7 +219,7 @@ def delete_company_api_key() -> dict:
 
 def _credential_session_key() -> str:
     user = get_active_user()
-    return f'user:{user.username}' if user is not None else 'standalone'
+    return f'user:{user.storage_key}' if user is not None else 'standalone'
 
 
 def apply_company_api_key(env: dict) -> bool:

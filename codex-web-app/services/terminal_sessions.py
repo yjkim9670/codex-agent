@@ -113,7 +113,7 @@ def _format_timestamp(value):
 
 def _assert_terminal_owner(session):
     current_user = get_active_user()
-    if current_user is not None and session.owner_username != current_user.username:
+    if current_user is not None and session.owner_username != current_user.storage_key:
         # Deliberately use not-found so a member cannot probe another user's
         # terminal IDs.
         raise TerminalSessionError('터미널 세션을 찾을 수 없습니다.', error_code='session_not_found', status_code=404)
@@ -747,7 +747,7 @@ def create_terminal_session(root_key=None, relative_path='', cols=None, rows=Non
         created_ts=now,
         updated_ts=now,
         last_output_ts=now,
-        owner_username=(get_active_user().username if get_active_user() is not None else ''),
+        owner_username=(get_active_user().storage_key if get_active_user() is not None else ''),
         master_fd=master_fd,
         process=process,
     )
@@ -764,7 +764,7 @@ def list_terminal_sessions():
         sessions = list(_TERMINAL_SESSIONS.values())
     current_user = get_active_user()
     if current_user is not None:
-        sessions = [item for item in sessions if item.owner_username == current_user.username]
+        sessions = [item for item in sessions if item.owner_username == current_user.storage_key]
     sessions.sort(key=lambda item: item.created_ts)
     summaries = []
     for session in sessions:

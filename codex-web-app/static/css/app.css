@@ -6048,6 +6048,97 @@ body.is-mermaid-diagram-viewer-open {
     flex-wrap: wrap;
 }
 
+.internal-view-switch {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: var(--surface-muted);
+}
+
+.internal-profile-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    padding: 5px 9px;
+    color: var(--text-primary);
+    background: var(--surface-muted);
+    font: inherit;
+    cursor: pointer;
+}
+
+.internal-profile-role {
+    color: var(--text-tertiary);
+    font-size: 11px;
+}
+
+.internal-profile-overlay {
+    position: fixed;
+    z-index: 110;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.48);
+}
+
+.internal-profile-overlay.is-hidden { display: none; }
+
+.internal-profile-card {
+    width: min(100%, 390px);
+    display: grid;
+    gap: 12px;
+    padding: 22px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-lg);
+}
+
+.internal-profile-card h2, .internal-profile-card p { margin: 0; }
+.internal-profile-card p { color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.internal-profile-card label { font-weight: 700; font-size: 13px; }
+.internal-profile-status { min-height: 20px; color: var(--danger); }
+.internal-profile-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.internal-view-switch-option {
+    border: 0;
+    border-radius: var(--radius-pill);
+    padding: 5px 9px;
+    background: transparent;
+    color: var(--text-tertiary);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.internal-view-switch-option:hover {
+    color: var(--text-primary);
+}
+
+.internal-view-switch-option.is-active {
+    background: var(--surface-raised);
+    color: var(--accent);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.internal-view-switch-option:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Future admin-only controls opt in with this marker.  The toggle never
+ * changes authorization; it only suppresses those controls while previewing
+ * the member-facing screen. */
+body.is-internal-member-view [data-internal-admin-only] {
+    display: none !important;
+}
+
 .git-actions {
     display: inline-flex;
     align-items: center;

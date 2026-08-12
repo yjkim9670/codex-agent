@@ -180,7 +180,7 @@ from ..services.company_credentials import (
     verify_admin_secret,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
-from ..services.multiuser import get_active_user, load_ip_user_map, save_ip_user_map
+from ..services.multiuser import get_active_user, load_ip_user_map, save_ip_user_map, update_ip_user_profile
 from ..services.shared_knowledge import (
     SharedKnowledgeError,
     build_knowledge_prompt_context,
@@ -697,7 +697,11 @@ def _build_runtime_info():
             'max_archive_bytes': int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES),
         },
         'current_user': (
-            {'username': get_active_user().username, 'role': get_active_user().role}
+            {
+                'username': get_active_user().username,
+                'role': get_active_user().role,
+                'profile_configured': get_active_user().profile_configured,
+            }
             if get_active_user() is not None else None
         ),
         'mail': {
@@ -725,7 +729,12 @@ def codex_internal_users():
     if request.method == 'GET':
         mapping = load_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH)
         users = [
-            {'ip': ip, 'username': value['username'], 'role': value['role']}
+            {
+                'ip': ip,
+                'username': value['username'],
+                'role': value['role'],
+                'profile_configured': value.get('profile_configured', False),
+            }
             for ip, value in sorted(mapping.items())
         ]
         return jsonify({'users': users})
@@ -735,6 +744,28 @@ def codex_internal_users():
     except ValueError as exc:
         return jsonify({'error': str(exc), 'error_code': 'invalid_internal_user_map'}), 400
     return jsonify({'users': users})
+
+
+@bp.route('/api/codex/internal/profile', methods=['GET', 'PUT'])
+def codex_internal_profile():
+    """Current user's editable display name in internal multi-user mode."""
+    if not is_internal_multiuser_mode():
+        return jsonify({'error': '내부 다중 사용자 모드에서만 사용할 수 있습니다.'}), 404
+    current_user = get_active_user()
+    if current_user is None:
+        return jsonify({'error': '내부 사용자 정보를 찾을 수 없습니다.'}), 403
+    if request.method == 'GET':
+        return jsonify({
+            'username': current_user.username,
+            'role': current_user.role,
+            'profile_configured': current_user.profile_configured,
+        })
+    payload = request.get_json(silent=True) or {}
+    try:
+        profile = update_ip_user_profile(CODEX_INTERNAL_USER_MAP_PATH, current_user.client_ip, payload.get('username'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc), 'error_code': 'invalid_internal_profile'}), 400
+    return jsonify({**profile, 'profile_configured': True})
 
 
 def _shared_knowledge_error_response(exc):

@@ -274,7 +274,7 @@ def is_internal_multiuser_mode():
 
 
 def _internal_user_root(user):
-    return CODEX_INTERNAL_DATA_DIR / 'users' / user.username
+    return CODEX_INTERNAL_DATA_DIR / 'users' / user.storage_key
 
 
 def _scoped_internal_path(relative_path):

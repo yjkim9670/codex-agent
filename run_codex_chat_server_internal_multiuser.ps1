@@ -20,7 +20,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($InternalDataDir)) {
-    $InternalDataDir = Join-Path $ScriptDir "internal-workbench-data"
+    $InternalDataDir = Join-Path (Split-Path -Parent $ScriptDir) "internal-workbench-data"
 }
 $InternalDataDir = [System.IO.Path]::GetFullPath($InternalDataDir)
 $UserMapPath = Join-Path $InternalDataDir "user_map.json"

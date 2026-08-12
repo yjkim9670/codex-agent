@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=213">
+    <link rel="stylesheet" href="/static/css/app.css?v=214">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
-<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}">
+<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
     {% macro render_file_panel(id_prefix) -%}
     <div class="file-browser-layout work-mode-file-layout" id="{{ id_prefix }}-layout" data-file-panel-id="{{ id_prefix }}">
         <div class="file-browser-list-panel work-mode-file-list-panel">
@@ -302,6 +302,30 @@
                 </div>
             </div>
             <div class="header-actions">
+                {% if current_internal_user %}
+                <button class="internal-profile-trigger" type="button" id="codex-internal-profile-trigger" title="내 username 설정">
+                    <span class="internal-profile-label">{{ current_internal_user.username }}</span>
+                    <span class="internal-profile-role">{{ current_internal_user.role }}</span>
+                </button>
+                {% endif %}
+                {% if current_internal_user and current_internal_user.role == 'admin' %}
+                <div class="internal-view-switch" role="group" aria-label="내부 사용자 화면 전환">
+                    <button
+                        class="internal-view-switch-option is-active"
+                        type="button"
+                        data-internal-view="admin"
+                        aria-pressed="true"
+                        title="관리자 전용 기능을 포함해 표시"
+                    >관리자</button>
+                    <button
+                        class="internal-view-switch-option"
+                        type="button"
+                        data-internal-view="member"
+                        aria-pressed="false"
+                        title="일반 사용자에게 보이는 화면으로 표시"
+                    >일반 사용자</button>
+                </div>
+                {% endif %}
                 <div class="theme-toggle">
                     <label class="theme-switch">
                         <input type="checkbox" id="codex-theme-toggle" aria-label="Toggle dark mode">
@@ -1112,6 +1136,22 @@
         </main>
     </div>
 
+    {% if current_internal_user %}
+    <div class="internal-profile-overlay is-hidden" id="codex-internal-profile-overlay" aria-hidden="true">
+        <form class="internal-profile-card" id="codex-internal-profile-form" role="dialog" aria-modal="true" aria-labelledby="codex-internal-profile-title">
+            <h2 id="codex-internal-profile-title">내 username 설정</h2>
+            <p>이름은 화면에 표시됩니다. 작업 폴더와 기존 데이터는 IP 기반으로 유지됩니다.</p>
+            <label for="codex-internal-profile-username">Username</label>
+            <input class="model-input" id="codex-internal-profile-username" name="username" maxlength="64" autocomplete="username" pattern="[a-z0-9][a-z0-9._-]{0,63}" required>
+            <p class="internal-profile-status" id="codex-internal-profile-status" aria-live="polite"></p>
+            <div class="internal-profile-actions">
+                <button class="btn ghost" type="button" id="codex-internal-profile-cancel">취소</button>
+                <button class="btn primary" type="submit">저장</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
+
     <div class="mobile-session-overlay" id="codex-mobile-session-overlay" aria-hidden="true">
         <div class="mobile-session-overlay-backdrop" data-action="close"></div>
         <div class="mobile-session-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-mobile-session-overlay-title">
@@ -1681,6 +1721,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=225"></script>
+    <script src="/static/js/app.js?v=227"></script>
 </body>
 </html>

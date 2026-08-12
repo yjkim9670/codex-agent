@@ -2114,6 +2114,88 @@ document.addEventListener('DOMContentLoaded', () => {
     const compactMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
     const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('codex-theme-toggle');
+    const internalViewSwitchButtons = Array.from(document.querySelectorAll('[data-internal-view]'));
+    const internalProfileOverlay = document.getElementById('codex-internal-profile-overlay');
+    const internalProfileTrigger = document.getElementById('codex-internal-profile-trigger');
+    const internalProfileForm = document.getElementById('codex-internal-profile-form');
+    const internalProfileInput = document.getElementById('codex-internal-profile-username');
+    const internalProfileCancel = document.getElementById('codex-internal-profile-cancel');
+    const internalProfileStatus = document.getElementById('codex-internal-profile-status');
+    const internalProfileConfigured = document.body.dataset.internalProfileConfigured === 'true';
+
+    if (internalProfileOverlay && internalProfileForm && internalProfileInput) {
+        const openInternalProfile = ({required = false} = {}) => {
+            internalProfileInput.value = document.body.dataset.internalUsername || '';
+            internalProfileStatus.textContent = '';
+            internalProfileOverlay.classList.remove('is-hidden');
+            internalProfileOverlay.setAttribute('aria-hidden', 'false');
+            internalProfileCancel.classList.toggle('is-hidden', required);
+            window.setTimeout(() => internalProfileInput.focus(), 0);
+        };
+        const closeInternalProfile = () => {
+            internalProfileOverlay.classList.add('is-hidden');
+            internalProfileOverlay.setAttribute('aria-hidden', 'true');
+        };
+        internalProfileTrigger?.addEventListener('click', () => openInternalProfile());
+        internalProfileCancel?.addEventListener('click', closeInternalProfile);
+        internalProfileOverlay.addEventListener('click', event => {
+            if (event.target === internalProfileOverlay && !internalProfileCancel.classList.contains('is-hidden')) closeInternalProfile();
+        });
+        internalProfileForm.addEventListener('submit', async event => {
+            event.preventDefault();
+            const username = internalProfileInput.value.trim().toLowerCase();
+            if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(username)) {
+                internalProfileStatus.textContent = '1~64자의 영문 소문자, 숫자, ., _, - 만 사용할 수 있습니다.';
+                return;
+            }
+            internalProfileStatus.textContent = '저장 중...';
+            try {
+                const response = await fetch('/api/codex/internal/profile', {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username}),
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.error || 'Username을 저장하지 못했습니다.');
+                document.body.dataset.internalUsername = payload.username;
+                document.body.dataset.internalProfileConfigured = 'true';
+                const label = internalProfileTrigger?.querySelector('.internal-profile-label');
+                if (label) label.textContent = payload.username;
+                closeInternalProfile();
+            } catch (error) {
+                internalProfileStatus.textContent = error.message || 'Username을 저장하지 못했습니다.';
+            }
+        });
+        if (!internalProfileConfigured) openInternalProfile({required: true});
+    }
+
+    // This is deliberately a presentation-only switch.  It lets an admin
+    // review the member-facing UI without changing the server-side identity
+    // or granting access to another user's workspace/data.
+    const setInternalView = view => {
+        const isMemberView = view === 'member';
+        document.body.classList.toggle('is-internal-member-view', isMemberView);
+        internalViewSwitchButtons.forEach(button => {
+            const active = button.dataset.internalView === (isMemberView ? 'member' : 'admin');
+            button.classList.toggle('is-active', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+        try {
+            window.sessionStorage.setItem('codex-internal-admin-view', isMemberView ? 'member' : 'admin');
+        } catch (_error) {
+            // Private browsing may reject session storage; the control still works for this page.
+        }
+    };
+    if (internalViewSwitchButtons.length) {
+        let savedView = 'admin';
+        try {
+            savedView = window.sessionStorage.getItem('codex-internal-admin-view') || 'admin';
+        } catch (_error) {
+            // Keep the safe default when session storage is unavailable.
+        }
+        setInternalView(savedView);
+        internalViewSwitchButtons.forEach(button => {
+            button.addEventListener('click', () => setInternalView(button.dataset.internalView));
+        });
+    }
     loadGitCommitMessageModelSetting();
     syncGitCommitMessageModelLabels();
     const themeMedia = window.matchMedia(THEME_MEDIA_QUERY);

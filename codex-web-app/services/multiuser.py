@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+import hashlib
 import json
 import os
 import re
@@ -25,6 +26,8 @@ class InternalUser:
     username: str
     role: str
     client_ip: str
+    storage_key: str
+    profile_configured: bool = False
 
 
 def normalize_username(value: object) -> str:
@@ -32,6 +35,12 @@ def normalize_username(value: object) -> str:
     if not _USER_ID_RE.fullmatch(username):
         raise ValueError("username must contain 1-64 lowercase letters, digits, '.', '_' or '-'")
     return username
+
+
+def storage_key_for_ip(client_ip: str) -> str:
+    """Return the stable, non-display filesystem identity for an IP address."""
+    digest = hashlib.sha256(str(client_ip).strip().encode('utf-8')).hexdigest()
+    return f'ip-{digest[:24]}'
 
 
 def activate_user(user: InternalUser):
@@ -77,7 +86,12 @@ def load_ip_user_map(path: Path) -> dict[str, dict[str, str]]:
         if role not in {'admin', 'maintainer', 'member'}:
             continue
         if ip:
-            result[ip] = {'username': username, 'role': role}
+            result[ip] = {
+                'username': username,
+                'role': role,
+                # Existing maps intentionally prompt once after this upgrade.
+                'profile_configured': bool(entry.get('profile_configured', False)),
+            }
     return result
 
 
@@ -94,7 +108,12 @@ def save_ip_user_map(path: Path, entries: object) -> list[dict[str, str]]:
         role = str(entry.get('role') or 'member').strip().lower()
         if not ip or ip in seen_ips or role not in {'admin', 'maintainer', 'member'}:
             raise ValueError('each entry needs a unique IP and a valid role')
-        clean.append({'ip': ip, 'username': username, 'role': role})
+        clean.append({
+            'ip': ip,
+            'username': username,
+            'role': role,
+            'profile_configured': bool(entry.get('profile_configured', False)),
+        })
         seen_ips.add(ip)
     if not any(entry['role'] == 'admin' for entry in clean):
         raise ValueError('at least one admin is required')
@@ -104,6 +123,33 @@ def save_ip_user_map(path: Path, entries: object) -> list[dict[str, str]]:
     temporary.write_text(json.dumps({'version': 1, 'users': clean}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     os.replace(temporary, target)
     return clean
+
+
+def update_ip_user_profile(path: Path, client_ip: str, username: object) -> dict[str, str]:
+    """Update only the current IP's display name; its storage identity never changes."""
+    normalized = normalize_username(username)
+    target = Path(path)
+    try:
+        raw = json.loads(target.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError('internal user map could not be read') from exc
+    entries = raw.get('users', []) if isinstance(raw, dict) else raw
+    if not isinstance(entries, list):
+        raise ValueError('internal user map is invalid')
+    found = None
+    for entry in entries:
+        if isinstance(entry, dict) and str(entry.get('ip') or '').strip() == client_ip:
+            entry['username'] = normalized
+            entry['profile_configured'] = True
+            found = entry
+            break
+    if found is None:
+        raise ValueError('internal user IP is not registered')
+    payload = {'version': raw.get('version', 1), 'users': entries} if isinstance(raw, dict) else entries
+    temporary = target.with_suffix(target.suffix + '.tmp')
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    os.replace(temporary, target)
+    return {'username': normalized, 'role': str(found.get('role') or 'member').strip().lower()}
 
 
 class ScopedPath:

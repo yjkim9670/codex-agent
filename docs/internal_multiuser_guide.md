@@ -10,11 +10,12 @@
                   └─ 개인 영역: workspace / 채팅 / 첨부 / 사용량 / API Key
 ```
 
-개인 영역은 `<CODEX_INTERNAL_DATA_DIR>/users/<username>/` 아래에 저장됩니다. 공용 RTL 원본은 `<CODEX_INTERNAL_DATA_DIR>/organization/shared-knowledge/` 아래에만 저장됩니다. 사용자에게 보이는 `shared` File Preview 루트는 읽기 전용입니다.
+개인 영역은 `<CODEX_INTERNAL_DATA_DIR>/users/ip-<SHA-256(IP) 앞 24자리>/` 아래에 저장됩니다. username은 화면에 표시되는 이름이며 변경해도 개인 폴더, 대화, API Key, 사용량 이력은 같은 IP 해시 경로를 계속 사용합니다. 첫 접속 시 username 설정 창이 열리고, 이후에는 상단의 username 버튼에서 수정할 수 있습니다. 공용 RTL 원본은 `<CODEX_INTERNAL_DATA_DIR>/organization/shared-knowledge/` 아래에만 저장됩니다. 사용자에게 보이는 `shared` File Preview 루트는 읽기 전용입니다.
 
 ## 2. 서버 설정과 시작
 
 Windows 사내 서버에서는 전용 PowerShell 스크립트로 시작하는 것을 권장합니다. 최초 실행 시 사용자 맵이 없으면 관리자 `12.80.214.204 → dinya`를 자동으로 생성합니다.
+별도 `-InternalDataDir`를 지정하지 않으면 데이터는 Workbench 폴더의 한 단계 위에 있는 `internal-workbench-data`에 생성됩니다.
 
 ```powershell
 .\run_codex_chat_server_internal_multiuser.ps1

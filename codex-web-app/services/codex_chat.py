@@ -13037,7 +13037,7 @@ def create_codex_stream(
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     stream = {
         'id': stream_id,
-        'owner_username': (get_active_user().username if get_active_user() is not None else ''),
+        'owner_username': (get_active_user().storage_key if get_active_user() is not None else ''),
         'session_id': session_id,
         'output': '',
         'error': '',
@@ -13756,7 +13756,7 @@ def get_codex_stream(stream_id):
 
 def _stream_belongs_to_current_user(stream):
     user = get_active_user()
-    return user is None or stream.get('owner_username', '') == user.username
+    return user is None or stream.get('owner_username', '') == user.storage_key
 
 
 def list_codex_streams(include_done=False):

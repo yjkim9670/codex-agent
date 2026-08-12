@@ -31,7 +31,7 @@ from .services.codex_chat import (
 )
 from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
-from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map
+from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
 
 
 def _get_allowed_origins():
@@ -95,9 +95,15 @@ def create_codex_app():
         record = mapping.get(client_ip)
         if record is None:
             return jsonify({'error': '등록되지 않은 내부 사용자 IP입니다.', 'error_code': 'internal_user_not_registered'}), 403
-        user = InternalUser(record['username'], record['role'], client_ip)
+        user = InternalUser(record['username'], record['role'], client_ip, storage_key_for_ip(client_ip), record.get('profile_configured', False))
         g.codex_current_user = user
         g.codex_user_context_token = activate_user(user)
+        # Move pre-hash user roots created by earlier internal-mode releases
+        # exactly once, preserving all existing chat, workspace and key data.
+        hashed_root = Path(WORKSPACE_DIR).parent
+        legacy_root = hashed_root.parent / user.username
+        if not hashed_root.exists() and legacy_root.is_dir() and legacy_root != hashed_root:
+            legacy_root.replace(hashed_root)
         # Provision only this user's empty workspace on first access.  The
         # scoped path prevents this from creating or exposing a shared root.
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
@@ -162,6 +168,11 @@ def create_codex_app():
             workspace_directory_path=runtime_context['workspace_directory_path'],
             shared_knowledge_directory_path=runtime_context['shared_knowledge_directory_path'],
             internal_multiuser_mode=is_internal_multiuser_mode(),
+            current_internal_user=(
+                {'username': g.codex_current_user.username, 'role': g.codex_current_user.role, 'profile_configured': g.codex_current_user.profile_configured}
+                if is_internal_multiuser_mode() and getattr(g, 'codex_current_user', None) is not None
+                else None
+            ),
             current_branch_name=runtime_context['current_branch_name'],
             company_mode_enabled=_is_company_mode_enabled(),
         )

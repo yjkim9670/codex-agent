@@ -7,7 +7,8 @@
 ```text
 고정 IP 사용자 → Codex Workbench
                   ├─ 공용 RTL Knowledge: revision별 읽기 전용 원본
-                  └─ 개인 영역: workspace / 채팅 / 첨부 / 사용량 / API Key
+                  ├─ 관리자 Key 풀: Windows DPAPI로 암호화된 공용 API Key
+                  └─ 개인 영역: workspace / 채팅 / 첨부 / 사용량
 ```
 
 개인 영역은 `<CODEX_INTERNAL_DATA_DIR>/users/ip-<SHA-256(IP) 앞 24자리>/` 아래에 저장됩니다. username은 화면에 표시되는 이름이며 변경해도 개인 폴더, 대화, API Key, 사용량 이력은 같은 IP 해시 경로를 계속 사용합니다. 첫 접속 시 username 설정 창이 열리고, 이후에는 상단의 username 버튼에서 수정할 수 있습니다. 공용 RTL 원본은 `<CODEX_INTERNAL_DATA_DIR>/organization/shared-knowledge/` 아래에만 저장됩니다. 사용자에게 보이는 `shared` File Preview 루트는 읽기 전용입니다.
@@ -33,7 +34,7 @@ export CODEX_INTERNAL_USER_MAP_PATH=/srv/codex-workbench/internal-state/user_map
 export CODEX_SHARED_KNOWLEDGE_DIR=/srv/codex-workbench/internal-state/organization/shared-knowledge
 ```
 
-`CODEX_INTERNAL_DATA_DIR`는 서비스 계정만 읽고 쓸 수 있게 권한을 제한합니다. 이 위치에는 사용자별 API Key와 대화가 들어가므로 백업 매체도 같은 수준으로 보호해야 합니다.
+`CODEX_INTERNAL_DATA_DIR`는 서비스 계정만 읽고 쓸 수 있게 권한을 제한합니다. 이 위치에는 암호화된 API Key 풀과 사용자 대화가 들어가므로 백업 매체도 같은 수준으로 보호해야 합니다.
 
 리버스 프록시 뒤에서 운영하면 프록시 IP만 신뢰하도록 지정합니다. 지정하지 않으면 Flask가 직접 연결한 IP만 사용합니다.
 
@@ -62,17 +63,19 @@ export CODEX_TRUSTED_PROXY_CIDRS=10.0.0.10/32
 
 | 역할 | 권한 |
 | --- | --- |
-| `admin` | IP 사용자 맵 관리, 공용 RTL revision 등록, 일반 사용자 기능 |
+| `admin` | IP 사용자 맵 관리, 공용 RTL revision 등록, API Key 풀 관리, 일반 사용자 기능 |
 | `maintainer` | 공용 RTL revision 등록, 일반 사용자 기능 |
-| `member` | 공용 RTL 조회·개인 workspace 복사·대화·개인 API Key |
+| `member` | 공용 RTL 조회·개인 workspace 복사·대화 |
 
 등록되지 않은 IP의 모든 요청은 `403`으로 거부됩니다. 관리자는 `GET`/`PUT /api/codex/internal/users`로 사용자 맵을 갱신할 수 있습니다. IP가 NAT로 공유되면 이 방식만으로는 개인 식별이 불가능하므로 사용자마다 고정 IP를 배정해야 합니다.
 
-## 4. 사용자별 API Key 등록
+## 4. 관리자 API Key 풀과 요청별 자동 배정
 
-각 사용자는 기존 Workbench의 Codex 계정/API Key 설정 화면에서 자신의 키를 등록합니다. 내부 모드에서는 자격 증명, 선택 계정, 사용량·이력이 해당 사용자의 개인 `.agent_state`에만 저장되고 다른 사용자의 키나 사용량에는 접근할 수 없습니다.
+내부 모드에서는 일반 사용자가 API Key를 입력하거나 볼 수 없습니다. `admin`으로 접속하면 설정 패널에 **Internal API Key Pool**이 표시됩니다. 여기에서 Key 이름과 실제 값을 추가하고 **Key Pool 저장**을 누릅니다. Key 값은 전송 시 암호화되며 저장 후에는 다시 화면·API 응답에 표시되지 않습니다.
 
-동일 키를 여러 사람이 등록하지 않는 것을 권장합니다. API 공급자 측 rate limit·사용량 한도는 키 단위로 공유되기 때문입니다. 키를 교체하거나 퇴사자를 제거할 때에는 해당 IP 맵과 그 사용자 자격 증명을 함께 폐기합니다.
+각 Codex/Claude 실행 요청이 시작될 때 서버는 등록된 Key를 라운드로빈(순환)으로 하나 선택합니다. 선택된 Key는 해당 요청의 종료까지 고정되며, 다음 요청은 다음 Key를 사용합니다. Key별 자동 선택 횟수와 마지막 선택 시각은 관리자 패널에서 확인할 수 있습니다. Key 풀은 `<CODEX_INTERNAL_DATA_DIR>/organization/credentials/api_key_pool.dpapi`에 Windows DPAPI로 암호화되어 저장되고, 선택 감사 로그는 같은 폴더의 `api_key_selection_audit.jsonl`에 Key ID·IP 해시 사용자 ID·시각만 기록됩니다. 사용자 개인 영역이나 브라우저 저장소에는 Key가 기록되지 않으며, 풀에 Key가 없으면 회사 API Key가 주입되지 않고 서버 환경변수 Key도 우회 경로로 사용되지 않습니다.
+
+API 공급자 측 rate limit·사용량 한도는 Key 단위로 공유됩니다. 선택 횟수는 배정 횟수이며 실제 토큰 사용량과는 다를 수 있으므로, 기존 Usage Panel의 메시지별 토큰 사용량과 함께 확인하십시오.
 
 ## 5. 공용 RTL Knowledge 등록 (admin/maintainer)
 
@@ -121,7 +124,7 @@ workspace/.codex-knowledge/<revision-id>/
 ## 7. 운영 점검·백업
 
 - `organization/audit-log.jsonl`에는 공용 revision 생성·개인 workspace import의 사용자/IP/시간을 기록합니다.
-- 개인 채팅, 첨부, 사용량 및 API Key는 사용자별 경로를 통째로 백업하되 다른 사용자에게 복원하지 않습니다.
+- 개인 채팅, 첨부, 사용량은 사용자별 경로를 통째로 백업하되 다른 사용자에게 복원하지 않습니다. API Key 풀은 `organization/credentials`를 별도로 서비스 계정 전용으로 백업합니다.
 - 공용 지식은 revision 디렉터리를 삭제·수정하지 말고 새 revision을 추가하는 방식으로 운영합니다.
 - 서버 업데이트 전에는 `user_map.json`, `organization/shared-knowledge`, 각 사용자 `.agent_state`를 백업하고, 테스트 IP로 `403` 차단과 사용자 간 채팅·파일 격리를 확인합니다.
 

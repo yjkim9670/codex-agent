@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Workbench · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=214">
+    <link rel="stylesheet" href="/static/css/app.css?v=215">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
-<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
+<body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
     {% macro render_file_panel(id_prefix) -%}
     <div class="file-browser-layout work-mode-file-layout" id="{{ id_prefix }}-layout" data-file-panel-id="{{ id_prefix }}">
         <div class="file-browser-list-panel work-mode-file-list-panel">
@@ -333,6 +333,7 @@
                     </label>
                 </div>
                 <div class="git-actions" aria-label="Git actions">
+                    {% if not internal_multiuser_mode %}
                     {% if current_branch_name %}
                         <span
                             class="git-branch"
@@ -347,6 +348,7 @@
                     <button class="btn ghost icon-only git-action-commit" type="button" id="codex-git-commit" aria-label="Stage files and commit" title="Stage files and commit"></button>
                     <button class="btn ghost icon-only git-action-push" type="button" id="codex-git-push" aria-label="Push current branch and run fetch" title="Push current branch and run fetch"></button>
                     <button class="btn ghost icon-only git-action-sync" type="button" id="codex-git-sync" aria-label="Open repository sync panel" title="Open repository sync panel"></button>
+                    {% endif %}
                     <button class="btn ghost icon-only git-action-browse" type="button" id="codex-file-browser-open" aria-label="Open file browser" title="Open file browser"></button>
                     <button class="btn ghost icon-only work-mode-toggle" type="button" id="codex-work-mode-toggle" aria-pressed="false" aria-label="Enable work mode" title="Enable work mode">
                         <span class="sr-only">Work mode</span>
@@ -649,7 +651,27 @@
                                 </button>
                             </div>
                         </div>
-                        {% if company_mode_enabled %}
+                        {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
+                        <section class="company-credential-card" id="codex-internal-api-key-allocation-card" aria-labelledby="codex-internal-api-key-allocation-title">
+                            <div class="company-credential-header">
+                                <div>
+                                    <div class="model-label" id="codex-internal-api-key-allocation-title">Internal API Key Pool</div>
+                                    <div class="company-credential-summary">관리자만 Key를 등록합니다. 각 Codex/Claude 요청은 등록 순서대로 자동 선택되며 Key 값은 다시 표시되지 않습니다.</div>
+                                </div>
+                            </div>
+                            <div class="company-credential-input-row">
+                                <input class="model-input" id="codex-internal-api-key-label" maxlength="100" placeholder="Key 이름 (예: RTL team 1)">
+                                <input class="model-input" id="codex-internal-api-key-value" type="password" autocomplete="new-password" placeholder="새 API Key">
+                                <button class="btn secondary" type="button" id="codex-internal-api-key-add">Key 추가</button>
+                            </div>
+                            <div id="codex-internal-api-key-allocation-list"></div>
+                            <div class="company-credential-actions">
+                                <button class="btn primary" type="button" id="codex-internal-api-key-allocation-save">Key Pool 저장</button>
+                                <button class="btn ghost" type="button" id="codex-internal-api-key-allocation-refresh">새로고침</button>
+                            </div>
+                            <div class="company-credential-status" id="codex-internal-api-key-allocation-status" aria-live="polite"></div>
+                        </section>
+                        {% elif company_mode_enabled %}
                         <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
                             <div class="company-credential-header">
                                 <div>
@@ -1721,6 +1743,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=227"></script>
+    <script src="/static/js/app.js?v=228"></script>
 </body>
 </html>

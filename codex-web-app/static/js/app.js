@@ -4018,6 +4018,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeTheme(themeToggle, themeMedia);
     initializeLiveWeatherPanel(compactMedia);
     initializeCompanyCredentialPanel();
+    initializeInternalApiKeyAllocationPanel();
     if (streamMonitor) {
         setStreamMonitorCollapsed(streamMonitor.classList.contains('is-collapsed'));
     }
@@ -6642,6 +6643,10 @@ function isWorkModeEnabled() {
     return Boolean(app?.classList.contains(WORK_MODE_CLASS));
 }
 
+function isInternalMultiuserMode() {
+    return document.body?.dataset.internalMultiuser === 'true';
+}
+
 function normalizeWorkModeSplitRatio(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return WORK_MODE_DEFAULT_SPLIT;
@@ -6799,7 +6804,10 @@ function initializeWorkMode(isMobile) {
     workModePanelMode = readWorkModePanelModePreference();
     initializeWorkModeFileViewState(isMobile);
     setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
-    const preferred = readWorkModePreference();
+    // Internal users always arrive in the work layout. Their standalone
+    // preference remains unchanged, and they can still leave work mode during
+    // the current visit if desired.
+    const preferred = isInternalMultiuserMode() || readWorkModePreference();
     setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
     const initialMobileView = isMobile
         ? WORK_MODE_MOBILE_VIEW_CHAT
@@ -8758,6 +8766,81 @@ function initializeCompanyCredentialPanel() {
         button.setAttribute('aria-pressed', String(!visible));
     });
     void loadCompanyCredentialStatus();
+}
+
+let internalApiKeyAllocation = null;
+
+function setInternalApiKeyAllocationStatus(message, isError = false) {
+    const element = document.getElementById('codex-internal-api-key-allocation-status');
+    if (!element) return;
+    element.textContent = String(message || '');
+    element.classList.toggle('is-error', Boolean(isError));
+}
+
+function renderInternalApiKeyAllocation() {
+    const host = document.getElementById('codex-internal-api-key-allocation-list');
+    if (!host || !internalApiKeyAllocation) return;
+    host.replaceChildren();
+    const keys = Array.isArray(internalApiKeyAllocation.keys) ? internalApiKeyAllocation.keys : [];
+    if (!keys.length) {
+        const empty = document.createElement('div');
+        empty.className = 'company-credential-summary';
+        empty.textContent = '등록된 Key가 없습니다. 위에서 Key 이름과 값을 입력해 추가하세요.';
+        host.append(empty);
+    }
+    if (keys.length) {
+        const keySummary = document.createElement('div');
+        keySummary.className = 'company-credential-summary';
+        keySummary.textContent = `등록 Key: ${keys.map(key => `${key.label} (자동 선택 ${key.selection_count || 0}회)`).join(', ')} · 다음 대화 제출부터 순환 적용됩니다.`;
+        host.append(keySummary);
+    }
+}
+
+async function loadInternalApiKeyAllocation() {
+    try {
+        internalApiKeyAllocation = await fetchJson('/api/codex/internal/api-key-allocation');
+        renderInternalApiKeyAllocation();
+    } catch (error) {
+        setInternalApiKeyAllocationStatus(normalizeError(error, 'API Key 배정 정보를 불러오지 못했습니다.'), true);
+    }
+}
+
+function initializeInternalApiKeyAllocationPanel() {
+    if (!document.getElementById('codex-internal-api-key-allocation-card')) return;
+    document.getElementById('codex-internal-api-key-add')?.addEventListener('click', () => {
+        const labelInput = document.getElementById('codex-internal-api-key-label');
+        const valueInput = document.getElementById('codex-internal-api-key-value');
+        const label = String(labelInput?.value || '').trim();
+        const apiKey = String(valueInput?.value || '').trim();
+        if (!label || !apiKey) {
+            setInternalApiKeyAllocationStatus('Key 이름과 실제 API Key 값을 모두 입력하세요.', true);
+            return;
+        }
+        if (!internalApiKeyAllocation) internalApiKeyAllocation = { keys: [] };
+        internalApiKeyAllocation.keys.push({ id: '', label, api_key: apiKey, assignment_count: 0 });
+        if (labelInput) labelInput.value = '';
+        if (valueInput) valueInput.value = '';
+        renderInternalApiKeyAllocation();
+        setInternalApiKeyAllocationStatus('새 Key를 추가했습니다. “배정 저장”을 눌러 적용하세요.');
+    });
+    document.getElementById('codex-internal-api-key-allocation-refresh')?.addEventListener('click', () => void loadInternalApiKeyAllocation());
+    document.getElementById('codex-internal-api-key-allocation-save')?.addEventListener('click', async () => {
+        if (!internalApiKeyAllocation) return;
+        setInternalApiKeyAllocationStatus('Key 풀을 안전하게 저장하는 중...');
+        try {
+            const encrypted = await encryptCompanyCredentialPayload({
+                keys: internalApiKeyAllocation.keys.map(key => ({ id: key.id, label: key.label, api_key: key.api_key || '' }))
+            });
+            internalApiKeyAllocation = await fetchJson('/api/codex/internal/api-key-allocation', {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(encrypted)
+            });
+            renderInternalApiKeyAllocation();
+            setInternalApiKeyAllocationStatus('Key Pool을 저장했습니다. 다음 Codex/Claude 요청부터 자동 순환 적용됩니다.');
+        } catch (error) {
+            setInternalApiKeyAllocationStatus(normalizeError(error, 'API Key 배정을 저장하지 못했습니다.'), true);
+        }
+    });
+    void loadInternalApiKeyAllocation();
 }
 
 async function loadSettings({ silent = true } = {}) {

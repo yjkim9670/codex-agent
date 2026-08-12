@@ -174,9 +174,11 @@ from ..services.company_credentials import (
     CompanyCredentialError,
     delete_company_api_key,
     get_company_credential_status,
+    get_internal_api_key_allocation,
     is_admin_auth_configured,
     store_company_api_key,
     test_company_api_key,
+    update_internal_api_key_allocation,
     verify_admin_secret,
 )
 from ..services.git_ops import get_current_branch_name, run_git_action
@@ -958,6 +960,15 @@ def _clear_company_admin_failures():
 
 @bp.route('/api/codex/company-credentials/status')
 def company_credentials_status():
+    if is_internal_multiuser_mode():
+        current_user = get_active_user()
+        if current_user is None:
+            return jsonify({'error': '내부 사용자 정보를 찾을 수 없습니다.'}), 403
+        return jsonify({
+            'internal_managed': True,
+            'credential': get_company_credential_status(),
+            'allocation': get_internal_api_key_allocation() if current_user.role == 'admin' else None,
+        })
     authenticated = _company_admin_authenticated()
     return jsonify({
         'auth_configured': is_admin_auth_configured(),
@@ -965,6 +976,22 @@ def company_credentials_status():
         'csrf_token': _company_admin_csrf_token(),
         'credential': get_company_credential_status() if authenticated else None,
     })
+
+
+@bp.route('/api/codex/internal/api-key-allocation', methods=['GET', 'PUT'])
+def codex_internal_api_key_allocation():
+    denied = _require_internal_role('admin')
+    if denied:
+        return denied
+    try:
+        if request.method == 'GET':
+            return jsonify(get_internal_api_key_allocation())
+        payload, _crypto_session_id = decrypt_credential_payload(request.get_json(silent=True) or {})
+        return jsonify(update_internal_api_key_allocation(payload))
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    except CompanyCredentialError as exc:
+        return _company_credential_error_response(exc)
 
 
 @bp.route('/api/codex/company-credentials/crypto-session', methods=['POST'])

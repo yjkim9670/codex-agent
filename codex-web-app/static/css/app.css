@@ -6067,7 +6067,9 @@ body.is-mermaid-diagram-viewer-open {
     padding: 5px 9px;
     color: var(--text-primary);
     background: var(--surface-muted);
-    font: inherit;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
 }
 

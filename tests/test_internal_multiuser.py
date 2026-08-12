@@ -212,3 +212,55 @@ print(json.dumps({'prompt': 'data-internal-profile-configured="false"' in root, 
     assert outcome['profile']['username'] == 'alice-new'
     assert any(item['name'] == 'keep.txt' for item in outcome['files'])
     assert (data_dir / 'users' / _storage_key('10.20.0.11') / 'workspace' / 'keep.txt').is_file()
+
+
+def test_internal_api_keys_rotate_per_request_and_never_fall_back_to_user_keys(tmp_path):
+    data_dir = tmp_path / 'internal-state'
+    map_path = data_dir / 'user_map.json'
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text(json.dumps({'users': [
+        {'ip': '10.20.0.11', 'username': 'admin', 'role': 'admin'},
+        {'ip': '10.20.0.12', 'username': 'member', 'role': 'member'},
+    ]}), encoding='utf-8')
+    script = r'''
+import json
+from codex_agent.services import company_credentials
+from codex_agent.services.multiuser import InternalUser, activate_user, deactivate_user, storage_key_for_ip
+company_credentials.sys.platform = 'win32'
+company_credentials._protect_windows = lambda value: b'P' + value
+company_credentials._unprotect_windows = lambda value: value[1:]
+admin_ip, member_ip = '10.20.0.11', '10.20.0.12'
+admin = InternalUser('admin', 'admin', admin_ip, storage_key_for_ip(admin_ip))
+member = InternalUser('member', 'member', member_ip, storage_key_for_ip(member_ip))
+token = activate_user(admin)
+try:
+    result = company_credentials.update_internal_api_key_allocation({
+        'keys': [
+            {'label': 'team-a', 'api_key': 'central-secret-a'},
+            {'label': 'team-b', 'api_key': 'central-secret-b'},
+        ],
+    })
+finally:
+    deactivate_user(token)
+token = activate_user(member)
+try:
+    envs = [{}, {}, {}]
+    applied = [company_credentials.apply_company_api_key(env) for env in envs]
+    metadata = company_credentials.get_internal_api_key_allocation()
+finally:
+    deactivate_user(token)
+print(json.dumps({'applied': applied, 'secrets': [env['DTGPT_API_KEY'] for env in envs], 'ids': [env['CODEX_WORKBENCH_INTERNAL_API_KEY_ID'] for env in envs], 'keys': metadata['keys']}))
+'''
+    env = os.environ.copy()
+    env.update({
+        'CODEX_WORKBENCH_MODE': 'internal-multiuser', 'CODEX_INTERNAL_DATA_DIR': str(data_dir),
+        'CODEX_INTERNAL_USER_MAP_PATH': str(map_path), 'DTGPT_API_KEY': 'environment-must-not-bypass',
+    })
+    result = subprocess.run([sys.executable, '-c', script], cwd=PROJECT_ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout.strip().splitlines()[-1])
+    assert outcome['applied'] == [True, True, True]
+    assert outcome['secrets'] == ['central-secret-a', 'central-secret-b', 'central-secret-a']
+    assert outcome['ids'][0] == outcome['ids'][2] != outcome['ids'][1]
+    assert [item['selection_count'] for item in outcome['keys']] == [2, 1]
+    assert 'central-secret' not in json.dumps({'keys': outcome['keys']})

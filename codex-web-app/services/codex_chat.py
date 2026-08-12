@@ -12527,6 +12527,7 @@ def _run_codex_stream(stream_id, prompt):
                     stream['queue_wait_ms'] = int(lock_info.get('wait_ms') or 0)
                     stream['codex_home'] = str(exec_env.get('CODEX_HOME') or _CODEX_HOME)
                     stream['agent_backend'] = agent_backend
+                    stream['internal_api_key_id'] = str(exec_env.get('CODEX_WORKBENCH_INTERNAL_API_KEY_ID') or '')
                     stream['updated_at'] = cli_started_at
 
         try:
@@ -13949,6 +13950,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         )
         structured_report_label = str(stream.get('structured_report_label') or '').strip()
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
+        internal_api_key_id = str(stream.get('internal_api_key_id') or '').strip()
         exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
 
     output_from_file = _read_output_last_message(output_path)
@@ -14130,7 +14132,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             'cancelled' if finalize_reason == 'user_cancelled' else 'failed'
         ),
         duration_ms=metadata.get('duration_ms'),
-        metadata={'finalize_reason': finalize_reason, 'execution_policy': execution_policy},
+        metadata={
+            'finalize_reason': finalize_reason,
+            'execution_policy': execution_policy,
+            **({'internal_api_key_id': internal_api_key_id} if internal_api_key_id else {}),
+        },
     )
     keepalive_mode = ''
     if stream.get('usage_operation') == 'usage_keepalive':

@@ -106,8 +106,29 @@ function Show-KeyPool([System.Collections.IDictionary]$Pool) {
     $rows | Format-Table -AutoSize
 }
 
+# Windows PowerShell 5.1 loads this type from the full .NET Framework by
+# default.  PowerShell 7 uses .NET and may not load the optional crypto
+# assembly until it is explicitly requested, even when it is installed.
+$isWindowsHost = if ($PSVersionTable.PSEdition -eq 'Desktop') {
+    $env:OS -eq 'Windows_NT'
+} elseif ($null -ne $IsWindows) {
+    [bool]$IsWindows
+} else {
+    [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+}
+if (-not $isWindowsHost) {
+    throw 'Windows DPAPI는 Windows에서만 사용할 수 있습니다. Windows PowerShell 또는 Windows용 PowerShell 7에서 실행하세요.'
+}
+
 if (-not ('Security.Cryptography.ProtectedData' -as [type])) {
-    throw 'Windows DPAPI를 사용할 수 없습니다. 이 스크립트는 Windows PowerShell 또는 PowerShell on Windows에서만 실행할 수 있습니다.'
+    try {
+        Add-Type -AssemblyName 'System.Security.Cryptography.ProtectedData' -ErrorAction Stop
+    } catch {
+        throw "Windows DPAPI 어셈블리를 불러올 수 없습니다. Windows PowerShell 5.1 또는 최신 PowerShell 7을 설치한 뒤 다시 실행하세요. ($($_.Exception.Message))"
+    }
+}
+if (-not ('Security.Cryptography.ProtectedData' -as [type])) {
+    throw 'Windows DPAPI를 초기화할 수 없습니다. Windows PowerShell 5.1 또는 최신 PowerShell 7에서 실행하세요.'
 }
 
 $pool = Read-KeyPool

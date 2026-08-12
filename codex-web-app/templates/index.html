@@ -584,7 +584,7 @@
                             <div class="account-switcher-status" id="codex-account-switcher-status"></div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
                         </div>
-                        <div class="model-card">
+                        <div class="model-card" id="codex-model-card">
                             <label id="codex-agent-backend-label" class="model-label is-hidden" for="codex-agent-backend-select">Agent backend</label>
                             <div id="codex-agent-backend-row" class="model-row model-row-single is-hidden">
                                 <div class="model-field model-field-agent-backend">
@@ -652,24 +652,14 @@
                             </div>
                         </div>
                         {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
-                        <section class="company-credential-card" id="codex-internal-api-key-allocation-card" aria-labelledby="codex-internal-api-key-allocation-title">
+                        <section class="company-credential-card" id="codex-internal-api-key-allocation-card" data-internal-admin-only aria-labelledby="codex-internal-api-key-allocation-title">
                             <div class="company-credential-header">
                                 <div>
                                     <div class="model-label" id="codex-internal-api-key-allocation-title">Internal API Key Pool</div>
-                                    <div class="company-credential-summary">관리자만 Key를 등록합니다. 각 Codex/Claude 요청은 등록 순서대로 자동 선택되며 Key 값은 다시 표시되지 않습니다.</div>
+                                    <div class="company-credential-summary">관리자만 Key를 등록합니다. 각 Codex/Claude 요청은 등록 순서대로 자동 선택됩니다.</div>
                                 </div>
+                                <button class="btn secondary" type="button" id="codex-internal-api-key-pool-open">Key Pool 열기</button>
                             </div>
-                            <div class="company-credential-input-row">
-                                <input class="model-input" id="codex-internal-api-key-label" maxlength="100" placeholder="Key 이름 (예: RTL team 1)">
-                                <input class="model-input" id="codex-internal-api-key-value" type="password" autocomplete="new-password" placeholder="새 API Key">
-                                <button class="btn secondary" type="button" id="codex-internal-api-key-add">Key 추가</button>
-                            </div>
-                            <div id="codex-internal-api-key-allocation-list"></div>
-                            <div class="company-credential-actions">
-                                <button class="btn primary" type="button" id="codex-internal-api-key-allocation-save">Key Pool 저장</button>
-                                <button class="btn ghost" type="button" id="codex-internal-api-key-allocation-refresh">새로고침</button>
-                            </div>
-                            <div class="company-credential-status" id="codex-internal-api-key-allocation-status" aria-live="polite"></div>
                         </section>
                         {% elif company_mode_enabled %}
                         <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
@@ -1502,6 +1492,34 @@
             </div>
         </div>
     </div>
+
+    {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
+    <div class="internal-key-pool-overlay" id="codex-internal-api-key-pool-overlay" aria-hidden="true" data-internal-admin-only>
+        <div class="internal-key-pool-overlay-backdrop" data-action="close"></div>
+        <section class="internal-key-pool-card" role="dialog" aria-modal="true" aria-labelledby="codex-internal-api-key-pool-overlay-title">
+            <div class="internal-key-pool-header">
+                <div>
+                    <div class="internal-key-pool-title" id="codex-internal-api-key-pool-overlay-title">Internal API Key Pool</div>
+                    <div class="company-credential-summary">Key 값은 저장 후 다시 표시되지 않습니다. 다음 Codex/Claude 요청부터 순환 적용됩니다.</div>
+                </div>
+                <button class="btn ghost icon-only" type="button" id="codex-internal-api-key-pool-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
+            </div>
+            <div class="internal-key-pool-body">
+                <div class="company-credential-input-row">
+                    <input class="model-input" id="codex-internal-api-key-label" maxlength="100" placeholder="Key 이름 (예: RTL team 1)">
+                    <input class="model-input" id="codex-internal-api-key-value" type="password" autocomplete="new-password" placeholder="새 API Key">
+                    <button class="btn secondary" type="button" id="codex-internal-api-key-add">Key 추가</button>
+                </div>
+                <div id="codex-internal-api-key-allocation-list"></div>
+                <div class="company-credential-status" id="codex-internal-api-key-allocation-status" aria-live="polite"></div>
+            </div>
+            <div class="internal-key-pool-footer">
+                <button class="btn ghost" type="button" id="codex-internal-api-key-allocation-refresh">새로고침</button>
+                <button class="btn primary" type="button" id="codex-internal-api-key-allocation-save">Key Pool 저장</button>
+            </div>
+        </section>
+    </div>
+    {% endif %}
 
     <div class="message-log-overlay" id="codex-message-log-overlay" aria-hidden="true">
         <div class="message-log-overlay-backdrop" data-action="close"></div>

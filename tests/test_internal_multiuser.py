@@ -132,6 +132,39 @@ print('member-role=' + str('data-internal-role="member"' in member))
     ]
 
 
+def test_internal_model_settings_are_admin_only_and_organization_wide(tmp_path):
+    data_dir = tmp_path / 'internal-state'
+    map_path = data_dir / 'user_map.json'
+    map_path.parent.mkdir(parents=True)
+    map_path.write_text(json.dumps({'users': [
+        {'ip': '10.20.0.11', 'username': 'admin', 'role': 'admin'},
+        {'ip': '10.20.0.12', 'username': 'member', 'role': 'member'},
+    ]}), encoding='utf-8')
+    script = r'''
+import json
+from codex_agent.codex_app import create_codex_app
+app = create_codex_app(); app.config['TESTING'] = True
+out = {}
+with app.test_client() as client:
+    out['member_write'] = client.patch('/api/codex/settings', json={'agent_backend': 'dtgpt'}, environ_overrides={'REMOTE_ADDR': '10.20.0.12'}).status_code
+    out['admin_write'] = client.patch('/api/codex/settings', json={'agent_backend': 'dtgpt', 'model': 'gpt-5'}, environ_overrides={'REMOTE_ADDR': '10.20.0.11'}).status_code
+    out['member_settings'] = client.get('/api/codex/settings', environ_overrides={'REMOTE_ADDR': '10.20.0.12'}).get_json()['settings']
+    admin_html = client.get('/', environ_overrides={'REMOTE_ADDR': '10.20.0.11'}).get_data(as_text=True)
+print(json.dumps({'member_write': out['member_write'], 'admin_write': out['admin_write'], 'model': out['member_settings']['model'], 'overlay': 'codex-internal-api-key-pool-overlay' in admin_html, 'admin_only': 'data-internal-admin-only' in admin_html}))
+'''
+    env = os.environ.copy()
+    env.update({
+        'CODEX_WORKBENCH_MODE': 'internal-multiuser', 'CODEX_INTERNAL_DATA_DIR': str(data_dir),
+        'CODEX_INTERNAL_USER_MAP_PATH': str(map_path), 'CODEX_REQUIRE_ACCOUNT_LOGIN': '0',
+        'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS': '0', 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES': '0',
+    })
+    result = subprocess.run([sys.executable, '-c', script], cwd=PROJECT_ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout.strip().splitlines()[-1])
+    assert outcome == {'member_write': 403, 'admin_write': 200, 'model': 'gpt-5', 'overlay': True, 'admin_only': True}
+    assert (data_dir / 'organization' / 'codex_settings.json').is_file()
+
+
 def test_internal_shared_rtl_knowledge_is_versioned_readonly_and_imported(tmp_path):
     data_dir = tmp_path / 'internal-state'
     map_path = data_dir / 'user_map.json'

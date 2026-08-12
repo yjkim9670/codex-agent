@@ -253,6 +253,10 @@ CODEX_INTERNAL_USER_MAP_PATH = _expand_path_value(os.environ.get('CODEX_INTERNAL
 CODEX_SHARED_KNOWLEDGE_DIR = _expand_path_value(os.environ.get('CODEX_SHARED_KNOWLEDGE_DIR')) or (
     CODEX_INTERNAL_DATA_DIR / 'organization' / 'shared-knowledge'
 )
+# Runtime model settings are organization policy in internal multi-user mode.
+# Keep this path outside the request-scoped user state so every user executes
+# with the administrator's selected backend/model/effort configuration.
+CODEX_ORGANIZATION_SETTINGS_PATH = CODEX_INTERNAL_DATA_DIR / 'organization' / 'codex_settings.json'
 def _parse_network_list(raw_value):
     networks = []
     for token in str(raw_value or '').split(','):

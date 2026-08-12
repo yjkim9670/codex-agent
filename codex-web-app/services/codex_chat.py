@@ -56,6 +56,7 @@ from ..config import (
     LEGACY_CODEX_USAGE_HISTORY_PATH,
     CODEX_SESSIONS_PATH,
     CODEX_SETTINGS_PATH,
+    CODEX_ORGANIZATION_SETTINGS_PATH,
     CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
     CODEX_USAGE_HISTORY_PATH,
@@ -70,6 +71,7 @@ from ..config import (
     KST,
     REPO_ROOT,
     WORKSPACE_DIR,
+    is_internal_multiuser_mode,
     get_codex_model_options_for_backend,
     normalize_codex_agent_backend,
     normalize_codex_model_name,
@@ -2466,9 +2468,12 @@ def format_assistant_response_content(content, mode_label='basic', model_name=''
 def _read_workspace_settings():
     data = {}
     best_mtime = None
-    for candidate_path in _iter_codex_state_candidate_paths(
-            CODEX_SETTINGS_PATH,
-            LEGACY_CODEX_SETTINGS_PATH):
+    if is_internal_multiuser_mode():
+        candidate_paths = (CODEX_ORGANIZATION_SETTINGS_PATH,)
+    else:
+        candidate_paths = _iter_codex_state_candidate_paths(
+            CODEX_SETTINGS_PATH, LEGACY_CODEX_SETTINGS_PATH)
+    for candidate_path in candidate_paths:
         payload = _read_json_object_from_path(candidate_path)
         if not isinstance(payload, dict) or not payload:
             continue
@@ -2532,8 +2537,9 @@ def _write_workspace_settings(settings):
             or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         ),
     }
-    CODEX_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CODEX_SETTINGS_PATH.write_text(
+    settings_path = CODEX_ORGANIZATION_SETTINGS_PATH if is_internal_multiuser_mode() else CODEX_SETTINGS_PATH
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding='utf-8'
     )
@@ -2967,7 +2973,8 @@ def _update_top_level_config(text, updates):
 
 def get_settings():
     with _CONFIG_LOCK:
-        if CODEX_SETTINGS_PATH.exists():
+        settings_path = CODEX_ORGANIZATION_SETTINGS_PATH if is_internal_multiuser_mode() else CODEX_SETTINGS_PATH
+        if settings_path.exists():
             return _merge_runtime_cli_settings(_read_workspace_settings())
         workspace_settings = _read_workspace_settings()
         if (
@@ -3023,7 +3030,8 @@ def update_settings(
         git_commit_message_reasoning_effort=None):
     with _CONFIG_LOCK:
         current = _read_workspace_settings()
-        if not current and not CODEX_SETTINGS_PATH.exists():
+        settings_path = CODEX_ORGANIZATION_SETTINGS_PATH if is_internal_multiuser_mode() else CODEX_SETTINGS_PATH
+        if not current and not settings_path.exists():
             text = _read_codex_config_text()
             current = _parse_top_level_config(text)
             current['plan_mode_model'] = None

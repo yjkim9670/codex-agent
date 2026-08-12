@@ -1286,6 +1286,10 @@ def codex_runtime_restart_policy():
 
 @bp.route('/api/codex/settings', methods=['PATCH'])
 def codex_settings_update():
+    if is_internal_multiuser_mode():
+        denied = _require_internal_role('admin')
+        if denied:
+            return denied
     payload = request.get_json(silent=True) or {}
     model = payload.get('model')
     reasoning = payload.get('reasoning_effort')

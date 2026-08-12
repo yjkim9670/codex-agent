@@ -6141,6 +6141,56 @@ body.is-internal-member-view [data-internal-admin-only] {
     display: none !important;
 }
 
+.internal-key-pool-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.internal-key-pool-overlay.is-visible { display: flex; }
+
+.internal-key-pool-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.52);
+}
+
+.internal-key-pool-card {
+    position: relative;
+    width: min(700px, 100%);
+    max-height: min(620px, calc(100vh - 40px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+}
+
+.internal-key-pool-header,
+.internal-key-pool-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.internal-key-pool-footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+}
+
+.internal-key-pool-title { font-size: 14px; font-weight: 650; }
+.internal-key-pool-body { overflow: auto; padding: 16px; display: grid; gap: 12px; }
+
 .git-actions {
     display: inline-flex;
     align-items: center;

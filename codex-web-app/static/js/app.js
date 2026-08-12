@@ -2173,6 +2173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const setInternalView = view => {
         const isMemberView = view === 'member';
         document.body.classList.toggle('is-internal-member-view', isMemberView);
+        syncInternalSettingsEditability();
         internalViewSwitchButtons.forEach(button => {
             const active = button.dataset.internalView === (isMemberView ? 'member' : 'admin');
             button.classList.toggle('is-active', active);
@@ -8305,6 +8306,7 @@ function renderCodexAccountControls() {
             : '계정 정보를 불러오는 중...';
     }
     renderCodexAccountList();
+    syncInternalSettingsEditability();
 }
 
 function setCodexAccountOverlayStatus(message, isError = false) {
@@ -8807,6 +8809,26 @@ async function loadInternalApiKeyAllocation() {
 
 function initializeInternalApiKeyAllocationPanel() {
     if (!document.getElementById('codex-internal-api-key-allocation-card')) return;
+    const overlay = document.getElementById('codex-internal-api-key-pool-overlay');
+    const openOverlay = () => {
+        if (!overlay || document.body.classList.contains('is-internal-member-view')) return;
+        overlay.classList.add('is-visible');
+        overlay.setAttribute('aria-hidden', 'false');
+        void loadInternalApiKeyAllocation();
+        window.setTimeout(() => document.getElementById('codex-internal-api-key-label')?.focus(), 0);
+    };
+    const closeOverlay = () => {
+        if (!overlay) return;
+        overlay.classList.remove('is-visible');
+        overlay.setAttribute('aria-hidden', 'true');
+        document.getElementById('codex-internal-api-key-pool-open')?.focus();
+    };
+    document.getElementById('codex-internal-api-key-pool-open')?.addEventListener('click', openOverlay);
+    document.getElementById('codex-internal-api-key-pool-close')?.addEventListener('click', closeOverlay);
+    overlay?.querySelector('.internal-key-pool-overlay-backdrop')?.addEventListener('click', closeOverlay);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && overlay?.classList.contains('is-visible')) closeOverlay();
+    });
     document.getElementById('codex-internal-api-key-add')?.addEventListener('click', () => {
         const labelInput = document.getElementById('codex-internal-api-key-label');
         const valueInput = document.getElementById('codex-internal-api-key-value');
@@ -8841,6 +8863,28 @@ function initializeInternalApiKeyAllocationPanel() {
         }
     });
     void loadInternalApiKeyAllocation();
+}
+
+function syncInternalSettingsEditability() {
+    const internalMode = document.body.dataset.internalMultiuser === 'true';
+    if (!internalMode) return;
+    const isAdmin = document.body.dataset.internalRole === 'admin';
+    const readOnly = !isAdmin || document.body.classList.contains('is-internal-member-view');
+    document.querySelectorAll('#codex-model-card input, #codex-model-card select').forEach(control => {
+        control.disabled = readOnly;
+    });
+    const apply = document.getElementById('codex-model-apply');
+    if (apply) apply.classList.toggle('is-hidden', readOnly);
+    if (readOnly) {
+        const keyPoolOverlay = document.getElementById('codex-internal-api-key-pool-overlay');
+        if (keyPoolOverlay) {
+            keyPoolOverlay.classList.remove('is-visible');
+            keyPoolOverlay.setAttribute('aria-hidden', 'true');
+        }
+    }
+    const accountSelect = document.getElementById('codex-account-select');
+    if (accountSelect) accountSelect.disabled = readOnly || accountSelect.options.length <= 1;
+    document.getElementById('codex-account-manage-open')?.classList.toggle('is-hidden', readOnly);
 }
 
 async function loadSettings({ silent = true } = {}) {
@@ -8914,6 +8958,7 @@ async function loadSettings({ silent = true } = {}) {
         renderStructuredReportBar();
         renderAppServerPilot();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        syncInternalSettingsEditability();
         syncGitCommitMessageModelLabels();
         if (isGitCommitMessageModelOverlayOpen()) {
             renderGitCommitMessageModelOptions();
@@ -9550,6 +9595,11 @@ async function watchManualUsageKeepalive(streamId, attempts = 0) {
 }
 
 async function updateSettings() {
+    if (document.body.dataset.internalMultiuser === 'true'
+        && (document.body.dataset.internalRole !== 'admin'
+            || document.body.classList.contains('is-internal-member-view'))) {
+        return;
+    }
     const input = document.getElementById('codex-model-input');
     const status = document.getElementById('codex-model-status');
     const refreshBtn = document.getElementById('codex-controls-refresh');
@@ -9660,6 +9710,7 @@ async function updateSettings() {
         renderStructuredReportBar();
         renderAppServerPilot();
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
+        syncInternalSettingsEditability();
         if (status) status.textContent = 'Saved';
     } catch (error) {
         if (status) status.textContent = normalizeError(error, 'Failed to update settings.');

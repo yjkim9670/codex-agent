@@ -11,7 +11,7 @@
                   └─ 개인 영역: workspace / 채팅 / 첨부 / 사용량
 ```
 
-개인 영역은 `<CODEX_INTERNAL_DATA_DIR>/users/ip-<SHA-256(IP) 앞 24자리>/` 아래에 저장됩니다. username은 화면에 표시되는 이름이며 변경해도 개인 폴더, 대화, API Key, 사용량 이력은 같은 IP 해시 경로를 계속 사용합니다. 첫 접속 시 username 설정 창이 열리고, 이후에는 상단의 username 버튼에서 수정할 수 있습니다. 공용 RTL 원본은 `<CODEX_INTERNAL_DATA_DIR>/organization/shared-knowledge/` 아래에만 저장됩니다. 사용자에게 보이는 `shared` File Preview 루트는 읽기 전용입니다.
+개인 영역은 `<CODEX_INTERNAL_DATA_DIR>/users/ip-<SHA-256(IP) 앞 24자리>/` 아래에 저장됩니다. username은 화면에 표시되는 이름이며 변경해도 개인 폴더, 대화, API Key, 사용량 이력은 같은 IP 해시 경로를 계속 사용합니다. 첫 접속 시 username 설정 창이 열리고, 이후에는 상단의 username 버튼에서 수정할 수 있습니다. 공용 RTL 원본은 `<CODEX_INTERNAL_DATA_DIR>/organization/shared-knowledge/` 아래에만 저장됩니다. 사용자에게 보이는 `shared` File Preview 루트는 읽기 전용입니다. Agent backend, 모델, effort, speed mode, browser verification 등의 실행 설정은 `<CODEX_INTERNAL_DATA_DIR>/organization/codex_settings.json`에 조직 공통으로 저장됩니다.
 
 ## 2. 서버 설정과 시작
 
@@ -63,7 +63,7 @@ export CODEX_TRUSTED_PROXY_CIDRS=10.0.0.10/32
 
 | 역할 | 권한 |
 | --- | --- |
-| `admin` | IP 사용자 맵 관리, 공용 RTL revision 등록, API Key 풀 관리, 일반 사용자 기능 |
+| `admin` | IP 사용자 맵 관리, 공용 RTL revision 등록, 조직 공통 Agent/Model/Effort 설정 및 API Key 풀 관리, 일반 사용자 기능 |
 | `maintainer` | 공용 RTL revision 등록, 일반 사용자 기능 |
 | `member` | 공용 RTL 조회·개인 workspace 복사·대화 |
 
@@ -71,11 +71,27 @@ export CODEX_TRUSTED_PROXY_CIDRS=10.0.0.10/32
 
 ## 4. 관리자 API Key 풀과 요청별 자동 배정
 
-내부 모드에서는 일반 사용자가 API Key를 입력하거나 볼 수 없습니다. `admin`으로 접속하면 설정 패널에 **Internal API Key Pool**이 표시됩니다. 여기에서 Key 이름과 실제 값을 추가하고 **Key Pool 저장**을 누릅니다. Key 값은 전송 시 암호화되며 저장 후에는 다시 화면·API 응답에 표시되지 않습니다.
+내부 모드에서는 일반 사용자가 API Key를 입력하거나 볼 수 없습니다. `admin`으로 접속하면 설정 패널에 **Internal API Key Pool**과 **Key Pool 열기** 버튼이 표시됩니다. 새 오버레이 창에서 Key 이름과 실제 값을 추가하고 **Key Pool 저장**을 누릅니다. Key 값은 전송 시 암호화되며 저장 후에는 다시 화면·API 응답에 표시되지 않습니다.
 
 각 Codex/Claude 실행 요청이 시작될 때 서버는 등록된 Key를 라운드로빈(순환)으로 하나 선택합니다. 선택된 Key는 해당 요청의 종료까지 고정되며, 다음 요청은 다음 Key를 사용합니다. Key별 자동 선택 횟수와 마지막 선택 시각은 관리자 패널에서 확인할 수 있습니다. Key 풀은 `<CODEX_INTERNAL_DATA_DIR>/organization/credentials/api_key_pool.dpapi`에 Windows DPAPI로 암호화되어 저장되고, 선택 감사 로그는 같은 폴더의 `api_key_selection_audit.jsonl`에 Key ID·IP 해시 사용자 ID·시각만 기록됩니다. 사용자 개인 영역이나 브라우저 저장소에는 Key가 기록되지 않으며, 풀에 Key가 없으면 회사 API Key가 주입되지 않고 서버 환경변수 Key도 우회 경로로 사용되지 않습니다.
 
 API 공급자 측 rate limit·사용량 한도는 Key 단위로 공유됩니다. 선택 횟수는 배정 횟수이며 실제 토큰 사용량과는 다를 수 있으므로, 기존 Usage Panel의 메시지별 토큰 사용량과 함께 확인하십시오.
+
+## 4-1. 조직 공통 Usage & Model 설정
+
+내부 모드에서는 `admin`만 Agent Backend, Claude/Codex model, effort, plan mode model/effort, speed mode, browser verification을 수정할 수 있습니다. 일반 사용자는 같은 현재값을 읽기 전용으로 보며, 관리자도 상단의 **일반 사용자** 화면 전환을 선택하면 동일한 읽기 전용 화면을 봅니다. 서버도 일반 사용자의 `PATCH /api/codex/settings`를 `403`으로 거부합니다.
+
+관리자가 저장한 값은 조직 공통 설정 파일에 저장되고, 모든 사용자의 다음 Codex/Claude 요청에 적용됩니다. 실행 중인 요청은 시작 시 확정된 설정을 계속 사용합니다.
+
+## 4-2. API Key 입력 시 HTTPS 필요
+
+`이 브라우저 연결에서는 API Key 암호화 전송을 사용할 수 없습니다. HTTPS로 접속하세요.`는 Workbench 오류가 아니라, `http://<사내-IP>:3300`처럼 보안 컨텍스트가 아닌 주소에서 브라우저가 Web Crypto API를 차단해서 발생합니다. API Key는 HTTPS 종료를 제공하는 사내 reverse proxy(IIS, nginx, Caddy 등) 뒤에서 접속하십시오.
+
+- Workbench는 계속 `127.0.0.1:3300` 또는 사내 방화벽으로 제한된 3300 포트에서 실행합니다.
+- reverse proxy에 사내 CA가 발급한 인증서를 설치하고 `https://workbench.<사내도메인>`으로 TLS를 종료한 뒤, 해당 포트로 프록시합니다.
+- proxy는 `X-Forwarded-Proto: https`와 실제 클라이언트 IP가 담긴 `X-Forwarded-For`를 전달하고, `CODEX_TRUSTED_PROXY_CIDRS`에는 proxy IP/CIDR만 설정합니다.
+- HTTPS를 쓰면 서버 시작 환경에 `CODEX_SESSION_COOKIE_SECURE=true`도 설정합니다.
+- 인증서 경고를 무시하거나 HTTP 예외를 열어 API Key를 입력하지 마십시오. `localhost`에서 서버 본인이 입력하는 경우만 브라우저의 보안 컨텍스트 예외가 적용될 수 있습니다.
 
 ## 5. 공용 RTL Knowledge 등록 (admin/maintainer)
 

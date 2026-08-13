@@ -300,3 +300,46 @@ print(json.dumps({'applied': applied, 'secrets': [env['DTGPT_API_KEY'] for env i
     assert [item['today_selection_count'] for item in outcome['keys']] == [2, 1]
     assert all('…' in item['secret_preview'] for item in outcome['keys'])
     assert 'central-secret' not in json.dumps({'keys': outcome['keys']})
+
+
+def test_internal_api_key_pool_reports_token_usage_per_key(tmp_path):
+    data_dir = tmp_path / 'internal-state'
+    script = r'''
+import json
+from codex_agent.services import company_credentials
+company_credentials.sys.platform = 'win32'
+company_credentials._protect_windows = lambda value: b'P' + value
+company_credentials._unprotect_windows = lambda value: value[1:]
+created = company_credentials.update_internal_api_key_allocation({
+    'keys': [{'label': 'team-a', 'api_key': 'central-secret-a'}],
+})
+key_id = created['keys'][0]['id']
+first = company_credentials.record_internal_api_key_token_usage(key_id, {
+    'input_tokens': 12, 'cached_input_tokens': 3, 'output_tokens': 8,
+    'reasoning_output_tokens': 2, 'total_tokens': 20,
+}, event_id='stream:one')
+duplicate = company_credentials.record_internal_api_key_token_usage(key_id, {
+    'total_tokens': 20,
+}, event_id='stream:one')
+second = company_credentials.record_internal_api_key_token_usage(key_id, {
+    'input_tokens': 5, 'output_tokens': 6, 'total_tokens': 11,
+}, event_id='stream:two')
+key = company_credentials.get_internal_api_key_allocation()['keys'][0]
+print(json.dumps({'first': first, 'duplicate': duplicate, 'second': second, 'key': key}))
+'''
+    env = os.environ.copy()
+    env.update({
+        'CODEX_WORKBENCH_MODE': 'internal-multiuser',
+        'CODEX_INTERNAL_DATA_DIR': str(data_dir),
+    })
+    result = subprocess.run([sys.executable, '-c', script], cwd=PROJECT_ROOT, env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    outcome = json.loads(result.stdout.strip().splitlines()[-1])
+    assert outcome['first'] is True
+    assert outcome['duplicate'] is False
+    assert outcome['second'] is True
+    assert outcome['key']['token_usage'] == {
+        'input_tokens': 17, 'cached_input_tokens': 3, 'output_tokens': 14,
+        'reasoning_output_tokens': 2, 'total_tokens': 31,
+    }
+    assert outcome['key']['today_token_usage'] == outcome['key']['token_usage']

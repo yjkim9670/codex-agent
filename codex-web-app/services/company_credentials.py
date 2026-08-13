@@ -35,6 +35,12 @@ _DPAPI_ENTROPY = b'CodexWorkbench.CompanyApiKey.v1'
 _MAX_API_KEY_CHARS = 8192
 _MAX_INTERNAL_KEYS = 64
 _KST = ZoneInfo('Asia/Seoul')
+_TOKEN_USAGE_FIELDS = (
+    'input_tokens', 'cached_input_tokens', 'output_tokens',
+    'reasoning_output_tokens', 'total_tokens',
+)
+_INTERNAL_USAGE_EVENT_LIMIT = 4096
+_INTERNAL_USAGE_DAY_LIMIT = 366
 
 
 def _internal_pool_path() -> Path:
@@ -127,17 +133,88 @@ def _today_selection_counts() -> dict[str, int]:
     return counts
 
 
+def _zero_token_usage() -> dict[str, int]:
+    return {field: 0 for field in _TOKEN_USAGE_FIELDS}
+
+
+def _normalize_token_usage(value: object) -> dict[str, int]:
+    """Normalize usage received from the chat service without importing it.
+
+    Keeping this local avoids a circular dependency: codex_chat resolves keys
+    through this module, while this module owns the encrypted pool statistics.
+    """
+    raw = value if isinstance(value, dict) else {}
+    normalized = _zero_token_usage()
+    for field in _TOKEN_USAGE_FIELDS:
+        try:
+            normalized[field] = max(0, int(raw.get(field) or 0))
+        except (TypeError, ValueError):
+            pass
+    return normalized
+
+
+def _add_token_usage(base: object, delta: object) -> dict[str, int]:
+    left = _normalize_token_usage(base)
+    right = _normalize_token_usage(delta)
+    return {field: left[field] + right[field] for field in _TOKEN_USAGE_FIELDS}
+
+
+def record_internal_api_key_token_usage(key_id: object, usage: object, *, event_id: object = '') -> bool:
+    """Attach completed request usage to its pooled key, once per event.
+
+    The aggregate is stored next to the DPAPI-protected pool.  No secret,
+    prompt, response, IP address, or user name is added to that record.
+    """
+    resolved_key_id = str(key_id or '').strip()
+    normalized = _normalize_token_usage(usage)
+    if not resolved_key_id or not any(normalized.values()):
+        return False
+    resolved_event_id = str(event_id or '').strip()
+    with _lock:
+        pool = _read_internal_pool()
+        if not any(str(item.get('id') or '') == resolved_key_id for item in pool['keys'] if isinstance(item, dict)):
+            return False
+        stats = pool.get('stats') if isinstance(pool.get('stats'), dict) else {}
+        entry = stats.get(resolved_key_id) if isinstance(stats.get(resolved_key_id), dict) else {}
+        event_ids = entry.get('usage_event_ids') if isinstance(entry.get('usage_event_ids'), dict) else {}
+        if resolved_event_id and resolved_event_id in event_ids:
+            return False
+        day_key = datetime.now(_KST).date().isoformat()
+        entry['token_usage'] = _add_token_usage(entry.get('token_usage'), normalized)
+        by_day = entry.get('token_usage_by_day') if isinstance(entry.get('token_usage_by_day'), dict) else {}
+        by_day[day_key] = _add_token_usage(by_day.get(day_key), normalized)
+        if len(by_day) > _INTERNAL_USAGE_DAY_LIMIT:
+            for stale_day in sorted(by_day)[:-_INTERNAL_USAGE_DAY_LIMIT]:
+                by_day.pop(stale_day, None)
+        entry['token_usage_by_day'] = by_day
+        if resolved_event_id:
+            event_ids[resolved_event_id] = datetime.now(timezone.utc).isoformat()
+            if len(event_ids) > _INTERNAL_USAGE_EVENT_LIMIT:
+                for stale_event in sorted(event_ids, key=event_ids.get)[:-_INTERNAL_USAGE_EVENT_LIMIT]:
+                    event_ids.pop(stale_event, None)
+            entry['usage_event_ids'] = event_ids
+        stats[resolved_key_id] = entry
+        pool['stats'] = stats
+        _write_internal_pool(pool)
+    return True
+
+
 def get_internal_api_key_allocation() -> dict:
     """Return administrator-safe pool metadata; secrets never leave the server."""
     with _lock:
         pool = _read_internal_pool()
         stats = pool['stats']
         today_counts = _today_selection_counts()
+        today_key = datetime.now(_KST).date().isoformat()
         keys = [
             {'id': item.get('id'), 'label': item.get('label'),
              'secret_preview': _mask_api_key(item.get('secret')),
              'selection_count': int((stats.get(str(item.get('id'))) or {}).get('selection_count') or 0),
              'today_selection_count': today_counts.get(str(item.get('id')), 0),
+             'token_usage': _normalize_token_usage((stats.get(str(item.get('id'))) or {}).get('token_usage')),
+             'today_token_usage': _normalize_token_usage(
+                 ((stats.get(str(item.get('id'))) or {}).get('token_usage_by_day') or {}).get(today_key)
+             ),
              'last_selected_at': str((stats.get(str(item.get('id'))) or {}).get('last_selected_at') or '')}
             for item in pool['keys'] if isinstance(item, dict)
         ]

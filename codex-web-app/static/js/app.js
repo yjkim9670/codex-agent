@@ -8816,8 +8816,10 @@ function renderInternalApiKeyAllocation() {
         usage.className = 'internal-key-pool-usage';
         const today = Number(key?.today_selection_count || 0);
         const total = Number(key?.selection_count || 0);
-        usage.textContent = `오늘 ${today}회 · 누적 ${total}회`;
-        usage.title = '오늘 사용 횟수는 한국 표준시(KST) 기준입니다.';
+        const todayTokens = Number(key?.today_token_usage?.total_tokens || 0);
+        const totalTokens = Number(key?.token_usage?.total_tokens || 0);
+        usage.textContent = `오늘 ${today}회 · ${todayTokens.toLocaleString()} 토큰 | 누적 ${total}회 · ${totalTokens.toLocaleString()} 토큰`;
+        usage.title = '사용 횟수와 토큰 사용량은 한국 표준시(KST) 기준으로 집계합니다. 토큰은 입력·출력·추론을 포함한 요청 총합입니다.';
 
         const remove = document.createElement('button');
         remove.type = 'button';

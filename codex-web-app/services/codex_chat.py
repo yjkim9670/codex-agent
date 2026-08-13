@@ -14181,6 +14181,16 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             **({'internal_api_key_id': internal_api_key_id} if internal_api_key_id else {}),
         },
     )
+    if internal_api_key_id:
+        # Persist the pool-level aggregate separately from per-user usage
+        # history, so administrators can inspect a key's usage across users.
+        try:
+            from .company_credentials import record_internal_api_key_token_usage
+            record_internal_api_key_token_usage(
+                internal_api_key_id, token_usage, event_id=f'stream:{stream_id}',
+            )
+        except Exception:
+            _LOGGER.debug('internal API key token usage update skipped', exc_info=True)
     keepalive_mode = ''
     if stream.get('usage_operation') == 'usage_keepalive':
         keepalive_mode = _record_usage_keepalive_completion(

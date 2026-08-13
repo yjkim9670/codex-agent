@@ -9083,10 +9083,10 @@ def _build_codex_child_base_env():
     return env
 
 
-def _build_codex_exec_env(queued_execution=False, account_id=None):
+def _build_codex_exec_env(queued_execution=False, account_id=None, internal_api_key=None):
     env = _build_codex_child_base_env()
     from .company_credentials import apply_company_api_key
-    apply_company_api_key(env)
+    apply_company_api_key(env, internal_key=internal_api_key)
     _apply_spreadsheet_runtime_env(env)
     use_account_context = bool(_normalize_account_id(account_id)) or _accounts_registry_path().exists()
     context = _account_storage_context(account_id) if use_account_context else None
@@ -9133,16 +9133,8 @@ def _apply_claude_company_exec_env(env, model_override=None):
     if not base_url:
         return env
 
-    auth_token = next((
-        str(env.get(key) or '').strip()
-        for key in (
-            'CODEX_CLAUDE_AUTH_TOKEN',
-            'DTGPT_API_KEY',
-            'ANTHROPIC_AUTH_TOKEN',
-            'ANTHROPIC_API_KEY',
-        )
-        if str(env.get(key) or '').strip()
-    ), '')
+    # Codex and Claude must use the exact same selected company/pool key.
+    auth_token = str(env.get('DTGPT_API_KEY') or '').strip()
     for key in _CLAUDE_PROVIDER_MODE_ENV_KEYS:
         env.pop(key, None)
     env['CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST'] = '1'
@@ -11736,6 +11728,12 @@ def _build_partial_stream_message_metadata(stream):
         'execution_policy': str(stream.get('execution_policy') or 'standard').strip() or 'standard',
         'streaming': True,
     }
+    internal_api_key_id = str(stream.get('internal_api_key_id') or '').strip()
+    internal_api_key_label = str(stream.get('internal_api_key_label') or '').strip()
+    if internal_api_key_id:
+        metadata['internal_api_key_id'] = internal_api_key_id
+    if internal_api_key_label:
+        metadata['internal_api_key_label'] = internal_api_key_label
     structured_report_preset = normalize_structured_report_preset_id(stream.get('structured_report_preset'))
     if structured_report_preset:
         metadata['structured_report_preset'] = structured_report_preset
@@ -12501,9 +12499,17 @@ def _run_codex_stream(stream_id, prompt):
         return
 
     prompt = _append_attachment_exec_context(prompt, attachments)
+    # The pooled secret is removed from shared stream state before launching
+    # the child process. The safe ID/label remain for status and chat metadata.
+    internal_api_key = None
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream:
+            internal_api_key = stream.pop('internal_api_key', None)
     exec_env = _build_codex_exec_env(
         queued_execution=queued_execution,
         account_id=account_id,
+        internal_api_key=internal_api_key,
     )
     agent_backend, cmd = _build_agent_command(
         prompt,
@@ -13015,7 +13021,8 @@ def create_codex_stream(
         structured_report_preset=None,
         worktree_task=None,
         account_id=None,
-        usage_operation='chat'):
+        usage_operation='chat',
+        internal_api_key=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -13045,6 +13052,9 @@ def create_codex_stream(
     )
     normalized_attachments = normalize_codex_attachments(attachments or [])
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
+    if is_internal_multiuser_mode() and not isinstance(internal_api_key, dict):
+        from .company_credentials import reserve_internal_api_key
+        internal_api_key = reserve_internal_api_key()
     stream = {
         'id': stream_id,
         'owner_username': (get_active_user().storage_key if get_active_user() is not None else ''),
@@ -13089,6 +13099,10 @@ def create_codex_stream(
         'execution_cwd': str(execution_cwd),
         'output_schema_path': output_schema_path,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
+        # Consumed before child-process creation; never returned from stream APIs.
+        'internal_api_key': internal_api_key if isinstance(internal_api_key, dict) else None,
+        'internal_api_key_id': str((internal_api_key or {}).get('id') or '').strip(),
+        'internal_api_key_label': str((internal_api_key or {}).get('label') or '').strip(),
         'assistant_progress_saved_at': None,
         'assistant_progress_output_length': 0,
         'assistant_progress_error_length': 0,
@@ -13143,6 +13157,8 @@ def create_codex_stream(
         'response_reasoning_effort': response_reasoning_effort,
         'response_agent_backend': agent_backend,
         'assistant_message_id': str(assistant_message_id or '').strip() or None,
+        'internal_api_key_id': str((internal_api_key or {}).get('id') or '').strip(),
+        'internal_api_key_label': str((internal_api_key or {}).get('label') or '').strip(),
         'execution_policy': execution_policy,
         'structured_report_preset': structured_report_preset_id,
         'worktree_task': worktree_task_payload,
@@ -13396,6 +13412,10 @@ def _start_codex_stream_for_session_locked(
         'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
         else ('worktree_isolated' if worktree_task else 'standard')
     )
+    internal_api_key = None
+    if is_internal_multiuser_mode():
+        from .company_credentials import reserve_internal_api_key
+        internal_api_key = reserve_internal_api_key()
     assistant_metadata = {
         'response_mode': response_mode,
         'response_model': response_model,
@@ -13406,6 +13426,12 @@ def _start_codex_stream_for_session_locked(
         'account_id': resolved_account_id,
         'account_label': account_profile.get('label') or resolved_account_id,
     }
+    internal_api_key_id = str((internal_api_key or {}).get('id') or '').strip()
+    internal_api_key_label = str((internal_api_key or {}).get('label') or '').strip()
+    if internal_api_key_id:
+        assistant_metadata['internal_api_key_id'] = internal_api_key_id
+    if internal_api_key_label:
+        assistant_metadata['internal_api_key_label'] = internal_api_key_label
     if structured_report_preset_id:
         assistant_metadata['structured_report_preset'] = structured_report_preset_id
     if worktree_task:
@@ -13433,6 +13459,7 @@ def _start_codex_stream_for_session_locked(
         'structured_report_preset': structured_report_preset_id,
         'worktree_task': worktree_task,
         'account_id': resolved_account_id,
+        'internal_api_key': internal_api_key,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -13866,6 +13893,8 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
             'cli_runtime_ms': stream.get('cli_runtime_ms'),
             'assistant_message_id': stream.get('assistant_message_id'),
+            'internal_api_key_id': str(stream.get('internal_api_key_id') or '').strip(),
+            'internal_api_key_label': str(stream.get('internal_api_key_label') or '').strip(),
             'agent_backend': _normalize_agent_backend_setting(stream.get('agent_backend')),
             'response_mode': stream.get('response_mode'),
             'response_model': stream.get('response_model'),

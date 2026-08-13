@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex Workbench · {{ workspace_directory_name }}</title>
+    <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
     <link rel="stylesheet" href="/static/css/app.css?v=215">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
@@ -293,11 +293,11 @@
     <div class="app">
         <header class="app-header">
             <div class="app-header-main">
-                <h1>Codex Workbench</h1>
+                <h1>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %}</h1>
                 <div class="app-header-subline">
                     <p class="app-workspace">{{ workspace_directory_name }}</p>
                     <button class="app-header-details-summary" type="button" id="codex-header-details-trigger">세부 정보</button>
-                    <span class="sr-only" id="codex-header-description">Manage Codex Workbench sessions.</span>
+                    <span class="sr-only" id="codex-header-description">Manage {% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} sessions.</span>
                     <span class="sr-only" id="codex-session-storage">세션 저장 용량 확인 중...</span>
                 </div>
             </div>

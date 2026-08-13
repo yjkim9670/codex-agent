@@ -1427,7 +1427,7 @@ def test_company_runners_disable_codex_account_login():
         in powershell_runner
     )
     assert '[Environment]::GetEnvironmentVariable("DTGPT_API_KEY", "User")' in powershell_runner
-    assert 'Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN' in powershell_runner
+    assert 'Set DTGPT_API_KEY before starting Workbench.' in powershell_runner
     assert 'CODEX_CLAUDE_MODEL_OPTIONS = ($ClaudeAvailableModels -join ",")' not in powershell_runner
 
 

@@ -26,6 +26,9 @@ $InternalDataDir = [System.IO.Path]::GetFullPath($InternalDataDir)
 $UserMapPath = Join-Path $InternalDataDir "user_map.json"
 
 $env:CODEX_WORKBENCH_MODE = "internal-multiuser"
+# A multi-user server authenticates requests solely through its encrypted Key
+# Pool. Discard a key inherited from the PowerShell session before launching.
+Remove-Item -Path "Env:DTGPT_API_KEY" -ErrorAction SilentlyContinue
 $env:CODEX_INTERNAL_DATA_DIR = $InternalDataDir
 $env:CODEX_INTERNAL_USER_MAP_PATH = $UserMapPath
 $env:CODEX_SHARED_KNOWLEDGE_DIR = Join-Path $InternalDataDir "organization\shared-knowledge"

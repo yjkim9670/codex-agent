@@ -11,6 +11,11 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ParentDir = Split-Path -Parent $ScriptDir
 $env:CODEX_COMPANY_MODE = "1"
+# This launcher has exactly one company credential source.  Do not allow a
+# previously configured Claude-specific token to affect either backend.
+foreach ($CredentialVariableName in @("CODEX_CLAUDE_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+    Remove-Item -Path ("Env:" + $CredentialVariableName) -ErrorAction SilentlyContinue
+}
 
 if (-not $env:CODEX_CHAT_SECRET_KEY) {
     $SecretBytes = New-Object byte[] 48
@@ -53,7 +58,7 @@ if (-not $env:CODEX_AGENT_BACKEND) {
 if (-not $env:CODEX_CLAUDE_BASE_URL) {
     $env:CODEX_CLAUDE_BASE_URL = "https://cloud.dtgpt.samsungds.net/llm"
 }
-if (-not $env:DTGPT_API_KEY) {
+if (-not $env:DTGPT_API_KEY -and $env:CODEX_WORKBENCH_MODE -ne "internal-multiuser") {
     $StoredDtgptApiKey = [Environment]::GetEnvironmentVariable("DTGPT_API_KEY", "User")
     if (-not [string]::IsNullOrWhiteSpace($StoredDtgptApiKey)) {
         $env:DTGPT_API_KEY = $StoredDtgptApiKey
@@ -194,13 +199,8 @@ if ($env:CODEX_CLAUDE_CLI_BIN) {
 } else {
     Write-Warning "Claude CLI was not found. Claude backend requests will fail until claude is installed or CODEX_CLAUDE_CLI_BIN is set."
 }
-if (
-    -not $env:DTGPT_API_KEY -and
-    -not $env:CODEX_CLAUDE_AUTH_TOKEN -and
-    -not $env:ANTHROPIC_AUTH_TOKEN -and
-    -not $env:ANTHROPIC_API_KEY
-) {
-    Write-Warning "Claude company authentication is not configured. Set DTGPT_API_KEY or CODEX_CLAUDE_AUTH_TOKEN before selecting Claude."
+if (-not $env:DTGPT_API_KEY -and $env:CODEX_WORKBENCH_MODE -ne "internal-multiuser") {
+    Write-Warning "Company authentication is not configured. Set DTGPT_API_KEY before starting Workbench."
 }
 if (-not $env:CODEX_COMPANY_ADMIN_PASSWORD -and -not $env:CODEX_COMPANY_ADMIN_TOKEN) {
     Write-Warning "Company API Key UI is disabled. Set CODEX_COMPANY_ADMIN_PASSWORD or CODEX_COMPANY_ADMIN_TOKEN before starting Workbench."

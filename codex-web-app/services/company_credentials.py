@@ -239,11 +239,9 @@ def _credential_path() -> Path:
 
 
 def _environment_api_key() -> str:
-    for name in ('DTGPT_API_KEY', 'CODEX_CLAUDE_AUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
-        value = str(os.environ.get(name) or '').strip()
-        if value:
-            return value
-    return ''
+    # The company runner has one authoritative credential. A separately
+    # configured Claude token must never silently override it.
+    return str(os.environ.get('DTGPT_API_KEY') or '').strip()
 
 
 class _DataBlob(ctypes.Structure):
@@ -425,10 +423,27 @@ def _credential_session_key() -> str:
     return f'user:{user.storage_key}' if user is not None else 'standalone'
 
 
-def apply_company_api_key(env: dict) -> bool:
+def reserve_internal_api_key() -> dict:
+    """Reserve one pooled key for a single child execution.
+
+    The returned secret is execution-local server memory and must never be
+    placed in an HTTP response or session metadata.
+    """
+    value, source, key_id, key_label = _acquire_internal_api_key()
+    return {'secret': value, 'source': source, 'id': key_id, 'label': key_label}
+
+
+def apply_company_api_key(env: dict, *, internal_key: dict | None = None) -> bool:
+    # Multi-user executions must never inherit a server-level credential when
+    # the pool is empty or unavailable.
+    for name in ('DTGPT_API_KEY', 'CODEX_CLAUDE_AUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
+        env.pop(name, None)
     try:
-        if is_internal_multiuser_mode() and get_active_user() is not None:
-            value, _source, key_id, key_label = _acquire_internal_api_key()
+        if is_internal_multiuser_mode():
+            selected = internal_key if isinstance(internal_key, dict) else reserve_internal_api_key()
+            value = str(selected.get('secret') or '').strip()
+            key_id = str(selected.get('id') or '').strip()
+            key_label = str(selected.get('label') or '').strip()
             if key_id:
                 # This opaque ID is safe to include in execution diagnostics;
                 # the actual credential is never exposed by an API response.
@@ -440,6 +455,7 @@ def apply_company_api_key(env: dict) -> bool:
         return False
     if not value:
         return False
+    # Both backends derive their gateway token from DTGPT_API_KEY.
     env['DTGPT_API_KEY'] = value
     return True
 

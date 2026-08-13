@@ -8790,12 +8790,50 @@ function renderInternalApiKeyAllocation() {
         empty.textContent = '등록된 Key가 없습니다. 위에서 Key 이름과 값을 입력해 추가하세요.';
         host.append(empty);
     }
-    if (keys.length) {
-        const keySummary = document.createElement('div');
-        keySummary.className = 'company-credential-summary';
-        keySummary.textContent = `등록 Key: ${keys.map(key => `${key.label} (자동 선택 ${key.selection_count || 0}회)`).join(', ')} · 다음 대화 제출부터 순환 적용됩니다.`;
-        host.append(keySummary);
-    }
+    if (!keys.length) return;
+
+    const list = document.createElement('div');
+    list.className = 'internal-key-pool-list';
+    keys.forEach((key, index) => {
+        const row = document.createElement('div');
+        row.className = 'internal-key-pool-row';
+
+        const name = document.createElement('input');
+        name.className = 'model-input internal-key-pool-name';
+        name.maxLength = 100;
+        name.value = String(key?.label || '');
+        name.setAttribute('aria-label', `Key ${index + 1} 이름`);
+        name.addEventListener('input', () => {
+            key.label = name.value;
+        });
+
+        const preview = document.createElement('span');
+        preview.className = 'internal-key-pool-preview';
+        preview.textContent = String(key?.secret_preview || '새 Key · 저장 후 표시');
+        preview.title = '보안을 위해 API Key의 일부만 표시합니다.';
+
+        const usage = document.createElement('span');
+        usage.className = 'internal-key-pool-usage';
+        const today = Number(key?.today_selection_count || 0);
+        const total = Number(key?.selection_count || 0);
+        usage.textContent = `오늘 ${today}회 · 누적 ${total}회`;
+        usage.title = '오늘 사용 횟수는 한국 표준시(KST) 기준입니다.';
+
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn ghost internal-key-pool-remove';
+        remove.textContent = '삭제';
+        remove.addEventListener('click', () => {
+            if (!window.confirm(`“${String(key?.label || `Key ${index + 1}`)}”를 Key Pool에서 삭제할까요?`)) return;
+            internalApiKeyAllocation.keys.splice(index, 1);
+            renderInternalApiKeyAllocation();
+            setInternalApiKeyAllocationStatus('변경 사항을 저장하면 삭제가 적용됩니다.');
+        });
+
+        row.append(name, preview, usage, remove);
+        list.appendChild(row);
+    });
+    host.append(list);
 }
 
 async function loadInternalApiKeyAllocation() {
@@ -8839,11 +8877,11 @@ function initializeInternalApiKeyAllocationPanel() {
             return;
         }
         if (!internalApiKeyAllocation) internalApiKeyAllocation = { keys: [] };
-        internalApiKeyAllocation.keys.push({ id: '', label, api_key: apiKey, assignment_count: 0 });
+        internalApiKeyAllocation.keys.push({ id: '', label, api_key: apiKey, selection_count: 0, today_selection_count: 0 });
         if (labelInput) labelInput.value = '';
         if (valueInput) valueInput.value = '';
         renderInternalApiKeyAllocation();
-        setInternalApiKeyAllocationStatus('새 Key를 추가했습니다. “배정 저장”을 눌러 적용하세요.');
+        setInternalApiKeyAllocationStatus('새 Key를 추가했습니다. “Key Pool 저장”을 눌러 적용하세요.');
     });
     document.getElementById('codex-internal-api-key-allocation-refresh')?.addEventListener('click', () => void loadInternalApiKeyAllocation());
     document.getElementById('codex-internal-api-key-allocation-save')?.addEventListener('click', async () => {
@@ -28734,6 +28772,12 @@ function buildMessageMetaText(role, timestampValue, message = null) {
         const worktreeTask = normalizeWorktreeTask(message.worktree_task);
         if (worktreeTask) {
             label = `${label} · ${worktreeTask.branch || worktreeTask.id}`;
+        }
+        const internalApiKeyLabel = typeof message.internal_api_key_label === 'string'
+            ? message.internal_api_key_label.trim()
+            : '';
+        if (internalApiKeyLabel) {
+            label = `${label} · Key ${internalApiKeyLabel}`;
         }
     }
     const timestamp = formatTimestamp(timestampValue);

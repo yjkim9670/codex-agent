@@ -282,7 +282,7 @@ try:
     metadata = company_credentials.get_internal_api_key_allocation()
 finally:
     deactivate_user(token)
-print(json.dumps({'applied': applied, 'secrets': [env['DTGPT_API_KEY'] for env in envs], 'ids': [env['CODEX_WORKBENCH_INTERNAL_API_KEY_ID'] for env in envs], 'keys': metadata['keys']}))
+print(json.dumps({'applied': applied, 'secrets': [env['DTGPT_API_KEY'] for env in envs], 'ids': [env['CODEX_WORKBENCH_INTERNAL_API_KEY_ID'] for env in envs], 'labels': [env['CODEX_WORKBENCH_INTERNAL_API_KEY_LABEL'] for env in envs], 'keys': metadata['keys']}))
 '''
     env = os.environ.copy()
     env.update({
@@ -295,5 +295,8 @@ print(json.dumps({'applied': applied, 'secrets': [env['DTGPT_API_KEY'] for env i
     assert outcome['applied'] == [True, True, True]
     assert outcome['secrets'] == ['central-secret-a', 'central-secret-b', 'central-secret-a']
     assert outcome['ids'][0] == outcome['ids'][2] != outcome['ids'][1]
+    assert outcome['labels'] == ['team-a', 'team-b', 'team-a']
     assert [item['selection_count'] for item in outcome['keys']] == [2, 1]
+    assert [item['today_selection_count'] for item in outcome['keys']] == [2, 1]
+    assert all('…' in item['secret_preview'] for item in outcome['keys'])
     assert 'central-secret' not in json.dumps({'keys': outcome['keys']})

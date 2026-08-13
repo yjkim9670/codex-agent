@@ -12536,6 +12536,7 @@ def _run_codex_stream(stream_id, prompt):
                     stream['codex_home'] = str(exec_env.get('CODEX_HOME') or _CODEX_HOME)
                     stream['agent_backend'] = agent_backend
                     stream['internal_api_key_id'] = str(exec_env.get('CODEX_WORKBENCH_INTERNAL_API_KEY_ID') or '')
+                    stream['internal_api_key_label'] = str(exec_env.get('CODEX_WORKBENCH_INTERNAL_API_KEY_LABEL') or '')
                     stream['updated_at'] = cli_started_at
 
         try:
@@ -13959,6 +13960,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         structured_report_label = str(stream.get('structured_report_label') or '').strip()
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task'))
         internal_api_key_id = str(stream.get('internal_api_key_id') or '').strip()
+        internal_api_key_label = str(stream.get('internal_api_key_label') or '').strip()
         exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
 
     output_from_file = _read_output_last_message(output_path)
@@ -13996,6 +13998,10 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
     metadata['account_id'] = account_id
+    if internal_api_key_id:
+        metadata['internal_api_key_id'] = internal_api_key_id
+    if internal_api_key_label:
+        metadata['internal_api_key_label'] = internal_api_key_label
     if worktree_task:
         try:
             metadata['worktree_task'] = get_git_worktree_task(worktree_task.get('id'))

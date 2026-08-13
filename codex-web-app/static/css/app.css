@@ -6191,6 +6191,58 @@ body.is-internal-member-view [data-internal-admin-only] {
 .internal-key-pool-title { font-size: 14px; font-weight: 650; }
 .internal-key-pool-body { overflow: auto; padding: 16px; display: grid; gap: 12px; }
 
+.internal-key-pool-list {
+    display: grid;
+    gap: 8px;
+}
+
+.internal-key-pool-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.25fr) minmax(104px, 1fr) minmax(118px, auto) auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+}
+
+.internal-key-pool-name {
+    min-width: 0;
+}
+
+.internal-key-pool-preview,
+.internal-key-pool-usage {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.internal-key-pool-preview {
+    font-family: var(--font-mono);
+}
+
+.internal-key-pool-usage {
+    color: var(--text-tertiary);
+}
+
+.internal-key-pool-remove {
+    color: var(--danger);
+}
+
+@media (max-width: 620px) {
+    .internal-key-pool-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .internal-key-pool-preview,
+    .internal-key-pool-usage {
+        grid-column: 1 / -1;
+    }
+}
+
 .git-actions {
     display: inline-flex;
     align-items: center;

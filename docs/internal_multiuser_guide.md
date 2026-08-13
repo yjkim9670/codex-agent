@@ -73,19 +73,18 @@ export CODEX_TRUSTED_PROXY_CIDRS=10.0.0.10/32
 
 내부 모드에서는 일반 사용자가 API Key를 입력하거나 볼 수 없습니다. `admin`으로 접속하면 설정 패널에 **Internal API Key Pool**과 **Key Pool 열기** 버튼이 표시됩니다. 새 오버레이 창에서 Key 이름과 실제 값을 추가하고 **Key Pool 저장**을 누릅니다. Key 값은 전송 시 암호화되며 저장 후에는 다시 화면·API 응답에 표시되지 않습니다.
 
-HTTPS 관리자 화면을 사용할 수 없는 경우에는 서버 콘솔에서 `Manage-CodexWorkbenchApiKeyPool.ps1`을 실행해 Key Pool을 관리할 수 있습니다. **반드시 Workbench 서버를 실행하는 동일한 Windows 계정**으로 실행해야 DPAPI로 기존 풀을 복호화할 수 있습니다. 실제 Key는 안전한 입력 프롬프트에서만 받아 화면이나 PowerShell 이력에 표시하지 않습니다.
+HTTPS 관리자 화면을 사용할 수 없는 경우에는 **Workbench 서버가 실행 중인 PC에서** `http://localhost:3300`으로 관리자 화면을 여십시오. `localhost`는 브라우저에서 보안 컨텍스트로 취급되므로 HTTP여도 API Key 암호화 전송을 사용할 수 있습니다. 이 경우 IP 사용자 맵에 `127.0.0.1`을 관리자 IP로 한 번 등록해야 합니다. 서버를 재시작한 뒤 `http://localhost:3300`으로 접속해 Key Pool을 관리하십시오.
 
-```powershell
-# Workbench 폴더에서 실행 (기본 데이터 경로: ..\internal-workbench-data)
-.\Manage-CodexWorkbenchApiKeyPool.ps1 -Action Add -Label 'team-a'
-.\Manage-CodexWorkbenchApiKeyPool.ps1 -Action List
-.\Manage-CodexWorkbenchApiKeyPool.ps1 -Action Remove -Id '<List에서 확인한 Id>'
+`user_map.json`의 예시는 다음과 같습니다. 기존 사용자 항목은 유지하고 `127.0.0.1` 항목만 추가합니다.
 
-# 서버를 다른 내부 데이터 경로로 시작했다면 같은 경로를 지정
-.\Manage-CodexWorkbenchApiKeyPool.ps1 -Action List -InternalDataDir 'D:\CodexWorkbench\internal-state'
+```json
+{
+  "127.0.0.1": {"username": "dinya", "role": "admin"},
+  "12.80.214.204": {"username": "dinya", "role": "admin"}
+}
 ```
 
-이 스크립트는 웹 서버 재시작 없이 풀 파일을 갱신합니다. 다만 이미 시작된 실행은 시작 시 선택한 Key를 계속 사용하고, 이후 새 Codex/Claude 실행부터 변경된 풀을 사용합니다.
+관리자 화면에서 변경한 Key Pool은 즉시 저장되며 서버를 재시작할 필요가 없습니다. 이미 실행 중인 요청은 기존에 선택한 Key를 계속 사용하고, 이후 새 Codex/Claude 요청부터 변경된 풀을 사용합니다.
 
 각 Codex/Claude 실행 요청이 시작될 때 서버는 등록된 Key를 라운드로빈(순환)으로 하나 선택합니다. 선택된 Key는 해당 요청의 종료까지 고정되며, 다음 요청은 다음 Key를 사용합니다. Key별 자동 선택 횟수와 마지막 선택 시각은 관리자 패널에서 확인할 수 있습니다. Key 풀은 `<CODEX_INTERNAL_DATA_DIR>/organization/credentials/api_key_pool.dpapi`에 Windows DPAPI로 암호화되어 저장되고, 선택 감사 로그는 같은 폴더의 `api_key_selection_audit.jsonl`에 Key ID·IP 해시 사용자 ID·시각만 기록됩니다. 사용자 개인 영역이나 브라우저 저장소에는 Key가 기록되지 않으며, 풀에 Key가 없으면 회사 API Key가 주입되지 않고 서버 환경변수 Key도 우회 경로로 사용되지 않습니다.
 

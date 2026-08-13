@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import threading
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import urllib.error
 import urllib.request
 import uuid
@@ -33,6 +34,7 @@ _session_api_keys = {}
 _DPAPI_ENTROPY = b'CodexWorkbench.CompanyApiKey.v1'
 _MAX_API_KEY_CHARS = 8192
 _MAX_INTERNAL_KEYS = 64
+_KST = ZoneInfo('Asia/Seoul')
 
 
 def _internal_pool_path() -> Path:
@@ -92,14 +94,50 @@ def _write_internal_pool(payload: dict) -> None:
         raise CompanyCredentialError('내부 API Key 풀을 저장하지 못했습니다.', error_code='internal_credential_write_failed', status_code=500) from exc
 
 
+def _mask_api_key(secret: object) -> str:
+    """Provide an administrator-friendly hint without returning a credential."""
+    value = str(secret or '').strip()
+    if not value:
+        return ''
+    if len(value) <= 8:
+        return f'{value[:2]}…{value[-2:]}' if len(value) > 4 else '••••'
+    return f'{value[:5]}…{value[-4:]}'
+
+
+def _today_selection_counts() -> dict[str, int]:
+    """Count KST-today selections from the non-secret audit trail."""
+    path = _internal_selection_audit_path()
+    if not path.is_file():
+        return {}
+    today = datetime.now(_KST).date()
+    counts: dict[str, int] = {}
+    try:
+        with path.open('r', encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    event = __import__('json').loads(line)
+                    selected_at = datetime.fromisoformat(str(event.get('selected_at') or '').replace('Z', '+00:00'))
+                    key_id = str(event.get('key_id') or '').strip()
+                except (TypeError, ValueError):
+                    continue
+                if key_id and selected_at.astimezone(_KST).date() == today:
+                    counts[key_id] = counts.get(key_id, 0) + 1
+    except OSError:
+        pass
+    return counts
+
+
 def get_internal_api_key_allocation() -> dict:
     """Return administrator-safe pool metadata; secrets never leave the server."""
     with _lock:
         pool = _read_internal_pool()
         stats = pool['stats']
+        today_counts = _today_selection_counts()
         keys = [
             {'id': item.get('id'), 'label': item.get('label'),
+             'secret_preview': _mask_api_key(item.get('secret')),
              'selection_count': int((stats.get(str(item.get('id'))) or {}).get('selection_count') or 0),
+             'today_selection_count': today_counts.get(str(item.get('id')), 0),
              'last_selected_at': str((stats.get(str(item.get('id'))) or {}).get('last_selected_at') or '')}
             for item in pool['keys'] if isinstance(item, dict)
         ]
@@ -144,16 +182,17 @@ def update_internal_api_key_allocation(payload: object) -> dict:
         return get_internal_api_key_allocation()
 
 
-def _acquire_internal_api_key() -> tuple[str, str, str]:
+def _acquire_internal_api_key() -> tuple[str, str, str, str]:
     """Atomically reserve the next pooled key for one child execution."""
     with _lock:
         pool = _read_internal_pool()
         keys = [item for item in pool['keys'] if isinstance(item, dict) and str(item.get('secret') or '').strip()]
         if not keys:
-            return '', 'internal_pool_empty', ''
+            return '', 'internal_pool_empty', '', ''
         index = int(pool.get('next_key_index') or 0) % len(keys)
         selected = keys[index]
         key_id = str(selected.get('id') or '')
+        key_label = str(selected.get('label') or '').strip()
         stats = pool.get('stats') if isinstance(pool.get('stats'), dict) else {}
         entry = stats.get(key_id) if isinstance(stats.get(key_id), dict) else {}
         entry['selection_count'] = max(0, int(entry.get('selection_count') or 0)) + 1
@@ -182,7 +221,7 @@ def _acquire_internal_api_key() -> tuple[str, str, str]:
             # A credential must remain usable when a non-secret audit file
             # cannot be appended (for example, a transient disk error).
             pass
-        return str(selected['secret']).strip(), 'internal_round_robin', key_id
+        return str(selected['secret']).strip(), 'internal_round_robin', key_id, key_label
 
 
 def _credential_path() -> Path:
@@ -389,11 +428,12 @@ def _credential_session_key() -> str:
 def apply_company_api_key(env: dict) -> bool:
     try:
         if is_internal_multiuser_mode() and get_active_user() is not None:
-            value, _source, key_id = _acquire_internal_api_key()
+            value, _source, key_id, key_label = _acquire_internal_api_key()
             if key_id:
                 # This opaque ID is safe to include in execution diagnostics;
                 # the actual credential is never exposed by an API response.
                 env['CODEX_WORKBENCH_INTERNAL_API_KEY_ID'] = key_id
+                env['CODEX_WORKBENCH_INTERNAL_API_KEY_LABEL'] = key_label
         else:
             value, _source = resolve_company_api_key()
     except CompanyCredentialError:

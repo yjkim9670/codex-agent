@@ -2496,7 +2496,15 @@ def codex_files_download():
         mimetype=result.get('mime_type') or 'application/octet-stream',
     )
     download_name = str(result.get('download_name') or 'download.bin').strip() or 'download.bin'
-    response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(download_name)}"
+    # RFC 5987 preserves non-ASCII names.  Keep an ASCII fallback as well for
+    # older browsers/download agents that ignore filename*.  The browser UI
+    # prefers filename*, so modern clients retain the original Korean name.
+    suffix = Path(download_name).suffix
+    fallback_name = f'download{suffix}' if suffix else 'download'
+    response.headers['Content-Disposition'] = (
+        f'attachment; filename="{fallback_name}"; '
+        f"filename*=UTF-8''{quote(download_name)}"
+    )
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response

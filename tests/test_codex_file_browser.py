@@ -660,6 +660,28 @@ def test_build_download_payload_includes_selected_directories(isolated_browser_r
         assert archive.read('docs/guide.txt').decode('utf-8') == 'guide'
 
 
+def test_build_download_payload_roots_selected_directory_at_its_own_name(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    selected = server_root / 'unneeded-parent' / 'selected-folder'
+    (selected / 'nested').mkdir(parents=True, exist_ok=True)
+    (selected / 'nested' / 'Korean-파일.txt').write_text('한글 UTF-8', encoding='utf-8')
+
+    result = file_browser.build_download_payload(
+        root_key='server',
+        relative_paths=['unneeded-parent/selected-folder'],
+    )
+
+    with ZipFile(io.BytesIO(result['content'])) as archive:
+        assert sorted(archive.namelist()) == [
+            'selected-folder/',
+            'selected-folder/nested/',
+            'selected-folder/nested/Korean-파일.txt',
+        ]
+        info = archive.getinfo('selected-folder/nested/Korean-파일.txt')
+        assert info.flag_bits & 0x800  # ZIP UTF-8 filename flag
+        assert archive.read(info).decode('utf-8') == '한글 UTF-8'
+
+
 def test_build_mail_archive_payload_includes_selected_directories(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'docs' / 'nested').mkdir(parents=True, exist_ok=True)
@@ -753,6 +775,8 @@ def test_download_route_returns_attachment(browser_test_client, isolated_browser
     assert response.status_code == 200
     assert response.headers['Content-Type'].startswith('text/plain')
     assert 'attachment;' in response.headers['Content-Disposition']
+    assert 'filename="download.txt"' in response.headers['Content-Disposition']
+    assert "filename*=UTF-8''report.txt" in response.headers['Content-Disposition']
     assert response.data == b'report body'
 
 

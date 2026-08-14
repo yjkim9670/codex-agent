@@ -539,7 +539,16 @@ def _resolve_archive_targets(root_key=None, relative_paths=None):
 
 
 def _iter_archive_entries(root_path, targets):
+    """Yield archive entries rooted at each selected directory.
+
+    A file browser path is relative to its configured root, but that root is
+    implementation detail from a downloader's perspective.  In particular,
+    downloading ``reports/2026`` should produce ``2026/...`` in the archive,
+    not ``reports/2026/...``.  Keep the selected directory itself as the
+    archive root so extraction still creates one containing folder.
+    """
     seen = set()
+    used_directory_roots = set()
     for target in targets:
         target_path = target['target_path']
         relative_path = target['relative_path']
@@ -549,7 +558,17 @@ def _iter_archive_entries(root_path, targets):
                 yield target_path, relative_path, False
             continue
 
-        directory_entry_name = f'{relative_path.rstrip("/")}/'
+        # Directory names are deliberately based on the selected directory,
+        # rather than its path below the File Preview root.  Disambiguate
+        # same-named selected folders without exposing their parent paths.
+        directory_root_name = target_path.name
+        candidate_root_name = directory_root_name
+        duplicate_index = 2
+        while candidate_root_name.casefold() in used_directory_roots:
+            candidate_root_name = f'{directory_root_name} ({duplicate_index})'
+            duplicate_index += 1
+        used_directory_roots.add(candidate_root_name.casefold())
+        directory_entry_name = f'{candidate_root_name}/'
         if directory_entry_name not in seen:
             seen.add(directory_entry_name)
             yield target_path, directory_entry_name, True
@@ -572,9 +591,14 @@ def _iter_archive_entries(root_path, targets):
                 resolved_child.relative_to(root_path)
             except (OSError, ValueError):
                 continue
-            archive_name = _to_relative_path(root_path, resolved_child)
-            if not archive_name:
+            try:
+                relative_to_selected = resolved_child.relative_to(target_path)
+            except ValueError:
                 continue
+            archive_name = relative_to_selected.as_posix()
+            if not archive_name or archive_name == '.':
+                continue
+            archive_name = f'{candidate_root_name}/{archive_name}'
             is_directory = resolved_child.is_dir()
             if is_directory:
                 archive_name = f'{archive_name.rstrip("/")}/'

@@ -17,3 +17,8 @@ workspace/*_token_usage.json
 model_agent/
 deploy/vercel/*.env
 deploy/codex-backend.env
+
+# Android client local build output
+android/.gradle/
+android/local.properties
+android/**/build/

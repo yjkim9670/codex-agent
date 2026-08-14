@@ -3687,6 +3687,31 @@ def test_build_codex_prompt_omits_powershell_rules_on_posix(monkeypatch):
     assert 'commands run in PowerShell' not in prompt
 
 
+def test_internal_multiuser_prompt_and_exec_env_expose_real_workspace_and_shared_paths(
+        monkeypatch, tmp_path):
+    workspace_dir = tmp_path / 'workspace'
+    shared_dir = tmp_path / 'organization' / 'shared-knowledge'
+    workspace_dir.mkdir(parents=True)
+    shared_dir.mkdir(parents=True)
+    monkeypatch.setattr(codex_chat, 'WORKSPACE_DIR', workspace_dir)
+    monkeypatch.setattr(codex_chat, 'CODEX_SHARED_KNOWLEDGE_DIR', shared_dir)
+    monkeypatch.setattr(codex_chat, 'is_internal_multiuser_mode', lambda: True)
+
+    prompt = codex_chat.build_codex_prompt([], '공용 문서를 확인해줘')
+    env = codex_chat._build_codex_exec_env()
+    command = codex_chat._build_codex_command('공용 문서를 확인해줘', execution_cwd=workspace_dir)
+
+    assert '$workspace` = current job workspace' in prompt
+    assert str(workspace_dir) in prompt
+    assert '$shared` = organization shared knowledge directory' in prompt
+    assert str(shared_dir) in prompt
+    assert 'not literal filesystem paths or shell variables' in prompt
+    assert env[codex_chat._WORKBENCH_WORKSPACE_DIR_ENV] == str(workspace_dir)
+    assert env[codex_chat._WORKBENCH_SHARED_DIR_ENV] == str(shared_dir)
+    assert '--add-dir' in command
+    assert command[command.index('--add-dir') + 1] == str(shared_dir)
+
+
 @pytest.mark.parametrize(
     ('mode', 'user_prompt', 'expected'),
     [

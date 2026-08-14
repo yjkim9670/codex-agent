@@ -55,6 +55,7 @@ from ..config import (
     LEGACY_CODEX_TOKEN_USAGE_PATH,
     LEGACY_CODEX_USAGE_HISTORY_PATH,
     CODEX_SESSIONS_PATH,
+    CODEX_SHARED_KNOWLEDGE_DIR,
     CODEX_SETTINGS_PATH,
     CODEX_ORGANIZATION_SETTINGS_PATH,
     CODEX_STORAGE_DIR,
@@ -229,6 +230,8 @@ _SESSION_METADATA_RESERVED_KEYS = {
 }
 _IMAGEGEN_WORKBENCH_OUTPUT_ENV = 'CODEX_WORKBENCH_IMAGEGEN_OUTPUT_DIR'
 _IMAGEGEN_WORKBENCH_TMP_ENV = 'CODEX_WORKBENCH_IMAGEGEN_TMP_DIR'
+_WORKBENCH_WORKSPACE_DIR_ENV = 'CODEX_WORKBENCH_WORKSPACE_DIR'
+_WORKBENCH_SHARED_DIR_ENV = 'CODEX_WORKBENCH_SHARED_DIR'
 _SPREADSHEET_RUNTIME_ROOT_ENV = 'CODEX_WORKBENCH_SPREADSHEET_RUNTIME_ROOT'
 _SPREADSHEET_NODE_ENV = 'CODEX_WORKBENCH_SPREADSHEET_NODE'
 _SPREADSHEET_NODE_MODULES_ENV = 'CODEX_WORKBENCH_SPREADSHEET_NODE_MODULES'
@@ -9092,6 +9095,12 @@ def _build_codex_exec_env(queued_execution=False, account_id=None, internal_api_
     context = _account_storage_context(account_id) if use_account_context else None
     env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
     env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    # These expose the paths selected by the Workbench without exposing any
+    # credentials.  `_run_codex_stream` replaces the workspace value with a
+    # worktree path when a job runs in worktree mode.
+    env[_WORKBENCH_WORKSPACE_DIR_ENV] = str(_resolve_execution_workspace_dir())
+    if is_internal_multiuser_mode():
+        env[_WORKBENCH_SHARED_DIR_ENV] = str(Path(CODEX_SHARED_KNOWLEDGE_DIR).expanduser().resolve())
     if context is not None:
         env['CODEX_HOME'] = str(context['codex_home'])
         env[_QUEUED_CODEX_HOME_ENV] = str(context['queued_codex_home'])
@@ -9320,29 +9329,66 @@ def _codex_shell_family(platform_name=None):
     return 'posix'
 
 
-def _build_execution_environment_overlay():
+def _resolve_execution_workspace_dir(execution_cwd=None):
+    """Return the directory used as the current job's working directory."""
+    try:
+        return Path(execution_cwd).expanduser().resolve() if execution_cwd else WORKSPACE_DIR.resolve()
+    except Exception:
+        return Path(WORKSPACE_DIR).expanduser().resolve()
+
+
+def _build_workspace_path_overlay(execution_cwd=None):
+    """Describe Workbench path labels using real paths before an agent runs."""
+    if not is_internal_multiuser_mode():
+        return ''
+    workspace_dir = _resolve_execution_workspace_dir(execution_cwd)
+    try:
+        shared_dir = Path(CODEX_SHARED_KNOWLEDGE_DIR).expanduser().resolve()
+    except Exception:
+        shared_dir = Path(CODEX_SHARED_KNOWLEDGE_DIR).expanduser()
+    return '\n'.join([
+        '- Workbench path aliases (replace these labels with the real paths in tool commands):',
+        f'  - `$workspace` = current job workspace: `{workspace_dir}`.',
+        f'  - `$shared` = organization shared knowledge directory: `{shared_dir}` (read-only; never modify its contents).',
+        f'  - `{_WORKBENCH_WORKSPACE_DIR_ENV}` and `{_WORKBENCH_SHARED_DIR_ENV}` contain the same paths for child processes.',
+        '- `$workspace` and `$shared` are Workbench labels, not literal filesystem paths or shell variables. Use the corresponding quoted real path when a command requires a path.',
+    ])
+
+
+def _append_execution_path_context(prompt_text, execution_cwd=None):
+    """Add the final per-job paths after a worktree CWD has been resolved."""
+    path_overlay = _build_workspace_path_overlay(execution_cwd=execution_cwd)
+    if not path_overlay:
+        return str(prompt_text or '')
+    return f"{str(prompt_text or '').rstrip()}\n\n## Job Path Context\n{path_overlay}"
+
+
+def _build_execution_environment_overlay(execution_cwd=None):
     platform_name = _codex_host_platform()
     shell_family = _codex_shell_family(platform_name)
-    if shell_family != 'powershell':
-        return ''
-
-    host_os = _codex_host_os_label(platform_name)
-    return '\n'.join([
-        f'- Host OS: {host_os} (`sys.platform={platform_name}`).',
-        '- `command_execution` commands run in PowerShell. Use PowerShell syntax, not Bash/POSIX syntax.',
-        '- Create directories with `New-Item -ItemType Directory -Force -Path \'path\'`.',
-        '- Create empty files with `New-Item -ItemType File -Force -Path \'path\'`.',
-        '- Do not use Bash heredocs such as `cat <<EOF`, `<<\'EOF\'`, or Python stdin heredocs.',
-        '- For multiline file writes in PowerShell, here-string delimiters must be alone on their own lines:',
-        '```powershell',
-        '$content = @\'',
-        'file contents',
-        '\'@',
-        'Set-Content -LiteralPath \'path\' -Value $content -Encoding utf8',
-        '```',
-        '- Never emit compact invalid here-strings like `@\'`n\'@`.',
-        '- If PowerShell returns `ParserError` or a shell syntax error, fix the command and retry before the final response.',
-    ])
+    lines = []
+    workspace_overlay = _build_workspace_path_overlay(execution_cwd=execution_cwd)
+    if workspace_overlay:
+        lines.append(workspace_overlay)
+    if shell_family == 'powershell':
+        host_os = _codex_host_os_label(platform_name)
+        lines.extend([
+            f'- Host OS: {host_os} (`sys.platform={platform_name}`).',
+            '- `command_execution` commands run in PowerShell. Use PowerShell syntax, not Bash/POSIX syntax.',
+            '- Create directories with `New-Item -ItemType Directory -Force -Path \'path\'`.',
+            '- Create empty files with `New-Item -ItemType File -Force -Path \'path\'`.',
+            '- Do not use Bash heredocs such as `cat <<EOF`, `<<\'EOF\'`, or Python stdin heredocs.',
+            '- For multiline file writes in PowerShell, here-string delimiters must be alone on their own lines:',
+            '```powershell',
+            '$content = @\'',
+            'file contents',
+            '\'@',
+            'Set-Content -LiteralPath \'path\' -Value $content -Encoding utf8',
+            '```',
+            '- Never emit compact invalid here-strings like `@\'`n\'@`.',
+            '- If PowerShell returns `ParserError` or a shell syntax error, fix the command and retry before the final response.',
+        ])
+    return '\n'.join(lines)
 
 
 def _looks_like_browser_ui_task(prompt_text, recent_blocks=None):
@@ -9515,6 +9561,13 @@ def _build_codex_command(
     repo_check_dir = Path(execution_cwd) if execution_cwd else WORKSPACE_DIR
     if CODEX_SKIP_GIT_REPO_CHECK or not _is_git_repository(repo_check_dir):
         cmd.append('--skip-git-repo-check')
+    # The shared directory is outside each user's workspace.  Codex's
+    # workspace-write sandbox otherwise cannot read it at all.  Keep the
+    # read-only policy explicit in the prompt; `--add-dir` is required solely
+    # to make shared knowledge visible to the child process.
+    if is_internal_multiuser_mode():
+        shared_dir = Path(CODEX_SHARED_KNOWLEDGE_DIR).expanduser().resolve()
+        cmd.extend(['--add-dir', str(shared_dir)])
     settings = get_settings() if inherit_model_settings else {}
     model = (str(model_override).strip() if model_override is not None else '') or settings.get('model')
     if model:
@@ -10132,6 +10185,7 @@ def execute_codex_prompt(
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = _new_codex_output_path()
     normalized_attachments = normalize_codex_attachments(attachments or [])
+    prompt = _append_execution_path_context(prompt, execution_cwd=WORKSPACE_DIR)
     prompt = _append_attachment_exec_context(prompt, normalized_attachments)
     agent_backend, cmd = _build_agent_command(
         prompt,
@@ -10141,6 +10195,7 @@ def execute_codex_prompt(
         reasoning_override=reasoning_override,
         attachments=normalized_attachments,
         question_only=question_only,
+        execution_cwd=WORKSPACE_DIR,
         agent_backend=agent_backend,
         inherit_model_settings=inherit_model_settings,
     )
@@ -10150,6 +10205,7 @@ def execute_codex_prompt(
     exec_details = None
     try:
         exec_env = _build_codex_exec_env(account_id=account_id)
+        exec_env[_WORKBENCH_WORKSPACE_DIR_ENV] = str(_resolve_execution_workspace_dir(WORKSPACE_DIR))
         _apply_agent_backend_exec_env(
             exec_env,
             agent_backend,
@@ -12498,6 +12554,7 @@ def _run_codex_stream(stream_id, prompt):
         _cleanup_output_schema(output_schema_path)
         return
 
+    prompt = _append_execution_path_context(prompt, execution_cwd=execution_cwd)
     prompt = _append_attachment_exec_context(prompt, attachments)
     # The pooled secret is removed from shared stream state before launching
     # the child process. The safe ID/label remain for status and chat metadata.
@@ -12511,6 +12568,7 @@ def _run_codex_stream(stream_id, prompt):
         account_id=account_id,
         internal_api_key=internal_api_key,
     )
+    exec_env[_WORKBENCH_WORKSPACE_DIR_ENV] = str(execution_cwd)
     agent_backend, cmd = _build_agent_command(
         prompt,
         output_path=output_path,

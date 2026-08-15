@@ -28,7 +28,7 @@ class TaskNotificationService : Service() {
         private const val MONITOR_NOTIFICATION_ID = 3101
         private const val COMPLETE_NOTIFICATION_ID = 3102
         private const val POLL_INTERVAL_MS = 5_000L
-        private const val IDLE_GRACE_POLLS = 6
+        private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
         private const val USER_AGENT = "CodexWorkbenchAndroid/1.1"
 
@@ -40,10 +40,12 @@ class TaskNotificationService : Service() {
                 putExtra(EXTRA_LABEL, label)
                 putExtra(EXTRA_COOKIE, cookie.orEmpty())
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
             }
         }
 
@@ -113,7 +115,6 @@ class TaskNotificationService : Service() {
         val startedAt = System.currentTimeMillis()
         var idlePolls = 0
         var seenActiveTask = false
-        val observedStreamIds = linkedSetOf<String>()
 
         while (!stopRequested.get() && System.currentTimeMillis() - startedAt < MAX_MONITOR_MS) {
             val snapshot = fetchStreamSnapshot()
@@ -128,7 +129,6 @@ class TaskNotificationService : Service() {
             if (activeIds.isNotEmpty()) {
                 seenActiveTask = true
                 idlePolls = 0
-                observedStreamIds.addAll(activeIds)
             } else if (!seenActiveTask) {
                 idlePolls += 1
                 if (idlePolls >= IDLE_GRACE_POLLS) break

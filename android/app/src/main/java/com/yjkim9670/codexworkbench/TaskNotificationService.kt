@@ -23,14 +23,14 @@ class TaskNotificationService : Service() {
         private const val EXTRA_COOKIE = "cookie"
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
-        private const val MONITOR_CHANNEL_ID = "workbench_task_monitor"
+        private const val MONITOR_CHANNEL_ID = "workbench_task_monitor_silent_v2"
         private const val COMPLETE_CHANNEL_ID = "workbench_task_complete"
         private const val MONITOR_NOTIFICATION_ID = 3101
         private const val COMPLETE_NOTIFICATION_ID = 3102
         private const val POLL_INTERVAL_MS = 5_000L
         private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
-        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1"
+        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.3"
 
         fun start(context: Context, baseUrl: String, label: String, cookie: String?) {
             if (baseUrl.isBlank()) return
@@ -115,6 +115,7 @@ class TaskNotificationService : Service() {
         val startedAt = System.currentTimeMillis()
         var idlePolls = 0
         var seenActiveTask = false
+        val observedSessionIds = linkedSetOf<String>()
 
         while (!stopRequested.get() && System.currentTimeMillis() - startedAt < MAX_MONITOR_MS) {
             val snapshot = fetchStreamSnapshot()
@@ -125,17 +126,20 @@ class TaskNotificationService : Service() {
                 continue
             }
 
-            val activeIds = snapshot.activeStreamIds
-            if (activeIds.isNotEmpty()) {
+            if (snapshot.activeStreams.isNotEmpty()) {
                 seenActiveTask = true
                 idlePolls = 0
+                snapshot.activeStreams.values
+                    .filter { it.isNotBlank() }
+                    .forEach { observedSessionIds.add(it) }
             } else if (!seenActiveTask) {
                 idlePolls += 1
                 if (idlePolls >= IDLE_GRACE_POLLS) break
             }
 
-            if (seenActiveTask && activeIds.isEmpty() && snapshot.pendingQueueCount <= 0) {
-                postCompletionNotification()
+            if (seenActiveTask && snapshot.activeStreams.isEmpty() && snapshot.pendingQueueCount <= 0) {
+                val sessionLabel = resolveCompletedSessionLabel(observedSessionIds)
+                postCompletionNotification(sessionLabel)
                 break
             }
 
@@ -148,7 +152,7 @@ class TaskNotificationService : Service() {
     }
 
     private data class StreamSnapshot(
-        val activeStreamIds: Set<String>,
+        val activeStreams: Map<String, String>,
         val pendingQueueCount: Int,
     )
 
@@ -156,32 +160,27 @@ class TaskNotificationService : Service() {
         var connection: HttpURLConnection? = null
         return try {
             val endpoint = baseUrl.trimEnd('/') + "/api/codex/streams?include_done=1"
-            connection = URL(endpoint).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 7_000
-            connection.readTimeout = 7_000
-            connection.instanceFollowRedirects = true
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("User-Agent", USER_AGENT)
-            if (cookie.isNotBlank()) connection.setRequestProperty("Cookie", cookie)
+            connection = openJsonConnection(endpoint)
 
             val code = connection.responseCode
             if (code !in 200..299) return null
-            val contentType = connection.contentType.orEmpty().lowercase()
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            if (!contentType.contains("json") && !body.trimStart().startsWith("{")) return null
+            if (!looksLikeJson(connection.contentType, body)) return null
 
             val root = JSONObject(body)
-            val streams = root.optJSONArray("streams") ?: return StreamSnapshot(emptySet(), 0)
-            val active = linkedSetOf<String>()
+            val streams = root.optJSONArray("streams") ?: return StreamSnapshot(emptyMap(), 0)
+            val active = linkedMapOf<String, String>()
             var pending = 0
             for (index in 0 until streams.length()) {
                 val stream = streams.optJSONObject(index) ?: continue
                 val id = stream.optString("id").trim()
+                val sessionId = stream.optString("session_id").trim()
                 val done = stream.optBoolean("done", false)
                 val cancelled = stream.optBoolean("cancelled", false)
                 pending = maxOf(pending, stream.optInt("pending_queue_count", 0))
-                if (id.isNotBlank() && !done && !cancelled) active.add(id)
+                if (id.isNotBlank() && !done && !cancelled) {
+                    active[id] = sessionId
+                }
             }
             StreamSnapshot(active, pending)
         } catch (_: Exception) {
@@ -190,6 +189,71 @@ class TaskNotificationService : Service() {
             connection?.disconnect()
         }
     }
+
+    private fun resolveCompletedSessionLabel(sessionIds: Set<String>): String? {
+        if (sessionIds.isEmpty()) return null
+        val titles = fetchSessionTitles(sessionIds)
+        val resolved = sessionIds.mapNotNull { sessionId ->
+            titles[sessionId]?.trim()?.takeIf { it.isNotBlank() }
+        }.distinct()
+
+        if (resolved.isNotEmpty()) {
+            return if (resolved.size == 1) {
+                resolved.first()
+            } else {
+                "${resolved.first()} 외 ${resolved.size - 1}개 채팅"
+            }
+        }
+
+        return if (sessionIds.size == 1) {
+            "세션 ${sessionIds.first().take(8)}"
+        } else {
+            "${sessionIds.size}개 채팅 세션"
+        }
+    }
+
+    private fun fetchSessionTitles(sessionIds: Set<String>): Map<String, String> {
+        var connection: HttpURLConnection? = null
+        return try {
+            val endpoint = baseUrl.trimEnd('/') + "/api/codex/sessions"
+            connection = openJsonConnection(endpoint)
+
+            val code = connection.responseCode
+            if (code !in 200..299) return emptyMap()
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            if (!looksLikeJson(connection.contentType, body)) return emptyMap()
+
+            val root = JSONObject(body)
+            val sessions = root.optJSONArray("sessions") ?: return emptyMap()
+            val result = linkedMapOf<String, String>()
+            for (index in 0 until sessions.length()) {
+                val session = sessions.optJSONObject(index) ?: continue
+                val id = session.optString("id").trim()
+                if (id !in sessionIds) continue
+                val title = session.optString("title").trim()
+                if (title.isNotBlank()) result[id] = title
+            }
+            result
+        } catch (_: Exception) {
+            emptyMap()
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun openJsonConnection(endpoint: String): HttpURLConnection =
+        (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 7_000
+            readTimeout = 7_000
+            instanceFollowRedirects = true
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("User-Agent", USER_AGENT)
+            if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
+        }
+
+    private fun looksLikeJson(contentType: String?, body: String): Boolean =
+        contentType.orEmpty().lowercase().contains("json") || body.trimStart().startsWith("{")
 
     private fun sleepPollInterval() {
         try {
@@ -203,14 +267,19 @@ class TaskNotificationService : Service() {
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
+
         manager.createNotificationChannel(
             NotificationChannel(
                 MONITOR_CHANNEL_ID,
-                "작업 완료 감시",
-                NotificationManager.IMPORTANCE_LOW,
+                "백그라운드 작업 감시",
+                NotificationManager.IMPORTANCE_MIN,
             ).apply {
-                description = "백그라운드에서 실행 중인 Workbench 작업의 완료 상태를 확인합니다."
+                description = "실행 중인 Workbench 작업을 백그라운드에서 조용히 확인합니다."
                 setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
+                lockscreenVisibility = Notification.VISIBILITY_SECRET
             },
         )
         manager.createNotificationChannel(
@@ -240,16 +309,19 @@ class TaskNotificationService : Service() {
             Notification.Builder(this)
         }
         return builder
-            .setSmallIcon(R.drawable.ic_notification_workbench)
+            .setSmallIcon(R.drawable.ic_notification_monitor)
             .setContentTitle("코덱스 워크벤치")
-            .setContentText("$workbenchLabel 작업 완료를 확인하는 중")
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setShowWhen(false)
+            .setSilent(true)
+            .setCategory(Notification.CATEGORY_SERVICE)
+            .setVisibility(Notification.VISIBILITY_SECRET)
             .build()
     }
 
-    private fun postCompletionNotification() {
+    private fun postCompletionNotification(sessionLabel: String?) {
         val openIntent = PendingIntent.getActivity(
             this,
             1,
@@ -264,16 +336,31 @@ class TaskNotificationService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
+
+        val content = sessionLabel
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "채팅: $it" }
+            ?: "$workbenchLabel 작업이 완료되었습니다."
+
         val notification = builder
-            .setSmallIcon(R.drawable.ic_notification_workbench)
+            .setSmallIcon(R.drawable.ic_notification_task_complete)
             .setContentTitle("작업 완료")
-            .setContentText("$workbenchLabel 작업이 완료되었습니다.")
+            .setContentText(content)
+            .setSubText(shortWorkbenchLabel())
+            .setStyle(Notification.BigTextStyle().bigText(content))
             .setContentIntent(openIntent)
             .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_STATUS)
             .build()
         getSystemService(NotificationManager::class.java)
             .notify(COMPLETE_NOTIFICATION_ID, notification)
     }
+
+    private fun shortWorkbenchLabel(): String =
+        workbenchLabel
+            .removeSuffix(" Codex Workbench")
+            .removeSuffix(" Workbench")
+            .ifBlank { "코덱스 워크벤치" }
 
     private fun stopForegroundCompat() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {

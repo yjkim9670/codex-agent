@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class TaskNotificationService : Service() {
     companion object {
         private const val ACTION_START = "com.yjkim9670.codexworkbench.action.START_TASK_MONITOR"
-        private const val ACTION_STOP = "com.yjkim9670.codexworkbench.action.STOP_TASK_MONITOR"
         private const val EXTRA_BASE_URL = "base_url"
         private const val EXTRA_LABEL = "workbench_label"
         private const val EXTRA_COOKIE = "cookie"
@@ -30,7 +29,7 @@ class TaskNotificationService : Service() {
         private const val POLL_INTERVAL_MS = 5_000L
         private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
-        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.3"
+        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.5"
 
         fun start(context: Context, baseUrl: String, label: String, cookie: String?) {
             if (baseUrl.isBlank()) return
@@ -50,10 +49,13 @@ class TaskNotificationService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, TaskNotificationService::class.java).apply {
-                action = ACTION_STOP
+            // MainActivity calls this on every resume. Using startService(ACTION_STOP)
+            // would create the service even when no monitor is running, so startup could
+            // execute notification-channel code unnecessarily. stopService is idempotent
+            // and does nothing when the monitor is not running.
+            runCatching {
+                context.stopService(Intent(context, TaskNotificationService::class.java))
             }
-            runCatching { context.startService(intent) }
         }
     }
 
@@ -69,13 +71,6 @@ class TaskNotificationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopRequested.set(true)
-            stopForegroundCompat()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         val enabled = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(PREF_NOTIFICATIONS_ENABLED, true)
         if (!enabled) {
@@ -105,6 +100,7 @@ class TaskNotificationService : Service() {
 
     override fun onDestroy() {
         stopRequested.set(true)
+        monitorThread?.interrupt()
         monitorThread = null
         super.onDestroy()
     }

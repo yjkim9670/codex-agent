@@ -6,12 +6,15 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.HttpAuthHandler
@@ -25,6 +28,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -40,12 +44,14 @@ class MainActivity : Activity() {
         private const val FILE_CHOOSER_REQUEST_CODE = 7001
         private const val HEALTH_TIMEOUT_MS = 6000
         private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.0"
+        private const val SPLASH_DURATION_MS = 1100L
     }
 
     private lateinit var root: FrameLayout
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var serverBaseUrl: String = ""
+    private var splashTransition: Runnable? = null
 
     private val prefs by lazy {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -53,19 +59,154 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureSystemBars()
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
-        root = FrameLayout(this)
-        root.setBackgroundColor(Color.WHITE)
+        root = FrameLayout(this).apply {
+            setBackgroundColor(Color.WHITE)
+        }
         setContentView(root)
+        applySystemBarInsets()
 
         val savedServer = prefs.getString(PREF_SERVER_URL, "").orEmpty()
-        showConnectionScreen(savedServer)
+        showOpeningScreen(savedServer)
+    }
+
+    private fun configureSystemBars() {
+        val navy = Color.rgb(7, 26, 53)
+        window.statusBarColor = navy
+        window.navigationBarColor = navy
+
+        val decor = window.decorView
+        decor.systemUiVisibility = decor.systemUiVisibility and
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv() and
+            View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.navigationBarDividerColor = navy
+        }
+    }
+
+    private fun applySystemBarInsets() {
+        root.setOnApplyWindowInsetsListener { _, windowInsets ->
+            val left: Int
+            val top: Int
+            val right: Int
+            val bottom: Int
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val safeInsets = windowInsets.getInsets(
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+                )
+                left = safeInsets.left
+                top = safeInsets.top
+                right = safeInsets.right
+                bottom = safeInsets.bottom
+            } else {
+                @Suppress("DEPRECATION")
+                left = windowInsets.systemWindowInsetLeft
+                @Suppress("DEPRECATION")
+                top = windowInsets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                right = windowInsets.systemWindowInsetRight
+                @Suppress("DEPRECATION")
+                bottom = windowInsets.systemWindowInsetBottom
+            }
+
+            root.setPadding(left, top, right, bottom)
+            windowInsets
+        }
+        root.requestApplyInsets()
+    }
+
+    private fun showOpeningScreen(nextServer: String) {
+        destroyWebView()
+        root.removeAllViews()
+        serverBaseUrl = ""
+
+        val splash = FrameLayout(this).apply {
+            setBackgroundResource(R.drawable.splash_background)
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+        }
+
+        val artwork = ImageView(this).apply {
+            setImageResource(R.drawable.ic_workbench_foreground)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "코덱스 워크벤치 아이콘"
+        }
+        content.addView(
+            artwork,
+            LinearLayout.LayoutParams(dp(236), dp(236)).apply {
+                bottomMargin = dp(18)
+                gravity = Gravity.CENTER_HORIZONTAL
+            },
+        )
+
+        val title = TextView(this).apply {
+            text = "코덱스 워크벤치"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            letterSpacing = 0.02f
+        }
+        content.addView(
+            title,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) },
+        )
+
+        val subtitle = TextView(this).apply {
+            text = "Workspace · Git · Terminal"
+            textSize = 14f
+            setTextColor(Color.rgb(184, 226, 237))
+            gravity = Gravity.CENTER
+        }
+        content.addView(
+            subtitle,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+
+        splash.addView(
+            content,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        root.addView(
+            splash,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+
+        splashTransition?.let { root.removeCallbacks(it) }
+        splashTransition = Runnable {
+            if (!isFinishing && !isDestroyed) {
+                showConnectionScreen(nextServer)
+            }
+        }.also { root.postDelayed(it, SPLASH_DURATION_MS) }
     }
 
     private fun showConnectionScreen(initialUrl: String) {
+        splashTransition?.let { root.removeCallbacks(it) }
+        splashTransition = null
         destroyWebView()
         root.removeAllViews()
+        root.setBackgroundColor(Color.WHITE)
         serverBaseUrl = ""
 
         val scroll = ScrollView(this).apply {
@@ -85,9 +226,10 @@ class MainActivity : Activity() {
         )
 
         val title = TextView(this).apply {
-            text = "Codex Workbench"
+            text = "코덱스 워크벤치"
             textSize = 26f
             setTextColor(Color.rgb(15, 27, 45))
+            typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
         }
         panel.addView(title, matchWrap().apply { bottomMargin = dp(10) })
@@ -239,6 +381,7 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun showWorkbench(baseUrl: String) {
         root.removeAllViews()
+        root.setBackgroundColor(Color.WHITE)
         serverBaseUrl = baseUrl
 
         val container = LinearLayout(this).apply {
@@ -253,7 +396,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(244, 247, 251))
         }
         val toolbarTitle = TextView(this).apply {
-            text = "Codex Workbench"
+            text = "코덱스 워크벤치"
             textSize = 16f
             setTextColor(Color.rgb(15, 27, 45))
             maxLines = 1
@@ -341,7 +484,7 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                toolbarTitle.text = view?.title?.takeIf { it.isNotBlank() } ?: "Codex Workbench"
+                toolbarTitle.text = view?.title?.takeIf { it.isNotBlank() } ?: "코덱스 워크벤치"
             }
 
             override fun onReceivedError(
@@ -485,7 +628,7 @@ class MainActivity : Activity() {
         try {
             val request = DownloadManager.Request(uri).apply {
                 setTitle(fileName)
-                setDescription("Codex Workbench download")
+                setDescription("코덱스 워크벤치 다운로드")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 setAllowedOverMetered(true)
                 setAllowedOverRoaming(false)
@@ -539,6 +682,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        splashTransition?.let { root.removeCallbacks(it) }
+        splashTransition = null
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         destroyWebView()

@@ -58,6 +58,7 @@ class MainActivity : Activity() {
     private var currentTarget: WorkbenchTarget? = null
     private var splashTransition: Runnable? = null
     private var settingsOverlay: View? = null
+    private var suppressNextPauseMonitor = false
 
     private val prefs by lazy {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -83,11 +84,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        suppressNextPauseMonitor = false
         TaskNotificationService.stop(this)
     }
 
     override fun onPause() {
-        startBackgroundCompletionMonitorIfNeeded()
+        if (!suppressNextPauseMonitor) {
+            startBackgroundCompletionMonitorIfNeeded()
+        }
+        suppressNextPauseMonitor = false
         super.onPause()
     }
 
@@ -312,6 +317,7 @@ class MainActivity : Activity() {
                 .putString(PREF_WORKBENCH_ID, target.id)
                 .putString(PREF_SERVER_URL, target.url)
                 .apply()
+            suppressNextPauseMonitor = true
             requestNotificationPermissionIfNeeded()
             showWorkbench(target)
         }
@@ -454,9 +460,11 @@ class MainActivity : Activity() {
                     }
                 }
                 return try {
+                    suppressNextPauseMonitor = true
                     startActivityForResult(intent, FILE_CHOOSER_REQUEST_CODE)
                     true
                 } catch (_: Exception) {
+                    suppressNextPauseMonitor = false
                     fileChooserCallback?.onReceiveValue(null)
                     fileChooserCallback = null
                     Toast.makeText(
@@ -610,6 +618,7 @@ class MainActivity : Activity() {
         notificationSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(PREF_NOTIFICATIONS_ENABLED, checked).apply()
             if (checked) {
+                suppressNextPauseMonitor = true
                 requestNotificationPermissionIfNeeded()
             } else {
                 TaskNotificationService.stop(this)
@@ -690,9 +699,11 @@ class MainActivity : Activity() {
 
     private fun openExternal(uri: Uri): Boolean {
         return try {
+            suppressNextPauseMonitor = true
             startActivity(Intent(Intent.ACTION_VIEW, uri))
             true
         } catch (_: Exception) {
+            suppressNextPauseMonitor = false
             Toast.makeText(this, "외부 링크를 열 수 없습니다.", Toast.LENGTH_SHORT).show()
             true
         }

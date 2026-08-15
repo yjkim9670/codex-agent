@@ -19,14 +19,27 @@ Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 �
 ## Mobile defaults
 
 - 상태바, display cutout, navigation/gesture 영역에 Android `WindowInsets` 기반 safe area를 적용합니다.
-- WebView text zoom 기본값은 90%입니다.
+- WebView text zoom 기본값은 85%입니다.
 - Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
 
+## Native UI design
+
+Android native 화면은 IBM Plex KR 계열의 정돈된 인상을 목표로 `sans-serif` / `sans-serif-medium` 시스템 fallback을 사용하고, regular / medium / semibold 계층과 좁은 letter spacing을 일관되게 적용합니다. 별도 font binary를 APK에 포함하지 않습니다.
+
+Workbench 선택 화면은 기본 Android RadioButton 목록 대신 다음 구성으로 표시합니다.
+
+- 밝은 canvas 위의 rounded selection card
+- TG / FN / LC / CT / DV 식별 badge
+- Workbench 이름과 Gateway path의 2단계 typography
+- 선택된 카드의 blue tint / border / check indicator
+- filled primary 접속 버튼과 outlined secondary 설정 버튼
+- WebView 상단 toolbar 및 설정 화면에도 동일한 typography와 rounded control 스타일 적용
+
 ## 작업 완료 알림
 
-설정 화면에서 `작업 완료 푸시 알림`을 켜거나 끌 수 있습니다.
+설정 화면에서 `작업 완료 알림`을 켜거나 끌 수 있습니다.
 
 이 기능은 FCM 같은 외부 push 서버가 아니라 Android 로컬 foreground monitor 방식입니다.
 
@@ -39,6 +52,8 @@ Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 �
 파일 선택기, Android 알림 권한창, 외부 링크처럼 앱 내부 동작 때문에 잠시 화면이 가려지는 경우에는 background monitor를 시작하지 않습니다. 인증 쿠키는 앱 설정이나 파일에 별도로 저장하지 않습니다. Android 13 이상에서는 알림 권한이 필요합니다.
 
 ## Build
+
+현재 Android client 버전은 `1.1.1` (`versionCode 3`)입니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20

@@ -12,7 +12,7 @@ val releaseSigningConfigured = listOf(
     releaseKeystorePassword,
     releaseKeyAlias,
     releaseKeyPassword,
-).all { it.isNotBlank() }
+).all { it.isNotBlank() } && java.io.File(releaseKeystoreFile).isFile
 val ciVersionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()
 
 android {

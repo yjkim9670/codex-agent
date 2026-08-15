@@ -13,6 +13,7 @@ val releaseSigningConfigured = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { it.isNotBlank() }
+val ciVersionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()
 
 android {
     namespace = "com.yjkim9670.codexworkbench"
@@ -22,7 +23,7 @@ android {
         applicationId = "com.yjkim9670.codexworkbench"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
+        versionCode = ciVersionCode ?: 6
         versionName = "1.1.4"
     }
 

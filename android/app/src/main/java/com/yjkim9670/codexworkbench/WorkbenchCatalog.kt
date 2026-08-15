@@ -38,6 +38,7 @@ object WorkbenchCatalog {
         ),
     )
 
+    // Stored preferences from an older app version must never make startup fail.
     fun byId(id: String?): WorkbenchTarget =
         targets.firstOrNull { it.id == id } ?: targets.first()
 

@@ -7,12 +7,16 @@ import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -27,12 +31,9 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
@@ -46,9 +47,21 @@ class MainActivity : Activity() {
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val FILE_CHOOSER_REQUEST_CODE = 7001
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 7002
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.1"
         private const val SPLASH_DURATION_MS = 1100L
-        private const val WEB_TEXT_ZOOM_PERCENT = 90
+        private const val WEB_TEXT_ZOOM_PERCENT = 85
+
+        private val COLOR_NAVY = Color.rgb(7, 26, 53)
+        private val COLOR_INK = Color.rgb(20, 34, 54)
+        private val COLOR_MUTED = Color.rgb(91, 106, 128)
+        private val COLOR_MUTED_LIGHT = Color.rgb(123, 138, 158)
+        private val COLOR_CANVAS = Color.rgb(247, 249, 252)
+        private val COLOR_SURFACE = Color.WHITE
+        private val COLOR_BORDER = Color.rgb(221, 227, 236)
+        private val COLOR_PRIMARY = Color.rgb(35, 104, 196)
+        private val COLOR_PRIMARY_DARK = Color.rgb(25, 78, 151)
+        private val COLOR_PRIMARY_SOFT = Color.rgb(237, 245, 255)
+        private val COLOR_PRIMARY_BORDER = Color.rgb(116, 163, 222)
     }
 
     private lateinit var root: FrameLayout
@@ -64,13 +77,23 @@ class MainActivity : Activity() {
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
+    private val plexRegular: Typeface by lazy {
+        Typeface.create("sans-serif", Typeface.NORMAL)
+    }
+    private val plexMedium: Typeface by lazy {
+        Typeface.create("sans-serif-medium", Typeface.NORMAL)
+    }
+    private val plexSemibold: Typeface by lazy {
+        Typeface.create("sans-serif", Typeface.BOLD)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureSystemBars()
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
         root = FrameLayout(this).apply {
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(COLOR_CANVAS)
         }
         setContentView(root)
         applySystemBarInsets()
@@ -97,9 +120,8 @@ class MainActivity : Activity() {
     }
 
     private fun configureSystemBars() {
-        val navy = Color.rgb(7, 26, 53)
-        window.statusBarColor = navy
-        window.navigationBarColor = navy
+        window.statusBarColor = COLOR_NAVY
+        window.navigationBarColor = COLOR_NAVY
 
         val decor = window.decorView
         decor.systemUiVisibility = decor.systemUiVisibility and
@@ -107,7 +129,7 @@ class MainActivity : Activity() {
             View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            window.navigationBarDividerColor = navy
+            window.navigationBarDividerColor = COLOR_NAVY
         }
     }
 
@@ -152,45 +174,42 @@ class MainActivity : Activity() {
         val splash = FrameLayout(this).apply {
             setBackgroundResource(R.drawable.splash_background)
         }
-
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(28), dp(32), dp(28), dp(32))
         }
 
-        val artwork = ImageView(this).apply {
-            setImageResource(R.drawable.ic_workbench_foreground)
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "코덱스 워크벤치 아이콘"
-        }
         content.addView(
-            artwork,
-            LinearLayout.LayoutParams(dp(236), dp(236)).apply {
-                bottomMargin = dp(18)
+            ImageView(this).apply {
+                setImageResource(R.drawable.ic_workbench_foreground)
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = "코덱스 워크벤치 아이콘"
+            },
+            LinearLayout.LayoutParams(dp(226), dp(226)).apply {
+                bottomMargin = dp(16)
                 gravity = Gravity.CENTER_HORIZONTAL
             },
         )
-
         content.addView(
-            TextView(this).apply {
-                text = "코덱스 워크벤치"
-                textSize = 30f
-                setTextColor(Color.WHITE)
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                letterSpacing = 0.02f
-            },
+            nativeText(
+                value = "코덱스 워크벤치",
+                sizeSp = 29f,
+                color = Color.WHITE,
+                weight = NativeWeight.SEMIBOLD,
+                gravity = Gravity.CENTER,
+            ).apply { letterSpacing = -0.005f },
             matchWrap().apply { bottomMargin = dp(8) },
         )
         content.addView(
-            TextView(this).apply {
-                text = "Workspace · Git · Terminal"
-                textSize = 14f
-                setTextColor(Color.rgb(184, 226, 237))
-                gravity = Gravity.CENTER
-            },
+            nativeText(
+                value = "Workspace · Git · Terminal",
+                sizeSp = 13.5f,
+                color = Color.rgb(184, 226, 237),
+                weight = NativeWeight.MEDIUM,
+                gravity = Gravity.CENTER,
+            ).apply { letterSpacing = 0.035f },
             matchWrap(),
         )
 
@@ -211,108 +230,177 @@ class MainActivity : Activity() {
         closeSettingsOverlay()
         destroyWebView()
         root.removeAllViews()
-        root.setBackgroundColor(Color.WHITE)
+        root.setBackgroundColor(COLOR_CANVAS)
         serverBaseUrl = ""
         currentTarget = null
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
+            setBackgroundColor(COLOR_CANVAS)
+            clipToPadding = false
         }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(22), dp(26), dp(22), dp(28))
+            setPadding(dp(20), dp(22), dp(20), dp(30))
         }
-        scroll.addView(
-            panel,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+        scroll.addView(panel, matchWrap())
+
+        val eyebrow = nativeText(
+            value = "CODEX WORKBENCH",
+            sizeSp = 11.5f,
+            color = COLOR_PRIMARY,
+            weight = NativeWeight.SEMIBOLD,
+            gravity = Gravity.CENTER,
+        ).apply { letterSpacing = 0.12f }
+        panel.addView(eyebrow, matchWrap().apply { bottomMargin = dp(7) })
 
         panel.addView(
-            TextView(this).apply {
-                text = "코덱스 워크벤치"
-                textSize = 25f
-                setTextColor(Color.rgb(15, 27, 45))
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-            },
-            matchWrap().apply { bottomMargin = dp(7) },
+            nativeText(
+                value = "코덱스 워크벤치",
+                sizeSp = 27f,
+                color = COLOR_INK,
+                weight = NativeWeight.SEMIBOLD,
+                gravity = Gravity.CENTER,
+            ),
+            matchWrap().apply { bottomMargin = dp(8) },
         )
         panel.addView(
-            TextView(this).apply {
-                text = "접속할 Workbench를 선택하세요.\nGateway: dinya.wind-mintaka.ts.net"
-                textSize = 13.5f
-                setTextColor(Color.rgb(76, 91, 113))
-                gravity = Gravity.CENTER
-            },
+            nativeText(
+                value = "사용할 Workbench를 선택하세요.\n인증은 선택한 Funnel Gateway에서 그대로 진행됩니다.",
+                sizeSp = 13.5f,
+                color = COLOR_MUTED,
+                weight = NativeWeight.REGULAR,
+                gravity = Gravity.CENTER,
+            ).apply { setLineSpacing(dp(2).toFloat(), 1f) },
             matchWrap().apply { bottomMargin = dp(20) },
         )
 
-        val selected = WorkbenchCatalog.byId(initialWorkbenchId)
-        val radioGroup = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-        }
-        WorkbenchCatalog.targets.forEachIndexed { index, target ->
-            val radio = RadioButton(this).apply {
-                id = View.generateViewId()
-                tag = target.id
-                text = "${target.name}\n${target.url.removePrefix(WorkbenchCatalog.GATEWAY_ROOT)}"
-                textSize = 14.5f
-                setTextColor(Color.rgb(31, 48, 72))
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(6), dp(6), dp(6), dp(6))
-                isChecked = target.id == selected.id
-            }
-            radioGroup.addView(
-                radio,
-                RadioGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    if (index < WorkbenchCatalog.targets.lastIndex) bottomMargin = dp(3)
-                },
-            )
+        val gatewayPill = nativeText(
+            value = "dinya.wind-mintaka.ts.net",
+            sizeSp = 11.5f,
+            color = COLOR_MUTED,
+            weight = NativeWeight.MEDIUM,
+            gravity = Gravity.CENTER,
+        ).apply {
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            background = roundedDrawable(Color.WHITE, dp(99).toFloat(), COLOR_BORDER, 1)
         }
         panel.addView(
-            radioGroup,
+            gatewayPill,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { bottomMargin = dp(18) },
         )
 
-        val connectButton = Button(this).apply {
-            text = "선택한 Workbench 접속"
-            isAllCaps = false
-            textSize = 15f
+        var selectedId = WorkbenchCatalog.byId(initialWorkbenchId).id
+        val cardViews = linkedMapOf<String, Pair<LinearLayout, TextView>>()
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
         }
+
+        fun refreshCards() {
+            cardViews.forEach { (id, pair) ->
+                applyWorkbenchCardState(pair.first, pair.second, id == selectedId)
+            }
+        }
+
+        WorkbenchCatalog.targets.forEachIndexed { index, target ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                isClickable = true
+                isFocusable = true
+                elevation = dp(1).toFloat()
+                setPadding(dp(14), dp(13), dp(12), dp(13))
+            }
+
+            val badge = nativeText(
+                value = targetBadge(target),
+                sizeSp = 11.5f,
+                color = COLOR_PRIMARY,
+                weight = NativeWeight.SEMIBOLD,
+                gravity = Gravity.CENTER,
+            ).apply {
+                background = roundedDrawable(COLOR_PRIMARY_SOFT, dp(13).toFloat())
+            }
+            card.addView(badge, LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(12) })
+
+            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            copy.addView(
+                nativeText(
+                    value = target.name.removeSuffix(" Codex Workbench"),
+                    sizeSp = 15f,
+                    color = COLOR_INK,
+                    weight = NativeWeight.MEDIUM,
+                ).apply {
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                },
+                matchWrap().apply { bottomMargin = dp(3) },
+            )
+            copy.addView(
+                nativeText(
+                    value = target.url.removePrefix(WorkbenchCatalog.GATEWAY_ROOT),
+                    sizeSp = 12.5f,
+                    color = COLOR_MUTED_LIGHT,
+                    weight = NativeWeight.REGULAR,
+                ),
+                matchWrap(),
+            )
+            card.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            val indicator = nativeText(
+                value = "",
+                sizeSp = 14f,
+                color = Color.WHITE,
+                weight = NativeWeight.SEMIBOLD,
+                gravity = Gravity.CENTER,
+            )
+            card.addView(indicator, LinearLayout.LayoutParams(dp(28), dp(28)).apply { leftMargin = dp(10) })
+
+            cardViews[target.id] = Pair(card, indicator)
+            applyWorkbenchCardState(card, indicator, target.id == selectedId)
+            card.setOnClickListener {
+                selectedId = target.id
+                refreshCards()
+            }
+
+            listContainer.addView(
+                card,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    if (index < WorkbenchCatalog.targets.lastIndex) bottomMargin = dp(9)
+                },
+            )
+        }
+        panel.addView(listContainer, matchWrap().apply { bottomMargin = dp(18) })
+
+        val connectButton = modernButton(
+            label = "선택한 Workbench 접속",
+            filled = true,
+        )
         panel.addView(
             connectButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(50),
-            ).apply { bottomMargin = dp(9) },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
+                bottomMargin = dp(10)
+            },
         )
 
-        val settingsButton = Button(this).apply {
-            text = "설정"
-            isAllCaps = false
-            textSize = 14f
-        }
+        val settingsButton = modernButton(
+            label = "앱 설정",
+            filled = false,
+        )
         panel.addView(
             settingsButton,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(46),
-            ),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)),
         )
 
         connectButton.setOnClickListener {
-            val checked = radioGroup.findViewById<RadioButton>(radioGroup.checkedRadioButtonId)
-            val target = WorkbenchCatalog.byId(checked?.tag?.toString())
+            val target = WorkbenchCatalog.byId(selectedId)
             prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
                 .putString(PREF_SERVER_URL, target.url)
@@ -324,6 +412,27 @@ class MainActivity : Activity() {
         settingsButton.setOnClickListener { showSettingsOverlay() }
 
         root.addView(scroll, fillFrame())
+    }
+
+    private fun applyWorkbenchCardState(
+        card: LinearLayout,
+        indicator: TextView,
+        selected: Boolean,
+    ) {
+        card.background = roundedDrawable(
+            fillColor = if (selected) COLOR_PRIMARY_SOFT else COLOR_SURFACE,
+            radius = dp(17).toFloat(),
+            strokeColor = if (selected) COLOR_PRIMARY_BORDER else COLOR_BORDER,
+            strokeWidthDp = if (selected) 2 else 1,
+        )
+        card.elevation = if (selected) dp(2).toFloat() else dp(1).toFloat()
+        indicator.text = if (selected) "✓" else ""
+        indicator.background = roundedDrawable(
+            fillColor = if (selected) COLOR_PRIMARY else COLOR_SURFACE,
+            radius = dp(14).toFloat(),
+            strokeColor = if (selected) COLOR_PRIMARY else COLOR_BORDER,
+            strokeWidthDp = 1,
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -341,29 +450,51 @@ class MainActivity : Activity() {
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), 0, dp(5), 0)
-            setBackgroundColor(Color.rgb(244, 247, 251))
+            setPadding(dp(12), dp(5), dp(8), dp(5))
+            setBackgroundColor(Color.rgb(249, 250, 252))
+            elevation = dp(1).toFloat()
         }
-        val toolbarTitle = TextView(this).apply {
-            text = target.name
-            textSize = 13.5f
-            setTextColor(Color.rgb(15, 27, 45))
-            maxLines = 1
-        }
+        val titleBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        titleBlock.addView(
+            nativeText(
+                value = target.name.removeSuffix(" Codex Workbench"),
+                sizeSp = 13f,
+                color = COLOR_INK,
+                weight = NativeWeight.MEDIUM,
+            ).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            },
+            matchWrap(),
+        )
+        titleBlock.addView(
+            nativeText(
+                value = target.url.removePrefix(WorkbenchCatalog.GATEWAY_ROOT),
+                sizeSp = 10.5f,
+                color = COLOR_MUTED_LIGHT,
+                weight = NativeWeight.REGULAR,
+            ).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            },
+            matchWrap(),
+        )
         toolbar.addView(
-            toolbarTitle,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+            titleBlock,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(6)
+            },
         )
 
-        val reloadButton = compactToolbarButton("↻", "새로고침")
-        val serverButton = compactToolbarButton("서버", "Workbench 선택")
-        val settingsButton = compactToolbarButton("설정", "앱 설정")
-        toolbar.addView(reloadButton, LinearLayout.LayoutParams(dp(44), dp(38)))
-        toolbar.addView(serverButton, LinearLayout.LayoutParams(dp(54), dp(38)))
-        toolbar.addView(settingsButton, LinearLayout.LayoutParams(dp(54), dp(38)))
+        val reloadButton = compactToolbarButton("↻", "새로고침", wide = false)
+        val serverButton = compactToolbarButton("서버", "Workbench 선택", wide = true)
+        val settingsButton = compactToolbarButton("설정", "앱 설정", wide = true)
+        toolbar.addView(reloadButton, LinearLayout.LayoutParams(dp(38), dp(36)).apply { rightMargin = dp(5) })
+        toolbar.addView(serverButton, LinearLayout.LayoutParams(dp(48), dp(36)).apply { rightMargin = dp(5) })
+        toolbar.addView(settingsButton, LinearLayout.LayoutParams(dp(48), dp(36)))
         container.addView(
             toolbar,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)),
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)),
         )
 
         val browser = WebView(this)
@@ -411,7 +542,6 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                toolbarTitle.text = target.name
                 enableWorkModeByDefault(view)
             }
 
@@ -494,18 +624,26 @@ class MainActivity : Activity() {
         browser.loadUrl(target.url)
     }
 
-    private fun compactToolbarButton(label: String, description: String): Button =
-        Button(this).apply {
-            text = label
-            textSize = if (label == "↻") 18f else 12f
-            isAllCaps = false
-            minWidth = 0
-            minimumWidth = 0
-            minHeight = 0
-            minimumHeight = 0
-            setPadding(dp(3), 0, dp(3), 0)
-            contentDescription = description
-        }
+    private fun compactToolbarButton(
+        label: String,
+        description: String,
+        wide: Boolean,
+    ): TextView = nativeText(
+        value = label,
+        sizeSp = if (wide) 10.5f else 17f,
+        color = COLOR_INK,
+        weight = if (wide) NativeWeight.MEDIUM else NativeWeight.REGULAR,
+        gravity = Gravity.CENTER,
+    ).apply {
+        contentDescription = description
+        isClickable = true
+        isFocusable = true
+        background = rippleBackground(
+            fillColor = Color.rgb(241, 244, 248),
+            radiusDp = 11,
+            rippleColor = Color.rgb(216, 225, 236),
+        )
+    }
 
     private fun enableWorkModeByDefault(browser: WebView?) {
         val script = """
@@ -528,92 +666,134 @@ class MainActivity : Activity() {
 
     private fun showSettingsOverlay() {
         if (settingsOverlay != null) return
+
         val overlay = FrameLayout(this).apply {
-            setBackgroundColor(Color.WHITE)
-            elevation = dp(8).toFloat()
+            setBackgroundColor(COLOR_CANVAS)
+            elevation = dp(10).toFloat()
         }
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(28))
+            setPadding(dp(20), dp(18), dp(20), dp(30))
         }
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val headingBlock = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headingBlock.addView(
+            nativeText(
+                value = "설정",
+                sizeSp = 25f,
+                color = COLOR_INK,
+                weight = NativeWeight.SEMIBOLD,
+            ),
+            matchWrap(),
+        )
+        headingBlock.addView(
+            nativeText(
+                value = "코덱스 워크벤치 Android",
+                sizeSp = 12f,
+                color = COLOR_MUTED,
+                weight = NativeWeight.REGULAR,
+            ),
+            matchWrap(),
+        )
         header.addView(
-            TextView(this).apply {
-                text = "설정"
-                textSize = 24f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.rgb(15, 27, 45))
-            },
+            headingBlock,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
-        val close = Button(this).apply {
-            text = "닫기"
-            textSize = 13f
-            isAllCaps = false
-        }
-        header.addView(close, LinearLayout.LayoutParams(dp(66), dp(42)))
-        panel.addView(header, matchWrap().apply { bottomMargin = dp(22) })
+        val close = modernMiniButton("닫기")
+        header.addView(close, LinearLayout.LayoutParams(dp(62), dp(40)))
+        panel.addView(header, matchWrap().apply { bottomMargin = dp(20) })
 
-        panel.addView(
-            TextView(this).apply {
-                text = "화면"
-                textSize = 17f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.rgb(31, 48, 72))
-            },
-            matchWrap().apply { bottomMargin = dp(6) },
-        )
-        panel.addView(
-            TextView(this).apply {
-                text = "Workbench 본문 글자 크기: 90%\n접속 직후 작업모드를 기본으로 엽니다."
-                textSize = 14f
-                setTextColor(Color.rgb(76, 91, 113))
-            },
-            matchWrap().apply { bottomMargin = dp(24) },
-        )
-
-        panel.addView(
-            TextView(this).apply {
-                text = "알림"
-                textSize = 17f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.rgb(31, 48, 72))
-            },
+        val displayCard = settingsCard("화면", "DISPLAY")
+        displayCard.addView(
+            nativeText(
+                value = "Workbench 본문 글자 크기 85%",
+                sizeSp = 14.5f,
+                color = COLOR_INK,
+                weight = NativeWeight.MEDIUM,
+            ),
             matchWrap().apply { bottomMargin = dp(5) },
         )
-
-        val notificationSwitch = Switch(this).apply {
-            text = "작업 완료 푸시 알림"
-            textSize = 15.5f
-            isChecked = prefs.getBoolean(PREF_NOTIFICATIONS_ENABLED, true)
-            setPadding(0, dp(6), 0, dp(6))
-        }
-        panel.addView(notificationSwitch, matchWrap().apply { bottomMargin = dp(6) })
-        panel.addView(
-            TextView(this).apply {
-                text = "앱을 백그라운드로 전환하면 실행 중인 Workbench 작업만 짧게 모니터링합니다. 작업이 끝나면 Android 알림을 보내고 모니터를 자동 종료합니다. 인증 쿠키는 저장하지 않습니다."
-                textSize = 13.5f
-                setTextColor(Color.rgb(76, 91, 113))
-            },
-            matchWrap().apply { bottomMargin = dp(22) },
+        displayCard.addView(
+            nativeText(
+                value = "모바일에서 더 많은 정보를 한 화면에 표시하고, 접속 직후 작업모드를 기본으로 엽니다.",
+                sizeSp = 13f,
+                color = COLOR_MUTED,
+                weight = NativeWeight.REGULAR,
+            ).apply { setLineSpacing(dp(2).toFloat(), 1f) },
+            matchWrap(),
         )
+        panel.addView(displayCard, matchWrap().apply { bottomMargin = dp(12) })
+
+        val notificationCard = settingsCard("알림", "NOTIFICATION")
+        val notificationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        notificationRow.addView(
+            nativeText(
+                value = "작업 완료 알림",
+                sizeSp = 14.5f,
+                color = COLOR_INK,
+                weight = NativeWeight.MEDIUM,
+            ),
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        val notificationSwitch = Switch(this).apply {
+            isChecked = prefs.getBoolean(PREF_NOTIFICATIONS_ENABLED, true)
+            showText = false
+            thumbTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(COLOR_PRIMARY, Color.rgb(190, 199, 211)),
+            )
+            trackTintList = ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(Color.rgb(181, 208, 242), Color.rgb(226, 231, 238)),
+            )
+        }
+        notificationRow.addView(notificationSwitch)
+        notificationCard.addView(notificationRow, matchWrap().apply { bottomMargin = dp(7) })
+        notificationCard.addView(
+            nativeText(
+                value = "앱이 백그라운드일 때 실행 중인 작업만 확인합니다. 완료되면 Android 알림을 보내고 모니터를 자동 종료하며, 인증 쿠키는 별도로 저장하지 않습니다.",
+                sizeSp = 13f,
+                color = COLOR_MUTED,
+                weight = NativeWeight.REGULAR,
+            ).apply { setLineSpacing(dp(2).toFloat(), 1f) },
+            matchWrap(),
+        )
+        panel.addView(notificationCard, matchWrap().apply { bottomMargin = dp(12) })
 
         val selectedTarget = currentTarget ?: WorkbenchCatalog.byId(
             prefs.getString(PREF_WORKBENCH_ID, WorkbenchCatalog.DEFAULT_ID),
         )
-        panel.addView(
-            TextView(this).apply {
-                text = "현재 Workbench\n${selectedTarget.name}\n${selectedTarget.url}"
-                textSize = 13.5f
-                setTextColor(Color.rgb(76, 91, 113))
-            },
+        val workbenchCard = settingsCard("현재 Workbench", "CONNECTION")
+        workbenchCard.addView(
+            nativeText(
+                value = selectedTarget.name,
+                sizeSp = 14.5f,
+                color = COLOR_INK,
+                weight = NativeWeight.MEDIUM,
+            ),
+            matchWrap().apply { bottomMargin = dp(4) },
+        )
+        workbenchCard.addView(
+            nativeText(
+                value = selectedTarget.url,
+                sizeSp = 12.5f,
+                color = COLOR_MUTED,
+                weight = NativeWeight.REGULAR,
+            ),
             matchWrap(),
         )
+        panel.addView(workbenchCard, matchWrap())
 
         notificationSwitch.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(PREF_NOTIFICATIONS_ENABLED, checked).apply()
@@ -626,11 +806,37 @@ class MainActivity : Activity() {
         }
         close.setOnClickListener { closeSettingsOverlay() }
 
-        scroll.addView(panel)
+        scroll.addView(panel, matchWrap())
         overlay.addView(scroll, fillFrame())
         settingsOverlay = overlay
         root.addView(overlay, fillFrame())
     }
+
+    private fun settingsCard(title: String, eyebrow: String): LinearLayout =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(17), dp(15), dp(17), dp(16))
+            elevation = dp(1).toFloat()
+            background = roundedDrawable(COLOR_SURFACE, dp(18).toFloat(), COLOR_BORDER, 1)
+            addView(
+                nativeText(
+                    value = eyebrow,
+                    sizeSp = 10f,
+                    color = COLOR_PRIMARY,
+                    weight = NativeWeight.SEMIBOLD,
+                ).apply { letterSpacing = 0.1f },
+                matchWrap().apply { bottomMargin = dp(5) },
+            )
+            addView(
+                nativeText(
+                    value = title,
+                    sizeSp = 18f,
+                    color = COLOR_INK,
+                    weight = NativeWeight.SEMIBOLD,
+                ),
+                matchWrap().apply { bottomMargin = dp(11) },
+            )
+        }
 
     private fun closeSettingsOverlay() {
         settingsOverlay?.let { root.removeView(it) }
@@ -801,6 +1007,107 @@ class MainActivity : Activity() {
             destroy()
         }
         webView = null
+    }
+
+    private enum class NativeWeight {
+        REGULAR,
+        MEDIUM,
+        SEMIBOLD,
+    }
+
+    private fun nativeText(
+        value: String,
+        sizeSp: Float,
+        color: Int,
+        weight: NativeWeight = NativeWeight.REGULAR,
+        gravity: Int = Gravity.START,
+    ): TextView = TextView(this).apply {
+        text = value
+        textSize = sizeSp
+        setTextColor(color)
+        this.gravity = gravity
+        includeFontPadding = false
+        typeface = when (weight) {
+            NativeWeight.REGULAR -> plexRegular
+            NativeWeight.MEDIUM -> plexMedium
+            NativeWeight.SEMIBOLD -> plexSemibold
+        }
+        letterSpacing = -0.008f
+        setLineSpacing(0f, 1.04f)
+    }
+
+    private fun modernButton(label: String, filled: Boolean): TextView =
+        nativeText(
+            value = label,
+            sizeSp = 14.5f,
+            color = if (filled) Color.WHITE else COLOR_PRIMARY_DARK,
+            weight = NativeWeight.MEDIUM,
+            gravity = Gravity.CENTER,
+        ).apply {
+            isClickable = true
+            isFocusable = true
+            background = rippleBackground(
+                fillColor = if (filled) COLOR_PRIMARY else Color.WHITE,
+                radiusDp = 16,
+                rippleColor = if (filled) Color.rgb(72, 132, 211) else Color.rgb(231, 238, 248),
+                strokeColor = if (filled) null else COLOR_PRIMARY_BORDER,
+            )
+        }
+
+    private fun modernMiniButton(label: String): TextView =
+        nativeText(
+            value = label,
+            sizeSp = 12.5f,
+            color = COLOR_INK,
+            weight = NativeWeight.MEDIUM,
+            gravity = Gravity.CENTER,
+        ).apply {
+            isClickable = true
+            isFocusable = true
+            background = rippleBackground(
+                fillColor = Color.WHITE,
+                radiusDp = 12,
+                rippleColor = Color.rgb(230, 236, 244),
+                strokeColor = COLOR_BORDER,
+            )
+        }
+
+    private fun targetBadge(target: WorkbenchTarget): String = when (target.id) {
+        "common_tg" -> "TG"
+        "finance" -> "FN"
+        "local" -> "LC"
+        "constraint" -> "CT"
+        "dev" -> "DV"
+        else -> "WB"
+    }
+
+    private fun roundedDrawable(
+        fillColor: Int,
+        radius: Float,
+        strokeColor: Int? = null,
+        strokeWidthDp: Int = 0,
+    ): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(fillColor)
+        cornerRadius = radius
+        if (strokeColor != null && strokeWidthDp > 0) {
+            setStroke(dp(strokeWidthDp), strokeColor)
+        }
+    }
+
+    private fun rippleBackground(
+        fillColor: Int,
+        radiusDp: Int,
+        rippleColor: Int,
+        strokeColor: Int? = null,
+    ): RippleDrawable {
+        val content = roundedDrawable(
+            fillColor = fillColor,
+            radius = dp(radiusDp).toFloat(),
+            strokeColor = strokeColor,
+            strokeWidthDp = if (strokeColor == null) 0 else 1,
+        )
+        return RippleDrawable(ColorStateList.valueOf(rippleColor), content, null)
     }
 
     private fun matchWrap(): LinearLayout.LayoutParams =

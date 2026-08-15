@@ -31,12 +31,12 @@ Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 �
 이 기능은 FCM 같은 외부 push 서버가 아니라 Android 로컬 foreground monitor 방식입니다.
 
 1. 사용자가 Workbench에서 작업을 시작합니다.
-2. 앱이 백그라운드로 전환될 때 현재 WebView 인증 쿠키를 메모리로만 foreground service에 전달합니다.
+2. 앱이 실제로 백그라운드로 전환될 때 현재 WebView 인증 쿠키를 메모리로만 foreground service에 전달합니다.
 3. service는 현재 선택한 Gateway의 `/api/codex/streams?include_done=1`을 5초 간격으로 확인합니다.
 4. 실행 중이던 stream과 pending queue가 모두 끝나면 `작업 완료` Android 알림을 보냅니다.
 5. 완료되거나 실행 중인 작업이 확인되지 않으면 service는 자동 종료합니다.
 
-인증 쿠키는 앱 설정이나 파일에 별도로 저장하지 않습니다. Android 13 이상에서는 알림 권한이 필요합니다.
+파일 선택기, Android 알림 권한창, 외부 링크처럼 앱 내부 동작 때문에 잠시 화면이 가려지는 경우에는 background monitor를 시작하지 않습니다. 인증 쿠키는 앱 설정이나 파일에 별도로 저장하지 않습니다. Android 13 이상에서는 알림 권한이 필요합니다.
 
 ## Build
 

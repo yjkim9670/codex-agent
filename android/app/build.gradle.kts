@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,7 +14,7 @@ val releaseSigningConfigured = listOf(
     releaseKeystorePassword,
     releaseKeyAlias,
     releaseKeyPassword,
-).all { it.isNotBlank() } && java.io.File(releaseKeystoreFile).isFile
+).all { it.isNotBlank() } && File(releaseKeystoreFile).isFile
 val ciVersionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull()
 
 android {

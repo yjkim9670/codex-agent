@@ -29,7 +29,7 @@ class TaskNotificationService : Service() {
         private const val POLL_INTERVAL_MS = 5_000L
         private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
-        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.5"
+        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.6"
 
         fun start(context: Context, baseUrl: String, label: String, cookie: String?) {
             if (baseUrl.isBlank()) return
@@ -49,10 +49,6 @@ class TaskNotificationService : Service() {
         }
 
         fun stop(context: Context) {
-            // MainActivity calls this on every resume. Using startService(ACTION_STOP)
-            // would create the service even when no monitor is running, so startup could
-            // execute notification-channel code unnecessarily. stopService is idempotent
-            // and does nothing when the monitor is not running.
             runCatching {
                 context.stopService(Intent(context, TaskNotificationService::class.java))
             }

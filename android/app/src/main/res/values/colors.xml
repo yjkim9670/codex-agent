@@ -2,4 +2,5 @@
 <resources>
     <color name="launcher_background">#071A35</color>
     <color name="system_bar_background">#071A35</color>
+    <color name="system_bar_background_light">#F7F9FC</color>
 </resources>

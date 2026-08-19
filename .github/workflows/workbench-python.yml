@@ -1,0 +1,43 @@
+name: Workbench Python
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'codex-web-app/**'
+      - 'codex_agent.py'
+      - 'tests/test_codex_cli_output_filter.py'
+      - '.github/workflows/workbench-python.yml'
+  pull_request:
+    paths:
+      - 'codex-web-app/**'
+      - 'codex_agent.py'
+      - 'tests/test_codex_cli_output_filter.py'
+      - '.github/workflows/workbench-python.yml'
+
+jobs:
+  cli-output-filter:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: Compile changed Workbench modules
+        run: |
+          python -m py_compile \
+            codex-web-app/codex_app.py \
+            codex-web-app/services/codex_cli_output_filter.py
+
+      - name: Run CLI output filter regression tests
+        run: pytest -q tests/test_codex_cli_output_filter.py

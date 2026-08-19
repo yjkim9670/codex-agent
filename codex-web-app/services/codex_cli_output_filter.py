@@ -26,10 +26,6 @@ _GENERIC_CLI_FAILURE = "Codex CLI 작업 중 오류가 발생했습니다. 상�
 _DIAGNOSTIC_LIMIT = 12
 _DIAGNOSTIC_TEXT_LIMIT = 12000
 
-# Signatures that identify implementation-level command/tool diagnostics rather than a
-# user-facing Codex answer. Keep this intentionally conservative: ordinary Python,
-# Git, network, authentication, or model error messages continue through the existing
-# path unless they contain one of these raw execution wrappers.
 _INTERNAL_PATTERNS = (
     re.compile(r"\bCreateProcess\s*\{", re.IGNORECASE),
     re.compile(r"\bCreateProcess\b.{0,200}\bRejected\s*\(", re.IGNORECASE | re.DOTALL),
@@ -44,7 +40,7 @@ def _normalize(value) -> str:
     if callable(normalizer):
         try:
             return normalizer(value)
-        except Exception:  # pragma: no cover - defensive fallback
+        except Exception:
             pass
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
@@ -55,10 +51,6 @@ def _looks_like_internal_cli_detail(value) -> bool:
         return False
     if any(pattern.search(text) for pattern in _INTERNAL_PATTERNS):
         return True
-
-    # Tool/runtime argument objects occasionally arrive as serialized JSON. Only
-    # classify them as internal when several execution-specific keys are present so
-    # that legitimate JSON shown by the assistant is not hidden.
     lowered = text.lower()
     execution_keys = sum(
         token in lowered
@@ -74,14 +66,12 @@ def _looks_like_internal_cli_detail(value) -> bool:
 
 
 def _remember_cli_diagnostic(stream_id, value) -> None:
-    """Retain a bounded copy without using the user-facing ``error`` field."""
     text = _normalize(value)
     if not text:
         return
     if len(text) > _DIAGNOSTIC_TEXT_LIMIT:
         text = text[-_DIAGNOSTIC_TEXT_LIMIT:]
         text = "(truncated)\n" + text
-
     try:
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
@@ -98,12 +88,10 @@ def _remember_cli_diagnostic(stream_id, value) -> None:
             stream["cli_diagnostic_seen"] = True
             stream["updated_at"] = time.time()
     except Exception:
-        # Filtering must never destabilize the chat stream.
         return
 
 
 def install_codex_cli_output_filter() -> None:
-    """Install the filter once for this server process."""
     current_append_error = getattr(_codex_chat, "_append_stream_exec_error", None)
     current_append_chunk = getattr(_codex_chat, "_append_stream_chunk", None)
     current_combine = getattr(_codex_chat, "_combine_stream_output_and_error", None)
@@ -126,10 +114,6 @@ def install_codex_cli_output_filter() -> None:
     def filtered_append_stream_exec_error(stream_id, text):
         if _looks_like_internal_cli_detail(text):
             _remember_cli_diagnostic(stream_id, text)
-            # The original Codex event is still retained by the existing codex_events
-            # path. Do not append this raw detail to stream['error'], because that
-            # field is rendered directly below the assistant response and is persisted
-            # into the chat transcript by finalize_codex_stream().
             return True
         return original_append_error(stream_id, text)
 
@@ -140,8 +124,6 @@ def install_codex_cli_output_filter() -> None:
         return original_append_chunk(stream_id, key, text)
 
     def filtered_hidden_codex_stderr_line(line):
-        # _stream_reader stores stderr in raw_stderr before this predicate is checked,
-        # so returning True here hides it from chat without losing diagnostic data.
         if _looks_like_internal_cli_detail(line):
             return True
         return original_hidden_stderr(line)
@@ -150,8 +132,6 @@ def install_codex_cli_output_filter() -> None:
         if _looks_like_internal_cli_detail(error_text):
             output_value = "" if output_text is None else str(output_text).strip()
             if output_value:
-                # The assistant already explained the command/tool failure in natural
-                # language, so do not append an additional raw CLI block.
                 return str(output_text)
             return _GENERIC_CLI_FAILURE
         return original_combine(output_text, error_text)

@@ -5,9 +5,13 @@ for example a full shell command followed by ``CreateProcess { ... Rejected(...)
 Those values are useful for diagnostics but should not be appended to the user-facing
 assistant message.
 
-This module installs narrow runtime wrappers around the existing stream helpers.  It
+This module installs narrow runtime wrappers around the existing stream helpers. It
 intentionally does not change Codex execution, event collection, work-item tracking,
 or the normal assistant/progress output path.
+
+The existing Workbench stream keeps structured ``codex_events`` and ``raw_stderr``
+for diagnostics. This filter only prevents implementation-level command/runtime text
+from being copied into the user-facing ``error`` field and persisted chat content.
 """
 
 from __future__ import annotations

@@ -73,10 +73,14 @@ def create_codex_app():
     ).strip().lower() in {'1', 'true', 'yes', 'on'}
     allowed_origins = _get_allowed_origins()
 
+    # Install once per server process. The filter keeps raw command/tool runtime
+    # diagnostics in Codex event/raw-stderr data while keeping normal chat readable.
     install_codex_cli_output_filter()
 
     def _client_ip():
         remote = str(request.remote_addr or '').strip()
+        # Forwarded client addresses are honored only when the TCP peer belongs
+        # to a configured proxy network; otherwise this header is forgeable.
         try:
             trusted_proxy = any(__import__('ipaddress').ip_address(remote) in network for network in CODEX_TRUSTED_PROXY_NETWORKS)
         except ValueError:
@@ -99,10 +103,14 @@ def create_codex_app():
         user = InternalUser(record['username'], record['role'], client_ip, storage_key_for_ip(client_ip), record.get('profile_configured', False))
         g.codex_current_user = user
         g.codex_user_context_token = activate_user(user)
+        # Move pre-hash user roots created by earlier internal-mode releases
+        # exactly once, preserving all existing chat, workspace and key data.
         hashed_root = Path(WORKSPACE_DIR).parent
         legacy_root = hashed_root.parent / user.username
         if not hashed_root.exists() and legacy_root.is_dir() and legacy_root != hashed_root:
             legacy_root.replace(hashed_root)
+        # Provision only this user's empty workspace on first access.  The
+        # scoped path prevents this from creating or exposing a shared root.
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
         return None
 

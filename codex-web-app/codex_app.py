@@ -73,8 +73,8 @@ def create_codex_app():
     ).strip().lower() in {'1', 'true', 'yes', 'on'}
     allowed_origins = _get_allowed_origins()
 
-    # Keep raw command/tool runtime diagnostics in the stream's diagnostic data,
-    # but do not append them to the normal assistant chat transcript.
+    # Install once per server process. The filter keeps raw command/tool runtime
+    # diagnostics in Codex event/raw-stderr data while keeping normal chat readable.
     install_codex_cli_output_filter()
 
     def _client_ip():

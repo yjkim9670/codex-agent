@@ -49,7 +49,7 @@ class MainActivity : Activity() {
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 7002
         private const val SPLASH_DURATION_MS = 900L
         private const val WEB_TEXT_ZOOM_PERCENT = 85
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.6"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.7"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE
@@ -75,8 +75,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Create the most basic view first. Everything after this point can fall back to
-        // an in-app recovery screen instead of terminating the process.
         root = FrameLayout(this).apply { setBackgroundColor(COLOR_CANVAS) }
         setContentView(root)
         installCrashRecorder()
@@ -241,7 +239,6 @@ class MainActivity : Activity() {
             ))
             root.addView(scroll, fillFrame())
         }.onFailure {
-            // Last-resort UI: avoid using any custom drawable/helper that could itself fail.
             root.removeAllViews()
             root.addView(TextView(this).apply {
                 text = "코덱스 워크벤치 복구 모드\n\n${formatError(it)}"
@@ -525,6 +522,7 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                runCatching { removeDuplicatedPromptSafeArea(view) }
                 runCatching { enableWorkModeByDefault(view) }
             }
 
@@ -588,6 +586,28 @@ class MainActivity : Activity() {
         settings.setOnClickListener { runCatching { showSettingsOverlay() } }
         root.addView(container, fillFrame())
         browser.loadUrl(target.url)
+    }
+
+    private fun removeDuplicatedPromptSafeArea(browser: WebView?) {
+        val script = """
+            (() => {
+                const styleId = 'codex-android-prompt-safe-area-fix';
+                let style = document.getElementById(styleId);
+                if (!style) {
+                    style = document.createElement('style');
+                    style.id = styleId;
+                    (document.head || document.documentElement).appendChild(style);
+                }
+                style.textContent = `
+                    @media (max-width: 840px) {
+                        .chat-input {
+                            padding-bottom: 0 !important;
+                        }
+                    }
+                `;
+            })();
+        """.trimIndent()
+        browser?.evaluateJavascript(script, null)
     }
 
     private fun enableWorkModeByDefault(browser: WebView?) {

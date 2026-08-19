@@ -29,6 +29,7 @@ from .services.codex_chat import (
     ensure_pending_queue_background_worker,
     ensure_usage_snapshot_background_worker,
 )
+from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
 from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
@@ -71,6 +72,10 @@ def create_codex_app():
         os.environ.get('CODEX_SESSION_COOKIE_SECURE') or ''
     ).strip().lower() in {'1', 'true', 'yes', 'on'}
     allowed_origins = _get_allowed_origins()
+
+    # Keep raw command/tool runtime diagnostics in the stream's diagnostic data,
+    # but do not append them to the normal assistant chat transcript.
+    install_codex_cli_output_filter()
 
     def _client_ip():
         remote = str(request.remote_addr or '').strip()

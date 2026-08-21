@@ -2,24 +2,31 @@
 
 Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin client입니다. Codex CLI, workspace, Git, terminal 및 인증 정보는 Workbench host에 유지되고 Android에서는 WebView와 모바일 기능만 담당합니다.
 
-## Workbench Gateway
+## Workbench connection modes
 
-앱 시작 후 다음 5개 Funnel Gateway 중 하나를 선택합니다. 기본 선택은 Common TG입니다.
+앱 시작 후 다음 5개 Workbench 중 하나를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`과 `Tailscale 내부 접속` 두 가지이며, 기본값은 기존과 동일한 Funnel입니다.
 
-| Workbench | Gateway |
-|---|---|
-| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` |
-| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` |
-| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` |
-| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` |
-| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` |
+| Workbench | Funnel | Tailscale direct |
+|---|---|---|
+| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` |
+| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` |
+| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` |
+| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` |
+| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` |
 
-Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 흐름을 WebView가 그대로 사용합니다. 앱은 OpenAI/GitHub/Workbench 비밀키를 APK에 포함하지 않습니다.
+Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. 선택한 접속 방식은 SharedPreferences에 저장되고 다음 실행에도 유지됩니다.
+
+선택된 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager, background completion monitor API에도 동일하게 사용합니다. 따라서 Funnel과 Tailscale 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않고 Tailscale 연결 상태를 확인하거나 Funnel 모드로 전환하라는 안내를 표시합니다.
+
+앱은 OpenAI/GitHub/Workbench 비밀키를 APK에 포함하지 않습니다.
 
 ## Mobile defaults
 
 - 상태바, display cutout, navigation/gesture 영역에 Android `WindowInsets` 기반 safe area를 적용합니다.
 - WebView text zoom 기본값은 85%입니다.
+- 설정에서 text zoom을 60~125%, 5% 단위로 변경할 수 있습니다.
+- text zoom 설정은 저장되며 현재 열린 WebView에도 즉시 적용됩니다.
+- 설정에서 `85%로 초기화`할 수 있습니다.
 - Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
@@ -27,6 +34,8 @@ Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 �
 ## Native UI
 
 네이티브 UI는 별도 font binary 없이 Android `sans-serif` 계열을 사용하고, 밝은 canvas / rounded card / primary action 구조를 사용합니다. 앱 이름은 `코덱스 워크벤치`입니다.
+
+서버 선택 화면에는 `Tailscale 내부 접속` 토글이 있으며, 각 Workbench card에 현재 선택된 방식의 실제 URL을 표시합니다. Workbench toolbar에도 현재 `Funnel` 또는 `Tailscale` 모드를 표시합니다.
 
 ## v1.1.6 crash-safe recovery mode
 
@@ -49,7 +58,7 @@ Funnel은 외부에서 접근할 수 있지만 Workbench 쪽 로그인/인증 �
 
 1. 사용자가 Workbench에서 작업을 시작합니다.
 2. 앱이 실제로 백그라운드로 전환될 때 현재 WebView 인증 쿠키를 메모리로만 foreground service에 전달합니다.
-3. service는 현재 선택한 Gateway의 `/api/codex/streams?include_done=1`을 5초 간격으로 확인합니다.
+3. service는 현재 선택한 접속 방식의 `/api/codex/streams?include_done=1`을 5초 간격으로 확인합니다.
 4. 실행 중이던 stream과 pending queue가 모두 끝나면 세션 제목을 포함한 `작업 완료` Android 알림을 시도합니다.
 5. 완료되거나 실행 중인 작업이 확인되지 않으면 service는 자동 종료합니다.
 
@@ -57,7 +66,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.6` (`versionCode 8`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.8` (`versionCode 10`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20
@@ -98,3 +107,4 @@ GitHub Actions의 `Android APK` workflow도 동일한 debug APK를 artifact로 �
 - background completion monitor에 넘기는 쿠키는 메모리로만 전달하며 별도 파일에 저장하지 않습니다.
 - SSL 오류 우회 및 자동 HTTP Basic credential 제출을 사용하지 않습니다.
 - `addJavascriptInterface` bridge를 사용하지 않습니다.
+- Tailscale direct URL은 HTTP이지만 tailnet 내부 통신을 전제로 하며, 앱은 Tailscale VPN 자체를 우회하거나 자동 연결하지 않습니다.

@@ -455,6 +455,22 @@ def test_append_message_preserves_created_at(isolated_codex_workspace):
     assert message['created_at'] == created_at
 
 
+def test_session_task_status_summarizes_latest_work_lifecycle(isolated_codex_workspace):
+    session = codex_chat.create_session('task-status')
+
+    assert codex_chat.get_session(session['id'])['task_status'] == 'not_started'
+
+    codex_chat.append_message(session['id'], 'user', 'please do this')
+    assert codex_chat.get_session(session['id'])['task_status'] == 'pending'
+
+    codex_chat.append_message(session['id'], 'assistant', 'done')
+    summary = next(item for item in codex_chat.list_sessions() if item['id'] == session['id'])
+    assert summary['task_status'] == 'completed'
+
+    codex_chat.append_message(session['id'], 'error', 'failed')
+    assert codex_chat.get_session(session['id'])['task_status'] == 'failed'
+
+
 def test_delete_session_message_removes_message_from_context(isolated_codex_workspace):
     session = codex_chat.create_session('delete-message')
     first = codex_chat.append_message(session['id'], 'user', 'remove me')

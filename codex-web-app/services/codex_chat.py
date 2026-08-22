@@ -8076,6 +8076,33 @@ def _resolve_session_last_response_mode(session):
     return None
 
 
+def _resolve_session_task_status(session):
+    """Return the lifecycle status for the latest task in a chat session."""
+    if not isinstance(session, dict):
+        return 'not_started'
+
+    session_id = str(session.get('id') or '').strip()
+    if session_id and get_active_stream_id_for_session(session_id):
+        return 'in_progress'
+    if _count_pending_queue_items(session) > 0:
+        return 'queued'
+
+    messages = session.get('messages', [])
+    if not isinstance(messages, list) or not messages:
+        return 'not_started'
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get('role') or '').strip().lower()
+        if role == 'assistant':
+            return 'completed'
+        if role == 'error':
+            return 'failed'
+        if role == 'user':
+            return 'pending'
+    return 'not_started'
+
+
 def generate_session_title(prompt):
     normalized = ' '.join(str(prompt or '').strip().split())
     if not normalized:
@@ -8096,6 +8123,7 @@ def list_sessions():
         usage = _estimate_session_token_usage(session)
         pending_queue_count = _count_pending_queue_items(session)
         last_response_mode = _resolve_session_last_response_mode(session)
+        task_status = _resolve_session_task_status(session)
         summary.append({
             'id': session.get('id'),
             'title': session.get('title') or 'New session',
@@ -8105,6 +8133,7 @@ def list_sessions():
             'updated_at': session.get('updated_at'),
             'message_count': len(session.get('messages', [])),
             'pending_queue_count': pending_queue_count,
+            'task_status': task_status,
             'last_response_mode': last_response_mode,
             'token_count': usage.get('total_tokens', 0),
             'input_token_count': usage.get('input_tokens', 0),
@@ -8136,6 +8165,7 @@ def _build_session_response(session):
     session_copy[_PENDING_QUEUE_KEY] = pending_queue
     session_copy['pending_queue_count'] = len(pending_queue)
     session_copy['message_count'] = len(messages)
+    session_copy['task_status'] = _resolve_session_task_status(session_copy)
     session_copy['last_response_mode'] = _resolve_session_last_response_mode(session_copy)
     session_copy['token_count'] = usage.get('total_tokens', 0)
     session_copy['input_token_count'] = usage.get('input_tokens', 0)

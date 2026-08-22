@@ -4889,36 +4889,11 @@ function hideAnswerCompleteNotice({ immediate = false } = {}) {
 }
 
 function showAnswerCompleteNotice() {
-    if (!document.body) return;
+    // The previous full-screen animated notice repeatedly repainted gradients
+    // and filters. A compact toast conveys the same state without continuous
+    // compositing work while the next task is being prepared.
     hideAnswerCompleteNotice({ immediate: true });
-
-    const notice = document.createElement('div');
-    notice.id = ANSWER_COMPLETE_NOTICE_ID;
-    notice.className = 'answer-complete-notice';
-    notice.setAttribute('role', 'status');
-    notice.setAttribute('aria-live', 'polite');
-    notice.setAttribute('aria-atomic', 'true');
-
-    const message = document.createElement('div');
-    message.className = 'answer-complete-notice-message';
-    const messageText = document.createElement('span');
-    messageText.className = 'answer-complete-notice-text';
-    messageText.textContent = '답변 완료';
-    message.appendChild(messageText);
-    notice.appendChild(message);
-    document.body.appendChild(notice);
-
-    answerCompleteNoticeDismissHandler = () => {
-        hideAnswerCompleteNotice();
-    };
-    document.addEventListener('pointerdown', answerCompleteNoticeDismissHandler, {
-        once: true,
-        capture: true
-    });
-
-    window.requestAnimationFrame(() => {
-        notice.classList.add('is-visible');
-    });
+    showToast('작업 완료', { tone: 'success', durationMs: 2200 });
 }
 
 async function fetchCodexRestartPolicy() {
@@ -25550,6 +25525,10 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
 
         const footer = document.createElement('div');
         footer.className = 'session-footer';
+        const taskStatusBadge = createSessionTaskStatusBadge(session);
+        if (taskStatusBadge) {
+            footer.appendChild(taskStatusBadge);
+        }
         const responseModeBadge = createSessionResponseModeBadge(session);
         if (responseModeBadge) {
             footer.appendChild(responseModeBadge);
@@ -25692,6 +25671,7 @@ function upsertSessionSummary(session) {
         pending_queue_count: Number.isFinite(Number(session.pending_queue_count))
             ? Math.max(0, Math.round(Number(session.pending_queue_count)))
             : 0,
+        task_status: typeof session.task_status === 'string' ? session.task_status.trim() : 'not_started',
         last_response_mode: lastResponseMode || null,
         token_count: usage.totalTokens,
         input_token_count: usage.inputTokens,
@@ -28673,6 +28653,36 @@ function createSessionResponseModeBadge(session) {
     const label = `마지막 응답: ${resolveResponseModeText(mode)}`;
     badge.setAttribute('aria-label', label);
     badge.setAttribute('title', label);
+    return badge;
+}
+
+function resolveSessionTaskStatus(session) {
+    if (isSessionStreaming(session?.id)) return 'in_progress';
+    const queuedCount = Math.max(
+        getQueuedPromptCount(session?.id),
+        Number(session?.pending_queue_count) || 0
+    );
+    if (queuedCount > 0) return 'queued';
+    const status = typeof session?.task_status === 'string' ? session.task_status.trim().toLowerCase() : '';
+    return ['completed', 'failed', 'pending', 'not_started'].includes(status) ? status : 'not_started';
+}
+
+function createSessionTaskStatusBadge(session) {
+    const status = resolveSessionTaskStatus(session);
+    const labels = {
+        completed: '완료',
+        in_progress: '작업 중',
+        queued: '대기 중',
+        failed: '실패',
+        pending: '응답 대기'
+    };
+    const label = labels[status];
+    if (!label) return null;
+    const badge = document.createElement('span');
+    badge.className = `session-task-status is-${status}`;
+    badge.textContent = label;
+    badge.setAttribute('aria-label', `작업 상태: ${label}`);
+    badge.setAttribute('title', `작업 상태: ${label}`);
     return badge;
 }
 

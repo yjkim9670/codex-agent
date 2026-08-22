@@ -56,7 +56,7 @@ class MainActivity : Activity() {
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
         private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
         private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.9"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.10"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE
@@ -437,7 +437,7 @@ class MainActivity : Activity() {
             }
         }
 
-        WorkbenchCatalog.targets.forEach { target ->
+        fun addTargetCard(target: WorkbenchTarget) {
             val card = simpleText(cardLabel(target), 14f, COLOR_INK, true).apply {
                 setPadding(dp(16), dp(13), dp(16), dp(13))
                 isClickable = true
@@ -454,6 +454,22 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { bottomMargin = dp(9) })
         }
+
+        panel.addView(
+            simpleText("시스템 대시보드", 12.5f, COLOR_MUTED, true),
+            matchWrap().apply { bottomMargin = dp(7) },
+        )
+        WorkbenchCatalog.targets
+            .filter { !it.isCodexWorkbench }
+            .forEach { addTargetCard(it) }
+
+        panel.addView(
+            simpleText("Codex Workbench", 12.5f, COLOR_MUTED, true),
+            matchWrap().apply { topMargin = dp(8); bottomMargin = dp(7) },
+        )
+        WorkbenchCatalog.targets
+            .filter { it.isCodexWorkbench }
+            .forEach { addTargetCard(it) }
         refreshCards()
 
         modeToggle.setOnCheckedChangeListener { _, checked ->
@@ -626,24 +642,58 @@ class MainActivity : Activity() {
             ): Boolean {
                 if (target.isCodexWorkbench) return false
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                val popup = WebView(this@MainActivity).apply {
-                    this.settings.javaScriptEnabled = true
-                    this.settings.domStorageEnabled = true
-                    this.settings.allowFileAccess = false
-                    this.settings.allowContentAccess = true
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(
-                            view: WebView?,
-                            request: WebResourceRequest?,
-                        ): Boolean {
-                            val uri = request?.url ?: return true
-                            val scheme = uri.scheme?.lowercase().orEmpty()
-                            if (scheme == "http" || scheme == "https" || scheme == "mailto" || scheme == "tel") {
-                                openExternal(uri)
+                var handled = false
+                val popup = WebView(this@MainActivity)
+                popup.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    allowFileAccess = false
+                    allowContentAccess = true
+                }
+
+                fun openCapturedUrl(uri: Uri): Boolean {
+                    if (handled) return true
+                    val scheme = uri.scheme?.lowercase().orEmpty()
+                    handled = true
+                    when (scheme) {
+                        "http", "https" -> {
+                            suppressNextPauseMonitor = true
+                            runCatching {
+                                startActivity(
+                                    DashboardBrowserActivity.createIntent(
+                                        this@MainActivity,
+                                        uri.toString(),
+                                    ),
+                                )
+                            }.onFailure {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "앱 내부 새 창을 열 수 없습니다.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             }
-                            view?.post { runCatching { view.destroy() } }
-                            return true
                         }
+                        "mailto", "tel" -> openExternal(uri)
+                    }
+                    popup.post { runCatching { popup.destroy() } }
+                    return true
+                }
+
+                popup.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView?,
+                        request: WebResourceRequest?,
+                    ): Boolean {
+                        val uri = request?.url ?: return true
+                        return openCapturedUrl(uri)
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        if (handled || url.isNullOrBlank() || url == "about:blank") return
+                        runCatching { Uri.parse(url) }
+                            .getOrNull()
+                            ?.let { openCapturedUrl(it) }
                     }
                 }
                 transport.webView = popup

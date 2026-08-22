@@ -29,7 +29,7 @@ class TaskNotificationService : Service() {
         private const val POLL_INTERVAL_MS = 5_000L
         private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
-        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.9"
+        private const val USER_AGENT = "CodexWorkbenchAndroid/1.1.10"
 
         fun start(context: Context, baseUrl: String, label: String, cookie: String?) {
             if (baseUrl.isBlank()) return

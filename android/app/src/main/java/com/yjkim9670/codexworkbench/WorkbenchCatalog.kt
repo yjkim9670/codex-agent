@@ -10,6 +10,7 @@ data class WorkbenchTarget(
     val name: String,
     val funnelUrl: String,
     val tailscaleUrl: String,
+    val isCodexWorkbench: Boolean = true,
 ) {
     fun urlFor(mode: ConnectionMode): String =
         if (mode == ConnectionMode.TAILSCALE) tailscaleUrl else funnelUrl
@@ -50,6 +51,13 @@ object WorkbenchCatalog {
             name = "Dev Codex Workbench",
             funnelUrl = "$FUNNEL_ROOT/dev/",
             tailscaleUrl = "http://$TAILSCALE_HOST:3004/",
+        ),
+        WorkbenchTarget(
+            id = "process_dashboard",
+            name = "Mac Process Dashboard",
+            funnelUrl = "$FUNNEL_ROOT/",
+            tailscaleUrl = "http://$TAILSCALE_HOST:18000/",
+            isCodexWorkbench = false,
         ),
     )
 

@@ -14,6 +14,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Message
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -55,7 +56,7 @@ class MainActivity : Activity() {
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
         private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
         private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.8"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.9"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE
@@ -376,7 +377,7 @@ class MainActivity : Activity() {
 
         panel.addView(simpleText("코덱스 워크벤치", 26f, COLOR_INK, true, Gravity.CENTER), matchWrap())
         panel.addView(
-            simpleText("접속할 Workbench와 네트워크 방식을 선택하세요.", 13.5f, COLOR_MUTED, false, Gravity.CENTER),
+            simpleText("접속할 서비스와 네트워크 방식을 선택하세요.", 13.5f, COLOR_MUTED, false, Gravity.CENTER),
             matchWrap().apply { topMargin = dp(6); bottomMargin = dp(16) },
         )
 
@@ -389,7 +390,7 @@ class MainActivity : Activity() {
 
         fun connectionSummary(): String =
             if (useTailscale) {
-                "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004"
+                "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
             } else {
                 "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
             }
@@ -461,7 +462,7 @@ class MainActivity : Activity() {
             refreshCards()
         }
 
-        val connect = simpleButton("선택한 Workbench 접속", true)
+        val connect = simpleButton("선택한 서비스 접속", true)
         val settings = simpleButton("앱 설정", false)
         panel.addView(connect, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
             topMargin = dp(10)
@@ -479,7 +480,9 @@ class MainActivity : Activity() {
                 .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
                 .apply()
             suppressNextPauseMonitor = true
-            runCatching { requestNotificationPermissionIfNeeded() }
+            if (target.isCodexWorkbench) {
+                runCatching { requestNotificationPermissionIfNeeded() }
+            }
             runCatching { showWorkbench(target, mode) }
                 .onFailure {
                     recordCrash(it)
@@ -552,8 +555,8 @@ class MainActivity : Activity() {
             databaseEnabled = true
             allowFileAccess = false
             allowContentAccess = true
-            javaScriptCanOpenWindowsAutomatically = false
-            setSupportMultipleWindows(false)
+            javaScriptCanOpenWindowsAutomatically = !target.isCodexWorkbench
+            setSupportMultipleWindows(!target.isCodexWorkbench)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             mediaPlaybackRequiresUserGesture = true
             builtInZoomControls = false
@@ -585,8 +588,10 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                runCatching { removeDuplicatedPromptSafeArea(view) }
-                runCatching { enableWorkModeByDefault(view) }
+                if (target.isCodexWorkbench) {
+                    runCatching { removeDuplicatedPromptSafeArea(view) }
+                    runCatching { enableWorkModeByDefault(view) }
+                }
             }
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -595,7 +600,8 @@ class MainActivity : Activity() {
                     val message = if (currentConnectionMode == ConnectionMode.TAILSCALE) {
                         "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
                     } else {
-                        "Workbench 연결 오류: ${error?.description ?: "unknown error"}"
+                        val label = if (target.isCodexWorkbench) "Workbench" else "대시보드"
+                        "$label 연결 오류: ${error?.description ?: "unknown error"}"
                     }
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
@@ -612,6 +618,39 @@ class MainActivity : Activity() {
         }
 
         browser.webChromeClient = object : WebChromeClient() {
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: Message?,
+            ): Boolean {
+                if (target.isCodexWorkbench) return false
+                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                val popup = WebView(this@MainActivity).apply {
+                    this.settings.javaScriptEnabled = true
+                    this.settings.domStorageEnabled = true
+                    this.settings.allowFileAccess = false
+                    this.settings.allowContentAccess = true
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                        ): Boolean {
+                            val uri = request?.url ?: return true
+                            val scheme = uri.scheme?.lowercase().orEmpty()
+                            if (scheme == "http" || scheme == "https" || scheme == "mailto" || scheme == "tel") {
+                                openExternal(uri)
+                            }
+                            view?.post { runCatching { view.destroy() } }
+                            return true
+                        }
+                    }
+                }
+                transport.webView = popup
+                resultMsg.sendToTarget()
+                return true
+            }
+
             override fun onShowFileChooser(
                 webView: WebView?,
                 filePathCallback: ValueCallback<Array<Uri>>?,
@@ -830,6 +869,7 @@ class MainActivity : Activity() {
 
     private fun startBackgroundCompletionMonitorIfNeeded() {
         val target = currentTarget ?: return
+        if (!target.isCodexWorkbench) return
         if (webView == null || serverBaseUrl.isBlank() || !notificationsAllowed() || isFinishing) return
         val cookie = runCatching { CookieManager.getInstance().getCookie(serverBaseUrl) }.getOrNull()
         TaskNotificationService.start(this, serverBaseUrl, target.name, cookie)

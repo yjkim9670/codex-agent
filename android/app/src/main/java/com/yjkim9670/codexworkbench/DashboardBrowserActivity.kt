@@ -56,22 +56,34 @@ class DashboardBrowserActivity : Activity() {
     private var browser: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        configureSystemBars()
+
+        // Establish a minimal view hierarchy first. If anything after this point fails,
+        // keep the Activity alive and surface the real cause instead of letting Android
+        // wrap it as "Unable to start activity" and terminate the app process.
+        root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
+        setContentView(root)
+
+        runCatching { configureSystemBars() }
+        runCatching { applySystemBarInsets() }
 
         val initialUrl = intent.getStringExtra(EXTRA_URL).orEmpty().trim()
         val initialUri = runCatching { Uri.parse(initialUrl) }.getOrNull()
         if (initialUri == null || initialUri.scheme?.lowercase() !in setOf("http", "https")) {
-            finish()
+            showStartupError(IllegalArgumentException("Invalid dashboard URL: $initialUrl"))
             return
         }
 
-        root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
-        setContentView(root)
-        applySystemBarInsets()
+        runCatching { buildBrowser(initialUri) }
+            .onFailure { error ->
+                destroyBrowser()
+                showStartupError(error)
+            }
+    }
 
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun buildBrowser(initialUri: Uri) {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
@@ -98,29 +110,39 @@ class DashboardBrowserActivity : Activity() {
 
         val webView = WebView(this)
         browser = webView
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            allowFileAccess = false
-            allowContentAccess = true
-            javaScriptCanOpenWindowsAutomatically = true
-            setSupportMultipleWindows(true)
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            mediaPlaybackRequiresUserGesture = true
-            builtInZoomControls = false
-            displayZoomControls = false
-            useWideViewPort = true
-            cacheMode = WebSettings.LOAD_DEFAULT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
-            textZoom = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        // Keep the startup settings deliberately small. Optional settings are guarded so
+        // device/WebView-provider differences cannot abort Activity creation.
+        webView.settings.javaScriptEnabled = true
+        webView.settings.domStorageEnabled = true
+        webView.settings.allowFileAccess = false
+        webView.settings.allowContentAccess = true
+        webView.settings.javaScriptCanOpenWindowsAutomatically = true
+        webView.settings.setSupportMultipleWindows(true)
+        runCatching { webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW }
+        runCatching { webView.settings.mediaPlaybackRequiresUserGesture = true }
+        runCatching { webView.settings.builtInZoomControls = false }
+        runCatching { webView.settings.displayZoomControls = false }
+        runCatching { webView.settings.useWideViewPort = true }
+        runCatching { webView.settings.cacheMode = WebSettings.LOAD_DEFAULT }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching { webView.settings.safeBrowsingEnabled = true }
+        }
+        runCatching {
+            webView.settings.textZoom = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getInt(PREF_WEB_TEXT_ZOOM, DEFAULT_WEB_TEXT_ZOOM_PERCENT)
                 .coerceIn(60, 125)
-            userAgentString = "${userAgentString} $USER_AGENT_SUFFIX"
         }
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, false)
+        runCatching {
+            webView.settings.userAgentString =
+                "${webView.settings.userAgentString} $USER_AGENT_SUFFIX"
+        }
+
+        runCatching {
+            CookieManager.getInstance().apply {
+                setAcceptCookie(true)
+                setAcceptThirdPartyCookies(webView, false)
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -146,10 +168,19 @@ class DashboardBrowserActivity : Activity() {
                 resultMsg: Message?,
             ): Boolean {
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                val capture = createPopupCaptureWebView()
-                transport.webView = capture
-                resultMsg.sendToTarget()
-                return true
+                return runCatching {
+                    val capture = createPopupCaptureWebView()
+                    transport.webView = capture
+                    resultMsg.sendToTarget()
+                    true
+                }.getOrElse {
+                    Toast.makeText(
+                        this@DashboardBrowserActivity,
+                        "앱 내부 새 창을 만들 수 없습니다: ${shortError(it)}",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    false
+                }
             }
 
             override fun onCloseWindow(window: WebView?) {
@@ -186,15 +217,19 @@ class DashboardBrowserActivity : Activity() {
         )
 
         container.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(container, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        ))
+        root.removeAllViews()
+        root.addView(
+            container,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
 
         back.setOnClickListener {
             if (webView.canGoBack()) webView.goBack() else finish()
         }
-        reload.setOnClickListener { webView.reload() }
+        reload.setOnClickListener { runCatching { webView.reload() } }
         close.setOnClickListener { finish() }
         webView.loadUrl(initialUri.toString())
     }
@@ -203,12 +238,10 @@ class DashboardBrowserActivity : Activity() {
     private fun createPopupCaptureWebView(): WebView {
         var handled = false
         val capture = WebView(this)
-        capture.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = false
-            allowContentAccess = true
-        }
+        capture.settings.javaScriptEnabled = true
+        capture.settings.domStorageEnabled = true
+        capture.settings.allowFileAccess = false
+        capture.settings.allowContentAccess = true
 
         fun handle(uri: Uri): Boolean {
             if (handled) return true
@@ -217,7 +250,11 @@ class DashboardBrowserActivity : Activity() {
                 "http", "https" -> runCatching {
                     startActivity(createIntent(this, uri.toString()))
                 }.onFailure {
-                    Toast.makeText(this, "앱 내부 새 창을 열 수 없습니다.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this,
+                        "앱 내부 새 창을 열 수 없습니다: ${shortError(it)}",
+                        Toast.LENGTH_LONG,
+                    ).show()
                 }
                 "mailto", "tel" -> openExternal(uri)
             }
@@ -238,6 +275,60 @@ class DashboardBrowserActivity : Activity() {
             }
         }
         return capture
+    }
+
+    private fun showStartupError(error: Throwable) {
+        runCatching {
+            root.removeAllViews()
+            val panel = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(24), dp(32), dp(24), dp(32))
+                setBackgroundColor(Color.WHITE)
+            }
+            panel.addView(
+                textView("프로세스 앱 창을 열지 못했습니다", 18f, true).apply {
+                    gravity = Gravity.CENTER
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            panel.addView(
+                textView(shortError(error), 13f, false).apply {
+                    gravity = Gravity.CENTER
+                    setTextColor(colorMuted)
+                    setPadding(0, dp(12), 0, dp(20))
+                },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            val close = toolbarButton("닫기").apply { gravity = Gravity.CENTER }
+            close.setOnClickListener { finish() }
+            panel.addView(
+                close,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)),
+            )
+            root.addView(
+                panel,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }.onFailure {
+            Toast.makeText(this, "프로세스 앱 창 초기화 실패: ${shortError(error)}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun shortError(error: Throwable): String {
+        val cause = generateSequence(error) { it.cause }.lastOrNull() ?: error
+        val name = cause.javaClass.simpleName.ifBlank { cause.javaClass.name }
+        val message = cause.message?.takeIf { it.isNotBlank() }
+        return if (message == null) name else "$name: $message"
     }
 
     private fun openExternal(uri: Uri): Boolean = try {
@@ -279,7 +370,7 @@ class DashboardBrowserActivity : Activity() {
             (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
             Toast.makeText(this, "다운로드 시작: $fileName", Toast.LENGTH_LONG).show()
         }.onFailure {
-            Toast.makeText(this, "다운로드 실패", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "다운로드 실패: ${shortError(it)}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -303,6 +394,11 @@ class DashboardBrowserActivity : Activity() {
     override fun onDestroy() {
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
+        destroyBrowser()
+        super.onDestroy()
+    }
+
+    private fun destroyBrowser() {
         browser?.let { webView ->
             browser = null
             runCatching { webView.stopLoading() }
@@ -311,7 +407,6 @@ class DashboardBrowserActivity : Activity() {
             runCatching { webView.removeAllViews() }
             runCatching { webView.destroy() }
         }
-        super.onDestroy()
     }
 
     private fun configureSystemBars() {

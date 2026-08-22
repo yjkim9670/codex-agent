@@ -33,7 +33,8 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 - Codex Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
-- Mac Process Dashboard의 `target="_blank"` / `window.open()` 요청은 dashboard WebView에서 multi-window 요청으로 받아 Android 외부 브라우저에서 엽니다. Codex Workbench WebView의 기존 popup 정책은 변경하지 않습니다.
+- 서버 선택 화면에서 `Mac Process Dashboard`는 최상단 `시스템 대시보드` 그룹에 별도로 표시하고, 5개 Codex Workbench는 그 아래 `Codex Workbench` 그룹에 표시합니다.
+- Mac Process Dashboard의 `target="_blank"` / `window.open()` 요청은 외부 브라우저로 보내지 않고 앱 내부 `DashboardBrowserActivity`의 독립 WebView 인스턴스로 엽니다. 각 인스턴스는 자체 뒤로가기/새로고침/닫기와 추가 popup 생성을 지원합니다. Codex Workbench WebView의 기존 popup 정책은 변경하지 않습니다.
 
 ## Native UI
 
@@ -70,7 +71,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.9` (`versionCode 11`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.10` (`versionCode 12`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20

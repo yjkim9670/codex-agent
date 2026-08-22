@@ -627,10 +627,10 @@ class MainActivity : Activity() {
                 if (target.isCodexWorkbench) return false
                 val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
                 val popup = WebView(this@MainActivity).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = true
+                    this.settings.javaScriptEnabled = true
+                    this.settings.domStorageEnabled = true
+                    this.settings.allowFileAccess = false
+                    this.settings.allowContentAccess = true
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(
                             view: WebView?,

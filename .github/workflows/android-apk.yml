@@ -26,7 +26,15 @@ jobs:
       ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/android/.signing/codex-workbench-release.jks
 
     steps:
+      - name: Check out dashboard feature branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/android-dashboard-inapp-windows'
+        uses: actions/checkout@v5
+        with:
+          ref: agent/android-dashboard-inapp-windows
+          fetch-depth: 0
+
       - name: Check out repository
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.ref != 'agent/android-dashboard-inapp-windows'
         uses: actions/checkout@v5
 
       - name: Apply dashboard in-app window patch

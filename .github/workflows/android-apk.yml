@@ -59,6 +59,7 @@ jobs:
         if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/android-dashboard-inapp-windows'
         shell: bash
         run: |
+          git restore .github/workflows/android-apk.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A

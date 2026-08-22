@@ -664,6 +664,7 @@ let usageHistoryLastRequestedHours = USAGE_HISTORY_DEFAULT_HOURS;
 let usageHistoryLastRequestedScope = 'account';
 let usageHistoryResizeRaf = 0;
 let answerCompleteNoticeDismissHandler = null;
+let answerCompleteNoticeRemoveId = null;
 let hoverTooltipInteractionsBound = false;
 let hoverTooltipLayer = null;
 let hoverTooltipAnchor = null;
@@ -4873,6 +4874,10 @@ function hideAnswerCompleteNotice({ immediate = false } = {}) {
         document.removeEventListener('pointerdown', answerCompleteNoticeDismissHandler, true);
         answerCompleteNoticeDismissHandler = null;
     }
+    if (answerCompleteNoticeRemoveId !== null) {
+        window.clearTimeout(answerCompleteNoticeRemoveId);
+        answerCompleteNoticeRemoveId = null;
+    }
 
     const notice = document.getElementById(ANSWER_COMPLETE_NOTICE_ID);
     if (!notice) return;
@@ -4881,7 +4886,8 @@ function hideAnswerCompleteNotice({ immediate = false } = {}) {
         return;
     }
     notice.classList.remove('is-visible');
-    window.setTimeout(() => {
+    answerCompleteNoticeRemoveId = window.setTimeout(() => {
+        answerCompleteNoticeRemoveId = null;
         if (notice.parentNode && !notice.classList.contains('is-visible')) {
             notice.parentNode.removeChild(notice);
         }
@@ -4889,11 +4895,44 @@ function hideAnswerCompleteNotice({ immediate = false } = {}) {
 }
 
 function showAnswerCompleteNotice() {
-    // The previous full-screen animated notice repeatedly repainted gradients
-    // and filters. A compact toast conveys the same state without continuous
-    // compositing work while the next task is being prepared.
+    // Keep the completion state highly visible, but only animate its entrance.
+    // Once visible, the notice is completely static until the user dismisses it.
     hideAnswerCompleteNotice({ immediate: true });
-    showToast('작업 완료', { tone: 'success', durationMs: 2200 });
+
+    const notice = document.createElement('div');
+    notice.id = ANSWER_COMPLETE_NOTICE_ID;
+    notice.className = 'answer-complete-notice';
+    notice.setAttribute('role', 'alertdialog');
+    notice.setAttribute('aria-modal', 'true');
+    notice.setAttribute('aria-label', '작업 완료. 클릭하여 닫기');
+    notice.tabIndex = -1;
+
+    const message = document.createElement('div');
+    message.className = 'answer-complete-notice-message';
+    const title = document.createElement('span');
+    title.className = 'answer-complete-notice-text';
+    title.textContent = '작업 완료';
+    const hint = document.createElement('span');
+    hint.className = 'answer-complete-notice-hint';
+    hint.textContent = '클릭하여 계속';
+    message.append(title, hint);
+    notice.appendChild(message);
+    document.body.appendChild(notice);
+
+    answerCompleteNoticeDismissHandler = event => {
+        // The overlay owns the click so the action beneath it is never invoked.
+        event.preventDefault();
+        event.stopPropagation();
+        hideAnswerCompleteNotice();
+    };
+    document.addEventListener('pointerdown', answerCompleteNoticeDismissHandler, true);
+
+    window.requestAnimationFrame(() => {
+        if (notice.isConnected) {
+            notice.classList.add('is-visible');
+            notice.focus({ preventScroll: true });
+        }
+    });
 }
 
 async function fetchCodexRestartPolicy() {

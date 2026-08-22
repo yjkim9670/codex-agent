@@ -753,8 +753,10 @@ textarea {
     width: min(720px, calc(100vw - 72px));
     min-height: 220px;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 18px;
     padding: 60px 76px;
     border: 1px solid rgba(255, 255, 255, 0.42);
     border-radius: 8px;
@@ -780,15 +782,23 @@ textarea {
 
 .answer-complete-notice-text {
     display: block;
+    font-size: clamp(32px, 4vw, 46px);
+    line-height: 1;
+    letter-spacing: -0.035em;
 }
 
 .answer-complete-notice-hint {
     display: block;
-    margin-top: 14px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    opacity: 0.82;
+    margin-top: 0;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.34);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    opacity: 0.88;
 }
 
 @keyframes answer-complete-edge-enter {
@@ -839,6 +849,10 @@ textarea {
             0 24px 72px rgba(15, 27, 45, 0.3),
             0 0 32px rgba(23, 165, 107, 0.18);
         font-size: 24px;
+    }
+
+    .answer-complete-notice-text {
+        font-size: clamp(30px, 9vw, 38px);
     }
 }
 
@@ -7474,6 +7488,47 @@ body.is-work-mode-resizing * {
     font-weight: 700;
     line-height: 1;
     white-space: nowrap;
+}
+
+.session-task-status-control {
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    min-height: 24px;
+    padding: 4px 26px 4px 10px;
+    background: var(--surface-raised);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: calc(100% - 12px) 10px, calc(100% - 8px) 10px;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+}
+
+.session-task-status-control:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+}
+
+.session-task-status-control.is-none {
+    border-color: transparent;
+    background-color: transparent;
+}
+
+.session-task-status-control.is-completed {
+    background-color: var(--session-response-report-bg);
+    border-color: var(--session-response-report-border);
+    color: var(--session-response-report-text);
+}
+
+.session-task-status-control.is-in_progress {
+    background-color: var(--session-response-basic-bg);
+    border-color: var(--session-response-basic-border);
+    color: var(--session-response-basic-text);
 }
 
 .session-task-status.is-completed {

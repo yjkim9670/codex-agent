@@ -455,20 +455,25 @@ def test_append_message_preserves_created_at(isolated_codex_workspace):
     assert message['created_at'] == created_at
 
 
-def test_session_task_status_summarizes_latest_work_lifecycle(isolated_codex_workspace):
+def test_session_task_status_is_user_selected_and_persisted(isolated_codex_workspace):
     session = codex_chat.create_session('task-status')
 
-    assert codex_chat.get_session(session['id'])['task_status'] == 'not_started'
+    assert codex_chat.get_session(session['id'])['task_status'] == 'none'
 
     codex_chat.append_message(session['id'], 'user', 'please do this')
-    assert codex_chat.get_session(session['id'])['task_status'] == 'pending'
-
     codex_chat.append_message(session['id'], 'assistant', 'done')
-    summary = next(item for item in codex_chat.list_sessions() if item['id'] == session['id'])
-    assert summary['task_status'] == 'completed'
+    assert codex_chat.get_session(session['id'])['task_status'] == 'none'
 
-    codex_chat.append_message(session['id'], 'error', 'failed')
-    assert codex_chat.get_session(session['id'])['task_status'] == 'failed'
+    updated = codex_chat.update_session_task_status(session['id'], 'in_progress')
+    assert updated is not None
+    summary = next(item for item in codex_chat.list_sessions() if item['id'] == session['id'])
+    assert summary['task_status'] == 'in_progress'
+
+    codex_chat.update_session_task_status(session['id'], 'completed')
+    assert codex_chat.get_session(session['id'])['task_status'] == 'completed'
+
+    codex_chat.update_session_task_status(session['id'], 'none')
+    assert codex_chat.get_session(session['id'])['task_status'] == 'none'
 
 
 def test_delete_session_message_removes_message_from_context(isolated_codex_workspace):

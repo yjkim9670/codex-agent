@@ -118,6 +118,7 @@ from ..services.codex_chat import (
     refresh_account_usage_snapshot_if_due,
     submit_usage_keepalive,
     rename_session,
+    update_session_task_status,
     record_usage_snapshot_if_due,
     record_token_usage_for_message,
     resume_codex_app_server_thread,
@@ -1780,28 +1781,38 @@ def codex_session_detail(session_id):
 
 
 @bp.route('/api/codex/sessions/<session_id>', methods=['PATCH'])
-def codex_session_rename(session_id):
+def codex_session_update(session_id):
     try:
         crypto_session_id = _get_chat_response_crypto_session_id()
     except FileCryptoError as exc:
         return _file_crypto_error_response(exc)
     payload = request.get_json(silent=True) or {}
-    title = (payload.get('title') or '').strip()
+    has_title = 'title' in payload
+    has_task_status = 'task_status' in payload
+    if not has_title and not has_task_status:
+        return jsonify({'error': '변경할 세션 정보가 없습니다.'}), 400
 
-    if not title:
-        return jsonify({'error': '세션 이름이 비어 있습니다.'}), 400
-    if len(title) > CODEX_MAX_TITLE_CHARS:
-        return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
+    session = None
+    if has_title:
+        title = str(payload.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': '세션 이름이 비어 있습니다.'}), 400
+        if len(title) > CODEX_MAX_TITLE_CHARS:
+            return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
+        active_stream_id = get_active_stream_id_for_session(session_id)
+        if active_stream_id:
+            return jsonify({
+                'error': '세션 응답이 실행 중일 때는 이름을 변경할 수 없습니다.',
+                'active_stream_id': active_stream_id,
+                'already_running': True
+            }), 409
+        session = rename_session(session_id, title)
 
-    active_stream_id = get_active_stream_id_for_session(session_id)
-    if active_stream_id:
-        return jsonify({
-            'error': '세션 응답이 실행 중일 때는 이름을 변경할 수 없습니다.',
-            'active_stream_id': active_stream_id,
-            'already_running': True
-        }), 409
-
-    session = rename_session(session_id, title)
+    if has_task_status:
+        task_status = str(payload.get('task_status') or '').strip().lower()
+        if task_status not in ('none', 'in_progress', 'completed'):
+            return jsonify({'error': '지원하지 않는 세션 상태입니다.'}), 400
+        session = update_session_task_status(session_id, task_status)
     if not session:
         return jsonify({'error': '세션을 찾을 수 없습니다.'}), 404
     return _jsonify_chat_payload_or_crypto_error({'session': session}, crypto_session_id)

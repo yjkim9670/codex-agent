@@ -4904,17 +4904,17 @@ function showAnswerCompleteNotice() {
     notice.className = 'answer-complete-notice';
     notice.setAttribute('role', 'alertdialog');
     notice.setAttribute('aria-modal', 'true');
-    notice.setAttribute('aria-label', '작업 완료. 클릭하여 닫기');
+    notice.setAttribute('aria-label', 'Task complete. Click anywhere to dismiss.');
     notice.tabIndex = -1;
 
     const message = document.createElement('div');
     message.className = 'answer-complete-notice-message';
     const title = document.createElement('span');
     title.className = 'answer-complete-notice-text';
-    title.textContent = '작업 완료';
+    title.textContent = 'Task Complete';
     const hint = document.createElement('span');
     hint.className = 'answer-complete-notice-hint';
-    hint.textContent = '클릭하여 계속';
+    hint.textContent = 'Click anywhere to dismiss';
     message.append(title, hint);
     notice.appendChild(message);
     document.body.appendChild(notice);
@@ -25564,10 +25564,7 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
 
         const footer = document.createElement('div');
         footer.className = 'session-footer';
-        const taskStatusBadge = createSessionTaskStatusBadge(session);
-        if (taskStatusBadge) {
-            footer.appendChild(taskStatusBadge);
-        }
+        footer.appendChild(createSessionTaskStatusControl(session));
         const responseModeBadge = createSessionResponseModeBadge(session);
         if (responseModeBadge) {
             footer.appendChild(responseModeBadge);
@@ -25710,7 +25707,7 @@ function upsertSessionSummary(session) {
         pending_queue_count: Number.isFinite(Number(session.pending_queue_count))
             ? Math.max(0, Math.round(Number(session.pending_queue_count)))
             : 0,
-        task_status: typeof session.task_status === 'string' ? session.task_status.trim() : 'not_started',
+        task_status: typeof session.task_status === 'string' ? session.task_status.trim() : 'none',
         last_response_mode: lastResponseMode || null,
         token_count: usage.totalTokens,
         input_token_count: usage.inputTokens,
@@ -28696,33 +28693,50 @@ function createSessionResponseModeBadge(session) {
 }
 
 function resolveSessionTaskStatus(session) {
-    if (isSessionStreaming(session?.id)) return 'in_progress';
-    const queuedCount = Math.max(
-        getQueuedPromptCount(session?.id),
-        Number(session?.pending_queue_count) || 0
-    );
-    if (queuedCount > 0) return 'queued';
     const status = typeof session?.task_status === 'string' ? session.task_status.trim().toLowerCase() : '';
-    return ['completed', 'failed', 'pending', 'not_started'].includes(status) ? status : 'not_started';
+    return ['completed', 'in_progress'].includes(status) ? status : 'none';
 }
 
-function createSessionTaskStatusBadge(session) {
+function createSessionTaskStatusControl(session) {
     const status = resolveSessionTaskStatus(session);
     const labels = {
+        none: '상태 설정',
         completed: '완료',
-        in_progress: '작업 중',
-        queued: '대기 중',
-        failed: '실패',
-        pending: '응답 대기'
+        in_progress: '작업 중'
     };
-    const label = labels[status];
-    if (!label) return null;
-    const badge = document.createElement('span');
-    badge.className = `session-task-status is-${status}`;
-    badge.textContent = label;
-    badge.setAttribute('aria-label', `작업 상태: ${label}`);
-    badge.setAttribute('title', `작업 상태: ${label}`);
-    return badge;
+    const control = document.createElement('select');
+    control.className = `session-task-status-control is-${status}`;
+    control.setAttribute('aria-label', '세션 작업 상태');
+    control.setAttribute('title', '세션 작업 상태');
+    Object.entries(labels).forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        option.selected = value === status;
+        control.appendChild(option);
+    });
+    control.addEventListener('click', event => event.stopPropagation());
+    control.addEventListener('change', async event => {
+        event.stopPropagation();
+        const nextStatus = control.value;
+        control.disabled = true;
+        try {
+            const result = await fetchChatResponseJson(`/api/codex/sessions/${session.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                timeoutMs: SESSION_MUTATION_REQUEST_TIMEOUT_MS,
+                body: JSON.stringify({ task_status: nextStatus })
+            });
+            upsertSessionSummary(result?.session);
+            renderSessions();
+        } catch (error) {
+            control.value = status;
+            setStatus(normalizeError(error, '세션 상태를 변경하지 못했습니다.'), true);
+        } finally {
+            control.disabled = false;
+        }
+    });
+    return control;
 }
 
 function resolveResponseModelForRequest(planMode = false) {

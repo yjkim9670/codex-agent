@@ -8077,30 +8077,11 @@ def _resolve_session_last_response_mode(session):
 
 
 def _resolve_session_task_status(session):
-    """Return the lifecycle status for the latest task in a chat session."""
+    """Return the optional status explicitly selected by the user."""
     if not isinstance(session, dict):
-        return 'not_started'
-
-    session_id = str(session.get('id') or '').strip()
-    if session_id and get_active_stream_id_for_session(session_id):
-        return 'in_progress'
-    if _count_pending_queue_items(session) > 0:
-        return 'queued'
-
-    messages = session.get('messages', [])
-    if not isinstance(messages, list) or not messages:
-        return 'not_started'
-    for message in reversed(messages):
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get('role') or '').strip().lower()
-        if role == 'assistant':
-            return 'completed'
-        if role == 'error':
-            return 'failed'
-        if role == 'user':
-            return 'pending'
-    return 'not_started'
+        return 'none'
+    status = str(session.get('task_status') or '').strip().lower()
+    return status if status in ('completed', 'in_progress') else 'none'
 
 
 def generate_session_title(prompt):
@@ -8327,6 +8308,27 @@ def rename_session(session_id, title):
         session['title'] = title
         session['updated_at'] = normalize_timestamp(None)
         data['sessions'] = _sort_sessions(data.get('sessions', []))
+        _save_data(data)
+        return deepcopy(session)
+
+
+def update_session_task_status(session_id, task_status):
+    """Persist the optional status explicitly selected by the user."""
+    normalized_status = str(task_status or '').strip().lower()
+    if normalized_status not in ('none', 'in_progress', 'completed'):
+        return None
+    with _session_store_transaction():
+        data = _load_data()
+        sessions = data.get('sessions', [])
+        session = _find_session(sessions, session_id)
+        if not session:
+            return None
+        if normalized_status == 'none':
+            session.pop('task_status', None)
+        else:
+            session['task_status'] = normalized_status
+        session['updated_at'] = normalize_timestamp(None)
+        data['sessions'] = _sort_sessions(sessions)
         _save_data(data)
         return deepcopy(session)
 

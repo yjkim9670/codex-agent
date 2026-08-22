@@ -25,8 +25,8 @@ android {
         applicationId = "com.yjkim9670.codexworkbench"
         minSdk = 26
         targetSdk = 36
-        versionCode = ciVersionCode ?: 9
-        versionName = "1.1.7"
+        versionCode = ciVersionCode ?: 10
+        versionName = "1.1.8"
     }
 
     buildFeatures {

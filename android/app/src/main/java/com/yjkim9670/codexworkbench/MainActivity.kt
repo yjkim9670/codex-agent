@@ -34,6 +34,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
@@ -43,13 +44,18 @@ class MainActivity : Activity() {
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_SERVER_URL = "server_url"
         private const val PREF_WORKBENCH_ID = "workbench_id"
+        private const val PREF_USE_TAILSCALE = "use_tailscale"
+        private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val PREF_LAST_CRASH = "last_crash"
         private const val FILE_CHOOSER_REQUEST_CODE = 7001
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 7002
         private const val SPLASH_DURATION_MS = 900L
-        private const val WEB_TEXT_ZOOM_PERCENT = 85
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.7"
+        private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 85
+        private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
+        private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
+        private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.8"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE
@@ -64,6 +70,7 @@ class MainActivity : Activity() {
     private var webView: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var currentTarget: WorkbenchTarget? = null
+    private var currentConnectionMode = ConnectionMode.FUNNEL
     private var serverBaseUrl = ""
     private var splashTransition: Runnable? = null
     private var settingsOverlay: View? = null
@@ -94,6 +101,13 @@ class MainActivity : Activity() {
             }
 
             val legacyUrl = prefs.getString(PREF_SERVER_URL, null)
+            if (!prefs.contains(PREF_USE_TAILSCALE)) {
+                WorkbenchCatalog.modeForUrl(legacyUrl)?.let { mode ->
+                    prefs.edit()
+                        .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
+                        .apply()
+                }
+            }
             val savedId = prefs.getString(PREF_WORKBENCH_ID, null)
                 ?: WorkbenchCatalog.byUrl(legacyUrl)?.id
                 ?: WorkbenchCatalog.DEFAULT_ID
@@ -305,6 +319,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         root.setBackgroundColor(Color.rgb(7, 26, 53))
         currentTarget = null
+        currentConnectionMode = ConnectionMode.FUNNEL
         serverBaseUrl = ""
 
         val content = LinearLayout(this).apply {
@@ -361,16 +376,56 @@ class MainActivity : Activity() {
 
         panel.addView(simpleText("코덱스 워크벤치", 26f, COLOR_INK, true, Gravity.CENTER), matchWrap())
         panel.addView(
-            simpleText("접속할 Workbench를 선택하세요.", 13.5f, COLOR_MUTED, false, Gravity.CENTER),
-            matchWrap().apply { topMargin = dp(6); bottomMargin = dp(18) },
+            simpleText("접속할 Workbench와 네트워크 방식을 선택하세요.", 13.5f, COLOR_MUTED, false, Gravity.CENTER),
+            matchWrap().apply { topMargin = dp(6); bottomMargin = dp(16) },
         )
 
         var selectedId = WorkbenchCatalog.byId(initialWorkbenchId).id
+        var useTailscale = prefs.getBoolean(PREF_USE_TAILSCALE, false)
         val cards = linkedMapOf<String, TextView>()
 
+        fun selectedMode(): ConnectionMode =
+            if (useTailscale) ConnectionMode.TAILSCALE else ConnectionMode.FUNNEL
+
+        fun connectionSummary(): String =
+            if (useTailscale) {
+                "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004"
+            } else {
+                "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
+            }
+
+        fun cardLabel(target: WorkbenchTarget): String = buildString {
+            append(target.name.removeSuffix(" Codex Workbench"))
+            append("\n")
+            append(if (useTailscale) "Tailscale · " else "Funnel · ")
+            append(target.urlFor(selectedMode()))
+        }
+
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+            background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
+        }
+        val modeText = simpleText("Tailscale 내부 접속", 14f, COLOR_INK, true)
+        modeRow.addView(modeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val modeToggle = Switch(this).apply {
+            isChecked = useTailscale
+            showText = false
+        }
+        modeRow.addView(modeToggle)
+        panel.addView(modeRow, matchWrap().apply { bottomMargin = dp(6) })
+
+        val modeSummary = simpleText(connectionSummary(), 12f, COLOR_MUTED, false).apply {
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+        panel.addView(modeSummary, matchWrap().apply { bottomMargin = dp(14) })
+
         fun refreshCards() {
+            modeSummary.text = connectionSummary()
             cards.forEach { (id, view) ->
                 val selected = id == selectedId
+                view.text = cardLabel(WorkbenchCatalog.byId(id))
                 view.background = roundedDrawable(
                     if (selected) COLOR_PRIMARY_SOFT else COLOR_SURFACE,
                     dp(15).toFloat(),
@@ -382,12 +437,7 @@ class MainActivity : Activity() {
         }
 
         WorkbenchCatalog.targets.forEach { target ->
-            val label = buildString {
-                append(target.name.removeSuffix(" Codex Workbench"))
-                append("\n")
-                append(target.url.removePrefix(WorkbenchCatalog.GATEWAY_ROOT))
-            }
-            val card = simpleText(label, 14f, COLOR_INK, true).apply {
+            val card = simpleText(cardLabel(target), 14f, COLOR_INK, true).apply {
                 setPadding(dp(16), dp(13), dp(16), dp(13))
                 isClickable = true
                 isFocusable = true
@@ -405,6 +455,12 @@ class MainActivity : Activity() {
         }
         refreshCards()
 
+        modeToggle.setOnCheckedChangeListener { _, checked ->
+            useTailscale = checked
+            prefs.edit().putBoolean(PREF_USE_TAILSCALE, checked).apply()
+            refreshCards()
+        }
+
         val connect = simpleButton("선택한 Workbench 접속", true)
         val settings = simpleButton("앱 설정", false)
         panel.addView(connect, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)).apply {
@@ -415,13 +471,16 @@ class MainActivity : Activity() {
 
         connect.setOnClickListener {
             val target = WorkbenchCatalog.byId(selectedId)
+            val mode = selectedMode()
+            val resolvedUrl = target.urlFor(mode)
             prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
-                .putString(PREF_SERVER_URL, target.url)
+                .putString(PREF_SERVER_URL, resolvedUrl)
+                .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
                 .apply()
             suppressNextPauseMonitor = true
             runCatching { requestNotificationPermissionIfNeeded() }
-            runCatching { showWorkbench(target) }
+            runCatching { showWorkbench(target, mode) }
                 .onFailure {
                     recordCrash(it)
                     showRecoveryScreen("WebView 시작 오류", formatError(it))
@@ -441,13 +500,14 @@ class MainActivity : Activity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showWorkbench(target: WorkbenchTarget) {
+    private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode) {
         closeSettingsOverlay()
         destroyWebView()
         root.removeAllViews()
         root.setBackgroundColor(Color.WHITE)
         currentTarget = target
-        serverBaseUrl = target.url
+        currentConnectionMode = mode
+        serverBaseUrl = target.urlFor(mode)
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -460,7 +520,10 @@ class MainActivity : Activity() {
             setBackgroundColor(COLOR_CANVAS)
         }
         val title = simpleText(
-            target.name.removeSuffix(" Codex Workbench"),
+            buildString {
+                append(target.name.removeSuffix(" Codex Workbench"))
+                append(if (mode == ConnectionMode.TAILSCALE) " · Tailscale" else " · Funnel")
+            },
             13f,
             COLOR_INK,
             true,
@@ -499,7 +562,7 @@ class MainActivity : Activity() {
             useWideViewPort = true
             cacheMode = WebSettings.LOAD_DEFAULT
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
-            textZoom = WEB_TEXT_ZOOM_PERCENT
+            textZoom = webTextZoomPercent()
             userAgentString = "${userAgentString} $USER_AGENT_SUFFIX"
         }
 
@@ -529,11 +592,12 @@ class MainActivity : Activity() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Workbench 연결 오류: ${error?.description ?: "unknown error"}",
-                        Toast.LENGTH_LONG,
-                    ).show()
+                    val message = if (currentConnectionMode == ConnectionMode.TAILSCALE) {
+                        "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
+                    } else {
+                        "Workbench 연결 오류: ${error?.description ?: "unknown error"}"
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -585,7 +649,7 @@ class MainActivity : Activity() {
         server.setOnClickListener { runCatching { showConnectionScreen(target.id) } }
         settings.setOnClickListener { runCatching { showSettingsOverlay() } }
         root.addView(container, fillFrame())
-        browser.loadUrl(target.url)
+        browser.loadUrl(serverBaseUrl)
     }
 
     private fun removeDuplicatedPromptSafeArea(browser: WebView?) {
@@ -642,39 +706,79 @@ class MainActivity : Activity() {
         }
         panel.addView(simpleText("설정", 25f, COLOR_INK, true), matchWrap().apply { bottomMargin = dp(16) })
 
-        val display = simpleText(
-            "화면\nWorkbench 본문 글자 크기 85% · 접속 시 작업모드 기본 활성화",
-            14f,
-            COLOR_INK,
-            true,
-        ).apply {
+        val displayCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(15), dp(16), dp(15))
             background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
         }
-        panel.addView(display, matchWrap().apply { bottomMargin = dp(12) })
+        displayCard.addView(simpleText("화면", 14f, COLOR_INK, true), matchWrap().apply {
+            bottomMargin = dp(5)
+        })
+        val scaleValue = simpleText(
+            "Workbench 본문 글자 크기 ${webTextZoomPercent()}%",
+            13.5f,
+            COLOR_INK,
+            true,
+        )
+        displayCard.addView(scaleValue, matchWrap().apply { bottomMargin = dp(2) })
+        displayCard.addView(
+            simpleText(
+                "60~125% · 5% 단위 · 접속 시 작업모드 기본 활성화",
+                12f,
+                COLOR_MUTED,
+                false,
+            ),
+            matchWrap().apply { bottomMargin = dp(6) },
+        )
 
-        val row = LinearLayout(this).apply {
+        val scaleSeek = SeekBar(this).apply {
+            max = (MAX_WEB_TEXT_ZOOM_PERCENT - MIN_WEB_TEXT_ZOOM_PERCENT) / WEB_TEXT_ZOOM_STEP_PERCENT
+            progress = (webTextZoomPercent() - MIN_WEB_TEXT_ZOOM_PERCENT) / WEB_TEXT_ZOOM_STEP_PERCENT
+        }
+        displayCard.addView(scaleSeek, matchWrap().apply { bottomMargin = dp(6) })
+
+        val resetScale = simpleButton("85%로 초기화", false)
+        displayCard.addView(resetScale, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        panel.addView(displayCard, matchWrap().apply { bottomMargin = dp(12) })
+
+        val notificationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(13), dp(16), dp(13))
             background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
         }
-        row.addView(simpleText("작업 완료 알림", 14f, COLOR_INK, true), LinearLayout.LayoutParams(
+        notificationRow.addView(simpleText("작업 완료 알림", 14f, COLOR_INK, true), LinearLayout.LayoutParams(
             0,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             1f,
         ))
-        val toggle = Switch(this).apply {
+        val notificationToggle = Switch(this).apply {
             isChecked = prefs.getBoolean(PREF_NOTIFICATIONS_ENABLED, true)
             showText = false
         }
-        row.addView(toggle)
-        panel.addView(row, matchWrap().apply { bottomMargin = dp(12) })
+        notificationRow.addView(notificationToggle)
+        panel.addView(notificationRow, matchWrap().apply { bottomMargin = dp(12) })
 
         val close = simpleButton("닫기", true)
         panel.addView(close, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
 
-        toggle.setOnCheckedChangeListener { _, checked ->
+        scaleSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = MIN_WEB_TEXT_ZOOM_PERCENT + progress * WEB_TEXT_ZOOM_STEP_PERCENT
+                scaleValue.text = "Workbench 본문 글자 크기 ${value}%"
+                prefs.edit().putInt(PREF_WEB_TEXT_ZOOM, value).apply()
+                runCatching { webView?.settings?.textZoom = value }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
+        resetScale.setOnClickListener {
+            scaleSeek.progress =
+                (DEFAULT_WEB_TEXT_ZOOM_PERCENT - MIN_WEB_TEXT_ZOOM_PERCENT) / WEB_TEXT_ZOOM_STEP_PERCENT
+        }
+
+        notificationToggle.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(PREF_NOTIFICATIONS_ENABLED, checked).apply()
             if (checked) {
                 suppressNextPauseMonitor = true
@@ -693,6 +797,15 @@ class MainActivity : Activity() {
         overlay.addView(scroll, fillFrame())
         settingsOverlay = overlay
         root.addView(overlay, fillFrame())
+    }
+
+    private fun webTextZoomPercent(): Int {
+        val stored = prefs.getInt(PREF_WEB_TEXT_ZOOM, DEFAULT_WEB_TEXT_ZOOM_PERCENT)
+        val clamped = stored.coerceIn(MIN_WEB_TEXT_ZOOM_PERCENT, MAX_WEB_TEXT_ZOOM_PERCENT)
+        val stepIndex = ((clamped - MIN_WEB_TEXT_ZOOM_PERCENT) + WEB_TEXT_ZOOM_STEP_PERCENT / 2) /
+            WEB_TEXT_ZOOM_STEP_PERCENT
+        return (MIN_WEB_TEXT_ZOOM_PERCENT + stepIndex * WEB_TEXT_ZOOM_STEP_PERCENT)
+            .coerceIn(MIN_WEB_TEXT_ZOOM_PERCENT, MAX_WEB_TEXT_ZOOM_PERCENT)
     }
 
     private fun closeSettingsOverlay() {

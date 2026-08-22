@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Apply dashboard in-app window patch
-        if: github.ref == 'refs/heads/agent/android-dashboard-inapp-windows'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/android-dashboard-inapp-windows'
         run: python3 .github/scripts/apply_dashboard_inapp_windows.py
 
       - name: Set up JDK 17
@@ -48,7 +48,7 @@ jobs:
         run: gradle -p android :app:assembleDebug --stacktrace
 
       - name: Commit validated dashboard changes
-        if: github.ref == 'refs/heads/agent/android-dashboard-inapp-windows'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/android-dashboard-inapp-windows'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"

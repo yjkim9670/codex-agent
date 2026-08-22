@@ -4,19 +4,22 @@ Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin clie
 
 ## Workbench connection modes
 
-앱 시작 후 다음 5개 Workbench 중 하나를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`과 `Tailscale 내부 접속` 두 가지이며, 기본값은 기존과 동일한 Funnel입니다.
+앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`과 `Tailscale 내부 접속` 두 가지이며, 기본값은 기존과 동일한 Funnel입니다.
 
-| Workbench | Funnel | Tailscale direct |
+| Service | Funnel | Tailscale direct |
 |---|---|---|
 | Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` |
 | Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` |
 | Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` |
 | Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` |
 | Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` |
+| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` |
 
 Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. 선택한 접속 방식은 SharedPreferences에 저장되고 다음 실행에도 유지됩니다.
 
-선택된 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager, background completion monitor API에도 동일하게 사용합니다. 따라서 Funnel과 Tailscale 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않고 Tailscale 연결 상태를 확인하거나 Funnel 모드로 전환하라는 안내를 표시합니다.
+선택된 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager에 동일하게 사용합니다. Codex Workbench에서는 background completion monitor API에도 같은 URL을 사용합니다. 따라서 Funnel과 Tailscale 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않고 Tailscale 연결 상태를 확인하거나 Funnel 모드로 전환하라는 안내를 표시합니다.
+
+`Mac Process Dashboard`는 일반 관리 페이지로 취급하며 Codex 전용 `/api/codex/streams` polling, 세션 완료 알림, Work Mode 활성화, prompt safe-area CSS injection 대상에서 제외합니다.
 
 앱은 OpenAI/GitHub/Workbench 비밀키를 APK에 포함하지 않습니다.
 
@@ -27,15 +30,16 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 - 설정에서 text zoom을 60~125%, 5% 단위로 변경할 수 있습니다.
 - text zoom 설정은 저장되며 현재 열린 WebView에도 즉시 적용됩니다.
 - 설정에서 `85%로 초기화`할 수 있습니다.
-- Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
+- Codex Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
+- Mac Process Dashboard의 `target="_blank"` / `window.open()` 요청은 dashboard WebView에서 multi-window 요청으로 받아 Android 외부 브라우저에서 엽니다. Codex Workbench WebView의 기존 popup 정책은 변경하지 않습니다.
 
 ## Native UI
 
 네이티브 UI는 별도 font binary 없이 Android `sans-serif` 계열을 사용하고, 밝은 canvas / rounded card / primary action 구조를 사용합니다. 앱 이름은 `코덱스 워크벤치`입니다.
 
-서버 선택 화면에는 `Tailscale 내부 접속` 토글이 있으며, 각 Workbench card에 현재 선택된 방식의 실제 URL을 표시합니다. Workbench toolbar에도 현재 `Funnel` 또는 `Tailscale` 모드를 표시합니다.
+서버 선택 화면에는 `Tailscale 내부 접속` 토글이 있으며, 각 서비스 card에 현재 선택된 방식의 실제 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 `Funnel` 또는 `Tailscale` 모드를 표시합니다.
 
 ## v1.1.6 crash-safe recovery mode
 
@@ -54,7 +58,7 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 
 설정 화면에서 `작업 완료 알림`을 켜거나 끌 수 있습니다.
 
-이 기능은 FCM 같은 외부 push 서버가 아니라 Android 로컬 foreground monitor 방식입니다.
+이 기능은 FCM 같은 외부 push 서버가 아니라 Android 로컬 foreground monitor 방식이며 Codex Workbench에서만 사용합니다. Mac Process Dashboard에서는 시작하지 않습니다.
 
 1. 사용자가 Workbench에서 작업을 시작합니다.
 2. 앱이 실제로 백그라운드로 전환될 때 현재 WebView 인증 쿠키를 메모리로만 foreground service에 전달합니다.
@@ -66,7 +70,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.8` (`versionCode 10`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.9` (`versionCode 11`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20

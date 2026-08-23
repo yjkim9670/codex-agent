@@ -4,13 +4,17 @@ import android.webkit.WebView
 import org.json.JSONObject
 
 object DownloadClickInterceptor {
+    const val BRIDGE_NAME = "CodexDownloadBridge"
+
     fun install(webView: WebView, bridgeScheme: String) {
         val scheme = JSONObject.quote(bridgeScheme)
+        val bridgeName = JSONObject.quote(BRIDGE_NAME)
         val script = """
             (function() {
               if (window.__codexDownloadInterceptorInstalled) return;
               window.__codexDownloadInterceptorInstalled = true;
               const bridgeScheme = $scheme;
+              const bridgeName = $bridgeName;
 
               function resolveHref(value) {
                 if (!value) return '';
@@ -21,6 +25,13 @@ object DownloadClickInterceptor {
               function signalDownload(href, name, mime) {
                 const resolved = resolveHref(href);
                 if (!resolved) return false;
+                try {
+                  const bridge = window[bridgeName];
+                  if (bridge && typeof bridge.request === 'function') {
+                    bridge.request(resolved, name || '', mime || '');
+                    return true;
+                  }
+                } catch (_) {}
                 const target = bridgeScheme + '://request?url=' + encodeURIComponent(resolved) +
                   '&name=' + encodeURIComponent(name || '') +
                   '&mime=' + encodeURIComponent(mime || '');

@@ -6,113 +6,114 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!--
-        Canonical Codex Workbench launcher mark.
-        Deep navy is supplied by the adaptive-icon background layer.
-        This foreground reproduces the generated terminal/workbench emblem:
-        a cyan-blue-violet open hexagonal frame, terminal chevron, and prompt bar.
-    -->
+    <!-- Canonical Codex Workbench launcher mark, scaled to 78% for better launcher spacing. -->
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.78"
+        android:scaleY="0.78">
 
-    <!-- Soft glow beneath the workbench frame. -->
-    <path
-        android:pathData="M33,25 L50,14 Q54,11 59,14 L81,28 Q87,32 87,39 L87,68 Q87,75 81,79 L61,92 Q55,96 49,92 L31,81"
-        android:fillColor="#00000000"
-        android:strokeWidth="7.2"
-        android:strokeAlpha="0.16"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:startX="29"
-                android:startY="20"
-                android:endX="87"
-                android:endY="90"
-                android:type="linear">
-                <item android:offset="0.00" android:color="#54FFF1" />
-                <item android:offset="0.48" android:color="#25B8FF" />
-                <item android:offset="1.00" android:color="#7651FF" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        <!-- Soft glow beneath the workbench frame. -->
+        <path
+            android:pathData="M33,25 L50,14 Q54,11 59,14 L81,28 Q87,32 87,39 L87,68 Q87,75 81,79 L61,92 Q55,96 49,92 L31,81"
+            android:fillColor="#00000000"
+            android:strokeWidth="7.2"
+            android:strokeAlpha="0.16"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="29"
+                    android:startY="20"
+                    android:endX="87"
+                    android:endY="90"
+                    android:type="linear">
+                    <item android:offset="0.00" android:color="#54FFF1" />
+                    <item android:offset="0.48" android:color="#25B8FF" />
+                    <item android:offset="1.00" android:color="#7651FF" />
+                </gradient>
+            </aapt:attr>
+        </path>
 
-    <!-- Main open hexagonal workbench frame. -->
-    <path
-        android:pathData="M33,25 L50,14 Q54,11 59,14 L81,28 Q87,32 87,39 L87,68 Q87,75 81,79 L61,92 Q55,96 49,92 L31,81"
-        android:fillColor="#00000000"
-        android:strokeWidth="3.9"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:startX="29"
-                android:startY="20"
-                android:endX="87"
-                android:endY="90"
-                android:type="linear">
-                <item android:offset="0.00" android:color="#47F4E8" />
-                <item android:offset="0.45" android:color="#29B9FF" />
-                <item android:offset="0.72" android:color="#3984FF" />
-                <item android:offset="1.00" android:color="#744DFF" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        <!-- Main open hexagonal workbench frame. -->
+        <path
+            android:pathData="M33,25 L50,14 Q54,11 59,14 L81,28 Q87,32 87,39 L87,68 Q87,75 81,79 L61,92 Q55,96 49,92 L31,81"
+            android:fillColor="#00000000"
+            android:strokeWidth="3.9"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="29"
+                    android:startY="20"
+                    android:endX="87"
+                    android:endY="90"
+                    android:type="linear">
+                    <item android:offset="0.00" android:color="#47F4E8" />
+                    <item android:offset="0.45" android:color="#29B9FF" />
+                    <item android:offset="0.72" android:color="#3984FF" />
+                    <item android:offset="1.00" android:color="#744DFF" />
+                </gradient>
+            </aapt:attr>
+        </path>
 
-    <!-- Soft glow beneath the terminal chevron. -->
-    <path
-        android:pathData="M28,36 L47,50 Q49,52 47,54 L28,68"
-        android:fillColor="#00000000"
-        android:strokeWidth="11.5"
-        android:strokeAlpha="0.14"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:strokeColor="#39E8EE" />
+        <!-- Soft glow beneath the terminal chevron. -->
+        <path
+            android:pathData="M28,36 L47,50 Q49,52 47,54 L28,68"
+            android:fillColor="#00000000"
+            android:strokeWidth="11.5"
+            android:strokeAlpha="0.14"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeColor="#39E8EE" />
 
-    <!-- Terminal prompt chevron. -->
-    <path
-        android:pathData="M28,36 L47,50 Q49,52 47,54 L28,68"
-        android:fillColor="#00000000"
-        android:strokeWidth="8.4"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:startX="27"
-                android:startY="35"
-                android:endX="49"
-                android:endY="69"
-                android:type="linear">
-                <item android:offset="0.00" android:color="#63F8E8" />
-                <item android:offset="0.50" android:color="#2ADFF2" />
-                <item android:offset="1.00" android:color="#12C8F4" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        <!-- Terminal prompt chevron. -->
+        <path
+            android:pathData="M28,36 L47,50 Q49,52 47,54 L28,68"
+            android:fillColor="#00000000"
+            android:strokeWidth="8.4"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="27"
+                    android:startY="35"
+                    android:endX="49"
+                    android:endY="69"
+                    android:type="linear">
+                    <item android:offset="0.00" android:color="#63F8E8" />
+                    <item android:offset="0.50" android:color="#2ADFF2" />
+                    <item android:offset="1.00" android:color="#12C8F4" />
+                </gradient>
+            </aapt:attr>
+        </path>
 
-    <!-- Terminal prompt bar glow. -->
-    <path
-        android:pathData="M54,67 L70,67"
-        android:fillColor="#00000000"
-        android:strokeWidth="7.0"
-        android:strokeAlpha="0.14"
-        android:strokeLineCap="round"
-        android:strokeColor="#2CBFFF" />
+        <!-- Terminal prompt bar glow. -->
+        <path
+            android:pathData="M54,67 L70,67"
+            android:fillColor="#00000000"
+            android:strokeWidth="7.0"
+            android:strokeAlpha="0.14"
+            android:strokeLineCap="round"
+            android:strokeColor="#2CBFFF" />
 
-    <!-- Terminal prompt bar. -->
-    <path
-        android:pathData="M54,67 L70,67"
-        android:fillColor="#00000000"
-        android:strokeWidth="5.0"
-        android:strokeLineCap="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:startX="54"
-                android:startY="67"
-                android:endX="70"
-                android:endY="67"
-                android:type="linear">
-                <item android:offset="0.00" android:color="#34D9FF" />
-                <item android:offset="1.00" android:color="#2C8DFF" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        <!-- Terminal prompt bar. -->
+        <path
+            android:pathData="M54,67 L70,67"
+            android:fillColor="#00000000"
+            android:strokeWidth="5.0"
+            android:strokeLineCap="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="54"
+                    android:startY="67"
+                    android:endX="70"
+                    android:endY="67"
+                    android:type="linear">
+                    <item android:offset="0.00" android:color="#34D9FF" />
+                    <item android:offset="1.00" android:color="#2C8DFF" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
 </vector>

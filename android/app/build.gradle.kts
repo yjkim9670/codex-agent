@@ -25,8 +25,8 @@ android {
         applicationId = "com.yjkim9670.codexworkbench"
         minSdk = 26
         targetSdk = 36
-        versionCode = ciVersionCode ?: 12
-        versionName = "1.1.10"
+        versionCode = ciVersionCode ?: 13
+        versionName = "1.1.11"
     }
 
     buildFeatures {
@@ -65,4 +65,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    implementation("androidx.webkit:webkit:1.17.0")
 }

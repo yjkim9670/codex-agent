@@ -16,10 +16,15 @@
         android:theme="@style/Theme.CodexWorkbench"
         android:usesCleartextTraffic="true">
         <activity
-            android:name=".DashboardBrowserActivity"
+            android:name=".DashboardBrowserActivityV2"
             android:configChanges="keyboardHidden|orientation|screenSize"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+
+        <activity-alias
+            android:name=".DashboardBrowserActivity"
+            android:exported="false"
+            android:targetActivity=".DashboardBrowserActivityV2" />
 
         <activity
             android:name=".MainActivity"

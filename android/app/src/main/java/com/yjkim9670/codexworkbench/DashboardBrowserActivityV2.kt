@@ -49,7 +49,7 @@ class DashboardBrowserActivityV2 : Activity() {
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
         private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 100
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.10"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.12"
         private const val DOWNLOAD_BRIDGE_SCHEME = "codex-download"
         private const val BLOB_CHUNK_BYTES = 48 * 1024
     }
@@ -252,9 +252,7 @@ class DashboardBrowserActivityV2 : Activity() {
             ),
         )
 
-        back.setOnClickListener {
-            if (webView.canGoBack()) webView.goBack() else finish()
-        }
+        back.setOnClickListener { returnToServerSelection() }
         reload.setOnClickListener { runCatching { webView.reload() } }
         close.setOnClickListener { finish() }
         webView.loadUrl(initialUri.toString())
@@ -703,10 +701,17 @@ class DashboardBrowserActivityV2 : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
-    @Deprecated("WebView history behavior")
+    private fun returnToServerSelection() {
+        startActivity(Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_SHOW_SERVER_SELECTION, true)
+        })
+        finish()
+    }
+
+    @Deprecated("Server selection is the navigation root")
     override fun onBackPressed() {
-        val current = browser
-        if (current != null && current.canGoBack()) current.goBack() else super.onBackPressed()
+        returnToServerSelection()
     }
 
     override fun onDestroy() {

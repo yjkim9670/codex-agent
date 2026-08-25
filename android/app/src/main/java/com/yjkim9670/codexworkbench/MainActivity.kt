@@ -42,6 +42,7 @@ import android.widget.Toast
 
 class MainActivity : Activity() {
     companion object {
+        const val EXTRA_SHOW_SERVER_SELECTION = "show_server_selection"
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_SERVER_URL = "server_url"
         private const val PREF_WORKBENCH_ID = "workbench_id"
@@ -56,7 +57,7 @@ class MainActivity : Activity() {
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
         private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
         private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.10"
+        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.12"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE
@@ -112,11 +113,24 @@ class MainActivity : Activity() {
             val savedId = prefs.getString(PREF_WORKBENCH_ID, null)
                 ?: WorkbenchCatalog.byUrl(legacyUrl)?.id
                 ?: WorkbenchCatalog.DEFAULT_ID
-            showOpeningScreen(savedId)
+            showConnectionScreen(savedId)
         } catch (error: Throwable) {
             recordCrash(error)
             showRecoveryScreen("앱 초기화 오류", formatError(error))
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent?.getBooleanExtra(EXTRA_SHOW_SERVER_SELECTION, false) != true) return
+        intent.removeExtra(EXTRA_SHOW_SERVER_SELECTION)
+        val savedId = prefs.getString(PREF_WORKBENCH_ID, null) ?: WorkbenchCatalog.DEFAULT_ID
+        runCatching { showConnectionScreen(savedId) }
+            .onFailure {
+                recordCrash(it)
+                showRecoveryScreen("연결 화면 오류", formatError(it))
+            }
     }
 
     override fun onResume() {
@@ -437,6 +451,25 @@ class MainActivity : Activity() {
             }
         }
 
+        fun connectToTarget(target: WorkbenchTarget) {
+            val mode = selectedMode()
+            val resolvedUrl = target.urlFor(mode)
+            prefs.edit()
+                .putString(PREF_WORKBENCH_ID, target.id)
+                .putString(PREF_SERVER_URL, resolvedUrl)
+                .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
+                .apply()
+            suppressNextPauseMonitor = true
+            if (target.isCodexWorkbench) {
+                runCatching { requestNotificationPermissionIfNeeded() }
+            }
+            runCatching { showWorkbench(target, mode) }
+                .onFailure {
+                    recordCrash(it)
+                    showRecoveryScreen("WebView 시작 오류", formatError(it))
+                }
+        }
+
         fun addTargetCard(target: WorkbenchTarget) {
             val card = simpleText(cardLabel(target), 14f, COLOR_INK, true).apply {
                 setPadding(dp(16), dp(13), dp(16), dp(13))
@@ -444,8 +477,12 @@ class MainActivity : Activity() {
                 isFocusable = true
                 setLineSpacing(dp(3).toFloat(), 1f)
                 setOnClickListener {
-                    selectedId = target.id
-                    refreshCards()
+                    if (target.isCodexWorkbench) {
+                        selectedId = target.id
+                        refreshCards()
+                    } else {
+                        connectToTarget(target)
+                    }
                 }
             }
             cards[target.id] = card
@@ -487,23 +524,7 @@ class MainActivity : Activity() {
         panel.addView(settings, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
 
         connect.setOnClickListener {
-            val target = WorkbenchCatalog.byId(selectedId)
-            val mode = selectedMode()
-            val resolvedUrl = target.urlFor(mode)
-            prefs.edit()
-                .putString(PREF_WORKBENCH_ID, target.id)
-                .putString(PREF_SERVER_URL, resolvedUrl)
-                .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
-                .apply()
-            suppressNextPauseMonitor = true
-            if (target.isCodexWorkbench) {
-                runCatching { requestNotificationPermissionIfNeeded() }
-            }
-            runCatching { showWorkbench(target, mode) }
-                .onFailure {
-                    recordCrash(it)
-                    showRecoveryScreen("WebView 시작 오류", formatError(it))
-                }
+            connectToTarget(WorkbenchCatalog.byId(selectedId))
         }
         settings.setOnClickListener {
             runCatching { showSettingsOverlay() }
@@ -1013,14 +1034,20 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
     }
 
-    @Deprecated("WebView history behavior")
+    @Deprecated("Server selection is the navigation root")
     override fun onBackPressed() {
         if (settingsOverlay != null) {
             closeSettingsOverlay()
             return
         }
-        val browser = webView
-        if (browser != null && browser.canGoBack()) browser.goBack() else super.onBackPressed()
+        if (webView != null || currentTarget != null) {
+            val selectedId = currentTarget?.id
+                ?: prefs.getString(PREF_WORKBENCH_ID, null)
+                ?: WorkbenchCatalog.DEFAULT_ID
+            showConnectionScreen(selectedId)
+            return
+        }
+        super.onBackPressed()
     }
 
     private fun destroyWebView() {

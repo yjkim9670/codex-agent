@@ -244,6 +244,7 @@
 
 :root {
     color-scheme: light;
+    --ui-scale: 0.9;
     --bg: #f4f7fb;
     --bg-ambient: none;
     --surface: #ffffff;
@@ -357,6 +358,7 @@
     --tooltip-text: #f7fbff;
     --tooltip-border: rgba(130, 153, 178, 0.42);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
+    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3.1'/><path d='M19.4 13.8a1.7 1.7 0 0 0 .34 1.88l.06.06-2.22 2.22-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3.14v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.22-2.22.06-.06a1.7 1.7 0 0 0 .34-1.88 1.7 1.7 0 0 0-1.55-1.03h-.09V9.71h.09A1.7 1.7 0 0 0 6.72 8.68a1.7 1.7 0 0 0-.34-1.88l-.06-.06L8.54 4.5l.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3.14v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.22 2.22-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3.14h-.09a1.7 1.7 0 0 0-1.55 1.03z'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -512,6 +514,7 @@
     --icon-button-active-bg: color-mix(in srgb, var(--accent) 24%, var(--surface-raised) 76%);
     --icon-button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
+    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3.1'/><path d='M19.4 13.8a1.7 1.7 0 0 0 .34 1.88l.06.06-2.22 2.22-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3.14v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.22-2.22.06-.06a1.7 1.7 0 0 0 .34-1.88 1.7 1.7 0 0 0-1.55-1.03h-.09V9.71h.09A1.7 1.7 0 0 0 6.72 8.68a1.7 1.7 0 0 0-.34-1.88l-.06-.06L8.54 4.5l.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3.14v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.22 2.22-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3.14h-.09a1.7 1.7 0 0 0-1.55 1.03z'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -602,6 +605,7 @@ body {
 body {
     margin: 0;
     font-family: var(--font-sans);
+    zoom: var(--ui-scale);
     letter-spacing: 0;
     background: var(--bg-ambient), var(--bg);
     color: var(--text-primary);
@@ -6160,6 +6164,14 @@ body.is-internal-member-view [data-internal-admin-only] {
     padding: 6px 12px;
 }
 
+.ui-settings-open {
+    flex: 0 0 auto;
+    background-image: var(--icon-settings);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 17px 17px;
+}
+
 #codex-git-commit,
 #codex-branch-overlay-commit,
 #codex-sync-overlay-commit,
@@ -8380,6 +8392,111 @@ body.is-work-mode-resizing * {
 .account-switcher-status.is-warning {
     color: var(--warning-text, #8a5300);
 }
+
+.ui-settings-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2400;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.ui-settings-overlay.is-visible { display: flex; }
+
+.ui-settings-overlay-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 20, 30, 0.45);
+}
+
+.ui-settings-card {
+    position: relative;
+    width: min(440px, calc(100vw - 32px));
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shell-shadow);
+    overflow: hidden;
+}
+
+.ui-settings-header,
+.ui-settings-footer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+}
+
+.ui-settings-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.ui-settings-description,
+.ui-scale-setting-help {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-tertiary);
+}
+
+.ui-settings-description { margin-top: 4px; }
+
+.ui-settings-close {
+    flex: 0 0 auto;
+    background-image: var(--icon-close);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.ui-settings-body { padding: 20px 18px; }
+
+.ui-scale-setting {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 14px;
+    align-items: center;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.ui-scale-setting input {
+    grid-column: 1 / -1;
+    width: 100%;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.ui-scale-setting-value {
+    min-width: 44px;
+    padding: 4px 8px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-muted);
+    color: var(--accent);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+.ui-scale-setting-help {
+    grid-column: 1 / -1;
+    font-weight: 400;
+}
+
+.ui-settings-footer {
+    align-items: center;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+}
+
+.ui-settings-footer .btn:first-child { margin-right: auto; }
 
 .account-overlay {
     position: fixed;

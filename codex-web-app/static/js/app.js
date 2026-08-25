@@ -2246,6 +2246,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const accountOverlay = document.getElementById('codex-account-overlay');
     const accountOverlayClose = document.getElementById('codex-account-overlay-close');
     const accountOverlayCloseFooter = document.getElementById('codex-account-overlay-close-footer');
+    const uiSettingsOpen = document.getElementById('codex-ui-settings-open');
+    const uiSettingsOverlay = document.getElementById('codex-ui-settings-overlay');
+    const uiSettingsClose = document.getElementById('codex-ui-settings-close');
+    const uiSettingsScaleInput = document.getElementById('codex-ui-scale-input');
+    const uiSettingsScaleValue = document.getElementById('codex-ui-scale-value');
+    const uiSettingsReset = document.getElementById('codex-ui-settings-reset');
+    const uiSettingsDone = document.getElementById('codex-ui-settings-done');
     const accountCreateBtn = document.getElementById('codex-account-create');
     const accountPlanUpdateBtn = document.getElementById('codex-account-plan-update');
     const gitBranch = document.getElementById('codex-git-branch');
@@ -2396,9 +2403,68 @@ document.addEventListener('DOMContentLoaded', () => {
         gitSyncBtn,
         fileBrowserBtn,
         workModeToggleBtn,
-        refreshBtn
+        refreshBtn,
+        uiSettingsOpen
     });
     syncFileBrowserOpenButtonState(false);
+
+    const UI_SCALE_STORAGE_KEY = 'codex-ui-scale';
+    const DEFAULT_UI_SCALE = 90;
+    let uiSettingsTrigger = null;
+    const normalizeUiScale = value => {
+        if (value === null || value === undefined || String(value).trim() === '') return DEFAULT_UI_SCALE;
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) return DEFAULT_UI_SCALE;
+        return Math.min(110, Math.max(80, Math.round(numeric / 5) * 5));
+    };
+    const applyUiScale = (value, { persist = true } = {}) => {
+        const scale = normalizeUiScale(value);
+        document.documentElement.style.setProperty('--ui-scale', String(scale / 100));
+        if (uiSettingsScaleInput) uiSettingsScaleInput.value = String(scale);
+        if (uiSettingsScaleValue) uiSettingsScaleValue.textContent = `${scale}%`;
+        if (persist) {
+            try {
+                window.localStorage.setItem(UI_SCALE_STORAGE_KEY, String(scale));
+            } catch (_error) {
+                // The setting remains active for this page when storage is unavailable.
+            }
+        }
+    };
+    const closeUiSettingsOverlay = () => {
+        if (!uiSettingsOverlay) return;
+        uiSettingsOverlay.classList.remove('is-visible');
+        uiSettingsOverlay.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('is-overlay-open');
+        uiSettingsTrigger?.focus();
+        uiSettingsTrigger = null;
+    };
+    const openUiSettingsOverlay = () => {
+        if (!uiSettingsOverlay) return;
+        uiSettingsTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        uiSettingsOverlay.classList.add('is-visible');
+        uiSettingsOverlay.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('is-overlay-open');
+        window.setTimeout(() => uiSettingsScaleInput?.focus(), 0);
+    };
+    try {
+        applyUiScale(window.localStorage.getItem(UI_SCALE_STORAGE_KEY), { persist: false });
+    } catch (_error) {
+        applyUiScale(DEFAULT_UI_SCALE, { persist: false });
+    }
+    uiSettingsOpen?.addEventListener('click', openUiSettingsOverlay);
+    uiSettingsClose?.addEventListener('click', closeUiSettingsOverlay);
+    uiSettingsDone?.addEventListener('click', closeUiSettingsOverlay);
+    uiSettingsOverlay?.addEventListener('click', event => {
+        if (event.target?.dataset?.action === 'close') closeUiSettingsOverlay();
+    });
+    uiSettingsScaleInput?.addEventListener('input', () => applyUiScale(uiSettingsScaleInput.value));
+    uiSettingsReset?.addEventListener('click', () => applyUiScale(DEFAULT_UI_SCALE));
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && uiSettingsOverlay?.classList.contains('is-visible')) {
+            event.preventDefault();
+            closeUiSettingsOverlay();
+        }
+    });
 
     if (form) {
         form.addEventListener('submit', handleSubmit);
@@ -4681,10 +4747,11 @@ function initializeHeaderActionTooltips({
     gitSyncBtn,
     fileBrowserBtn,
     workModeToggleBtn,
-    refreshBtn
+    refreshBtn,
+    uiSettingsOpen
 } = {}) {
     syncHoverTooltipFromLabel(gitBranch);
-    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, workModeToggleBtn, refreshBtn].forEach(button => {
+    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, workModeToggleBtn, refreshBtn, uiSettingsOpen].forEach(button => {
         syncHoverTooltipFromLabel(button);
     });
     updateThemeSwitchTooltip(themeToggle);

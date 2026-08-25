@@ -48,7 +48,7 @@ class DashboardBrowserActivity : Activity() {
         private const val FILE_CHOOSER_REQUEST_CODE = 7101
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
-        private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 85
+        private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 100
         private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.10"
         private const val DOWNLOAD_BRIDGE_SCHEME = "codex-download"
         private const val BLOB_CHUNK_BYTES = 48 * 1024

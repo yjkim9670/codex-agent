@@ -52,7 +52,7 @@ class MainActivity : Activity() {
         private const val FILE_CHOOSER_REQUEST_CODE = 7001
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 7002
         private const val SPLASH_DURATION_MS = 900L
-        private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 85
+        private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 100
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
         private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
         private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
@@ -826,7 +826,7 @@ class MainActivity : Activity() {
         }
         displayCard.addView(scaleSeek, matchWrap().apply { bottomMargin = dp(6) })
 
-        val resetScale = simpleButton("85%로 초기화", false)
+        val resetScale = simpleButton("100%로 초기화", false)
         displayCard.addView(resetScale, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
         panel.addView(displayCard, matchWrap().apply { bottomMargin = dp(12) })
 

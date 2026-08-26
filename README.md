@@ -37,6 +37,19 @@ Or with the helper script:
 
 The helper launcher also uses `../.venv`.
 
+## Android Development on MacBook
+
+For the canonical MacBook + Codex workflow, Android build/release procedure,
+GitHub Actions handoff, and stable signing/update policy, read:
+
+- [`android/MACBOOK_CODEX_WORKFLOW.md`](android/MACBOOK_CODEX_WORKFLOW.md)
+- [`android/RELEASE_SIGNING.md`](android/RELEASE_SIGNING.md)
+- [`android/NAVIGATION.md`](android/NAVIGATION.md)
+
+The MacBook is the runtime host for Workbench services. The Android app remains
+a thin native/WebView client and may be built either locally on the MacBook or
+through the repository's `Android APK` GitHub Actions workflow.
+
 ## Codex CLI Stability Options
 Workbench serializes mutable, interactive `codex exec` runs per workspace by
 default. Read-only subjobs and structured reports can still run in parallel.

@@ -57,7 +57,7 @@ class MainActivity : Activity() {
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
         private const val MAX_WEB_TEXT_ZOOM_PERCENT = 125
         private const val WEB_TEXT_ZOOM_STEP_PERCENT = 5
-        private const val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/1.1.12"
+        private val USER_AGENT_SUFFIX = "CodexWorkbenchAndroid/${BuildConfig.VERSION_NAME}"
 
         private val COLOR_CANVAS = Color.rgb(247, 249, 252)
         private val COLOR_SURFACE = Color.WHITE

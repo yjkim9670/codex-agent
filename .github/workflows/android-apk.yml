@@ -21,8 +21,8 @@ jobs:
       ANDROID_VERSION_CODE: ${{ github.run_number }}
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      ANDROID_KEY_ALIAS: codex-workbench
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEYSTORE_FILE: ${{ github.workspace }}/android/.signing/codex-workbench-release.jks
 
     steps:
@@ -40,54 +40,73 @@ jobs:
         with:
           gradle-version: "8.13"
 
-      - name: Build debug APK
+      - name: Build debug validation APK
         run: gradle -p android :app:assembleDebug --stacktrace
 
-      - name: Upload debug APK
+      - name: Upload debug validation APK
         uses: actions/upload-artifact@v4
         with:
-          name: codex-workbench-android-debug
+          name: codex-workbench-android-debug-validation-only
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Report missing stable signing secrets
+        if: >-
+          env.ANDROID_KEYSTORE_BASE64 == '' ||
+          env.ANDROID_KEYSTORE_PASSWORD == ''
+        run: |
+          echo "::warning::Stable Android release signing is not configured. Debug APK is validation-only and must not be used as the long-lived installed app."
+          {
+            echo "### Android release signing"
+            echo
+            echo "Stable release signing secrets are not configured for this run."
+            echo "Only the debug validation artifact was produced."
+            echo "Configure ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD to produce the update-safe release artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Prepare stable release keystore
         if: >-
           env.ANDROID_KEYSTORE_BASE64 != '' &&
-          env.ANDROID_KEYSTORE_PASSWORD != '' &&
-          env.ANDROID_KEY_ALIAS != '' &&
-          env.ANDROID_KEY_PASSWORD != ''
+          env.ANDROID_KEYSTORE_PASSWORD != ''
         run: |
           mkdir -p android/.signing
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_FILE"
           chmod 600 "$ANDROID_KEYSTORE_FILE"
+          keytool -list \
+            -keystore "$ANDROID_KEYSTORE_FILE" \
+            -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+            -alias "$ANDROID_KEY_ALIAS" >/dev/null
 
       - name: Build signed release APK
         if: >-
           env.ANDROID_KEYSTORE_BASE64 != '' &&
-          env.ANDROID_KEYSTORE_PASSWORD != '' &&
-          env.ANDROID_KEY_ALIAS != '' &&
-          env.ANDROID_KEY_PASSWORD != ''
+          env.ANDROID_KEYSTORE_PASSWORD != ''
         run: gradle -p android :app:assembleRelease --stacktrace
 
       - name: Verify release APK signature
         if: >-
           env.ANDROID_KEYSTORE_BASE64 != '' &&
-          env.ANDROID_KEYSTORE_PASSWORD != '' &&
-          env.ANDROID_KEY_ALIAS != '' &&
-          env.ANDROID_KEY_PASSWORD != ''
+          env.ANDROID_KEYSTORE_PASSWORD != ''
         run: |
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -n "$APKSIGNER"
-          "$APKSIGNER" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk
+          "$APKSIGNER" verify --verbose --print-certs android/app/build/outputs/apk/release/app-release.apk | tee android/app/build/outputs/apk/release/signature.txt
+          {
+            echo "### Android stable release signature"
+            echo
+            echo '```text'
+            cat android/app/build/outputs/apk/release/signature.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload signed release APK
         if: >-
           env.ANDROID_KEYSTORE_BASE64 != '' &&
-          env.ANDROID_KEYSTORE_PASSWORD != '' &&
-          env.ANDROID_KEY_ALIAS != '' &&
-          env.ANDROID_KEY_PASSWORD != ''
+          env.ANDROID_KEYSTORE_PASSWORD != ''
         uses: actions/upload-artifact@v4
         with:
           name: codex-workbench-android-release
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+          retention-days: 90

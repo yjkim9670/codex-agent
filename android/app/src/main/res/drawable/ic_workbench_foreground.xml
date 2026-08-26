@@ -6,12 +6,12 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Canonical Codex Workbench launcher mark, scaled to 78% for better launcher spacing. -->
+    <!-- Canonical Codex Workbench launcher mark, scaled to 62% for more launcher breathing room. -->
     <group
         android:pivotX="54"
         android:pivotY="54"
-        android:scaleX="0.78"
-        android:scaleY="0.78">
+        android:scaleX="0.62"
+        android:scaleY="0.62">
 
         <!-- Soft glow beneath the workbench frame. -->
         <path

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=217">
+    <link rel="stylesheet" href="/static/css/app.css?v=219">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -416,6 +416,14 @@
                 <section class="sessions">
                     <div class="sessions-header">
                         <span id="codex-sessions-title">Sessions</span>
+                        <div class="session-status-filters" role="group" aria-label="세션 작업 상태 필터">
+                            <button class="session-status-filter is-in-progress" type="button" data-session-status-filter="in_progress" aria-pressed="false" title="작업 중 세션만 보기">
+                                <span>작업 중</span><span class="session-status-filter-count" data-session-status-count="in_progress">0</span>
+                            </button>
+                            <button class="session-status-filter is-completed" type="button" data-session-status-filter="completed" aria-pressed="false" title="완료 세션만 보기">
+                                <span>완료</span><span class="session-status-filter-count" data-session-status-count="completed">0</span>
+                            </button>
+                        </div>
                         <div class="sessions-actions">
                             <button class="btn secondary icon-only sessions-new" type="button" id="codex-chat-new-session" aria-label="Create new session" title="Create new session"></button>
                             <button class="btn ghost icon-only sessions-toggle" type="button" id="codex-sessions-toggle" aria-expanded="true" aria-controls="codex-session-list" aria-label="Collapse sessions panel" title="Collapse sessions panel"></button>
@@ -1168,6 +1176,14 @@
         <div class="mobile-session-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-mobile-session-overlay-title">
             <div class="mobile-session-overlay-header">
                 <div class="mobile-session-overlay-title" id="codex-mobile-session-overlay-title">Sessions</div>
+                <div class="session-status-filters mobile-session-status-filters" role="group" aria-label="세션 작업 상태 필터">
+                    <button class="session-status-filter is-in-progress" type="button" data-session-status-filter="in_progress" aria-pressed="false" title="작업 중 세션만 보기">
+                        <span>작업 중</span><span class="session-status-filter-count" data-session-status-count="in_progress">0</span>
+                    </button>
+                    <button class="session-status-filter is-completed" type="button" data-session-status-filter="completed" aria-pressed="false" title="완료 세션만 보기">
+                        <span>완료</span><span class="session-status-filter-count" data-session-status-count="completed">0</span>
+                    </button>
+                </div>
                 <button class="btn ghost icon-only mobile-session-overlay-close" type="button" id="codex-mobile-session-overlay-close" aria-label="닫기">
                     <span class="sr-only">닫기</span>
                 </button>
@@ -1785,6 +1801,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=231"></script>
+    <script src="/static/js/app.js?v=233"></script>
 </body>
 </html>

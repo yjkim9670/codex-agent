@@ -3751,6 +3751,33 @@ def test_build_codex_prompt_omits_powershell_rules_on_posix(monkeypatch):
     assert 'commands run in PowerShell' not in prompt
 
 
+def test_multiline_prompt_is_preserved_in_context_and_cli_stdin():
+    class _StdinCapture:
+        def __init__(self):
+            self.value = ''
+            self.closed = False
+
+        def write(self, value):
+            self.value += value
+
+        def close(self):
+            self.closed = True
+
+    class _Process:
+        def __init__(self):
+            self.stdin = _StdinCapture()
+
+    user_prompt = '첫 번째 줄\n두 번째 줄\n\n세 번째 문단'
+    composed = codex_chat.build_codex_prompt([], user_prompt)
+    process = _Process()
+
+    codex_chat._write_codex_prompt_to_stdin(process, composed)
+
+    assert '첫 번째 줄\n두 번째 줄\n\n세 번째 문단' in composed
+    assert process.stdin.value == composed
+    assert process.stdin.closed is True
+
+
 def test_internal_multiuser_prompt_and_exec_env_expose_real_workspace_and_shared_paths(
         monkeypatch, tmp_path):
     workspace_dir = tmp_path / 'workspace'

@@ -30,6 +30,7 @@ function buildStaticAssetPath(path) {
 
 const state = {
     sessions: [],
+    sessionStatusFilter: 'all',
     activeSessionId: null,
     sessionStorage: null,
     loading: false,
@@ -2115,6 +2116,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamMonitor = document.getElementById('codex-stream-monitor');
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
+    const sessionStatusFilterButtons = Array.from(
+        document.querySelectorAll('[data-session-status-filter]')
+    );
     const compactMedia = window.matchMedia(MOBILE_MEDIA_QUERY);
     const phoneMedia = window.matchMedia(PHONE_MEDIA_QUERY);
     const themeToggle = document.getElementById('codex-theme-toggle');
@@ -2472,6 +2476,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (form) {
         form.addEventListener('submit', handleSubmit);
     }
+
+    sessionStatusFilterButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            const filter = button.dataset.sessionStatusFilter || 'all';
+            state.sessionStatusFilter = state.sessionStatusFilter === filter ? 'all' : filter;
+            renderSessions();
+        });
+    });
 
     if (input) {
         input.addEventListener('keydown', event => {
@@ -25579,7 +25591,21 @@ function renderSessionsIntoList(list, { closeOverlayOnSelect = false } = {}) {
         return;
     }
 
-    state.sessions.forEach(session => {
+    const activeFilter = normalizeSessionStatusFilter(state.sessionStatusFilter);
+    const visibleSessions = activeFilter === 'all'
+        ? state.sessions
+        : state.sessions.filter(session => resolveSessionTaskStatus(session) === activeFilter);
+    if (visibleSessions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = activeFilter === 'in_progress'
+            ? '작업 중인 세션이 없습니다.'
+            : '완료된 세션이 없습니다.';
+        list.appendChild(empty);
+        return;
+    }
+
+    visibleSessions.forEach(session => {
         const item = document.createElement('div');
         item.className = 'session-item';
         if (session.id === state.activeSessionId) {
@@ -25698,6 +25724,7 @@ function renderSessions() {
     }
     if (targets.length === 0) return;
     updateSessionsHeaderSummary();
+    updateSessionStatusFilters();
     updateChatSessionNavigationButtons();
     targets.forEach(target => {
         renderSessionsIntoList(target.list, {
@@ -25705,6 +25732,35 @@ function renderSessions() {
         });
     });
     renderRunningJobsMonitor();
+}
+
+function normalizeSessionStatusFilter(value) {
+    return ['in_progress', 'completed'].includes(value) ? value : 'all';
+}
+
+function updateSessionStatusFilters() {
+    const activeFilter = normalizeSessionStatusFilter(state.sessionStatusFilter);
+    state.sessionStatusFilter = activeFilter;
+    const counts = { in_progress: 0, completed: 0 };
+    state.sessions.forEach(session => {
+        const status = resolveSessionTaskStatus(session);
+        if (Object.hasOwn(counts, status)) {
+            counts[status] += 1;
+        }
+    });
+    document.querySelectorAll('[data-session-status-filter]').forEach(button => {
+        const filter = button.dataset.sessionStatusFilter || '';
+        const selected = filter === activeFilter;
+        button.classList.toggle('is-active', selected);
+        button.setAttribute('aria-pressed', String(selected));
+        const count = counts[filter] || 0;
+        const label = filter === 'in_progress' ? '작업 중' : '완료';
+        button.setAttribute('title', `${label} 세션 ${formatNumber(count)}개${selected ? ' · 필터 해제' : '만 보기'}`);
+    });
+    document.querySelectorAll('[data-session-status-count]').forEach(countElement => {
+        const status = countElement.dataset.sessionStatusCount || '';
+        countElement.textContent = String(counts[status] || 0);
+    });
 }
 
 function getMobileSessionOverlayElements() {
@@ -29156,7 +29212,10 @@ function setMarkdownContent(element, content, options = {}) {
         if (streaming) {
             element.textContent = messageContent;
         } else {
-            element.innerHTML = renderMessageContent(messageContent);
+            element.innerHTML = renderMarkdown(messageContent, {
+                showCodeLineNumbers: true,
+                preserveLineBreaks: messageData?.role === 'user'
+            });
             hydrateRenderedMarkdown(element);
             renderMessageAttachments(element, messageData);
         }
@@ -30459,7 +30518,8 @@ function buildMessagePreview(text) {
 function normalizeMarkdownRenderOptions(options = {}) {
     const source = options && typeof options === 'object' ? options : {};
     return {
-        showCodeLineNumbers: Boolean(source.showCodeLineNumbers)
+        showCodeLineNumbers: Boolean(source.showCodeLineNumbers),
+        preserveLineBreaks: Boolean(source.preserveLineBreaks)
     };
 }
 
@@ -30501,7 +30561,7 @@ function renderMarkdown(text, options = {}) {
 
     const parsed = markedApi.parse(normalized, {
         async: false,
-        breaks: false,
+        breaks: renderOptions.preserveLineBreaks,
         gfm: true,
         pedantic: false,
         renderer

@@ -8532,9 +8532,9 @@ def _normalize_context_text(value):
     text = value.replace('\r\n', '\n').replace('\r', '\n').strip()
     if not text:
         return ''
-    # Keep paragraph boundaries while removing trailing spaces and blank-only lines.
+    # Preserve user-authored line and paragraph boundaries while trimming line-edge whitespace.
     lines = [line.strip() for line in text.split('\n')]
-    return '\n'.join(line for line in lines if line)
+    return '\n'.join(lines).strip()
 
 
 def _single_line_text(value):

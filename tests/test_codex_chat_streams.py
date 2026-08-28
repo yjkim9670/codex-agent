@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from werkzeug.datastructures import FileStorage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -720,7 +722,48 @@ def test_usage_event_v2_records_operation_model_credit_and_deduplicates(
     event = summary['recent'][0]
     assert event['schema_version'] == 2
     assert event['uncached_input_tokens'] == 4_157
-    assert event['credit_equivalent']['value'] == pytest.approx(0.025415)
+    assert event['credit_equivalent']['value'] == pytest.approx(0.0010166)
+    assert event['credit_equivalent']['unit'] == 'usd'
+    assert summary['by_model']['gpt-5.6-luna']['api_cost_estimate_usd'] == pytest.approx(0.0010166)
+    assert summary['priced_request_count'] == 1
+
+
+def test_usage_event_summary_breaks_down_models_and_uses_current_rate_card(
+        isolated_codex_workspace):
+    codex_chat.record_usage_event(
+        event_id='luna-001', session_id='session-luna',
+        usage={'input_tokens': 1_000_000, 'cached_input_tokens': 500_000, 'output_tokens': 100_000},
+        model='gpt-5.6-luna', source='unit_test',
+    )
+    codex_chat.record_usage_event(
+        event_id='terra-001', session_id='session-terra',
+        usage={'input_tokens': 1_000_000, 'cached_input_tokens': 0, 'output_tokens': 100_000},
+        model='gpt-5.6-terra', source='unit_test',
+    )
+
+    summary = codex_chat.get_usage_event_summary(hours=24 * 30)
+
+    assert summary['count'] == 2
+    assert summary['by_model']['gpt-5.6-luna']['total_tokens'] == 1_100_000
+    assert summary['by_model']['gpt-5.6-luna']['api_cost_estimate_usd'] == pytest.approx(0.23)
+    assert summary['by_model']['gpt-5.6-terra']['api_cost_estimate_usd'] == pytest.approx(3.2)
+    assert summary['api_cost_estimate_usd'] == pytest.approx(3.43)
+
+
+def test_chat_attachment_accepts_a_non_image_file_and_adds_file_context(isolated_codex_workspace):
+    attachment = codex_chat.save_codex_attachment(FileStorage(
+        stream=BytesIO(b'# release notes\n- ship it\n'),
+        filename='release-notes.md',
+        content_type='text/markdown',
+    ))
+
+    normalized = codex_chat.normalize_codex_attachments([attachment])
+    prompt = codex_chat._append_attachment_exec_context('Review this.', normalized)
+
+    assert normalized[0]['name'] == 'release-notes.md'
+    assert normalized[0]['mime_type'] == 'text/markdown'
+    assert '<attached_files>' in prompt
+    assert 'Attachment 1: release-notes.md [text/markdown]' in prompt
 
 
 def test_six_hour_account_api_refresh_persists_exact_limits_without_model_request(

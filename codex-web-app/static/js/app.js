@@ -438,6 +438,9 @@ const USAGE_HISTORY_WEEKLY_HOURS = 24 * 7;
 const OPENAI_API_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
 // Standard API prices per 1M text tokens from OpenAI's pricing docs.
 const OPENAI_API_TOKEN_PRICES_PER_MILLION = Object.freeze({
+    'gpt-5.6-sol': { input: 4, cachedInput: 0.4, output: 20, context: 'standard short context' },
+    'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12, context: 'standard short context' },
+    'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2, context: 'standard short context' },
     'gpt-5.5': { input: 5, cachedInput: 0.5, output: 30, context: 'standard short context' },
     'gpt-5.5-pro': { input: 30, cachedInput: null, output: 180, context: 'standard short context' },
     'gpt-5.4': { input: 2.5, cachedInput: 0.25, output: 15, context: 'standard short context' },
@@ -1232,7 +1235,7 @@ function normalizeChatAttachment(attachment) {
             : path,
         name: typeof attachment.name === 'string' && attachment.name.trim()
             ? attachment.name.trim()
-            : (typeof attachment.original_name === 'string' ? attachment.original_name.trim() : 'image'),
+            : (typeof attachment.original_name === 'string' ? attachment.original_name.trim() : 'attachment'),
         original_name: typeof attachment.original_name === 'string' ? attachment.original_name.trim() : '',
         path,
         relative_path: typeof attachment.relative_path === 'string' ? attachment.relative_path.trim() : '',
@@ -1260,12 +1263,12 @@ function renderPendingAttachments() {
 
         const label = document.createElement('span');
         label.className = 'chat-attachment-name';
-        label.textContent = attachment.name || 'image';
+        label.textContent = attachment.name || 'attachment';
 
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'chat-attachment-remove';
-        remove.setAttribute('aria-label', `Remove ${attachment.name || 'image'}`);
+        remove.setAttribute('aria-label', `Remove ${attachment.name || 'attachment'}`);
         remove.setAttribute('title', 'Remove');
         remove.addEventListener('click', event => {
             event.preventDefault();
@@ -2498,13 +2501,13 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const uploaded = await uploadChatAttachmentFiles(selectedFiles);
                 if (uploaded.length > 0) {
-                    showToast(`이미지 ${uploaded.length}개를 첨부했습니다.`, {
+                    showToast(`파일 ${uploaded.length}개를 첨부했습니다.`, {
                         tone: 'success',
                         durationMs: 1800
                     });
                 }
             } catch (error) {
-                showToast(normalizeError(error, '이미지 첨부에 실패했습니다.'), {
+                showToast(normalizeError(error, '파일 첨부에 실패했습니다.'), {
                     tone: 'error',
                     durationMs: 4200
                 });
@@ -6832,6 +6835,13 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
     }
 
     elements.app.classList.toggle(WORK_MODE_CLASS, wantsEnabled);
+    const fileBrowserButton = document.getElementById('codex-file-browser-open');
+    if (fileBrowserButton) {
+        // Keep the control inaccessible while the inline work-mode browser is active.
+        // CSS mirrors this for the first paint before this handler runs.
+        fileBrowserButton.hidden = wantsEnabled;
+        fileBrowserButton.setAttribute('aria-hidden', wantsEnabled ? 'true' : 'false');
+    }
     if (!wantsEnabled && !isPhoneLayout() && isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
@@ -15047,15 +15057,23 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
             .sort((left, right) => Number(right?.[1]?.total_tokens || 0) - Number(left?.[1]?.total_tokens || 0))
             .map(([name, entry]) => `${name} ${formatNumber(Number(entry?.requests || 0))}`)
             .join(' · ');
-        const creditEquivalent = Number(usageEvents?.credit_equivalent);
+        const apiCost = Number(usageEvents?.api_cost_estimate_usd);
+        const byModel = Object.entries(usageEvents?.by_model || {});
+        const modelText = byModel
+            .sort((left, right) => Number(right?.[1]?.total_tokens || 0) - Number(left?.[1]?.total_tokens || 0))
+            .map(([name, entry]) => `${name} ${formatCompactTokenCount(Number(entry?.total_tokens || 0))}`)
+            .join(' · ');
+        const pricedRequests = Number(usageEvents?.priced_request_count || 0);
         appendUsageHistoryMetricCard(elements.ratios, {
-            label: 'Workbench recorded usage',
+            label: `Workbench recorded (${Number(usageEvents?.window_hours || 0) / 24 || 30}d)`,
             value: `${formatNumber(Number(usageEvents?.count || 0))} req`,
-            subvalue: Number.isFinite(creditEquivalent)
-                ? `${creditEquivalent.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')} credit-eq`
+            subvalue: Number.isFinite(apiCost) && pricedRequests > 0
+                ? `API estimate ${formatUsageHistoryUsd(apiCost)}`
                 : '',
-            meta: operationText || 'No operation breakdown',
-            lowConfidence: false
+            meta: [modelText, operationText, pricedRequests > 0 ? `${formatNumber(pricedRequests)} priced` : 'model mapping unavailable']
+                .filter(Boolean)
+                .join(' · '),
+            lowConfidence: Number(usageEvents?.unpriced_request_count || 0) > 0
         });
     }
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import mimetypes
 import os
 import re
 import shlex
@@ -197,6 +198,7 @@ _TOKEN_PART_KEYS = (
 _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
+_USAGE_EVENT_DEFAULT_ANALYSIS_HOURS = 24 * 30
 _USAGE_ACCOUNT_REFRESH_SECONDS = 2 * 60 * 60
 _USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
@@ -839,7 +841,7 @@ _EXECUTION_POLICY_PRESETS = (
 
 
 class CodexAttachmentError(ValueError):
-    """Controlled validation error for Codex image attachments."""
+    """Controlled validation error for Codex chat attachments."""
 
     def __init__(self, message, *, status_code=400):
         super().__init__(str(message))
@@ -875,26 +877,16 @@ class CodexToolingError(ValueError):
         self.details = details if isinstance(details, dict) else {}
 
 
-def _is_supported_image_path(path):
-    try:
-        suffix = Path(path).suffix.lower()
-    except Exception:
-        suffix = ''
-    return suffix in _IMAGE_ATTACHMENT_EXTENSIONS
-
-
 def _sanitize_attachment_filename(value):
     source = str(value or '').strip().replace('\\', '/').split('/')[-1]
     if not source:
-        source = 'image'
+        source = 'attachment'
     source = re.sub(r'[^A-Za-z0-9._ -]+', '-', source).strip(' .-_')
     if not source:
-        source = 'image'
-    stem = Path(source).stem[:72].strip(' .-_') or 'image'
+        source = 'attachment'
+    stem = Path(source).stem[:72].strip(' .-_') or 'attachment'
     suffix = Path(source).suffix.lower()
-    if suffix not in _IMAGE_ATTACHMENT_EXTENSIONS:
-        suffix = '.png'
-    return f'{stem}{suffix}'
+    return f'{stem}{suffix[:24]}'
 
 
 def _attachment_is_under_allowed_root(path):
@@ -953,17 +945,15 @@ def _validate_attachment_payload(payload):
     except Exception as exc:
         raise CodexAttachmentError('첨부 파일 경로가 올바르지 않습니다.') from exc
     if not resolved.is_file():
-        raise CodexAttachmentError('첨부는 이미지 파일만 허용됩니다.')
+        raise CodexAttachmentError('첨부는 일반 파일이어야 합니다.')
     if not _attachment_is_under_allowed_root(resolved):
         raise CodexAttachmentError('작업공간 밖의 첨부 파일은 허용되지 않습니다.')
-    if not _is_supported_image_path(resolved):
-        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
     try:
         size = resolved.stat().st_size
     except Exception:
         size = 0
     if size > CODEX_MAX_ATTACHMENT_BYTES:
-        raise CodexAttachmentError('첨부 이미지가 너무 큽니다.')
+        raise CodexAttachmentError('첨부 파일이 너무 큽니다.')
     return _attachment_payload_from_path(
         resolved,
         attachment_id=payload.get('id'),
@@ -981,10 +971,10 @@ def normalize_codex_attachments(raw_attachments):
         raise CodexAttachmentError('attachments는 배열이어야 합니다.')
     if CODEX_MAX_ATTACHMENTS_PER_TURN <= 0:
         if raw_attachments:
-            raise CodexAttachmentError('이 서버에서는 이미지 첨부가 비활성화되어 있습니다.', status_code=403)
+            raise CodexAttachmentError('이 서버에서는 파일 첨부가 비활성화되어 있습니다.', status_code=403)
         return []
     if len(raw_attachments) > CODEX_MAX_ATTACHMENTS_PER_TURN:
-        raise CodexAttachmentError(f'이미지는 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.')
+        raise CodexAttachmentError(f'파일은 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.')
 
     normalized = []
     seen = set()
@@ -1000,19 +990,14 @@ def normalize_codex_attachments(raw_attachments):
 
 def save_codex_attachment(file_storage):
     if CODEX_MAX_ATTACHMENTS_PER_TURN <= 0:
-        raise CodexAttachmentError('이 서버에서는 이미지 첨부가 비활성화되어 있습니다.', status_code=403)
+        raise CodexAttachmentError('이 서버에서는 파일 첨부가 비활성화되어 있습니다.', status_code=403)
     if file_storage is None:
         raise CodexAttachmentError('업로드된 파일이 없습니다.')
     original_name = str(getattr(file_storage, 'filename', '') or '').strip()
-    original_suffix = Path(original_name).suffix.lower()
     mimetype = str(getattr(file_storage, 'mimetype', '') or '').strip().lower()
-    if original_suffix and original_suffix not in _IMAGE_ATTACHMENT_EXTENSIONS:
-        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
-    if not original_suffix and not mimetype.startswith('image/'):
-        raise CodexAttachmentError('이미지 파일만 첨부할 수 있습니다.')
     safe_name = _sanitize_attachment_filename(original_name)
-    if not _is_supported_image_path(safe_name):
-        raise CodexAttachmentError('지원하지 않는 이미지 형식입니다.')
+    if not mimetype:
+        mimetype = mimetypes.guess_type(safe_name)[0] or 'application/octet-stream'
 
     attachment_id = uuid.uuid4().hex
     target_dir = _attachments_dir() / datetime.now().strftime('%Y%m%d')
@@ -1031,7 +1016,7 @@ def save_codex_attachment(file_storage):
                     break
                 total_size += len(chunk)
                 if total_size > CODEX_MAX_ATTACHMENT_BYTES:
-                    raise CodexAttachmentError('첨부 이미지가 너무 큽니다.')
+                    raise CodexAttachmentError('첨부 파일이 너무 큽니다.')
                 handle.write(chunk)
     except Exception:
         try:
@@ -1064,9 +1049,10 @@ def _format_attachment_context_lines(attachments):
         return []
     lines = []
     for index, attachment in enumerate(normalized, start=1):
-        label = attachment.get('name') or attachment.get('original_name') or attachment.get('relative_path') or 'image'
+        label = attachment.get('name') or attachment.get('original_name') or attachment.get('relative_path') or 'attachment'
         relative_path = attachment.get('relative_path') or attachment.get('path') or ''
-        lines.append(f'- Image {index}: {label} ({relative_path})')
+        mime_type = attachment.get('mime_type') or 'unknown type'
+        lines.append(f'- Attachment {index}: {label} [{mime_type}] ({relative_path})')
     return lines
 
 
@@ -1077,9 +1063,9 @@ def _append_attachment_exec_context(prompt_text, attachments):
     return '\n'.join([
         str(prompt_text or '').strip() or '(empty)',
         '',
-        '<attached_images>',
+        '<attached_files>',
         *lines,
-        '</attached_images>',
+        '</attached_files>',
     ])
 
 
@@ -5077,16 +5063,49 @@ def _add_token_usage(base, delta):
 
 
 def _calculate_usage_credit_equivalent(model, usage, service_tier='standard'):
-    """Return the published Luna credit-equivalent, not a Plus quota percentage."""
+    """Return a Standard API rate-card estimate in USD for a known model.
+
+    This is deliberately separate from ChatGPT/Codex plan limits.  It is a
+    what-if calculation using the public API price card, not a bill or quota
+    conversion.  `output_tokens` is billed once: the Responses API reports
+    reasoning output within its output accounting, so adding the separately
+    exposed reasoning figure here would double count it.
+    """
     model_name = str(model or '').strip().lower()
+    snapshot_match = re.match(r'^(.*)-\d{4}-\d{2}-\d{2}$', model_name)
+    if snapshot_match:
+        model_name = snapshot_match.group(1)
     normalized = _normalize_token_usage(usage)
-    if not normalized or 'luna' not in model_name:
-        return None
-    rates = {
-        'uncached_input_per_million': 5.0,
-        'cached_input_per_million': 0.5,
-        'output_per_million': 30.0,
+    rates_by_model = {
+        # Standard, short-context text prices per 1M tokens, verified against
+        # https://developers.openai.com/api/docs/pricing (2026-08-28).
+        'gpt-5.6-sol': (4.0, 0.4, 20.0),
+        'gpt-5.6-terra': (2.0, 0.2, 12.0),
+        'gpt-5.6-luna': (0.2, 0.02, 1.2),
+        'gpt-5.5': (5.0, 0.5, 30.0),
+        'gpt-5.4': (2.5, 0.25, 15.0),
+        'gpt-5.4-mini': (0.75, 0.075, 4.5),
+        'gpt-5.4-nano': (0.2, 0.02, 1.25),
+        'gpt-5.3-codex': (1.75, 0.175, 14.0),
+        'chat-latest': (5.0, 0.5, 30.0),
+        'gpt-5.2': (1.75, 0.175, 14.0),
+        'gpt-5.1': (1.25, 0.125, 10.0),
+        'gpt-5': (1.25, 0.125, 10.0),
+        'gpt-5-mini': (0.25, 0.025, 2.0),
+        'gpt-5-nano': (0.05, 0.005, 0.4),
+        'gpt-4.1': (2.0, 0.5, 8.0),
+        'gpt-4.1-mini': (0.4, 0.1, 1.6),
+        'gpt-4.1-nano': (0.1, 0.025, 0.4),
+        'gpt-4o': (2.5, 1.25, 10.0),
+        'gpt-4o-mini': (0.15, 0.075, 0.6),
     }
+    rate_values = rates_by_model.get(model_name)
+    if not normalized or rate_values is None:
+        return None
+    rates = dict(zip(
+        ('uncached_input_per_million', 'cached_input_per_million', 'output_per_million'),
+        rate_values,
+    ))
     cached = min(normalized['input_tokens'], normalized['cached_input_tokens'])
     uncached = max(0, normalized['input_tokens'] - cached)
     value = (
@@ -5096,8 +5115,10 @@ def _calculate_usage_credit_equivalent(model, usage, service_tier='standard'):
     ) / 1_000_000
     return {
         'value': round(value, 9),
-        'unit': 'credits',
+        'unit': 'usd',
         'kind': 'rate_card_equivalent',
+        'pricing_basis': 'standard_short_context',
+        'pricing_source': 'https://developers.openai.com/api/docs/pricing',
         'service_tier': str(service_tier or 'standard'),
         'rates': rates,
     }
@@ -5201,7 +5222,7 @@ def _migrate_legacy_usage_events(context):
         })
 
 
-def get_usage_event_summary(account_id=None, recent_limit=100):
+def get_usage_event_summary(account_id=None, recent_limit=100, hours=_USAGE_EVENT_DEFAULT_ANALYSIS_HOURS):
     context = _account_storage_context(account_id)
     if context is None:
         return {'path': '', 'count': 0, 'by_operation': {}, 'recent': []}
@@ -5222,10 +5243,25 @@ def get_usage_event_summary(account_id=None, recent_limit=100):
                         events.append(value)
     except Exception:
         _LOGGER.debug('usage events summary load skipped', exc_info=True)
+    analysis_hours = _coerce_non_negative_int(hours)
+    if analysis_hours is None or analysis_hours <= 0:
+        analysis_hours = _USAGE_EVENT_DEFAULT_ANALYSIS_HOURS
+    cutoff = datetime.now().astimezone() - timedelta(hours=analysis_hours)
+    filtered_events = []
+    for event in events:
+        try:
+            recorded_at = parse_timestamp(event.get('recorded_at'))
+        except (TypeError, ValueError):
+            recorded_at = None
+        if recorded_at is not None and recorded_at >= cutoff:
+            filtered_events.append(event)
+
     by_operation = {}
+    by_model = {}
     credit_total = 0.0
     request_total = 0
-    for event in events:
+    priced_request_count = 0
+    for event in filtered_events:
         operation = str(event.get('operation') or 'legacy_unknown')
         entry = by_operation.setdefault(operation, {
             'requests': 0,
@@ -5236,21 +5272,49 @@ def get_usage_event_summary(account_id=None, recent_limit=100):
         entry['requests'] += request_count
         request_total += request_count
         entry['total_tokens'] += int(event.get('total_tokens') or 0)
-        credit = event.get('credit_equivalent')
+        model = str(event.get('model') or '').strip() or 'unclassified_legacy'
+        model_entry = by_model.setdefault(model, {
+            'requests': 0,
+            **_zero_token_usage(),
+            'api_cost_estimate_usd': None,
+            'priced_requests': 0,
+        })
+        model_entry['requests'] += request_count
+        for key in _zero_token_usage():
+            model_entry[key] += int(event.get(key) or 0)
+
+        # Recalculate rather than trust an event's historical estimate: the
+        # price card can change and previous Workbench releases used stale
+        # Luna rates.
+        credit = _calculate_usage_credit_equivalent(model, event, service_tier=event.get('service_tier'))
         credit_value = _coerce_float(credit.get('value')) if isinstance(credit, dict) else None
         if credit_value is not None:
             entry['credit_equivalent'] += credit_value
             credit_total += credit_value
+            model_entry['api_cost_estimate_usd'] = round(
+                float(model_entry['api_cost_estimate_usd'] or 0.0) + credit_value,
+                9,
+            )
+            model_entry['priced_requests'] += request_count
+            priced_request_count += request_count
     for entry in by_operation.values():
         entry['credit_equivalent'] = round(entry['credit_equivalent'], 9)
     limit = max(1, min(500, _coerce_non_negative_int(recent_limit) or 100))
+    for entry in by_model.values():
+        if entry['api_cost_estimate_usd'] is not None:
+            entry['api_cost_estimate_usd'] = round(entry['api_cost_estimate_usd'], 9)
     return {
         'path': str(path),
         'count': request_total,
-        'event_count': len(events),
+        'event_count': len(filtered_events),
+        'window_hours': analysis_hours,
         'credit_equivalent': round(credit_total, 9),
+        'api_cost_estimate_usd': round(credit_total, 9),
+        'priced_request_count': priced_request_count,
+        'unpriced_request_count': max(0, request_total - priced_request_count),
         'by_operation': by_operation,
-        'recent': events[-limit:],
+        'by_model': by_model,
+        'recent': filtered_events[-limit:],
     }
 
 

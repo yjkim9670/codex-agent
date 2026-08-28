@@ -361,7 +361,7 @@
     --tooltip-text: #f7fbff;
     --tooltip-border: rgba(130, 153, 178, 0.42);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
-    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3.1'/><path d='M19.4 13.8a1.7 1.7 0 0 0 .34 1.88l.06.06-2.22 2.22-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3.14v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.22-2.22.06-.06a1.7 1.7 0 0 0 .34-1.88 1.7 1.7 0 0 0-1.55-1.03h-.09V9.71h.09A1.7 1.7 0 0 0 6.72 8.68a1.7 1.7 0 0 0-.34-1.88l-.06-.06L8.54 4.5l.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3.14v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.22 2.22-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3.14h-.09a1.7 1.7 0 0 0-1.55 1.03z'/></svg>");
+    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m12 2.8 1.4 2.3 2.6.5 1.9-1.6 2.1 2.1-1.6 1.9.5 2.6 2.3 1.4-2.3 1.4-.5 2.6 1.6 1.9-2.1 2.1-1.9-1.6-2.6.5-1.4 2.3-1.4-2.3-2.6-.5-1.9 1.6-2.1-2.1 1.6-1.9-.5-2.6-2.3-1.4 2.3-1.4.5-2.6L4 6.1 6.1 4 8 5.6l2.6-.5z'/><circle cx='12' cy='12' r='3.25'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -517,7 +517,7 @@
     --icon-button-active-bg: color-mix(in srgb, var(--accent) 24%, var(--surface-raised) 76%);
     --icon-button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
-    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3.1'/><path d='M19.4 13.8a1.7 1.7 0 0 0 .34 1.88l.06.06-2.22 2.22-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3.14v-.09a1.7 1.7 0 0 0-1.03-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06-2.22-2.22.06-.06a1.7 1.7 0 0 0 .34-1.88 1.7 1.7 0 0 0-1.55-1.03h-.09V9.71h.09A1.7 1.7 0 0 0 6.72 8.68a1.7 1.7 0 0 0-.34-1.88l-.06-.06L8.54 4.5l.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3.14v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.22 2.22-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3.14h-.09a1.7 1.7 0 0 0-1.55 1.03z'/></svg>");
+    --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m12 2.8 1.4 2.3 2.6.5 1.9-1.6 2.1 2.1-1.6 1.9.5 2.6 2.3 1.4-2.3 1.4-.5 2.6 1.6 1.9-2.1 2.1-1.9-1.6-2.6.5-1.4 2.3-1.4-2.3-2.6-.5-1.9 1.6-2.1-2.1 1.6-1.9-.5-2.6-2.3-1.4 2.3-1.4.5-2.6L4 6.1 6.1 4 8 5.6l2.6-.5z'/><circle cx='12' cy='12' r='3.25'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
     --icon-fullscreen-exit: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 14 10 14 10 20'/><polyline points='20 10 14 10 14 4'/></svg>");
@@ -6175,6 +6175,11 @@ body.is-internal-member-view [data-internal-admin-only] {
     background-size: 17px 17px;
 }
 
+/* The work-mode preview replaces the standalone file-browser overlay. */
+.app.is-work-mode #codex-file-browser-open {
+    display: none;
+}
+
 #codex-git-commit,
 #codex-branch-overlay-commit,
 #codex-sync-overlay-commit,
@@ -11317,10 +11322,6 @@ label.hover-tooltip,
 
     .app.is-work-mode .header-actions {
         justify-content: flex-end;
-    }
-
-    .app.is-work-mode #codex-file-browser-open {
-        display: none;
     }
 
     .app.is-work-mode .layout {

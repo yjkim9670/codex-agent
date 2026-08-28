@@ -687,7 +687,7 @@ def _build_runtime_info():
         'feature_flags': {
             'files_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'git_api_enabled': bool(CODEX_ENABLE_GIT_API),
-            'image_attachments_enabled': CODEX_MAX_ATTACHMENTS_PER_TURN > 0,
+            'file_attachments_enabled': CODEX_MAX_ATTACHMENTS_PER_TURN > 0,
             'mail_api_enabled': bool(CODEX_ENABLE_FILES_API),
             'usage_limits_enabled': bool(CODEX_SHOW_USAGE_LIMITS),
         },
@@ -845,10 +845,10 @@ def codex_attachment_upload():
         files.append(single_file)
     files = [item for item in files if item is not None]
     if not files:
-        return jsonify({'error': '업로드할 이미지가 없습니다.', 'error_code': 'missing_attachment'}), 400
+        return jsonify({'error': '업로드할 파일이 없습니다.', 'error_code': 'missing_attachment'}), 400
     if len(files) > CODEX_MAX_ATTACHMENTS_PER_TURN:
         return jsonify({
-            'error': f'이미지는 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.',
+            'error': f'파일은 한 번에 최대 {CODEX_MAX_ATTACHMENTS_PER_TURN}개까지 첨부할 수 있습니다.',
             'error_code': 'too_many_attachments',
         }), 400
     try:

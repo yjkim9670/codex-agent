@@ -2518,6 +2518,19 @@ def codex_files_download():
     )
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    # Keep these diagnostic headers small and deterministic.  They make it
+    # possible for the browser UI to distinguish a failed proxy/download
+    # hand-off from a failed server-side archive build, without exposing file
+    # paths or archive contents.
+    content = result.get('content') or b''
+    response.headers['Content-Length'] = str(len(content))
+    response.headers['X-Codex-Download-Mode'] = 'archive' if result.get('is_archive') else 'file'
+    if result.get('is_archive'):
+        response.headers['X-Codex-Archive-Size'] = str(max(0, int(result.get('archive_size') or len(content))))
+        response.headers['X-Codex-Archive-Source-Size'] = str(max(0, int(result.get('source_size') or 0)))
+        response.headers['X-Codex-Archive-File-Count'] = str(max(0, int(result.get('file_count') or 0)))
+        response.headers['X-Codex-Archive-Directory-Count'] = str(max(0, int(result.get('directory_count') or 0)))
+        response.headers['X-Codex-Archive-Entry-Count'] = str(max(0, int(result.get('entry_count') or 0)))
     return response
 
 

@@ -793,6 +793,10 @@ def test_download_route_returns_archive_for_selected_directories(browser_test_cl
     assert response.status_code == 200
     assert response.headers['Content-Type'].startswith('application/zip')
     assert 'attachment;' in response.headers['Content-Disposition']
+    assert response.headers['X-Codex-Download-Mode'] == 'archive'
+    assert int(response.headers['X-Codex-Archive-Size']) == len(response.data)
+    assert int(response.headers['X-Codex-Archive-File-Count']) == 1
+    assert int(response.headers['X-Codex-Archive-Directory-Count']) == 1
     with ZipFile(io.BytesIO(response.data)) as archive:
         assert archive.read('bundle/report.txt').decode('utf-8') == 'report body'
 
@@ -1696,8 +1700,11 @@ def test_file_preview_download_shows_progress_toast():
     assert '서버 압축 준비 중' in app_js
     assert '수신 중' in app_js
     assert '다운로드 버튼 여는 중' in app_js
-    assert '/static/css/app.css?v=205' in template
-    assert '/static/js/app.js?v=213' in template
+    assert '/static/css/app.css?v=219' in template
+    assert '/static/js/app.js?v=234' in template
+    assert 'ZIP 생성 완료:' in app_js
+    assert 'X-Codex-Archive-Size' not in app_js  # headers are normalized by fetchBlob
+    assert 'archiveSize: Number(response.headers.get(\'x-codex-archive-size\'))' in app_js
 
 
 def test_file_preview_upload_shows_progress_dialog_and_uses_larger_limits():

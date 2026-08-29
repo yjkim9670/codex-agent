@@ -10052,6 +10052,16 @@ async function fetchBlob(url, options = {}) {
     return {
         contentType,
         contentDisposition: response.headers.get('content-disposition') || '',
+        responseMeta: {
+            status: response.status,
+            contentLength: Number(response.headers.get('content-length')) || 0,
+            downloadMode: response.headers.get('x-codex-download-mode') || '',
+            archiveSize: Number(response.headers.get('x-codex-archive-size')) || 0,
+            archiveSourceSize: Number(response.headers.get('x-codex-archive-source-size')) || 0,
+            archiveFileCount: Number(response.headers.get('x-codex-archive-file-count')) || 0,
+            archiveDirectoryCount: Number(response.headers.get('x-codex-archive-directory-count')) || 0,
+            archiveEntryCount: Number(response.headers.get('x-codex-archive-entry-count')) || 0
+        },
         blob: await readResponseBlob(response, contentType, onDownloadProgress)
     };
 }
@@ -10121,9 +10131,14 @@ function saveBlobAsFile(blob, filename = 'download.bin') {
     document.body.appendChild(anchor);
     anchor.click();
     document.body.removeChild(anchor);
+    // Corporate Chromium policies and proxy security scanners can start the
+    // object-URL download slightly after click().  Revoking it in the next
+    // task (the previous behaviour) can therefore turn a successful fetch
+    // into a cancelled download.  Keep the in-memory URL available long
+    // enough for that hand-off, then release it.
     window.setTimeout(() => {
         URL.revokeObjectURL(objectUrl);
-    }, 0);
+    }, 60_000);
     return true;
 }
 
@@ -21131,16 +21146,34 @@ async function downloadSelectedFilesFromFilePanel(variant) {
         if (!saveBlobAsFile(result?.blob, filename)) {
             throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
         }
-        progressToast?.update(`${targetLabel} 다운로드 버튼을 열었습니다.`, { tone: 'success' });
+        const responseMeta = result?.responseMeta || {};
+        const archiveSize = Number(responseMeta.archiveSize) || Number(result?.blob?.size) || 0;
+        const sourceSize = Number(responseMeta.archiveSourceSize) || 0;
+        const fileCount = Number(responseMeta.archiveFileCount) || 0;
+        const directoryCount = Number(responseMeta.archiveDirectoryCount) || 0;
+        const entryCount = Number(responseMeta.archiveEntryCount) || 0;
+        const archiveDetails = isArchiveDownload
+            ? [
+                `ZIP 생성 완료: ${formatFileBrowserSize(archiveSize)}`,
+                sourceSize > 0 ? `원본 ${formatFileBrowserSize(sourceSize)}` : '',
+                fileCount || directoryCount ? `파일 ${fileCount}개 · 폴더 ${directoryCount}개` : '',
+                entryCount ? `항목 ${entryCount}개` : ''
+            ].filter(Boolean).join(' · ')
+            : `수신 완료: ${formatFileBrowserSize(archiveSize)}`;
+        progressToast?.update(`${archiveDetails} · Chrome 다운로드를 요청했습니다.`, { tone: 'success' });
         window.setTimeout(() => {
             progressToast?.dismiss();
-        }, 2600);
+        }, 6200);
         return true;
     } catch (error) {
-        progressToast?.update(normalizeError(error, '파일 다운로드에 실패했습니다.'), { tone: 'error' });
+        const message = normalizeError(error, '파일 다운로드에 실패했습니다.');
+        const diagnostic = error?.isTimeout
+            ? '서버 압축 또는 Funnel/사내 프록시 응답 시간이 제한을 초과했습니다.'
+            : 'Chrome 다운로드 목록과 개발자도구 Network의 /api/codex/files/download 응답 상태를 확인하세요.';
+        progressToast?.update(`${message} · ${diagnostic}`, { tone: 'error' });
         window.setTimeout(() => {
             progressToast?.dismiss();
-        }, 4200);
+        }, 7000);
         return false;
     } finally {
         window.clearInterval(progressIntervalId);

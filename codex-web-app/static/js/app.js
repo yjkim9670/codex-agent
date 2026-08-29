@@ -18475,7 +18475,10 @@ function syncFilePanelSelectionBar(variant) {
     const visibleFilePaths = getFilePanelVisibleFilePaths(variant);
     const visibleFileCount = visibleFilePaths.length;
     const selectionModeActive = syncFilePanelSelectionModeClass(elements, variant, selectedCount);
-    const actionModeActive = selectionModeActive || usingPreviewContext;
+    // Preview actions belong in the viewer.  The selection action bar must
+    // only represent an explicit checkbox selection.
+    const actionModeActive = selectionModeActive;
+    const isTmpRoot = root === FILE_BROWSER_ROOT_TMP;
     if (elements.layout) {
         elements.layout.classList.toggle('has-file-context-target', usingPreviewContext);
     }
@@ -18518,7 +18521,8 @@ function syncFilePanelSelectionBar(variant) {
             elements.newFileBtn,
             `현재 폴더에 새 파일 만들기 (${currentDisplayPath})`
         );
-        elements.newFileBtn.disabled = isBusy;
+        elements.newFileBtn.disabled = isBusy || isTmpRoot;
+        elements.newFileBtn.classList.toggle('is-hidden', isTmpRoot);
         syncHoverTooltipFromLabel(elements.newFileBtn);
     }
     if (elements.newFolderBtn) {
@@ -18526,7 +18530,8 @@ function syncFilePanelSelectionBar(variant) {
             elements.newFolderBtn,
             `현재 폴더에 새 폴더 만들기 (${currentDisplayPath})`
         );
-        elements.newFolderBtn.disabled = isBusy;
+        elements.newFolderBtn.disabled = isBusy || isTmpRoot;
+        elements.newFolderBtn.classList.toggle('is-hidden', isTmpRoot);
         syncHoverTooltipFromLabel(elements.newFolderBtn);
     }
     if (elements.uploadBtn) {
@@ -18534,7 +18539,8 @@ function syncFilePanelSelectionBar(variant) {
             elements.uploadBtn,
             `현재 폴더에 파일 업로드 (${currentDisplayPath})`
         );
-        elements.uploadBtn.disabled = isBusy;
+        elements.uploadBtn.disabled = isBusy || isTmpRoot;
+        elements.uploadBtn.classList.toggle('is-hidden', isTmpRoot);
         syncHoverTooltipFromLabel(elements.uploadBtn);
     }
     if (elements.deleteDirectoryBtn) {
@@ -18544,7 +18550,8 @@ function syncFilePanelSelectionBar(variant) {
                 ? `현재 폴더 삭제 (${currentDisplayPath})`
                 : '루트 폴더는 삭제할 수 없습니다.'
         );
-        elements.deleteDirectoryBtn.disabled = isBusy || !currentPath;
+        elements.deleteDirectoryBtn.disabled = isBusy || !currentPath || isTmpRoot;
+        elements.deleteDirectoryBtn.closest('.file-panel-folder-menu')?.classList.toggle('is-hidden', isTmpRoot);
         syncHoverTooltipFromLabel(elements.deleteDirectoryBtn);
     }
     if (elements.addContextBtn) {
@@ -18556,7 +18563,7 @@ function syncFilePanelSelectionBar(variant) {
         syncHoverTooltipFromLabel(elements.addContextBtn);
     }
     if (elements.moveBtn) {
-        elements.moveBtn.disabled = isBusy || actionTargetCount <= 0 || hasActionDirectories;
+        elements.moveBtn.disabled = isBusy || actionTargetCount <= 0 || isTmpRoot;
     }
     if (elements.selectAllBtn) {
         const selectAllLabel = !selectionModeActive
@@ -18608,7 +18615,7 @@ function syncFilePanelSelectionBar(variant) {
         elements.mailBtn.disabled = isBusy || actionTargetCount <= 0;
     }
     if (elements.deleteBtn) {
-        elements.deleteBtn.disabled = isBusy || actionTargetCount <= 0;
+        elements.deleteBtn.disabled = isBusy || actionTargetCount <= 0 || isTmpRoot;
     }
     syncFilePanelFolderContextButton(variant);
 }
@@ -19595,7 +19602,9 @@ function shouldEncryptChatPromptRequests() {
 }
 
 function shouldEncryptFileBrowserRequests() {
-    return state.settings?.securityPolicy?.fileWriteEncryptionRequired !== false;
+    // All file mutations and transfers share the encrypted envelope.  The
+    // server still owns the narrow trusted-HTTP compatibility exception.
+    return true;
 }
 
 function normalizeJsonRequestPayload(payload) {
@@ -20220,27 +20229,21 @@ async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', 
 }
 
 async function createFilePanelFile(root, path, content = '') {
-    return fetchJson('/api/codex/files/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path),
-            content: typeof content === 'string' ? content : ''
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/create', {
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path),
+        content: typeof content === 'string' ? content : ''
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
 async function createFilePanelDirectory(root, path) {
-    return fetchJson('/api/codex/files/create-directory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path)
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/create-directory', {
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path)
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
@@ -20332,13 +20335,17 @@ async function uploadFilePanelFiles(root, path, fileList, { onUploadProgress = n
         return { uploaded: [] };
     }
     const formData = new FormData();
-    formData.append('root', normalizeFileBrowserRoot(root));
-    formData.append('path', normalizeFileBrowserRelativePath(path));
+    const encryptedPayload = await encryptFileBrowserRequestPayload({
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path)
+    });
+    formData.append('payload', stringifyJsonRequestPayload(encryptedPayload));
     files.forEach(file => formData.append('files', file));
-    return uploadJsonWithProgress('/api/codex/files/upload', formData, {
+    const response = await uploadJsonWithProgress('/api/codex/files/upload', formData, {
         timeoutMs: FILE_BROWSER_UPLOAD_TIMEOUT_MS,
         onUploadProgress
     });
+    return decryptFileBrowserResponsePayload(response);
 }
 
 function getFileUploadProgressElements() {
@@ -20415,33 +20422,53 @@ function closeFileUploadProgress() {
 }
 
 async function fetchFilePanelDownload(root, paths, { onDownloadProgress = null } = {}) {
-    return fetchBlob('/api/codex/files/download', {
+    return fetchEncryptedFileBrowserBlob('/api/codex/files/download', {
+        root: normalizeFileBrowserRoot(root),
+        paths: Array.from(createNormalizedRelativePathSet(paths))
+    }, {
+        timeoutMs: FILE_BROWSER_DOWNLOAD_TIMEOUT_MS,
+        onDownloadProgress
+    });
+}
+
+async function inspectFilePanelDownload(root, paths) {
+    return fetchEncryptedFileBrowserJson('/api/codex/files/download-preflight', {
+        root: normalizeFileBrowserRoot(root),
+        paths: Array.from(createNormalizedRelativePathSet(paths))
+    }, { timeoutMs: FILE_BROWSER_REQUEST_TIMEOUT_MS });
+}
+
+async function fetchEncryptedFileBrowserBlob(url, payload, { timeoutMs, onDownloadProgress } = {}) {
+    const payloadBody = stringifyJsonRequestPayload(payload);
+    if (!shouldEncryptFileBrowserRequests()) {
+        return fetchBlob(url, { method: 'POST', headers: buildPlainJsonPostHeaders(), timeoutMs, onDownloadProgress, body: payloadBody });
+    }
+    if (!isFileBrowserCryptoSupported()) {
+        if (!canUseTrustedHttpCryptoFallback()) throw createCryptoUnsupportedError('파일 전송');
+        return fetchBlob(url, { method: 'POST', headers: buildTrustedHttpCryptoFallbackHeaders(), timeoutMs, onDownloadProgress, body: payloadBody });
+    }
+    const encryptedPayload = await encryptFileBrowserRequestPayload(payload, payloadBody);
+    return fetchBlob(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_DOWNLOAD_TIMEOUT_MS,
+        timeoutMs,
         onDownloadProgress,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            paths: Array.from(createNormalizedRelativePathSet(paths))
-        })
+        body: stringifyJsonRequestPayload(encryptedPayload)
     });
 }
 
 async function sendFilePanelMail(root, paths, mailPayload = {}) {
     const payload = mailPayload && typeof mailPayload === 'object' ? mailPayload : {};
-    return fetchJson('/api/codex/files/mail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MAIL_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            paths: Array.from(createNormalizedRelativePathSet(paths)),
-            to: String(payload.to || '').trim(),
-            cc: String(payload.cc || '').trim(),
-            bcc: String(payload.bcc || '').trim(),
-            subject: String(payload.subject || '').trim(),
-            body: String(payload.body || '')
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/mail', {
+        root: normalizeFileBrowserRoot(root),
+        paths: Array.from(createNormalizedRelativePathSet(paths)),
+        to: String(payload.to || '').trim(),
+        cc: String(payload.cc || '').trim(),
+        bcc: String(payload.bcc || '').trim(),
+        subject: String(payload.subject || '').trim(),
+        body: String(payload.body || '')
+    }, {
+        timeoutMs: FILE_BROWSER_MAIL_TIMEOUT_MS
     });
 }
 
@@ -20457,43 +20484,34 @@ async function fetchFilePanelRawText(root, path) {
 }
 
 async function deleteFilePanelFiles(root, paths) {
-    return fetchJson('/api/codex/files/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            paths: Array.from(createNormalizedRelativePathSet(paths))
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/delete', {
+        root: normalizeFileBrowserRoot(root),
+        paths: Array.from(createNormalizedRelativePathSet(paths))
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
 async function deleteFilePanelDirectory(root, path) {
-    return fetchJson('/api/codex/files/delete-directory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            path: normalizeFileBrowserRelativePath(path)
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/delete-directory', {
+        root: normalizeFileBrowserRoot(root),
+        path: normalizeFileBrowserRelativePath(path)
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
 async function moveFilePanelFiles(root, paths, payload = {}) {
     const requestPayload = payload && typeof payload === 'object' ? payload : {};
-    return fetchJson('/api/codex/files/move', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
-        body: JSON.stringify({
-            root: normalizeFileBrowserRoot(root),
-            paths: Array.from(createNormalizedRelativePathSet(paths)),
-            destination_path: normalizeFileBrowserRelativePath(requestPayload.destination_path),
-            destination_directory: Object.prototype.hasOwnProperty.call(requestPayload, 'destination_directory')
-                ? normalizeFileBrowserRelativePath(requestPayload.destination_directory)
-                : undefined
-        })
+    return fetchEncryptedFileBrowserJson('/api/codex/files/move', {
+        root: normalizeFileBrowserRoot(root),
+        paths: Array.from(createNormalizedRelativePathSet(paths)),
+        destination_path: normalizeFileBrowserRelativePath(requestPayload.destination_path),
+        destination_directory: Object.prototype.hasOwnProperty.call(requestPayload, 'destination_directory')
+            ? normalizeFileBrowserRelativePath(requestPayload.destination_directory)
+            : undefined
+    }, {
+        timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS
     });
 }
 
@@ -21112,6 +21130,22 @@ async function downloadSelectedFilesFromFilePanel(variant) {
     }, 1000);
     setFilePanelBulkActionInFlight(normalizedVariant, true);
     try {
+        if (isArchiveDownload) {
+            updateProgressToast('ZIP 항목 및 원본 용량 사전 확인 중');
+            const inspection = await inspectFilePanelDownload(
+                getFilePanelActionTargetRoot(normalizedVariant), selectedPaths
+            );
+            const inspectionText = [
+                `파일 ${Number(inspection?.file_count) || 0}개`,
+                `폴더 ${Number(inspection?.directory_count) || 0}개`,
+                `압축 항목 ${Number(inspection?.entry_count) || 0}개`,
+                `원본 ${formatFileBrowserSize(Number(inspection?.source_size) || 0)}`
+            ].join(' · ');
+            if (!window.confirm(`ZIP 다운로드를 시작할까요?\n\n${inspectionText}\n\n확인 후 서버에서 압축을 생성합니다.`)) {
+                progressToast?.dismiss();
+                return false;
+            }
+        }
         updateProgressToast(isArchiveDownload
             ? `${targetLabel} 서버 압축 준비 중`
             : `${targetLabel} 서버 응답 준비 중`);
@@ -21434,24 +21468,16 @@ async function moveSelectedFilesFromFilePanel(variant) {
     const selectedPaths = getFilePanelActionTargetPaths(normalizedVariant);
     const usingPreviewAction = isFilePanelUsingPreviewActionTarget(normalizedVariant);
     if (!selectedPaths.length) return false;
-    if (getFilePanelActionTargetEntrySummary(normalizedVariant).hasDirectories) {
-        showToast('선택 이동은 파일만 지원합니다.', {
-            tone: 'error',
-            durationMs: 3200
-        });
-        return false;
-    }
-
     let payload = null;
     if (selectedPaths.length === 1) {
-        const nextPath = window.prompt('새 파일 경로를 입력하세요.', selectedPaths[0]);
+        const nextPath = window.prompt('새 파일 또는 폴더 경로를 입력하세요.', selectedPaths[0]);
         if (nextPath === null) return false;
         payload = {
             destination_path: normalizeFileBrowserRelativePath(nextPath)
         };
     } else {
         const nextDirectory = window.prompt(
-            `선택한 ${selectedPaths.length}개 파일을 옮길 대상 폴더 경로를 입력하세요.`,
+            `선택한 ${selectedPaths.length}개 파일 또는 폴더를 옮길 대상 폴더 경로를 입력하세요.`,
             getFilePanelCurrentPath(normalizedVariant)
         );
         if (nextDirectory === null) return false;
@@ -21516,7 +21542,7 @@ async function moveSelectedFilesFromFilePanel(variant) {
             }
         }
         showToast(
-            selectedPaths.length === 1 ? '파일 이름/경로를 변경했습니다.' : `선택 파일 ${selectedPaths.length}개를 이동했습니다.`,
+            selectedPaths.length === 1 ? '파일 또는 폴더 이름/경로를 변경했습니다.' : `선택 항목 ${selectedPaths.length}개를 이동했습니다.`,
             {
                 tone: 'success',
                 durationMs: 2600

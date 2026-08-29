@@ -817,6 +817,12 @@ def _build_move_operations(root_path, targets, *, destination_path=None, destina
                 error_code='path_conflict',
                 status_code=409,
             )
+        if operation['source_path'].is_dir() and destination_path.is_relative_to(operation['source_path']):
+            raise FileBrowserError(
+                '폴더를 자기 자신 또는 하위 폴더로 이동할 수 없습니다.',
+                error_code='invalid_path',
+                status_code=400,
+            )
 
     return operations
 
@@ -1545,6 +1551,42 @@ def build_download_payload(root_key=None, relative_paths=None):
         'download_name': _build_download_archive_name(),
         'content': content,
         'is_archive': True,
+    }
+
+
+def inspect_download_payload(root_key=None, relative_paths=None):
+    """Return bounded archive facts without allocating a ZIP buffer."""
+    normalized_root, root_path, targets = _resolve_archive_targets(root_key, relative_paths)
+    file_count = 0
+    directory_count = 0
+    source_size = 0
+    entry_count = 0
+    for entry_path, _archive_name, is_directory in _iter_archive_entries(root_path, targets):
+        entry_count += 1
+        if is_directory:
+            directory_count += 1
+            continue
+        try:
+            source_size += max(0, int(entry_path.stat().st_size))
+        except OSError as exc:
+            raise FileBrowserError(
+                f'파일 정보를 확인할 수 없습니다: {exc}', error_code='read_error', status_code=500
+            ) from exc
+        if source_size > _MAX_MULTI_DOWNLOAD_TOTAL_BYTES:
+            raise FileBrowserError(
+                f'선택한 파일과 폴더의 전체 다운로드 크기 제한({_format_byte_limit(_MAX_MULTI_DOWNLOAD_TOTAL_BYTES)})을 초과했습니다.',
+                error_code='file_too_large', status_code=413,
+            )
+        file_count += 1
+    return {
+        'root': normalized_root,
+        'paths': [item['relative_path'] for item in targets],
+        'target_count': len(targets),
+        'file_count': file_count,
+        'directory_count': directory_count,
+        'entry_count': entry_count,
+        'source_size': source_size,
+        'is_archive': len(targets) > 1 or directory_count > 0,
     }
 
 

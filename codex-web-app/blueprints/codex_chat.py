@@ -149,6 +149,7 @@ from ..services.file_browser import (
     create_file,
     delete_directory,
     delete_files,
+    inspect_download_payload,
     list_directory,
     move_files,
     read_file,
@@ -422,6 +423,23 @@ def _decrypt_optional_file_payload(payload):
     if is_encrypted_file_payload(payload):
         return decrypt_file_payload(payload)
     return payload if isinstance(payload, dict) else {}, ''
+
+
+def _decrypt_required_file_payload(payload):
+    """Decode the common file-operation envelope.
+
+    File mutations and transfers must not silently fall back to a plain JSON
+    body.  The explicitly configured trusted-HTTP compatibility path remains
+    available for legacy local deployments only.
+    """
+    decoded, crypto_session_id = _decrypt_optional_file_payload(payload)
+    if not crypto_session_id and not _is_trusted_http_crypto_fallback_allowed():
+        raise FileCryptoError(
+            '파일 변경 및 전송 요청은 암호화되어야 합니다.',
+            error_code='encrypted_file_payload_required',
+            status_code=400,
+        )
+    return decoded, crypto_session_id
 
 
 def _jsonify_file_payload(result, crypto_session_id=''):
@@ -2367,11 +2385,7 @@ def codex_files_write():
         raw_payload = {}
     try:
         payload, crypto_session_id = _decrypt_optional_file_payload(raw_payload)
-        if (
-            CODEX_REQUIRE_ENCRYPTED_FILE_WRITES
-            and not crypto_session_id
-            and not _is_trusted_http_crypto_fallback_allowed()
-        ):
+        if not crypto_session_id and not _is_trusted_http_crypto_fallback_allowed():
             raise FileBrowserError(
                 '파일 저장 요청은 암호화되어야 합니다.',
                 error_code='encrypted_file_write_required',
@@ -2404,54 +2418,62 @@ def codex_files_write():
 def codex_files_create():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = create_file(
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
             content=payload.get('content', ''),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/create-directory', methods=['POST'])
 def codex_files_create_directory():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = create_directory(
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/upload', methods=['POST'])
 def codex_files_upload():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
+    raw_payload = request.form.get('payload')
+    try:
+        envelope = json.loads(raw_payload) if raw_payload else {}
+    except (TypeError, ValueError):
+        envelope = {}
     files = request.files.getlist('files')
     single_file = request.files.get('file')
     if single_file and single_file not in files:
         files.append(single_file)
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(envelope)
         result = upload_files(
-            root_key=request.form.get('root'),
-            relative_path=request.form.get('path', ''),
+            root_key=payload.get('root'),
+            relative_path=payload.get('path', ''),
             file_storages=files,
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/raw/<root_key>/<path:relative_path>')
@@ -2491,14 +2513,14 @@ def codex_files_raw(root_key, relative_path):
 def codex_files_download():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, _crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = build_download_payload(
             root_key=payload.get('root'),
             relative_paths=payload.get('paths'),
         )
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
 
@@ -2534,14 +2556,29 @@ def codex_files_download():
     return response
 
 
+@bp.route('/api/codex/files/download-preflight', methods=['POST'])
+def codex_files_download_preflight():
+    if not CODEX_ENABLE_FILES_API:
+        return _feature_disabled_response('files')
+    try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
+        result = inspect_download_payload(
+            root_key=payload.get('root'),
+            relative_paths=payload.get('paths'),
+        )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+    except FileBrowserError as exc:
+        return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
+
+
 @bp.route('/api/codex/files/mail', methods=['POST'])
 def codex_files_mail():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         archive = build_mail_archive_payload(
             root_key=payload.get('root'),
             relative_paths=payload.get('paths'),
@@ -2556,12 +2593,14 @@ def codex_files_mail():
             body=payload.get('body', ''),
             archive_payload=archive,
         )
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
     except MailSendError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
 
-    return jsonify({
+    return _jsonify_file_payload({
         **mail_result,
         'archive': {
             'name': archive.get('download_name'),
@@ -2571,60 +2610,60 @@ def codex_files_mail():
             'directory_count': archive.get('directory_count'),
             'entry_count': archive.get('entry_count'),
         },
-    })
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/files/delete', methods=['POST'])
 def codex_files_delete():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = delete_files(
             root_key=payload.get('root'),
             relative_paths=payload.get('paths'),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/delete-directory', methods=['POST'])
 def codex_files_delete_directory():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = delete_directory(
             root_key=payload.get('root'),
             relative_path=payload.get('path', ''),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/files/move', methods=['POST'])
 def codex_files_move():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    payload = request.get_json(silent=True) or {}
-    if not isinstance(payload, dict):
-        payload = {}
     try:
+        payload, crypto_session_id = _decrypt_required_file_payload(request.get_json(silent=True) or {})
         result = move_files(
             root_key=payload.get('root'),
             relative_paths=payload.get('paths'),
             destination_path=payload.get('destination_path'),
             destination_directory=payload.get('destination_directory'),
         )
+        return _jsonify_file_payload(result, crypto_session_id)
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
     except FileBrowserError as exc:
         return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
-    return jsonify(result)
 
 
 @bp.route('/api/codex/terminals')

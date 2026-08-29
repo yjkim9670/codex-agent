@@ -2341,6 +2341,21 @@ textarea {
     background-size: 16px 16px;
 }
 
+.file-browser-viewer-close {
+    background-image: var(--icon-close);
+    order: 10;
+    margin-left: 6px;
+    border-color: color-mix(in srgb, var(--border) 58%, var(--text-secondary));
+    background-color: color-mix(in srgb, var(--surface-muted) 72%, var(--text-secondary));
+    box-shadow: inset 1px 0 0 color-mix(in srgb, var(--surface) 56%, transparent), -4px 0 8px color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+.file-browser-viewer-close:hover,
+.file-browser-viewer-close:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+    background-color: color-mix(in srgb, var(--accent) 16%, var(--surface-muted));
+}
+
 .file-browser-viewer-add-context {
     background-image: var(--icon-chat-add);
 }

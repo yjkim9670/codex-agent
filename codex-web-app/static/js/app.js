@@ -2280,6 +2280,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const workModeTerminalOpenBtn = document.getElementById('codex-work-mode-terminal-open');
     const workModeTerminalNewTabBtn = document.getElementById('codex-work-mode-terminal-new-tab');
     const workModeTerminalCloseTabBtn = document.getElementById('codex-work-mode-terminal-close-tab');
+    const workModeFileClosePreviewBtn = document.getElementById('codex-work-mode-file-close-preview');
     const workModeFileOpenNewBtn = document.getElementById('codex-work-mode-file-open-new');
     const workModeFileAddCurrentContextBtn = document.getElementById('codex-work-mode-file-add-current-context');
     const workModeFileCopyBtn = document.getElementById('codex-work-mode-file-copy');
@@ -2355,6 +2356,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const fileBrowserUpBtn = document.getElementById('codex-file-browser-up');
     const fileBrowserFolderContextBtn = document.getElementById('codex-file-browser-folder-context');
     const fileBrowserFullscreenBtn = document.getElementById('codex-file-browser-fullscreen');
+    const fileBrowserClosePreviewBtn = document.getElementById('codex-file-browser-close-preview');
     const fileBrowserOpenNewBtn = document.getElementById('codex-file-browser-open-new');
     const fileBrowserAddCurrentContextBtn = document.getElementById('codex-file-browser-add-current-context');
     const fileBrowserCopyBtn = document.getElementById('codex-file-browser-copy');
@@ -2826,6 +2828,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeFileAddCurrentContextBtn) {
         workModeFileAddCurrentContextBtn.addEventListener('click', () => {
             void addCurrentFileToChatContext(FILE_PANEL_VARIANT_WORK_MODE);
+        });
+    }
+    if (workModeFileClosePreviewBtn) {
+        workModeFileClosePreviewBtn.addEventListener('click', () => {
+            closeFilePanelPreview(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
     if (workModeFileMoveBtn) {
@@ -3457,6 +3464,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (fileBrowserAddCurrentContextBtn) {
         fileBrowserAddCurrentContextBtn.addEventListener('click', () => {
             void addCurrentFileToChatContext(FILE_PANEL_VARIANT_OVERLAY);
+        });
+    }
+    if (fileBrowserClosePreviewBtn) {
+        fileBrowserClosePreviewBtn.addEventListener('click', () => {
+            closeFilePanelPreview(FILE_PANEL_VARIANT_OVERLAY);
         });
     }
     if (fileBrowserMoveBtn) {
@@ -5397,6 +5409,7 @@ function getFilePanelElementsByPrefix({
         viewerMeta: byId('viewer-meta'),
         viewerActions: byId('viewer-actions'),
         viewerContent: byId('viewer-content'),
+        closePreviewBtn: byId('close-preview'),
         openNewBtn: byId('open-new'),
         addCurrentContextBtn: byId('add-current-context'),
         copyBtn: byId('copy'),
@@ -6459,14 +6472,21 @@ function syncFilePanelViewerActionState(variant) {
         elements.viewerPanel.classList.toggle('is-editing', Boolean(state.editing));
         elements.viewerPanel.classList.toggle('is-diff-mode', isDiffMode);
     }
+    if (elements.closePreviewBtn) {
+        elements.closePreviewBtn.classList.toggle('is-hidden', !hasPreview);
+        elements.closePreviewBtn.disabled = !hasPreview || isBusy;
+        updateFilePanelActionButtonLabel(elements.closePreviewBtn, '파일 미리보기 닫기');
+        setIconButtonScreenReaderText(elements.closePreviewBtn, '파일 미리보기 닫기');
+        syncHoverTooltipFromLabel(elements.closePreviewBtn);
+    }
     if (elements.openNewBtn) {
         syncFilePanelPreviewOpenButton(normalizedVariant, { loading: isBusy });
     }
     if (elements.addCurrentContextBtn) {
         elements.addCurrentContextBtn.classList.toggle('is-hidden', !hasPreview);
         elements.addCurrentContextBtn.disabled = !hasPreview || isBusy;
-        updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일과 폴더 위치를 채팅에 추가');
-        setIconButtonScreenReaderText(elements.addCurrentContextBtn, '현재 파일과 폴더 위치를 채팅에 추가');
+        updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일 위치를 채팅에 추가');
+        setIconButtonScreenReaderText(elements.addCurrentContextBtn, '현재 파일 위치를 채팅에 추가');
         syncHoverTooltipFromLabel(elements.addCurrentContextBtn);
     }
     syncFilePanelFolderContextButton(normalizedVariant);
@@ -18305,11 +18325,9 @@ function getFilePanelDirectoryContextRoot(variant) {
 function buildFilePanelPreviewChatContextText(root, filePath) {
     const normalizedFilePath = normalizeFileBrowserRelativePath(filePath);
     if (!normalizedFilePath) return '';
-    const folderPath = getFileBrowserParentPath(normalizedFilePath);
     return [
         '[File Preview Context]',
-        `file: ${formatFileBrowserDisplayPath(root, normalizedFilePath)}`,
-        `folder: ${formatFileBrowserDisplayPath(root, folderPath)}`
+        `file: ${formatFileBrowserDisplayPath(root, normalizedFilePath)}`
     ].join('\n');
 }
 
@@ -20523,6 +20541,18 @@ function clearFilePanelViewerForVariant(variant, message = '파일을 선택하�
     clearWorkModeFileViewer(message);
 }
 
+function closeFilePanelPreview(variant) {
+    const normalizedVariant = normalizeFilePanelVariant(variant);
+    const state = getFilePanelEditState(normalizedVariant);
+    if (!state?.path) return false;
+    if (!confirmDiscardFilePanelEditChanges(normalizedVariant)) return false;
+
+    setFilePanelPreviewPath(normalizedVariant, '');
+    clearFilePanelViewerForVariant(normalizedVariant);
+    applyFilePanelSelectionStateForVariant(normalizedVariant);
+    return true;
+}
+
 function refreshFilePanelDirectoryForVariant(variant, options = {}) {
     if (normalizeFilePanelVariant(variant) === FILE_PANEL_VARIANT_OVERLAY) {
         return refreshFileBrowserDirectory(options);
@@ -20850,13 +20880,13 @@ async function addCurrentFileToChatContext(variant) {
         if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE && isMobileLayout() && isWorkModeEnabled()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
         }
-        showToast('현재 파일과 폴더 위치를 채팅 입력에 넣었습니다.', {
+        showToast('현재 파일 위치를 채팅 입력에 넣었습니다.', {
             tone: 'success',
             durationMs: 2600
         });
         return true;
     } catch (error) {
-        showToast(normalizeError(error, '파일과 폴더 위치를 채팅 입력에 넣지 못했습니다.'), {
+        showToast(normalizeError(error, '파일 위치를 채팅 입력에 넣지 못했습니다.'), {
             tone: 'error',
             durationMs: 4200
         });

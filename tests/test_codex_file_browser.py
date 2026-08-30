@@ -1760,7 +1760,7 @@ def test_session_list_refresh_preserves_populated_ui_on_unconfirmed_empty_respon
     assert '세션 목록을 안전하게 갱신하지 못했습니다. 기존 대화를 유지합니다.' in app_js
 
 
-def test_usage_history_chart_only_displays_weekly_limit():
+def test_usage_panel_displays_five_hour_and_weekly_limits_when_available():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
 
@@ -1769,9 +1769,9 @@ def test_usage_history_chart_only_displays_weekly_limit():
         || value === undefined
         || (typeof value === 'string' && !value.trim())
     ) return null;""" in app_js
-    assert "Boolean(usage?.weekly)" in app_js
+    assert "Boolean(usage?.five_hour || usage?.weekly)" in app_js
+    assert "buildUsageEntry(usage?.five_hour, '5h')" in app_js
     assert "buildUsageEntry(usage?.weekly, 'Weekly')" in app_js
-    assert "buildUsageEntry(usage?.five_hour, '5h')" not in app_js
     assert "label: 'Weekly 1% token'" in app_js
     assert "5h 1% token" not in app_js
     assert "item?.five_hour_used_percent" not in app_js
@@ -1884,6 +1884,25 @@ def test_chat_markdown_uses_html_whitespace_without_expanding_blank_lines():
 
     assert 'white-space: normal;' in message_bubble_rule
     assert 'white-space: pre-wrap;' not in message_bubble_rule
+    assert 'min-width: 0;' in message_bubble_rule
+    assert 'overflow-wrap: anywhere;' in message_bubble_rule
+
+
+def test_chat_message_content_stays_within_its_bubble():
+    app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
+
+    message_rule = app_css.split('.message {', 1)[1].split('}', 1)[0]
+    bubble_children_rule = app_css.split('.message-bubble > * {', 1)[1].split('}', 1)[0]
+    table_scroll_rule = app_css.split('.message-bubble .markdown-table-scroll {', 1)[1].split('}', 1)[0]
+    table_cell_rule = app_css.split('.message-bubble th,\n.message-bubble td {', 1)[1].split('}', 1)[0]
+
+    assert 'min-width: 0;' in message_rule
+    assert 'min-width: 0;' in bubble_children_rule
+    assert 'max-width: 100%;' in bubble_children_rule
+    assert 'width: 100%;' in table_scroll_rule
+    assert 'min-width: 0;' in table_scroll_rule
+    assert 'overflow-x: auto;' in table_scroll_rule
+    assert 'overflow-wrap: anywhere;' in table_cell_rule
 
 
 def test_chat_assistant_label_uses_response_agent_backend():

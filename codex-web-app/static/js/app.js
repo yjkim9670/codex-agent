@@ -9264,7 +9264,7 @@ function updateUsageSummary(usage) {
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
     }
-    const hasUsage = showUsageLimits && Boolean(usage?.weekly);
+    const hasUsage = showUsageLimits && Boolean(usage?.five_hour || usage?.weekly);
     if (hasTokenUsage) {
         const tokenEntries = [
             buildTokenUsageEntry(tokenUsage?.today, 'Today'),
@@ -9287,6 +9287,7 @@ function updateUsageSummary(usage) {
         return;
     }
     const entries = showUsageLimits ? [
+        buildUsageEntry(usage?.five_hour, '5h'),
         buildUsageEntry(usage?.weekly, 'Weekly')
     ].filter(Boolean) : [];
     entries.forEach(entry => {

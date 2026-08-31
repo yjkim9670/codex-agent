@@ -1142,9 +1142,10 @@ def test_upload_route_saves_files_to_current_folder(browser_test_client, isolate
 
     response = browser_test_client.post(
         '/api/codex/files/upload',
+        base_url='http://127.0.0.1',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
         data={
-            'root': 'server',
-            'path': 'docs',
+            'payload': json.dumps({'root': 'server', 'path': 'docs'}),
             'files': [
                 (io.BytesIO(b'alpha'), 'alpha.txt'),
                 (io.BytesIO(b'beta'), 'beta.bin'),
@@ -1161,6 +1162,32 @@ def test_upload_route_saves_files_to_current_folder(browser_test_client, isolate
     assert (server_root / 'docs' / 'beta.bin').read_bytes() == b'beta'
 
 
+def test_upload_route_accepts_trusted_tailscale_http_fallback(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    """Multipart uploads must share the same Tailscale HTTP fallback as writes."""
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK', True)
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'docs').mkdir(parents=True, exist_ok=True)
+
+    response = browser_test_client.post(
+        '/api/codex/files/upload',
+        base_url='http://100.64.12.34',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
+        data={
+            'payload': json.dumps({'root': 'server', 'path': 'docs'}),
+            'files': (io.BytesIO(b'tailscale-upload'), 'tailscale.txt'),
+        },
+        content_type='multipart/form-data',
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['count'] == 1
+    assert (server_root / 'docs' / 'tailscale.txt').read_bytes() == b'tailscale-upload'
+
+
 def test_upload_route_rejects_existing_file(browser_test_client, isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'docs').mkdir(parents=True, exist_ok=True)
@@ -1168,9 +1195,10 @@ def test_upload_route_rejects_existing_file(browser_test_client, isolated_browse
 
     response = browser_test_client.post(
         '/api/codex/files/upload',
+        base_url='http://127.0.0.1',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
         data={
-            'root': 'server',
-            'path': 'docs',
+            'payload': json.dumps({'root': 'server', 'path': 'docs'}),
             'files': (io.BytesIO(b'new'), 'alpha.txt'),
         },
         content_type='multipart/form-data',
@@ -1198,9 +1226,10 @@ def test_upload_route_reports_dynamic_file_size_limit(
 
     response = browser_test_client.post(
         '/api/codex/files/upload',
+        base_url='http://127.0.0.1',
+        headers={'X-Codex-Trusted-Http-Fallback': '1'},
         data={
-            'root': 'server',
-            'path': 'docs',
+            'payload': json.dumps({'root': 'server', 'path': 'docs'}),
             'files': (io.BytesIO(b'12345'), 'large.bin'),
         },
         content_type='multipart/form-data',

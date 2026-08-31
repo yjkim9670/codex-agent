@@ -20266,7 +20266,7 @@ async function createFilePanelDirectory(root, path) {
     });
 }
 
-function uploadJsonWithProgress(url, formData, { timeoutMs = 0, onUploadProgress = null } = {}) {
+function uploadJsonWithProgress(url, formData, { timeoutMs = 0, onUploadProgress = null, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
         let settled = false;
@@ -20279,6 +20279,11 @@ function uploadJsonWithProgress(url, formData, { timeoutMs = 0, onUploadProgress
         const rejectOnce = finish(reject);
 
         request.open('POST', url, true);
+        Object.entries(headers && typeof headers === 'object' ? headers : {}).forEach(([name, value]) => {
+            if (value != null && String(value).trim()) {
+                request.setRequestHeader(name, String(value));
+            }
+        });
         const normalizedTimeoutMs = Number(timeoutMs);
         if (Number.isFinite(normalizedTimeoutMs) && normalizedTimeoutMs > 0) {
             request.timeout = normalizedTimeoutMs;
@@ -20354,17 +20359,36 @@ async function uploadFilePanelFiles(root, path, fileList, { onUploadProgress = n
         return { uploaded: [] };
     }
     const formData = new FormData();
-    const encryptedPayload = await encryptFileBrowserRequestPayload({
+    const payload = {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path)
-    });
-    formData.append('payload', stringifyJsonRequestPayload(encryptedPayload));
+    };
+    let headers = {};
+    let responseEncrypted = false;
+    if (shouldEncryptFileBrowserRequests() && isFileBrowserCryptoSupported()) {
+        const encryptedPayload = await encryptFileBrowserRequestPayload(payload);
+        formData.append('payload', stringifyJsonRequestPayload(encryptedPayload));
+        responseEncrypted = true;
+    } else if (shouldEncryptFileBrowserRequests()) {
+        if (!canUseTrustedHttpCryptoFallback()) {
+            throw createCryptoUnsupportedError('파일 업로드');
+        }
+        // Tailscale's encrypted tunnel can be accessed over HTTP, where some
+        // browsers intentionally withhold Web Crypto.  Match every other file
+        // mutation by using the server-validated trusted HTTP compatibility
+        // envelope instead of attempting an unavailable browser handshake.
+        formData.append('payload', stringifyJsonRequestPayload(payload));
+        headers = buildTrustedHttpCryptoFallbackMarkerHeaders();
+    } else {
+        formData.append('payload', stringifyJsonRequestPayload(payload));
+    }
     files.forEach(file => formData.append('files', file));
     const response = await uploadJsonWithProgress('/api/codex/files/upload', formData, {
         timeoutMs: FILE_BROWSER_UPLOAD_TIMEOUT_MS,
-        onUploadProgress
+        onUploadProgress,
+        headers
     });
-    return decryptFileBrowserResponsePayload(response);
+    return responseEncrypted ? decryptFileBrowserResponsePayload(response) : response;
 }
 
 function getFileUploadProgressElements() {
@@ -24091,6 +24115,62 @@ function formatFilePanelSaveTransferToast(transferMeta) {
     return parts.join(' · ');
 }
 
+function getFilePanelSaveChangeSummary(originalContent, nextContent) {
+    const original = typeof originalContent === 'string' ? originalContent : '';
+    const next = typeof nextContent === 'string' ? nextContent : '';
+    const patch = buildFilePanelEditPatch(original, next);
+    const removed = Array.from(original)
+        .slice(patch.start, patch.start + patch.delete_count)
+        .join('');
+    const inserted = patch.insert;
+    const originalLines = original ? original.split('\n').length : 0;
+    const nextLines = next ? next.split('\n').length : 0;
+    const removedLines = removed ? removed.split('\n').length - (removed.endsWith('\n') ? 1 : 0) : 0;
+    const insertedLines = inserted ? inserted.split('\n').length - (inserted.endsWith('\n') ? 1 : 0) : 0;
+    const patchPayload = stringifyJsonRequestPayload({
+        mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0', patch
+    });
+    const patchPayloadBytes = getUtf8ByteLength(patchPayload);
+    // AES-GCM adds a 16-byte authentication tag; base64 expands binary values.
+    // Include fixed envelope fields so this remains useful before a session ID exists.
+    const encryptedPayloadBytes = Math.ceil((patchPayloadBytes + 16) / 3) * 4 + 160;
+    return {
+        originalBytes: getUtf8ByteLength(original),
+        nextBytes: getUtf8ByteLength(next),
+        originalLines,
+        nextLines,
+        removedLines,
+        insertedLines,
+        removedBytes: getUtf8ByteLength(removed),
+        insertedBytes: getUtf8ByteLength(inserted),
+        patchPayloadBytes,
+        encryptedPayloadBytes
+    };
+}
+
+function confirmFilePanelSave(path, originalContent, nextContent) {
+    const summary = getFilePanelSaveChangeSummary(originalContent, nextContent);
+    const byteDelta = summary.nextBytes - summary.originalBytes;
+    const lineDelta = summary.nextLines - summary.originalLines;
+    const signed = value => value > 0 ? `+${value}` : String(value);
+    const encrypted = shouldEncryptFileBrowserRequests() && isFileBrowserCryptoSupported();
+    const transferBytes = encrypted ? summary.encryptedPayloadBytes : summary.patchPayloadBytes;
+    const transportLabel = encrypted
+        ? 'AES-GCM 암호화 envelope (예상치)'
+        : canUseTrustedHttpCryptoFallback()
+            ? 'Tailscale 신뢰 HTTP 예외'
+            : '일반 JSON';
+    return window.confirm([
+        '다음 변경 사항을 저장할까요?',
+        '',
+        `파일: ${path}`,
+        `내용: ${summary.originalLines}줄 → ${summary.nextLines}줄 (${signed(lineDelta)}줄)`,
+        `파일 크기: ${formatFileBrowserSize(summary.originalBytes)} → ${formatFileBrowserSize(summary.nextBytes)} (${signed(byteDelta)} bytes)`,
+        `변경 구간: ${summary.removedLines}줄 · ${formatFileBrowserSize(summary.removedBytes)} 삭제 / ${summary.insertedLines}줄 · ${formatFileBrowserSize(summary.insertedBytes)} 추가`,
+        `예상 업로드: ${formatFileBrowserSize(transferBytes)} · ${transportLabel}`
+    ].join('\n'));
+}
+
 async function saveFilePanelEdits(variant, options = {}) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const state = getFilePanelEditState(normalizedVariant);
@@ -24099,6 +24179,9 @@ async function saveFilePanelEdits(variant, options = {}) {
     const stayEditing = Boolean(options.stayEditing);
     const contentToSave = String(state.editBuffer || '');
     const originalContent = String(state.previewResult?.content || '');
+    if (!options.skipConfirmation && !confirmFilePanelSave(state.path, originalContent, contentToSave)) {
+        return false;
+    }
     state.saving = true;
     syncFilePanelViewerActionState(normalizedVariant);
     try {

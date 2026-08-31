@@ -6463,6 +6463,11 @@ function syncFilePanelViewerActionState(variant) {
     const state = getFilePanelEditState(normalizedVariant);
     const hasPreview = Boolean(state.path);
     const isBusy = isFilePanelLoading(elements) || isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
+    // Closing a preview and adding its path to the chat do not depend on the
+    // directory listing.  In particular, a binary file has no renderable
+    // content but is still a valid selected-file context and must always give
+    // the user a way back to the empty viewer state.
+    const isPreviewActionBusy = isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
     const isDiffMode = Boolean(state.diffMode);
     const canDiff = hasPreview && isFilePanelDiffSupported(state);
     const canEdit = hasPreview && !isDiffMode && Boolean(state.editable);
@@ -6474,7 +6479,7 @@ function syncFilePanelViewerActionState(variant) {
     }
     if (elements.closePreviewBtn) {
         elements.closePreviewBtn.classList.toggle('is-hidden', !hasPreview);
-        elements.closePreviewBtn.disabled = !hasPreview || isBusy;
+        elements.closePreviewBtn.disabled = !hasPreview || isPreviewActionBusy;
         updateFilePanelActionButtonLabel(elements.closePreviewBtn, '파일 미리보기 닫기');
         setIconButtonScreenReaderText(elements.closePreviewBtn, '파일 미리보기 닫기');
         syncHoverTooltipFromLabel(elements.closePreviewBtn);
@@ -6484,7 +6489,7 @@ function syncFilePanelViewerActionState(variant) {
     }
     if (elements.addCurrentContextBtn) {
         elements.addCurrentContextBtn.classList.toggle('is-hidden', !hasPreview);
-        elements.addCurrentContextBtn.disabled = !hasPreview || isBusy;
+        elements.addCurrentContextBtn.disabled = !hasPreview || isPreviewActionBusy;
         updateFilePanelActionButtonLabel(elements.addCurrentContextBtn, '현재 파일 위치를 채팅에 추가');
         setIconButtonScreenReaderText(elements.addCurrentContextBtn, '현재 파일 위치를 채팅에 추가');
         syncHoverTooltipFromLabel(elements.addCurrentContextBtn);
@@ -24346,6 +24351,9 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         placeholder.className = 'file-browser-placeholder';
         placeholder.textContent = 'Binary 파일은 미리보기에서 지원되지 않습니다.';
         elements.viewerContent.appendChild(placeholder);
+        // The placeholder is not a failed selection: retain the file-level
+        // actions so users can close it or add its path as chat context.
+        syncFilePanelViewerActionState(variant);
         return;
     }
 

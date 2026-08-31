@@ -464,6 +464,15 @@ def test_read_file_marks_binary_content(isolated_browser_roots):
     assert result['line_count'] == 0
 
 
+def test_binary_preview_keeps_close_and_chat_context_actions_available():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert "const isPreviewActionBusy = isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;" in app_js
+    assert "elements.closePreviewBtn.disabled = !hasPreview || isPreviewActionBusy;" in app_js
+    assert "elements.addCurrentContextBtn.disabled = !hasPreview || isPreviewActionBusy;" in app_js
+    assert "syncFilePanelViewerActionState(variant);" in app_js[app_js.index("if (isBinary) {"):]
+
+
 def test_read_file_reports_editable_text_metadata(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     target = server_root / 'notes.md'

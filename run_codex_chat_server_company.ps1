@@ -51,7 +51,21 @@ if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
 }
 if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
     $env:CODEX_AGENT_BACKEND_OPTIONS = "dtgpt,claude,opencode"
+} else {
+    # Existing corporate shells can retain an older option list such as
+    # "dtgpt,claude". Keep any explicitly configured backends, while making
+    # the locally supported OpenCode Server backend available after upgrades.
+    $BackendOptions = @(
+        $env:CODEX_AGENT_BACKEND_OPTIONS -split ',' |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    if ($BackendOptions -notcontains "opencode") {
+        $BackendOptions += "opencode"
+    }
+    $env:CODEX_AGENT_BACKEND_OPTIONS = $BackendOptions -join ','
 }
+Write-Host ("Agent backends: {0}" -f $env:CODEX_AGENT_BACKEND_OPTIONS)
 if (-not $env:CODEX_AGENT_BACKEND) {
     $env:CODEX_AGENT_BACKEND = "dtgpt"
 }

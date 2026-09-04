@@ -50,7 +50,7 @@ if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
     $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 }
 if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
-    $env:CODEX_AGENT_BACKEND_OPTIONS = "dtgpt,claude"
+    $env:CODEX_AGENT_BACKEND_OPTIONS = "dtgpt,claude,opencode"
 }
 if (-not $env:CODEX_AGENT_BACKEND) {
     $env:CODEX_AGENT_BACKEND = "dtgpt"

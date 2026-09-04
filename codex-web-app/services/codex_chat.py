@@ -20,6 +20,9 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 try:
     import pwd
@@ -59,6 +62,8 @@ from ..config import (
     CODEX_SHARED_KNOWLEDGE_DIR,
     CODEX_SETTINGS_PATH,
     CODEX_ORGANIZATION_SETTINGS_PATH,
+    CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS,
+    CODEX_OPENCODE_SERVER_URL,
     CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
     CODEX_USAGE_HISTORY_PATH,
@@ -1956,6 +1961,19 @@ def _resolve_claude_model(model_override=None):
     return ''
 
 
+def _resolve_opencode_model(model_override=None):
+    allowed_models = set(get_codex_model_options_for_backend('opencode'))
+    for candidate in (model_override, get_settings().get('model'), os.environ.get('CODEX_OPENCODE_MODEL')):
+        model_name = str(candidate or '').strip()
+        if not model_name or '\x00' in model_name:
+            continue
+        if allowed_models and model_name not in allowed_models:
+            continue
+        if '/' in model_name:
+            return model_name
+    return ''
+
+
 def _read_codex_config_text():
     try:
         return CODEX_CONFIG_PATH.read_text(encoding='utf-8')
@@ -2411,6 +2429,8 @@ def resolve_response_model_name(model_override=None):
     settings = get_settings()
     if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'claude':
         return _resolve_claude_model(model_override=model_override) or 'claude-default'
+    if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'opencode':
+        return _resolve_opencode_model(model_override=model_override) or 'opencode-default'
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
@@ -2432,6 +2452,8 @@ def resolve_response_reasoning_effort(model_override=None, reasoning_override=No
             model_name=model_name,
             reasoning_effort=reasoning_effort,
         ) or None
+    if _normalize_agent_backend_setting(settings.get('agent_backend')) == 'opencode':
+        return None
     model_name = ''
     if model_override is not None:
         model_name = str(model_override).strip()
@@ -12587,7 +12609,214 @@ def _stream_reader(stream_id, pipe, key):
             pass
 
 
+def _opencode_request(method, path, payload=None, timeout=None):
+    """Call the locally hosted OpenCode server without exposing provider credentials."""
+    base_url = str(CODEX_OPENCODE_SERVER_URL or '').rstrip('/')
+    if not base_url:
+        raise CodexToolingError('CODEX_OPENCODE_SERVER_URL is not configured.')
+    body = None
+    headers = {'Accept': 'application/json'}
+    if payload is not None:
+        body = json.dumps(payload).encode('utf-8')
+        headers['Content-Type'] = 'application/json; charset=utf-8'
+    request = Request(f'{base_url}{path}', data=body, headers=headers, method=method)
+    try:
+        with urlopen(request, timeout=timeout or CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS) as response:
+            raw = response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace').strip()
+        raise CodexToolingError(f'OpenCode Server HTTP {exc.code}: {detail or exc.reason}') from exc
+    except URLError as exc:
+        raise CodexToolingError(f'OpenCode Server에 연결할 수 없습니다: {exc.reason}') from exc
+    try:
+        return json.loads(raw.decode('utf-8')) if raw else {}
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CodexToolingError('OpenCode Server가 올바른 JSON 응답을 반환하지 않았습니다.') from exc
+
+
+def _opencode_model_payload(model_name):
+    provider_id, separator, model_id = str(model_name or '').strip().partition('/')
+    if not separator or not provider_id or not model_id:
+        return None
+    return {'providerID': provider_id, 'modelID': model_id}
+
+
+def _extract_opencode_event_session_id(event):
+    if not isinstance(event, dict):
+        return ''
+    properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
+    session = properties.get('session') or event.get('session') or properties.get('sessionID') or event.get('sessionID')
+    if isinstance(session, dict):
+        session = session.get('id')
+    return str(session or '').strip()
+
+
+def _extract_opencode_event_text(event):
+    if not isinstance(event, dict):
+        return '', ''
+    properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
+    part = properties.get('part') or event.get('part')
+    if not isinstance(part, dict):
+        return '', ''
+    part_type = str(part.get('type') or '').strip().lower()
+    if part_type not in ('text', 'reasoning'):
+        return '', ''
+    return str(part.get('id') or '').strip(), str(part.get('text') or '').strip()
+
+
+def _handle_opencode_sse_event(stream_id, event_name, data):
+    event = _parse_json_object(data)
+    if not event:
+        return False
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        expected_session_id = str(stream.get('opencode_session_id') or '').strip() if stream else ''
+    event_session_id = _extract_opencode_event_session_id(event)
+    if expected_session_id and event_session_id and event_session_id != expected_session_id:
+        return False
+    _append_stream_event(stream_id, {'type': event_name or event.get('type') or 'opencode.event', 'event': event})
+    event_type = str(event_name or event.get('type') or '').strip().lower()
+    properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
+    if event_type in ('session.error', 'session.status'):
+        error = str(properties.get('error') or event.get('error') or '').strip()
+        if error:
+            _append_stream_exec_error(stream_id, error)
+    part_id, text = _extract_opencode_event_text(event)
+    if text:
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            texts = stream.setdefault('opencode_part_text', {}) if stream else {}
+            prior = str(texts.get(part_id) or '') if part_id else ''
+            if part_id:
+                texts[part_id] = text
+        # OpenCode publishes the complete current part text on updates.  The
+        # generic CLI helper strips a leading space from an incremental chunk
+        # while removing ImageGen directives, so append this SSE suffix here.
+        delta = text[len(prior):] if prior and text.startswith(prior) else text
+        if delta:
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream and not stream.get('cancelled'):
+                    stream['output'] = (stream.get('output') or '') + delta
+                    stream['output_length'] = len(stream['output'])
+                    stream['output_last_message'] = text.strip()
+                    stream['progress_output_invalidated'] = False
+                    stream['final_agent_message_after_work_seen'] = True
+                    stream['last_output_at'] = time.time()
+                    stream['updated_at'] = stream['last_output_at']
+            _persist_stream_progress(stream_id, force=False)
+    status = properties.get('status')
+    if isinstance(status, dict):
+        status = status.get('type') or status.get('status')
+    return event_type in ('session.idle', 'session.completed') or str(status or '').strip().lower() == 'idle'
+
+
+def _abort_opencode_stream(stream):
+    session_id = str((stream or {}).get('opencode_session_id') or '').strip()
+    if not session_id:
+        return
+    try:
+        _opencode_request('POST', f'/session/{quote(session_id, safe="")}/abort', payload={})
+    except Exception:
+        _LOGGER.debug('OpenCode session abort failed', exc_info=True)
+
+
+def _delete_opencode_session(stream):
+    session_id = str((stream or {}).get('opencode_session_id') or '').strip()
+    if not session_id:
+        return
+    try:
+        _opencode_request('DELETE', f'/session/{quote(session_id, safe="")}')
+    except Exception:
+        _LOGGER.debug('OpenCode temporary session cleanup failed', exc_info=True)
+
+
+def _run_opencode_stream(stream_id, prompt):
+    """Run one ephemeral OpenCode session and translate its SSE to Workbench state."""
+    started_at = time.time()
+    try:
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not stream:
+                return
+            execution_cwd = str(stream.get('execution_cwd') or WORKSPACE_DIR)
+            model_name = str(stream.get('response_model') or stream.get('model_override') or '').strip()
+            stream['cli_started_at'] = started_at
+            stream['updated_at'] = started_at
+        session = _opencode_request('POST', '/session', {'directory': execution_cwd})
+        opencode_session_id = str(session.get('id') or '').strip()
+        if not opencode_session_id:
+            raise CodexToolingError('OpenCode Server가 세션 ID를 반환하지 않았습니다.')
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not stream:
+                return
+            stream['opencode_session_id'] = opencode_session_id
+            stream['updated_at'] = time.time()
+        payload = {'parts': [{'type': 'text', 'text': prompt}]}
+        model = _opencode_model_payload(model_name)
+        if model:
+            payload['model'] = model
+        _opencode_request('POST', f'/session/{quote(opencode_session_id, safe="")}/prompt_async', payload)
+
+        request = Request(f'{str(CODEX_OPENCODE_SERVER_URL).rstrip("/")}/event', headers={'Accept': 'text/event-stream'})
+        with urlopen(request, timeout=CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS) as response:
+            event_name = ''
+            data_lines = []
+            for raw_line in response:
+                with state.codex_streams_lock:
+                    current = state.codex_streams.get(stream_id)
+                    cancelled = not current or bool(current.get('cancelled') or current.get('saved'))
+                if cancelled:
+                    break
+                line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
+                if not line:
+                    if data_lines:
+                        if _handle_opencode_sse_event(stream_id, event_name, '\n'.join(data_lines)):
+                            break
+                    event_name, data_lines = '', []
+                elif line.startswith('event:'):
+                    event_name = line[6:].strip()
+                elif line.startswith('data:'):
+                    data_lines.append(line[5:].lstrip())
+    except Exception as exc:
+        _append_stream_exec_error(stream_id, f'OpenCode Server 실행 중 오류가 발생했습니다: {exc}')
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream and not stream.get('cancelled'):
+                stream['exit_code'] = 1
+    finally:
+        completed_at = time.time()
+        should_finalize = False
+        stream_for_cleanup = None
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream_for_cleanup = dict(stream)
+            if stream and not stream.get('saved'):
+                stream['done'] = True
+                stream['exit_code'] = stream.get('exit_code') if stream.get('exit_code') is not None else 0
+                stream['completed_at'] = completed_at
+                stream['process_exited_at'] = completed_at
+                stream['cli_runtime_ms'] = max(0, int((completed_at - (stream.get('cli_started_at') or completed_at)) * 1000))
+                stream['finalize_reason'] = 'opencode_server'
+                stream['updated_at'] = completed_at
+                should_finalize = True
+        _delete_opencode_session(stream_for_cleanup)
+        if should_finalize:
+            _mark_stream_task_complete(stream_id, stream.get('output_last_message') or stream.get('output') or '')
+            _mark_stream_turn_completed(stream_id)
+        _persist_stream_progress(stream_id, force=True)
+        finalize_codex_stream(stream_id)
+
+
 def _run_codex_stream(stream_id, prompt):
+    with state.codex_streams_lock:
+        initial_stream = state.codex_streams.get(stream_id)
+        backend = _normalize_agent_backend_setting(initial_stream.get('agent_backend')) if initial_stream else ''
+    if backend == 'opencode':
+        _run_opencode_stream(stream_id, prompt)
+        return
     poll_interval_seconds = _coerce_positive_seconds(
         CODEX_STREAM_POLL_INTERVAL_SECONDS,
         default_value=0.5,
@@ -14390,6 +14619,7 @@ def stop_codex_stream(stream_id):
         stream['updated_at'] = now
         stream['finalize_reason'] = 'user_cancelled'
         process = stream.get('process')
+        opencode_session_id = str(stream.get('opencode_session_id') or '').strip()
         session_id = stream.get('session_id')
         account_id = _normalize_account_id(stream.get('account_id')) or get_active_account_id()
         assistant_message_id = str(stream.get('assistant_message_id') or '').strip() or None
@@ -14424,6 +14654,8 @@ def stop_codex_stream(stream_id):
         minimum=0.5
     )
     _terminate_stream_process(process, grace_seconds)
+    if opencode_session_id:
+        _abort_opencode_stream({'opencode_session_id': opencode_session_id})
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:

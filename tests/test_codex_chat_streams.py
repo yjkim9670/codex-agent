@@ -2418,6 +2418,59 @@ def test_agent_backend_options_include_company_choices(monkeypatch):
     assert codex_config.normalize_codex_agent_backend('codex') == 'dtgpt'
 
 
+def test_opencode_backend_catalog_uses_server_provider_models(monkeypatch):
+    monkeypatch.setenv('CODEX_AGENT_BACKEND_OPTIONS', 'dtgpt,opencode')
+    monkeypatch.setenv('CODEX_AGENT_BACKEND', 'opencode')
+    monkeypatch.setattr(codex_config, '_read_opencode_model_catalog_from_server', lambda: ([
+        {
+            'slug': 'codemate/CodeLLMPro',
+            'default_reasoning_effort': None,
+            'reasoning_options': [],
+        },
+    ], {'type': 'opencode_server'}))
+
+    assert [item['id'] for item in codex_config.get_codex_agent_backend_options()] == ['dtgpt', 'opencode']
+    assert codex_config.normalize_codex_agent_backend('opencode-server') == 'opencode'
+    assert codex_config.get_codex_model_options_for_backend('opencode') == ['codemate/CodeLLMPro']
+    assert codex_config.get_codex_reasoning_options_for_backend('opencode') == []
+
+
+def test_opencode_event_text_is_emitted_as_delta():
+    stream_id = 'opencode-event-test'
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = {
+            'id': stream_id,
+            'opencode_session_id': 'session-1',
+            'opencode_part_text': {},
+            'output': '',
+            'output_length': 0,
+            'error': '',
+            'error_length': 0,
+            'codex_events': [],
+            'codex_event_count': 0,
+            'started_at': time.time(),
+            'updated_at': time.time(),
+        }
+
+    first = json.dumps({
+        'properties': {
+            'sessionID': 'session-1',
+            'part': {'id': 'part-1', 'type': 'text', 'text': '안녕'},
+        },
+    })
+    second = json.dumps({
+        'properties': {
+            'sessionID': 'session-1',
+            'part': {'id': 'part-1', 'type': 'text', 'text': '안녕하세요'},
+        },
+    })
+
+    assert codex_chat._handle_opencode_sse_event(stream_id, 'message.part.updated', first) is False
+    assert codex_chat._handle_opencode_sse_event(stream_id, 'message.part.updated', second) is False
+    with state.codex_streams_lock:
+        assert state.codex_streams[stream_id]['output'] == '안녕하세요'
+
+
 def test_claude_model_catalog_is_backend_scoped(monkeypatch):
     monkeypatch.setenv('CODEX_CLAUDE_MODEL_OPTIONS', 'claude-sonnet,claude-opus')
 

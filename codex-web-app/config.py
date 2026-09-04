@@ -7,6 +7,7 @@ import time
 from ipaddress import ip_network
 from datetime import timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .services.multiuser import ScopedPath
@@ -27,6 +28,13 @@ _DTGPT_MODEL_EXCLUDE_TERMS = ('embedding', 'embed', 'reranker', 'bge')
 _DTGPT_HEALTH_MAX_RESPONSE_BYTES = 1024 * 1024
 _dtgpt_health_cache_lock = threading.Lock()
 _dtgpt_health_cache = {
+    'url': None,
+    'expires_at': 0.0,
+    'catalog': [],
+    'metadata': None,
+}
+_opencode_provider_cache_lock = threading.Lock()
+_opencode_provider_cache = {
     'url': None,
     'expires_at': 0.0,
     'catalog': [],
@@ -331,6 +339,12 @@ CODEX_MAX_MODEL_CHARS = 80
 CODEX_MAX_REASONING_CHARS = 40
 CODEX_MAX_SERVICE_TIER_CHARS = 40
 CODEX_MAX_AGENT_BACKEND_CHARS = 40
+CODEX_OPENCODE_SERVER_URL = str(
+    os.environ.get('CODEX_OPENCODE_SERVER_URL') or 'http://127.0.0.1:4096'
+).strip().rstrip('/')
+CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS = _parse_int_env(
+    'CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS', 30, minimum=1, maximum=600
+)
 CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
 CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
 _CODEX_CLI_SANDBOX_VALUES = ('read-only', 'workspace-write', 'danger-full-access')
@@ -417,6 +431,11 @@ _AGENT_BACKEND_DEFINITIONS = {
         'name': 'Claude',
         'description': 'Claude CLI',
     },
+    'opencode': {
+        'id': 'opencode',
+        'name': 'OpenCode',
+        'description': 'OpenCode Server',
+    },
 }
 _AGENT_BACKEND_ALIASES = {
     'codex': 'dtgpt',
@@ -426,6 +445,8 @@ _AGENT_BACKEND_ALIASES = {
     'anthropic': 'claude',
     'claude-cli': 'claude',
     'claude_cli': 'claude',
+    'opencode-server': 'opencode',
+    'opencode_server': 'opencode',
 }
 CODEX_MODEL_ALIASES = {
     # Keep backward compatibility for legacy saved settings.
@@ -1302,10 +1323,107 @@ def get_claude_reasoning_options(model_name=None):
     )
 
 
+def _get_opencode_server_url():
+    return str(os.environ.get('CODEX_OPENCODE_SERVER_URL') or 'http://127.0.0.1:4096').strip().rstrip('/')
+
+
+def _read_opencode_model_options_from_env():
+    configured = [
+        item.strip()
+        for item in str(os.environ.get('CODEX_OPENCODE_MODEL_OPTIONS') or '').split(',')
+        if item.strip()
+    ]
+    default_model = str(os.environ.get('CODEX_OPENCODE_MODEL') or '').strip()
+    if default_model:
+        configured.insert(0, default_model)
+    return _normalize_model_options(configured)
+
+
+def _extract_opencode_provider_models(payload):
+    providers = payload.get('providers') if isinstance(payload, dict) else payload
+    if isinstance(providers, dict):
+        normalized_providers = []
+        for key, value in providers.items():
+            if isinstance(value, dict):
+                item = dict(value)
+                item.setdefault('id', key)
+            else:
+                item = {'id': key, 'models': value}
+            normalized_providers.append(item)
+        providers = normalized_providers
+    if not isinstance(providers, list):
+        return []
+    catalog = []
+    seen = set()
+    for provider in providers:
+        if not isinstance(provider, dict):
+            continue
+        provider_id = str(provider.get('id') or provider.get('name') or '').strip()
+        models = provider.get('models') or []
+        if isinstance(models, dict):
+            normalized_models = []
+            for key, value in models.items():
+                item = dict(value) if isinstance(value, dict) else {}
+                item.setdefault('id', key)
+                normalized_models.append(item)
+            models = normalized_models
+        for model in models if isinstance(models, list) else []:
+            model_id = str(model.get('id') if isinstance(model, dict) else model or '').strip()
+            if not model_id:
+                continue
+            slug = model_id if '/' in model_id else f'{provider_id}/{model_id}'
+            if not provider_id or slug in seen:
+                continue
+            entry = _build_model_catalog_entry(slug, reasoning_options=[])
+            if entry:
+                catalog.append(entry)
+                seen.add(slug)
+    return catalog
+
+
+def _read_opencode_model_catalog_from_server():
+    server_url = _get_opencode_server_url()
+    if not server_url:
+        return [], None
+    now = time.monotonic()
+    with _opencode_provider_cache_lock:
+        if _opencode_provider_cache['url'] == server_url and _opencode_provider_cache['expires_at'] > now:
+            return list(_opencode_provider_cache['catalog']), dict(_opencode_provider_cache['metadata'])
+        query = urlencode({'directory': str(WORKSPACE_DIR)})
+        url = f'{server_url}/provider?{query}'
+        try:
+            request = Request(url, headers={'Accept': 'application/json'}, method='GET')
+            with urlopen(request, timeout=_parse_int_env('CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS', 5, 1, 60)) as response:
+                payload = json.loads(response.read(_DTGPT_HEALTH_MAX_RESPONSE_BYTES).decode('utf-8'))
+            catalog = _extract_opencode_provider_models(payload)
+            if not catalog:
+                raise ValueError('OpenCode provider response contains no usable models')
+            metadata = {'type': 'opencode_server', 'url': server_url}
+            cache_seconds = _parse_int_env('CODEX_OPENCODE_MODEL_CACHE_SECONDS', 300, 1, 3600)
+        except Exception as exc:
+            catalog = []
+            metadata = {'type': 'opencode_server_error', 'url': server_url, 'error': f'{type(exc).__name__}: {exc}'}
+            cache_seconds = _parse_int_env('CODEX_OPENCODE_MODEL_ERROR_CACHE_SECONDS', 30, 1, 3600)
+        _opencode_provider_cache.update({
+            'url': server_url, 'expires_at': now + cache_seconds, 'catalog': list(catalog), 'metadata': dict(metadata),
+        })
+        return catalog, metadata
+
+
+def get_opencode_model_catalog():
+    server_catalog, _metadata = _read_opencode_model_catalog_from_server()
+    if server_catalog:
+        return server_catalog
+    configured = _read_opencode_model_options_from_env()
+    return _select_model_catalog_entries(configured, []) if configured else []
+
+
 def get_codex_model_catalog_for_backend(agent_backend=None):
     backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
     if backend == 'claude':
         return get_claude_model_catalog()
+    if backend == 'opencode':
+        return get_opencode_model_catalog()
     return get_codex_model_catalog()
 
 
@@ -1320,6 +1438,8 @@ def get_codex_reasoning_options_for_backend(agent_backend=None, model_name=None)
     backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
     if backend == 'claude':
         return get_claude_reasoning_options(model_name=model_name)
+    if backend == 'opencode':
+        return []
     return get_codex_reasoning_options(model_name=model_name)
 
 
@@ -1332,6 +1452,8 @@ def get_codex_model_catalogs_by_agent_backend():
     }
     if 'claude' in option_ids:
         catalogs['claude'] = get_claude_model_catalog()
+    if 'opencode' in option_ids:
+        catalogs['opencode'] = get_opencode_model_catalog()
     return catalogs
 
 

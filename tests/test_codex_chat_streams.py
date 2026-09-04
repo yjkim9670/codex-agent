@@ -2435,6 +2435,18 @@ def test_opencode_backend_catalog_uses_server_provider_models(monkeypatch):
     assert codex_config.get_codex_reasoning_options_for_backend('opencode') == []
 
 
+def test_opencode_backend_catalog_accepts_current_provider_response_schema():
+    catalog = codex_config._extract_opencode_provider_models({
+        'all': [
+            {'id': 'codemate', 'models': {'CodeLLMPro': {'id': 'CodeLLMPro'}}},
+        ],
+        'default': {'codemate': 'CodeLLMPro'},
+        'connected': ['codemate'],
+    })
+
+    assert [item['slug'] for item in catalog] == ['codemate/CodeLLMPro']
+
+
 def test_opencode_event_text_is_emitted_as_delta():
     stream_id = 'opencode-event-test'
     with state.codex_streams_lock:
@@ -2469,6 +2481,30 @@ def test_opencode_event_text_is_emitted_as_delta():
     assert codex_chat._handle_opencode_sse_event(stream_id, 'message.part.updated', second) is False
     with state.codex_streams_lock:
         assert state.codex_streams[stream_id]['output'] == '안녕하세요'
+
+
+def test_opencode_error_toast_finishes_stream_with_provider_error():
+    stream_id = 'opencode-toast-test'
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = {
+            'id': stream_id,
+            'opencode_session_id': 'session-1',
+            'output': '',
+            'error': '',
+            'error_length': 0,
+            'codex_events': [],
+            'codex_event_count': 0,
+            'started_at': time.time(),
+            'updated_at': time.time(),
+        }
+
+    event = json.dumps({
+        'properties': {'variant': 'error', 'message': 'Model is unavailable'},
+    })
+
+    assert codex_chat._handle_opencode_sse_event(stream_id, 'tui.toast.show', event) is True
+    with state.codex_streams_lock:
+        assert 'OpenCode: Model is unavailable' in state.codex_streams[stream_id]['error']
 
 
 def test_claude_model_catalog_is_backend_scoped(monkeypatch):

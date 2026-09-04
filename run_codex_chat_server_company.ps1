@@ -49,6 +49,15 @@ if (-not $env:CODEX_REASONING_OPTIONS) {
 if (-not $env:CODEX_CLI_MODEL_PROVIDER) {
     $env:CODEX_CLI_MODEL_PROVIDER = "dtgpt_oa"
 }
+if (-not $env:CODEX_OPENCODE_MODEL) {
+    $env:CODEX_OPENCODE_MODEL = "codemate/CodeLLMPro"
+}
+if (-not $env:CODEX_OPENCODE_MODEL_OPTIONS) {
+    $env:CODEX_OPENCODE_MODEL_OPTIONS = "codemate/CodeLLMPro"
+}
+if (-not $env:CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS) {
+    $env:CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS = "600"
+}
 if (-not $env:CODEX_AGENT_BACKEND_OPTIONS) {
     $env:CODEX_AGENT_BACKEND_OPTIONS = "dtgpt,claude,opencode"
 } else {

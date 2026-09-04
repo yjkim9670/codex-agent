@@ -345,6 +345,13 @@ CODEX_OPENCODE_SERVER_URL = str(
 CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS = _parse_int_env(
     'CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS', 30, minimum=1, maximum=600
 )
+# OpenCode emits its keepalive heartbeat every 30 seconds.  This must be
+# materially longer than the request timeout used by short JSON endpoints,
+# otherwise a healthy SSE connection can time out at the heartbeat boundary.
+CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS = _parse_int_env(
+    'CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS', 600, minimum=31, maximum=3600
+)
+CODEX_OPENCODE_DEFAULT_MODEL = 'codemate/CodeLLMPro'
 CODEX_CLI_PROFILE = _parse_cli_text_env('CODEX_CLI_PROFILE')
 CODEX_CLI_MODEL_PROVIDER = _parse_cli_text_env('CODEX_CLI_MODEL_PROVIDER')
 _CODEX_CLI_SANDBOX_VALUES = ('read-only', 'workspace-write', 'danger-full-access')
@@ -1333,14 +1340,21 @@ def _read_opencode_model_options_from_env():
         for item in str(os.environ.get('CODEX_OPENCODE_MODEL_OPTIONS') or '').split(',')
         if item.strip()
     ]
-    default_model = str(os.environ.get('CODEX_OPENCODE_MODEL') or '').strip()
+    default_model = str(
+        os.environ.get('CODEX_OPENCODE_MODEL') or CODEX_OPENCODE_DEFAULT_MODEL
+    ).strip()
     if default_model:
         configured.insert(0, default_model)
     return _normalize_model_options(configured)
 
 
 def _extract_opencode_provider_models(payload):
-    providers = payload.get('providers') if isinstance(payload, dict) else payload
+    # Current OpenCode returns {all, default, connected}; older releases and
+    # /config/providers return {providers, default}.  Accept both schemas.
+    providers = (
+        (payload.get('all') or payload.get('providers'))
+        if isinstance(payload, dict) else payload
+    )
     if isinstance(providers, dict):
         normalized_providers = []
         for key, value in providers.items():

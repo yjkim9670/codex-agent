@@ -63,6 +63,7 @@ from ..config import (
     CODEX_SETTINGS_PATH,
     CODEX_ORGANIZATION_SETTINGS_PATH,
     CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS,
+    CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS,
     CODEX_OPENCODE_SERVER_URL,
     CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
@@ -1963,7 +1964,12 @@ def _resolve_claude_model(model_override=None):
 
 def _resolve_opencode_model(model_override=None):
     allowed_models = set(get_codex_model_options_for_backend('opencode'))
-    for candidate in (model_override, get_settings().get('model'), os.environ.get('CODEX_OPENCODE_MODEL')):
+    for candidate in (
+        model_override,
+        get_settings().get('model'),
+        os.environ.get('CODEX_OPENCODE_MODEL'),
+        'codemate/CodeLLMPro',
+    ):
         model_name = str(candidate or '').strip()
         if not model_name or '\x00' in model_name:
             continue
@@ -12677,6 +12683,14 @@ def _handle_opencode_sse_event(stream_id, event_name, data):
     _append_stream_event(stream_id, {'type': event_name or event.get('type') or 'opencode.event', 'event': event})
     event_type = str(event_name or event.get('type') or '').strip().lower()
     properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
+    # The headless server reports provider/configuration failures through the
+    # TUI notification bus.  Previously Workbench discarded these events and
+    # subsequently reported only a misleading SSE timeout.
+    if event_type == 'tui.toast.show' and str(properties.get('variant') or '').lower() == 'error':
+        message = str(properties.get('message') or properties.get('title') or '').strip()
+        if message:
+            _append_stream_exec_error(stream_id, f'OpenCode: {message}')
+            return True
     if event_type in ('session.error', 'session.status'):
         error = str(properties.get('error') or event.get('error') or '').strip()
         if error:
@@ -12760,7 +12774,7 @@ def _run_opencode_stream(stream_id, prompt):
         _opencode_request('POST', f'/session/{quote(opencode_session_id, safe="")}/prompt_async', payload)
 
         request = Request(f'{str(CODEX_OPENCODE_SERVER_URL).rstrip("/")}/event', headers={'Accept': 'text/event-stream'})
-        with urlopen(request, timeout=CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS) as response:
             event_name = ''
             data_lines = []
             for raw_line in response:

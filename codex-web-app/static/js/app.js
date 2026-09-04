@@ -1651,6 +1651,9 @@ function normalizeAgentBackendValue(value) {
     if (token === 'anthropic' || token === 'claude-cli' || token === 'claude_cli') {
         return 'claude';
     }
+    if (token === 'opencode' || token === 'opencode-server' || token === 'opencode_server') {
+        return 'opencode';
+    }
     if (token === 'dtgpt' || token === 'claude') return token;
     return '';
 }
@@ -1663,7 +1666,9 @@ function normalizeAgentBackendOptions(options) {
         const rawId = typeof item?.id === 'string' ? item.id : (typeof item === 'string' ? item : '');
         const id = normalizeAgentBackendValue(rawId);
         if (!id || seen.has(id)) return;
-        const fallbackName = id === 'claude' ? 'Claude' : 'Codex';
+        const fallbackName = id === 'claude'
+            ? 'Claude'
+            : (id === 'opencode' ? 'OpenCode' : 'Codex');
         const name = typeof item?.name === 'string'
             ? item.name.trim()
             : (typeof item?.label === 'string' ? item.label.trim() : fallbackName);
@@ -9562,7 +9567,9 @@ function formatAgentBackendStatus(agentBackend) {
     if (!normalized) return '';
     const option = getAgentBackendOption(normalized);
     if (option) return option.name;
-    return normalized === 'claude' ? 'Claude' : 'Codex';
+    if (normalized === 'claude') return 'Claude';
+    if (normalized === 'opencode') return 'OpenCode';
+    return 'Codex';
 }
 
 function updateServiceTierControls(serviceTier, options) {

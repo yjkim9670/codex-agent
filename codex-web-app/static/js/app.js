@@ -2107,6 +2107,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('codex-chat-input');
     const imageAttachBtn = document.getElementById('codex-chat-image-attach');
     const imageInput = document.getElementById('codex-chat-image-input');
+    const composeToolsToggle = document.getElementById('codex-chat-compose-tools-toggle');
+    const composeToolsMenu = document.getElementById('codex-chat-compose-tools-menu');
     const newSessionBtn = document.getElementById('codex-chat-new-session');
     const newSessionInlineBtn = document.getElementById('codex-chat-new-session-inline');
     const chatSessionPrevBtn = document.getElementById('codex-chat-session-prev');
@@ -2119,6 +2121,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
     const streamMonitorToggle = document.getElementById('codex-stream-monitor-toggle');
     const streamMonitor = document.getElementById('codex-stream-monitor');
+    const chatFrame = document.querySelector('.chat-frame');
+    const streamMonitorMarker = streamMonitor?.parentNode
+        ? document.createComment('codex-stream-monitor-position')
+        : null;
+    if (streamMonitorMarker && streamMonitor?.parentNode) {
+        streamMonitor.parentNode.insertBefore(streamMonitorMarker, streamMonitor);
+    }
     const sessionsPanel = document.querySelector('.sessions');
     const sessionsToggle = document.getElementById('codex-sessions-toggle');
     const sessionStatusFilterButtons = Array.from(
@@ -2135,6 +2144,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const internalProfileCancel = document.getElementById('codex-internal-profile-cancel');
     const internalProfileStatus = document.getElementById('codex-internal-profile-status');
     const internalProfileConfigured = document.body.dataset.internalProfileConfigured === 'true';
+
+    const setCoverComposeToolsOpen = open => {
+        const isOpen = Boolean(open) && phoneMedia.matches;
+        composeToolsMenu?.classList.toggle('is-hidden', !isOpen);
+        composeToolsToggle?.setAttribute('aria-expanded', String(isOpen));
+    };
+    const syncCoverStreamMonitor = isPhone => {
+        if (!streamMonitor || !chatFrame || !streamMonitorMarker) return;
+        if (isPhone) {
+            if (streamMonitor.parentElement !== chatFrame) {
+                chatFrame.appendChild(streamMonitor);
+            }
+            setStreamMonitorCollapsed(true);
+        } else if (streamMonitor.previousSibling !== streamMonitorMarker) {
+            streamMonitorMarker.parentNode?.insertBefore(streamMonitor, streamMonitorMarker.nextSibling);
+        }
+    };
 
     if (internalProfileOverlay && internalProfileForm && internalProfileInput) {
         const openInternalProfile = ({required = false} = {}) => {
@@ -2535,6 +2561,35 @@ document.addEventListener('DOMContentLoaded', () => {
                 imageAttachBtn.disabled = false;
                 imageAttachBtn.removeAttribute('aria-busy');
                 syncActiveSessionControls();
+            }
+        });
+    }
+
+    if (composeToolsToggle && composeToolsMenu) {
+        composeToolsToggle.addEventListener('click', () => {
+            setCoverComposeToolsOpen(composeToolsMenu.classList.contains('is-hidden'));
+        });
+        composeToolsMenu.addEventListener('click', event => {
+            const action = event.target.closest('[data-chat-compose-action]')?.dataset.chatComposeAction;
+            if (!action) return;
+            event.preventDefault();
+            if (action === 'attach') {
+                imageAttachBtn?.click();
+            } else if (action === 'plan') {
+                planModeToggle?.click();
+            }
+            setCoverComposeToolsOpen(false);
+        });
+        document.addEventListener('click', event => {
+            if (!phoneMedia.matches || composeToolsMenu.classList.contains('is-hidden')) return;
+            if (!composeToolsMenu.contains(event.target) && !composeToolsToggle.contains(event.target)) {
+                setCoverComposeToolsOpen(false);
+            }
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && !composeToolsMenu.classList.contains('is-hidden')) {
+                setCoverComposeToolsOpen(false);
+                composeToolsToggle.focus();
             }
         });
     }
@@ -3894,6 +3949,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     syncSessionsLayout(compactMedia.matches);
     syncControlsLayout();
+    syncCoverStreamMonitor(phoneMedia.matches);
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
     initializeWorkMode(phoneMedia.matches);
@@ -3925,6 +3981,8 @@ document.addEventListener('DOMContentLoaded', () => {
         setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
         handleWorkModeMediaChange(isPhone);
         syncTerminalExtraKeysState();
+        setCoverComposeToolsOpen(false);
+        syncCoverStreamMonitor(isPhone);
     };
     if (typeof phoneMedia.addEventListener === 'function') {
         phoneMedia.addEventListener('change', handlePhoneLayoutChange);

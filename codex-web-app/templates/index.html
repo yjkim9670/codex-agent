@@ -727,6 +727,19 @@
                         <div class="chat-prompt-field">
                             <label class="sr-only" for="codex-chat-input">Codex prompt</label>
                             <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for Codex. (Shift+Enter for newline)"></textarea>
+                            <button
+                                class="btn ghost icon-only chat-compose-tools-toggle"
+                                type="button"
+                                id="codex-chat-compose-tools-toggle"
+                                aria-expanded="false"
+                                aria-controls="codex-chat-compose-tools-menu"
+                                aria-label="Open compose options"
+                                title="More compose options"
+                            ><span class="sr-only">More compose options</span></button>
+                            <div class="chat-compose-tools-menu is-hidden" id="codex-chat-compose-tools-menu" role="menu" aria-label="Compose options">
+                                <button class="btn ghost icon-only chat-compose-tool-attach" type="button" data-chat-compose-action="attach" role="menuitem" aria-label="Attach files" title="Attach files"><span class="sr-only">Attach files</span></button>
+                                <button class="btn ghost chat-compose-tool-plan" type="button" data-chat-compose-action="plan" role="menuitem" aria-label="Change plan mode" title="Change plan mode">Plan</button>
+                            </div>
                         </div>
                         <div id="codex-chat-attachments" class="chat-attachments is-empty" aria-live="polite"></div>
                     </div>

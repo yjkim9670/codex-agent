@@ -840,6 +840,147 @@ textarea {
 }
 
 @media (max-width: 599px) {
+    /* Cover-screen composer: keep the primary action visible and reveal
+     * attachment/plan controls from the prompt field only on demand. */
+    .chat-input {
+        --mobile-chat-compose-height: 76px;
+        grid-template-columns: minmax(0, 1fr) var(--chat-action-button-width);
+    }
+
+    .chat-submit-column {
+        display: block;
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-submit-column::after,
+    .chat-input .chat-attach-image,
+    .chat-input .chat-plan-mode-toggle {
+        display: none;
+    }
+
+    .chat-input #codex-chat-send {
+        display: block;
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-input textarea,
+    .chat-input .chat-prompt-field {
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-input textarea {
+        padding: 10px 46px 10px 12px;
+    }
+
+    .chat-compose-tools-toggle {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        z-index: 3;
+        width: 30px;
+        min-width: 30px;
+        height: 30px;
+        min-height: 30px;
+        padding: 0;
+        background-image: var(--icon-plus);
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 16px 16px;
+    }
+
+    .chat-compose-tools-toggle[aria-expanded="true"] {
+        background-image: var(--icon-close);
+    }
+
+    .chat-compose-tools-menu {
+        position: absolute;
+        right: 8px;
+        bottom: calc(100% + 6px);
+        z-index: 4;
+        display: grid;
+        grid-template-columns: 32px auto;
+        gap: 5px;
+        align-items: center;
+        padding: 5px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface-raised);
+        box-shadow: var(--shell-shadow);
+    }
+
+    .chat-compose-tools-menu.is-hidden {
+        display: none;
+    }
+
+    .chat-compose-tools-menu .btn {
+        height: 32px;
+        min-height: 32px;
+    }
+
+    .chat-compose-tool-attach {
+        width: 32px;
+        min-width: 32px;
+        padding: 0;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M21.4 11.4 12 20.8a5.2 5.2 0 0 1-7.4-7.4l9.7-9.7a3.5 3.5 0 0 1 5 5l-9.7 9.7a1.8 1.8 0 0 1-2.6-2.6l8.9-8.9'/></svg>");
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 15px 15px;
+    }
+
+    [data-theme="dark"] .chat-compose-tool-attach {
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M21.4 11.4 12 20.8a5.2 5.2 0 0 1-7.4-7.4l9.7-9.7a3.5 3.5 0 0 1 5 5l-9.7 9.7a1.8 1.8 0 0 1-2.6-2.6l8.9-8.9'/></svg>");
+    }
+
+    .chat-compose-tool-plan {
+        min-width: 44px;
+        padding: 0 8px;
+        font-size: 11px;
+        font-weight: 800;
+    }
+
+    /* The monitor is moved into .chat-frame by the cover-screen layout sync.
+     * It remains an overlay in both its collapsed and expanded states. */
+    .chat-frame > .stream-monitor {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 5;
+        width: min(272px, calc(100% - 16px));
+        margin: 0;
+        box-shadow: var(--shell-shadow);
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: var(--icon-button-radius);
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed .stream-monitor-title {
+        display: none;
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed .stream-monitor-header {
+        min-height: 0;
+        justify-content: center;
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed .stream-monitor-actions {
+        width: 100%;
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed .stream-monitor-toggle {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        background-image: var(--icon-chat-switch);
+        transform: none;
+    }
+}
     .answer-complete-notice {
         padding:
             max(20px, env(safe-area-inset-top))
@@ -12464,6 +12605,55 @@ label.hover-tooltip,
         width: var(--icon-button-size);
         min-width: var(--icon-button-size);
         height: var(--icon-button-size);
+    }
+}
+
+/* Keep the cover-screen controls out of every non-phone layout. */
+@media (min-width: 600px) {
+    .chat-compose-tools-toggle,
+    .chat-compose-tools-menu {
+        display: none;
+    }
+}
+
+/* This final phone override follows the legacy mobile composer rules above. */
+@media (max-width: 599px) {
+    .chat-input {
+        --mobile-chat-compose-height: 76px;
+    }
+
+    .chat-submit-column {
+        display: block;
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-submit-column::after,
+    .chat-input .chat-attach-image,
+    .chat-input .chat-plan-mode-toggle {
+        display: none;
+    }
+
+    .chat-input #codex-chat-send {
+        display: block;
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-input textarea,
+    .chat-input .chat-prompt-field {
+        height: var(--mobile-chat-compose-height);
+        min-height: var(--mobile-chat-compose-height);
+    }
+
+    .chat-input textarea {
+        padding: 10px 46px 10px 12px;
+    }
+
+    .chat-compose-tools-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
     }
 }
 

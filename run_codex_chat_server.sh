@@ -22,17 +22,17 @@ resolve_codex_cli_bin() {
     local path_candidate
     local prefix
 
+    if codex_cli_candidate_available "${CODEX_CLI_BIN:-}"; then
+        printf '%s\n' "${CODEX_CLI_BIN}"
+        return 0
+    fi
+
     for candidate in "${SCRIPT_DIR}/.local/bin/codex"; do
         if codex_cli_candidate_available "${candidate}"; then
             printf '%s\n' "${candidate}"
             return 0
         fi
     done
-
-    if codex_cli_candidate_available "${CODEX_CLI_BIN:-}"; then
-        printf '%s\n' "${CODEX_CLI_BIN}"
-        return 0
-    fi
 
     for candidate in \
         "${PARENT_DIR}/.local/bin/codex" \

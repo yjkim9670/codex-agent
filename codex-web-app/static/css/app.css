@@ -980,7 +980,10 @@ textarea {
         background-image: var(--icon-chat-switch);
         transform: none;
     }
-}
+
+    /* Keep the completion notice compact only on the cover screen.  These
+     * rules were accidentally outside this media query, shrinking the desktop
+     * panel to the mobile dimensions as well. */
     .answer-complete-notice {
         padding:
             max(20px, env(safe-area-inset-top))
@@ -9206,6 +9209,13 @@ body.is-work-mode-resizing * {
     min-height: var(--chat-compose-min-height);
 }
 
+/* These controls belong exclusively to the cover-screen composer.  Hide them
+ * by default so wider layouts can never reserve or render a blank button. */
+#codex-chat-compose-tools-toggle,
+#codex-chat-compose-tools-menu {
+    display: none;
+}
+
 .chat-input textarea {
     width: 100%;
     height: 100%;
@@ -12608,14 +12618,6 @@ label.hover-tooltip,
     }
 }
 
-/* Keep the cover-screen controls out of every non-phone layout. */
-@media (min-width: 600px) {
-    .chat-compose-tools-toggle,
-    .chat-compose-tools-menu {
-        display: none;
-    }
-}
-
 /* This final phone override follows the legacy mobile composer rules above. */
 @media (max-width: 599px) {
     .chat-input {
@@ -12650,7 +12652,7 @@ label.hover-tooltip,
         padding: 10px 46px 10px 12px;
     }
 
-    .chat-compose-tools-toggle {
+    #codex-chat-compose-tools-toggle {
         display: inline-flex;
         align-items: center;
         justify-content: center;

@@ -977,7 +977,15 @@ textarea {
         width: 30px;
         height: 30px;
         border: 0;
-        background-image: var(--icon-chat-switch);
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M4 12h2.4l2-5.2 3.2 10.4 2.4-6.2 1.8 3H20'/><circle cx='19' cy='6' r='1.5'/></svg>");
+        transform: none;
+    }
+
+    [data-theme="dark"] .chat-frame > .stream-monitor.is-collapsed .stream-monitor-toggle {
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M4 12h2.4l2-5.2 3.2 10.4 2.4-6.2 1.8 3H20'/><circle cx='19' cy='6' r='1.5'/></svg>");
+    }
+
+    .chat-frame > .stream-monitor.is-collapsed .stream-monitor-toggle:active {
         transform: none;
     }
 
@@ -12497,6 +12505,51 @@ label.hover-tooltip,
     .app.is-mobile-keyboard-open .chat {
         overflow: hidden;
         padding-bottom: 0;
+    }
+
+    /* The keyboard leaves very little vertical room on the Fold cover screen.
+     * Keep the conversation frame visible, but remove all non-chat chrome
+     * while the lifted composer is active. */
+    .app.is-mobile-keyboard-open .app-header,
+    .app.is-mobile-keyboard-open .sidebar-stack,
+    .app.is-mobile-keyboard-open .sessions,
+    .app.is-mobile-keyboard-open .chat-header,
+    .app.is-mobile-keyboard-open .stream-monitor,
+    .app.is-mobile-keyboard-open .chat-controls,
+    .app.is-mobile-keyboard-open .chat-runtime-strip,
+    .app.is-mobile-keyboard-open .chat-status {
+        display: none;
+    }
+
+    /* In work mode the cover-screen header rule is declared later and would
+     * otherwise bring the session title back while the keyboard is open. */
+    .app.is-mobile-keyboard-open.is-work-mode .chat-header {
+        display: none;
+    }
+
+    .app.is-mobile-keyboard-open .chat {
+        gap: 0;
+    }
+
+    /* The composer stays in the full-height shell and is translated above the
+     * keyboard. Reserve that translated distance in the flex layout so the
+     * chat frame ends at the composer instead of extending behind it. */
+    .app.is-mobile-keyboard-open .chat-frame {
+        margin-bottom: var(--mobile-prompt-lift);
+        overflow: hidden;
+    }
+
+    .app.is-mobile-keyboard-open .chat-messages {
+        overflow-y: auto;
+        overflow-x: hidden;
+        overscroll-behavior-y: contain;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .app.is-mobile-keyboard-open .chat-input {
+        z-index: 10;
+        background: var(--surface-raised);
+        box-shadow: 0 -10px 28px color-mix(in srgb, var(--bg) 58%, transparent);
     }
 
     .app.is-mobile-keyboard-open .chat-controls-body {

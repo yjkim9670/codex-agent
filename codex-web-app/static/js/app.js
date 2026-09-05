@@ -7441,6 +7441,10 @@ function applyMobileViewportHeight() {
     const nextHeight = getUsableMobileViewportHeight(metrics);
     const keyboardOpen = isMobileKeyboardOpen(isMobileViewportBehaviorActive(), metrics);
     let appHeightSource = nextHeight;
+    // Keep the pre-keyboard shell height while the cover-screen keyboard is
+    // open.  The composer is then lifted above the keyboard by
+    // applyMobilePromptLift(), rather than being constrained to the much
+    // shorter visual viewport.
     if (keyboardOpen) {
         const currentWidth = getMobileViewportWidthForStability();
         const stableHeight = Number(lastStableMobileViewportHeight);

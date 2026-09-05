@@ -818,7 +818,7 @@ def test_six_hour_account_api_refresh_persists_exact_limits_without_model_reques
     assert summary['account_usage']['total_tokens'] == 12_317_920_501
 
 
-def test_account_usage_auto_refresh_runs_within_30_minutes_of_two_hour_kst_boundaries():
+def test_account_usage_auto_refresh_runs_on_30_minute_kst_slots():
     no_snapshot = {}
     assert codex_chat._account_usage_refresh_is_due(
         no_snapshot, datetime(2026, 8, 4, 12, 0, tzinfo=codex_chat.KST)
@@ -831,6 +831,9 @@ def test_account_usage_auto_refresh_runs_within_30_minutes_of_two_hour_kst_bound
     ) is True
     assert codex_chat._account_usage_refresh_is_due(
         no_snapshot, datetime(2026, 8, 4, 12, 30, 1, tzinfo=codex_chat.KST)
+    ) is True
+    assert codex_chat._account_usage_refresh_is_due(
+        no_snapshot, datetime(2026, 8, 4, 12, 40, 1, tzinfo=codex_chat.KST)
     ) is False
     assert codex_chat._account_usage_refresh_is_due(
         no_snapshot, datetime(2026, 8, 4, 14, 0, tzinfo=codex_chat.KST)
@@ -845,22 +848,59 @@ def test_account_usage_auto_refresh_runs_within_30_minutes_of_two_hour_kst_bound
     ) is True
 
 
-def test_usage_keepalive_automatic_daily_key_requires_weekly_usage_at_zero():
+def test_usage_keepalive_cycle_targets_cover_five_hour_and_weekly_zero_windows():
     now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
-    assert codex_chat._usage_keepalive_daily_key({
+    targets = codex_chat._usage_keepalive_cycle_targets({
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T17:00:00+09:00'},
         'weekly': {'used_percent': 0, 'resets_at': '2026-08-10T00:00:00+09:00'},
-    }, now) == '2026-08-04'
-    assert codex_chat._usage_keepalive_daily_key({
-        # The reset timestamp may be unchanged after a global reset; the
-        # following KST day must still become eligible for one new task.
-        'weekly': {'used_percent': 0, 'resets_at': '2026-08-10T00:00:00+09:00'},
-    }, datetime(2026, 8, 5, 0, 0, tzinfo=codex_chat.KST)) == '2026-08-05'
-    assert codex_chat._usage_keepalive_daily_key({
+    }, now)
+    assert targets == {
+        'five_hour': 'five_hour:2026-08-04T17:00:00+09:00',
+        'weekly': 'weekly:2026-08-10T00:00:00+09:00',
+    }
+    assert codex_chat._usage_keepalive_cycle_targets({
         'weekly': {'used_percent': 1, 'resets_at': '2026-08-10T00:00:00+09:00'},
-    }, now) == ''
-    assert codex_chat._usage_keepalive_daily_key({
-        'five_hour': {'used_percent': 0},
-    }, now) == ''
+    }, now) == {}
+
+
+def test_usage_keepalive_uses_bounded_fallback_key_for_unsettled_reset_timestamp():
+    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    targets = codex_chat._usage_keepalive_cycle_targets({
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
+        'weekly': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
+    }, now)
+    assert targets['five_hour'].startswith('five_hour:fallback:')
+    assert targets['weekly'].startswith('weekly:fallback:')
+
+
+def test_usage_keepalive_followup_refresh_and_verification_state_machine():
+    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    snapshot = {
+        'five_hour': {'used_percent': 1, 'resets_at': '2026-08-04T17:00:00+09:00'},
+        'weekly': {'used_percent': 1, 'resets_at': '2026-08-11T12:30:00+09:00'},
+        'usage_keepalive': {
+            'last_mode': 'automatic',
+            'verification_due_at': '2026-08-04T12:29:00+09:00',
+            'automatic_cycle_targets': {'five_hour': 'five_hour:previous', 'weekly': 'weekly:previous'},
+            'history': [],
+        },
+    }
+    assert codex_chat._account_usage_refresh_is_due(snapshot, now) is True
+    assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
+    state = snapshot['usage_keepalive']
+    assert state['verification_status'] == 'verified'
+    assert state['next_retry_at'] is None
+    assert state['history'][-1]['event'] == 'verified'
+
+    snapshot['usage_keepalive'].update({
+        'verification_due_at': '2026-08-04T12:29:00+09:00',
+        'automatic_cycle_targets': {'five_hour': 'five_hour:unsettled'},
+    })
+    snapshot['five_hour']['resets_at'] = '2026-08-04T12:31:00+09:00'
+    assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
+    assert snapshot['usage_keepalive']['verification_status'] == 'retry_pending'
+    assert snapshot['usage_keepalive']['next_retry_at'] is not None
+    assert snapshot['usage_keepalive']['history'][-1]['event'] == 'verification_failed'
 
 
 def test_usage_keepalive_uses_terra_with_a_concise_reasoning_prompt():

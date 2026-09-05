@@ -205,7 +205,7 @@ _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
 _USAGE_EVENT_DEFAULT_ANALYSIS_HOURS = 24 * 30
-_USAGE_ACCOUNT_REFRESH_SECONDS = 2 * 60 * 60
+_USAGE_ACCOUNT_REFRESH_SECONDS = 30 * 60
 _USAGE_HISTORY_VERSION = 3
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
@@ -219,9 +219,11 @@ _TOKENS_PER_PERCENT_MEDIUM_PERCENT_SUM = 2.0
 _TOKENS_PER_PERCENT_HIGH_SAMPLES = 6
 _TOKENS_PER_PERCENT_HIGH_PERCENT_SUM = 4.0
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
-_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS = 30 * 60
+_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS = 10 * 60
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
+_USAGE_KEEPALIVE_FOLLOWUP_LOCK = threading.Lock()
+_USAGE_KEEPALIVE_FOLLOWUP_TIMERS = {}
 _LOCAL_USAGE_HISTORY_MIGRATION_LOCK = threading.Lock()
 _LOCAL_USAGE_HISTORY_MIGRATION_SIGNATURES = {}
 _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest()[:12]
@@ -7599,17 +7601,19 @@ def _normalize_account_usage_api_result(value):
 
 
 def _account_usage_refresh_slot(now=None):
-    """Return the current KST two-hour slot during its 30-minute grace window."""
+    """Return the current KST 30-minute slot during its 10-minute grace window."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    slot = current.replace(minute=0, second=0, microsecond=0)
-    if current.hour % 2 or current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
+    slot = current.replace(minute=(current.minute // 30) * 30, second=0, microsecond=0)
+    if current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
         return None
     return slot
 
 
 def _account_usage_refresh_is_due(snapshot, now=None):
-    """Run once per two-hour KST slot, allowing a 30-minute missed-slot catch-up."""
+    """Run once per 30-minute KST slot, with immediate keepalive follow-ups."""
+    if _usage_keepalive_followup_is_due(snapshot, now):
+        return True
     slot = _account_usage_refresh_slot(now)
     if slot is None:
         return False
@@ -7619,6 +7623,9 @@ def _account_usage_refresh_is_due(snapshot, now=None):
 
 _USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
 _USAGE_KEEPALIVE_REASONING_EFFORT = 'low'
+_USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
+_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS = 15 * 60
+_USAGE_KEEPALIVE_MAX_AUTOMATIC_ATTEMPTS = 3
 _USAGE_KEEPALIVE_PROMPT = (
     'Perform this concise reasoning check:\n'
     '1. State whether this statement is internally consistent: "A system records a timestamp after each completed job."\n'
@@ -7628,19 +7635,44 @@ _USAGE_KEEPALIVE_PROMPT = (
 )
 
 
-def _usage_keepalive_daily_key(snapshot, now=None):
-    weekly = snapshot.get('weekly') if isinstance(snapshot, dict) else None
-    if not isinstance(weekly, dict):
-        return ''
-    used_percent = _normalize_used_percent(weekly.get('used_percent'))
-    if used_percent != 0:
-        return ''
+def _usage_keepalive_cycle_targets(snapshot, now=None):
+    """Return zero-usage rate-limit windows that may need activation.
+
+    `resets_at` identifies a real server window when it is available.  Some
+    reset responses temporarily return a near-current timestamp instead; use a
+    bounded KST fallback key in that case so polling cannot submit repeatedly.
+    """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    # A global reset can occur without changing weekly.resets_at.  Limit the
-    # automatic task to once per KST calendar day instead of one weekly-reset
-    # timestamp, so a later reset is eligible again on the following day.
-    return current.date().isoformat()
+    targets = {}
+    for name, fallback_hours, minimum_future in (
+            ('five_hour', 5, timedelta(hours=1)),
+            ('weekly', 24 * 7, timedelta(days=1))):
+        limit = snapshot.get(name) if isinstance(snapshot, dict) else None
+        if not isinstance(limit, dict) or _normalize_used_percent(limit.get('used_percent')) != 0:
+            continue
+        reset_at = parse_timestamp(limit.get('resets_at'))
+        if reset_at and reset_at > current + minimum_future:
+            targets[name] = '%s:%s' % (name, normalize_timestamp(reset_at))
+        else:
+            epoch_hour = int(current.timestamp() // (fallback_hours * 60 * 60))
+            targets[name] = '%s:fallback:%s' % (name, epoch_hour)
+    return targets
+
+
+def _usage_keepalive_daily_key(snapshot, now=None):
+    """Compatibility helper retained for callers from older installations."""
+    return _usage_keepalive_cycle_targets(snapshot, now).get('weekly', '')
+
+
+def _usage_keepalive_followup_is_due(snapshot, now=None):
+    keepalive = (snapshot or {}).get('usage_keepalive')
+    if not isinstance(keepalive, dict) or keepalive.get('last_mode') != 'automatic':
+        return False
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    due_at = parse_timestamp(keepalive.get('verification_due_at'))
+    retry_at = parse_timestamp(keepalive.get('next_retry_at'))
+    return bool((due_at and due_at <= current) or (retry_at and retry_at <= current))
 
 
 def _account_has_active_codex_stream(account_id):
@@ -7659,12 +7691,21 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
     previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}
     attempted_at = normalize_timestamp(None)
-    daily_key = _usage_keepalive_daily_key(snapshot)
+    cycle_targets = _usage_keepalive_cycle_targets(snapshot)
     if automatic:
-        if not daily_key:
-            return {'submitted': False, 'reason': 'weekly_not_zero'}
-        if previous_keepalive.get('automatic_daily_key') == daily_key:
-            return {'submitted': False, 'reason': 'already_attempted_today'}
+        if not cycle_targets:
+            return {'submitted': False, 'reason': 'no_zero_usage_window'}
+        previous_targets = previous_keepalive.get('automatic_cycle_targets')
+        previous_targets = previous_targets if isinstance(previous_targets, dict) else {}
+        retry_at = parse_timestamp(previous_keepalive.get('next_retry_at'))
+        same_targets = previous_targets == cycle_targets
+        attempts = int(previous_keepalive.get('automatic_attempts') or 0)
+        if same_targets and previous_keepalive.get('verification_status') != 'retry_pending':
+            return {'submitted': False, 'reason': 'cycle_already_submitted'}
+        if same_targets and (not retry_at or retry_at > datetime.now(KST)):
+            return {'submitted': False, 'reason': 'retry_not_due'}
+        if same_targets and attempts >= _USAGE_KEEPALIVE_MAX_AUTOMATIC_ATTEMPTS:
+            return {'submitted': False, 'reason': 'retry_limit_reached'}
     if get_selected_agent_backend() != 'dtgpt':
         return {'submitted': False, 'reason': 'terra_requires_codex_backend'}
     if _account_has_active_codex_stream(account_id):
@@ -7682,7 +7723,11 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
             _USAGE_KEEPALIVE_PROMPT,
             model_override=_USAGE_KEEPALIVE_MODEL,
             reasoning_override=_USAGE_KEEPALIVE_REASONING_EFFORT,
-            question_only=True,
+            # Ephemeral/read-only execution may not establish the account's
+            # usage window.  The prompt remains deliberately no-tools and
+            # no-changes, but use a normal Codex request so the service can
+            # account for it like an ordinary task.
+            question_only=False,
             account_id=account_id,
             usage_operation='usage_keepalive',
         )
@@ -7715,13 +7760,23 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
         'history': history,
     }
     if automatic:
-        # Mark before starting the process so a second Workbench copy cannot
-        # race this process during the same KST calendar day.
-        keepalive_state['automatic_daily_key'] = daily_key
+        # Mark before starting so another Workbench copy cannot race this
+        # process. Completion later schedules a separate verification read.
+        keepalive_state['automatic_cycle_targets'] = cycle_targets
+        keepalive_state['automatic_attempts'] = (
+            int(previous_keepalive.get('automatic_attempts') or 0) + 1
+            if previous_keepalive.get('automatic_cycle_targets') == cycle_targets else 1
+        )
+        keepalive_state['verification_status'] = 'submitted' if started else 'retry_pending'
+        keepalive_state['verification_due_at'] = None
+        keepalive_state['next_retry_at'] = (
+            normalize_timestamp(datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
+            if not started else None
+        )
         _LOGGER.info(
-            'Automatic usage keepalive %s (account_id=%s, stream_id=%s, weekly_usage=0%%)',
+            'Automatic usage keepalive %s (account_id=%s, stream_id=%s, targets=%s)',
             'submitted' if started else 'failed to submit', account_id,
-            (started or {}).get('id') if started else '',
+            (started or {}).get('id') if started else '', cycle_targets,
         )
     snapshot['usage_keepalive'] = keepalive_state
     return {
@@ -7730,6 +7785,39 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
         'reason': '' if started else 'start_failed',
         'state': keepalive_state,
     }
+
+
+def _verify_usage_keepalive_locked(snapshot, now=None):
+    """Validate that an automatic keepalive established its reset windows."""
+    keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else None
+    if not isinstance(keepalive, dict) or keepalive.get('last_mode') != 'automatic':
+        return False
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    due_at = parse_timestamp(keepalive.get('verification_due_at'))
+    if not due_at or due_at > current:
+        return False
+    targets = keepalive.get('automatic_cycle_targets')
+    targets = targets if isinstance(targets, dict) else {}
+    verified = []
+    for name in targets:
+        limit = snapshot.get(name) if isinstance(snapshot, dict) else None
+        reset_at = parse_timestamp((limit or {}).get('resets_at')) if isinstance(limit, dict) else None
+        horizon = timedelta(hours=4) if name == 'five_hour' else timedelta(days=6)
+        if reset_at and reset_at >= current + horizon:
+            verified.append(name)
+    history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
+    history = [item for item in history[-49:] if isinstance(item, dict)]
+    success = bool(targets) and len(verified) == len(targets)
+    keepalive['verification_status'] = 'verified' if success else 'retry_pending'
+    keepalive['verification_due_at'] = None
+    keepalive['last_verified_at'] = normalize_timestamp(current) if success else keepalive.get('last_verified_at')
+    keepalive['next_retry_at'] = None if success else normalize_timestamp(
+        current + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
+    history.append({'at': normalize_timestamp(current), 'event': 'verified' if success else 'verification_failed',
+                    'mode': 'automatic', 'targets': targets, 'verified_targets': verified})
+    keepalive['history'] = history
+    snapshot['usage_keepalive'] = keepalive
+    return True
 
 
 def submit_usage_keepalive(account_id=None):
@@ -7774,6 +7862,16 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
         keepalive['last_completed_at'] = completed_at
         keepalive['last_status'] = 'completed' if succeeded else 'failed'
         keepalive['last_error'] = '' if succeeded else str(error or '')[:1000]
+        if mode == 'automatic':
+            keepalive['verification_status'] = 'pending' if succeeded else 'retry_pending'
+            keepalive['verification_due_at'] = (
+                normalize_timestamp(datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS))
+                if succeeded else None
+            )
+            keepalive['next_retry_at'] = (
+                None if succeeded else normalize_timestamp(
+                    datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
+            )
         keepalive['history'] = history
         snapshot['usage_keepalive'] = keepalive
         snapshot['version'] = snapshot.get('version') or 1
@@ -7785,7 +7883,42 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
                 'completed' if succeeded else 'failed', account_id,
                 (_normalize_token_usage(token_usage) or _zero_token_usage()).get('total_tokens', 0),
             )
-        return mode
+    if mode == 'automatic' and succeeded:
+        _schedule_usage_keepalive_followup(account_id)
+    return mode
+
+
+def _schedule_usage_keepalive_followup(account_id, delay_seconds=None):
+    """Schedule the delayed verification even when no browser is open."""
+    normalized_account_id = _normalize_account_id(account_id)
+    if not normalized_account_id:
+        return
+
+    def run_followup():
+        # Remove this running timer first so a failed verification can enqueue
+        # its own delayed retry from within the refresh below.
+        with _USAGE_KEEPALIVE_FOLLOWUP_LOCK:
+            _USAGE_KEEPALIVE_FOLLOWUP_TIMERS.pop(normalized_account_id, None)
+        try:
+            refresh_account_usage_snapshot_if_due(
+                account_id=normalized_account_id,
+                force=True,
+                limit_sample_source='automatic',
+            )
+        except Exception:
+            _LOGGER.debug('usage keepalive follow-up refresh skipped', exc_info=True)
+
+    with _USAGE_KEEPALIVE_FOLLOWUP_LOCK:
+        existing = _USAGE_KEEPALIVE_FOLLOWUP_TIMERS.get(normalized_account_id)
+        if existing and existing.is_alive():
+            return
+        timer = threading.Timer(
+            _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS if delay_seconds is None else delay_seconds,
+            run_followup,
+        )
+        timer.daemon = True
+        _USAGE_KEEPALIVE_FOLLOWUP_TIMERS[normalized_account_id] = timer
+        timer.start()
 
 
 def refresh_account_usage_snapshot_if_due(
@@ -7826,7 +7959,7 @@ def refresh_account_usage_snapshot_if_due(
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
                 'last_automatic_refresh_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
                 ),
@@ -7841,6 +7974,12 @@ def refresh_account_usage_snapshot_if_due(
                 'error': '',
                 'usage_keepalive': previous.get('usage_keepalive') if isinstance(previous.get('usage_keepalive'), dict) else {},
             }
+            verification_updated = _verify_usage_keepalive_locked(snapshot)
+            verification_state = snapshot.get('usage_keepalive') if verification_updated else {}
+            schedule_retry = bool(
+                isinstance(verification_state, dict)
+                and verification_state.get('verification_status') == 'retry_pending'
+            )
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
             if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
@@ -7855,6 +7994,10 @@ def refresh_account_usage_snapshot_if_due(
             if resolved_limit_sample_source == 'automatic':
                 keepalive = _submit_usage_keepalive_locked(context, snapshot, automatic=True)
                 _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+            if schedule_retry:
+                _schedule_usage_keepalive_followup(
+                    context['account']['id'], _USAGE_KEEPALIVE_RETRY_DELAY_SECONDS,
+                )
             return {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
         except Exception as exc:
             failed = {
@@ -7863,7 +8006,7 @@ def refresh_account_usage_snapshot_if_due(
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_2_hours_on_the_hour_kst_with_30_minute_grace',
+                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
                 'last_automatic_attempt_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
                 ),

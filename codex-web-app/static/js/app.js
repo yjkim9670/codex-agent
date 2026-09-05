@@ -439,6 +439,7 @@ const USAGE_HISTORY_WEEKLY_HOURS = 24 * 7;
 const OPENAI_API_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
 // Standard API prices per 1M text tokens from OpenAI's pricing docs.
 const OPENAI_API_TOKEN_PRICES_PER_MILLION = Object.freeze({
+    'gpt-6-astra': { input: 10, cachedInput: 1, output: 50, context: 'standard short context' },
     'gpt-5.6-sol': { input: 4, cachedInput: 0.4, output: 20, context: 'standard short context' },
     'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12, context: 'standard short context' },
     'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2, context: 'standard short context' },
@@ -30195,6 +30196,65 @@ function resolveWeeklyLimitTokenScale(history = state.settings?.usageHistory) {
     };
 }
 
+function resolveMessageLimitModelMetadata(message) {
+    const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    const firstText = (...values) => {
+        for (const value of values) {
+            if (typeof value === 'string' && value.trim()) return value.trim();
+        }
+        return '';
+    };
+    return {
+        model: firstText(message?.response_model, message?.model, metadata.response_model, metadata.model),
+        reasoningEffort: firstText(
+            message?.response_reasoning_effort,
+            message?.reasoning_effort,
+            metadata.response_reasoning_effort,
+            metadata.reasoning_effort
+        ),
+        serviceTier: firstText(message?.service_tier, metadata.service_tier)
+    };
+}
+
+function calculateMessageApiCost(usage, pricing) {
+    if (!usage || !pricing) return null;
+    const inputTokens = Math.max(0, Number(usage.inputTokens) || 0);
+    const cachedInputTokens = Math.min(inputTokens, Math.max(0, Number(usage.cachedInputTokens) || 0));
+    const outputTokens = Math.max(0, Number(usage.outputTokens) || 0);
+    const totalTokens = Math.max(0, Number(usage.totalTokens) || 0);
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    if (uncachedInputTokens + cachedInputTokens + outputTokens <= 0 || totalTokens <= 0) return null;
+    const cachedRate = Number.isFinite(Number(pricing.cachedInput)) ? Number(pricing.cachedInput) : Number(pricing.input);
+    const cost = (
+        uncachedInputTokens * Number(pricing.input)
+        + cachedInputTokens * cachedRate
+        + outputTokens * Number(pricing.output)
+    ) / 1_000_000;
+    return Number.isFinite(cost) && cost >= 0 ? cost : null;
+}
+
+function resolveModelWeightedLimitUsage(usage, message) {
+    const metadata = resolveMessageLimitModelMetadata(message);
+    const modelPricing = resolveOpenAiApiPricing(metadata.model);
+    const solPricing = resolveOpenAiApiPricing('gpt-5.6-sol');
+    const modelCost = calculateMessageApiCost(usage, modelPricing);
+    const solCost = calculateMessageApiCost(usage, solPricing);
+    if (modelCost === null || solCost === null || solCost <= 0) {
+        return { usage, metadata, multiplier: 1, isModelWeighted: false, pricingKnown: Boolean(modelPricing) };
+    }
+    // The account history is still a token-to-limit observation.  Convert this
+    // message into the equivalent Sol token load before applying that observed
+    // scale.  This is deliberately not presented as an official quota formula.
+    const multiplier = Math.max(0.05, Math.min(100, modelCost / solCost));
+    return {
+        usage: { ...usage, totalTokens: usage.totalTokens * multiplier },
+        metadata,
+        multiplier,
+        isModelWeighted: Math.abs(multiplier - 1) > 0.005,
+        pricingKnown: true
+    };
+}
+
 function formatLimitUsagePercent(value, { allowZero = false } = {}) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric) || numeric < 0) return '';
@@ -30211,9 +30271,11 @@ function formatLimitUsagePercent(value, { allowZero = false } = {}) {
     return numeric.toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
 }
 
-function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero = false } = {}) {
+function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero = false, message = null } = {}) {
     if (!usage || (usage.hasData === false)) return null;
-    const totalTokens = Number(usage.totalTokens);
+    const weighted = message ? resolveModelWeightedLimitUsage(usage, message) : null;
+    const estimateUsage = weighted?.usage || usage;
+    const totalTokens = Number(estimateUsage.totalTokens);
     if (!Number.isFinite(totalTokens) || totalTokens < 0 || (!includeZero && totalTokens <= 0)) return null;
     const scale = resolveWeeklyLimitTokenScale();
     if (!scale) return null;
@@ -30234,9 +30296,23 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     const marker = lowConfidence ? '~' : '';
     const tooltipParts = [
         `주간 리밋 추정 ${marker}${percentText}%`,
-        `${formatNumber(totalTokens)} tok / ${formatNumber(Math.round(scale.tokensPerPercent))} tok per 1%`,
+        `${formatNumber(Math.round(totalTokens))} weighted tok / ${formatNumber(Math.round(scale.tokensPerPercent))} tok per 1%`,
         `scope ${scale.scope}`
     ];
+    if (weighted?.metadata?.model) {
+        tooltipParts.push(`model ${weighted.metadata.model}`);
+    }
+    if (weighted?.isModelWeighted) {
+        tooltipParts.push(`model rate weight ×${weighted.multiplier.toFixed(2)}`);
+    } else if (weighted?.metadata?.model && !weighted?.pricingKnown) {
+        tooltipParts.push('model rate unavailable; unweighted tokens used');
+    }
+    if (weighted?.metadata?.reasoningEffort) {
+        tooltipParts.push(`effort ${weighted.metadata.reasoningEffort} recorded`);
+    }
+    if (weighted?.metadata?.serviceTier) {
+        tooltipParts.push(`tier ${weighted.metadata.serviceTier} recorded`);
+    }
     if (scale.sampleCount !== null) {
         tooltipParts.push(`samples ${formatNumber(scale.sampleCount)}`);
     }
@@ -30264,8 +30340,8 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     };
 }
 
-function buildMessageLimitUsageEstimate(usage) {
-    return buildLimitUsageEstimate(usage, { subjectLabel: 'message' });
+function buildMessageLimitUsageEstimate(usage, message = null) {
+    return buildLimitUsageEstimate(usage, { subjectLabel: 'message', message });
 }
 
 function buildSessionLimitUsageEstimate(session) {
@@ -30282,20 +30358,33 @@ function getFooterStoredTokenUsage(footer) {
     const totalTokens = toNonNegativeInt(footer.dataset.tokenTotal);
     if (totalTokens === null || totalTokens <= 0) return null;
     return {
-        inputTokens: 0,
-        cachedInputTokens: 0,
-        outputTokens: 0,
-        reasoningOutputTokens: 0,
+        inputTokens: toNonNegativeInt(footer.dataset.tokenInput) || 0,
+        cachedInputTokens: toNonNegativeInt(footer.dataset.tokenCachedInput) || 0,
+        outputTokens: toNonNegativeInt(footer.dataset.tokenOutput) || 0,
+        reasoningOutputTokens: toNonNegativeInt(footer.dataset.tokenReasoningOutput) || 0,
         totalTokens,
         estimated: footer.dataset.tokenEstimated === '1',
         hasData: true
     };
 }
 
-function setMessageLimitUsage(footer, usage = null) {
+function getFooterStoredLimitMetadata(footer) {
+    if (!footer) return null;
+    const model = String(footer.dataset.limitModel || '').trim();
+    const reasoningEffort = String(footer.dataset.limitReasoningEffort || '').trim();
+    const serviceTier = String(footer.dataset.limitServiceTier || '').trim();
+    if (!model && !reasoningEffort && !serviceTier) return null;
+    return {
+        response_model: model,
+        response_reasoning_effort: reasoningEffort,
+        service_tier: serviceTier
+    };
+}
+
+function setMessageLimitUsage(footer, usage = null, message = null) {
     if (!footer) return;
     const resolvedUsage = usage || getFooterStoredTokenUsage(footer);
-    const estimate = buildMessageLimitUsageEstimate(resolvedUsage);
+    const estimate = buildMessageLimitUsageEstimate(resolvedUsage, message || getFooterStoredLimitMetadata(footer));
     footer.dataset.limitText = estimate?.text || '';
     footer.dataset.limitTooltip = estimate?.tooltip || '';
     footer.classList.toggle('has-limit-estimate', Boolean(estimate));
@@ -30319,8 +30408,16 @@ function setMessageTokenUsage(footer, message) {
     const usage = resolveMessageTokenUsage(message, { fallbackToEstimate: true });
     footer.dataset.tokenText = usage.hasData ? formatMessageTokenSummary(message) : '';
     footer.dataset.tokenTotal = usage.hasData ? String(usage.totalTokens) : '';
+    footer.dataset.tokenInput = usage.hasData ? String(usage.inputTokens) : '';
+    footer.dataset.tokenCachedInput = usage.hasData ? String(usage.cachedInputTokens) : '';
+    footer.dataset.tokenOutput = usage.hasData ? String(usage.outputTokens) : '';
+    footer.dataset.tokenReasoningOutput = usage.hasData ? String(usage.reasoningOutputTokens) : '';
     footer.dataset.tokenEstimated = usage.estimated ? '1' : '0';
-    setMessageLimitUsage(footer, usage);
+    const limitMetadata = resolveMessageLimitModelMetadata(message);
+    footer.dataset.limitModel = limitMetadata.model;
+    footer.dataset.limitReasoningEffort = limitMetadata.reasoningEffort;
+    footer.dataset.limitServiceTier = limitMetadata.serviceTier;
+    setMessageLimitUsage(footer, usage, message);
     syncMessageFooter(footer);
 }
 
@@ -30329,7 +30426,14 @@ function createMessageFooter() {
     footer.className = 'message-footer';
     footer.dataset.tokenText = '';
     footer.dataset.tokenTotal = '';
+    footer.dataset.tokenInput = '';
+    footer.dataset.tokenCachedInput = '';
+    footer.dataset.tokenOutput = '';
+    footer.dataset.tokenReasoningOutput = '';
     footer.dataset.tokenEstimated = '0';
+    footer.dataset.limitModel = '';
+    footer.dataset.limitReasoningEffort = '';
+    footer.dataset.limitServiceTier = '';
     footer.dataset.limitText = '';
     footer.dataset.limitTooltip = '';
     footer.dataset.durationText = '';

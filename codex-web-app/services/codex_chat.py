@@ -5108,6 +5108,10 @@ def _calculate_usage_credit_equivalent(model, usage, service_tier='standard'):
         # Standard, short-context text prices per 1M tokens, verified against
         # https://developers.openai.com/api/docs/pricing (2026-08-28).
         'gpt-5.6-sol': (4.0, 0.4, 20.0),
+        # Astra is priced at 2.5x Sol for the same text-token mix.  Keep this
+        # here (and in the browser display estimator) so its events do not get
+        # silently treated as generic, unweighted token counts.
+        'gpt-6-astra': (10.0, 1.0, 50.0),
         'gpt-5.6-terra': (2.0, 0.2, 12.0),
         'gpt-5.6-luna': (0.2, 0.02, 1.2),
         'gpt-5.5': (5.0, 0.5, 30.0),
@@ -14420,6 +14424,9 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['service_tier'] = normalize_codex_service_tier(
+        get_settings().get('service_tier')
+    ) or 'standard'
     metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
@@ -14566,7 +14573,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         message_id=(saved_message or {}).get('id'),
         model=response_model,
         reasoning_effort=response_reasoning_effort,
-        service_tier=normalize_codex_service_tier(get_settings().get('service_tier')) or 'standard',
+        service_tier=metadata['service_tier'],
         backend=agent_backend,
         status='completed' if message_role == 'assistant' else (
             'cancelled' if finalize_reason == 'user_cancelled' else 'failed'
@@ -14701,6 +14708,9 @@ def stop_codex_stream(stream_id):
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
+    metadata['service_tier'] = normalize_codex_service_tier(
+        get_settings().get('service_tier')
+    ) or 'standard'
     metadata['response_agent_backend'] = agent_backend
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
@@ -14741,12 +14751,21 @@ def stop_codex_stream(stream_id):
             metadata,
             created_at=created_at_value
         )
-    _record_token_usage(
+    record_usage_event(
         event_id=f'stream-stop:{stream_id}',
         session_id=session_id,
         usage=token_usage,
         source='stream_user_cancelled',
         account_id=account_id,
+        operation='chat',
+        message_id=(saved_message or {}).get('id'),
+        model=response_model,
+        reasoning_effort=response_reasoning_effort,
+        service_tier=metadata['service_tier'],
+        backend=agent_backend,
+        status='cancelled',
+        duration_ms=metadata.get('duration_ms'),
+        metadata={'execution_policy': execution_policy},
     )
 
     with state.codex_streams_lock:

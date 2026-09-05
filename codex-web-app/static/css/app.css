@@ -235,6 +235,14 @@
 }
 
 @font-face {
+    font-family: "SUIT Variable";
+    src: url("/static/fonts/suit/SUIT-Variable.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+}
+
+@font-face {
     font-family: "D2Coding";
     src: url("/static/fonts/D2CodingBold-Ver1.3.2-20180524.ttf") format("truetype");
     font-style: normal;
@@ -414,6 +422,7 @@
     --session-response-report-text: #1f6f4a;
     --font-ibm-ui-ko: "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-ibm-ui-ja: "IBM Plex Sans JP", "IBM Plex Sans KR", sans-serif;
+    --font-suit-ui: "SUIT Variable", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-naver-ui: var(--font-ibm-ui-ko);
     --font-naver-code: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     --font-session-list-title: var(--font-naver-ui);
@@ -429,6 +438,20 @@
 
 :lang(ja):not(code):not(pre):not(kbd):not(samp) {
     font-family: var(--font-ibm-ui-ja);
+}
+
+[data-ui-font="suit"] {
+    --font-naver-ui: var(--font-suit-ui);
+    --font-sans: var(--font-suit-ui);
+}
+
+[data-ui-font="suit"]:lang(ja) {
+    --font-naver-ui: var(--font-suit-ui);
+    --font-sans: var(--font-suit-ui);
+}
+
+[data-ui-font="suit"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-suit-ui);
 }
 
 [data-theme="dark"] {
@@ -2896,7 +2919,7 @@ textarea {
 .file-browser-source {
     margin: 0;
     padding: 10px 0;
-    font-family: var(--font-code-block);
+    font-family: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     font-size: 12px;
     line-height: 1.55;
     color: var(--code-text);
@@ -3037,7 +3060,7 @@ textarea {
 .file-browser-large-text-content {
     margin: 0;
     padding: 10px 14px;
-    font-family: var(--font-code-block);
+    font-family: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     font-size: 12px;
     line-height: 1.55;
     white-space: pre;
@@ -3097,10 +3120,57 @@ textarea {
     padding: 12px 14px;
     background: var(--code-bg);
     color: var(--code-text);
-    font-family: var(--font-code-block);
+    font-family: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     font-size: 12px;
     line-height: 1.6;
     tab-size: 4;
+}
+
+.file-browser-editor-syntax-viewport {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.file-browser-editor-body.has-syntax-highlight .file-browser-editor-syntax-viewport {
+    left: calc((var(--file-browser-editor-line-digit-width, 2) * 1ch) + 20px);
+}
+
+.file-browser-editor-syntax {
+    display: block;
+    box-sizing: border-box;
+    width: max-content;
+    min-width: 100%;
+    min-height: 100%;
+    margin: 0;
+    padding: 12px 14px;
+    color: var(--code-text);
+    font-family: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.6;
+    tab-size: 4;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.file-browser-editor.is-fixed-mode .file-browser-editor-syntax {
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.file-browser-editor-input.has-syntax-highlight {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--code-cursor);
+}
+
+.file-browser-editor-input.has-syntax-highlight::selection {
+    color: transparent;
+    background: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 .file-browser-editor.is-fixed-mode .file-browser-editor-input {
@@ -8684,7 +8754,8 @@ body.is-work-mode-resizing * {
 }
 
 .ui-settings-description,
-.ui-scale-setting-help {
+.ui-scale-setting-help,
+.ui-font-setting-help {
     font-size: 12px;
     line-height: 1.45;
     color: var(--text-tertiary);
@@ -8700,7 +8771,83 @@ body.is-work-mode-resizing * {
     background-size: 16px 16px;
 }
 
-.ui-settings-body { padding: 20px 18px; }
+.ui-settings-body {
+    display: grid;
+    gap: 20px;
+    padding: 20px 18px;
+}
+
+.ui-font-setting {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.ui-font-setting-label {
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.ui-font-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.ui-font-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-height: 72px;
+    padding: 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-muted);
+    cursor: pointer;
+}
+
+.ui-font-option:has(input:checked) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+}
+
+.ui-font-option input {
+    flex: 0 0 auto;
+    margin: 3px 0 0;
+    accent-color: var(--accent);
+}
+
+.ui-font-option-copy {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.ui-font-option-name {
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.25;
+}
+
+.ui-font-option-sample {
+    color: var(--text-secondary);
+    font-family: var(--font-ibm-ui-ko);
+    font-size: 12px;
+    line-height: 1.25;
+    white-space: nowrap;
+}
+
+.ui-font-option-suit .ui-font-option-sample { font-family: var(--font-suit-ui); }
+
+.ui-font-setting-help {
+    font-weight: 400;
+}
 
 .ui-scale-setting {
     display: grid;

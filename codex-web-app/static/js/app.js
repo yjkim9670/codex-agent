@@ -2291,6 +2291,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const uiSettingsClose = document.getElementById('codex-ui-settings-close');
     const uiSettingsScaleInput = document.getElementById('codex-ui-scale-input');
     const uiSettingsScaleValue = document.getElementById('codex-ui-scale-value');
+    const uiSettingsFontInputs = Array.from(document.querySelectorAll('input[name="codex-ui-font"]'));
     const uiSettingsReset = document.getElementById('codex-ui-settings-reset');
     const uiSettingsDone = document.getElementById('codex-ui-settings-done');
     const accountCreateBtn = document.getElementById('codex-account-create');
@@ -2451,7 +2452,9 @@ document.addEventListener('DOMContentLoaded', () => {
     syncFileBrowserOpenButtonState(false);
 
     const UI_SCALE_STORAGE_KEY = 'codex-ui-scale';
+    const UI_FONT_STORAGE_KEY = 'codex-ui-font';
     const DEFAULT_UI_SCALE = 90;
+    const DEFAULT_UI_FONT = 'ibm-plex';
     let uiSettingsTrigger = null;
     const normalizeUiScale = value => {
         if (value === null || value === undefined || String(value).trim() === '') return DEFAULT_UI_SCALE;
@@ -2472,6 +2475,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
+    const normalizeUiFont = value => value === 'suit' ? 'suit' : DEFAULT_UI_FONT;
+    const applyUiFont = (value, { persist = true } = {}) => {
+        const font = normalizeUiFont(value);
+        if (font === DEFAULT_UI_FONT) {
+            delete document.documentElement.dataset.uiFont;
+        } else {
+            document.documentElement.dataset.uiFont = font;
+        }
+        uiSettingsFontInputs.forEach(input => {
+            input.checked = input.value === font;
+        });
+        if (persist) {
+            try {
+                window.localStorage.setItem(UI_FONT_STORAGE_KEY, font);
+            } catch (_error) {
+                // The setting remains active for this page when storage is unavailable.
+            }
+        }
+    };
     const closeUiSettingsOverlay = () => {
         if (!uiSettingsOverlay) return;
         uiSettingsOverlay.classList.remove('is-visible');
@@ -2486,12 +2508,14 @@ document.addEventListener('DOMContentLoaded', () => {
         uiSettingsOverlay.classList.add('is-visible');
         uiSettingsOverlay.setAttribute('aria-hidden', 'false');
         document.body.classList.add('is-overlay-open');
-        window.setTimeout(() => uiSettingsScaleInput?.focus(), 0);
+        window.setTimeout(() => uiSettingsFontInputs.find(input => input.checked)?.focus(), 0);
     };
     try {
         applyUiScale(window.localStorage.getItem(UI_SCALE_STORAGE_KEY), { persist: false });
+        applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
     } catch (_error) {
         applyUiScale(DEFAULT_UI_SCALE, { persist: false });
+        applyUiFont(DEFAULT_UI_FONT, { persist: false });
     }
     uiSettingsOpen?.addEventListener('click', openUiSettingsOverlay);
     uiSettingsClose?.addEventListener('click', closeUiSettingsOverlay);
@@ -2500,7 +2524,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target?.dataset?.action === 'close') closeUiSettingsOverlay();
     });
     uiSettingsScaleInput?.addEventListener('input', () => applyUiScale(uiSettingsScaleInput.value));
-    uiSettingsReset?.addEventListener('click', () => applyUiScale(DEFAULT_UI_SCALE));
+    uiSettingsFontInputs.forEach(input => {
+        input.addEventListener('change', () => applyUiFont(input.value));
+    });
+    uiSettingsReset?.addEventListener('click', () => {
+        applyUiScale(DEFAULT_UI_SCALE);
+        applyUiFont(DEFAULT_UI_FONT);
+    });
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && uiSettingsOverlay?.classList.contains('is-visible')) {
             event.preventDefault();
@@ -20312,6 +20342,90 @@ function buildFilePanelEditPatch(originalContent, nextContent) {
     };
 }
 
+// Code-point offsets match Python string indexing, including non-BMP characters.
+function buildFilePanelEditPatches(originalContent, nextContent) {
+    const single = buildFilePanelEditPatch(originalContent, nextContent);
+    if (!single.delete_count && !single.insert) return [];
+    const a = Array.from(originalContent).slice(single.start, single.start + single.delete_count);
+    const b = Array.from(single.insert);
+    const trace = [];
+    let frontier = new Map([[1, 0]]);
+    let work = 0;
+    // Bound worst-case work for large rewrites; a single replacement remains exact.
+    for (let d = 0; d <= Math.min(a.length + b.length, 512); d += 1) {
+        trace.push(new Map(frontier));
+        for (let k = -d; k <= d; k += 2) {
+            let x = k === -d || (k !== d && (frontier.get(k - 1) ?? -1) < (frontier.get(k + 1) ?? -1))
+                ? (frontier.get(k + 1) ?? 0) : frontier.get(k - 1) + 1;
+            let y = x - k;
+            while (x < a.length && y < b.length && a[x] === b[y]) {
+                x += 1;
+                y += 1;
+                work += 1;
+            }
+            if (++work > 2000000) return [single];
+            frontier.set(k, x);
+            if (x < a.length || y < b.length) continue;
+            const edits = [];
+            for (let depth = d; depth > 0; depth -= 1) {
+                const previous = trace[depth];
+                const diagonal = x - y;
+                const prevK = diagonal === -depth || (diagonal !== depth
+                    && (previous.get(diagonal - 1) ?? -1) < (previous.get(diagonal + 1) ?? -1))
+                    ? diagonal + 1 : diagonal - 1;
+                const prevX = previous.get(prevK);
+                const prevY = prevX - prevK;
+                while (x > prevX && y > prevY) { x -= 1; y -= 1; }
+                if (x === prevX) { y -= 1; edits.push({ start: x, insert: b[y] }); }
+                else { x -= 1; edits.push({ start: x, insert: null }); }
+            }
+            const patches = [];
+            for (const edit of edits.reverse()) {
+                const start = single.start + edit.start;
+                let patch = patches[patches.length - 1];
+                if (!patch || patch.start + patch.delete_count !== start) {
+                    patch = { start, delete_count: 0, insert: '' };
+                    patches.push(patch);
+                }
+                if (edit.insert === null) patch.delete_count += 1;
+                else patch.insert += edit.insert;
+            }
+            return JSON.stringify(patches).length < JSON.stringify([single]).length ? patches : [single];
+        }
+    }
+    return [single];
+}
+
+function normalizeFilePanelEditorNewlines(content) {
+    return String(content).replace(/\r\n?/g, '\n');
+}
+
+function restoreFilePanelEditorNewlines(original, edited) {
+    const normalized = normalizeFilePanelEditorNewlines(original);
+    const next = normalizeFilePanelEditorNewlines(edited);
+    if (!original.includes('\r')) return next;
+    const chars = Array.from(original);
+    const offsets = [];
+    const endings = original.match(/\r\n|\r|\n/g) || [];
+    const counts = new Map();
+    for (const ending of endings) counts.set(ending, (counts.get(ending) || 0) + 1);
+    const preferred = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] || '\n';
+    for (let i = 0; i < chars.length; i += 1) {
+        offsets.push(i);
+        if (chars[i] === '\r' && chars[i + 1] === '\n') i += 1;
+    }
+    offsets.push(chars.length);
+    const parts = [];
+    let cursor = 0;
+    for (const patch of buildFilePanelEditPatches(normalized, next)) {
+        const start = offsets[patch.start];
+        parts.push(chars.slice(cursor, start).join(''), patch.insert.replace(/\n/g, preferred));
+        cursor = offsets[patch.start + patch.delete_count];
+    }
+    parts.push(chars.slice(cursor).join(''));
+    return parts.join('');
+}
+
 async function fetchFileBrowserDirectory(root, path = '') {
     return fetchJson('/api/codex/files/list', {
         method: 'POST',
@@ -20365,7 +20479,7 @@ async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', 
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
         expected_modified_ns: String(expectedModifiedNs || '').trim(),
-        patch: buildFilePanelEditPatch(baseContent, nextContent)
+        patch: buildFilePanelEditPatches(baseContent, nextContent)
     }, {
         timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
         includeTransferMeta: true
@@ -22857,7 +22971,7 @@ function setFilePanelEditorMode(variant, mode, textarea) {
     const selection = captureFilePanelTextareaSelection(textarea);
     if (textarea instanceof HTMLTextAreaElement) {
         state.editBuffer = textarea.value;
-        state.dirty = textarea.value !== String(state.previewResult?.content || '');
+        state.dirty = textarea.value !== normalizeFilePanelEditorNewlines(state.previewResult?.content || '');
     }
     fileBrowserEditState.editorMode = normalizedMode;
     workModeFileEditState.editorMode = normalizedMode;
@@ -23872,6 +23986,12 @@ function handleFilePanelEditorKeydown(event, variant, textarea) {
     return true;
 }
 
+function syncFilePanelEditorSyntaxHighlight(layer, textarea, language) {
+    if (!(layer instanceof HTMLElement) || !(textarea instanceof HTMLTextAreaElement)) return;
+    layer.innerHTML = highlightScriptContent(textarea.value, language);
+    layer.style.transform = `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`;
+}
+
 function renderFilePanelEditor(variant, options = {}) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const config = getFilePanelVariantConfig(normalizedVariant);
@@ -23901,6 +24021,9 @@ function renderFilePanelEditor(variant, options = {}) {
     textarea.value = typeof state.editBuffer === 'string'
         ? state.editBuffer
         : String(state.previewResult?.content || '');
+    const highlightLanguage = String(state.previewResult?.language || '').trim();
+    const hasSyntaxHighlight = Boolean(state.previewResult?.is_script)
+        && Boolean(getScriptHighlightConfig(highlightLanguage));
 
     const status = document.createElement('div');
     status.className = 'file-browser-editor-status';
@@ -23926,6 +24049,17 @@ function renderFilePanelEditor(variant, options = {}) {
         gutter.setAttribute('aria-hidden', 'true');
         body.appendChild(gutter);
     }
+    let syntaxLayer = null;
+    if (hasSyntaxHighlight) {
+        const syntaxViewport = document.createElement('div');
+        syntaxViewport.className = 'file-browser-editor-syntax-viewport';
+        syntaxLayer = document.createElement('code');
+        syntaxLayer.className = 'file-browser-editor-syntax';
+        syntaxViewport.appendChild(syntaxLayer);
+        body.appendChild(syntaxViewport);
+        textarea.classList.add('has-syntax-highlight');
+        body.classList.add('has-syntax-highlight');
+    }
     body.appendChild(textarea);
     let vimCursor = null;
     if (isFixedMode) {
@@ -23944,12 +24078,15 @@ function renderFilePanelEditor(variant, options = {}) {
         if (vimCursor) {
             syncFilePanelEditorVimCursor(vimCursor, textarea, state);
         }
+        if (syntaxLayer) {
+            syncFilePanelEditorSyntaxHighlight(syntaxLayer, textarea, highlightLanguage);
+        }
     };
     syncEditorChrome();
 
     textarea.addEventListener('input', () => {
         state.editBuffer = textarea.value;
-        state.dirty = textarea.value !== String(state.previewResult?.content || '');
+        state.dirty = textarea.value !== normalizeFilePanelEditorNewlines(state.previewResult?.content || '');
         syncEditorChrome();
         syncFilePanelViewerActionState(normalizedVariant);
     });
@@ -24243,15 +24380,18 @@ function formatFilePanelSaveTransferToast(transferMeta) {
 function getFilePanelSaveChangeSummary(originalContent, nextContent) {
     const original = typeof originalContent === 'string' ? originalContent : '';
     const next = typeof nextContent === 'string' ? nextContent : '';
-    const patch = buildFilePanelEditPatch(original, next);
-    const removed = Array.from(original)
-        .slice(patch.start, patch.start + patch.delete_count)
-        .join('');
-    const inserted = patch.insert;
-    const originalLines = original ? original.split('\n').length : 0;
-    const nextLines = next ? next.split('\n').length : 0;
-    const removedLines = removed ? removed.split('\n').length - (removed.endsWith('\n') ? 1 : 0) : 0;
-    const insertedLines = inserted ? inserted.split('\n').length - (inserted.endsWith('\n') ? 1 : 0) : 0;
+    const patch = buildFilePanelEditPatches(original, next);
+    const chars = Array.from(original);
+    const removals = patch.map(item => chars.slice(item.start, item.start + item.delete_count).join(''));
+    const additions = patch.map(item => item.insert);
+    const removed = removals.join('');
+    const inserted = additions.join('');
+    const originalLines = original ? normalizeFilePanelEditorNewlines(original).split('\n').length : 0;
+    const nextLines = next ? normalizeFilePanelEditorNewlines(next).split('\n').length : 0;
+    const countLines = text => text ? (normalizeFilePanelEditorNewlines(text).match(/\n/g) || []).length
+        + (/[\r\n]$/.test(text) ? 0 : 1) : 0;
+    const removedLines = removals.reduce((sum, text) => sum + countLines(text), 0);
+    const insertedLines = additions.reduce((sum, text) => sum + countLines(text), 0);
     const patchPayload = stringifyJsonRequestPayload({
         mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0', patch
     });
@@ -24302,8 +24442,8 @@ async function saveFilePanelEdits(variant, options = {}) {
     if (!state.editing || !state.dirty || state.saving || !state.path) return false;
 
     const stayEditing = Boolean(options.stayEditing);
-    const contentToSave = String(state.editBuffer || '');
     const originalContent = String(state.previewResult?.content || '');
+    const contentToSave = restoreFilePanelEditorNewlines(originalContent, String(state.editBuffer || ''));
     if (!options.skipConfirmation && !confirmFilePanelSave(state.path, originalContent, contentToSave)) {
         return false;
     }

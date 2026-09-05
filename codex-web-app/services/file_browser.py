@@ -697,35 +697,28 @@ def _apply_text_patch(content, patch):
             error_code='invalid_content',
             status_code=400,
         )
-    if not isinstance(patch, dict):
-        raise FileBrowserError(
-            '저장 패치가 올바르지 않습니다.',
-            error_code='invalid_patch',
-            status_code=400,
-        )
-    try:
-        start = int(patch.get('start'))
-        delete_count = int(patch.get('delete_count'))
-    except (TypeError, ValueError) as exc:
-        raise FileBrowserError(
-            '저장 패치 범위가 올바르지 않습니다.',
-            error_code='invalid_patch',
-            status_code=400,
-        ) from exc
-    insert = patch.get('insert', '')
-    if not isinstance(insert, str):
-        raise FileBrowserError(
-            '저장 패치 내용이 올바르지 않습니다.',
-            error_code='invalid_patch',
-            status_code=400,
-        )
-    if start < 0 or delete_count < 0 or start > len(content) or start + delete_count > len(content):
-        raise FileBrowserError(
-            '저장 패치 범위가 파일 내용과 맞지 않습니다.',
-            error_code='invalid_patch',
-            status_code=400,
-        )
-    return f'{content[:start]}{insert}{content[start + delete_count:]}'
+    # All offsets refer to the original content. Validate before writing anything.
+    patches = patch if isinstance(patch, list) else [patch]
+    parts = []
+    cursor = 0
+    previous_start = -1
+    for item in patches:
+        if not isinstance(item, dict):
+            raise FileBrowserError('저장 패치가 올바르지 않습니다.', error_code='invalid_patch', status_code=400)
+        start = item.get('start')
+        delete_count = item.get('delete_count')
+        insert = item.get('insert', '')
+        if (type(start) is not int or type(delete_count) is not int
+                or not isinstance(insert, str)):
+            raise FileBrowserError('저장 패치가 올바르지 않습니다.', error_code='invalid_patch', status_code=400)
+        if (start < cursor or start <= previous_start or delete_count < 0
+                or start > len(content) or start + delete_count > len(content)):
+            raise FileBrowserError('저장 패치 범위가 파일 내용과 맞지 않습니다.', error_code='invalid_patch', status_code=400)
+        parts.extend((content[cursor:start], insert))
+        cursor = start + delete_count
+        previous_start = start
+    parts.append(content[cursor:])
+    return ''.join(parts)
 
 
 def _build_move_operations(root_path, targets, *, destination_path=None, destination_directory=None):
@@ -1151,7 +1144,7 @@ def write_file_patch(root_key=None, relative_path='', patch=None, expected_modif
         normalized_path,
         expected_modified_ns,
     )
-    next_content = _apply_text_patch(str(current_state.get('content') or ''), patch or {})
+    next_content = _apply_text_patch(str(current_state.get('content') or ''), patch)
     return _write_file_content(
         normalized_root,
         root_path,

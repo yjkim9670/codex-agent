@@ -1331,20 +1331,40 @@
             <div class="ui-settings-header">
                 <div>
                     <div class="ui-settings-title" id="codex-ui-settings-title">화면 설정</div>
-                    <div class="ui-settings-description" id="codex-ui-settings-description">글자와 인터페이스 크기를 조정합니다.</div>
+                    <div class="ui-settings-description" id="codex-ui-settings-description">글꼴과 인터페이스 크기를 조정합니다.</div>
                 </div>
                 <button class="btn ghost icon-only ui-settings-close" type="button" id="codex-ui-settings-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
             </div>
             <div class="ui-settings-body">
+                <fieldset class="ui-font-setting" aria-describedby="codex-ui-font-help">
+                    <legend class="ui-font-setting-label">인터페이스 글꼴</legend>
+                    <div class="ui-font-options">
+                        <label class="ui-font-option">
+                            <input type="radio" name="codex-ui-font" value="ibm-plex" checked>
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">IBM Plex Sans KR</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
+                        <label class="ui-font-option ui-font-option-suit">
+                            <input type="radio" name="codex-ui-font" value="suit">
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">SUIT Variable</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
+                    </div>
+                    <span class="ui-font-setting-help" id="codex-ui-font-help">변경사항은 바로 적용되며, 이 브라우저에 저장됩니다.</span>
+                </fieldset>
                 <label class="ui-scale-setting" for="codex-ui-scale-input">
                     <span class="ui-scale-setting-label">글자 및 UI 크기</span>
                     <span class="ui-scale-setting-value" id="codex-ui-scale-value">90%</span>
                     <input id="codex-ui-scale-input" type="range" min="80" max="110" step="5" value="90" aria-describedby="codex-ui-scale-help">
-                    <span class="ui-scale-setting-help" id="codex-ui-scale-help">변경사항은 바로 적용되며, 이 브라우저에 저장됩니다.</span>
+                    <span class="ui-scale-setting-help" id="codex-ui-scale-help">80%부터 110%까지 조절할 수 있습니다.</span>
                 </label>
             </div>
             <div class="ui-settings-footer">
-                <button class="btn ghost" type="button" id="codex-ui-settings-reset">기본값 90%로 초기화</button>
+                <button class="btn ghost" type="button" id="codex-ui-settings-reset">기본 설정으로 초기화</button>
                 <button class="btn primary" type="button" id="codex-ui-settings-done">완료</button>
             </div>
         </section>
@@ -1824,6 +1844,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=241"></script>
+    <script src="/static/js/app.js?v=242"></script>
 </body>
 </html>

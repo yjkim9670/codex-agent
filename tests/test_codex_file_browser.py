@@ -967,7 +967,9 @@ def test_encrypted_read_route_returns_encrypted_payload(browser_test_client, iso
     assert payload['path'] == 'notes.txt'
 
 
+@pytest.mark.parametrize('multiple', [False, True])
 def test_encrypted_write_route_accepts_patch_and_omits_content(
+    multiple,
     browser_test_client,
     isolated_browser_roots,
     monkeypatch,
@@ -986,11 +988,9 @@ def test_encrypted_write_route_accepts_patch_and_omits_content(
             'root': 'server',
             'path': 'notes.txt',
             'expected_modified_ns': original['modified_ns'],
-            'patch': {
-                'start': 7,
-                'delete_count': 6,
-                'insert': 'encrypted',
-            },
+            'patch': ([{'start': 7, 'delete_count': 2, 'insert': 'en'},
+                       {'start': 10, 'delete_count': 3, 'insert': 'rypted'}]
+                      if multiple else {'start': 7, 'delete_count': 6, 'insert': 'encrypted'}),
         }),
     )
 
@@ -2086,3 +2086,59 @@ def test_markdown_tables_use_content_based_column_widths():
     assert app_css.count('word-break: normal;') >= 3
     assert app_css.count('word-break: keep-all;') >= 3
     assert app_css.count('overflow-wrap: normal;') >= 3
+
+
+@pytest.mark.parametrize('patch', [
+    [{'start': 0, 'delete_count': 1, 'insert': 'A'}, {'start': 99, 'delete_count': 0, 'insert': '!'}],
+    [{'start': 1, 'delete_count': 3}, {'start': 2, 'delete_count': 1}],
+    [{'start': 3, 'delete_count': 0}, {'start': 1, 'delete_count': 0}],
+    [{'start': 1, 'delete_count': 0}, {'start': 1, 'delete_count': 0}],
+    [{'start': -1, 'delete_count': 0}],
+    [{'start': 0.5, 'delete_count': 0}],
+    [{'start': True, 'delete_count': 0}],
+    [{'start': 0, 'delete_count': -1}],
+    [{'start': 0, 'delete_count': 0, 'insert': None}],
+    [None],
+])
+def test_multi_patch_rejects_invalid_without_partial_write(isolated_browser_roots, patch):
+    target = isolated_browser_roots['server_root'] / 'patch.txt'
+    target.write_bytes(b'abcdef\r\n')
+    original = file_browser.read_file(root_key='server', relative_path='patch.txt')
+    with pytest.raises(file_browser.FileBrowserError) as error:
+        file_browser.write_file_patch('server', 'patch.txt', patch, original['modified_ns'])
+    assert error.value.error_code == 'invalid_patch'
+    assert target.read_bytes() == b'abcdef\r\n'
+
+
+def test_multi_patch_unicode_crlf_and_conflict(isolated_browser_roots):
+    target = isolated_browser_roots['server_root'] / 'patch.txt'
+    target.write_bytes('😀abc\r\n끝\r\n'.encode())
+    original = file_browser.read_file(root_key='server', relative_path='patch.txt')
+    patches = [{'start': 1, 'delete_count': 1, 'insert': '가'},
+               {'start': 6, 'delete_count': 1, 'insert': '마지막'}]
+    result = file_browser.write_file_patch('server', 'patch.txt', patches, original['modified_ns'])
+    expected = '😀가bc\r\n마지막\r\n'.encode()
+    assert target.read_bytes() == expected
+    assert 'content' not in result
+    with pytest.raises(file_browser.FileBrowserError) as error:
+        file_browser.write_file_patch('server', 'patch.txt', patches, '1')
+    assert error.value.error_code == 'modified_conflict'
+    assert target.read_bytes() == expected
+    file_browser.write_file_patch('server', 'patch.txt', [], result['modified_ns'])
+    assert target.read_bytes() == expected
+
+
+def test_multi_patch_route(browser_test_client, isolated_browser_roots, monkeypatch):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK', True)
+    target = isolated_browser_roots['server_root'] / 'patch.txt'
+    target.write_bytes(b'abc\r\ndef\r\n')
+    original = file_browser.read_file('server', 'patch.txt')
+    response = browser_test_client.post('/api/codex/files/write',
+        base_url='http://100.64.12.34', headers={'X-Codex-Trusted-Http-Fallback': '1'},
+        json={'mode': 'patch', 'root': 'server', 'path': 'patch.txt',
+              'expected_modified_ns': original['modified_ns'],
+              'patch': [{'start': 0, 'delete_count': 1, 'insert': 'A'},
+                        {'start': 5, 'delete_count': 1, 'insert': 'D'}]})
+    assert response.status_code == 200
+    assert 'content' not in response.get_json()
+    assert target.read_bytes() == b'Abc\r\nDef\r\n'

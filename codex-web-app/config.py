@@ -579,6 +579,11 @@ def _normalize_model_catalog(entries):
 
 _current_codex_model_catalog = _normalize_model_catalog([
     {
+        'slug': 'gpt-6-astra',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': ['low', 'medium', 'high', 'xhigh', 'max'],
+    },
+    {
         'slug': 'gpt-5.6-sol',
         'default_reasoning_effort': 'low',
         'reasoning_options': _GPT56_REASONING_OPTIONS,
@@ -671,8 +676,9 @@ def _catalog_has_current_codex_models(catalog):
 
 def _supplement_codex_model_catalog(catalog):
     normalized_catalog = _normalize_model_catalog(catalog)
-    if _catalog_has_current_codex_models(normalized_catalog):
-        return _prioritize_current_codex_models(normalized_catalog)
+    # The CLI's on-disk catalog can lag a newly released first-party model.
+    # Keep the curated current list present even when the cache contains an
+    # older subset, then retain any extra account-specific entries from cache.
     return _prioritize_current_codex_models(_merge_model_catalogs(
         _current_codex_model_catalog,
         normalized_catalog,

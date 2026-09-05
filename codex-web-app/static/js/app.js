@@ -173,7 +173,7 @@ const MOBILE_KEYBOARD_VIEWPORT_DELTA = 120;
 const MOBILE_KEYBOARD_BASELINE_DELTA = 64;
 const MOBILE_PROMPT_BOTTOM_TARGET_GAP = 0;
 const MOBILE_PROMPT_ANDROID_BOTTOM_TARGET_GAP = 8;
-const MOBILE_PROMPT_MAX_SHIFT = 96;
+const MOBILE_PROMPT_MIN_MAX_SHIFT = 96;
 const MOBILE_VIEWPORT_FOCUS_RESYNC_DELAYS = Object.freeze([80, 160, 320]);
 const MOBILE_VIEWPORT_ANDROID_FOCUS_RESYNC_DELAYS = Object.freeze([480]);
 const MOBILE_PROMPT_FOCUS_RESYNC_DELAYS = Object.freeze([80, 160, 320, 480, 720, 960]);
@@ -7537,10 +7537,20 @@ function applyMobilePromptLift({ isMobile = isMobileViewportBehaviorActive(), ke
                 ? MOBILE_PROMPT_ANDROID_BOTTOM_TARGET_GAP
                 : MOBILE_PROMPT_BOTTOM_TARGET_GAP;
             const desiredShift = viewportBottom - unshiftedPromptBottom - targetGap;
+            // Foldables commonly keep the layout viewport at its pre-keyboard
+            // height.  In that mode the composer may need to travel farther
+            // than the old fixed 96px cap to clear the Android keyboard.
+            const viewportOcclusion = metrics.hasLayoutHeight
+                ? Math.max(0, metrics.layoutHeight - viewportBottom)
+                : 0;
+            const maxShift = Math.max(
+                MOBILE_PROMPT_MIN_MAX_SHIFT,
+                Math.ceil(viewportOcclusion + targetGap + 24)
+            );
             const clampedShift = clampNumber(
                 desiredShift,
-                MOBILE_PROMPT_MAX_SHIFT * -1,
-                MOBILE_PROMPT_MAX_SHIFT
+                maxShift * -1,
+                maxShift
             );
             nextLift = Math.round(clampedShift * -1);
         }
@@ -27277,7 +27287,7 @@ function renderAppServerModels() {
         setAppServerPanelEmpty('codex-app-server-models', 'Loading...');
         return;
     }
-    const models = normalizeAppServerList(state.appServer.models).slice(0, 8);
+    const models = normalizeAppServerList(state.appServer.models);
     if (models.length === 0) {
         setAppServerPanelEmpty('codex-app-server-models', 'No models');
         return;

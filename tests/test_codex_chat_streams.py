@@ -179,7 +179,8 @@ def test_model_catalog_reads_workbench_auth_home_cache(monkeypatch, tmp_path):
     monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
     monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
 
-    assert codex_config.get_codex_model_options()[:4] == [
+    assert codex_config.get_codex_model_options()[:5] == [
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
@@ -215,7 +216,8 @@ def test_model_catalog_falls_back_to_login_home_cache(monkeypatch, tmp_path):
     monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
     monkeypatch.delenv('CODEX_MODEL_CACHE_PATH', raising=False)
 
-    assert codex_config.get_codex_model_options()[:4] == [
+    assert codex_config.get_codex_model_options()[:5] == [
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
@@ -341,11 +343,15 @@ def test_model_catalog_default_starts_with_gpt56(monkeypatch, tmp_path):
     monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(missing_cache))
     monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
 
-    assert codex_config.get_codex_model_options()[:4] == [
+    assert codex_config.get_codex_model_options()[:5] == [
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-5.5',
+    ]
+    assert codex_config.get_codex_reasoning_options('gpt-6-astra') == [
+        'low', 'medium', 'high', 'xhigh', 'max'
     ]
 
 

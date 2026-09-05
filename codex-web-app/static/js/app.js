@@ -2098,6 +2098,8 @@ function primeSettingsOptionsFromDom(
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initializeWindowsSmallTextWeight();
+
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
         void initializePublicFilePreview();
         return;
@@ -7241,6 +7243,45 @@ function isAndroidPlatform() {
         return true;
     }
     return /\bAndroid\b/i.test(String(navigator.userAgent || ''));
+}
+
+function isWindowsDesktopPlatform() {
+    const userAgentData = navigator.userAgentData;
+    const platform = String(userAgentData?.platform || navigator.platform || '');
+    return /\b(?:Windows|Win32|Win64)\b/i.test(platform);
+}
+
+function initializeWindowsSmallTextWeight() {
+    if (!isWindowsDesktopPlatform()) return;
+
+    document.documentElement.classList.add('is-windows-desktop');
+    const eligibleElement = element => {
+        if (!(element instanceof HTMLElement) || element.classList.contains('windows-small-text')) {
+            return false;
+        }
+        const styles = window.getComputedStyle(element);
+        const fontSize = Number.parseFloat(styles.fontSize);
+        const fontWeight = Number.parseFloat(styles.fontWeight);
+        return Number.isFinite(fontSize)
+            && fontSize <= 12
+            && Number.isFinite(fontWeight)
+            && fontWeight < 500;
+    };
+    const applyWeight = root => {
+        if (!(root instanceof Element)) return;
+        if (eligibleElement(root)) root.classList.add('windows-small-text');
+        root.querySelectorAll('*').forEach(element => {
+            if (eligibleElement(element)) element.classList.add('windows-small-text');
+        });
+    };
+
+    applyWeight(document.body);
+    const observer = new MutationObserver(records => {
+        records.forEach(record => {
+            record.addedNodes.forEach(node => applyWeight(node));
+        });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 }
 
 function isLikelyVirtualKeyboardEnvironment() {

@@ -13331,3 +13331,9 @@ label.hover-tooltip,
         font-size: 12.5px;
     }
 }
+
+/* Windows DirectWrite keeps IBM Plex Sans KR more legible at compact UI sizes
+   when the auxiliary text uses the shipped medium face. */
+html.is-windows-desktop .windows-small-text {
+    font-weight: 500;
+}

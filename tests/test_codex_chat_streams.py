@@ -848,29 +848,25 @@ def test_account_usage_auto_refresh_runs_on_30_minute_kst_slots():
     ) is True
 
 
-def test_usage_keepalive_cycle_targets_cover_five_hour_and_weekly_zero_windows():
+def test_usage_keepalive_cycle_targets_use_only_five_hour_zero_usage_slots():
     now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
     targets = codex_chat._usage_keepalive_cycle_targets({
         'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T17:00:00+09:00'},
         'weekly': {'used_percent': 0, 'resets_at': '2026-08-10T00:00:00+09:00'},
     }, now)
-    assert targets == {
-        'five_hour': 'five_hour:2026-08-04T17:00:00+09:00',
-        'weekly': 'weekly:2026-08-10T00:00:00+09:00',
-    }
+    assert targets == {'five_hour': 'five_hour:zero-usage-slot:99211'}
     assert codex_chat._usage_keepalive_cycle_targets({
         'weekly': {'used_percent': 1, 'resets_at': '2026-08-10T00:00:00+09:00'},
     }, now) == {}
 
 
-def test_usage_keepalive_uses_bounded_fallback_key_for_unsettled_reset_timestamp():
+def test_usage_keepalive_ignores_provisional_future_reset_timestamp():
     now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
     targets = codex_chat._usage_keepalive_cycle_targets({
         'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
         'weekly': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
     }, now)
-    assert targets['five_hour'].startswith('five_hour:fallback:')
-    assert targets['weekly'].startswith('weekly:fallback:')
+    assert targets == {'five_hour': 'five_hour:zero-usage-slot:99211'}
 
 
 def test_usage_keepalive_followup_refresh_and_verification_state_machine():
@@ -909,7 +905,7 @@ def test_usage_keepalive_followup_refresh_and_verification_state_machine():
     assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
     assert snapshot['usage_keepalive']['verification_status'] == 'unverified'
     assert snapshot['usage_keepalive']['next_retry_at'] is None
-    assert snapshot['usage_keepalive']['history'][-1]['event'] == 'verification_failed'
+    assert snapshot['usage_keepalive']['history'][-1]['event'] == 'reset_time_changed'
 
 
 def test_usage_keepalive_does_not_retry_when_a_valid_reset_candidate_moves():

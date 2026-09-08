@@ -7628,7 +7628,6 @@ _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
 # provisional rate-limit response consumed a large amount of quota without
 # making the server's reset timestamp any more authoritative.
 _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN = timedelta(hours=5)
-_USAGE_KEEPALIVE_GLOBAL_WEEKLY_COOLDOWN = timedelta(days=7)
 _USAGE_KEEPALIVE_PROMPT = (
     'Perform a read-only workspace health review.\n\n'
     '1. Inspect the top-level project structure and read up to three representative '
@@ -7644,33 +7643,27 @@ _USAGE_KEEPALIVE_PROMPT = (
 
 
 def _usage_keepalive_cycle_targets(snapshot, now=None):
-    """Return zero-usage rate-limit windows that may need activation.
+    """Return the five-hour zero-usage window that may need activation.
 
-    `resets_at` identifies a real server window when it is available.  Some
-    reset responses temporarily return a near-current timestamp instead; use a
-    bounded KST fallback key in that case so polling cannot submit repeatedly.
+    ``resets_at`` is deliberately not used to identify a submission cycle.
+    Before the service has activated a window it can expose a plausible,
+    future-looking provisional value, so it is not reliable enough to drive a
+    token-consuming request.  A bounded five-hour observation slot plus the
+    account-wide cooldown guarantees at most one automatic request per slot.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
     targets = {}
-    for name, fallback_hours, minimum_future in (
-            ('five_hour', 5, timedelta(hours=1)),
-            ('weekly', 24 * 7, timedelta(days=1))):
-        limit = snapshot.get(name) if isinstance(snapshot, dict) else None
-        if not isinstance(limit, dict) or _normalize_used_percent(limit.get('used_percent')) != 0:
-            continue
-        reset_at = parse_timestamp(limit.get('resets_at'))
-        if reset_at and reset_at > current + minimum_future:
-            targets[name] = '%s:%s' % (name, normalize_timestamp(reset_at))
-        else:
-            epoch_hour = int(current.timestamp() // (fallback_hours * 60 * 60))
-            targets[name] = '%s:fallback:%s' % (name, epoch_hour)
+    limit = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
+    if isinstance(limit, dict) and _normalize_used_percent(limit.get('used_percent')) == 0:
+        epoch_slot = int(current.timestamp() // (5 * 60 * 60))
+        targets['five_hour'] = 'five_hour:zero-usage-slot:%s' % epoch_slot
     return targets
 
 
 def _usage_keepalive_daily_key(snapshot, now=None):
     """Compatibility helper retained for callers from older installations."""
-    return _usage_keepalive_cycle_targets(snapshot, now).get('weekly', '')
+    return _usage_keepalive_cycle_targets(snapshot, now).get('five_hour', '')
 
 
 def _usage_keepalive_followup_is_due(snapshot, now=None):
@@ -7706,9 +7699,9 @@ def _usage_keepalive_coordination_path(context):
 def _usage_keepalive_global_claim(context, cycle_targets, now=None):
     """Atomically reserve one automatic submission across all workspaces.
 
-    A single ordinary request normally covers both zero-use windows.  A
-    moving provisional reset value is guarded by a window-sized cooldown, so
-    another Workbench copy cannot turn it into a submission storm.
+    A moving provisional reset value is never used here.  The five-hour
+    zero-usage slot is guarded by a window-sized cooldown, so another
+    Workbench copy cannot turn polling into a submission storm.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     path = _usage_keepalive_coordination_path(context)
@@ -7724,10 +7717,7 @@ def _usage_keepalive_global_claim(context, cycle_targets, now=None):
         for name, target in cycle_targets.items():
             prior = windows.get(name) if isinstance(windows.get(name), dict) else {}
             prior_at = parse_timestamp(prior.get('submitted_at'))
-            cooldown = (
-                _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN
-                if name == 'five_hour' else _USAGE_KEEPALIVE_GLOBAL_WEEKLY_COOLDOWN
-            )
+            cooldown = _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN
             if prior.get('target') == target:
                 continue
             changed_windows.append((name, target))
@@ -7737,8 +7727,6 @@ def _usage_keepalive_global_claim(context, cycle_targets, now=None):
             return False, 'account_cycle_already_submitted'
         if not eligible_windows:
             return False, 'account_window_cooldown'
-        # Do not refresh an unchanged weekly reservation on every new 5h
-        # cycle.  Each window retains its own cooldown and target identity.
         for name, target in eligible_windows:
             windows[name] = {
                 'target': target,
@@ -7772,27 +7760,8 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
     attempted_at = normalize_timestamp(None)
     cycle_targets = _usage_keepalive_cycle_targets(snapshot)
     if automatic:
-        # A zero-use API response may advertise a provisional reset time of
-        # "now + window".  That value moves after every tiny request.  Treat
-        # the first target as the cycle identity until it actually expires;
-        # otherwise each verification would look like a brand-new reset and
-        # create an unbounded keepalive loop.
         previous_targets = previous_keepalive.get('automatic_cycle_targets')
         previous_targets = previous_targets if isinstance(previous_targets, dict) else {}
-        previous_target_times = [
-            parse_timestamp(str(value).split(':', 1)[-1])
-            for value in previous_targets.values()
-        ]
-        future_previous_targets = [
-            value for value in previous_target_times
-            if value is not None and value > datetime.now(KST)
-        ]
-        if (
-            previous_keepalive.get('last_mode') == 'automatic'
-            and future_previous_targets
-            and cycle_targets
-        ):
-            cycle_targets = previous_targets
         if not cycle_targets:
             return {'submitted': False, 'reason': 'no_zero_usage_window'}
         same_targets = previous_targets == cycle_targets
@@ -7880,10 +7849,11 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
 def _verify_usage_keepalive_locked(snapshot, now=None):
     """Validate that an automatic keepalive established stable reset windows.
 
-    A zero-use rate-limit response can synthesize ``now + window`` on each
-    read. It looks plausible and is always in the future, but it is not an
-    activated server window. A candidate must survive a second delayed API
-    read unchanged before it is accepted.
+    A zero-use rate-limit response can synthesize a plausible future reset
+    value, but that is not evidence of an activated server window.  A reset
+    value is diagnostic only: it must survive a second delayed API read
+    unchanged before it is accepted, regardless of whether it is in the
+    future.
     """
     keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else None
     if not isinstance(keepalive, dict) or keepalive.get('last_mode') != 'automatic':
@@ -7894,12 +7864,15 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
         return False
     targets = keepalive.get('automatic_cycle_targets')
     targets = targets if isinstance(targets, dict) else {}
+    # Snapshots written by earlier versions may still contain a weekly target.
+    # Weekly limits are intentionally outside the automatic-work policy.
+    targets = ({'five_hour': targets['five_hour']}
+               if targets.get('five_hour') else {})
     candidates = {}
     for name in targets:
         limit = snapshot.get(name) if isinstance(snapshot, dict) else None
         reset_at = parse_timestamp((limit or {}).get('resets_at')) if isinstance(limit, dict) else None
-        horizon = timedelta(hours=4) if name == 'five_hour' else timedelta(days=6)
-        if reset_at and reset_at >= current + horizon:
+        if reset_at:
             candidates[name] = normalize_timestamp(reset_at)
     history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
     history = [item for item in history[-49:] if isinstance(item, dict)]

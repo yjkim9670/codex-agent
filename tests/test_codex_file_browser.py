@@ -1812,12 +1812,12 @@ def test_usage_panel_displays_five_hour_and_weekly_limits_when_available():
     assert "buildUsageEntry(usage?.weekly, 'Weekly')" in app_js
     assert "label: 'Weekly 1% token'" in app_js
     assert "5h 1% token" not in app_js
-    assert "item?.five_hour_used_percent" not in app_js
-    assert "item?.five_hour_reset_detected" not in app_js
-    assert "five-hour-line" not in app_js
-    assert "five-hour-reset" not in app_js
-    assert "five-hour-line" not in app_css
-    assert "five-hour-reset" not in app_css
+    assert "item?.five_hour_used_percent" in app_js
+    assert "item?.five_hour_reset_detected" in app_js
+    assert "five-hour-line" in app_js
+    assert "five-hour-reset" in app_js
+    assert "five-hour-line" in app_css
+    assert "five-hour-reset" in app_css
     assert 'Uncached ${formatCompactTokenCount(uncachedInputTokens)}' in app_js
     assert 'Cached ${formatCompactTokenCount(details.cachedInputTokens)}' in app_js
     assert 'Output ${formatCompactTokenCount(details.outputTokens)}' in app_js
@@ -1846,8 +1846,8 @@ def test_usage_history_chart_shows_hover_and_click_cursor_guides():
     assert '.usage-history-chart .cursor-grid-guide.is-pinned' in app_css
     assert 'stroke-width: 1;' in app_css
     assert '.cursor-grid-guide.is-visible {\n    stroke-dasharray: 4 4;\n    opacity: 0.68;' in app_css
-    assert '/static/css/app.css?v=205' in template
-    assert '/static/js/app.js?v=213' in template
+    assert '/static/css/app.css?v=225' in template
+    assert '/static/js/app.js?v=243' in template
 
 
 def test_usage_history_can_switch_account_and_workspace_scope():

@@ -886,11 +886,20 @@ def test_usage_keepalive_followup_refresh_and_verification_state_machine():
         },
     }
     assert codex_chat._account_usage_refresh_is_due(snapshot, now) is True
+    # The first post-task observation is a candidate only. An unchanged
+    # second observation proves the reset time has stabilized.
+    assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
+    state = snapshot['usage_keepalive']
+    assert state['verification_status'] == 'stability_pending'
+    assert state['verification_due_at'] is not None
+    assert state['history'][-1]['event'] == 'stability_candidate_recorded'
+
+    state['verification_due_at'] = '2026-08-04T12:29:00+09:00'
     assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
     state = snapshot['usage_keepalive']
     assert state['verification_status'] == 'verified'
     assert state['next_retry_at'] is None
-    assert state['history'][-1]['event'] == 'verified'
+    assert state['history'][-1]['event'] == 'verified_stable_reset'
 
     snapshot['usage_keepalive'].update({
         'verification_due_at': '2026-08-04T12:29:00+09:00',
@@ -901,6 +910,27 @@ def test_usage_keepalive_followup_refresh_and_verification_state_machine():
     assert snapshot['usage_keepalive']['verification_status'] == 'retry_pending'
     assert snapshot['usage_keepalive']['next_retry_at'] is not None
     assert snapshot['usage_keepalive']['history'][-1]['event'] == 'verification_failed'
+
+
+def test_usage_keepalive_retries_when_a_valid_reset_candidate_moves():
+    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    snapshot = {
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T17:30:00+09:00'},
+        'usage_keepalive': {
+            'last_mode': 'automatic',
+            'verification_due_at': '2026-08-04T12:29:00+09:00',
+            'automatic_cycle_targets': {'five_hour': 'five_hour:previous'},
+            'verification_candidate_resets': {'five_hour': '2026-08-04T17:00:00+09:00'},
+            'history': [],
+        },
+    }
+
+    assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
+    state = snapshot['usage_keepalive']
+    assert state['verification_status'] == 'retry_pending'
+    assert state['next_retry_at'] is not None
+    assert 'verification_candidate_resets' not in state
+    assert state['history'][-1]['event'] == 'reset_time_changed'
 
 
 def test_usage_keepalive_uses_terra_with_a_concise_reasoning_prompt():

@@ -7693,10 +7693,29 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
     attempted_at = normalize_timestamp(None)
     cycle_targets = _usage_keepalive_cycle_targets(snapshot)
     if automatic:
-        if not cycle_targets:
-            return {'submitted': False, 'reason': 'no_zero_usage_window'}
+        # A zero-use API response may advertise a provisional reset time of
+        # "now + window".  That value moves after every tiny request.  Treat
+        # the first target as the cycle identity until it actually expires;
+        # otherwise each verification would look like a brand-new reset and
+        # create an unbounded keepalive loop.
         previous_targets = previous_keepalive.get('automatic_cycle_targets')
         previous_targets = previous_targets if isinstance(previous_targets, dict) else {}
+        previous_target_times = [
+            parse_timestamp(str(value).split(':', 1)[-1])
+            for value in previous_targets.values()
+        ]
+        future_previous_targets = [
+            value for value in previous_target_times
+            if value is not None and value > datetime.now(KST)
+        ]
+        if (
+            previous_keepalive.get('last_mode') == 'automatic'
+            and future_previous_targets
+            and cycle_targets
+        ):
+            cycle_targets = previous_targets
+        if not cycle_targets:
+            return {'submitted': False, 'reason': 'no_zero_usage_window'}
         retry_at = parse_timestamp(previous_keepalive.get('next_retry_at'))
         same_targets = previous_targets == cycle_targets
         attempts = int(previous_keepalive.get('automatic_attempts') or 0)
@@ -7788,7 +7807,13 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
 
 
 def _verify_usage_keepalive_locked(snapshot, now=None):
-    """Validate that an automatic keepalive established its reset windows."""
+    """Validate that an automatic keepalive established stable reset windows.
+
+    A zero-use rate-limit response can synthesize ``now + window`` on each
+    read. It looks plausible and is always in the future, but it is not an
+    activated server window. A candidate must survive a second delayed API
+    read unchanged before it is accepted.
+    """
     keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else None
     if not isinstance(keepalive, dict) or keepalive.get('last_mode') != 'automatic':
         return False
@@ -7798,23 +7823,46 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
         return False
     targets = keepalive.get('automatic_cycle_targets')
     targets = targets if isinstance(targets, dict) else {}
-    verified = []
+    candidates = {}
     for name in targets:
         limit = snapshot.get(name) if isinstance(snapshot, dict) else None
         reset_at = parse_timestamp((limit or {}).get('resets_at')) if isinstance(limit, dict) else None
         horizon = timedelta(hours=4) if name == 'five_hour' else timedelta(days=6)
         if reset_at and reset_at >= current + horizon:
-            verified.append(name)
+            candidates[name] = normalize_timestamp(reset_at)
     history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
     history = [item for item in history[-49:] if isinstance(item, dict)]
-    success = bool(targets) and len(verified) == len(targets)
-    keepalive['verification_status'] = 'verified' if success else 'retry_pending'
-    keepalive['verification_due_at'] = None
-    keepalive['last_verified_at'] = normalize_timestamp(current) if success else keepalive.get('last_verified_at')
-    keepalive['next_retry_at'] = None if success else normalize_timestamp(
-        current + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
-    history.append({'at': normalize_timestamp(current), 'event': 'verified' if success else 'verification_failed',
-                    'mode': 'automatic', 'targets': targets, 'verified_targets': verified})
+    previous_candidates = keepalive.get('verification_candidate_resets')
+    previous_candidates = previous_candidates if isinstance(previous_candidates, dict) else {}
+    candidate_complete = bool(targets) and len(candidates) == len(targets)
+    if candidate_complete and not previous_candidates:
+        # First post-completion read only records a candidate. The next read
+        # proves whether the service stopped recalculating ``resets_at``.
+        keepalive['verification_candidate_resets'] = candidates
+        keepalive['verification_status'] = 'stability_pending'
+        keepalive['verification_due_at'] = normalize_timestamp(
+            current + timedelta(seconds=_USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS))
+        keepalive['next_retry_at'] = None
+        event = 'stability_candidate_recorded'
+    elif candidate_complete and candidates == previous_candidates:
+        keepalive['verification_status'] = 'verified'
+        keepalive['verification_due_at'] = None
+        keepalive['next_retry_at'] = None
+        keepalive['last_verified_at'] = normalize_timestamp(current)
+        event = 'verified_stable_reset'
+    else:
+        # A changed candidate is still provisional. Only then schedule a new
+        # submission, rather than spending tokens to confirm an unchanged one.
+        keepalive.pop('verification_candidate_resets', None)
+        keepalive['verification_status'] = 'retry_pending'
+        keepalive['verification_due_at'] = None
+        keepalive['next_retry_at'] = normalize_timestamp(
+            current + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
+        event = 'reset_time_changed' if candidate_complete else 'verification_failed'
+    history.append({'at': normalize_timestamp(current), 'event': event,
+                    'mode': 'automatic', 'targets': targets,
+                    'candidate_resets': candidates,
+                    'previous_candidate_resets': previous_candidates})
     keepalive['history'] = history
     snapshot['usage_keepalive'] = keepalive
     return True
@@ -7864,6 +7912,9 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
         keepalive['last_error'] = '' if succeeded else str(error or '')[:1000]
         if mode == 'automatic':
             keepalive['verification_status'] = 'pending' if succeeded else 'retry_pending'
+            # Never compare a new request with a reset sampled for an older
+            # request/cycle.
+            keepalive.pop('verification_candidate_resets', None)
             keepalive['verification_due_at'] = (
                 normalize_timestamp(datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS))
                 if succeeded else None
@@ -7976,10 +8027,11 @@ def refresh_account_usage_snapshot_if_due(
             }
             verification_updated = _verify_usage_keepalive_locked(snapshot)
             verification_state = snapshot.get('usage_keepalive') if verification_updated else {}
-            schedule_retry = bool(
-                isinstance(verification_state, dict)
-                and verification_state.get('verification_status') == 'retry_pending'
+            verification_status = (
+                verification_state.get('verification_status')
+                if isinstance(verification_state, dict) else ''
             )
+            schedule_retry = verification_status in {'retry_pending', 'stability_pending'}
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
             if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
@@ -7996,7 +8048,11 @@ def refresh_account_usage_snapshot_if_due(
                 _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             if schedule_retry:
                 _schedule_usage_keepalive_followup(
-                    context['account']['id'], _USAGE_KEEPALIVE_RETRY_DELAY_SECONDS,
+                    context['account']['id'], (
+                        _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS
+                        if verification_status == 'stability_pending'
+                        else _USAGE_KEEPALIVE_RETRY_DELAY_SECONDS
+                    ),
                 )
             return {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
         except Exception as exc:
@@ -8177,6 +8233,25 @@ def get_usage_summary(account_id=None):
         'token_usage': token_usage,
         'account_token_usage': account_token_usage,
         **account_metadata,
+    }
+
+
+def _compact_usage_limit_snapshot(usage_summary):
+    """Keep the two quota readings stored with a chat turn deliberately small."""
+    usage = usage_summary if isinstance(usage_summary, dict) else {}
+
+    def limit_value(name):
+        limit = usage.get(name) if isinstance(usage.get(name), dict) else {}
+        used = _normalize_used_percent(limit.get('used_percent'))
+        return {
+            'used_percent': used,
+            'resets_at': _normalize_optional_timestamp(limit.get('resets_at')),
+        }
+
+    return {
+        'observed_at': _normalize_optional_timestamp(usage.get('limits_observed_at')),
+        'five_hour': limit_value('five_hour'),
+        'weekly': limit_value('weekly'),
     }
 
 
@@ -13596,6 +13671,22 @@ def create_codex_stream(
     )
     normalized_attachments = normalize_codex_attachments(attachments or [])
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
+    # Read immediately before execution so the bubble can show an actual
+    # before/after pair rather than an older scheduler sample.
+    try:
+        before_refresh = refresh_account_usage_snapshot_if_due(
+            account_id=resolved_account_id,
+            force=True,
+            limit_sample_source='manual',
+        )
+        before_snapshot = before_refresh.get('snapshot') if isinstance(before_refresh, dict) else None
+    except Exception:
+        _LOGGER.debug('pre-task account usage refresh skipped', exc_info=True)
+        before_snapshot = None
+    usage_limits_before = _compact_usage_limit_snapshot(
+        before_snapshot if isinstance(before_snapshot, dict)
+        else get_usage_summary(account_id=resolved_account_id)
+    )
     if is_internal_multiuser_mode() and not isinstance(internal_api_key, dict):
         from .company_credentials import reserve_internal_api_key
         internal_api_key = reserve_internal_api_key()
@@ -13628,6 +13719,7 @@ def create_codex_stream(
         'plan_mode': bool(plan_mode),
         'queued_execution': bool(queued_execution),
         'account_id': resolved_account_id,
+        'usage_limits_before': usage_limits_before,
         'usage_operation': str(usage_operation or 'chat'),
         'question_only': bool(question_only or structured_report_preset_id),
         'attachments': normalized_attachments,
@@ -14535,6 +14627,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         internal_api_key_id = str(stream.get('internal_api_key_id') or '').strip()
         internal_api_key_label = str(stream.get('internal_api_key_label') or '').strip()
         exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
+        usage_limits_before = deepcopy(stream.get('usage_limits_before'))
 
     output_from_file = _read_output_last_message(output_path)
     output_file_untrusted_after_work_item = _output_file_is_untrusted_after_work_item(
@@ -14574,6 +14667,10 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata['execution_policy'] = execution_policy
     metadata['streaming'] = False
     metadata['account_id'] = account_id
+    metadata['usage_limits_before'] = (
+        usage_limits_before if isinstance(usage_limits_before, dict)
+        else _compact_usage_limit_snapshot({})
+    )
     if internal_api_key_id:
         metadata['internal_api_key_id'] = internal_api_key_id
     if internal_api_key_label:
@@ -14750,7 +14847,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.
     try:
-        refresh_account_usage_snapshot_if_due(
+        refresh_result = refresh_account_usage_snapshot_if_due(
             account_id=account_id,
             force=True,
             limit_sample_source=(
@@ -14759,6 +14856,19 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 else 'post_task'
             ),
         )
+        refreshed_snapshot = (
+            refresh_result.get('snapshot') if isinstance(refresh_result, dict) else None
+        )
+        metadata['usage_limits_after'] = _compact_usage_limit_snapshot(
+            refreshed_snapshot if isinstance(refreshed_snapshot, dict)
+            else get_usage_summary(account_id=account_id)
+        )
+        if saved_message:
+            saved_message = update_message(
+                session_id,
+                saved_message['id'],
+                metadata=metadata,
+            ) or saved_message
     except Exception:
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
     if trigger_queue:

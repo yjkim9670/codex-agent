@@ -15475,7 +15475,7 @@ function renderUsageHistoryLegend(history) {
     if (automaticKeepaliveSampleCount > 0) {
         legendItems.push({
             key: 'automatic-keepalive-sample',
-            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (주간 0% 감지 · Terra low)`
+            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (5h/Weekly 리셋 감지 · Terra low)`
         });
     }
     if (missingSampleCount > 0) {
@@ -15494,6 +15494,13 @@ function renderUsageHistoryLegend(history) {
         legendItems.push({
             key: 'weekly-reset',
             text: `Weekly 리셋 감지 ${formatNumber(weeklyResetCount)}회`
+        });
+    }
+    const fiveHourResetCount = Number(history?.five_hour_reset_detected_count);
+    if (Number.isFinite(fiveHourResetCount)) {
+        legendItems.push({
+            key: 'five-hour-reset',
+            text: `5h 리셋 감지 ${formatNumber(fiveHourResetCount)}회`
         });
     }
     if (Number.isFinite(tokenCounterResetCount) && tokenCounterResetCount > 0) {
@@ -15595,6 +15602,7 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     const tokenDelta = Number(item?.delta_tokens);
     const tokenBreakdown = formatUsageHistoryTokenBreakdown(item);
     const resetLabels = [];
+    if (item?.five_hour_reset_detected) resetLabels.push('5h');
     if (item?.weekly_reset_detected) resetLabels.push('weekly');
     if (item?.token_counter_reset_detected) resetLabels.push('token counter');
 
@@ -15610,9 +15618,9 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     } else if (item?.limit_sample_source === 'post_task') {
         parts.push('Codex 작업 완료 후 조회');
     } else if (item?.limit_sample_source === 'post_keepalive') {
-        parts.push('주간 0% 감지/수동 경량 작업 완료 후 조회 (Terra low)');
+        parts.push('5h/Weekly 리셋 감지 또는 수동 경량 작업 완료 후 조회 (Terra low)');
     } else if (item?.limit_sample_source === 'post_keepalive_automatic') {
-        parts.push('주간 0% 감지 후 자동 경량 작업 완료 및 기록 (Terra low)');
+        parts.push('5h/Weekly 리셋 감지 후 자동 경량 작업 완료 및 기록 (Terra low)');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
@@ -15622,6 +15630,8 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         parts.push(`Plan ${planLabel}`);
     }
     parts.push(
+        `5h ${formatUsageHistoryPercentValue(item?.five_hour_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_five_hour_used_percent)})`,
+        `5h reset ${formatResetTimestamp(item?.five_hour_resets_at) || '--'}`,
         `Weekly ${formatUsageHistoryPercentValue(item?.weekly_used_percent)} (${formatUsageHistorySignedPercent(item?.delta_weekly_used_percent)})`,
         `Weekly reset ${formatResetTimestamp(item?.weekly_resets_at) || '--'}`
     );
@@ -15676,12 +15686,14 @@ function resolveVisibleUsagePlanTransitions(history, items = []) {
 function resolveUsageHistoryChartDisplayHeight(containerWidth, mobileLayout) {
     const normalizedWidth = Math.max(280, Number(containerWidth) || 0);
     if (mobileLayout) {
-        return clampToRange(Math.round(normalizedWidth * 0.92), 300, 520);
+        return clampToRange(Math.round(normalizedWidth * 1.22), 420, 650);
     }
-    return clampToRange(Math.round(normalizedWidth * 0.42), 260, 420);
+    return clampToRange(Math.round(normalizedWidth * 0.56), 380, 520);
 }
 
 function resetUsageHistoryChartPresentation(chartWrap, chart) {
+    const overlay = document.getElementById('codex-usage-history-overlay');
+    overlay?.classList.remove('is-mobile-chart-layout');
     if (chartWrap instanceof HTMLElement) {
         chartWrap.style.removeProperty('--usage-history-chart-height');
     }
@@ -15745,6 +15757,10 @@ function renderUsageHistoryChart(history) {
     }
 
     const mobileLayout = isMobileLayout();
+    // CSS viewport width is not a reliable mobile signal (Samsung Internet
+    // can expose a wide layout viewport).  Mirror the renderer's mobile
+    // decision onto the overlay so its scroll container cannot be skipped.
+    elements.overlay?.classList.toggle('is-mobile-chart-layout', mobileLayout);
     const containerWidth = Number(chartWrap?.clientWidth)
         || Number(chart.clientWidth)
         || 360;
@@ -15752,16 +15768,14 @@ function renderUsageHistoryChart(history) {
     if (chartWrap instanceof HTMLElement) {
         chartWrap.style.setProperty('--usage-history-chart-height', `${displayHeight}px`);
     }
-    const typography = applyUsageHistoryChartTypography(chart, containerWidth, displayHeight, mobileLayout);
-    const width = mobileLayout ? 920 : 1000;
-    const aspectRatio = containerWidth > 0
-        ? displayHeight / containerWidth
-        : (mobileLayout ? 0.92 : 0.42);
-    const height = clampToRange(
-        Math.round(width * aspectRatio),
-        mobileLayout ? 720 : 340,
-        mobileLayout ? 980 : 520
-    );
+    // Use the rendered SVG viewport as its coordinate system.  The former
+    // fixed 920/1000-wide viewBox was stretched to this viewport with
+    // preserveAspectRatio="none", which gave text different horizontal and
+    // vertical scales on narrow screens (and also made touch coordinates
+    // disagree with drawn grid coordinates).
+    const width = Math.max(1, Math.round(Number(chart.clientWidth) || containerWidth));
+    const height = Math.max(1, Math.round(Number(chart.clientHeight) || displayHeight));
+    const typography = applyUsageHistoryChartTypography(chart, width, height, mobileLayout);
     const leftMargin = clampToRange(Math.round(typography.axisFontSize * 5.8), 58, mobileLayout ? 68 : 72);
     const rightMargin = clampToRange(Math.round(typography.axisFontSize * 5.5), 56, mobileLayout ? 66 : 72);
     const margin = mobileLayout
@@ -15770,27 +15784,28 @@ function renderUsageHistoryChart(history) {
     const plotWidth = Math.max(1, width - margin.left - margin.right);
     const plotAreaHeight = Math.max(1, height - margin.top - margin.bottom);
     chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    chart.setAttribute('preserveAspectRatio', 'none');
+    chart.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
-    const tokenDeltas = items.map(item => Math.max(0, Number(item?.delta_tokens) || 0));
+    const fiveHourUsed = items.map(item => normalizeUsedPercent(item?.five_hour_used_percent));
     const weeklyUsed = items.map(item => normalizeUsedPercent(item?.weekly_used_percent));
-    const percentValues = weeklyUsed.filter(value => Number.isFinite(value));
-    const maxUsedPercent = percentValues.length > 0 ? Math.max(...percentValues) : 0;
-    const percentScale = resolveUsageHistoryPercentScale(maxUsedPercent);
-    const percentTicks = buildUsageHistoryPercentTicks(percentScale);
-    const maxTokenDelta = Math.max(1, ...tokenDeltas);
+    const fiveHourValues = fiveHourUsed.filter(value => Number.isFinite(value));
+    const weeklyValues = weeklyUsed.filter(value => Number.isFinite(value));
+    // Both panels intentionally use the same full 0–100% scale.  Auto-scaling
+    // makes small 5h changes look comparable to a much larger Weekly change.
+    const fiveHourScale = 100;
+    const weeklyScale = 100;
+    const fiveHourTicks = buildUsageHistoryPercentTicks(fiveHourScale);
+    const weeklyTicks = buildUsageHistoryPercentTicks(weeklyScale);
+    const percentScale = Math.max(fiveHourScale, weeklyScale);
+    const maxUsedPercent = Math.max(0, ...fiveHourValues, ...weeklyValues);
 
-    const stackedGap = mobileLayout ? 30 : 0;
-    const tokenPlotHeight = mobileLayout
-        ? Math.max(90, Math.round((plotAreaHeight - stackedGap) * 0.53))
-        : plotAreaHeight;
-    const percentPlotHeight = mobileLayout
-        ? Math.max(70, plotAreaHeight - stackedGap - tokenPlotHeight)
-        : plotAreaHeight;
-    const tokenTop = margin.top;
-    const tokenBottom = tokenTop + tokenPlotHeight;
-    const percentTop = mobileLayout ? tokenBottom + stackedGap : margin.top;
-    const percentBottom = percentTop + percentPlotHeight;
+    const stackedGap = mobileLayout ? 36 : 30;
+    const fiveHourPlotHeight = Math.max(90, Math.round((plotAreaHeight - stackedGap) * 0.5));
+    const weeklyPlotHeight = Math.max(90, plotAreaHeight - stackedGap - fiveHourPlotHeight);
+    const fiveHourTop = margin.top;
+    const fiveHourBottom = fiveHourTop + fiveHourPlotHeight;
+    const weeklyTop = fiveHourBottom + stackedGap;
+    const weeklyBottom = weeklyTop + weeklyPlotHeight;
 
     const itemTimestamps = items.map(item => new Date(item?.bucket_start || item?.recorded_at || '').getTime());
     const firstTimestamp = itemTimestamps[0];
@@ -15806,25 +15821,19 @@ function renderUsageHistoryChart(history) {
     };
     const xAt = index => xAtTimestamp(items[index]?.bucket_start || items[index]?.recorded_at) ?? margin.left;
     const slotWidth = items.length > 1 ? plotWidth / (items.length - 1) : plotWidth;
-    const barWidth = Math.max(2, Math.min(14, slotWidth / 1.8));
-    const yToken = value => tokenBottom - ((Math.max(0, value) / maxTokenDelta) * tokenPlotHeight);
-    const yPercent = value => {
-        const normalized = Math.max(0, Math.min(percentScale, Number(value) || 0));
-        return percentBottom - ((normalized / percentScale) * percentPlotHeight);
-    };
+    const yFiveHour = value => fiveHourBottom - ((Math.max(0, Math.min(fiveHourScale, Number(value) || 0)) / fiveHourScale) * fiveHourPlotHeight);
+    const yWeekly = value => weeklyBottom - ((Math.max(0, Math.min(weeklyScale, Number(value) || 0)) / weeklyScale) * weeklyPlotHeight);
     const relationScope = resolveUsageHistoryRelationScope(history);
     const cursorGuideSnapPointsByIndex = items.map((item, index) => {
         if (item?.is_padding || item?.is_missing) return [];
-        const points = [{
-            x: xAt(index),
-            y: yToken(tokenDeltas[index]),
-            index,
-            metric: 'tokens'
-        }];
+        const points = [];
+        if (Number.isFinite(fiveHourUsed[index])) {
+            points.push({ x: xAt(index), y: yFiveHour(fiveHourUsed[index]), index, metric: 'five-hour' });
+        }
         if (Number.isFinite(weeklyUsed[index])) {
             points.push({
                 x: xAt(index),
-                y: yPercent(weeklyUsed[index]),
+                y: yWeekly(weeklyUsed[index]),
                 index,
                 metric: 'weekly'
             });
@@ -15866,12 +15875,12 @@ function renderUsageHistoryChart(history) {
         x1: margin.left,
         y1: margin.top,
         x2: margin.left,
-        y2: percentBottom,
+        y2: weeklyBottom,
         class: 'cursor-grid-guide cursor-grid-guide-vertical'
     });
     const cursorGuideHorizontal = createUsageHistorySvgNode('line', {
         x1: margin.left,
-        y1: margin.top,
+        y1: fiveHourTop,
         x2: margin.left + plotWidth,
         y2: margin.top,
         class: 'cursor-grid-guide cursor-grid-guide-horizontal'
@@ -15879,6 +15888,7 @@ function renderUsageHistoryChart(history) {
     chart.append(cursorGuideVertical, cursorGuideHorizontal);
 
     let cursorGuidePinned = false;
+    let ignoreNextTouchClick = false;
     const setCursorGuideVisible = visible => {
         [cursorGuideVertical, cursorGuideHorizontal].forEach(guide => {
             guide.classList.toggle('is-visible', Boolean(visible));
@@ -15903,7 +15913,7 @@ function renderUsageHistoryChart(history) {
     };
     const updateCursorGuide = (x, y) => {
         const normalizedX = Math.max(margin.left, Math.min(margin.left + plotWidth, Number(x)));
-        const normalizedY = Math.max(margin.top, Math.min(percentBottom, Number(y)));
+        const normalizedY = Math.max(fiveHourTop, Math.min(weeklyBottom, Number(y)));
         if (!Number.isFinite(normalizedX) || !Number.isFinite(normalizedY)) return false;
         const snappedPoint = snapCursorGuidePoint({ x: normalizedX, y: normalizedY });
         if (!snappedPoint) return false;
@@ -15915,17 +15925,22 @@ function renderUsageHistoryChart(history) {
         return true;
     };
     const resolveCursorGuidePoint = event => {
-        const bounds = chart.getBoundingClientRect();
-        if (bounds.width <= 0 || bounds.height <= 0) return null;
-        const x = ((Number(event?.clientX) - bounds.left) / bounds.width) * width;
-        const y = ((Number(event?.clientY) - bounds.top) / bounds.height) * height;
+        // Screen CTM accounts for CSS zoom, SVG sizing and viewBox transforms.
+        // It is notably more reliable than bounding-box ratios for touch input.
+        const matrix = chart.getScreenCTM?.();
+        if (!matrix || !Number.isFinite(Number(event?.clientX)) || !Number.isFinite(Number(event?.clientY))) {
+            return null;
+        }
+        const point = new DOMPoint(Number(event.clientX), Number(event.clientY)).matrixTransform(matrix.inverse());
+        const x = point.x;
+        const y = point.y;
         if (
             !Number.isFinite(x)
             || !Number.isFinite(y)
             || x < margin.left
             || x > margin.left + plotWidth
             || y < margin.top
-            || y > percentBottom
+            || y > weeklyBottom
         ) {
             return null;
         }
@@ -15936,6 +15951,7 @@ function renderUsageHistoryChart(history) {
         setCursorGuideVisible(false);
     };
     chart.onpointermove = event => {
+        if (event.pointerType === 'touch') return;
         if (cursorGuidePinned) return;
         const point = resolveCursorGuidePoint(event);
         if (point) {
@@ -15947,7 +15963,25 @@ function renderUsageHistoryChart(history) {
     chart.onpointerleave = () => {
         if (!cursorGuidePinned) setCursorGuideVisible(false);
     };
+    chart.onpointerdown = event => {
+        if (event.pointerType !== 'touch') return;
+        // The click synthesized after this touch must not pin a guide.
+        ignoreNextTouchClick = true;
+        clearCursorGuidePin();
+    };
+    chart.onpointerup = event => {
+        if (event.pointerType === 'touch') clearCursorGuidePin();
+    };
+    chart.onpointercancel = () => clearCursorGuidePin();
     chart.onclick = event => {
+        // A tap is normally followed by a synthetic click.  Do not leave a
+        // guide pinned from that click: mobile users need the chart surface to
+        // keep scrolling, and a stale guide looks like a grid at another point.
+        if (ignoreNextTouchClick || window.matchMedia?.('(hover: none)').matches) {
+            ignoreNextTouchClick = false;
+            clearCursorGuidePin();
+            return;
+        }
         const point = resolveCursorGuidePoint(event);
         if (!point) {
             clearCursorGuidePin();
@@ -15975,7 +16009,7 @@ function renderUsageHistoryChart(history) {
         setCursorGuideVisible(false);
     };
     chart.setAttribute('tabindex', '0');
-    chart.dataset.cursorGuide = 'hover-click';
+    chart.dataset.cursorGuide = 'hover-click (touch clears)';
     chart.dataset.cursorGuideSnap = 'records';
     const buildTimeGridIndexes = () => {
         const lastIndex = items.length - 1;
@@ -15988,46 +16022,17 @@ function renderUsageHistoryChart(history) {
         return Array.from(indexes).sort((a, b) => a - b);
     };
 
-    if (mobileLayout) {
+    const appendUsagePanelGrid = (label, ticks, scale, yAt) => {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: margin.left,
-            y: tokenTop - typography.titleGap,
+            y: yAt(scale) - typography.titleGap,
             'text-anchor': 'start',
             class: 'axis-title'
-        })).textContent = 'Token delta';
-        chart.appendChild(createUsageHistorySvgNode('text', {
-            x: margin.left,
-            y: percentTop - typography.titleGap,
-            'text-anchor': 'start',
-            class: 'axis-title'
-        })).textContent = `Used % (0-${percentScale}%)`;
-    }
-
-    if (mobileLayout) {
-        [0, 25, 50, 75, 100].forEach(percent => {
-            const y = tokenTop + tokenPlotHeight - ((percent / 100) * tokenPlotHeight);
-            appendGridLine({
-                x1: margin.left,
-                y1: y,
-                x2: margin.left + plotWidth,
-                y2: y
-            }, percent === 0 || percent === 100 ? 'y-grid edge-grid token-grid' : 'y-grid token-grid');
-            const leftToken = Math.round((maxTokenDelta * percent) / 100);
-            chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left - typography.axisSideGap,
-                y: y + typography.axisLabelOffset,
-                'text-anchor': 'end',
-                class: 'axis-label'
-            })).textContent = formatCompactTokenCount(leftToken);
-        });
-        percentTicks.forEach(percent => {
-            const y = yPercent(percent);
-            appendGridLine({
-                x1: margin.left,
-                y1: y,
-                x2: margin.left + plotWidth,
-                y2: y
-            }, percent === 0 || percent === percentScale ? 'y-grid edge-grid percent-grid' : 'y-grid percent-grid');
+        })).textContent = `${label} cumulative (0-${scale}%)`;
+        ticks.forEach(percent => {
+            const y = yAt(percent);
+            appendGridLine({ x1: margin.left, y1: y, x2: margin.left + plotWidth, y2: y },
+                percent === 0 || percent === scale ? 'y-grid edge-grid percent-grid' : 'y-grid percent-grid');
             chart.appendChild(createUsageHistorySvgNode('text', {
                 x: margin.left + plotWidth + typography.axisSideGap,
                 y: y + typography.axisLabelOffset,
@@ -16035,30 +16040,9 @@ function renderUsageHistoryChart(history) {
                 class: 'axis-label'
             })).textContent = formatUsageHistoryPercentTick(percent);
         });
-    } else {
-        percentTicks.forEach(percent => {
-            const y = yPercent(percent);
-            appendGridLine({
-                x1: margin.left,
-                y1: y,
-                x2: margin.left + plotWidth,
-                y2: y
-            }, percent === 0 || percent === percentScale ? 'y-grid edge-grid' : 'y-grid');
-            const leftToken = Math.round((maxTokenDelta * percent) / percentScale);
-            chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left - typography.axisSideGap,
-                y: y + typography.axisLabelOffset,
-                'text-anchor': 'end',
-                class: 'axis-label'
-            })).textContent = formatCompactTokenCount(leftToken);
-            chart.appendChild(createUsageHistorySvgNode('text', {
-                x: margin.left + plotWidth + typography.axisSideGap,
-                y: y + typography.axisLabelOffset,
-                'text-anchor': 'start',
-                class: 'axis-label'
-            })).textContent = formatUsageHistoryPercentTick(percent);
-        });
-    }
+    };
+    appendUsagePanelGrid('5h used', fiveHourTicks, fiveHourScale, yFiveHour);
+    appendUsagePanelGrid('Weekly used', weeklyTicks, weeklyScale, yWeekly);
     const missingIntervals = [];
     let missingStartIndex = null;
     items.forEach((item, index) => {
@@ -16078,7 +16062,7 @@ function renderUsageHistoryChart(history) {
             x: startX,
             y: margin.top,
             width: endX - startX,
-            height: percentBottom - margin.top,
+            height: weeklyBottom - margin.top,
             class: 'missing-interval',
             tabindex: '0'
         });
@@ -16095,41 +16079,11 @@ function renderUsageHistoryChart(history) {
             x1: x,
             y1: margin.top,
             x2: x,
-            y2: percentBottom
+            y2: weeklyBottom
         }, isEdge ? 'time-grid edge-grid' : 'time-grid');
     });
 
-    const tokenBarHits = [];
-    tokenDeltas.forEach((delta, index) => {
-        if (delta <= 0) return;
-        const x = xAt(index);
-        const y = yToken(delta);
-        const barHeight = Math.max(1, tokenBottom - y);
-        chart.appendChild(createUsageHistorySvgNode('rect', {
-            x: x - (barWidth / 2),
-            y,
-            width: barWidth,
-            height: barHeight,
-            rx: 1.5,
-            class: 'token-bar'
-        }));
-        tokenBarHits.push({ x, y, barHeight, index });
-    });
-    tokenBarHits.forEach(({ x, y, barHeight, index }) => {
-        const hitWidth = Math.max(barWidth, mobileLayout ? 18 : 12);
-        const hitY = Math.min(y, tokenBottom - (mobileLayout ? 18 : 14));
-        const hitHeight = Math.max(barHeight, tokenBottom - hitY, mobileLayout ? 18 : 14);
-        appendTooltipHitRect(
-            x - (hitWidth / 2),
-            hitY,
-            hitWidth,
-            hitHeight,
-            buildUsageHistoryPointTooltip(items[index], 'Token delta', relationScope),
-            'token-hit'
-        );
-    });
-
-    const appendPercentLine = (values, className, pointColor, metricLabel, hitClassName) => {
+    const appendPercentLine = (values, className, pointColor, metricLabel, hitClassName, yAt) => {
         const points = [];
         const segments = [];
         let segment = [];
@@ -16153,7 +16107,7 @@ function renderUsageHistoryChart(history) {
                 segments.push(segment);
                 segment = [];
             }
-            const point = { x: xAt(index), y: yPercent(value), value, index };
+            const point = { x: xAt(index), y: yAt(value), value, index };
             points.push(point);
             segment.push(point);
         });
@@ -16185,7 +16139,8 @@ function renderUsageHistoryChart(history) {
         });
     };
 
-    appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit');
+    appendPercentLine(fiveHourUsed, 'five-hour-line', 'rgba(224, 122, 36, 0.95)', '5h used', 'five-hour-hit', yFiveHour);
+    appendPercentLine(weeklyUsed, 'weekly-line', 'rgba(61, 130, 197, 0.95)', 'Weekly used', 'weekly-hit', yWeekly);
 
     // Marker events are deliberately independent from the latest sample
     // source.  A later sample in the same bucket must not erase a scheduled
@@ -16196,7 +16151,7 @@ function renderUsageHistoryChart(history) {
             .filter(event => event.source === 'automatic')
             .forEach(event => {
         const x = xAt(index) - (mobileLayout ? 3.5 : 3);
-        const y = yPercent(weeklyUsed[index]) + (mobileLayout ? 3.5 : 3);
+        const y = yWeekly(weeklyUsed[index]) + (mobileLayout ? 3.5 : 3);
         const size = mobileLayout ? 5.8 : 4.8;
         const marker = createUsageHistorySvgNode('path', {
             d: `M${x} ${y - size} L${x + size} ${y} L${x} ${y + size} L${x - size} ${y} Z`,
@@ -16220,7 +16175,7 @@ function renderUsageHistoryChart(history) {
             .filter(event => event.source === 'post_task')
             .forEach(event => {
         const x = xAt(index);
-        const y = yPercent(weeklyUsed[index]);
+        const y = yWeekly(weeklyUsed[index]);
         const size = mobileLayout ? 4.6 : 3.8;
         const marker = createUsageHistorySvgNode('circle', {
             cx: x,
@@ -16240,12 +16195,12 @@ function renderUsageHistoryChart(history) {
     });
 
     items.forEach((item, index) => {
-        if (!Number.isFinite(weeklyUsed[index])) return;
+        if (!Number.isFinite(fiveHourUsed[index])) return;
         usageHistorySampleEvents(item)
-            .filter(event => ['post_keepalive', 'post_keepalive_automatic'].includes(event.source))
+            .filter(event => event.source === 'post_keepalive_automatic')
             .forEach(event => {
         const x = xAt(index) + (mobileLayout ? 3.5 : 3);
-        const y = yPercent(weeklyUsed[index]) - (mobileLayout ? 3.5 : 3);
+        const y = yFiveHour(fiveHourUsed[index]) - (mobileLayout ? 3.5 : 3);
         const size = mobileLayout ? 4.8 : 4;
         const marker = createUsageHistorySvgNode('path', {
             d: `M${x - size} ${y - size} H${x + size} V${y + size} H${x - size} Z`,
@@ -16265,6 +16220,32 @@ function renderUsageHistoryChart(history) {
             });
     });
 
+    // Manual keepalive checks retain their existing Weekly marker.  Automatic
+    // keepalive completion is intentionally rendered only in the 5h panel
+    // above, where its reset-window effect is being verified.
+    items.forEach((item, index) => {
+        if (!Number.isFinite(weeklyUsed[index])) return;
+        usageHistorySampleEvents(item)
+            .filter(event => event.source === 'post_keepalive')
+            .forEach(event => {
+        const x = xAt(index) + (mobileLayout ? 3.5 : 3);
+        const y = yWeekly(weeklyUsed[index]) - (mobileLayout ? 3.5 : 3);
+        const size = mobileLayout ? 4.8 : 4;
+        const marker = createUsageHistorySvgNode('path', {
+            d: `M${x - size} ${y - size} H${x + size} V${y + size} H${x - size} Z`,
+            class: 'automatic-keepalive-sample-marker',
+            tabindex: '0'
+        });
+        const tooltip = buildUsageHistoryPointTooltip(
+            { ...item, limit_sample_source: event.source, limits_observed_at: event.observedAt },
+            '경량 작업 사용량', relationScope,
+        );
+        attachUsageHistoryTooltip(marker, tooltip);
+        chart.appendChild(marker);
+        appendTooltipHitCircle(x, y, tooltip, 'keepalive-sample-hit');
+            });
+    });
+
     const visiblePlanTransitions = resolveVisibleUsagePlanTransitions(history, items);
     visiblePlanTransitions.forEach((transition, index) => {
         const x = xAtTimestamp(transition?.at);
@@ -16274,7 +16255,7 @@ function renderUsageHistoryChart(history) {
             x1: x,
             y1: margin.top,
             x2: x,
-            y2: percentBottom,
+            y2: weeklyBottom,
             class: 'plan-transition-guide'
         });
         attachUsageHistoryTooltip(guide, tooltip);
@@ -16296,7 +16277,7 @@ function renderUsageHistoryChart(history) {
             x - (mobileLayout ? 9 : 7),
             margin.top,
             mobileLayout ? 18 : 14,
-            percentBottom - margin.top,
+            weeklyBottom - margin.top,
             tooltip,
             'plan-transition-hit'
         );
@@ -16304,12 +16285,12 @@ function renderUsageHistoryChart(history) {
 
     const appendResetMarker = (item, index, label, keyClass, offset) => {
         const x = xAt(index);
-        const markerY = (mobileLayout ? percentTop : margin.top) + offset;
+        const markerY = weeklyTop + offset;
         const guide = createUsageHistorySvgNode('line', {
             x1: x,
-            y1: mobileLayout ? percentTop : margin.top,
+            y1: weeklyTop,
             x2: x,
-            y2: percentBottom,
+            y2: weeklyBottom,
             class: `reset-guide ${keyClass}`
         });
         chart.appendChild(guide);
@@ -16330,6 +16311,23 @@ function renderUsageHistoryChart(history) {
     };
 
     items.forEach((item, index) => {
+        if (item?.five_hour_reset_detected) {
+            const x = xAt(index);
+            const markerY = fiveHourTop + (mobileLayout ? 10 : 11);
+            const guide = createUsageHistorySvgNode('line', {
+                x1: x, y1: fiveHourTop, x2: x, y2: fiveHourBottom,
+                class: 'reset-guide five-hour-reset'
+            });
+            chart.appendChild(guide);
+            const marker = createUsageHistorySvgNode('path', {
+                d: `M${x} ${markerY - 5} L${x + 5} ${markerY} L${x} ${markerY + 5} L${x - 5} ${markerY} Z`,
+                class: 'reset-marker five-hour-reset', tabindex: '0'
+            });
+            const tooltip = buildUsageHistoryResetTooltip(item, '5h', relationScope);
+            attachUsageHistoryTooltip(marker, tooltip);
+            chart.appendChild(marker);
+            appendTooltipHitCircle(x, markerY, tooltip, 'five-hour-reset-hit');
+        }
         if (item?.weekly_reset_detected) {
             appendResetMarker(item, index, 'Weekly', 'weekly-reset', mobileLayout ? 10 : 11);
         }
@@ -16345,7 +16343,7 @@ function renderUsageHistoryChart(history) {
     ].forEach(label => {
         chart.appendChild(createUsageHistorySvgNode('text', {
             x: label.x,
-            y: percentBottom + typography.bottomLabelGap,
+            y: weeklyBottom + typography.bottomLabelGap,
             'text-anchor': label.anchor,
             class: 'axis-label'
         })).textContent = label.text;
@@ -30172,28 +30170,32 @@ function formatMessageTokenSummary(message) {
     return parts.join(' · ');
 }
 
-function resolveWeeklyLimitTokenScale(history = state.settings?.usageHistory) {
+function resolveLimitTokenScale(limitName, history = state.settings?.usageHistory) {
     const relation = history?.relation || {};
-    const weekly = relation?.weekly || {};
-    const reliableValue = Number(weekly?.tokens_per_percent);
-    const rawValue = Number(weekly?.raw_tokens_per_percent);
+    const limit = relation?.[limitName] || {};
+    const reliableValue = Number(limit?.tokens_per_percent);
+    const rawValue = Number(limit?.raw_tokens_per_percent);
     const hasReliableValue = Number.isFinite(reliableValue) && reliableValue > 0;
     const hasRawValue = Number.isFinite(rawValue) && rawValue > 0;
     const tokensPerPercent = hasReliableValue
         ? reliableValue
         : (hasRawValue ? rawValue : null);
     if (!tokensPerPercent) return null;
-    const confidence = String(weekly?.confidence || '').trim().toLowerCase();
+    const confidence = String(limit?.confidence || '').trim().toLowerCase();
     const relationScope = resolveUsageHistoryRelationScope(history);
     return {
         tokensPerPercent,
         scope: relationScope,
         confidence,
-        sampleCount: toNonNegativeInt(weekly?.sample_count),
-        percentSum: Number(weekly?.percent_sum),
-        isReliable: Boolean(weekly?.is_reliable && hasReliableValue),
+        sampleCount: toNonNegativeInt(limit?.sample_count),
+        percentSum: Number(limit?.percent_sum),
+        isReliable: Boolean(limit?.is_reliable && hasReliableValue),
         usesRawFallback: !hasReliableValue && hasRawValue
     };
+}
+
+function resolveWeeklyLimitTokenScale(history = state.settings?.usageHistory) {
+    return resolveLimitTokenScale('weekly', history);
 }
 
 function resolveMessageLimitModelMetadata(message) {
@@ -30271,13 +30273,13 @@ function formatLimitUsagePercent(value, { allowZero = false } = {}) {
     return numeric.toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
 }
 
-function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero = false, message = null } = {}) {
+function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero = false, message = null, limitName = 'weekly' } = {}) {
     if (!usage || (usage.hasData === false)) return null;
     const weighted = message ? resolveModelWeightedLimitUsage(usage, message) : null;
     const estimateUsage = weighted?.usage || usage;
     const totalTokens = Number(estimateUsage.totalTokens);
     if (!Number.isFinite(totalTokens) || totalTokens < 0 || (!includeZero && totalTokens <= 0)) return null;
-    const scale = resolveWeeklyLimitTokenScale();
+    const scale = resolveLimitTokenScale(limitName);
     if (!scale) return null;
 
     const percent = totalTokens / scale.tokensPerPercent;
@@ -30295,7 +30297,7 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     );
     const marker = lowConfidence ? '~' : '';
     const tooltipParts = [
-        `주간 리밋 추정 ${marker}${percentText}%`,
+        `${limitName === 'five_hour' ? '5h' : 'Weekly'} 리밋 추정 ${marker}${percentText}%`,
         `${formatNumber(Math.round(totalTokens))} weighted tok / ${formatNumber(Math.round(scale.tokensPerPercent))} tok per 1%`,
         `scope ${scale.scope}`
     ];
@@ -30326,7 +30328,7 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
         tooltipParts.push(`${subjectLabel} tokens are estimated from text`);
     }
     if (scale.usesRawFallback || !scale.isReliable) {
-        tooltipParts.push('weekly token scale is estimated');
+        tooltipParts.push(`${limitName === 'five_hour' ? '5h' : 'Weekly'} token scale is estimated`);
     }
     if (hasConcurrentActivity) {
         tooltipParts.push(`active sessions ${formatNumber(liveSessionCount)}`);
@@ -30334,14 +30336,51 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     tooltipParts.push('동시 실행/외부 Codex 사용이 있으면 오차가 커질 수 있습니다.');
 
     return {
-        text: `Weekly ${marker}${percentText}%`,
+        text: `${limitName === 'five_hour' ? '5h' : 'Weekly'} ${marker}${percentText}%`,
         tooltip: tooltipParts.join(' · '),
         lowConfidence
     };
 }
 
 function buildMessageLimitUsageEstimate(usage, message = null) {
-    return buildLimitUsageEstimate(usage, { subjectLabel: 'message', message });
+    const weekly = buildLimitUsageEstimate(usage, { subjectLabel: 'message', message, limitName: 'weekly' });
+    const fiveHour = buildLimitUsageEstimate(usage, { subjectLabel: 'message', message, limitName: 'five_hour' });
+    if (!weekly && !fiveHour) return null;
+    return {
+        text: [weekly?.text, fiveHour?.text].filter(Boolean).join(' · '),
+        tooltip: [weekly?.tooltip, fiveHour?.tooltip].filter(Boolean).join('\n'),
+        lowConfidence: Boolean(weekly?.lowConfidence || fiveHour?.lowConfidence)
+    };
+}
+
+function resolveMessageUsageLimitSnapshot(message, key) {
+    const metadata = message?.metadata && typeof message.metadata === 'object' ? message.metadata : {};
+    const snapshot = message?.[key] || metadata?.[key];
+    return snapshot && typeof snapshot === 'object' ? snapshot : null;
+}
+
+function formatObservedLimitPercent(snapshot, limitName) {
+    const value = Number(snapshot?.[limitName]?.used_percent);
+    if (!Number.isFinite(value) || value < 0) return '--';
+    return `${formatLimitUsagePercent(value, { allowZero: true })}%`;
+}
+
+function buildMessageObservedLimitUsage(message) {
+    const before = resolveMessageUsageLimitSnapshot(message, 'usage_limits_before');
+    const after = resolveMessageUsageLimitSnapshot(message, 'usage_limits_after');
+    if (!before && !after) return null;
+    const describe = limitName => {
+        const previous = formatObservedLimitPercent(before, limitName);
+        const current = formatObservedLimitPercent(after, limitName);
+        if (previous === '--' && current === '--') return '';
+        return `${limitName === 'five_hour' ? '5h' : 'Weekly'} 실제 ${previous} → ${current}`;
+    };
+    const text = ['five_hour', 'weekly'].map(describe).filter(Boolean).join(' · ');
+    if (!text) return null;
+    return {
+        text,
+        tooltip: '작업 시작 전 캐시된 사용량과 완료 직후 사용량 API 재조회 결과입니다. 다른 동시 작업의 사용량도 함께 반영될 수 있습니다.'
+    };
 }
 
 function buildSessionLimitUsageEstimate(session) {
@@ -30385,8 +30424,13 @@ function setMessageLimitUsage(footer, usage = null, message = null) {
     if (!footer) return;
     const resolvedUsage = usage || getFooterStoredTokenUsage(footer);
     const estimate = buildMessageLimitUsageEstimate(resolvedUsage, message || getFooterStoredLimitMetadata(footer));
+    const observed = message ? buildMessageObservedLimitUsage(message) : null;
     footer.dataset.limitText = estimate?.text || '';
     footer.dataset.limitTooltip = estimate?.tooltip || '';
+    if (message) {
+        footer.dataset.limitObservedText = observed?.text || '';
+        footer.dataset.limitObservedTooltip = observed?.tooltip || '';
+    }
     footer.classList.toggle('has-limit-estimate', Boolean(estimate));
     footer.classList.toggle('is-limit-low-confidence', Boolean(estimate?.lowConfidence));
 }
@@ -30436,6 +30480,8 @@ function createMessageFooter() {
     footer.dataset.limitServiceTier = '';
     footer.dataset.limitText = '';
     footer.dataset.limitTooltip = '';
+    footer.dataset.limitObservedText = '';
+    footer.dataset.limitObservedTooltip = '';
     footer.dataset.durationText = '';
     footer.dataset.cliRuntimeText = '';
     footer.dataset.queueWaitText = '';
@@ -30510,6 +30556,8 @@ function syncMessageFooter(footer) {
     const tokenText = footer.dataset.tokenText || '';
     const limitText = footer.dataset.limitText || '';
     const limitTooltip = footer.dataset.limitTooltip || '';
+    const limitObservedText = footer.dataset.limitObservedText || '';
+    const limitObservedTooltip = footer.dataset.limitObservedTooltip || '';
     const durationText = footer.dataset.durationText || '';
     const cliRuntimeText = footer.dataset.cliRuntimeText || '';
     const queueWaitText = footer.dataset.queueWaitText || '';
@@ -30523,6 +30571,9 @@ function syncMessageFooter(footer) {
     }
     if (limitText) {
         parts.push(limitText);
+    }
+    if (limitObservedText) {
+        parts.push(limitObservedText);
     }
     if (durationText) {
         parts.push(`총 걸린시간 ${durationText}`);
@@ -30542,7 +30593,7 @@ function syncMessageFooter(footer) {
     const textElement = footer.querySelector('.message-footer-text');
     if (textElement) {
         textElement.textContent = parts.join(' · ');
-        setHoverTooltip(textElement, limitTooltip, { focusable: false });
+        setHoverTooltip(textElement, [limitTooltip, limitObservedTooltip].filter(Boolean).join('\n'), { focusable: false });
     } else {
         footer.textContent = parts.join(' · ');
     }

@@ -867,11 +867,14 @@ textarea {
      * attachment/plan controls from the prompt field only on demand. */
     .chat-input {
         --mobile-chat-compose-height: 76px;
+        --chat-action-button-width: 52px;
         grid-template-columns: minmax(0, 1fr) var(--chat-action-button-width);
     }
 
     .chat-submit-column {
-        display: block;
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
         height: var(--mobile-chat-compose-height);
         min-height: var(--mobile-chat-compose-height);
     }
@@ -883,9 +886,13 @@ textarea {
     }
 
     .chat-input #codex-chat-send {
-        display: block;
-        height: var(--mobile-chat-compose-height);
-        min-height: var(--mobile-chat-compose-height);
+        display: inline-flex;
+        width: 52px;
+        min-width: 52px;
+        max-width: 52px;
+        height: 52px;
+        min-height: 52px;
+        border-radius: 16px;
     }
 
     .chat-input textarea,
@@ -5509,6 +5516,25 @@ body.is-mermaid-diagram-viewer-open {
     padding: 12px 18px 12px;
 }
 
+/*
+ * The chart renderer uses a taller two-panel layout on touch devices.  Do
+ * not couple its scrolling behaviour to a viewport-width media query: some
+ * phones (notably Samsung Internet with a high CSS viewport / desktop-site
+ * setting) do not match that query even though JS correctly selects the
+ * mobile chart.  Keeping the scroll container and the chart's resolved
+ * height together prevents the SVG from being flex-shrunk and clipped.
+ */
+.usage-history-overlay.is-mobile-chart-layout .usage-history-overlay-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+}
+
+.usage-history-overlay.is-mobile-chart-layout .usage-history-chart-wrap {
+    flex: 0 0 auto;
+}
+
 .usage-history-meta {
     font-size: 12px;
     color: var(--text-secondary);
@@ -5771,6 +5797,7 @@ body.is-mermaid-diagram-viewer-open {
 .usage-history-chart .axis-label {
     fill: var(--text-tertiary);
     font-size: var(--usage-history-chart-axis-font-size, 11px);
+    font-weight: 500;
 }
 
 .usage-history-chart .axis-title {
@@ -5801,6 +5828,12 @@ body.is-mermaid-diagram-viewer-open {
 .usage-history-chart .weekly-line {
     fill: none;
     stroke: rgba(61, 130, 197, 0.95);
+    stroke-width: 2;
+}
+
+.usage-history-chart .five-hour-line {
+    fill: none;
+    stroke: rgba(224, 122, 36, 0.95);
     stroke-width: 2;
 }
 
@@ -5869,6 +5902,14 @@ body.is-mermaid-diagram-viewer-open {
 
 .usage-history-chart .reset-marker.weekly-reset {
     fill: rgba(61, 130, 197, 0.95);
+}
+
+.usage-history-chart .reset-guide.five-hour-reset {
+    stroke: rgba(224, 122, 36, 0.95);
+}
+
+.usage-history-chart .reset-marker.five-hour-reset {
+    fill: rgba(224, 122, 36, 0.95);
 }
 
 .usage-history-chart .plan-transition-guide {
@@ -5943,6 +5984,11 @@ body.is-mermaid-diagram-viewer-open {
 
 .usage-history-legend-swatch.weekly-reset {
     background: rgba(61, 130, 197, 0.95);
+    transform: rotate(45deg);
+}
+
+.usage-history-legend-swatch.five-hour-reset {
+    background: rgba(224, 122, 36, 0.95);
     transform: rotate(45deg);
 }
 
@@ -12085,8 +12131,14 @@ label.hover-tooltip,
     }
 
     .usage-history-chart-wrap {
-        min-height: 280px;
-        height: var(--usage-history-chart-height, clamp(300px, 44dvh, 500px));
+        min-height: 420px;
+        height: var(--usage-history-chart-height, clamp(420px, 64dvh, 650px));
+    }
+
+    .usage-history-overlay-body {
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
     }
 
     .usage-history-chart {
@@ -12822,10 +12874,13 @@ label.hover-tooltip,
 @media (max-width: 599px) {
     .chat-input {
         --mobile-chat-compose-height: 76px;
+        --chat-action-button-width: 52px;
     }
 
     .chat-submit-column {
-        display: block;
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
         height: var(--mobile-chat-compose-height);
         min-height: var(--mobile-chat-compose-height);
     }
@@ -12837,9 +12892,13 @@ label.hover-tooltip,
     }
 
     .chat-input #codex-chat-send {
-        display: block;
-        height: var(--mobile-chat-compose-height);
-        min-height: var(--mobile-chat-compose-height);
+        display: inline-flex;
+        width: 52px;
+        min-width: 52px;
+        max-width: 52px;
+        height: 52px;
+        min-height: 52px;
+        border-radius: 16px;
     }
 
     .chat-input textarea,
@@ -12856,6 +12915,23 @@ label.hover-tooltip,
         display: inline-flex;
         align-items: center;
         justify-content: center;
+    }
+
+    /* The desktop default uses an ID selector to keep this menu out of wider
+     * layouts.  Repeat the ID here so it cannot override the phone menu after
+     * the + button removes .is-hidden.  Keep the popup above the composer as
+     * it intentionally extends beyond the prompt field. */
+    #codex-chat-compose-tools-menu:not(.is-hidden) {
+        display: grid;
+        position: absolute;
+        right: 8px;
+        bottom: calc(100% + 6px);
+        z-index: 20;
+    }
+
+    .chat-compose-main,
+    .chat-prompt-field {
+        overflow: visible;
     }
 }
 

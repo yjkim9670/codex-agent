@@ -30461,48 +30461,15 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
         || hasConcurrentActivity
     );
     const marker = lowConfidence ? '~' : '';
-    const tooltipParts = [
-        `${limitName === 'five_hour' ? '5h' : 'Weekly'} 리밋 추정 ${marker}${percentText}%`,
-        `${formatNumber(Math.round(totalTokens))} weighted tok / ${formatNumber(Math.round(scale.tokensPerPercent))} tok per 1%`,
-        `scope ${scale.scope}`
-    ];
-    if (weighted?.metadata?.model) {
-        tooltipParts.push(`model ${weighted.metadata.model}`);
-    }
-    if (weighted?.isModelWeighted) {
-        tooltipParts.push(`model rate weight ×${weighted.multiplier.toFixed(2)}`);
-    } else if (weighted?.metadata?.model && !weighted?.pricingKnown) {
-        tooltipParts.push('model rate unavailable; unweighted tokens used');
-    }
-    if (weighted?.metadata?.reasoningEffort) {
-        tooltipParts.push(`effort ${weighted.metadata.reasoningEffort} recorded`);
-    }
-    if (weighted?.metadata?.serviceTier) {
-        tooltipParts.push(`tier ${weighted.metadata.serviceTier} recorded`);
-    }
-    if (scale.sampleCount !== null) {
-        tooltipParts.push(`samples ${formatNumber(scale.sampleCount)}`);
-    }
-    if (Number.isFinite(scale.percentSum)) {
-        tooltipParts.push(`observed ${formatUsageHistoryRatePercent(scale.percentSum)}`);
-    }
-    if (scale.confidence && scale.confidence !== 'none') {
-        tooltipParts.push(`confidence ${scale.confidence}`);
-    }
-    if (usage.estimated) {
-        tooltipParts.push(`${subjectLabel} tokens are estimated from text`);
-    }
-    if (scale.usesRawFallback || !scale.isReliable) {
-        tooltipParts.push(`${limitName === 'five_hour' ? '5h' : 'Weekly'} token scale is estimated`);
-    }
-    if (hasConcurrentActivity) {
-        tooltipParts.push(`active sessions ${formatNumber(liveSessionCount)}`);
-    }
-    tooltipParts.push('동시 실행/외부 Codex 사용이 있으면 오차가 커질 수 있습니다.');
+    // These estimates share one message-footer tooltip. Keep each limit to one
+    // scannable line; model, tier, sample and scope diagnostics add noise here
+    // without changing how the displayed percentage should be read.
+    const limitLabel = limitName === 'five_hour' ? '5h' : 'Weekly';
+    const tooltip = `${limitLabel} ${marker}${percentText}% · 1% ≈ ${formatCompactTokenCount(scale.tokensPerPercent)} weighted tok`;
 
     return {
         text: `${limitName === 'five_hour' ? '5h' : 'Weekly'} ${marker}${percentText}%`,
-        tooltip: tooltipParts.join(' · '),
+        tooltip,
         lowConfidence
     };
 }
@@ -30511,10 +30478,14 @@ function buildMessageLimitUsageEstimate(usage, message = null) {
     const weekly = buildLimitUsageEstimate(usage, { subjectLabel: 'message', message, limitName: 'weekly' });
     const fiveHour = buildLimitUsageEstimate(usage, { subjectLabel: 'message', message, limitName: 'five_hour' });
     if (!weekly && !fiveHour) return null;
+    const lowConfidence = Boolean(weekly?.lowConfidence || fiveHour?.lowConfidence);
     return {
         text: [weekly?.text, fiveHour?.text].filter(Boolean).join(' · '),
-        tooltip: [weekly?.tooltip, fiveHour?.tooltip].filter(Boolean).join('\n'),
-        lowConfidence: Boolean(weekly?.lowConfidence || fiveHour?.lowConfidence)
+        tooltip: [
+            ...[fiveHour?.tooltip, weekly?.tooltip].filter(Boolean),
+            ...(lowConfidence ? ['~ 표시는 기록 기반 추정치이며, 동시 작업 시 차이가 날 수 있습니다.'] : [])
+        ].join('\n'),
+        lowConfidence
     };
 }
 
@@ -30544,7 +30515,7 @@ function buildMessageObservedLimitUsage(message) {
     if (!text) return null;
     return {
         text,
-        tooltip: '작업 시작 전 캐시된 사용량과 완료 직후 사용량 API 재조회 결과입니다. 다른 동시 작업의 사용량도 함께 반영될 수 있습니다.'
+        tooltip: '실제 사용량: 작업 전·후 API 표본입니다. 동시 작업분도 함께 반영될 수 있습니다.'
     };
 }
 

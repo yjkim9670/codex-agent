@@ -1200,7 +1200,7 @@ def codex_usage_refresh():
 
 @bp.route('/api/codex/usage/keepalive', methods=['POST'])
 def codex_usage_keepalive():
-    """Submit a user-requested concise Terra/low usage keepalive task."""
+    """Submit a user-requested concise Terra/medium usage keepalive task."""
     ensure_usage_snapshot_background_worker()
     account_id = get_active_account_id()
     result = submit_usage_keepalive(account_id=account_id)

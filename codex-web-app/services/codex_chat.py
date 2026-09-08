@@ -7765,7 +7765,7 @@ def _account_has_active_codex_stream(account_id):
 
 
 def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
-    """Submit one isolated Terra/low request while account snapshot lock is held."""
+    """Submit one isolated Terra/medium request while account snapshot lock is held."""
     account_id = context['account']['id']
     previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}

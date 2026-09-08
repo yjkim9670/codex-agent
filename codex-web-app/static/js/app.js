@@ -2280,6 +2280,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const controlsToggle = document.getElementById('codex-controls-toggle');
     const controls = document.getElementById('codex-controls');
     const usageHistoryOpen = document.getElementById('codex-usage-history-open');
+    const usageKeepaliveHistoryOpen = document.getElementById('codex-usage-keepalive-history-open');
     const usageRefreshBtn = document.getElementById('codex-usage-refresh');
     const usageKeepaliveSubmitBtn = document.getElementById('codex-usage-keepalive-submit');
     const accountSelect = document.getElementById('codex-account-select');
@@ -2382,6 +2383,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageHistoryOverlay = document.getElementById('codex-usage-history-overlay');
     const usageHistoryOverlayClose = document.getElementById('codex-usage-history-overlay-close');
     const usageHistoryOverlayCloseFooter = document.getElementById('codex-usage-history-overlay-close-footer');
+    const usageKeepaliveHistoryOverlay = document.getElementById('codex-usage-keepalive-history-overlay');
+    const usageKeepaliveHistoryClose = document.getElementById('codex-usage-keepalive-history-close');
+    const usageKeepaliveHistoryCloseFooter = document.getElementById('codex-usage-keepalive-history-close-footer');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
@@ -3333,6 +3337,9 @@ document.addEventListener('DOMContentLoaded', () => {
             void openUsageHistoryOverlay();
         });
     }
+    if (usageKeepaliveHistoryOpen) {
+        usageKeepaliveHistoryOpen.addEventListener('click', openUsageKeepaliveHistoryOverlay);
+    }
     if (accountSelect) {
         accountSelect.addEventListener('change', () => {
             void switchActiveCodexAccount(accountSelect.value);
@@ -3395,7 +3402,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (usageKeepaliveSubmitBtn) {
         usageKeepaliveSubmitBtn.addEventListener('click', async () => {
             const confirmed = window.confirm(
-                'Terra low effort 경량 작업을 제출할까요? 짧은 일관성 검토 요청이 실행되어 사용량이 발생합니다.'
+                'Terra medium effort 경량 작업을 제출할까요? 읽기 전용 워크스페이스 검토가 실행되어 사용량이 발생합니다.'
             );
             if (!confirmed) return;
             usageKeepaliveSubmitBtn.disabled = true;
@@ -3406,7 +3413,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.settings.usage = result?.usage || state.settings.usage;
                 state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
                 updateUsageSummary(state.settings.usage);
-                showToast('Terra low effort 경량 작업을 제출했습니다.', { type: 'success' });
+                showToast('Terra medium effort 경량 작업을 제출했습니다.', { type: 'success' });
                 const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
                 if (streamId) void watchManualUsageKeepalive(streamId);
             } catch (error) {
@@ -3429,6 +3436,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (usageHistoryOverlayCloseFooter) {
         usageHistoryOverlayCloseFooter.addEventListener('click', closeUsageHistoryOverlay);
+    }
+    if (usageKeepaliveHistoryOverlay) {
+        usageKeepaliveHistoryOverlay.addEventListener('click', event => {
+            if (event.target?.dataset?.action === 'close') closeUsageKeepaliveHistoryOverlay();
+        });
+    }
+    if (usageKeepaliveHistoryClose) {
+        usageKeepaliveHistoryClose.addEventListener('click', closeUsageKeepaliveHistoryOverlay);
+    }
+    if (usageKeepaliveHistoryCloseFooter) {
+        usageKeepaliveHistoryCloseFooter.addEventListener('click', closeUsageKeepaliveHistoryOverlay);
     }
     if (messageLogOverlay) {
         messageLogOverlay.addEventListener('click', event => {
@@ -3856,6 +3874,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (isMobileSessionOverlayOpen()) {
             closeMobileSessionOverlay();
+            return;
+        }
+        if (isUsageKeepaliveHistoryOverlayOpen()) {
+            closeUsageKeepaliveHistoryOverlay();
             return;
         }
         if (isUsageHistoryOverlayOpen()) {
@@ -9390,6 +9412,7 @@ function updateUsageSummary(usage) {
     const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
     const keepaliveButton = document.getElementById('codex-usage-keepalive-submit');
+    const keepaliveHistoryButton = document.getElementById('codex-usage-keepalive-history-open');
     const keepaliveStatus = document.getElementById('codex-usage-keepalive-status');
     if (historyButton) {
         const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
@@ -9399,6 +9422,12 @@ function updateUsageSummary(usage) {
     }
     if (keepaliveButton) {
         keepaliveButton.classList.toggle('is-hidden', !showUsageLimits);
+    }
+    if (keepaliveHistoryButton) {
+        const hasKeepaliveHistory = Array.isArray(usage?.usage_keepalive?.history)
+            && usage.usage_keepalive.history.length > 0;
+        keepaliveHistoryButton.classList.toggle('is-hidden', !showUsageLimits);
+        keepaliveHistoryButton.classList.toggle('is-ready', hasKeepaliveHistory);
     }
     if (keepaliveStatus) {
         const keepalive = usage?.usage_keepalive || {};
@@ -9411,6 +9440,7 @@ function updateUsageSummary(usage) {
         if (keepalive?.last_error) keepaliveStatus.title = String(keepalive.last_error);
         else keepaliveStatus.removeAttribute('title');
     }
+    if (isUsageKeepaliveHistoryOverlayOpen()) renderUsageKeepaliveHistory();
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     const tokenUsage = usage?.token_usage || null;
     const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
@@ -9900,9 +9930,9 @@ async function watchManualUsageKeepalive(streamId, attempts = 0) {
             ? ` · ${formatCompactTokenCount(totalTokens)} tokens`
             : '';
         if (Number(result?.exit_code) === 0 && !result?.error) {
-            showToast(`Terra low effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
+            showToast(`Terra medium effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
         } else {
-            showToast(`Terra low effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
+            showToast(`Terra medium effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
         }
         await refreshUsageSummary({ silent: true, forceAccountRefresh: false });
     } catch (error) {
@@ -15469,13 +15499,13 @@ function renderUsageHistoryLegend(history) {
     if (keepaliveSampleCount > 0) {
         legendItems.push({
             key: '',
-            text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Terra low)`
+            text: `경량 작업 후 조회 ${formatNumber(keepaliveSampleCount)}회 (Terra medium)`
         });
     }
     if (automaticKeepaliveSampleCount > 0) {
         legendItems.push({
             key: 'automatic-keepalive-sample',
-            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (5h/Weekly 리셋 감지 · Terra low)`
+            text: `자동 경량 작업 완료 ${formatNumber(automaticKeepaliveSampleCount)}회 (5h/Weekly 리셋 감지 · Terra medium)`
         });
     }
     if (missingSampleCount > 0) {
@@ -15618,9 +15648,9 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     } else if (item?.limit_sample_source === 'post_task') {
         parts.push('Codex 작업 완료 후 조회');
     } else if (item?.limit_sample_source === 'post_keepalive') {
-        parts.push('5h/Weekly 리셋 감지 또는 수동 경량 작업 완료 후 조회 (Terra low)');
+        parts.push('5h/Weekly 리셋 감지 또는 수동 경량 작업 완료 후 조회 (Terra medium)');
     } else if (item?.limit_sample_source === 'post_keepalive_automatic') {
-        parts.push('5h/Weekly 리셋 감지 후 자동 경량 작업 완료 및 기록 (Terra low)');
+        parts.push('5h/Weekly 리셋 감지 후 자동 경량 작업 완료 및 기록 (Terra medium)');
     }
     if (tokenBreakdown) {
         parts.push(tokenBreakdown);
@@ -16607,6 +16637,92 @@ function closeUsageHistoryOverlay() {
         && !isMobileSessionOverlayOpen()
         && !isTerminalOverlayOpen()
     ) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function isUsageKeepaliveHistoryOverlayOpen() {
+    const overlay = document.getElementById('codex-usage-keepalive-history-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function formatUsageKeepaliveHistoryEvent(event) {
+    const labels = {
+        submitted: '제출됨',
+        completed: '완료',
+        failed: '실패',
+        submission_failed: '제출 실패',
+        stability_candidate_recorded: '리셋 시각 안정성 확인 대기',
+        verified_stable_reset: '리셋 시각 안정성 확인됨',
+        reset_time_changed: '리셋 시각 변경 감지',
+        verification_failed: '리셋 시각 확인 실패'
+    };
+    return labels[String(event || '').trim()] || String(event || '기록됨');
+}
+
+function formatUsageKeepaliveHistoryTokens(tokenUsage) {
+    const total = Number(tokenUsage?.total_tokens);
+    return Number.isFinite(total) && total >= 0
+        ? `${formatCompactTokenCount(Math.round(total))} tokens`
+        : '';
+}
+
+function renderUsageKeepaliveHistory() {
+    const summary = document.getElementById('codex-usage-keepalive-history-summary');
+    const list = document.getElementById('codex-usage-keepalive-history-list');
+    if (!summary || !list) return;
+    const keepalive = state.settings?.usage?.usage_keepalive || {};
+    const history = Array.isArray(keepalive.history) ? keepalive.history.slice().reverse() : [];
+    const model = String(keepalive.model || 'gpt-5.6-terra').replace(/^gpt-5\.6-/, '');
+    const effort = String(keepalive.reasoning_effort || 'medium');
+    summary.textContent = `${history.length}개 이벤트 · ${model} / ${effort} effort`;
+    list.innerHTML = '';
+    if (!history.length) {
+        const empty = document.createElement('div');
+        empty.className = 'usage-keepalive-history-empty';
+        empty.textContent = '아직 경량 작업 이력이 없습니다.';
+        list.appendChild(empty);
+        return;
+    }
+    history.forEach(item => {
+        const row = document.createElement('article');
+        row.className = 'usage-keepalive-history-item';
+        const heading = document.createElement('div');
+        heading.className = 'usage-keepalive-history-item-heading';
+        const event = document.createElement('strong');
+        event.textContent = formatUsageKeepaliveHistoryEvent(item?.event);
+        const mode = document.createElement('span');
+        mode.textContent = String(item?.mode || 'manual') === 'automatic' ? '자동' : '수동';
+        heading.append(event, mode);
+        const details = document.createElement('div');
+        details.className = 'usage-keepalive-history-item-details';
+        const parts = [formatResetTimestamp(item?.at), formatUsageKeepaliveHistoryTokens(item?.token_usage)].filter(Boolean);
+        if (item?.error) parts.push(String(item.error));
+        if (item?.candidate_resets && Object.keys(item.candidate_resets).length) parts.push('리셋 후보 기록됨');
+        details.textContent = parts.join(' · ') || '세부 정보 없음';
+        row.append(heading, details);
+        list.appendChild(row);
+    });
+}
+
+function openUsageKeepaliveHistoryOverlay() {
+    const overlay = document.getElementById('codex-usage-keepalive-history-overlay');
+    if (!overlay) return;
+    if (isUsageHistoryOverlayOpen()) closeUsageHistoryOverlay();
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    renderUsageKeepaliveHistory();
+}
+
+function closeUsageKeepaliveHistoryOverlay() {
+    const overlay = document.getElementById('codex-usage-keepalive-history-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('is-visible');
+    overlay.setAttribute('aria-hidden', 'true');
+    if (!isUsageHistoryOverlayOpen() && !isGitBranchOverlayOpen() && !isGitSyncOverlayOpen()
+        && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMailComposeOverlayOpen()
+        && !isMobileSessionOverlayOpen() && !isTerminalOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
     }
 }

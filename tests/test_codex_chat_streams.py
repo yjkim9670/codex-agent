@@ -907,12 +907,12 @@ def test_usage_keepalive_followup_refresh_and_verification_state_machine():
     })
     snapshot['five_hour']['resets_at'] = '2026-08-04T12:31:00+09:00'
     assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
-    assert snapshot['usage_keepalive']['verification_status'] == 'retry_pending'
-    assert snapshot['usage_keepalive']['next_retry_at'] is not None
+    assert snapshot['usage_keepalive']['verification_status'] == 'unverified'
+    assert snapshot['usage_keepalive']['next_retry_at'] is None
     assert snapshot['usage_keepalive']['history'][-1]['event'] == 'verification_failed'
 
 
-def test_usage_keepalive_retries_when_a_valid_reset_candidate_moves():
+def test_usage_keepalive_does_not_retry_when_a_valid_reset_candidate_moves():
     now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
     snapshot = {
         'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T17:30:00+09:00'},
@@ -927,10 +927,34 @@ def test_usage_keepalive_retries_when_a_valid_reset_candidate_moves():
 
     assert codex_chat._verify_usage_keepalive_locked(snapshot, now) is True
     state = snapshot['usage_keepalive']
-    assert state['verification_status'] == 'retry_pending'
-    assert state['next_retry_at'] is not None
+    assert state['verification_status'] == 'unverified'
+    assert state['next_retry_at'] is None
     assert 'verification_candidate_resets' not in state
     assert state['history'][-1]['event'] == 'reset_time_changed'
+
+
+def test_usage_keepalive_global_claim_blocks_other_workspaces_and_allows_next_window(tmp_path, monkeypatch):
+    """The shared claim is authoritative even when local account IDs differ."""
+    coordination_path = tmp_path / 'shared' / 'keepalive.json'
+    monkeypatch.setattr(
+        codex_chat, '_usage_keepalive_coordination_path', lambda context: coordination_path)
+    context = {'account': {'id': 'workspace-a'}, 'codex_home': tmp_path / 'codex-home'}
+    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    first_targets = {'five_hour': 'five_hour:fallback:1234'}
+
+    assert codex_chat._usage_keepalive_global_claim(context, first_targets, now) == (True, '')
+    # Same cycle in another Workbench copy cannot create another request.
+    assert codex_chat._usage_keepalive_global_claim(
+        {**context, 'account': {'id': 'workspace-b'}}, first_targets, now
+    ) == (False, 'account_cycle_already_submitted')
+    # A moving provisional reset value is also blocked for the full 5h window.
+    assert codex_chat._usage_keepalive_global_claim(
+        context, {'five_hour': 'five_hour:fallback:1235'}, now + timedelta(minutes=15)
+    ) == (False, 'account_window_cooldown')
+    # The next genuine 5h window is eligible for exactly one new probe.
+    assert codex_chat._usage_keepalive_global_claim(
+        context, {'five_hour': 'five_hour:fallback:1235'}, now + timedelta(hours=5)
+    ) == (True, '')
 
 
 def test_usage_keepalive_uses_terra_with_a_concise_reasoning_prompt():

@@ -7624,8 +7624,11 @@ def _account_usage_refresh_is_due(snapshot, now=None):
 _USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
 _USAGE_KEEPALIVE_REASONING_EFFORT = 'low'
 _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
-_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS = 15 * 60
-_USAGE_KEEPALIVE_MAX_AUTOMATIC_ATTEMPTS = 3
+# A keepalive is an activation probe, not a retry mechanism.  Retrying a
+# provisional rate-limit response consumed a large amount of quota without
+# making the server's reset timestamp any more authoritative.
+_USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN = timedelta(hours=5)
+_USAGE_KEEPALIVE_GLOBAL_WEEKLY_COOLDOWN = timedelta(days=7)
 _USAGE_KEEPALIVE_PROMPT = (
     'Perform this concise reasoning check:\n'
     '1. State whether this statement is internally consistent: "A system records a timestamp after each completed job."\n'
@@ -7671,8 +7674,79 @@ def _usage_keepalive_followup_is_due(snapshot, now=None):
         return False
     current = now if isinstance(now, datetime) else datetime.now(KST)
     due_at = parse_timestamp(keepalive.get('verification_due_at'))
-    retry_at = parse_timestamp(keepalive.get('next_retry_at'))
-    return bool((due_at and due_at <= current) or (retry_at and retry_at <= current))
+    # Follow-ups are read-only stability checks.  In particular, a failed
+    # check must never make the scheduler submit another model request.
+    return bool(due_at and due_at <= current)
+
+
+def _usage_keepalive_coordination_path(context):
+    """Return a cross-workspace coordination file for the signed-in account."""
+    identity = _read_auth_identity(context['codex_home'])
+    provider_id = str(identity.get('provider_account_id') or '').strip()
+    if provider_id:
+        key_material = 'provider-account:' + provider_id
+    else:
+        # Account IDs are Workbench-local in older installs.  Auth contents
+        # are shared by copied Workbench accounts, making this a stable
+        # fallback without placing credentials in a filename.
+        try:
+            auth_material = (Path(context['codex_home']) / 'auth.json').read_bytes()
+        except OSError:
+            auth_material = str(Path(context['codex_home']).resolve()).encode('utf-8')
+        key_material = 'auth-fingerprint:' + hashlib.sha256(auth_material).hexdigest()
+    key = hashlib.sha256(key_material.encode('utf-8')).hexdigest()[:32]
+    return Path(CODEX_ACCOUNTS_DIR).parent / 'usage_keepalive' / f'{key}.json'
+
+
+def _usage_keepalive_global_claim(context, cycle_targets, now=None):
+    """Atomically reserve one automatic submission across all workspaces.
+
+    A single ordinary request normally covers both zero-use windows.  A
+    moving provisional reset value is guarded by a window-sized cooldown, so
+    another Workbench copy cannot turn it into a submission storm.
+    """
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    path = _usage_keepalive_coordination_path(context)
+    with _acquire_path_file_lock(path):
+        try:
+            previous = json.loads(path.read_text(encoding='utf-8'))
+        except Exception:
+            previous = {}
+        windows = previous.get('windows') if isinstance(previous, dict) else {}
+        windows = windows if isinstance(windows, dict) else {}
+        changed_windows = []
+        eligible_windows = []
+        for name, target in cycle_targets.items():
+            prior = windows.get(name) if isinstance(windows.get(name), dict) else {}
+            prior_at = parse_timestamp(prior.get('submitted_at'))
+            cooldown = (
+                _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN
+                if name == 'five_hour' else _USAGE_KEEPALIVE_GLOBAL_WEEKLY_COOLDOWN
+            )
+            if prior.get('target') == target:
+                continue
+            changed_windows.append((name, target))
+            if not prior_at or prior_at + cooldown <= current:
+                eligible_windows.append((name, target))
+        if not changed_windows:
+            return False, 'account_cycle_already_submitted'
+        if not eligible_windows:
+            return False, 'account_window_cooldown'
+        # Do not refresh an unchanged weekly reservation on every new 5h
+        # cycle.  Each window retains its own cooldown and target identity.
+        for name, target in eligible_windows:
+            windows[name] = {
+                'target': target,
+                'submitted_at': normalize_timestamp(current),
+                'workspace_scope_id': _WORKSPACE_SCOPE_ID,
+                'account_id': context['account']['id'],
+            }
+        _write_json_atomic(path, {
+            'version': 1,
+            'updated_at': normalize_timestamp(current),
+            'windows': windows,
+        })
+    return True, ''
 
 
 def _account_has_active_codex_stream(account_id):
@@ -7716,21 +7790,19 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
             cycle_targets = previous_targets
         if not cycle_targets:
             return {'submitted': False, 'reason': 'no_zero_usage_window'}
-        retry_at = parse_timestamp(previous_keepalive.get('next_retry_at'))
         same_targets = previous_targets == cycle_targets
-        attempts = int(previous_keepalive.get('automatic_attempts') or 0)
-        if same_targets and previous_keepalive.get('verification_status') != 'retry_pending':
+        if same_targets:
             return {'submitted': False, 'reason': 'cycle_already_submitted'}
-        if same_targets and (not retry_at or retry_at > datetime.now(KST)):
-            return {'submitted': False, 'reason': 'retry_not_due'}
-        if same_targets and attempts >= _USAGE_KEEPALIVE_MAX_AUTOMATIC_ATTEMPTS:
-            return {'submitted': False, 'reason': 'retry_limit_reached'}
     if get_selected_agent_backend() != 'dtgpt':
         return {'submitted': False, 'reason': 'terra_requires_codex_backend'}
     if _account_has_active_codex_stream(account_id):
         return {'submitted': False, 'reason': 'account_busy'}
     if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(context['codex_home']):
         return {'submitted': False, 'reason': 'account_login_required'}
+    if automatic:
+        claimed, claim_reason = _usage_keepalive_global_claim(context, cycle_targets)
+        if not claimed:
+            return {'submitted': False, 'reason': claim_reason}
 
     session = create_session(
         title='Usage keepalive',
@@ -7782,16 +7854,10 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
         # Mark before starting so another Workbench copy cannot race this
         # process. Completion later schedules a separate verification read.
         keepalive_state['automatic_cycle_targets'] = cycle_targets
-        keepalive_state['automatic_attempts'] = (
-            int(previous_keepalive.get('automatic_attempts') or 0) + 1
-            if previous_keepalive.get('automatic_cycle_targets') == cycle_targets else 1
-        )
-        keepalive_state['verification_status'] = 'submitted' if started else 'retry_pending'
+        keepalive_state['automatic_attempts'] = 1
+        keepalive_state['verification_status'] = 'submitted' if started else 'submission_failed'
         keepalive_state['verification_due_at'] = None
-        keepalive_state['next_retry_at'] = (
-            normalize_timestamp(datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
-            if not started else None
-        )
+        keepalive_state['next_retry_at'] = None
         _LOGGER.info(
             'Automatic usage keepalive %s (account_id=%s, stream_id=%s, targets=%s)',
             'submitted' if started else 'failed to submit', account_id,
@@ -7851,13 +7917,13 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
         keepalive['last_verified_at'] = normalize_timestamp(current)
         event = 'verified_stable_reset'
     else:
-        # A changed candidate is still provisional. Only then schedule a new
-        # submission, rather than spending tokens to confirm an unchanged one.
+        # A changed candidate is still provisional.  Preserve that outcome for
+        # diagnostics, but do not turn a read-only verification failure into a
+        # new token-consuming request.
         keepalive.pop('verification_candidate_resets', None)
-        keepalive['verification_status'] = 'retry_pending'
+        keepalive['verification_status'] = 'unverified'
         keepalive['verification_due_at'] = None
-        keepalive['next_retry_at'] = normalize_timestamp(
-            current + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
+        keepalive['next_retry_at'] = None
         event = 'reset_time_changed' if candidate_complete else 'verification_failed'
     history.append({'at': normalize_timestamp(current), 'event': event,
                     'mode': 'automatic', 'targets': targets,
@@ -7911,7 +7977,7 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
         keepalive['last_status'] = 'completed' if succeeded else 'failed'
         keepalive['last_error'] = '' if succeeded else str(error or '')[:1000]
         if mode == 'automatic':
-            keepalive['verification_status'] = 'pending' if succeeded else 'retry_pending'
+            keepalive['verification_status'] = 'pending' if succeeded else 'submission_failed'
             # Never compare a new request with a reset sampled for an older
             # request/cycle.
             keepalive.pop('verification_candidate_resets', None)
@@ -7919,10 +7985,7 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
                 normalize_timestamp(datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS))
                 if succeeded else None
             )
-            keepalive['next_retry_at'] = (
-                None if succeeded else normalize_timestamp(
-                    datetime.now(KST) + timedelta(seconds=_USAGE_KEEPALIVE_RETRY_DELAY_SECONDS))
-            )
+            keepalive['next_retry_at'] = None
         keepalive['history'] = history
         snapshot['usage_keepalive'] = keepalive
         snapshot['version'] = snapshot.get('version') or 1
@@ -8031,7 +8094,7 @@ def refresh_account_usage_snapshot_if_due(
                 verification_state.get('verification_status')
                 if isinstance(verification_state, dict) else ''
             )
-            schedule_retry = verification_status in {'retry_pending', 'stability_pending'}
+            schedule_retry = verification_status == 'stability_pending'
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
             if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
@@ -8050,8 +8113,6 @@ def refresh_account_usage_snapshot_if_due(
                 _schedule_usage_keepalive_followup(
                     context['account']['id'], (
                         _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS
-                        if verification_status == 'stability_pending'
-                        else _USAGE_KEEPALIVE_RETRY_DELAY_SECONDS
                     ),
                 )
             return {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}

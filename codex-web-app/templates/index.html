@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=230">
+    <link rel="stylesheet" href="/static/css/app.css?v=231">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -1269,6 +1269,12 @@
                         <div class="usage-history-ratio-cards" id="codex-usage-history-ratios"></div>
                     </div>
                 </details>
+                <div class="usage-history-zoom-controls" id="codex-usage-history-zoom-controls" role="group" aria-label="모바일 그래프 가로 확대">
+                    <span class="usage-history-zoom-label">가로 확대</span>
+                    <button class="usage-history-zoom-btn is-active" type="button" data-zoom="1" aria-pressed="true">1×</button>
+                    <button class="usage-history-zoom-btn" type="button" data-zoom="1.5" aria-pressed="false">1.5×</button>
+                    <button class="usage-history-zoom-btn" type="button" data-zoom="2" aria-pressed="false">2×</button>
+                </div>
                 <div class="usage-history-chart-wrap" id="codex-usage-history-chart-wrap">
                     <svg
                         class="usage-history-chart"
@@ -1874,6 +1880,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=248"></script>
+    <script src="/static/js/app.js?v=249"></script>
 </body>
 </html>

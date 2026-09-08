@@ -668,6 +668,7 @@ let streamMonitorState = null;
 let usageHistoryLastRequestedHours = USAGE_HISTORY_DEFAULT_HOURS;
 let usageHistoryLastRequestedScope = 'account';
 let usageHistoryResizeRaf = 0;
+let usageHistoryMobileChartZoom = 1;
 let answerCompleteNoticeDismissHandler = null;
 let answerCompleteNoticeRemoveId = null;
 let hoverTooltipInteractionsBound = false;
@@ -2387,6 +2388,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageKeepaliveHistoryClose = document.getElementById('codex-usage-keepalive-history-close');
     const usageKeepaliveHistoryCloseFooter = document.getElementById('codex-usage-keepalive-history-close-footer');
     const usageKeepaliveHistoryMore = document.getElementById('codex-usage-keepalive-history-more');
+    const usageHistoryZoomControls = document.getElementById('codex-usage-history-zoom-controls');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
@@ -3345,6 +3347,17 @@ document.addEventListener('DOMContentLoaded', () => {
         usageKeepaliveHistoryMore.addEventListener('click', () => {
             usageKeepaliveHistoryVisibleCount += USAGE_KEEPALIVE_HISTORY_PAGE_SIZE;
             renderUsageKeepaliveHistory();
+        });
+    }
+    if (usageHistoryZoomControls) {
+        usageHistoryZoomControls.querySelectorAll('[data-zoom]').forEach(button => {
+            button.addEventListener('click', event => {
+                event.preventDefault();
+                const zoom = Number(button.dataset?.zoom);
+                if (!Number.isFinite(zoom) || zoom < 1 || zoom > 2) return;
+                usageHistoryMobileChartZoom = zoom;
+                renderUsageHistoryOverlay(state.settings?.usageHistory || null, usageHistoryLastRequestedHours);
+            });
         });
     }
     if (accountSelect) {
@@ -14843,6 +14856,8 @@ function getUsageHistoryOverlayElements() {
         ratios: document.getElementById('codex-usage-history-ratios'),
         chartWrap: document.getElementById('codex-usage-history-chart-wrap'),
         chart: document.getElementById('codex-usage-history-chart'),
+        zoomControls: document.getElementById('codex-usage-history-zoom-controls'),
+        zoomButtons: Array.from(document.querySelectorAll('#codex-usage-history-zoom-controls [data-zoom]')),
         legend: document.getElementById('codex-usage-history-legend'),
         empty: document.getElementById('codex-usage-history-empty')
     };
@@ -15733,6 +15748,8 @@ function resetUsageHistoryChartPresentation(chartWrap, chart) {
     overlay?.classList.remove('is-mobile-chart-layout');
     if (chartWrap instanceof HTMLElement) {
         chartWrap.style.removeProperty('--usage-history-chart-height');
+        chartWrap.style.removeProperty('--usage-history-chart-zoom');
+        chartWrap.classList.remove('is-horizontally-zoomed');
     }
     if (chart instanceof SVGElement) {
         chart.style.removeProperty('--usage-history-chart-axis-font-size');
@@ -15798,6 +15815,17 @@ function renderUsageHistoryChart(history) {
     // can expose a wide layout viewport).  Mirror the renderer's mobile
     // decision onto the overlay so its scroll container cannot be skipped.
     elements.overlay?.classList.toggle('is-mobile-chart-layout', mobileLayout);
+    const zoom = mobileLayout ? clampToRange(Number(usageHistoryMobileChartZoom) || 1, 1, 2) : 1;
+    if (chartWrap instanceof HTMLElement) {
+        chartWrap.style.setProperty('--usage-history-chart-zoom', String(zoom));
+        chartWrap.classList.toggle('is-horizontally-zoomed', zoom > 1);
+    }
+    elements.zoomButtons?.forEach(button => {
+        const buttonZoom = Number(button.dataset?.zoom);
+        const active = mobileLayout && Math.abs(buttonZoom - zoom) < 0.01;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
     const containerWidth = Number(chartWrap?.clientWidth)
         || Number(chart.clientWidth)
         || 360;

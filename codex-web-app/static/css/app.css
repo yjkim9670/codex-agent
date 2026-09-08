@@ -5871,11 +5871,58 @@ body.is-mermaid-diagram-viewer-open {
     overflow: hidden;
 }
 
+.usage-history-zoom-controls {
+    display: none;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+.usage-history-zoom-label {
+    margin-right: 4px;
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+.usage-history-zoom-btn {
+    min-width: 40px;
+    min-height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-secondary);
+    background: var(--surface);
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.usage-history-zoom-btn.is-active {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 11%, var(--surface) 89%);
+}
+
 .usage-history-chart {
     width: 100%;
     height: 100%;
     min-height: 0;
     display: block;
+}
+
+.usage-history-overlay.is-mobile-chart-layout .usage-history-zoom-controls {
+    display: flex;
+}
+
+.usage-history-overlay.is-mobile-chart-layout .usage-history-chart-wrap.is-horizontally-zoomed {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+}
+
+.usage-history-overlay.is-mobile-chart-layout .usage-history-chart-wrap.is-horizontally-zoomed .usage-history-chart {
+    width: calc(100% * var(--usage-history-chart-zoom, 1));
+    min-width: calc(100% * var(--usage-history-chart-zoom, 1));
 }
 
 .usage-history-chart .grid-line {

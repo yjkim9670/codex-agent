@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=229">
+    <link rel="stylesheet" href="/static/css/app.css?v=230">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -579,12 +579,12 @@
                                         title="Terra medium effort 경량 작업 제출"
                                     ><span class="sr-only">Terra medium effort 경량 작업 제출</span></button>
                                     <button
-                                        class="btn ghost usage-keepalive-history-open"
+                                        class="btn ghost icon-only usage-keepalive-history-open"
                                         type="button"
                                         id="codex-usage-keepalive-history-open"
                                         aria-label="경량 작업 이력 열기"
                                         title="경량 작업 이력 열기"
-                                    >History</button>
+                                    ><span class="sr-only">경량 작업 이력 열기</span></button>
                                     <button
                                         class="btn ghost icon-only usage-history-open"
                                         type="button"
@@ -1294,13 +1294,16 @@
             <div class="usage-keepalive-history-overlay-header">
                 <div>
                     <div class="usage-keepalive-history-title" id="codex-usage-keepalive-history-title">경량 작업 History</div>
-                    <div class="usage-keepalive-history-subtitle">Terra · medium effort · 최근 50개 이벤트</div>
+                    <div class="usage-keepalive-history-subtitle">Terra · medium effort · 최근 이벤트</div>
                 </div>
                 <button class="btn ghost icon-only usage-history-overlay-close" type="button" id="codex-usage-keepalive-history-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
             </div>
             <div class="usage-keepalive-history-overlay-body">
                 <div class="usage-keepalive-history-summary" id="codex-usage-keepalive-history-summary">이력을 불러오는 중...</div>
                 <div class="usage-keepalive-history-list" id="codex-usage-keepalive-history-list"></div>
+                <div class="usage-keepalive-history-more-wrap">
+                    <button class="btn ghost usage-keepalive-history-more" type="button" id="codex-usage-keepalive-history-more">더 보기</button>
+                </div>
             </div>
             <div class="usage-keepalive-history-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-usage-keepalive-history-close-footer">닫기</button>
@@ -1871,6 +1874,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=247"></script>
+    <script src="/static/js/app.js?v=248"></script>
 </body>
 </html>

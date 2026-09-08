@@ -2386,6 +2386,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageKeepaliveHistoryOverlay = document.getElementById('codex-usage-keepalive-history-overlay');
     const usageKeepaliveHistoryClose = document.getElementById('codex-usage-keepalive-history-close');
     const usageKeepaliveHistoryCloseFooter = document.getElementById('codex-usage-keepalive-history-close-footer');
+    const usageKeepaliveHistoryMore = document.getElementById('codex-usage-keepalive-history-more');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
     const fileBrowserOverlayCloseFooter = document.getElementById('codex-file-browser-overlay-close-footer');
@@ -3339,6 +3340,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (usageKeepaliveHistoryOpen) {
         usageKeepaliveHistoryOpen.addEventListener('click', openUsageKeepaliveHistoryOverlay);
+    }
+    if (usageKeepaliveHistoryMore) {
+        usageKeepaliveHistoryMore.addEventListener('click', () => {
+            usageKeepaliveHistoryVisibleCount += USAGE_KEEPALIVE_HISTORY_PAGE_SIZE;
+            renderUsageKeepaliveHistory();
+        });
     }
     if (accountSelect) {
         accountSelect.addEventListener('change', () => {
@@ -16667,16 +16674,29 @@ function formatUsageKeepaliveHistoryTokens(tokenUsage) {
         : '';
 }
 
+const USAGE_KEEPALIVE_HISTORY_PAGE_SIZE = 10;
+let usageKeepaliveHistoryVisibleCount = USAGE_KEEPALIVE_HISTORY_PAGE_SIZE;
+
 function renderUsageKeepaliveHistory() {
     const summary = document.getElementById('codex-usage-keepalive-history-summary');
     const list = document.getElementById('codex-usage-keepalive-history-list');
+    const moreWrap = document.querySelector('.usage-keepalive-history-more-wrap');
+    const moreButton = document.getElementById('codex-usage-keepalive-history-more');
     if (!summary || !list) return;
     const keepalive = state.settings?.usage?.usage_keepalive || {};
     const history = Array.isArray(keepalive.history) ? keepalive.history.slice().reverse() : [];
     const model = String(keepalive.model || 'gpt-5.6-terra').replace(/^gpt-5\.6-/, '');
     const effort = String(keepalive.reasoning_effort || 'medium');
-    summary.textContent = `${history.length}개 이벤트 · ${model} / ${effort} effort`;
+    const visibleHistory = history.slice(0, usageKeepaliveHistoryVisibleCount);
+    summary.textContent = history.length > USAGE_KEEPALIVE_HISTORY_PAGE_SIZE
+        ? `최근 ${visibleHistory.length} / ${history.length}개 이벤트 · ${model} / ${effort} effort`
+        : `${history.length}개 이벤트 · ${model} / ${effort} effort`;
     list.innerHTML = '';
+    if (moreWrap) moreWrap.classList.toggle('is-hidden', visibleHistory.length >= history.length);
+    if (moreButton) {
+        const remaining = Math.max(0, history.length - visibleHistory.length);
+        moreButton.textContent = remaining > 0 ? `더 보기 (${remaining}개 남음)` : '더 보기';
+    }
     if (!history.length) {
         const empty = document.createElement('div');
         empty.className = 'usage-keepalive-history-empty';
@@ -16684,7 +16704,7 @@ function renderUsageKeepaliveHistory() {
         list.appendChild(empty);
         return;
     }
-    history.forEach(item => {
+    visibleHistory.forEach(item => {
         const row = document.createElement('article');
         row.className = 'usage-keepalive-history-item';
         const heading = document.createElement('div');
@@ -16712,6 +16732,7 @@ function openUsageKeepaliveHistoryOverlay() {
     overlay.classList.add('is-visible');
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('is-overlay-open');
+    usageKeepaliveHistoryVisibleCount = USAGE_KEEPALIVE_HISTORY_PAGE_SIZE;
     renderUsageKeepaliveHistory();
 }
 

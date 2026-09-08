@@ -957,12 +957,14 @@ def test_usage_keepalive_global_claim_blocks_other_workspaces_and_allows_next_wi
     ) == (True, '')
 
 
-def test_usage_keepalive_uses_terra_with_a_concise_reasoning_prompt():
+def test_usage_keepalive_uses_terra_with_a_read_only_workspace_review():
     assert codex_chat._USAGE_KEEPALIVE_MODEL == 'gpt-5.6-terra'
-    assert codex_chat._USAGE_KEEPALIVE_REASONING_EFFORT == 'low'
-    assert 'internally consistent' in codex_chat._USAGE_KEEPALIVE_PROMPT
-    assert 'exactly three short bullet points' in codex_chat._USAGE_KEEPALIVE_PROMPT
-    assert 'Do not use tools, inspect files, or make any changes.' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert codex_chat._USAGE_KEEPALIVE_REASONING_EFFORT == 'medium'
+    assert 'read-only workspace health review' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'up to three representative source or configuration files' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'exactly three concrete risks or maintainability issues' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'one small, reversible improvement' in codex_chat._USAGE_KEEPALIVE_PROMPT
+    assert 'Do not modify files, install packages, run builds, access the network' in codex_chat._USAGE_KEEPALIVE_PROMPT
 
 
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):

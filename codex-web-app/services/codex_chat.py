@@ -7622,7 +7622,7 @@ def _account_usage_refresh_is_due(snapshot, now=None):
 
 
 _USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
-_USAGE_KEEPALIVE_REASONING_EFFORT = 'low'
+_USAGE_KEEPALIVE_REASONING_EFFORT = 'medium'
 _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
 # A keepalive is an activation probe, not a retry mechanism.  Retrying a
 # provisional rate-limit response consumed a large amount of quota without
@@ -7630,11 +7630,16 @@ _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
 _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN = timedelta(hours=5)
 _USAGE_KEEPALIVE_GLOBAL_WEEKLY_COOLDOWN = timedelta(days=7)
 _USAGE_KEEPALIVE_PROMPT = (
-    'Perform this concise reasoning check:\n'
-    '1. State whether this statement is internally consistent: "A system records a timestamp after each completed job."\n'
-    '2. Name one possible edge case.\n'
-    '3. Name one verification step.\n\n'
-    'Respond with exactly three short bullet points. Do not use tools, inspect files, or make any changes.'
+    'Perform a read-only workspace health review.\n\n'
+    '1. Inspect the top-level project structure and read up to three representative '
+    'source or configuration files.\n'
+    '2. Identify two important runtime or data flows.\n'
+    '3. Report exactly three concrete risks or maintainability issues. For each, include '
+    'the affected file or path, why it matters, and one minimal verification step.\n'
+    '4. Propose one small, reversible improvement, but do not edit any files.\n\n'
+    'Use tools only for reading or listing workspace files. Do not modify files, install '
+    'packages, run builds, access the network, or make external changes. Keep the report '
+    'concise but technically specific, targeting roughly 600 to 1,000 tokens.'
 )
 
 

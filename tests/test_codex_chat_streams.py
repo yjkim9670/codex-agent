@@ -1251,6 +1251,60 @@ def test_usage_history_does_not_mark_repeated_zero_percent_as_weekly_resets():
     assert not any(item['weekly_reset_detected'] for item in items)
 
 
+def test_usage_calibration_batches_zero_percent_observations(
+        isolated_codex_workspace):
+    context = codex_chat._account_storage_context()
+    before = {
+        'limits_observed_at': '2026-09-10T10:00:00+09:00',
+        'five_hour': {'used_percent': 10, 'resets_at': '2026-09-10T15:00:00+09:00'},
+        'weekly': {'used_percent': 20, 'resets_at': '2026-09-17T00:00:00+09:00'},
+    }
+    first = codex_chat._create_usage_calibration_record(
+        account_id=context['account']['id'], event_id='first',
+        model='gpt-5.6-sol', reasoning_effort='medium', service_tier='standard',
+        usage={'input_tokens': 100, 'output_tokens': 0, 'total_tokens': 100},
+        limits_before=before,
+        prediction_scales={'five_hour': 100, 'weekly': 200},
+    )
+    assert first is not None
+    assert not codex_chat._reconcile_usage_calibration(
+        context['account']['id'], {
+            **before, 'last_success_at': codex_chat.normalize_timestamp(None),
+        },
+    )
+    second = codex_chat._create_usage_calibration_record(
+        account_id=context['account']['id'], event_id='second',
+        model='gpt-5.6-sol', reasoning_effort='medium', service_tier='standard',
+        usage={'input_tokens': 300, 'output_tokens': 0, 'total_tokens': 300},
+        limits_before=before,
+        prediction_scales={'five_hour': 100, 'weekly': 200},
+    )
+    assert second is not None
+    assert codex_chat._reconcile_usage_calibration(
+        context['account']['id'], {
+            'last_success_at': codex_chat.normalize_timestamp(None),
+            'five_hour': {'used_percent': 12, 'resets_at': '2026-09-10T16:00:00+09:00'},
+            'weekly': {'used_percent': 21, 'resets_at': '2026-09-18T00:00:00+09:00'},
+        },
+    )
+
+    ledger = codex_chat._load_usage_calibration_ledger(context['usage_calibration_path'])
+    assert ledger['records'][0]['outcomes']['five_hour']['quality'] == 'batched_rounding'
+    assert ledger['records'][0]['outcomes']['five_hour']['actual_percent'] == pytest.approx(0.5)
+    assert ledger['records'][1]['outcomes']['five_hour']['actual_percent'] == pytest.approx(1.5)
+    summary = codex_chat._build_usage_calibration_summary(context['account']['id'])
+    assert summary['limits']['five_hour']['raw_tokens_per_percent'] == pytest.approx(200)
+    assert summary['models']['gpt-5.6-sol']['five_hour']['observation_group_count'] == 1
+
+
+def test_usage_calibration_uses_sol_weighted_tokens_and_ignores_future_reset_time():
+    usage = {'input_tokens': 80, 'output_tokens': 20, 'total_tokens': 100}
+    assert codex_chat._calculate_sol_weighted_tokens('gpt-6-astra', usage) == pytest.approx(250)
+    assert not codex_chat._limit_reset_detected(
+        '2026-09-10T12:00:00+09:00', '2026-09-11T12:00:00+09:00', 0, 0,
+    )
+
+
 def test_usage_history_does_not_count_pre_scope_limits_as_token_growth():
     limit_samples = [
         {

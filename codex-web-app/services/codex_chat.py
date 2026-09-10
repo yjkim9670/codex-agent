@@ -207,6 +207,11 @@ _USAGE_EVENT_VERSION = 2
 _USAGE_EVENT_DEFAULT_ANALYSIS_HOURS = 24 * 30
 _USAGE_ACCOUNT_REFRESH_SECONDS = 30 * 60
 _USAGE_HISTORY_VERSION = 3
+_USAGE_CALIBRATION_VERSION = 1
+_USAGE_CALIBRATION_ALGORITHM = 'sol_weighted_observation_v1'
+_USAGE_CALIBRATION_MAX_RECORDS = 1000
+_USAGE_CALIBRATION_STALE_HOURS = 24 * 8
+_USAGE_CALIBRATION_FOLLOWUP_SECONDS = 90
 _ACCOUNTS_VERSION = 2
 _USAGE_HISTORY_BUCKET_HOURS = 1
 _USAGE_HISTORY_RETENTION_DAYS = 90
@@ -224,6 +229,8 @@ _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
 _USAGE_KEEPALIVE_FOLLOWUP_LOCK = threading.Lock()
 _USAGE_KEEPALIVE_FOLLOWUP_TIMERS = {}
+_USAGE_CALIBRATION_FOLLOWUP_LOCK = threading.Lock()
+_USAGE_CALIBRATION_FOLLOWUP_TIMERS = {}
 _LOCAL_USAGE_HISTORY_MIGRATION_LOCK = threading.Lock()
 _LOCAL_USAGE_HISTORY_MIGRATION_SIGNATURES = {}
 _WORKSPACE_SCOPE_ID = hashlib.sha1(str(WORKSPACE_DIR).encode('utf-8')).hexdigest()[:12]
@@ -4715,6 +4722,7 @@ def _account_storage_context(account_id=None):
         'usage_events_path': root / 'codex_usage_events.jsonl',
         'account_usage_snapshot_path': root / 'codex_account_usage_snapshot.json',
         'usage_history_path': root / 'codex_usage_history.json',
+        'usage_calibration_path': root / 'codex_usage_calibration.json',
         'usage_plan_path': root / 'codex_usage_plans.json',
         'queued_codex_home': runtime_root / 'queued_codex_home',
         'app_server_codex_home': runtime_root / 'app_server_codex_home',
@@ -5156,6 +5164,25 @@ def _calculate_usage_credit_equivalent(model, usage, service_tier='standard'):
         'service_tier': str(service_tier or 'standard'),
         'rates': rates,
     }
+
+
+def _calculate_sol_weighted_tokens(model, usage, service_tier='standard'):
+    """Normalize a request's token mix to the equivalent GPT-5.6 Sol load."""
+    normalized = _normalize_token_usage(usage)
+    if not normalized or normalized.get('total_tokens', 0) <= 0:
+        return None
+    model_credit = _calculate_usage_credit_equivalent(
+        model, normalized, service_tier=service_tier,
+    )
+    sol_credit = _calculate_usage_credit_equivalent(
+        'gpt-5.6-sol', normalized, service_tier=service_tier,
+    )
+    model_value = _coerce_float((model_credit or {}).get('value'))
+    sol_value = _coerce_float((sol_credit or {}).get('value'))
+    if model_value is None or sol_value is None or sol_value <= 0:
+        return float(normalized['total_tokens'])
+    multiplier = max(0.05, min(100.0, model_value / sol_value))
+    return round(normalized['total_tokens'] * multiplier, 4)
 
 
 def _append_usage_event(path, event):
@@ -7062,6 +7089,417 @@ def _aggregate_tokens_per_percent(history_items, delta_key, token_delta_key='del
     }
 
 
+def _empty_usage_calibration_ledger():
+    return {
+        'version': _USAGE_CALIBRATION_VERSION,
+        'algorithm': _USAGE_CALIBRATION_ALGORITHM,
+        'updated_at': normalize_timestamp(None),
+        'records': [],
+    }
+
+
+def _load_usage_calibration_ledger(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except Exception:
+        return _empty_usage_calibration_ledger()
+    if not isinstance(data, dict):
+        return _empty_usage_calibration_ledger()
+    records = [item for item in (data.get('records') or []) if isinstance(item, dict)]
+    return {
+        'version': _USAGE_CALIBRATION_VERSION,
+        'algorithm': _USAGE_CALIBRATION_ALGORITHM,
+        'updated_at': normalize_timestamp(data.get('updated_at')),
+        'records': records[-_USAGE_CALIBRATION_MAX_RECORDS:],
+    }
+
+
+def _compact_calibration_limits(value):
+    source = value if isinstance(value, dict) else {}
+    result = {}
+    for limit_name in ('five_hour', 'weekly'):
+        limit = source.get(limit_name) if isinstance(source.get(limit_name), dict) else {}
+        result[limit_name] = {
+            'used_percent': _normalize_used_percent(limit.get('used_percent')),
+            # Retained for diagnostics only. Reset decisions never depend on a
+            # future resets_at value because the API may revise that value.
+            'resets_at': _normalize_optional_timestamp(limit.get('resets_at')),
+        }
+    observed_at = _normalize_optional_timestamp(
+        source.get('limits_observed_at') or source.get('last_success_at')
+    )
+    if observed_at:
+        result['observed_at'] = observed_at
+    return result
+
+
+def _calibration_relation_from_records(records, limit_name, model=''):
+    model_key = str(model or '').strip().lower()
+    candidates = []
+    for record in records:
+        if str(record.get('status') or '') not in {'completed', 'failed'}:
+            continue
+        if record.get('learning_eligible') is False:
+            continue
+        if model_key and str(record.get('model') or '').strip().lower() != model_key:
+            continue
+        outcome = record.get('outcomes', {}).get(limit_name, {})
+        if outcome.get('status') != 'observed':
+            continue
+        weighted_tokens = _coerce_float(record.get('weighted_tokens'))
+        actual_percent = _coerce_float(outcome.get('actual_percent'))
+        if weighted_tokens is None or weighted_tokens <= 0 or actual_percent is None or actual_percent <= 0:
+            continue
+        candidates.append((record, weighted_tokens, actual_percent, outcome))
+
+    # Model-specific fitting is restricted to single-model observation groups.
+    # A mixed group is still useful globally but cannot identify which model
+    # caused the difference without inventing an attribution rule.
+    if model_key:
+        group_models = {}
+        for record, _tokens, _actual, outcome in candidates:
+            group_id = str(outcome.get('group_id') or '')
+            group_models.setdefault(group_id, set()).add(str(record.get('model') or '').strip().lower())
+        candidates = [
+            item for item in candidates
+            if len(group_models.get(str(item[3].get('group_id') or ''), set())) == 1
+        ]
+
+    groups = {}
+    for record, weighted_tokens, actual_percent, outcome in candidates:
+        group_id = str(outcome.get('group_id') or record.get('id') or '')
+        group = groups.setdefault(group_id, {
+            'observed_at': outcome.get('observed_at') or record.get('created_at') or '',
+            'weighted_tokens': 0.0,
+            'actual_percent': 0.0,
+            'baseline_predicted_percent': 0.0,
+            'baseline_available': True,
+        })
+        group['weighted_tokens'] += weighted_tokens
+        group['actual_percent'] += actual_percent
+        predicted = _coerce_float((record.get('predictions') or {}).get(limit_name))
+        if predicted is None:
+            group['baseline_available'] = False
+        else:
+            group['baseline_predicted_percent'] += predicted
+
+    ordered_groups = sorted(groups.values(), key=lambda item: item['observed_at'])
+    token_sum = sum(item['weighted_tokens'] for item in ordered_groups)
+    percent_sum = sum(item['actual_percent'] for item in ordered_groups)
+    group_count = len(ordered_groups)
+    raw_scale = round(token_sum / percent_sum, 4) if token_sum > 0 and percent_sum > 0 else None
+    confidence = _tokens_per_percent_confidence(group_count, percent_sum)
+
+    # Walk-forward validation: each candidate scale is trained only on earlier
+    # groups, then compared with the prediction captured before the later task.
+    train_tokens = 0.0
+    train_percent = 0.0
+    candidate_errors = []
+    baseline_errors = []
+    for index, group in enumerate(ordered_groups):
+        if index >= 2 and train_tokens > 0 and train_percent > 0:
+            trained_scale = train_tokens / train_percent
+            candidate = group['weighted_tokens'] / trained_scale
+            candidate_errors.append(abs(candidate - group['actual_percent']))
+            if group['baseline_available']:
+                baseline_errors.append(abs(
+                    group['baseline_predicted_percent'] - group['actual_percent']
+                ))
+        train_tokens += group['weighted_tokens']
+        train_percent += group['actual_percent']
+    candidate_mae = (
+        round(sum(candidate_errors) / len(candidate_errors), 4)
+        if candidate_errors else None
+    )
+    baseline_mae = (
+        round(sum(baseline_errors) / len(baseline_errors), 4)
+        if baseline_errors and len(baseline_errors) == len(candidate_errors) else None
+    )
+    improved = bool(
+        candidate_mae is not None
+        and baseline_mae is not None
+        and candidate_mae <= baseline_mae * 0.98
+    )
+    is_reliable = bool(
+        raw_scale is not None
+        and group_count >= _TOKENS_PER_PERCENT_MIN_SAMPLES
+        and percent_sum >= _TOKENS_PER_PERCENT_MIN_PERCENT_SUM
+    )
+    predicted_values = [
+        _coerce_float((record.get('predictions') or {}).get(limit_name))
+        for record, _weighted, _actual, _outcome in candidates
+    ]
+    paired = [
+        (predicted, actual)
+        for predicted, (_record, _weighted, actual, _outcome) in zip(predicted_values, candidates)
+        if predicted is not None
+    ]
+    return {
+        'weighted_token_sum': round(token_sum, 4),
+        'percent_sum': round(percent_sum, 4),
+        'record_count': len(candidates),
+        'observation_group_count': group_count,
+        'tokens_per_percent': raw_scale if is_reliable and improved else None,
+        'raw_tokens_per_percent': raw_scale,
+        'confidence': confidence,
+        'is_reliable': is_reliable,
+        'is_applied': bool(is_reliable and improved),
+        'predicted_percent_sum': (
+            round(sum(item[0] for item in paired), 4) if paired else None
+        ),
+        'actual_percent_sum': round(sum(item[1] for item in paired), 4) if paired else None,
+        'mae_percent': (
+            round(sum(abs(predicted - actual) for predicted, actual in paired) / len(paired), 4)
+            if paired else None
+        ),
+        'validation': {
+            'method': 'walk_forward',
+            'sample_count': len(candidate_errors),
+            'candidate_mae_percent': candidate_mae,
+            'baseline_mae_percent': baseline_mae,
+            'improved': improved,
+        },
+    }
+
+
+def _build_usage_calibration_summary(account_id=None):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return {'algorithm': _USAGE_CALIBRATION_ALGORITHM, 'records': 0, 'models': {}}
+    with _acquire_path_file_lock(context['usage_calibration_path']):
+        ledger = _load_usage_calibration_ledger(context['usage_calibration_path'])
+    records = ledger.get('records') or []
+    model_names = sorted({str(item.get('model') or '').strip() for item in records if str(item.get('model') or '').strip()})
+    pending = sum(
+        1 for item in records
+        if any(
+            (item.get('outcomes', {}).get(name, {}).get('status') == 'pending')
+            for name in ('five_hour', 'weekly')
+        )
+    )
+    return {
+        'version': ledger.get('version'),
+        'algorithm': ledger.get('algorithm'),
+        'updated_at': ledger.get('updated_at'),
+        'records': len(records),
+        'pending_records': pending,
+        'limits': {
+            name: _calibration_relation_from_records(records, name)
+            for name in ('five_hour', 'weekly')
+        },
+        'models': {
+            model: {
+                name: _calibration_relation_from_records(records, name, model=model)
+                for name in ('five_hour', 'weekly')
+            }
+            for model in model_names
+        },
+        'recent': records[-20:],
+    }
+
+
+def _resolve_usage_prediction_scales(account_id=None, model=''):
+    history = get_usage_history_summary(account_id=account_id, scope='account')
+    calibration = history.get('calibration') if isinstance(history, dict) else {}
+    model_calibration = (calibration.get('models') or {}).get(str(model or '').strip(), {})
+    scales = {}
+    sources = {}
+    for name in ('five_hour', 'weekly'):
+        selected = model_calibration.get(name) if isinstance(model_calibration, dict) else None
+        source = 'model_calibration'
+        if not isinstance(selected, dict) or not selected.get('is_applied'):
+            selected = (calibration.get('limits') or {}).get(name, {})
+            source = 'global_calibration'
+        if not isinstance(selected, dict) or not selected.get('is_applied'):
+            selected = (history.get('relation') or {}).get(name, {})
+            source = 'weighted_history'
+        value = _coerce_float((selected or {}).get('tokens_per_percent'))
+        if value is None or value <= 0:
+            value = _coerce_float((selected or {}).get('raw_tokens_per_percent'))
+            source += '_provisional'
+        scales[name] = value if value is not None and value > 0 else None
+        sources[name] = source if scales[name] else 'unavailable'
+    return scales, sources
+
+
+def _create_usage_calibration_record(
+        account_id, event_id, model, reasoning_effort, service_tier, usage,
+        limits_before, prediction_scales=None, prediction_sources=None,
+        status='completed'):
+    context = _account_storage_context(account_id)
+    weighted_tokens = _calculate_sol_weighted_tokens(model, usage, service_tier)
+    if context is None or weighted_tokens is None or weighted_tokens <= 0:
+        return None
+    compact_before = _compact_calibration_limits(limits_before)
+    scales = prediction_scales if isinstance(prediction_scales, dict) else {}
+    predictions = {}
+    for name in ('five_hour', 'weekly'):
+        scale = _coerce_float(scales.get(name))
+        predictions[name] = round(weighted_tokens / scale, 6) if scale and scale > 0 else None
+    record = {
+        'id': str(event_id or uuid.uuid4().hex),
+        'created_at': normalize_timestamp(None),
+        'status': str(status or 'completed'),
+        'learning_eligible': not _account_has_active_codex_stream(context['account']['id']),
+        'model': str(model or ''),
+        'reasoning_effort': str(reasoning_effort or ''),
+        'service_tier': str(service_tier or 'standard'),
+        'raw_tokens': (_normalize_token_usage(usage) or _zero_token_usage()).get('total_tokens', 0),
+        'weighted_tokens': weighted_tokens,
+        'weighting_basis': 'gpt-5.6-sol-api-rate-equivalent',
+        'calculation_version': _USAGE_CALIBRATION_ALGORITHM,
+        'limits_before': compact_before,
+        'prediction_scales': {
+            name: _coerce_float(scales.get(name)) for name in ('five_hour', 'weekly')
+        },
+        'predictions': predictions,
+        'prediction_sources': (
+            dict(prediction_sources) if isinstance(prediction_sources, dict) else {}
+        ),
+        'outcomes': {
+            name: {'status': 'pending'} for name in ('five_hour', 'weekly')
+        },
+    }
+    if not record['learning_eligible']:
+        record['learning_exclusion_reason'] = 'concurrent_active_stream'
+    with _acquire_path_file_lock(context['usage_calibration_path']):
+        ledger = _load_usage_calibration_ledger(context['usage_calibration_path'])
+        if any(str(item.get('id') or '') == record['id'] for item in ledger['records']):
+            return next(item for item in ledger['records'] if str(item.get('id') or '') == record['id'])
+        ledger['records'].append(record)
+        ledger['records'] = ledger['records'][-_USAGE_CALIBRATION_MAX_RECORDS:]
+        ledger['updated_at'] = normalize_timestamp(None)
+        _write_json_atomic(context['usage_calibration_path'], ledger)
+    return record
+
+
+def _reconcile_usage_calibration(account_id, limits_after):
+    context = _account_storage_context(account_id)
+    if context is None:
+        return False
+    current = _compact_calibration_limits(limits_after)
+    observed_at = current.get('observed_at') or normalize_timestamp(None)
+    observed_time = parse_timestamp(observed_at)
+    changed = False
+    with _acquire_path_file_lock(context['usage_calibration_path']):
+        ledger = _load_usage_calibration_ledger(context['usage_calibration_path'])
+        records = ledger.get('records') or []
+        for limit_name in ('five_hour', 'weekly'):
+            pending = [
+                item for item in records
+                if item.get('outcomes', {}).get(limit_name, {}).get('status') == 'pending'
+                and (
+                    observed_time is None
+                    or parse_timestamp(item.get('created_at')) is None
+                    or parse_timestamp(item.get('created_at')) <= observed_time
+                )
+            ]
+            if not pending:
+                continue
+            baseline = _coerce_float(
+                pending[0].get('limits_before', {}).get(limit_name, {}).get('used_percent')
+            )
+            current_percent = _coerce_float(current.get(limit_name, {}).get('used_percent'))
+            if baseline is None or current_percent is None:
+                continue
+            delta = round(current_percent - baseline, 4)
+            oldest_time = parse_timestamp(pending[0].get('created_at'))
+            stale = bool(
+                oldest_time is not None and observed_time is not None
+                and observed_time - oldest_time > timedelta(hours=_USAGE_CALIBRATION_STALE_HOURS)
+            )
+            if delta < -0.1 or stale:
+                reason = 'reset_observed' if delta < -0.1 else 'observation_timeout'
+                for record in pending:
+                    record['outcomes'][limit_name] = {
+                        'status': 'excluded', 'reason': reason, 'observed_at': observed_at,
+                    }
+                changed = True
+                continue
+            if delta <= 0:
+                continue
+            weighted_total = sum((_coerce_float(item.get('weighted_tokens')) or 0.0) for item in pending)
+            if weighted_total <= 0:
+                continue
+            group_id = f'{limit_name}:{pending[0].get("id")}:{observed_at}'
+            quality = 'direct' if len(pending) == 1 else 'batched_rounding'
+            for record in pending:
+                weighted = _coerce_float(record.get('weighted_tokens')) or 0.0
+                actual = delta * weighted / weighted_total
+                record['outcomes'][limit_name] = {
+                    'status': 'observed',
+                    'actual_percent': round(actual, 6),
+                    'group_actual_percent': delta,
+                    'group_id': group_id,
+                    'group_size': len(pending),
+                    'quality': quality,
+                    'observed_at': observed_at,
+                }
+            changed = True
+        if changed:
+            ledger['updated_at'] = normalize_timestamp(None)
+            _write_json_atomic(context['usage_calibration_path'], ledger)
+    return changed
+
+
+def _attach_weighted_token_deltas(history_items, context, scope='account'):
+    """Attach Sol-equivalent token deltas to each observed history interval."""
+    events = []
+    try:
+        path = context.get('usage_events_path')
+        if path and Path(path).is_file():
+            for line in Path(path).read_text(encoding='utf-8').splitlines():
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                event_time = parse_timestamp(event.get('recorded_at')) if isinstance(event, dict) else None
+                if event_time is None:
+                    continue
+                if scope == 'workspace' and event.get('workspace_id') != _WORKSPACE_SCOPE_ID:
+                    continue
+                weighted = _calculate_sol_weighted_tokens(
+                    event.get('model'), event, event.get('service_tier'),
+                )
+                raw_tokens = _coerce_non_negative_int(event.get('total_tokens')) or 0
+                if weighted is not None and weighted > 0:
+                    events.append((event_time, weighted, raw_tokens))
+    except Exception:
+        _LOGGER.debug('weighted usage event load skipped', exc_info=True)
+    events.sort(key=lambda item: item[0])
+    previous_time = None
+    result = []
+    raw_delta_key = 'delta_account_tokens' if scope == 'account' else 'delta_workspace_tokens'
+    for item in history_items:
+        current_time = parse_timestamp(item.get('recorded_at') or item.get('bucket_start'))
+        weighted_delta = 0.0
+        classified_raw_delta = 0
+        if current_time is not None and previous_time is not None:
+            weighted_delta = sum(
+                value for event_time, value, _raw_tokens in events
+                if previous_time < event_time <= current_time
+            )
+            classified_raw_delta = sum(
+                raw_tokens for event_time, _value, raw_tokens in events
+                if previous_time < event_time <= current_time
+            )
+        raw_delta = _coerce_non_negative_int(item.get(raw_delta_key)) or 0
+        # Imported legacy ledgers have no per-event model metadata. Preserve
+        # those observations as unweighted fallback instead of losing them.
+        unclassified_raw_delta = max(0, raw_delta - classified_raw_delta)
+        weighted_delta += unclassified_raw_delta
+        used_fallback = unclassified_raw_delta > 0
+        result.append({
+            **item,
+            'delta_weighted_tokens': round(weighted_delta, 4),
+            'delta_unclassified_tokens': unclassified_raw_delta,
+            'weighted_token_fallback': used_fallback,
+        })
+        if current_time is not None:
+            previous_time = current_time
+    return result
+
+
 def _summarize_usage_history_hourly_average(history_items, window_hours, delta_key='delta_tokens'):
     normalized_window_hours = _coerce_non_negative_int(window_hours)
     if normalized_window_hours is None or normalized_window_hours <= 0:
@@ -7352,6 +7790,10 @@ def get_usage_history_summary(
             for item in history_items
         ]
 
+    history_items = _attach_weighted_token_deltas(
+        history_items, context, scope=relation_scope,
+    )
+
     current_plan_period = _resolve_usage_plan_period(
         plan_periods,
         last_recorded or last_bucket,
@@ -7386,12 +7828,18 @@ def get_usage_history_summary(
         'delta_weekly_used_percent',
         token_delta_key='delta_account_tokens',
     )
-    five_hour_relation = (
-        account_five_hour_relation if relation_scope == 'account' else workspace_five_hour_relation
+    five_hour_relation = _aggregate_tokens_per_percent(
+        relation_history_items,
+        'delta_five_hour_used_percent',
+        token_delta_key='delta_weighted_tokens',
     )
-    weekly_relation = (
-        account_weekly_relation if relation_scope == 'account' else workspace_weekly_relation
+    weekly_relation = _aggregate_tokens_per_percent(
+        relation_history_items,
+        'delta_weekly_used_percent',
+        token_delta_key='delta_weighted_tokens',
     )
+    five_hour_relation['token_unit'] = 'sol_weighted'
+    weekly_relation['token_unit'] = 'sol_weighted'
     reset_count = sum(1 for item in history_items if item.get('reset_detected'))
     five_hour_reset_count = sum(1 for item in history_items if item.get('five_hour_reset_detected'))
     weekly_reset_count = sum(1 for item in history_items if item.get('weekly_reset_detected'))
@@ -7441,12 +7889,12 @@ def get_usage_history_summary(
             'five_hour': _aggregate_tokens_per_percent(
                 eligible_period_items,
                 'delta_five_hour_used_percent',
-                token_delta_key='delta_tokens',
+                token_delta_key='delta_weighted_tokens',
             ),
             'weekly': _aggregate_tokens_per_percent(
                 eligible_period_items,
                 'delta_weekly_used_percent',
-                token_delta_key='delta_tokens',
+                token_delta_key='delta_weighted_tokens',
             ),
             'averages': period_averages,
         })
@@ -7519,6 +7967,9 @@ def get_usage_history_summary(
                 'weekly': account_weekly_relation,
             },
         },
+        'calibration': _build_usage_calibration_summary(
+            account_id=context['account']['id'],
+        ),
         'scope': {
             'workspace_id': _WORKSPACE_SCOPE_ID,
             'workspace_path': str(WORKSPACE_DIR),
@@ -8013,6 +8464,34 @@ def _schedule_usage_keepalive_followup(account_id, delay_seconds=None):
         timer.start()
 
 
+def _schedule_usage_calibration_followup(account_id):
+    """Take one delayed observation to absorb rate-limit reporting lag."""
+    normalized_account_id = _normalize_account_id(account_id)
+    if not normalized_account_id:
+        return
+
+    def run_followup():
+        with _USAGE_CALIBRATION_FOLLOWUP_LOCK:
+            _USAGE_CALIBRATION_FOLLOWUP_TIMERS.pop(normalized_account_id, None)
+        try:
+            refresh_account_usage_snapshot_if_due(
+                account_id=normalized_account_id,
+                force=True,
+                limit_sample_source='manual',
+            )
+        except Exception:
+            _LOGGER.debug('usage calibration follow-up refresh skipped', exc_info=True)
+
+    with _USAGE_CALIBRATION_FOLLOWUP_LOCK:
+        existing = _USAGE_CALIBRATION_FOLLOWUP_TIMERS.get(normalized_account_id)
+        if existing and existing.is_alive():
+            return
+        timer = threading.Timer(_USAGE_CALIBRATION_FOLLOWUP_SECONDS, run_followup)
+        timer.daemon = True
+        _USAGE_CALIBRATION_FOLLOWUP_TIMERS[normalized_account_id] = timer
+        timer.start()
+
+
 def refresh_account_usage_snapshot_if_due(
         account_id=None, force=False, limit_sample_source=None):
     context = _account_storage_context(account_id)
@@ -8083,6 +8562,7 @@ def refresh_account_usage_snapshot_if_due(
                 account_id=context['account']['id'],
                 limit_sample_source=resolved_limit_sample_source,
             )
+            _reconcile_usage_calibration(context['account']['id'], snapshot)
             keepalive = {'submitted': False, 'reason': 'not_automatic'}
             if resolved_limit_sample_source == 'automatic':
                 keepalive = _submit_usage_keepalive_locked(context, snapshot, automatic=True)
@@ -14841,6 +15321,37 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             created_at=created_at_value,
         )
 
+    calibration_record = None
+    try:
+        prediction_scales, prediction_sources = _resolve_usage_prediction_scales(
+            account_id=account_id, model=response_model,
+        )
+        calibration_record = _create_usage_calibration_record(
+            account_id=account_id,
+            event_id=f'stream:{stream_id}',
+            model=response_model,
+            reasoning_effort=response_reasoning_effort,
+            service_tier=metadata['service_tier'],
+            usage=token_usage,
+            limits_before=usage_limits_before,
+            prediction_scales=prediction_scales,
+            prediction_sources=prediction_sources,
+            status='completed' if message_role == 'assistant' else 'failed',
+        )
+    except Exception:
+        _LOGGER.debug('usage calibration record skipped', exc_info=True)
+    if calibration_record:
+        metadata['usage_prediction'] = {
+            'calculation_version': _USAGE_CALIBRATION_ALGORITHM,
+            'weighted_tokens': calibration_record.get('weighted_tokens'),
+            'predictions': calibration_record.get('predictions'),
+            'sources': calibration_record.get('prediction_sources'),
+        }
+        if saved_message:
+            saved_message = update_message(
+                session_id, saved_message['id'], metadata=metadata,
+            ) or saved_message
+
     record_usage_event(
         event_id=f'stream:{stream_id}',
         session_id=session_id,
@@ -14864,6 +15375,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         metadata={
             'finalize_reason': finalize_reason,
             'execution_policy': execution_policy,
+            'usage_prediction': metadata.get('usage_prediction') or {},
             **({'internal_api_key_id': internal_api_key_id} if internal_api_key_id else {}),
         },
     )
@@ -14911,6 +15423,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 saved_message['id'],
                 metadata=metadata,
             ) or saved_message
+        if calibration_record:
+            _schedule_usage_calibration_followup(account_id)
     except Exception:
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
     if trigger_queue:

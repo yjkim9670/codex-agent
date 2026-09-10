@@ -15448,8 +15448,67 @@ function renderUsageHistoryRatioCards(history, costEstimate = null) {
         });
     }
 
+    const calibration = history?.calibration || {};
+    const calibrationModels = Object.entries(calibration?.models || {});
+    if (Number(calibration?.records || 0) > 0) {
+        const appliedLimits = ['five_hour', 'weekly']
+            .filter(name => calibration?.limits?.[name]?.is_applied)
+            .map(name => name === 'five_hour' ? '5h' : 'Weekly');
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: 'Prediction calibration',
+            value: `${formatNumber(Number(calibration.records || 0))} turns`,
+            subvalue: `${formatNumber(Number(calibration.pending_records || 0))} pending observation`,
+            meta: [
+                calibration.algorithm || '',
+                appliedLimits.length > 0 ? `applied ${appliedLimits.join(', ')}` : 'validation pending'
+            ].filter(Boolean).join(' · '),
+            lowConfidence: appliedLimits.length === 0
+        });
+    }
+    calibrationModels.forEach(([modelName, modelLimits]) => {
+        const describeLimit = (label, entry) => {
+            const predicted = entry?.predicted_percent_sum == null
+                ? null
+                : Number(entry.predicted_percent_sum);
+            const actual = entry?.actual_percent_sum == null
+                ? null
+                : Number(entry.actual_percent_sum);
+            const groups = Number(entry?.observation_group_count || 0);
+            if (actual === null || !Number.isFinite(actual) || groups <= 0) return `${label} --`;
+            const predictionText = Number.isFinite(predicted) ? `${predicted.toFixed(2)}%p` : '--';
+            return `${label} ${predictionText}→${actual.toFixed(2)}%p`;
+        };
+        const fiveHour = modelLimits?.five_hour || {};
+        const weekly = modelLimits?.weekly || {};
+        const observedRecords = Math.max(
+            Number(fiveHour?.record_count || 0),
+            Number(weekly?.record_count || 0)
+        );
+        if (observedRecords <= 0) return;
+        const scales = [
+            Number(fiveHour?.raw_tokens_per_percent) > 0
+                ? `5h 1%≈${formatCompactTokenCount(Number(fiveHour.raw_tokens_per_percent))}`
+                : '',
+            Number(weekly?.raw_tokens_per_percent) > 0
+                ? `Weekly 1%≈${formatCompactTokenCount(Number(weekly.raw_tokens_per_percent))}`
+                : ''
+        ].filter(Boolean);
+        appendUsageHistoryMetricCard(elements.ratios, {
+            label: modelName,
+            value: describeLimit('5h', fiveHour),
+            subvalue: describeLimit('Weekly', weekly),
+            meta: [
+                `${formatNumber(observedRecords)} observed turns`,
+                ...scales,
+                (fiveHour?.is_applied || weekly?.is_applied) ? 'validated' : 'learning'
+            ].join(' · '),
+            lowConfidence: !(fiveHour?.is_applied || weekly?.is_applied)
+        });
+    });
+
     const ratioItems = [
-        { key: 'weekly', label: 'Weekly 1% token', entry: relation?.weekly }
+        { key: 'five_hour', label: '5h 1% weighted token', entry: relation?.five_hour },
+        { key: 'weekly', label: 'Weekly 1% weighted token', entry: relation?.weekly }
     ];
     ratioItems.forEach(item => {
         const ratioValue = Number(item?.entry?.tokens_per_percent);
@@ -30474,9 +30533,22 @@ function formatMessageTokenSummary(message) {
     return parts.join(' · ');
 }
 
-function resolveLimitTokenScale(limitName, history = state.settings?.usageHistory) {
+function resolveLimitTokenScale(limitName, history = state.settings?.usageHistory, message = null) {
     const relation = history?.relation || {};
-    const limit = relation?.[limitName] || {};
+    const metadata = message ? resolveMessageLimitModelMetadata(message) : {};
+    const modelName = String(metadata?.model || '').trim();
+    const calibration = history?.calibration || {};
+    const modelLimit = modelName ? calibration?.models?.[modelName]?.[limitName] : null;
+    const globalLimit = calibration?.limits?.[limitName];
+    let limit = relation?.[limitName] || {};
+    let calibrationScope = '';
+    if (modelLimit?.is_applied && Number(modelLimit?.tokens_per_percent) > 0) {
+        limit = modelLimit;
+        calibrationScope = 'model';
+    } else if (globalLimit?.is_applied && Number(globalLimit?.tokens_per_percent) > 0) {
+        limit = globalLimit;
+        calibrationScope = 'global';
+    }
     const reliableValue = Number(limit?.tokens_per_percent);
     const rawValue = Number(limit?.raw_tokens_per_percent);
     const hasReliableValue = Number.isFinite(reliableValue) && reliableValue > 0;
@@ -30494,7 +30566,8 @@ function resolveLimitTokenScale(limitName, history = state.settings?.usageHistor
         sampleCount: toNonNegativeInt(limit?.sample_count),
         percentSum: Number(limit?.percent_sum),
         isReliable: Boolean(limit?.is_reliable && hasReliableValue),
-        usesRawFallback: !hasReliableValue && hasRawValue
+        usesRawFallback: !hasReliableValue && hasRawValue,
+        calibrationScope
     };
 }
 
@@ -30583,7 +30656,7 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     const estimateUsage = weighted?.usage || usage;
     const totalTokens = Number(estimateUsage.totalTokens);
     if (!Number.isFinite(totalTokens) || totalTokens < 0 || (!includeZero && totalTokens <= 0)) return null;
-    const scale = resolveLimitTokenScale(limitName);
+    const scale = resolveLimitTokenScale(limitName, state.settings?.usageHistory, message);
     if (!scale) return null;
 
     const percent = totalTokens / scale.tokensPerPercent;
@@ -30604,7 +30677,8 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     // scannable line; model, tier, sample and scope diagnostics add noise here
     // without changing how the displayed percentage should be read.
     const limitLabel = limitName === 'five_hour' ? '5h' : 'Weekly';
-    const tooltip = `${limitLabel} ${marker}${percentText}% · 1% ≈ ${formatCompactTokenCount(scale.tokensPerPercent)} weighted tok`;
+    const calibrationText = scale.calibrationScope ? ` · ${scale.calibrationScope} calibrated` : '';
+    const tooltip = `${limitLabel} ${marker}${percentText}% · 1% ≈ ${formatCompactTokenCount(scale.tokensPerPercent)} weighted tok${calibrationText}`;
 
     return {
         text: `${limitName === 'five_hour' ? '5h' : 'Weekly'} ${marker}${percentText}%`,

@@ -9340,6 +9340,40 @@ body.is-work-mode-resizing * {
     overflow-wrap: anywhere;
 }
 
+/* Compact, independently legible status panel below the Usage readings. */
+.codex-cli-version-card {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 7px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    min-width: 0;
+}
+
+.codex-cli-version-label {
+    flex: 0 0 auto;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.codex-cli-version-value {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .usage-account {
     font-size: 11px;
     font-weight: 600;

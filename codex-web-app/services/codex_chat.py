@@ -8191,6 +8191,9 @@ def get_usage_summary(account_id=None):
         'account_id': resolved_account_id,
         'account_label': context['account']['label'],
         'authenticated': _codex_home_has_auth(context['codex_home']),
+        # This is cached by executable fingerprint, so it is safe to return
+        # alongside the frequently refreshed Usage-panel payload.
+        'codex_cli_version': _current_codex_cli_identity().get('cli_version') or '',
         'account_usage': api_account_usage,
         'account_usage_refresh': {
             'source': api_snapshot.get('source') or '',

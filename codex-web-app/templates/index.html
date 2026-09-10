@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=231">
+    <link rel="stylesheet" href="/static/css/app.css?v=232">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -615,6 +615,10 @@
                             </div>
                             <div class="account-switcher-status" id="codex-account-switcher-status"></div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
+                            <div class="codex-cli-version-card" id="codex-cli-version-card" aria-live="polite">
+                                <span class="codex-cli-version-label">Codex CLI</span>
+                                <span class="codex-cli-version-value" id="codex-cli-version-value">확인 중...</span>
+                            </div>
                         </div>
                         <div class="model-card" id="codex-model-card">
                             <label id="codex-agent-backend-label" class="model-label is-hidden" for="codex-agent-backend-select">Agent backend</label>
@@ -1880,6 +1884,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=249"></script>
+    <script src="/static/js/app.js?v=250"></script>
 </body>
 </html>

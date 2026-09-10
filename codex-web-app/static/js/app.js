@@ -9429,6 +9429,14 @@ function buildAccountUsageRefreshToastMessage(usage) {
 function updateUsageSummary(usage) {
     const element = document.getElementById('codex-usage-summary');
     if (!element) return;
+    const cliVersionElement = document.getElementById('codex-cli-version-value');
+    if (cliVersionElement) {
+        const cliVersion = typeof usage?.codex_cli_version === 'string'
+            ? usage.codex_cli_version.trim()
+            : '';
+        cliVersionElement.textContent = cliVersion || '버전 정보를 불러올 수 없습니다.';
+        cliVersionElement.title = cliVersion || '';
+    }
     const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
     const keepaliveButton = document.getElementById('codex-usage-keepalive-submit');

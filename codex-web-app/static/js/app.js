@@ -163,6 +163,10 @@ const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const PHONE_MEDIA_QUERY = '(max-width: 599px)';
 const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
+const UI_VIEW_MODE_STORAGE_KEY = 'codex-ui-view-mode';
+const UI_VIEW_MODE_AUTO = 'auto';
+const UI_VIEW_MODES = Object.freeze(['auto', 'desktop', 'fold', 'mobile']);
+let uiViewMode = UI_VIEW_MODE_AUTO;
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_VIEWPORT_TOP_VAR = '--mobile-viewport-top';
 const MOBILE_TERMINAL_VIEWPORT_HEIGHT_VAR = '--mobile-terminal-viewport-height';
@@ -2295,6 +2299,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const uiSettingsScaleInput = document.getElementById('codex-ui-scale-input');
     const uiSettingsScaleValue = document.getElementById('codex-ui-scale-value');
     const uiSettingsFontInputs = Array.from(document.querySelectorAll('input[name="codex-ui-font"]'));
+    const uiSettingsViewInputs = Array.from(document.querySelectorAll('input[name="codex-ui-view-mode"]'));
+    const uiSettingsViewDetected = document.getElementById('codex-ui-view-detected');
     const uiSettingsReset = document.getElementById('codex-ui-settings-reset');
     const uiSettingsDone = document.getElementById('codex-ui-settings-done');
     const accountCreateBtn = document.getElementById('codex-account-create');
@@ -2502,6 +2508,46 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
+    const viewModeLabel = mode => ({ desktop: '데스크톱', fold: '폴드', mobile: '모바일' }[mode] || '알 수 없음');
+    const updateUiViewModeControls = () => {
+        const detected = detectUiViewMode();
+        const effective = resolveUiViewMode();
+        uiSettingsViewInputs.forEach(input => {
+            input.checked = input.value === uiViewMode;
+        });
+        if (uiSettingsViewDetected) {
+            const size = `${Math.round(window.innerWidth)} × ${Math.round(window.innerHeight)}px`;
+            const source = uiViewMode === UI_VIEW_MODE_AUTO
+                ? `자동 적용: ${viewModeLabel(effective)}`
+                : `감지: ${viewModeLabel(detected)} · 강제 적용: ${viewModeLabel(effective)}`;
+            uiSettingsViewDetected.textContent = `${source} (${size})`;
+        }
+    };
+    const applyUiViewMode = (value, { persist = true, refresh = true } = {}) => {
+        uiViewMode = normalizeUiViewMode(value);
+        const effective = resolveUiViewMode();
+        document.documentElement.dataset.viewMode = effective;
+        document.documentElement.dataset.viewModeSource = uiViewMode;
+        document.querySelector('.app')?.setAttribute('data-view-mode', effective);
+        if (persist) {
+            try {
+                window.localStorage.setItem(UI_VIEW_MODE_STORAGE_KEY, uiViewMode);
+            } catch (_error) {
+                // The selection remains active for this page when storage is unavailable.
+            }
+        }
+        updateUiViewModeControls();
+        if (refresh) {
+            window.setTimeout(() => {
+                syncSessionsLayout(isCompactLayout());
+                setFileBrowserMobileView(fileBrowserMobileView);
+                setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
+                handleWorkModeMediaChange(isMobileLayout());
+                syncCoverStreamMonitor(isMobileLayout());
+                syncTerminalExtraKeysState();
+            }, 0);
+        }
+    };
     const closeUiSettingsOverlay = () => {
         if (!uiSettingsOverlay) return;
         uiSettingsOverlay.classList.remove('is-visible');
@@ -2521,9 +2567,11 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
         applyUiScale(window.localStorage.getItem(UI_SCALE_STORAGE_KEY), { persist: false });
         applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
+        applyUiViewMode(window.localStorage.getItem(UI_VIEW_MODE_STORAGE_KEY), { persist: false, refresh: false });
     } catch (_error) {
         applyUiScale(DEFAULT_UI_SCALE, { persist: false });
         applyUiFont(DEFAULT_UI_FONT, { persist: false });
+        applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
     }
     uiSettingsOpen?.addEventListener('click', openUiSettingsOverlay);
     uiSettingsClose?.addEventListener('click', closeUiSettingsOverlay);
@@ -2535,9 +2583,13 @@ document.addEventListener('DOMContentLoaded', () => {
     uiSettingsFontInputs.forEach(input => {
         input.addEventListener('change', () => applyUiFont(input.value));
     });
+    uiSettingsViewInputs.forEach(input => {
+        input.addEventListener('change', () => applyUiViewMode(input.value));
+    });
     uiSettingsReset?.addEventListener('click', () => {
         applyUiScale(DEFAULT_UI_SCALE);
         applyUiFont(DEFAULT_UI_FONT);
+        applyUiViewMode(UI_VIEW_MODE_AUTO);
     });
     document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && uiSettingsOverlay?.classList.contains('is-visible')) {
@@ -2616,7 +2668,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (action === 'attach') {
                 imageAttachBtn?.click();
             } else if (action === 'plan') {
-                planModeToggle?.click();
+                // The desktop toggle is hidden on phone layouts.  Update the
+                // shared state directly instead of relying on a hidden button.
+                setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
             }
             setCoverComposeToolsOpen(false);
         });
@@ -3100,12 +3154,16 @@ document.addEventListener('DOMContentLoaded', () => {
     if (workModeMobileBrowserBtn) {
         workModeMobileBrowserBtn.addEventListener('click', event => {
             event.preventDefault();
-            if (!isWorkModeEnabled() || !isMobileLayout()) return;
+            if (!isWorkModeEnabled() || (!isMobileLayout() && !isFoldLayout())) return;
             const hasSelection = Boolean(normalizeFileBrowserRelativePath(workModeFileSelectedPath));
             const targetView = hasSelection
                 ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
                 : WORK_MODE_MOBILE_VIEW_LIST;
-            setWorkModeMobileView(targetView);
+            if (isFoldLayout()) {
+                setWorkModeBrowseView(targetView);
+            } else {
+                setWorkModeMobileView(targetView);
+            }
             void ensureWorkModeFilePanelContent();
         });
     }
@@ -4024,21 +4082,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     syncSessionsLayout(compactMedia.matches);
     syncControlsLayout();
-    syncCoverStreamMonitor(phoneMedia.matches);
+    syncCoverStreamMonitor(isMobileLayout());
     setFileBrowserMobileView(fileBrowserMobileView);
     setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-    initializeWorkMode(phoneMedia.matches);
+    initializeWorkMode(isMobileLayout());
     setWorkModeFileViewerFullscreen(false);
     if (isWorkModeEnabled()) {
         applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
     }
     const handleCompactLayoutChange = event => {
-        const isCompact = Boolean(event?.matches);
+        const isCompact = isCompactLayout();
         syncSessionsLayout(isCompact);
         syncLiveWeatherLayout(isCompact);
         setFileBrowserMobileView(fileBrowserMobileView);
         setFileBrowserViewerFullscreen(fileBrowserViewerFullscreen);
-        handleWorkModeMediaChange(isPhoneLayout());
+        handleWorkModeMediaChange(isMobileLayout());
         syncTerminalExtraKeysState();
         syncActiveSessionControls();
     };
@@ -4048,7 +4106,7 @@ document.addEventListener('DOMContentLoaded', () => {
         compactMedia.addListener(handleCompactLayoutChange);
     }
     const handlePhoneLayoutChange = event => {
-        const isPhone = Boolean(event?.matches);
+        const isPhone = isMobileLayout();
         if (!isPhone && isMobileSessionOverlayOpen()) {
             closeMobileSessionOverlay();
         }
@@ -4065,6 +4123,11 @@ document.addEventListener('DOMContentLoaded', () => {
         phoneMedia.addListener(handlePhoneLayoutChange);
     }
     const handleWindowLayoutResize = createRafThrottledHandler(() => {
+        if (uiViewMode === UI_VIEW_MODE_AUTO) {
+            applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
+        } else {
+            updateUiViewModeControls();
+        }
         if (isWorkModeEnabled()) {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
@@ -6133,7 +6196,7 @@ function normalizeWorkModeMobileBrowseView(value) {
 
 function setWorkModeBrowseView(view = WORK_MODE_MOBILE_VIEW_LIST) {
     workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(view);
-    setWorkModeMobileView(workModeMobileView);
+    setWorkModeMobileView(isFoldLayout() ? workModeMobileBrowseView : workModeMobileView);
 }
 
 function syncWorkModeFileFullscreenButtonState() {
@@ -6176,6 +6239,11 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     const fileElements = getWorkModeFileElements();
     const mobile = isMobileLayout();
     const fold = isFoldLayout();
+    // A fullscreen preview owns the fold surface, so release it before an
+    // explicit return to the chat surface.
+    if (fold && nextView === WORK_MODE_MOBILE_VIEW_CHAT && workModePreviewFullscreen) {
+        setWorkModePreviewFullscreen(false);
+    }
     const enabled = isWorkModeEnabled();
     const applyMobileView = mobile && enabled;
     const applyFoldBrowseView = fold && enabled;
@@ -6213,15 +6281,24 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         );
         elements.app.classList.toggle(
             'is-work-mode-fold-list',
-            applyFoldBrowseView && foldBrowseView === WORK_MODE_MOBILE_VIEW_LIST
+            applyFoldBrowseView
+                && nextView !== WORK_MODE_MOBILE_VIEW_CHAT
+                && foldBrowseView === WORK_MODE_MOBILE_VIEW_LIST
+        );
+        elements.app.classList.toggle(
+            'is-work-mode-fold-chat',
+            applyFoldBrowseView && nextView === WORK_MODE_MOBILE_VIEW_CHAT
         );
         elements.app.classList.toggle(
             'is-work-mode-fold-viewer',
-            applyFoldBrowseView && foldBrowseView === WORK_MODE_MOBILE_VIEW_VIEWER
+            applyFoldBrowseView
+                && nextView !== WORK_MODE_MOBILE_VIEW_CHAT
+                && foldBrowseView === WORK_MODE_MOBILE_VIEW_VIEWER
         );
     }
 
-    const showMobileBrowserButton = applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
+    const showMobileBrowserButton = (applyMobileView || applyFoldBrowseView)
+        && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
     if (elements?.mobileBrowserBtn) {
         const mobileBrowserLabel = isWorkModeTerminalPanelActive() ? 'Terminal로 이동' : '브라우저로 이동';
         elements.mobileBrowserBtn.classList.toggle('is-hidden', !showMobileBrowserButton);
@@ -6236,7 +6313,8 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         }
     }
 
-    const showChatButton = applyMobileView && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
+    const showChatButton = (applyMobileView || applyFoldBrowseView)
+        && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
     const showBackButton = (
         applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
     ) || (
@@ -6246,6 +6324,9 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     if (fileElements?.chatBtn) {
         fileElements.chatBtn.classList.toggle('is-hidden', !showChatButton);
         fileElements.chatBtn.disabled = !showChatButton;
+        fileElements.chatBtn.setAttribute('aria-label', '채팅으로 돌아가기');
+        fileElements.chatBtn.setAttribute('title', '채팅으로 돌아가기');
+        syncHoverTooltipFromLabel(fileElements.chatBtn, '채팅으로 돌아가기');
         const switchSlot = fileElements.chatBtn.closest('.work-mode-preview-switch-slot');
         if (switchSlot) {
             switchSlot.classList.toggle('is-hidden', !showChatButton);
@@ -7076,7 +7157,7 @@ function initializeWorkMode(isMobile) {
     // the current visit if desired.
     const preferred = isInternalMultiuserMode() || readWorkModePreference();
     setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
-    const initialMobileView = isMobile
+    const initialMobileView = (isMobile || isFoldLayout())
         ? WORK_MODE_MOBILE_VIEW_CHAT
         : normalizeWorkModeMobileView(workModeMobileView) === WORK_MODE_MOBILE_VIEW_CHAT
             ? WORK_MODE_MOBILE_VIEW_LIST
@@ -7284,19 +7365,45 @@ function syncSessionsLayout(isCompact) {
 }
 
 function isPhoneLayout() {
-    return window.matchMedia(PHONE_MEDIA_QUERY).matches;
+    return resolveUiViewMode() === 'mobile';
 }
 
 function isFoldLayout() {
-    return window.matchMedia(FOLD_MEDIA_QUERY).matches;
+    return resolveUiViewMode() === 'fold';
 }
 
 function isCompactLayout() {
-    return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+    const mode = resolveUiViewMode();
+    return mode === 'fold' || mode === 'mobile';
 }
 
 function isMobileLayout() {
     return isPhoneLayout();
+}
+
+function normalizeUiViewMode(value) {
+    return UI_VIEW_MODES.includes(value) ? value : UI_VIEW_MODE_AUTO;
+}
+
+function hasFoldableWindowSignal() {
+    try {
+        const segments = typeof window.getWindowSegments === 'function' ? window.getWindowSegments() : [];
+        if (segments && Number(segments.length) > 1) return true;
+    } catch (_error) {
+        // Window Segments is optional and unavailable on most browsers.
+    }
+    return mediaQueryMatches('(spanning: single-fold-vertical)')
+        || mediaQueryMatches('(spanning: single-fold-horizontal)')
+        || /(?:SM-F\d|Pixel Fold|Surface Duo|\bFold\b)/i.test(String(navigator.userAgent || ''));
+}
+
+function detectUiViewMode() {
+    if (window.matchMedia(PHONE_MEDIA_QUERY).matches) return 'mobile';
+    return hasFoldableWindowSignal() ? 'fold' : 'desktop';
+}
+
+function resolveUiViewMode() {
+    return uiViewMode === UI_VIEW_MODE_AUTO ? detectUiViewMode() : uiViewMode;
 }
 
 function mediaQueryMatches(query) {
@@ -18272,9 +18379,11 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
             syncWorkModeFileRootButtons({ loading });
             if (elements.chatBtn) {
                 const canMoveToChat = isWorkModeEnabled()
-                    && mobile
+                    && (mobile || fold)
                     && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT;
-                elements.chatBtn.disabled = loading || !canMoveToChat;
+                // Directory/file loading must not trap a fold user in the
+                // preview.  Returning to chat is a local view transition.
+                elements.chatBtn.disabled = !canMoveToChat;
             }
             syncWorkModeFileFullscreenButtonState();
             syncWorkModeHtmlPreviewOpenButton({ loading });
@@ -27367,12 +27476,8 @@ function setPlanModeToggleState(nextState) {
     const normalized = normalizePlanModeState(nextState);
     state.settings.planModeState = normalized;
     const button = document.getElementById('codex-plan-mode-toggle');
-    if (!button) return;
     const isActive = normalized !== PLAN_MODE_STATE_OFF;
     const isPlanAndExecute = normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-    button.classList.toggle('is-active', isActive);
-    button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
-    button.setAttribute('aria-pressed', String(isActive));
     let label = 'Plan mode off';
     let buttonText = 'Plan';
     if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
@@ -27381,10 +27486,36 @@ function setPlanModeToggleState(nextState) {
         label = 'Plan then execute mode on';
         buttonText = 'Plan+';
     }
-    button.dataset.planModeState = normalized;
-    button.textContent = buttonText;
-    button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
+    if (button) {
+        button.classList.toggle('is-active', isActive);
+        button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
+        button.setAttribute('aria-pressed', String(isActive));
+        button.dataset.planModeState = normalized;
+        button.textContent = buttonText;
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+    }
+
+    // The phone-only menu is a second representation of the same state.
+    // Synchronize it here so selecting Plan never appears to turn itself off.
+    const composeToggle = document.getElementById('codex-chat-compose-tools-toggle');
+    const composePlanButton = document.querySelector('[data-chat-compose-action="plan"]');
+    if (composeToggle) {
+        composeToggle.classList.toggle('is-plan-active', isActive);
+        composeToggle.classList.toggle('is-plan-and-execute', isPlanAndExecute);
+        composeToggle.dataset.planModeState = normalized;
+        composeToggle.setAttribute('aria-label', label);
+        composeToggle.setAttribute('title', label);
+    }
+    if (composePlanButton) {
+        composePlanButton.classList.toggle('is-active', isActive);
+        composePlanButton.classList.toggle('is-plan-and-execute', isPlanAndExecute);
+        composePlanButton.dataset.planModeState = normalized;
+        composePlanButton.setAttribute('aria-pressed', String(isActive));
+        composePlanButton.textContent = buttonText;
+        composePlanButton.setAttribute('aria-label', label);
+        composePlanButton.setAttribute('title', label);
+    }
 }
 
 function getExecutionPolicyPreset(id) {

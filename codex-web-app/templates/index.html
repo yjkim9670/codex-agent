@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}Codex Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=232">
+    <link rel="stylesheet" href="/static/css/app.css?v=236">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -1150,6 +1150,7 @@
                                 title="채팅으로 이동"
                             >
                                 <span class="sr-only">채팅으로 이동</span>
+                                <span class="work-mode-preview-chat-label" aria-hidden="true">채팅</span>
                             </button>
                         </div>
                     </div>
@@ -1371,11 +1372,22 @@
             <div class="ui-settings-header">
                 <div>
                     <div class="ui-settings-title" id="codex-ui-settings-title">화면 설정</div>
-                    <div class="ui-settings-description" id="codex-ui-settings-description">글꼴과 인터페이스 크기를 조정합니다.</div>
+                    <div class="ui-settings-description" id="codex-ui-settings-description">글꼴, 인터페이스 크기와 작업 화면 레이아웃을 조정합니다.</div>
                 </div>
                 <button class="btn ghost icon-only ui-settings-close" type="button" id="codex-ui-settings-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
             </div>
             <div class="ui-settings-body">
+                <fieldset class="ui-view-setting" aria-describedby="codex-ui-view-help">
+                    <legend class="ui-font-setting-label">화면 보기 모드</legend>
+                    <div class="ui-view-detected" id="codex-ui-view-detected" role="status">현재 화면 감지 중…</div>
+                    <div class="ui-view-options" role="radiogroup" aria-label="화면 보기 모드 선택">
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="auto" checked><span>자동</span></label>
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="desktop"><span>데스크톱</span></label>
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="fold"><span>폴드</span></label>
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="mobile"><span>모바일</span></label>
+                    </div>
+                    <span class="ui-font-setting-help" id="codex-ui-view-help">폴드·모바일은 작업 모드에서 한 화면씩 전환해 좁은 화면의 분할 보기를 피합니다. 선택값은 이 브라우저에 저장됩니다.</span>
+                </fieldset>
                 <fieldset class="ui-font-setting" aria-describedby="codex-ui-font-help">
                     <legend class="ui-font-setting-label">인터페이스 글꼴</legend>
                     <div class="ui-font-options">
@@ -1884,6 +1896,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=250"></script>
+    <script src="/static/js/app.js?v=252"></script>
 </body>
 </html>

@@ -927,6 +927,28 @@ textarea {
         background-image: var(--icon-close);
     }
 
+    /* Keep the selected plan mode visible after the popup is closed. */
+    .chat-compose-tools-toggle.is-plan-active:not([aria-expanded="true"]) {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 46%, transparent);
+    }
+
+    .chat-compose-tools-toggle.is-plan-active::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 6px;
+        height: 6px;
+        border: 1px solid var(--surface-raised);
+        border-radius: 999px;
+        background: var(--accent);
+    }
+
+    .chat-compose-tools-toggle.is-plan-and-execute::after {
+        background: #23704f;
+    }
+
     .chat-compose-tools-menu {
         position: absolute;
         right: 8px;
@@ -971,6 +993,18 @@ textarea {
         padding: 0 8px;
         font-size: 11px;
         font-weight: 800;
+    }
+
+    .chat-compose-tool-plan.is-active {
+        background-color: var(--accent);
+        border-color: var(--accent-dark);
+        color: #fff;
+    }
+
+    .chat-compose-tool-plan.is-plan-and-execute {
+        background-color: #23704f;
+        border-color: #175137;
+        color: #fff;
     }
 
     /* The monitor is moved into .chat-frame by the cover-screen layout sync.
@@ -9003,6 +9037,58 @@ body.is-work-mode-resizing * {
     padding: 20px 18px;
 }
 
+.ui-view-setting {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.ui-view-detected {
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
+
+.ui-view-options {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.ui-view-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-muted);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.ui-view-option:has(input:checked) {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+    color: var(--accent);
+}
+
+.ui-view-option input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
 .ui-font-setting {
     display: grid;
     gap: 10px;
@@ -13773,4 +13859,108 @@ label.hover-tooltip,
    when the auxiliary text uses the shipped medium face. */
 html.is-windows-desktop .windows-small-text {
     font-weight: 500;
+}
+
+/* Explicit view modes are deliberately scoped to work mode.  This preserves
+   the established desktop/tablet layout unless a user selects another mode. */
+:root[data-view-mode="fold"] .app.is-work-mode .layout,
+:root[data-view-mode="mobile"] .app.is-work-mode .layout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .sidebar-stack,
+:root[data-view-mode="mobile"] .app.is-work-mode .sidebar-stack {
+    display: none;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .chat,
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview,
+:root[data-view-mode="mobile"] .app.is-work-mode .chat,
+:root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview {
+    width: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+    border-radius: 10px;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview,
+:root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview {
+    display: flex;
+    padding: 10px;
+    gap: 8px;
+}
+
+/* Fold work mode is intentionally single-panel: chat first, then the file
+   browser.  File list/viewer state remains independent inside the browser. */
+:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-chat .work-mode-preview,
+:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-list .chat,
+:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-viewer .chat {
+    display: none !important;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-list .work-mode-preview,
+:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-viewer .work-mode-preview {
+    display: flex !important;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat,
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-back,
+:root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview-chat,
+:root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview-back {
+    display: inline-flex;
+}
+
+.work-mode-preview-chat-label {
+    display: none;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat {
+    width: var(--icon-button-size);
+    min-width: var(--icon-button-size);
+    flex: 0 0 var(--icon-button-size);
+    height: var(--icon-button-size);
+    padding: 0;
+    font-size: 0;
+    background-position: center;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat-label {
+    display: none;
+}
+
+:root[data-view-mode="fold"] .app.is-work-mode .work-mode-divider,
+:root[data-view-mode="mobile"] .app.is-work-mode .work-mode-divider {
+    display: none !important;
+}
+
+/* A forced desktop mode restores the split work surface even on a narrow
+   device, for users who explicitly prefer it. */
+:root[data-view-mode="desktop"] .app.is-work-mode .layout {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+}
+
+:root[data-view-mode="desktop"] .app.is-work-mode .chat {
+    flex: 0 0 var(--work-mode-chat-width, 58%);
+    width: var(--work-mode-chat-width, 58%);
+    min-width: 0;
+}
+
+:root[data-view-mode="desktop"] .app.is-work-mode .work-mode-preview {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+:root[data-view-mode="desktop"] .app.is-work-mode .work-mode-divider {
+    display: block !important;
+}
+
+@media (max-width: 420px) {
+    .ui-view-options {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }

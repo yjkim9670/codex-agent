@@ -963,6 +963,59 @@ def test_usage_keepalive_uses_terra_with_a_read_only_workspace_review():
     assert 'Do not modify files, install packages, run builds, access the network' in codex_chat._USAGE_KEEPALIVE_PROMPT
 
 
+def test_usage_keepalive_reuses_locked_snapshot_for_stream_preflight(monkeypatch):
+    snapshot = {
+        'five_hour': {'used_percent': 0.0},
+        'usage_keepalive': {},
+    }
+    context = {'account': {'id': 'keepalive-account'}, 'codex_home': Path('/tmp/codex-home')}
+    captured = {}
+
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: 'dtgpt')
+    monkeypatch.setattr(codex_chat, '_account_has_active_codex_stream', lambda _account_id: False)
+    monkeypatch.setattr(codex_chat, '_codex_home_has_auth', lambda _codex_home: True)
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *_args, **_kwargs: (True, ''))
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'keepalive-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **kwargs: captured.update(kwargs) or {'id': 'keepalive-stream'})
+
+    result = codex_chat._submit_usage_keepalive_locked(context, snapshot, automatic=True)
+
+    assert result['submitted'] is True
+    assert captured['preflight_usage_snapshot'] is snapshot
+
+
+def test_create_codex_stream_skips_refresh_when_preflight_snapshot_is_provided(
+        monkeypatch, isolated_codex_workspace):
+    class NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return None
+
+    snapshot = {'five_hour': {'used_percent': 0.0}}
+    session = codex_chat.create_session('keepalive-preflight')
+
+    monkeypatch.setattr(codex_chat.threading, 'Thread', NoopThread)
+    monkeypatch.setattr(
+        codex_chat,
+        'refresh_account_usage_snapshot_if_due',
+        lambda **_kwargs: pytest.fail('preflight refresh must not reacquire the held snapshot lock'),
+    )
+
+    result = codex_chat.create_codex_stream(
+        session['id'],
+        'keepalive prompt',
+        account_id='default',
+        usage_operation='usage_keepalive',
+        preflight_usage_snapshot=snapshot,
+    )
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams[result['id']]
+    assert stream['usage_limits_before']['five_hour']['used_percent'] == 0.0
+
+
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)

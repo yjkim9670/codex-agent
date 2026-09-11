@@ -8246,6 +8246,10 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
             question_only=False,
             account_id=account_id,
             usage_operation='usage_keepalive',
+            # The caller holds account_usage_snapshot_path.  Reusing this
+            # snapshot prevents create_codex_stream() from trying to acquire
+            # the same non-reentrant cross-process flock during preflight.
+            preflight_usage_snapshot=snapshot,
         )
     except Exception as exc:
         delete_session(session['id'])
@@ -14163,7 +14167,8 @@ def create_codex_stream(
         worktree_task=None,
         account_id=None,
         usage_operation='chat',
-        internal_api_key=None):
+        internal_api_key=None,
+        preflight_usage_snapshot=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -14194,17 +14199,23 @@ def create_codex_stream(
     normalized_attachments = normalize_codex_attachments(attachments or [])
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     # Read immediately before execution so the bubble can show an actual
-    # before/after pair rather than an older scheduler sample.
-    try:
-        before_refresh = refresh_account_usage_snapshot_if_due(
-            account_id=resolved_account_id,
-            force=True,
-            limit_sample_source='manual',
-        )
-        before_snapshot = before_refresh.get('snapshot') if isinstance(before_refresh, dict) else None
-    except Exception:
-        _LOGGER.debug('pre-task account usage refresh skipped', exc_info=True)
-        before_snapshot = None
+    # before/after pair rather than an older scheduler sample.  Automatic
+    # usage keepalive calls this function while holding the shared account
+    # snapshot lock, so it passes that already-fresh snapshot instead of
+    # attempting a non-reentrant nested file lock.
+    if isinstance(preflight_usage_snapshot, dict):
+        before_snapshot = preflight_usage_snapshot
+    else:
+        try:
+            before_refresh = refresh_account_usage_snapshot_if_due(
+                account_id=resolved_account_id,
+                force=True,
+                limit_sample_source='manual',
+            )
+            before_snapshot = before_refresh.get('snapshot') if isinstance(before_refresh, dict) else None
+        except Exception:
+            _LOGGER.debug('pre-task account usage refresh skipped', exc_info=True)
+            before_snapshot = None
     usage_limits_before = _compact_usage_limit_snapshot(
         before_snapshot if isinstance(before_snapshot, dict)
         else get_usage_summary(account_id=resolved_account_id)

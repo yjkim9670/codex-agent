@@ -12856,6 +12856,21 @@ def _filter_benign_codex_stderr(text):
     return '\n'.join(lines).strip()
 
 
+def _is_benign_codex_stderr_text(text):
+    """Return whether an error payload contains only known CLI diagnostics.
+
+    stderr is normally read line-by-line, but some Codex JSON events wrap it as
+    ``CLI stderr: <line>``.  Those events must use the same benign-warning
+    policy; otherwise a harmless CLI warning still sets ``codex_error_seen``.
+    """
+    lines = []
+    for line in str(text or '').splitlines():
+        normalized = re.sub(r'^\s*(?:CLI\s+)?stderr\s*:\s*', '', line, flags=re.IGNORECASE)
+        if normalized.strip():
+            lines.append(normalized)
+    return bool(lines) and all(_is_benign_codex_stderr_line(line) for line in lines)
+
+
 def _is_chat_hidden_codex_stderr_line(line):
     normalized = str(line or '').strip()
     if _is_benign_codex_stderr_line(normalized):
@@ -13008,6 +13023,12 @@ def _record_stream_sampling_retry_warning(stream_id):
 def _append_stream_exec_error(stream_id, text):
     normalized = _normalize_stream_log_text(text)
     if not normalized:
+        return False
+    if _is_benign_codex_stderr_text(normalized):
+        # Structured exec events sometimes carry stderr as an error payload.
+        # Keep it in diagnostics without turning a successful response into a
+        # red error bubble.
+        _append_stream_raw_stderr(stream_id, normalized + '\n')
         return False
     user_cancelled_mcp_tool_call = _is_user_cancelled_mcp_tool_call_error(normalized)
     with state.codex_streams_lock:

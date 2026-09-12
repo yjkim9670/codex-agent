@@ -5631,6 +5631,29 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
     }
 
 
+def test_structured_cli_stderr_warning_does_not_mark_stream_as_failed(isolated_codex_workspace):
+    session = codex_chat.create_session('structured-benign-cli-stderr')
+    stream_id = 'stream-structured-benign-cli-stderr'
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = _build_stream_state(
+            stream_id,
+            session['id'],
+            started_at=time.time(),
+            output_path=isolated_codex_workspace['workspace_dir'] / 'structured-benign-stderr.txt',
+        )
+
+    assert codex_chat._append_stream_exec_error(
+        stream_id,
+        f'CLI stderr: {_SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE}',
+    ) is False
+
+    with state.codex_streams_lock:
+        stream = state.codex_streams[stream_id]
+        assert stream.get('codex_error_seen') is False
+        assert stream.get('error') == ''
+        assert _SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE in stream.get('raw_stderr', '')
+
+
 def test_stream_reader_records_stderr_app_server_event_lag(isolated_codex_workspace):
     session = codex_chat.create_session('stderr-app-server-event-lag')
     stream_id = 'stream-stderr-app-server-event-lag'

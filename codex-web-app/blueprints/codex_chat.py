@@ -166,6 +166,7 @@ from ..services.file_crypto import (
     decrypt_chat_payload,
     decrypt_credential_payload,
     decrypt_file_payload,
+    decrypt_file_write_binary_payload,
     encrypt_chat_payload,
     encrypt_file_payload,
     is_encrypted_chat_payload,
@@ -2380,11 +2381,24 @@ def codex_files_read():
 def codex_files_write():
     if not CODEX_ENABLE_FILES_API:
         return _feature_disabled_response('files')
-    raw_payload = request.get_json(silent=True) or {}
-    if not isinstance(raw_payload, dict):
-        raw_payload = {}
     try:
-        payload, crypto_session_id = _decrypt_optional_file_payload(raw_payload)
+        if request.mimetype == 'application/vnd.codex.file-write-v3':
+            # v3 keeps the AES-GCM ciphertext binary: no JSON envelope or
+            # base64 expansion.  Its compact plaintext is [root, path,
+            # expected_modified_ns, patches].
+            compact_payload, crypto_session_id = decrypt_file_write_binary_payload(request.get_data(cache=False))
+            payload = {
+                'mode': 'patch',
+                'root': compact_payload[0],
+                'path': compact_payload[1],
+                'expected_modified_ns': compact_payload[2],
+                'patch': compact_payload[3],
+            }
+        else:
+            raw_payload = request.get_json(silent=True) or {}
+            if not isinstance(raw_payload, dict):
+                raw_payload = {}
+            payload, crypto_session_id = _decrypt_optional_file_payload(raw_payload)
         if not crypto_session_id and not _is_trusted_http_crypto_fallback_allowed():
             raise FileBrowserError(
                 '파일 저장 요청은 암호화되어야 합니다.',

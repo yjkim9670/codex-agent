@@ -20305,6 +20305,30 @@ async function encryptFileBrowserRequestPayload(payload, payloadJson = null) {
     };
 }
 
+async function encryptFileBrowserWriteV3Payload(compactPayloadJson) {
+    const session = await getFileBrowserCryptoSession();
+    const encoder = new TextEncoder();
+    const sessionIdBytes = encoder.encode(session.id);
+    if (!sessionIdBytes.length || sessionIdBytes.length > 255) {
+        throw new Error('파일 암호화 세션 ID가 올바르지 않습니다.');
+    }
+    const iv = new Uint8Array(12);
+    window.crypto.getRandomValues(iv);
+    const ciphertext = new Uint8Array(await window.crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv, additionalData: sessionIdBytes },
+        session.requestKey,
+        encoder.encode(compactPayloadJson)
+    ));
+    // CFW3 | session-id byte length | session-id | IV | AES-GCM ciphertext.
+    // Keeping this binary avoids both envelope field names and base64 expansion.
+    const frame = new Uint8Array(5 + sessionIdBytes.length + iv.length + ciphertext.length);
+    frame.set([0x43, 0x46, 0x57, 0x33, sessionIdBytes.length], 0);
+    frame.set(sessionIdBytes, 5);
+    frame.set(iv, 5 + sessionIdBytes.length);
+    frame.set(ciphertext, 5 + sessionIdBytes.length + iv.length);
+    return frame;
+}
+
 async function decryptFileBrowserResponsePayload(payload) {
     if (!payload?.encrypted) return payload;
     const sessionId = String(payload.crypto_session_id || '').trim();
@@ -20405,6 +20429,47 @@ async function fetchEncryptedFileBrowserJson(url, payload, {
         }
     }
     throw lastError || new Error('파일 암호화 요청에 실패했습니다.');
+}
+
+async function fetchEncryptedFileBrowserWriteV3(url, payload, {
+    timeoutMs = FILE_BROWSER_REQUEST_TIMEOUT_MS,
+    includeTransferMeta = false
+} = {}) {
+    const compactPayload = [payload.root, payload.path, payload.expected_modified_ns, payload.patch];
+    const compactPayloadJson = JSON.stringify(compactPayload);
+    const payloadBytes = getUtf8ByteLength(compactPayloadJson);
+    if (!shouldEncryptFileBrowserRequests() || !isFileBrowserCryptoSupported()) {
+        // Keep the prior JSON flow for the explicit trusted-HTTP compatibility path.
+        return fetchEncryptedFileBrowserJson(url, payload, { timeoutMs, includeTransferMeta });
+    }
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const frame = await encryptFileBrowserWriteV3Payload(compactPayloadJson);
+            const response = await fetchJson(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/vnd.codex.file-write-v3' },
+                timeoutMs,
+                body: frame
+            });
+            const responseEncrypted = Boolean(response?.encrypted);
+            const result = await decryptFileBrowserResponsePayload(response);
+            return buildJsonTransferResult(result, {
+                encrypted: true,
+                transport: 'browser_aes_gcm_binary_v3',
+                payloadBytes,
+                uploadedBytes: frame.byteLength,
+                responseEncrypted,
+                responseDecrypted: responseEncrypted,
+                attempt: attempt + 1
+            }, includeTransferMeta);
+        } catch (error) {
+            lastError = error;
+            if (!isRecoverableFileBrowserCryptoError(error) || attempt > 0) throw error;
+            resetFileBrowserCryptoSession();
+        }
+    }
+    throw lastError || new Error('파일 저장 요청에 실패했습니다.');
 }
 
 function resetChatPromptCryptoSession() {
@@ -20834,7 +20899,7 @@ function buildFilePanelWritePayload(root, path, content, expectedModifiedNs = ''
 }
 
 async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', originalContent = '') {
-    return fetchEncryptedFileBrowserJson('/api/codex/files/write', buildFilePanelWritePayload(
+    return fetchEncryptedFileBrowserWriteV3('/api/codex/files/write', buildFilePanelWritePayload(
         root,
         path,
         content,
@@ -24454,6 +24519,9 @@ function renderFilePanelEditor(variant, options = {}) {
         if (gutter) {
             gutter.scrollTop = textarea.scrollTop;
         }
+        if (syntaxLayer) {
+            syncFilePanelEditorSyntaxHighlight(syntaxLayer, textarea, highlightLanguage);
+        }
         if (vimCursor) {
             syncFilePanelEditorVimCursor(vimCursor, textarea, state);
         }
@@ -24725,7 +24793,9 @@ function formatFilePanelSaveTransferToast(transferMeta) {
     if (transferMeta?.encrypted) {
         parts.push(
             transferMeta.responseDecrypted
-                ? 'AES-GCM 암호화 전송 및 응답 복호화 확인'
+                ? transferMeta.transport === 'browser_aes_gcm_binary_v3'
+                    ? 'AES-GCM compact binary v3 전송 및 응답 복호화 확인'
+                    : 'AES-GCM 암호화 전송 및 응답 복호화 확인'
                 : 'AES-GCM 암호화 전송 확인'
         );
     } else if (transferMeta?.transport === 'trusted_http_fallback') {
@@ -24747,6 +24817,12 @@ function getFileBrowserEncryptedBodyByteLength(payloadBytes, sessionId = '') {
         iv: 'x'.repeat(16),
         ciphertext: 'x'.repeat(ciphertextBytes)
     }));
+}
+
+function getFileBrowserWriteV3BodyByteLength(payloadBytes, sessionId = '') {
+    const estimatedSessionId = String(sessionId || '').trim() || 'x'.repeat(32);
+    // 4-byte magic, one-byte ID length, session ID, 12-byte IV, and GCM tag.
+    return 5 + getUtf8ByteLength(estimatedSessionId) + 12 + Math.max(0, Number(payloadBytes) || 0) + 16;
 }
 
 function getFilePanelSaveChangeSummary(originalContent, nextContent, request = {}) {
@@ -24771,10 +24847,14 @@ function getFilePanelSaveChangeSummary(originalContent, nextContent, request = {
         request.expectedModifiedNs || '0',
         original
     );
-    const patchPayload = stringifyJsonRequestPayload(writePayload);
+    const patchPayload = JSON.stringify([
+        writePayload.root,
+        writePayload.path,
+        writePayload.expected_modified_ns,
+        writePayload.patch
+    ]);
     const patchPayloadBytes = getUtf8ByteLength(patchPayload);
-    // AES-GCM adds a 16-byte tag. IV/ciphertext are base64 inside the JSON envelope.
-    const encryptedPayloadBytes = getFileBrowserEncryptedBodyByteLength(
+    const encryptedPayloadBytes = getFileBrowserWriteV3BodyByteLength(
         patchPayloadBytes,
         request.cryptoSessionId
     );
@@ -24854,7 +24934,7 @@ function confirmFilePanelSave(root, path, expectedModifiedNs, originalContent, n
     const encrypted = shouldEncryptFileBrowserRequests() && isFileBrowserCryptoSupported();
     const transferBytes = encrypted ? summary.encryptedPayloadBytes : summary.patchPayloadBytes;
     const transportLabel = encrypted
-        ? 'AES-GCM 암호화 envelope (예상치)'
+        ? 'AES-GCM compact binary v3 (예상치)'
         : canUseTrustedHttpCryptoFallback()
             ? 'Tailscale 신뢰 HTTP 예외'
             : '일반 JSON';

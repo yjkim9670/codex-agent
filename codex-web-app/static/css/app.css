@@ -2258,7 +2258,11 @@ textarea {
     border-radius: 10px;
     background: var(--bg);
     color: var(--text-primary);
-    font: 13px/1.55 var(--font-code-block);
+    font-family: var(--font-ibm-ui-ko);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.6;
+    letter-spacing: -0.01em;
     white-space: pre-wrap;
 }
 
@@ -9509,9 +9513,11 @@ body.is-work-mode-resizing * {
     min-width: 0;
     overflow: hidden;
     color: var(--text-secondary);
-    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-family: var(--font-ibm-ui-ko);
     font-size: 11px;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
     text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -13645,6 +13651,10 @@ label.hover-tooltip,
     }
 
     .file-browser-editor-gutter {
+        font-size: 10px;
+    }
+
+    .file-browser-editor-syntax {
         font-size: 10px;
     }
 

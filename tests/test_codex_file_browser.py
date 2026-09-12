@@ -122,6 +122,15 @@ def _encrypt_test_file_payload(session, payload):
     }
 
 
+def _encrypt_test_file_write_v3_payload(session, payload):
+    """Build the browser's CFW3 binary write frame for route tests."""
+    iv = os.urandom(12)
+    raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    session_id = session['id'].encode('ascii')
+    ciphertext = AESGCM(session['request_key']).encrypt(iv, raw, session_id)
+    return b'CFW3' + bytes([len(session_id)]) + session_id + iv + ciphertext
+
+
 def _decrypt_test_file_payload(session, envelope):
     assert envelope['encrypted'] is True
     raw = AESGCM(session['response_key']).decrypt(
@@ -1029,6 +1038,32 @@ def test_encrypted_write_route_accepts_patch_and_omits_content(
     envelope = response.get_json()
     assert envelope['encrypted'] is True
     payload = _decrypt_test_file_payload(session, envelope)
+    assert payload['saved'] is True
+    assert 'content' not in payload
+    assert target.read_text(encoding='utf-8') == 'before encrypted'
+
+
+def test_encrypted_write_route_accepts_compact_binary_v3(
+    browser_test_client,
+    isolated_browser_roots,
+    monkeypatch,
+):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_FILE_WRITES', True)
+    target = isolated_browser_roots['server_root'] / 'notes.txt'
+    target.write_text('before secret', encoding='utf-8')
+    original = file_browser.read_file(root_key='server', relative_path='notes.txt')
+    session = _open_test_crypto_session(browser_test_client)
+
+    response = browser_test_client.post(
+        '/api/codex/files/write',
+        data=_encrypt_test_file_write_v3_payload(session, [
+            'server', 'notes.txt', original['modified_ns'], [[7, 6, 'encrypted']],
+        ]),
+        content_type='application/vnd.codex.file-write-v3',
+    )
+
+    assert response.status_code == 200
+    payload = _decrypt_test_file_payload(session, response.get_json())
     assert payload['saved'] is True
     assert 'content' not in payload
     assert target.read_text(encoding='utf-8') == 'before encrypted'

@@ -26,6 +26,7 @@ _KEY_MATERIAL_BYTES = 64
 _AES_GCM_KEY_BYTES = 32
 _AES_GCM_IV_BYTES = 12
 _MAX_ENCRYPTED_PAYLOAD_BYTES = 1024 * 1024
+_FILE_WRITE_BINARY_MAGIC = b'CFW3'
 _PURPOSE_FILE = 'file'
 _PURPOSE_CHAT = 'chat'
 _PURPOSE_CREDENTIAL = 'credential'
@@ -271,6 +272,24 @@ def _decrypt_payload(envelope, *, purpose: str):
             status_code=413,
         )
 
+    return _json_loads_bytes(_decrypt_payload_bytes(session, session_id, iv, ciphertext)), session_id
+
+
+def _decrypt_payload_bytes(session, session_id: str, iv: bytes, ciphertext: bytes) -> bytes:
+    """Authenticate and decrypt a request body after its envelope was parsed."""
+
+    if len(iv) != _AES_GCM_IV_BYTES:
+        raise FileCryptoError(
+            '암호화 요청 IV 길이가 올바르지 않습니다.',
+            error_code='invalid_crypto_payload',
+            status_code=400,
+        )
+    if len(ciphertext) > _MAX_ENCRYPTED_PAYLOAD_BYTES:
+        raise FileCryptoError(
+            '암호화 요청 크기 제한을 초과했습니다.',
+            error_code='crypto_payload_too_large',
+            status_code=413,
+        )
     with _sessions_lock:
         if iv in session.used_request_ivs:
             raise FileCryptoError(
@@ -281,7 +300,7 @@ def _decrypt_payload(envelope, *, purpose: str):
         session.used_request_ivs.add(iv)
 
     try:
-        raw = AESGCM(session.request_key).decrypt(
+        return AESGCM(session.request_key).decrypt(
             iv,
             ciphertext,
             session_id.encode('ascii'),
@@ -292,7 +311,40 @@ def _decrypt_payload(envelope, *, purpose: str):
             error_code='crypto_auth_failed',
             status_code=400,
         ) from exc
-    return _json_loads_bytes(raw), session_id
+
+
+def decrypt_file_write_binary_payload(frame):
+    """Decode the compact v3 file-write frame.
+
+    Frame layout: ``CFW3 | id-length | session-id | 12-byte IV | ciphertext``.
+    The plaintext is a compact JSON array, intentionally not an object, so a
+    tiny edit does not repeatedly pay for JSON field names or base64.
+    """
+
+    raw_frame = bytes(frame or b'')
+    minimum_size = len(_FILE_WRITE_BINARY_MAGIC) + 1 + _AES_GCM_IV_BYTES + 16
+    if len(raw_frame) < minimum_size or not raw_frame.startswith(_FILE_WRITE_BINARY_MAGIC):
+        raise FileCryptoError('저장 암호화 프레임이 올바르지 않습니다.', error_code='invalid_crypto_payload', status_code=400)
+    session_id_size = raw_frame[len(_FILE_WRITE_BINARY_MAGIC)]
+    offset = len(_FILE_WRITE_BINARY_MAGIC) + 1
+    ciphertext_offset = offset + session_id_size + _AES_GCM_IV_BYTES
+    if not session_id_size or ciphertext_offset + 16 > len(raw_frame):
+        raise FileCryptoError('저장 암호화 프레임이 올바르지 않습니다.', error_code='invalid_crypto_payload', status_code=400)
+    try:
+        session_id = raw_frame[offset:offset + session_id_size].decode('ascii')
+    except UnicodeDecodeError as exc:
+        raise FileCryptoError('저장 암호화 세션이 올바르지 않습니다.', error_code='invalid_crypto_payload', status_code=400) from exc
+    session = _get_session(session_id, purpose=_PURPOSE_FILE)
+    iv = raw_frame[offset + session_id_size:ciphertext_offset]
+    ciphertext = raw_frame[ciphertext_offset:]
+    decrypted = _decrypt_payload_bytes(session, session_id, iv, ciphertext)
+    try:
+        payload = json.loads(decrypted.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FileCryptoError('복호화된 저장 요청이 올바르지 않습니다.', error_code='invalid_crypto_payload', status_code=400) from exc
+    if not isinstance(payload, list) or len(payload) != 4:
+        raise FileCryptoError('복호화된 저장 요청이 올바르지 않습니다.', error_code='invalid_crypto_payload', status_code=400)
+    return payload, session_id
 
 
 def decrypt_file_payload(envelope):

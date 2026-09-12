@@ -81,15 +81,18 @@ const deletionPayload = context.buildFilePanelWritePayload(
     actualRequest.expectedModifiedNs,
     '0123456789'
 );
-assert.equal(deletionSummary.patchPayloadBytes, Buffer.byteLength(JSON.stringify(deletionPayload)));
-const ciphertextLength = Math.ceil((deletionSummary.patchPayloadBytes + 16) / 3) * 4;
-const envelope = JSON.stringify({
-    encrypted: true,
-    crypto_session_id: actualRequest.cryptoSessionId,
-    iv: 'x'.repeat(16),
-    ciphertext: 'x'.repeat(ciphertextLength)
-});
-assert.equal(deletionSummary.encryptedPayloadBytes, Buffer.byteLength(envelope));
+const compactWritePayload = JSON.stringify([
+    deletionPayload.root,
+    deletionPayload.path,
+    deletionPayload.expected_modified_ns,
+    deletionPayload.patch
+]);
+assert.equal(deletionSummary.patchPayloadBytes, Buffer.byteLength(compactWritePayload));
+// CFW3 frame: magic (4), id length (1), session ID, IV (12), and GCM tag (16).
+assert.equal(
+    deletionSummary.encryptedPayloadBytes,
+    5 + Buffer.byteLength(actualRequest.cryptoSessionId) + 12 + deletionSummary.patchPayloadBytes + 16
+);
 assert.match(source, /function showCopyableFilePanelSaveConfirmation\(message\)/);
 assert.match(source, /data-action="copy">내용 복사<\/button>/);
 assert.match(source, /예상 업로드\(요청 본문\)/);

@@ -614,6 +614,26 @@ def test_verilog_family_files_are_editable_from_preview(isolated_browser_roots):
         assert target.read_text(encoding='utf-8') == updated_content
 
 
+def test_fortran_f_files_are_editable_from_preview(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    target = server_root / 'legacy.f'
+    target.write_text('      PROGRAM HELLO\n      END\n', encoding='utf-8')
+
+    original = file_browser.read_file(root_key='server', relative_path='legacy.f')
+    updated_content = '      PROGRAM UPDATED\n      END\n'
+    updated = file_browser.write_file(
+        root_key='server',
+        relative_path='legacy.f',
+        content=updated_content,
+        expected_modified_ns=original['modified_ns'],
+    )
+
+    assert original['editable'] is True
+    assert updated['editable'] is True
+    assert updated['saved'] is True
+    assert target.read_text(encoding='utf-8') == updated_content
+
+
 def test_write_file_rejects_non_editable_extension(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'diagram.svg').write_text('<svg></svg>', encoding='utf-8')
@@ -2139,6 +2159,19 @@ def test_multi_patch_unicode_crlf_and_conflict(isolated_browser_roots):
     assert target.read_bytes() == expected
 
 
+def test_compact_multi_patch_unicode_crlf_and_conflict(isolated_browser_roots):
+    target = isolated_browser_roots['server_root'] / 'compact-patch.txt'
+    target.write_bytes('😀abc\r\n끝\r\n'.encode())
+    original = file_browser.read_file(root_key='server', relative_path='compact-patch.txt')
+    patches = [[1, 1, '가'], [6, 1, '마지막']]
+    result = file_browser.write_file_patch('server', 'compact-patch.txt', patches, original['modified_ns'])
+    assert target.read_bytes() == '😀가bc\r\n마지막\r\n'.encode()
+    with pytest.raises(file_browser.FileBrowserError) as error:
+        file_browser.write_file_patch('server', 'compact-patch.txt', patches, '1')
+    assert error.value.error_code == 'modified_conflict'
+    assert 'content' not in result
+
+
 def test_multi_patch_route(browser_test_client, isolated_browser_roots, monkeypatch):
     monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK', True)
     target = isolated_browser_roots['server_root'] / 'patch.txt'
@@ -2148,8 +2181,7 @@ def test_multi_patch_route(browser_test_client, isolated_browser_roots, monkeypa
         base_url='http://100.64.12.34', headers={'X-Codex-Trusted-Http-Fallback': '1'},
         json={'mode': 'patch', 'root': 'server', 'path': 'patch.txt',
               'expected_modified_ns': original['modified_ns'],
-              'patch': [{'start': 0, 'delete_count': 1, 'insert': 'A'},
-                        {'start': 5, 'delete_count': 1, 'insert': 'D'}]})
+              'patch': [[0, 1, 'A'], [5, 1, 'D']]})
     assert response.status_code == 200
     assert 'content' not in response.get_json()
     assert target.read_bytes() == b'Abc\r\nDef\r\n'

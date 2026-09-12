@@ -5,6 +5,7 @@ const source = fs.readFileSync(`${__dirname}/../codex-web-app/static/js/app.js`,
 const context = vm.createContext({});
 vm.runInContext(source.slice(source.indexOf('function buildFilePanelEditPatch('), source.indexOf('async function fetchFileBrowserDirectory(')), context);
 const build = context.buildFilePanelEditPatches;
+const compact = context.compactFilePanelEditPatches;
 function apply(original, patches) {
     const chars = Array.from(original);
     let cursor = 0;
@@ -48,7 +49,10 @@ const patches = build(original, edited);
 assert.equal(patches.length, 2);
 assert.equal(apply(original, patches), edited);
 assert.ok(Buffer.byteLength(JSON.stringify(patches)) < 150);
-console.log(`PASS: ${cases.length} cases, 1000 randomized cases, 8 newline cases; distant edits ${Buffer.byteLength(original)}B -> ${Buffer.byteLength(JSON.stringify(patches))}B patch JSON`);
+const compactPatches = compact(patches);
+assert.equal(JSON.stringify(compactPatches), JSON.stringify(patches.map(({start, delete_count, insert}) => [start, delete_count, insert])));
+assert.ok(Buffer.byteLength(JSON.stringify(compactPatches)) < Buffer.byteLength(JSON.stringify(patches)));
+console.log(`PASS: ${cases.length} cases, 1000 randomized cases, 8 newline cases; distant edits ${Buffer.byteLength(original)}B -> ${Buffer.byteLength(JSON.stringify(compactPatches))}B compact patch JSON`);
 context.stringifyJsonRequestPayload = JSON.stringify;
 context.getUtf8ByteLength = value => Buffer.byteLength(value);
 vm.runInContext(source.slice(source.indexOf('function getFilePanelSaveChangeSummary('), source.indexOf('function confirmFilePanelSave(')), context);
@@ -57,6 +61,9 @@ assert.equal(summary.removedBytes, 2);
 assert.equal(summary.insertedBytes, 2);
 assert.equal(summary.removedLines, 2);
 assert.equal(summary.insertedLines, 2);
+assert.ok(summary.patchPayloadBytes < Buffer.byteLength(JSON.stringify({
+    mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0', patch: patches
+})));
 const saved = restore('a\r\nb\r\n', 'a\nB\n');
 const savedAgain = restore(saved, 'A\nB\n');
 assert.equal(savedAgain, 'A\r\nB\r\n');

@@ -115,6 +115,7 @@ _EDITABLE_TEXT_SUFFIXES = {
     '.css',
     '.csv',
     '.cxx',
+    '.f',
     '.go',
     '.h',
     '.hpp',
@@ -704,11 +705,16 @@ def _apply_text_patch(content, patch):
     cursor = 0
     previous_start = -1
     for item in patches:
-        if not isinstance(item, dict):
+        if isinstance(item, dict):
+            start = item.get('start')
+            delete_count = item.get('delete_count')
+            insert = item.get('insert', '')
+        elif isinstance(item, list) and len(item) == 3:
+            # Compact patch v2: [start, delete_count, insert].  Keep the
+            # object form above for clients running an older frontend.
+            start, delete_count, insert = item
+        else:
             raise FileBrowserError('저장 패치가 올바르지 않습니다.', error_code='invalid_patch', status_code=400)
-        start = item.get('start')
-        delete_count = item.get('delete_count')
-        insert = item.get('insert', '')
         if (type(start) is not int or type(delete_count) is not int
                 or not isinstance(insert, str)):
             raise FileBrowserError('저장 패치가 올바르지 않습니다.', error_code='invalid_patch', status_code=400)

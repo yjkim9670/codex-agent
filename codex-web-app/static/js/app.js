@@ -20729,10 +20729,21 @@ function buildFilePanelEditPatches(originalContent, nextContent) {
                 if (edit.insert === null) patch.delete_count += 1;
                 else patch.insert += edit.insert;
             }
-            return JSON.stringify(patches).length < JSON.stringify([single]).length ? patches : [single];
+            return getFilePanelCompactPatchesJsonLength(patches) < getFilePanelCompactPatchesJsonLength([single])
+                ? patches : [single];
         }
     }
     return [single];
+}
+
+// Compact patch v2 removes repeated JSON field names from each changed range.
+// The server also accepts the former object form during frontend cache rollouts.
+function compactFilePanelEditPatches(patches) {
+    return patches.map(({ start, delete_count: deleteCount, insert }) => [start, deleteCount, insert]);
+}
+
+function getFilePanelCompactPatchesJsonLength(patches) {
+    return JSON.stringify(compactFilePanelEditPatches(patches)).length;
 }
 
 function normalizeFilePanelEditorNewlines(content) {
@@ -20818,7 +20829,7 @@ async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', 
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
         expected_modified_ns: String(expectedModifiedNs || '').trim(),
-        patch: buildFilePanelEditPatches(baseContent, nextContent)
+        patch: compactFilePanelEditPatches(buildFilePanelEditPatches(baseContent, nextContent))
     }, {
         timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
         includeTransferMeta: true
@@ -24732,7 +24743,8 @@ function getFilePanelSaveChangeSummary(originalContent, nextContent) {
     const removedLines = removals.reduce((sum, text) => sum + countLines(text), 0);
     const insertedLines = additions.reduce((sum, text) => sum + countLines(text), 0);
     const patchPayload = stringifyJsonRequestPayload({
-        mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0', patch
+        mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0',
+        patch: compactFilePanelEditPatches(patch)
     });
     const patchPayloadBytes = getUtf8ByteLength(patchPayload);
     // AES-GCM adds a 16-byte authentication tag; base64 expands binary values.

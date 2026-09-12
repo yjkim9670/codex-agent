@@ -2661,7 +2661,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (composeToolsToggle && composeToolsMenu) {
         composeToolsToggle.addEventListener('click', () => {
-            setCoverComposeToolsOpen(composeToolsMenu.classList.contains('is-hidden'));
+            // Keep the options menu available while choosing a plan state.  It
+            // is dismissed only by an outside interaction (or Escape), not by
+            // pressing the + control again.
+            if (composeToolsMenu.classList.contains('is-hidden')) {
+                setCoverComposeToolsOpen(true);
+            }
         });
         composeToolsMenu.addEventListener('click', event => {
             const action = event.target.closest('[data-chat-compose-action]')?.dataset.chatComposeAction;
@@ -2674,7 +2679,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // shared state directly instead of relying on a hidden button.
                 setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
             }
-            setCoverComposeToolsOpen(false);
+            // Keep the menu open so repeated presses can cycle through the
+            // visible Plan / Plan+ states.  The document click handler below
+            // closes it only when the user touches outside this menu.
         });
         document.addEventListener('click', event => {
             if (!phoneMedia.matches || composeToolsMenu.classList.contains('is-hidden')) return;

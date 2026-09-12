@@ -25,13 +25,14 @@ BROWSER_ROOT_WORKSPACE = 'workspace'
 BROWSER_ROOT_SHARED = 'shared'
 
 _MAX_LIST_ENTRIES = 2000
-# Text is sent as JSON and may be highlighted or rendered client-side.  Keep the
-# server ceiling moderate so callers cannot turn a preview request into an
-# unbounded memory/DOM operation, while allowing useful inspection of larger
-# source and log files.
-_MAX_FILE_PREVIEW_BYTES = 1024 * 1024
+# Text is sent as JSON and may be highlighted or rendered client-side. Keep the
+# ceiling deliberately small: previews must stay responsive even for dense logs
+# and minified source. Users can download a file when they need the full body.
+_MAX_FILE_PREVIEW_BYTES = 64 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
-_MAX_FILE_RAW_BYTES = 5 * 1024 * 1024
+# Raw previews feed browser document/media parsers, which can be much more
+# expensive than their byte size suggests. Limit them independently as well.
+_MAX_FILE_RAW_BYTES = 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES)
@@ -1419,7 +1420,7 @@ def read_file_raw(root_key=None, relative_path=''):
 
     if total_bytes > _MAX_FILE_RAW_BYTES:
         raise FileBrowserError(
-            '동적 미리보기 제공 크기 제한(5MB)을 초과했습니다.',
+            '동적 미리보기 제공 크기 제한(1MB)을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )

@@ -372,15 +372,26 @@ def test_read_large_html_can_still_use_raw_rendered_preview(isolated_browser_roo
     assert b'id="rendered"' in raw_result['content']
 
 
-def test_read_file_preview_ceiling_allows_one_mebibyte(isolated_browser_roots):
+def test_read_file_preview_ceiling_truncates_at_64_kib(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
-    content = 'a' * (768 * 1024)
+    content = 'a' * (96 * 1024)
     (server_root / 'large.txt').write_text(content, encoding='utf-8')
 
     result = file_browser.read_file(root_key='server', relative_path='large.txt')
 
-    assert result['truncated'] is False
-    assert len(result['content']) == len(content)
+    assert result['truncated'] is True
+    assert len(result['content']) == 64 * 1024
+
+
+def test_raw_preview_rejects_files_larger_than_one_mebibyte(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    (server_root / 'large.pdf').write_bytes(b'0' * (1024 * 1024 + 1))
+
+    with pytest.raises(file_browser.FileBrowserError) as exc_info:
+        file_browser.read_file_raw(root_key='server', relative_path='large.pdf')
+
+    assert exc_info.value.error_code == 'file_too_large'
+    assert exc_info.value.status_code == 413
 
 
 def test_read_file_raw_keeps_html_mime_for_template_markers(isolated_browser_roots):
@@ -446,8 +457,8 @@ def test_html_preview_uses_an_opaque_origin_sandbox_and_moderate_text_limit():
     app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
 
     assert "const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';" in app_js
-    assert "const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 256 * 1024;" in app_js
-    assert "const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 160 * 1024;" in app_js
+    assert "const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;" in app_js
+    assert "const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;" in app_js
     assert "allow-same-origin allow-scripts allow-forms" not in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(normalizedRoot, normalizedPath)' in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(previewRoot, normalizedPath)' in app_js

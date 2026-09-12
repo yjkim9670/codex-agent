@@ -772,6 +772,13 @@ def test_chat_attachment_accepts_a_non_image_file_and_adds_file_context(isolated
     assert 'Attachment 1: release-notes.md [text/markdown]' in prompt
 
 
+def test_file_preview_context_adds_only_the_display_path():
+    app_js = (PROJECT_ROOT / 'codex-web-app' / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert "return formatFileBrowserDisplayPath(root, normalizedFilePath);" in app_js
+    assert "'[File Preview Context]'" not in app_js
+
+
 def test_six_hour_account_api_refresh_persists_exact_limits_without_model_request(
         isolated_codex_workspace, monkeypatch):
     calls = []

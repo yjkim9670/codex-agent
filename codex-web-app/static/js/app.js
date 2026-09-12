@@ -322,19 +322,19 @@ const FILE_BROWSER_SPREADSHEET_MAX_COLS = 50;
 const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
 const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
 const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';
-const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 256 * 1024;
+const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;
 // Keep the switch to the lightweight text preview aligned with its display limits.
 // Otherwise medium-sized, line-dense files take the expensive full-DOM path.
-const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 160 * 1024;
-const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 2500;
-const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 48 * 1024;
-const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 600;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 96 * 1024;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 1200;
+const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 32 * 1024;
+const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 750;
+const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 16 * 1024;
+const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 250;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 24 * 1024;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 400;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
-const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 160 * 1024;
-const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 2500;
+const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;
+const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 750;
 const FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES = 60;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGES = 24;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH = 1120;
@@ -18823,10 +18823,7 @@ function getFilePanelDirectoryContextRoot(variant) {
 function buildFilePanelPreviewChatContextText(root, filePath) {
     const normalizedFilePath = normalizeFileBrowserRelativePath(filePath);
     if (!normalizedFilePath) return '';
-    return [
-        '[File Preview Context]',
-        `file: ${formatFileBrowserDisplayPath(root, normalizedFilePath)}`
-    ].join('\n');
+    return formatFileBrowserDisplayPath(root, normalizedFilePath);
 }
 
 function buildFilePanelDirectoryChatContextText(root, directoryPath) {

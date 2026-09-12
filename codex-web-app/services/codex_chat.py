@@ -478,6 +478,10 @@ _BENIGN_CODEX_STDERR_PREFIXES = (
 )
 _BENIGN_CODEX_STDERR_FRAGMENT_GROUPS = (
     (
+        'Skill descriptions were shortened to fit the skills context budget.',
+        'Codex can still see every skill',
+    ),
+    (
         "WARN codex_core_skills::loader: ignoring interface.icon_",
         "icon path must not contain '..'",
     ),

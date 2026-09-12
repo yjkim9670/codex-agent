@@ -5154,6 +5154,11 @@ _STDIN_CLOSED_BENIGN_STDERR_LINE = (
     'error=write_stdin failed: stdin is closed for this session; '
     'rerun exec_command with tty=true to keep stdin open'
 )
+_SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE = (
+    'Skill descriptions were shortened to fit the skills context budget. '
+    'Codex can still see every skill, but some descriptions are shorter. '
+    'Disable unused skills or plugins to leave more room for the rest.'
+)
 _QUEUE_FULL_BENIGN_STDERR_LINE = (
     '2026-05-29T03:50:15.557962Z  WARN codex_app_server_client: '
     'dropping in-process app-server event because consumer queue is full'
@@ -5205,6 +5210,7 @@ class _ExitedWithBenignStderrAndFinalMessageProcess:
             'Reading additional input from stdin...\n',
             'WARNING: proceeding, even though we could not update PATH: Read-only file system (os error 30)\n',
             _STDIN_CLOSED_BENIGN_STDERR_LINE + '\n',
+            _SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE + '\n',
             _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE + '\n',
             _EXEC_COMMAND_REJECTED_HIDDEN_STDERR_LINE + '\n',
             _APPLY_PATCH_FAILED_HIDDEN_STDERR_LINE + '\n',
@@ -5597,6 +5603,7 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
     stderr_text = '\n'.join([
         _QUEUE_FULL_BENIGN_STDERR_LINE,
         _SAMPLING_RETRY_BENIGN_STDERR_LINE,
+        _SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE,
         _PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE,
         _MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE,
         _APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE,
@@ -5604,6 +5611,7 @@ def test_benign_stderr_filter_ignores_app_server_and_sampling_retry_logs():
 
     assert codex_chat._is_benign_codex_stderr_line(_QUEUE_FULL_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_SAMPLING_RETRY_BENIGN_STDERR_LINE) is True
+    assert codex_chat._is_benign_codex_stderr_line(_SKILL_CONTEXT_BUDGET_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_PLUGIN_MARKETPLACE_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_MODEL_CACHE_SCHEMA_BENIGN_STDERR_LINE) is True
     assert codex_chat._is_benign_codex_stderr_line(_APP_SERVER_EVENT_LAG_BENIGN_STDERR_LINE) is True

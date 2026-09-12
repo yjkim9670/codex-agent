@@ -55,7 +55,10 @@ assert.ok(Buffer.byteLength(JSON.stringify(compactPatches)) < Buffer.byteLength(
 console.log(`PASS: ${cases.length} cases, 1000 randomized cases, 8 newline cases; distant edits ${Buffer.byteLength(original)}B -> ${Buffer.byteLength(JSON.stringify(compactPatches))}B compact patch JSON`);
 context.stringifyJsonRequestPayload = JSON.stringify;
 context.getUtf8ByteLength = value => Buffer.byteLength(value);
-vm.runInContext(source.slice(source.indexOf('function getFilePanelSaveChangeSummary('), source.indexOf('function confirmFilePanelSave(')), context);
+context.normalizeFileBrowserRoot = value => String(value || 'server');
+context.normalizeFileBrowserRelativePath = value => String(value || '');
+vm.runInContext(source.slice(source.indexOf('function buildFilePanelWritePayload('), source.indexOf('async function writeFilePanelFile(')), context);
+vm.runInContext(source.slice(source.indexOf('function getFileBrowserEncryptedBodyByteLength('), source.indexOf('function showCopyableFilePanelSaveConfirmation(')), context);
 const summary = context.getFilePanelSaveChangeSummary(original, edited);
 assert.equal(summary.removedBytes, 2);
 assert.equal(summary.insertedBytes, 2);
@@ -64,6 +67,32 @@ assert.equal(summary.insertedLines, 2);
 assert.ok(summary.patchPayloadBytes < Buffer.byteLength(JSON.stringify({
     mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0', patch: patches
 })));
+const actualRequest = {
+    root: 'workspace',
+    path: 'a/long/path/'.repeat(10) + 'sample.f',
+    expectedModifiedNs: '1799999999999999999',
+    cryptoSessionId: 's'.repeat(32)
+};
+const deletionSummary = context.getFilePanelSaveChangeSummary('0123456789', '012349', actualRequest);
+const deletionPayload = context.buildFilePanelWritePayload(
+    actualRequest.root,
+    actualRequest.path,
+    '012349',
+    actualRequest.expectedModifiedNs,
+    '0123456789'
+);
+assert.equal(deletionSummary.patchPayloadBytes, Buffer.byteLength(JSON.stringify(deletionPayload)));
+const ciphertextLength = Math.ceil((deletionSummary.patchPayloadBytes + 16) / 3) * 4;
+const envelope = JSON.stringify({
+    encrypted: true,
+    crypto_session_id: actualRequest.cryptoSessionId,
+    iv: 'x'.repeat(16),
+    ciphertext: 'x'.repeat(ciphertextLength)
+});
+assert.equal(deletionSummary.encryptedPayloadBytes, Buffer.byteLength(envelope));
+assert.match(source, /function showCopyableFilePanelSaveConfirmation\(message\)/);
+assert.match(source, /data-action="copy">내용 복사<\/button>/);
+assert.match(source, /예상 업로드\(요청 본문\)/);
 const saved = restore('a\r\nb\r\n', 'a\nB\n');
 const savedAgain = restore(saved, 'A\nB\n');
 assert.equal(savedAgain, 'A\r\nB\r\n');

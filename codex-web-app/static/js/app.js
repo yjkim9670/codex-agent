@@ -20821,16 +20821,26 @@ async function fetchGitFileDiff(repoTarget, path) {
     });
 }
 
-async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', originalContent = '') {
+function buildFilePanelWritePayload(root, path, content, expectedModifiedNs = '', originalContent = '') {
     const nextContent = typeof content === 'string' ? content : '';
     const baseContent = typeof originalContent === 'string' ? originalContent : '';
-    return fetchEncryptedFileBrowserJson('/api/codex/files/write', {
+    return {
         mode: 'patch',
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
         expected_modified_ns: String(expectedModifiedNs || '').trim(),
         patch: compactFilePanelEditPatches(buildFilePanelEditPatches(baseContent, nextContent))
-    }, {
+    };
+}
+
+async function writeFilePanelFile(root, path, content, expectedModifiedNs = '', originalContent = '') {
+    return fetchEncryptedFileBrowserJson('/api/codex/files/write', buildFilePanelWritePayload(
+        root,
+        path,
+        content,
+        expectedModifiedNs,
+        originalContent
+    ), {
         timeoutMs: FILE_BROWSER_MUTATION_TIMEOUT_MS,
         includeTransferMeta: true
     });
@@ -24705,9 +24715,9 @@ function formatFilePanelSaveTransferToast(transferMeta) {
     const hasPayloadBytes = Number.isFinite(payloadBytes) && payloadBytes >= 0;
 
     if (hasUploadedBytes) {
-        const sizeParts = [`업로드 ${formatFileBrowserSize(uploadedBytes)}`];
+        const sizeParts = [`요청 본문 ${formatFileBrowserSize(uploadedBytes)}`];
         if (hasPayloadBytes && Math.round(payloadBytes) !== Math.round(uploadedBytes)) {
-            sizeParts.push(`요청 ${formatFileBrowserSize(payloadBytes)}`);
+            sizeParts.push(`암호화 전 JSON ${formatFileBrowserSize(payloadBytes)}`);
         }
         parts.push(sizeParts.join(' / '));
     }
@@ -24727,7 +24737,19 @@ function formatFilePanelSaveTransferToast(transferMeta) {
     return parts.join(' · ');
 }
 
-function getFilePanelSaveChangeSummary(originalContent, nextContent) {
+function getFileBrowserEncryptedBodyByteLength(payloadBytes, sessionId = '') {
+    const normalizedPayloadBytes = Math.max(0, Number(payloadBytes) || 0);
+    const ciphertextBytes = Math.ceil((normalizedPayloadBytes + 16) / 3) * 4;
+    const estimatedSessionId = String(sessionId || '').trim() || 'x'.repeat(32);
+    return getUtf8ByteLength(stringifyJsonRequestPayload({
+        encrypted: true,
+        crypto_session_id: estimatedSessionId,
+        iv: 'x'.repeat(16),
+        ciphertext: 'x'.repeat(ciphertextBytes)
+    }));
+}
+
+function getFilePanelSaveChangeSummary(originalContent, nextContent, request = {}) {
     const original = typeof originalContent === 'string' ? originalContent : '';
     const next = typeof nextContent === 'string' ? nextContent : '';
     const patch = buildFilePanelEditPatches(original, next);
@@ -24742,14 +24764,20 @@ function getFilePanelSaveChangeSummary(originalContent, nextContent) {
         + (/[\r\n]$/.test(text) ? 0 : 1) : 0;
     const removedLines = removals.reduce((sum, text) => sum + countLines(text), 0);
     const insertedLines = additions.reduce((sum, text) => sum + countLines(text), 0);
-    const patchPayload = stringifyJsonRequestPayload({
-        mode: 'patch', root: 'server', path: 'file', expected_modified_ns: '0',
-        patch: compactFilePanelEditPatches(patch)
-    });
+    const writePayload = buildFilePanelWritePayload(
+        request.root || 'server',
+        request.path || 'file',
+        next,
+        request.expectedModifiedNs || '0',
+        original
+    );
+    const patchPayload = stringifyJsonRequestPayload(writePayload);
     const patchPayloadBytes = getUtf8ByteLength(patchPayload);
-    // AES-GCM adds a 16-byte authentication tag; base64 expands binary values.
-    // Include fixed envelope fields so this remains useful before a session ID exists.
-    const encryptedPayloadBytes = Math.ceil((patchPayloadBytes + 16) / 3) * 4 + 160;
+    // AES-GCM adds a 16-byte tag. IV/ciphertext are base64 inside the JSON envelope.
+    const encryptedPayloadBytes = getFileBrowserEncryptedBodyByteLength(
+        patchPayloadBytes,
+        request.cryptoSessionId
+    );
     return {
         originalBytes: getUtf8ByteLength(original),
         nextBytes: getUtf8ByteLength(next),
@@ -24764,8 +24792,62 @@ function getFilePanelSaveChangeSummary(originalContent, nextContent) {
     };
 }
 
-function confirmFilePanelSave(path, originalContent, nextContent) {
-    const summary = getFilePanelSaveChangeSummary(originalContent, nextContent);
+function showCopyableFilePanelSaveConfirmation(message) {
+    if (!document?.body) return Promise.resolve(window.confirm(message));
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'file-save-confirm-overlay';
+        overlay.innerHTML = `
+            <div class="file-save-confirm-backdrop" data-action="cancel"></div>
+            <section class="file-save-confirm-card" role="dialog" aria-modal="true" aria-labelledby="file-save-confirm-title">
+                <h2 id="file-save-confirm-title">파일 저장 확인</h2>
+                <textarea class="file-save-confirm-message" readonly aria-label="저장 변경 사항"></textarea>
+                <div class="file-save-confirm-actions">
+                    <button class="btn ghost" type="button" data-action="copy">내용 복사</button>
+                    <span class="file-save-confirm-spacer"></span>
+                    <button class="btn ghost" type="button" data-action="cancel">취소</button>
+                    <button class="btn primary" type="button" data-action="save">저장</button>
+                </div>
+            </section>`;
+        const textarea = overlay.querySelector('.file-save-confirm-message');
+        const saveButton = overlay.querySelector('[data-action="save"]');
+        textarea.value = message;
+        const finish = confirmed => {
+            document.removeEventListener('keydown', onKeyDown, true);
+            overlay.remove();
+            resolve(confirmed);
+        };
+        const onKeyDown = event => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                finish(false);
+            }
+        };
+        overlay.addEventListener('click', async event => {
+            const action = event.target.closest('[data-action]')?.dataset.action;
+            if (action === 'save') finish(true);
+            if (action === 'cancel') finish(false);
+            if (action === 'copy') {
+                await writeTextToClipboard(message);
+                event.target.textContent = '복사됨';
+                window.setTimeout(() => {
+                    if (event.target?.isConnected) event.target.textContent = '내용 복사';
+                }, 1400);
+            }
+        });
+        document.addEventListener('keydown', onKeyDown, true);
+        document.body.appendChild(overlay);
+        window.requestAnimationFrame(() => saveButton?.focus());
+    });
+}
+
+function confirmFilePanelSave(root, path, expectedModifiedNs, originalContent, nextContent) {
+    const summary = getFilePanelSaveChangeSummary(originalContent, nextContent, {
+        root,
+        path,
+        expectedModifiedNs,
+        cryptoSessionId: fileBrowserCryptoSession?.id || ''
+    });
     const byteDelta = summary.nextBytes - summary.originalBytes;
     const lineDelta = summary.nextLines - summary.originalLines;
     const signed = value => value > 0 ? `+${value}` : String(value);
@@ -24776,14 +24858,14 @@ function confirmFilePanelSave(path, originalContent, nextContent) {
         : canUseTrustedHttpCryptoFallback()
             ? 'Tailscale 신뢰 HTTP 예외'
             : '일반 JSON';
-    return window.confirm([
+    return showCopyableFilePanelSaveConfirmation([
         '다음 변경 사항을 저장할까요?',
         '',
         `파일: ${path}`,
         `내용: ${summary.originalLines}줄 → ${summary.nextLines}줄 (${signed(lineDelta)}줄)`,
         `파일 크기: ${formatFileBrowserSize(summary.originalBytes)} → ${formatFileBrowserSize(summary.nextBytes)} (${signed(byteDelta)} bytes)`,
         `변경 구간: ${summary.removedLines}줄 · ${formatFileBrowserSize(summary.removedBytes)} 삭제 / ${summary.insertedLines}줄 · ${formatFileBrowserSize(summary.insertedBytes)} 추가`,
-        `예상 업로드: ${formatFileBrowserSize(transferBytes)} · ${transportLabel}`
+        `예상 업로드(요청 본문): ${formatFileBrowserSize(transferBytes)} · ${transportLabel}`
     ].join('\n'));
 }
 
@@ -24795,14 +24877,26 @@ async function saveFilePanelEdits(variant, options = {}) {
     const stayEditing = Boolean(options.stayEditing);
     const originalContent = String(state.previewResult?.content || '');
     const contentToSave = restoreFilePanelEditorNewlines(originalContent, String(state.editBuffer || ''));
-    if (!options.skipConfirmation && !confirmFilePanelSave(state.path, originalContent, contentToSave)) {
-        return false;
-    }
+    const saveRoot = state.root || getFilePanelCurrentRoot(normalizedVariant);
     state.saving = true;
     syncFilePanelViewerActionState(normalizedVariant);
+    if (!options.skipConfirmation) {
+        const confirmed = await confirmFilePanelSave(
+            saveRoot,
+            state.path,
+            state.modifiedNs,
+            originalContent,
+            contentToSave
+        );
+        if (!confirmed) {
+            state.saving = false;
+            syncFilePanelViewerActionState(normalizedVariant);
+            return false;
+        }
+    }
     try {
         const writeResult = await writeFilePanelFile(
-            state.root || getFilePanelCurrentRoot(normalizedVariant),
+            saveRoot,
             state.path,
             contentToSave,
             state.modifiedNs,

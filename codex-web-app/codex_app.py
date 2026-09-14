@@ -33,6 +33,7 @@ from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
 from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
+from .services.quick_tunnel_discovery import discover_quick_tunnel_for_client
 
 
 def _get_allowed_origins():
@@ -193,6 +194,13 @@ def create_codex_app():
             'feature_flags': runtime_context['feature_flags'],
             'security_policy': runtime_context['security_policy'],
         })
+
+    @app.route('/api/android/quick-tunnel')
+    def android_quick_tunnel_discovery():
+        payload, status_code = discover_quick_tunnel_for_client(
+            force_refresh=request.args.get('refresh') == '1'
+        )
+        return jsonify(payload), status_code
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])
     def codex_preflight(_):

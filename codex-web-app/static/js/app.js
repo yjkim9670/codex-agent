@@ -607,6 +607,15 @@ let workModeHtmlPreviewState = {
     suspended: false,
     viewerScroll: null
 };
+// A chat response can be pinned into the inline File Preview without writing a
+// temporary file.  Keep this separate from the selected-file state so opening
+// it never changes the user's workspace or file selection.
+let workModeMessagePreviewState = {
+    text: '',
+    title: '',
+    subtitle: ''
+};
+let workModeMessagePreviewOpenInFlight = false;
 let fileBrowserEditState = {
     root: FILE_BROWSER_ROOT_WORKSPACE,
     path: '',
@@ -2995,6 +3004,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (workModeFileClosePreviewBtn) {
         workModeFileClosePreviewBtn.addEventListener('click', () => {
+            if (hasWorkModeMessagePreview()) {
+                closeWorkModeMessagePreview();
+                return;
+            }
             closeFilePanelPreview(FILE_PANEL_VARIANT_WORK_MODE);
         });
     }
@@ -18532,6 +18545,84 @@ function clearWorkModeFileViewer(message = '파일을 선택하세요.') {
     resetFilePanelEditState(FILE_PANEL_VARIANT_WORK_MODE);
 }
 
+function hasWorkModeMessagePreview() {
+    return Boolean(normalizeDetailText(workModeMessagePreviewState?.text));
+}
+
+function closeWorkModeMessagePreview() {
+    if (!hasWorkModeMessagePreview()) return;
+    workModeMessagePreviewState = {
+        text: '',
+        title: '',
+        subtitle: ''
+    };
+    const elements = getWorkModeFileElements();
+    elements?.viewerPanel?.classList.remove('is-message-preview');
+    clearWorkModeFileViewer('파일을 선택하세요.');
+}
+
+async function openMessageInWorkModePreview(title, text, subtitle = '') {
+    const normalizedText = normalizeDetailText(text);
+    if (!normalizedText) return false;
+
+    workModeMessagePreviewState = {
+        text: normalizedText,
+        title: String(title || '채팅 응답').trim() || '채팅 응답',
+        subtitle: String(subtitle || '채팅 응답 전체 보기').trim()
+    };
+
+    if (!isWorkModeEnabled()) {
+        setWorkModeEnabled(true, { persist: true, notifyOnMobile: false });
+    }
+    setWorkModePanelMode(WORK_MODE_PANEL_MODE_FILE, { persist: true });
+    if (isMobileLayout()) {
+        setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
+    } else if (isFoldLayout()) {
+        setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_VIEWER);
+    }
+
+    // Wait for a first-time directory load before rendering the message; that
+    // load may otherwise replace the viewer contents after this function exits.
+    workModeMessagePreviewOpenInFlight = true;
+    try {
+        await ensureWorkModeFilePanelContent();
+    } finally {
+        workModeMessagePreviewOpenInFlight = false;
+    }
+    if (!hasWorkModeMessagePreview()) return false;
+
+    const elements = getWorkModeFileElements();
+    if (!elements?.viewerContent) return false;
+    elements.viewerPanel?.classList.add('is-message-preview');
+    setFilePanelViewerMetaText(
+        elements,
+        [workModeMessagePreviewState.title, workModeMessagePreviewState.subtitle].filter(Boolean).join(' · ')
+    );
+    elements.viewerContent.innerHTML = '';
+    const article = document.createElement('article');
+    article.className = 'file-browser-markdown work-mode-message-preview';
+    article.innerHTML = renderMarkdown(workModeMessagePreviewState.text, {
+        showCodeLineNumbers: true
+    });
+    elements.viewerContent.appendChild(article);
+    hydrateRenderedMarkdown(article);
+    elements.viewerContent.scrollTop = 0;
+
+    if (elements.viewerActions) {
+        elements.viewerActions.querySelectorAll('button').forEach(button => {
+            const isClose = button === elements.closePreviewBtn;
+            button.classList.toggle('is-hidden', !isClose);
+            button.disabled = !isClose;
+        });
+    }
+    if (elements.closePreviewBtn) {
+        updateFilePanelActionButtonLabel(elements.closePreviewBtn, '채팅 응답 미리보기 닫기');
+        setIconButtonScreenReaderText(elements.closePreviewBtn, '채팅 응답 미리보기 닫기');
+        syncHoverTooltipFromLabel(elements.closePreviewBtn);
+    }
+    return true;
+}
+
 function createNormalizedRelativePathSet(paths) {
     const values = paths instanceof Set ? Array.from(paths) : (Array.isArray(paths) ? paths : []);
     const normalized = new Set();
@@ -25054,6 +25145,11 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const isWorkModeViewer = elements.viewerContent.id === 'codex-work-mode-file-viewer-content';
     const variant = getFilePanelVariantFromElements(elements);
 
+    if (isWorkModeViewer && hasWorkModeMessagePreview() && !workModeMessagePreviewOpenInFlight) {
+        workModeMessagePreviewState = { text: '', title: '', subtitle: '' };
+        elements.viewerPanel?.classList.remove('is-message-preview');
+    }
+
     const normalizedPath = normalizeFileBrowserRelativePath(result?.path || '');
     const language = typeof result?.language === 'string' ? result.language.trim() : '';
     const isHtml = Boolean(result?.is_html);
@@ -31063,6 +31159,23 @@ function createMessageFooter() {
     });
     linkGroup.appendChild(previewLink);
 
+    const workModePreviewLink = document.createElement('button');
+    workModePreviewLink.type = 'button';
+    workModePreviewLink.className = 'message-work-mode-preview-link message-detail-link is-hidden';
+    workModePreviewLink.textContent = '▣ File Preview에서 보기';
+    workModePreviewLink.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const previewText = normalizeDetailText(footer.dataset.previewText);
+        if (!previewText) return;
+        void openMessageInWorkModePreview(
+            footer.dataset.previewTitle || '채팅 응답',
+            previewText,
+            footer.dataset.previewSubtitle || '채팅 응답 전체 보기'
+        );
+    });
+    linkGroup.appendChild(workModePreviewLink);
+
     const detailLink = document.createElement('button');
     detailLink.type = 'button';
     detailLink.className = 'message-log-link message-detail-link is-hidden';
@@ -31144,6 +31257,10 @@ function syncMessageFooter(footer) {
     const previewLink = footer.querySelector('.message-preview-link');
     if (previewLink) {
         previewLink.classList.toggle('is-hidden', !previewText);
+    }
+    const workModePreviewLink = footer.querySelector('.message-work-mode-preview-link');
+    if (workModePreviewLink) {
+        workModePreviewLink.classList.toggle('is-hidden', !previewText);
     }
     const detailLink = footer.querySelector('.message-log-link');
     if (detailLink) {

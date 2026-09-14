@@ -883,10 +883,45 @@ def test_usage_keepalive_uses_dawn_alignment_then_recovers_missed_days_at_next_z
     ) == {'five_hour': 'five_hour:dawn-alignment:2026-08-04'}
     assert codex_chat._usage_keepalive_cycle_targets(
         zero_usage, datetime(2026, 8, 4, 2, 40, tzinfo=codex_chat.KST)
-    ) == {'five_hour': 'five_hour:fallback:2026-08-04T02:00:00+0900'}
+    ) == {}
     assert codex_chat._usage_keepalive_cycle_targets(
         {'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T22:30:00+09:00'}},
         datetime(2026, 8, 4, 17, 30, tzinfo=codex_chat.KST)
+    ) == {}
+
+
+def test_usage_keepalive_uses_staged_alignment_slots_before_the_night_slot():
+    zero_usage = {'five_hour': {'used_percent': 0}}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        zero_usage, datetime(2026, 8, 4, 16, 30, tzinfo=codex_chat.KST)
+    ) == {'five_hour': 'five_hour:staged-prealignment:2026-08-04T16:30:00+09:00'}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        zero_usage, datetime(2026, 8, 4, 21, 30, tzinfo=codex_chat.KST)
+    ) == {'five_hour': 'five_hour:night-prealignment:2026-08-04'}
+
+
+def test_usage_keepalive_excludes_0130_and_preserves_it_as_dawn_buffer():
+    zero_usage = {'five_hour': {'used_percent': 0}}
+    # 01:30 is deliberately not an activation opportunity; the next eligible
+    # slot is the direct 02:30 dawn alignment.
+    assert codex_chat._usage_keepalive_alignment_slot(
+        datetime(2026, 8, 4, 1, 30, tzinfo=codex_chat.KST)
+    ) is None
+    assert codex_chat._usage_keepalive_cycle_targets(
+        zero_usage, datetime(2026, 8, 4, 1, 30, tzinfo=codex_chat.KST)
+    ) == {}
+    assert codex_chat._usage_keepalive_next_alignment_slot(
+        datetime(2026, 8, 4, 1, 30, tzinfo=codex_chat.KST)
+    )[0] == datetime(2026, 8, 4, 2, 30, tzinfo=codex_chat.KST)
+
+
+def test_usage_keepalive_falls_back_after_a_staged_alignment_slot_was_busy():
+    snapshot = {'five_hour': {'used_percent': 10}, 'usage_keepalive': {}}
+    slot_time = datetime(2026, 8, 4, 16, 30, tzinfo=codex_chat.KST)
+    assert codex_chat._record_usage_keepalive_alignment_observation(snapshot, slot_time) is True
+    snapshot['five_hour'] = {'used_percent': 0, 'resets_at': '2026-08-04T22:30:00+09:00'}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        snapshot, datetime(2026, 8, 4, 17, 0, tzinfo=codex_chat.KST)
     ) == {'five_hour': 'five_hour:fallback:2026-08-04T22:30:00+09:00'}
 
 

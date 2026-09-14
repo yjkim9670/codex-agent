@@ -8079,12 +8079,21 @@ def _account_usage_refresh_is_due(snapshot, now=None):
 _USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
 _USAGE_KEEPALIVE_REASONING_EFFORT = 'medium'
 _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
-# Automatic activation is deliberately confined to the quiet KST dawn slot.
-# Starting at 02:30 yields the five-hour boundaries 07:30, 12:30, 17:30 and
-# 22:30, splitting the observed afternoon peak at 17:30.  The preceding
-# 01:30–02:30 period is consequently an implicit no-submit buffer.
+# Automatic activation is deliberately scheduled around the quiet KST dawn
+# slot. Starting at 02:30 yields the five-hour boundaries 07:30, 12:30,
+# 17:30 and 22:30, splitting the observed afternoon peak at 17:30. Deliberate
+# opportunities at 06:30, 11:30, 16:30 and 21:30 carry the cadence forward to
+# the next day's 02:30 boundary.  01:30 is intentionally excluded: it is a
+# quiet buffer before the primary dawn alignment, not a submission opportunity.
 _USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST = 2
 _USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST = 30
+_USAGE_KEEPALIVE_ALIGNMENT_OPPORTUNITIES_KST = (
+    (2, 30, 'dawn-alignment'),
+    (6, 30, 'staged-prealignment'),
+    (11, 30, 'staged-prealignment'),
+    (16, 30, 'staged-prealignment'),
+    (21, 30, 'night-prealignment'),
+)
 _USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS = 10 * 60
 _USAGE_KEEPALIVE_ALIGNMENT_TOLERANCE_SECONDS = 10 * 60
 _USAGE_KEEPALIVE_ALIGNMENT_TARGET_KST = '17:30'
@@ -8108,18 +8117,66 @@ _USAGE_KEEPALIVE_PROMPT = (
 
 
 def _usage_keepalive_alignment_slot(now=None):
-    """Return today's 02:30 KST activation slot while its 10-minute window is open."""
+    """Return the active KST alignment opportunity while its window is open."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    slot = current.replace(
-        hour=_USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST,
-        minute=_USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST,
-        second=0,
-        microsecond=0,
-    )
-    if slot <= current < slot + timedelta(seconds=_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS):
-        return slot
+    for hour, minute, kind in _USAGE_KEEPALIVE_ALIGNMENT_OPPORTUNITIES_KST:
+        slot = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot <= current < slot + timedelta(seconds=_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS):
+            return slot, kind
     return None
+
+
+def _usage_keepalive_next_alignment_slot(now):
+    """Return the next deliberate opportunity after ``now`` in KST."""
+    current = now.astimezone(KST) if now.tzinfo else now.replace(tzinfo=KST)
+    candidates = []
+    for day_offset in (0, 1):
+        day = current + timedelta(days=day_offset)
+        for hour, minute, kind in _USAGE_KEEPALIVE_ALIGNMENT_OPPORTUNITIES_KST:
+            slot = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if slot > current:
+                candidates.append((slot, kind))
+    return min(candidates, key=lambda item: item[0]) if candidates else None
+
+
+def _usage_keepalive_missed_alignment_slot(snapshot):
+    keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
+    keepalive = keepalive if isinstance(keepalive, dict) else {}
+    return parse_timestamp(keepalive.get('last_missed_alignment_slot_at'))
+
+
+def _record_usage_keepalive_alignment_observation(snapshot, now=None):
+    """Remember a scheduled alignment slot that was unavailable due to usage.
+
+    This lets the next zero-use observation recover capacity promptly, instead
+    of waiting for a later staged opportunity that has already been missed.
+    """
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    active = _usage_keepalive_alignment_slot(current)
+    if active is None:
+        return False
+    limit = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
+    if isinstance(limit, dict) and _normalize_used_percent(limit.get('used_percent')) == 0:
+        return False
+    slot, kind = active
+    keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
+    keepalive = keepalive if isinstance(keepalive, dict) else {}
+    slot_at = normalize_timestamp(slot)
+    if keepalive.get('last_missed_alignment_slot_at') == slot_at:
+        return False
+    history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
+    keepalive['last_missed_alignment_slot_at'] = slot_at
+    keepalive['last_missed_alignment_kind'] = kind
+    keepalive['history'] = [item for item in history[-49:] if isinstance(item, dict)] + [{
+        'at': normalize_timestamp(current),
+        'event': 'alignment_opportunity_missed',
+        'mode': 'automatic',
+        'slot_at': slot_at,
+        'slot_kind': kind,
+    }]
+    snapshot['usage_keepalive'] = keepalive
+    return True
 
 
 def _usage_keepalive_cycle_targets(snapshot, now=None):
@@ -8128,33 +8185,30 @@ def _usage_keepalive_cycle_targets(snapshot, now=None):
     ``resets_at`` is deliberately not used to identify a submission cycle.
     Before the service has activated a window it can expose a plausible,
     future-looking provisional value, so it is not reliable enough to drive a
-    token-consuming request.  The 02:30–02:40 KST slot is reserved for the
-    preferred 17:30 phase.  If that opportunity is missed because the limit
-    was not yet at 0%, fall back for the remainder of the day: submit as soon
-    as an observed zero-use window appears, then use its reported reset time
-    as the next five-hour cycle key.  This restores capacity promptly without
-    letting repeated polls submit duplicate work for one observed window.
+    token-consuming request.  In addition to 21:30 and 02:30, staged slots at
+    06:30, 11:30 and 16:30 can progressively carry the cadence to the next
+    02:30 boundary.  01:30 remains a protected buffer before dawn alignment.
+    Other zero-use observations wait for the next staged
+    slot, unless that slot was observed with non-zero usage; then recovery is
+    allowed at the next observed zero-use window.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    alignment_slot = _usage_keepalive_alignment_slot(current)
+    alignment_opportunity = _usage_keepalive_alignment_slot(current)
     targets = {}
     limit = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
     if not isinstance(limit, dict) or _normalize_used_percent(limit.get('used_percent')) != 0:
         return targets
-    if alignment_slot is not None:
-        targets['five_hour'] = 'five_hour:dawn-alignment:%s' % alignment_slot.date().isoformat()
+    if alignment_opportunity is not None:
+        alignment_slot, alignment_kind = alignment_opportunity
+        if alignment_kind == 'dawn-alignment':
+            targets['five_hour'] = 'five_hour:dawn-alignment:%s' % alignment_slot.date().isoformat()
+        elif alignment_kind == 'night-prealignment':
+            targets['five_hour'] = 'five_hour:night-prealignment:%s' % alignment_slot.date().isoformat()
+        else:
+            targets['five_hour'] = 'five_hour:staged-prealignment:%s' % normalize_timestamp(alignment_slot)
         return targets
 
-    # Do not activate early: 01:30–02:30 remains the quiet alignment buffer.
-    preferred_slot = current.replace(
-        hour=_USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST,
-        minute=_USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST,
-        second=0,
-        microsecond=0,
-    )
-    if current < preferred_slot + timedelta(seconds=_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS):
-        return targets
     keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     keepalive = keepalive if isinstance(keepalive, dict) else {}
     attempted_at = parse_timestamp(keepalive.get('last_attempt_at'))
@@ -8171,6 +8225,15 @@ def _usage_keepalive_cycle_targets(snapshot, now=None):
         keepalive.get('alignment_status') == 'aligned'
         or keepalive.get('verification_status') in {'submitted', 'pending', 'stability_pending'}
     ):
+        return targets
+    # Preserve every still-available intentional opportunity before spending
+    # an arbitrary zero-use window.  Once an opportunity was actually seen
+    # with non-zero usage, or a completed dawn probe proved misaligned,
+    # prompt recovery regains priority.
+    dawn_probe_failed = has_today_dawn_probe and keepalive.get('verification_status') in {'verified', 'unverified'}
+    if (not dawn_probe_failed
+            and _usage_keepalive_missed_alignment_slot(snapshot) is None
+            and _usage_keepalive_next_alignment_slot(current)):
         return targets
     reset_at = parse_timestamp(limit.get('resets_at'))
     cycle_key = normalize_timestamp(reset_at) if reset_at else current.strftime('%Y-%m-%dT%H:00:00%z')
@@ -8396,6 +8459,11 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         # process. Completion later schedules a separate verification read.
         keepalive_state['automatic_cycle_targets'] = cycle_targets
         keepalive_state['automatic_attempts'] = 1
+        # A successful deliberate submission supersedes a previously missed
+        # slot; future zero-use observations should once again protect the
+        # remaining staged opportunities.
+        keepalive_state.pop('last_missed_alignment_slot_at', None)
+        keepalive_state.pop('last_missed_alignment_kind', None)
         keepalive_state['verification_status'] = 'submitted' if started else 'submission_failed'
         keepalive_state['verification_due_at'] = None
         keepalive_state['next_retry_at'] = None
@@ -8686,6 +8754,7 @@ def refresh_account_usage_snapshot_if_due(
             _reconcile_usage_calibration(context['account']['id'], snapshot)
             keepalive = {'submitted': False, 'reason': 'not_automatic'}
             if resolved_limit_sample_source == 'automatic':
+                _record_usage_keepalive_alignment_observation(snapshot)
                 keepalive = _submit_usage_keepalive_locked(context, snapshot, automatic=True)
                 _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
             if schedule_retry:

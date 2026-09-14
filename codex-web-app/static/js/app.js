@@ -29648,7 +29648,10 @@ async function finishStream(streamId, result) {
         syncActiveSessionControls();
     }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
-    void refreshUsageSummary({ silent: true });
+    // The local snapshot may still hold the value sampled before this answer.
+    // Fetch the account limits after finalization so both real 5h and weekly
+    // percentages update without requiring the user to reload the page.
+    await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
     void refreshWorktreeTasks({ silent: true });
     void flushQueuedPrompts(sessionId);
 }

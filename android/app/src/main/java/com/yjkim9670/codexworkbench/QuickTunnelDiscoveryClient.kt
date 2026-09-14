@@ -1,6 +1,7 @@
 package com.yjkim9670.codexworkbench
 
 import android.os.SystemClock
+import android.webkit.CookieManager
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -62,6 +63,10 @@ object QuickTunnelDiscoveryClient {
                 instanceFollowRedirects = false
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("User-Agent", USER_AGENT)
+                val sessionCookie = runCatching {
+                    CookieManager.getInstance().getCookie(baseEndpoint)
+                }.getOrNull()
+                if (!sessionCookie.isNullOrBlank()) setRequestProperty("Cookie", sessionCookie)
             }
             val code = connection.responseCode
             val body = runCatching {
@@ -120,7 +125,7 @@ object QuickTunnelDiscoveryClient {
         if (code == 401 || code == 403 || code in 300..399) {
             return QuickTunnelDiscoveryResult(
                 QuickTunnelDiscoveryKind.AUTH_REQUIRED,
-                message = "Quick Tunnel discovery 접근 인증이 필요합니다.",
+                message = "Quick Tunnel discovery 접근 인증이 필요합니다. Funnel 로그인 상태를 확인하세요.",
             )
         }
         return QuickTunnelDiscoveryResult(

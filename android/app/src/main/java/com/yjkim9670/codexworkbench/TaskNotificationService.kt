@@ -42,13 +42,22 @@ class TaskNotificationService : Service() {
             quickTunnelPath: String? = null,
         ) {
             if (baseUrl.isBlank()) return
+            val inferredMode = WorkbenchCatalog.modeForUrl(baseUrl)
+            val resolvedMode = if (inferredMode == ConnectionMode.QUICK_TUNNEL) {
+                ConnectionMode.QUICK_TUNNEL
+            } else {
+                connectionMode
+            }
+            val resolvedPath = quickTunnelPath
+                ?: WorkbenchCatalog.byUrl(baseUrl)?.quickTunnelPath
+                ?: ""
             val intent = Intent(context, TaskNotificationService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_BASE_URL, baseUrl)
                 putExtra(EXTRA_LABEL, label)
                 putExtra(EXTRA_COOKIE, cookie.orEmpty())
-                putExtra(EXTRA_CONNECTION_MODE, connectionMode.name)
-                putExtra(EXTRA_QUICK_TUNNEL_PATH, quickTunnelPath.orEmpty())
+                putExtra(EXTRA_CONNECTION_MODE, resolvedMode.name)
+                putExtra(EXTRA_QUICK_TUNNEL_PATH, resolvedPath)
             }
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

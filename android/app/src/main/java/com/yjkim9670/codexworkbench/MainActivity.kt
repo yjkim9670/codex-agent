@@ -28,7 +28,6 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -392,31 +391,6 @@ class MainActivity : Activity() {
             .apply()
     }
 
-    private fun connectQuickTunnelTarget(target: WorkbenchTarget, forceRefresh: Boolean) {
-        Toast.makeText(this, "Quick Tunnel 주소를 확인하는 중입니다.", Toast.LENGTH_SHORT).show()
-        Thread({
-            val result = QuickTunnelDiscoveryClient.resolve(forceRefresh = forceRefresh)
-            val resolvedUrl = result.rootUrl?.let { target.quickTunnelUrl(it) }
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                if (resolvedUrl.isNullOrBlank()) {
-                    serverBaseUrl = ""
-                    Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
-                    showConnectionScreen(target.id)
-                    return@runOnUiThread
-                }
-                runCatching { showWorkbench(target, ConnectionMode.QUICK_TUNNEL, resolvedUrl) }
-                    .onFailure {
-                        recordCrash(it)
-                        showRecoveryScreen("WebView 시작 오류", formatError(it))
-                    }
-            }
-        }, "quick-tunnel-discovery").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
     private fun showConnectionScreen(initialWorkbenchId: String) {
         splashTransition?.let(root::removeCallbacks)
         splashTransition = null
@@ -452,7 +426,7 @@ class MainActivity : Activity() {
             ConnectionMode.TAILSCALE ->
                 "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
             ConnectionMode.QUICK_TUNNEL ->
-                "Cloudflare Quick Tunnel · 접속 시 현재 trycloudflare.com 주소를 자동 검색"
+                "Cloudflare Quick Tunnel · ${WorkbenchCatalog.QUICK_TUNNEL_ROOT}"
         }
 
         fun cardLabel(target: WorkbenchTarget): String = buildString {
@@ -461,7 +435,8 @@ class MainActivity : Activity() {
             when (selectedConnectionMode) {
                 ConnectionMode.FUNNEL -> append("Funnel · ${target.funnelUrl}")
                 ConnectionMode.TAILSCALE -> append("Tailscale · ${target.tailscaleUrl}")
-                ConnectionMode.QUICK_TUNNEL -> append("Quick Tunnel · 자동 검색 ${target.quickTunnelPath}")
+                ConnectionMode.QUICK_TUNNEL ->
+                    append("Quick Tunnel · ${target.urlFor(ConnectionMode.QUICK_TUNNEL)}")
             }
         }
 
@@ -532,26 +507,18 @@ class MainActivity : Activity() {
 
         fun connectToTarget(target: WorkbenchTarget) {
             val mode = selectedConnectionMode
-            val editor = prefs.edit()
+            val resolvedUrl = target.urlFor(mode)
+            prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
                 .putString(PREF_CONNECTION_MODE, mode.name)
                 .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
-            if (mode == ConnectionMode.QUICK_TUNNEL) {
-                editor.remove(PREF_SERVER_URL)
-            } else {
-                editor.putString(PREF_SERVER_URL, target.urlFor(mode))
-            }
-            editor.apply()
+                .putString(PREF_SERVER_URL, resolvedUrl)
+                .apply()
 
             suppressNextPauseMonitor = true
             if (target.isCodexWorkbench) {
                 runCatching { requestNotificationPermissionIfNeeded() }
             }
-            if (mode == ConnectionMode.QUICK_TUNNEL) {
-                connectQuickTunnelTarget(target, forceRefresh = false)
-                return
-            }
-            val resolvedUrl = target.urlFor(mode)
             runCatching { showWorkbench(target, mode, resolvedUrl) }
                 .onFailure {
                     recordCrash(it)
@@ -701,41 +668,6 @@ class MainActivity : Activity() {
             setAcceptThirdPartyCookies(browser, false)
         }
 
-        var quickTunnelRetryUsed = false
-        var quickTunnelRecoveryInProgress = false
-
-        fun recoverQuickTunnel(view: WebView?): Boolean {
-            if (mode != ConnectionMode.QUICK_TUNNEL ||
-                quickTunnelRetryUsed ||
-                quickTunnelRecoveryInProgress
-            ) {
-                return false
-            }
-            quickTunnelRetryUsed = true
-            quickTunnelRecoveryInProgress = true
-            QuickTunnelDiscoveryClient.invalidate()
-            Thread({
-                val result = QuickTunnelDiscoveryClient.resolve(forceRefresh = true)
-                val refreshedUrl = result.rootUrl?.let { target.quickTunnelUrl(it) }
-                runOnUiThread {
-                    quickTunnelRecoveryInProgress = false
-                    if (isFinishing || isDestroyed || webView !== view) return@runOnUiThread
-                    if (refreshedUrl.isNullOrBlank()) {
-                        serverBaseUrl = ""
-                        Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
-                        showConnectionScreen(target.id)
-                        return@runOnUiThread
-                    }
-                    serverBaseUrl = refreshedUrl
-                    view?.loadUrl(refreshedUrl)
-                }
-            }, "quick-tunnel-recovery").apply {
-                isDaemon = true
-                start()
-            }
-            return true
-        }
-
         browser.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
@@ -750,12 +682,6 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                if (mode == ConnectionMode.QUICK_TUNNEL && !quickTunnelRecoveryInProgress) {
-                    val loadedUri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull()
-                    if (loadedUri != null && isSameServerOrigin(loadedUri)) {
-                        quickTunnelRetryUsed = false
-                    }
-                }
                 if (target.isCodexWorkbench) {
                     runCatching { removeDuplicatedPromptSafeArea(view) }
                     runCatching { enableWorkModeByDefault(view) }
@@ -765,13 +691,6 @@ class MainActivity : Activity() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame != true) return
-                if (mode == ConnectionMode.QUICK_TUNNEL &&
-                    error != null &&
-                    QuickTunnelRetryPolicy.shouldRediscoverForWebViewError(error.errorCode) &&
-                    recoverQuickTunnel(view)
-                ) {
-                    return
-                }
                 val message = when (currentConnectionMode) {
                     ConnectionMode.TAILSCALE ->
                         "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
@@ -783,19 +702,6 @@ class MainActivity : Activity() {
                     }
                 }
                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
-            }
-
-            override fun onReceivedHttpError(
-                view: WebView?,
-                request: WebResourceRequest?,
-                errorResponse: WebResourceResponse?,
-            ) {
-                super.onReceivedHttpError(view, request, errorResponse)
-                if (request?.isForMainFrame != true || mode != ConnectionMode.QUICK_TUNNEL) return
-                val statusCode = errorResponse?.statusCode ?: return
-                if (QuickTunnelRetryPolicy.shouldRediscoverForHttpStatus(statusCode)) {
-                    recoverQuickTunnel(view)
-                }
             }
 
             override fun onReceivedHttpAuthRequest(

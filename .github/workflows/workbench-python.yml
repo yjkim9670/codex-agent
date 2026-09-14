@@ -7,14 +7,12 @@ on:
       - 'codex-web-app/**'
       - 'codex_agent.py'
       - 'tests/test_codex_cli_output_filter.py'
-      - 'tests/test_quick_tunnel_discovery.py'
       - '.github/workflows/workbench-python.yml'
   pull_request:
     paths:
       - 'codex-web-app/**'
       - 'codex_agent.py'
       - 'tests/test_codex_cli_output_filter.py'
-      - 'tests/test_quick_tunnel_discovery.py'
       - '.github/workflows/workbench-python.yml'
 
 jobs:
@@ -39,8 +37,7 @@ jobs:
         run: |
           python -m py_compile \
             codex-web-app/codex_app.py \
-            codex-web-app/services/codex_cli_output_filter.py \
-            codex-web-app/services/quick_tunnel_discovery.py
+            codex-web-app/services/codex_cli_output_filter.py
 
-      - name: Run Workbench regression tests
-        run: pytest -q tests/test_codex_cli_output_filter.py tests/test_quick_tunnel_discovery.py
+      - name: Run CLI output filter regression tests
+        run: pytest -q tests/test_codex_cli_output_filter.py

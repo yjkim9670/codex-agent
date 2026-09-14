@@ -4,32 +4,40 @@ Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin clie
 
 ## Workbench connection modes
 
-앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`과 `Tailscale 내부 접속` 두 가지이며, 기본값은 기존과 동일한 Funnel입니다.
+앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`, `Tailscale`, `Quick Tunnel` 세 가지이며, 기본값은 기존과 동일한 Funnel입니다.
 
-| Service | Funnel | Tailscale direct |
-|---|---|---|
-| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` |
-| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` |
-| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` |
-| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` |
-| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` |
-| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` |
+Quick Tunnel은 별도 discovery 서버나 API를 사용하지 않습니다. Android 앱에 고정된 Cloudflare Quick Tunnel root에 서비스별 path를 붙여 접속합니다.
 
-Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. 선택한 접속 방식은 SharedPreferences에 저장되고 다음 실행에도 유지됩니다.
+Quick Tunnel root:
 
-선택된 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager에 동일하게 사용합니다. Codex Workbench에서는 background completion monitor API에도 같은 URL을 사용합니다. 따라서 Funnel과 Tailscale 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않고 Tailscale 연결 상태를 확인하거나 Funnel 모드로 전환하라는 안내를 표시합니다.
+```text
+https://painted-slideshow-hampshire-main.trycloudflare.com
+```
+
+| Service | Funnel | Tailscale direct | Quick Tunnel |
+|---|---|---|---|
+| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/tg/` |
+| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/finance-codex/` |
+| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/local/` |
+| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/constraint/` |
+| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/dev/` |
+| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/` |
+
+Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. Quick Tunnel은 위 고정 root를 세 번째 외부 접속 주소로 사용합니다.
+
+선택한 Workbench와 접속 방식은 SharedPreferences에 저장합니다. 선택된 실제 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager 및 background completion monitor에 동일하게 사용합니다. 따라서 Funnel, Tailscale, Quick Tunnel 주소가 한 세션에서 섞이지 않습니다.
+
+Quick Tunnel 사용을 위해 Workbench 서버에 별도 환경변수, Bearer token, BFF endpoint 또는 Proc Manager discovery API 설정을 추가할 필요가 없습니다. Quick Tunnel hostname이 변경되면 Android의 `WorkbenchCatalog.QUICK_TUNNEL_ROOT`를 새 주소로 변경해 새 APK를 빌드합니다.
 
 `Mac Process Dashboard`는 일반 관리 페이지로 취급하며 Codex 전용 `/api/codex/streams` polling, 세션 완료 알림, Work Mode 활성화, prompt safe-area CSS injection 대상에서 제외합니다.
-
-앱은 OpenAI/GitHub/Workbench 비밀키를 APK에 포함하지 않습니다.
 
 ## Mobile defaults
 
 - 상태바, display cutout, navigation/gesture 영역에 Android `WindowInsets` 기반 safe area를 적용합니다.
-- WebView text zoom 기본값은 85%입니다.
+- WebView text zoom 기본값은 100%입니다.
 - 설정에서 text zoom을 60~125%, 5% 단위로 변경할 수 있습니다.
 - text zoom 설정은 저장되며 현재 열린 WebView에도 즉시 적용됩니다.
-- 설정에서 `85%로 초기화`할 수 있습니다.
+- 설정에서 `100%로 초기화`할 수 있습니다.
 - Codex Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
@@ -40,9 +48,9 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 
 네이티브 UI는 별도 font binary 없이 Android `sans-serif` 계열을 사용하고, 밝은 canvas / rounded card / primary action 구조를 사용합니다. 앱 이름은 `코덱스 워크벤치`입니다.
 
-서버 선택 화면에는 `Tailscale 내부 접속` 토글이 있으며, 각 서비스 card에 현재 선택된 방식의 실제 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 `Funnel` 또는 `Tailscale` 모드를 표시합니다.
+서버 선택 화면에는 Funnel/Tailscale/Quick Tunnel 세 가지 mode button이 있으며, 각 서비스 card에 선택된 mode의 실제 고정 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 연결 모드를 표시합니다.
 
-## v1.1.6 crash-safe recovery mode
+## Crash-safe recovery mode
 
 일부 Galaxy 기기에서 앱 실행 직후 Activity가 종료되는 문제를 ADB 없이도 확인할 수 있도록 시작 구조를 단순화했습니다.
 
@@ -71,7 +79,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.10` (`versionCode 12`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.15` (`versionCode 17`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20
@@ -81,7 +89,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 - minSdk 26
 
 ```bash
-gradle -p android :app:assembleDebug
+gradle -p android :app:testDebugUnitTest :app:assembleDebug
 ```
 
 APK 출력 위치:
@@ -90,7 +98,7 @@ APK 출력 위치:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-GitHub Actions의 `Android APK` workflow도 동일한 debug APK를 artifact로 업로드합니다.
+GitHub Actions의 `Android APK` workflow는 unit test를 먼저 실행한 뒤 debug APK를 artifact로 업로드합니다.
 
 ## Stable in-place updates
 
@@ -108,6 +116,7 @@ GitHub Actions의 `Android APK` workflow도 동일한 debug APK를 artifact로 �
 ## Security
 
 - APK에 OpenAI/GitHub/Workbench credentials를 넣지 않습니다.
+- Quick Tunnel 연결에 별도 discovery credential이나 Bearer token을 사용하지 않습니다.
 - WebView 인증 쿠키는 Android WebView가 관리합니다.
 - background completion monitor에 넘기는 쿠키는 메모리로만 전달하며 별도 파일에 저장하지 않습니다.
 - SSL 오류 우회 및 자동 HTTP Basic credential 제출을 사용하지 않습니다.

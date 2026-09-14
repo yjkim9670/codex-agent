@@ -25,8 +25,8 @@ android {
         applicationId = "com.yjkim9670.codexworkbench"
         minSdk = 26
         targetSdk = 36
-        versionCode = ciVersionCode ?: 16
-        versionName = "1.1.14"
+        versionCode = ciVersionCode ?: 17
+        versionName = "1.1.15"
     }
 
     buildFeatures {
@@ -69,4 +69,5 @@ android {
 
 dependencies {
     implementation("androidx.webkit:webkit:1.17.0")
+    testImplementation("junit:junit:4.13.2")
 }

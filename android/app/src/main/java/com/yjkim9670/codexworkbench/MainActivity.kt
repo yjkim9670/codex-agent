@@ -47,6 +47,7 @@ class MainActivity : Activity() {
         private const val PREF_SERVER_URL = "server_url"
         private const val PREF_WORKBENCH_ID = "workbench_id"
         private const val PREF_USE_TAILSCALE = "use_tailscale"
+        private const val PREF_CONNECTION_MODE = "connection_mode"
         private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val PREF_LAST_CRASH = "last_crash"
@@ -103,12 +104,17 @@ class MainActivity : Activity() {
             }
 
             val legacyUrl = prefs.getString(PREF_SERVER_URL, null)
-            if (!prefs.contains(PREF_USE_TAILSCALE)) {
-                WorkbenchCatalog.modeForUrl(legacyUrl)?.let { mode ->
-                    prefs.edit()
-                        .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
-                        .apply()
-                }
+            if (!prefs.contains(PREF_CONNECTION_MODE)) {
+                val migratedMode = WorkbenchCatalog.modeForUrl(legacyUrl)
+                    ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
+                        ConnectionMode.TAILSCALE
+                    } else {
+                        ConnectionMode.FUNNEL
+                    }
+                prefs.edit()
+                    .putString(PREF_CONNECTION_MODE, migratedMode.name)
+                    .putBoolean(PREF_USE_TAILSCALE, migratedMode == ConnectionMode.TAILSCALE)
+                    .apply()
             }
             val savedId = prefs.getString(PREF_WORKBENCH_ID, null)
                 ?: WorkbenchCatalog.byUrl(legacyUrl)?.id
@@ -370,6 +376,21 @@ class MainActivity : Activity() {
         }.also { root.postDelayed(it, SPLASH_DURATION_MS) }
     }
 
+    private fun storedConnectionMode(): ConnectionMode =
+        ConnectionMode.fromPreference(prefs.getString(PREF_CONNECTION_MODE, null))
+            ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
+                ConnectionMode.TAILSCALE
+            } else {
+                ConnectionMode.FUNNEL
+            }
+
+    private fun persistConnectionMode(mode: ConnectionMode) {
+        prefs.edit()
+            .putString(PREF_CONNECTION_MODE, mode.name)
+            .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
+            .apply()
+    }
+
     private fun showConnectionScreen(initialWorkbenchId: String) {
         splashTransition?.let(root::removeCallbacks)
         splashTransition = null
@@ -396,45 +417,69 @@ class MainActivity : Activity() {
         )
 
         var selectedId = WorkbenchCatalog.byId(initialWorkbenchId).id
-        var useTailscale = prefs.getBoolean(PREF_USE_TAILSCALE, false)
+        var selectedConnectionMode = storedConnectionMode()
         val cards = linkedMapOf<String, TextView>()
+        val modeButtons = linkedMapOf<ConnectionMode, TextView>()
 
-        fun selectedMode(): ConnectionMode =
-            if (useTailscale) ConnectionMode.TAILSCALE else ConnectionMode.FUNNEL
-
-        fun connectionSummary(): String =
-            if (useTailscale) {
+        fun connectionSummary(): String = when (selectedConnectionMode) {
+            ConnectionMode.FUNNEL -> "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
+            ConnectionMode.TAILSCALE ->
                 "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
-            } else {
-                "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
-            }
+            ConnectionMode.QUICK_TUNNEL ->
+                "Cloudflare Quick Tunnel · ${WorkbenchCatalog.QUICK_TUNNEL_ROOT}"
+        }
 
         fun cardLabel(target: WorkbenchTarget): String = buildString {
             append(target.name.removeSuffix(" Codex Workbench"))
             append("\n")
-            append(if (useTailscale) "Tailscale · " else "Funnel · ")
-            append(target.urlFor(selectedMode()))
+            when (selectedConnectionMode) {
+                ConnectionMode.FUNNEL -> append("Funnel · ${target.funnelUrl}")
+                ConnectionMode.TAILSCALE -> append("Tailscale · ${target.tailscaleUrl}")
+                ConnectionMode.QUICK_TUNNEL ->
+                    append("Quick Tunnel · ${target.urlFor(ConnectionMode.QUICK_TUNNEL)}")
+            }
         }
 
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(13), dp(16), dp(13))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
             background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
         }
-        val modeText = simpleText("Tailscale 내부 접속", 14f, COLOR_INK, true)
-        modeRow.addView(modeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val modeToggle = Switch(this).apply {
-            isChecked = useTailscale
-            showText = false
+        listOf(
+            ConnectionMode.FUNNEL to "Funnel",
+            ConnectionMode.TAILSCALE to "Tailscale",
+            ConnectionMode.QUICK_TUNNEL to "Quick Tunnel",
+        ).forEach { (mode, label) ->
+            val button = simpleText(label, 12.5f, COLOR_INK, true, Gravity.CENTER).apply {
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+            }
+            modeButtons[mode] = button
+            modeRow.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (mode != ConnectionMode.FUNNEL) leftMargin = dp(4)
+            })
         }
-        modeRow.addView(modeToggle)
         panel.addView(modeRow, matchWrap().apply { bottomMargin = dp(6) })
 
         val modeSummary = simpleText(connectionSummary(), 12f, COLOR_MUTED, false).apply {
             setPadding(dp(4), 0, dp(4), 0)
         }
         panel.addView(modeSummary, matchWrap().apply { bottomMargin = dp(14) })
+
+        fun refreshModeButtons() {
+            modeButtons.forEach { (mode, view) ->
+                val selected = mode == selectedConnectionMode
+                view.background = roundedDrawable(
+                    if (selected) COLOR_PRIMARY_SOFT else Color.WHITE,
+                    dp(11).toFloat(),
+                    if (selected) COLOR_PRIMARY else COLOR_BORDER,
+                    if (selected) 2 else 1,
+                )
+                view.setTextColor(if (selected) COLOR_PRIMARY else COLOR_INK)
+            }
+        }
 
         fun refreshCards() {
             modeSummary.text = connectionSummary()
@@ -451,19 +496,30 @@ class MainActivity : Activity() {
             }
         }
 
+        modeButtons.forEach { (mode, view) ->
+            view.setOnClickListener {
+                selectedConnectionMode = mode
+                persistConnectionMode(mode)
+                refreshModeButtons()
+                refreshCards()
+            }
+        }
+
         fun connectToTarget(target: WorkbenchTarget) {
-            val mode = selectedMode()
+            val mode = selectedConnectionMode
             val resolvedUrl = target.urlFor(mode)
             prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
-                .putString(PREF_SERVER_URL, resolvedUrl)
+                .putString(PREF_CONNECTION_MODE, mode.name)
                 .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
+                .putString(PREF_SERVER_URL, resolvedUrl)
                 .apply()
+
             suppressNextPauseMonitor = true
             if (target.isCodexWorkbench) {
                 runCatching { requestNotificationPermissionIfNeeded() }
             }
-            runCatching { showWorkbench(target, mode) }
+            runCatching { showWorkbench(target, mode, resolvedUrl) }
                 .onFailure {
                     recordCrash(it)
                     showRecoveryScreen("WebView 시작 오류", formatError(it))
@@ -507,13 +563,8 @@ class MainActivity : Activity() {
         WorkbenchCatalog.targets
             .filter { it.isCodexWorkbench }
             .forEach { addTargetCard(it) }
+        refreshModeButtons()
         refreshCards()
-
-        modeToggle.setOnCheckedChangeListener { _, checked ->
-            useTailscale = checked
-            prefs.edit().putBoolean(PREF_USE_TAILSCALE, checked).apply()
-            refreshCards()
-        }
 
         val connect = simpleButton("선택한 서비스 접속", true)
         val settings = simpleButton("앱 설정", false)
@@ -540,14 +591,14 @@ class MainActivity : Activity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode) {
+    private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode, resolvedUrl: String) {
         closeSettingsOverlay()
         destroyWebView()
         root.removeAllViews()
         root.setBackgroundColor(Color.WHITE)
         currentTarget = target
         currentConnectionMode = mode
-        serverBaseUrl = target.urlFor(mode)
+        serverBaseUrl = resolvedUrl
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -562,7 +613,13 @@ class MainActivity : Activity() {
         val title = simpleText(
             buildString {
                 append(target.name.removeSuffix(" Codex Workbench"))
-                append(if (mode == ConnectionMode.TAILSCALE) " · Tailscale" else " · Funnel")
+                append(
+                    when (mode) {
+                        ConnectionMode.FUNNEL -> " · Funnel"
+                        ConnectionMode.TAILSCALE -> " · Tailscale"
+                        ConnectionMode.QUICK_TUNNEL -> " · Quick Tunnel"
+                    },
+                )
             },
             13f,
             COLOR_INK,
@@ -633,15 +690,18 @@ class MainActivity : Activity() {
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
-                if (request?.isForMainFrame == true) {
-                    val message = if (currentConnectionMode == ConnectionMode.TAILSCALE) {
+                if (request?.isForMainFrame != true) return
+                val message = when (currentConnectionMode) {
+                    ConnectionMode.TAILSCALE ->
                         "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
-                    } else {
+                    ConnectionMode.QUICK_TUNNEL ->
+                        "Quick Tunnel 연결 오류: ${error?.description ?: "unknown error"}"
+                    ConnectionMode.FUNNEL -> {
                         val label = if (target.isCodexWorkbench) "Workbench" else "대시보드"
                         "$label 연결 오류: ${error?.description ?: "unknown error"}"
                     }
-                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
             }
 
             override fun onReceivedHttpAuthRequest(

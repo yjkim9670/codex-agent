@@ -170,7 +170,7 @@ def create_codex_app():
             server_directory_path=runtime_context['server_directory_path'],
             tmp_directory_path=runtime_context['tmp_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],
-            workspace_directory_path=str(workspace_directory),
+            workspace_directory_path=runtime_context['workspace_directory_path'],
             shared_knowledge_directory_path=runtime_context['shared_knowledge_directory_path'],
             internal_multiuser_mode=is_internal_multiuser_mode(),
             current_internal_user=(

@@ -6,28 +6,40 @@ Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin clie
 
 앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`, `Tailscale`, `Quick Tunnel` 세 가지이며, 기본값은 기존과 동일한 Funnel입니다.
 
-Quick Tunnel은 별도 discovery 서버나 API를 사용하지 않습니다. Android 앱에 고정된 Cloudflare Quick Tunnel root에 서비스별 path를 붙여 접속합니다.
+Quick Tunnel은 별도 discovery 서버나 API를 사용하지 않습니다. Android 앱 설정에 저장된 Cloudflare Quick Tunnel root에 서비스별 path를 붙여 접속합니다. 저장된 값이 없으면 아래 기본 root를 사용합니다.
 
-Quick Tunnel root:
+Default Quick Tunnel root:
 
 ```text
 https://painted-slideshow-hampshire-main.trycloudflare.com
 ```
 
-| Service | Funnel | Tailscale direct | Quick Tunnel |
+| Service | Funnel | Tailscale direct | Quick Tunnel path |
 |---|---|---|---|
-| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/tg/` |
-| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/finance-codex/` |
-| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/local/` |
-| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/constraint/` |
-| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/dev/` |
-| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` | `https://painted-slideshow-hampshire-main.trycloudflare.com/` |
+| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` | `/tg/` |
+| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` | `/finance-codex/` |
+| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` | `/local/` |
+| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` | `/constraint/` |
+| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` | `/dev/` |
+| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` | `/` |
 
-Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. Quick Tunnel은 위 고정 root를 세 번째 외부 접속 주소로 사용합니다.
+Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. Quick Tunnel은 설정된 root를 세 번째 외부 접속 주소로 사용합니다.
 
-선택한 Workbench와 접속 방식은 SharedPreferences에 저장합니다. 선택된 실제 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager 및 background completion monitor에 동일하게 사용합니다. 따라서 Funnel, Tailscale, Quick Tunnel 주소가 한 세션에서 섞이지 않습니다.
+선택한 Workbench, 접속 방식, 사용자 지정 Quick Tunnel root는 SharedPreferences에 저장합니다. 선택된 실제 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager 및 background completion monitor에 동일하게 사용합니다. 따라서 Funnel, Tailscale, Quick Tunnel 주소가 한 세션에서 섞이지 않습니다.
 
-Quick Tunnel 사용을 위해 Workbench 서버에 별도 환경변수, Bearer token, BFF endpoint 또는 Proc Manager discovery API 설정을 추가할 필요가 없습니다. Quick Tunnel hostname이 변경되면 Android의 `WorkbenchCatalog.QUICK_TUNNEL_ROOT`를 새 주소로 변경해 새 APK를 빌드합니다.
+### Editable Quick Tunnel root
+
+앱 설정의 `Quick Tunnel` 카드에서 `Quick Tunnel 주소 변경`을 누르면 root 주소를 직접 수정할 수 있습니다.
+
+- 허용 형식: `https://xxxxx.trycloudflare.com`
+- 끝의 `/`는 자동 제거합니다.
+- `http://`, 다른 domain, path, query, fragment, custom port, user info가 붙은 URL은 저장하지 않습니다.
+- 저장된 root는 다음 Quick Tunnel 접속부터 사용합니다.
+- `/tg/`, `/dev/`, `/finance-codex/` 등 서비스 path는 앱이 자동으로 붙입니다.
+- `기본값`을 누르면 현재 기본 root로 복원합니다.
+- 이미 열려 있는 WebView 세션의 URL은 주소 저장 시 강제로 변경하지 않습니다.
+
+Quick Tunnel 사용을 위해 Workbench 서버에 별도 환경변수, Bearer token, BFF endpoint 또는 Proc Manager discovery API 설정을 추가할 필요가 없습니다. Quick Tunnel hostname이 변경되어도 APK를 다시 빌드할 필요 없이 앱 설정에서 root만 교체하면 됩니다.
 
 `Mac Process Dashboard`는 일반 관리 페이지로 취급하며 Codex 전용 `/api/codex/streams` polling, 세션 완료 알림, Work Mode 활성화, prompt safe-area CSS injection 대상에서 제외합니다.
 
@@ -48,7 +60,7 @@ Quick Tunnel 사용을 위해 Workbench 서버에 별도 환경변수, Bearer to
 
 네이티브 UI는 별도 font binary 없이 Android `sans-serif` 계열을 사용하고, 밝은 canvas / rounded card / primary action 구조를 사용합니다. 앱 이름은 `코덱스 워크벤치`입니다.
 
-서버 선택 화면에는 Funnel/Tailscale/Quick Tunnel 세 가지 mode button이 있으며, 각 서비스 card에 선택된 mode의 실제 고정 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 연결 모드를 표시합니다.
+서버 선택 화면에는 Funnel/Tailscale/Quick Tunnel 세 가지 mode button이 있으며, 각 서비스 card에 선택된 mode의 실제 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 연결 모드를 표시합니다. 앱 설정에는 현재 Quick Tunnel root와 주소 변경 버튼을 표시합니다.
 
 ## Crash-safe recovery mode
 
@@ -79,7 +91,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.15` (`versionCode 17`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.16` (`versionCode 18`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20
@@ -117,6 +129,7 @@ GitHub Actions의 `Android APK` workflow는 unit test를 먼저 실행한 뒤 de
 
 - APK에 OpenAI/GitHub/Workbench credentials를 넣지 않습니다.
 - Quick Tunnel 연결에 별도 discovery credential이나 Bearer token을 사용하지 않습니다.
+- 사용자 입력 Quick Tunnel root는 HTTPS `*.trycloudflare.com` root만 허용합니다.
 - WebView 인증 쿠키는 Android WebView가 관리합니다.
 - background completion monitor에 넘기는 쿠키는 메모리로만 전달하며 별도 파일에 저장하지 않습니다.
 - SSL 오류 우회 및 자동 HTTP Basic credential 제출을 사용하지 않습니다.

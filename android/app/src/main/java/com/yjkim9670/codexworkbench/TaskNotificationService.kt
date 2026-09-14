@@ -20,6 +20,8 @@ class TaskNotificationService : Service() {
         private const val EXTRA_BASE_URL = "base_url"
         private const val EXTRA_LABEL = "workbench_label"
         private const val EXTRA_COOKIE = "cookie"
+        private const val EXTRA_CONNECTION_MODE = "connection_mode"
+        private const val EXTRA_QUICK_TUNNEL_PATH = "quick_tunnel_path"
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val MONITOR_CHANNEL_ID = "workbench_task_monitor_silent_v2"
@@ -31,13 +33,22 @@ class TaskNotificationService : Service() {
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
         private val USER_AGENT = "CodexWorkbenchAndroid/${BuildConfig.VERSION_NAME}"
 
-        fun start(context: Context, baseUrl: String, label: String, cookie: String?) {
+        fun start(
+            context: Context,
+            baseUrl: String,
+            label: String,
+            cookie: String?,
+            connectionMode: ConnectionMode = ConnectionMode.FUNNEL,
+            quickTunnelPath: String? = null,
+        ) {
             if (baseUrl.isBlank()) return
             val intent = Intent(context, TaskNotificationService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_BASE_URL, baseUrl)
                 putExtra(EXTRA_LABEL, label)
                 putExtra(EXTRA_COOKIE, cookie.orEmpty())
+                putExtra(EXTRA_CONNECTION_MODE, connectionMode.name)
+                putExtra(EXTRA_QUICK_TUNNEL_PATH, quickTunnelPath.orEmpty())
             }
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -60,6 +71,8 @@ class TaskNotificationService : Service() {
     private var baseUrl: String = ""
     private var workbenchLabel: String = "코덱스 워크벤치"
     private var cookie: String = ""
+    private var connectionMode = ConnectionMode.FUNNEL
+    private var quickTunnelPath: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -77,6 +90,9 @@ class TaskNotificationService : Service() {
         baseUrl = intent?.getStringExtra(EXTRA_BASE_URL).orEmpty().trim()
         workbenchLabel = intent?.getStringExtra(EXTRA_LABEL).orEmpty().ifBlank { "코덱스 워크벤치" }
         cookie = intent?.getStringExtra(EXTRA_COOKIE).orEmpty()
+        connectionMode = ConnectionMode.fromPreference(intent?.getStringExtra(EXTRA_CONNECTION_MODE))
+            ?: ConnectionMode.FUNNEL
+        quickTunnelPath = intent?.getStringExtra(EXTRA_QUICK_TUNNEL_PATH).orEmpty()
         if (baseUrl.isBlank()) {
             stopSelf()
             return START_NOT_STICKY
@@ -148,19 +164,20 @@ class TaskNotificationService : Service() {
         val pendingQueueCount: Int,
     )
 
+    private data class RequestResult(
+        val statusCode: Int?,
+        val body: String = "",
+        val contentType: String? = null,
+        val networkFailure: Boolean = false,
+    )
+
     private fun fetchStreamSnapshot(): StreamSnapshot? {
-        var connection: HttpURLConnection? = null
-        return try {
-            val endpoint = baseUrl.trimEnd('/') + "/api/codex/streams?include_done=1"
-            connection = openJsonConnection(endpoint)
-
-            val code = connection.responseCode
-            if (code !in 200..299) return null
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            if (!looksLikeJson(connection.contentType, body)) return null
-
-            val root = JSONObject(body)
-            val streams = root.optJSONArray("streams") ?: return StreamSnapshot(emptyMap(), 0)
+        val result = requestJson("/api/codex/streams?include_done=1")
+        val code = result.statusCode ?: return null
+        if (code !in 200..299 || !looksLikeJson(result.contentType, result.body)) return null
+        return runCatching {
+            val root = JSONObject(result.body)
+            val streams = root.optJSONArray("streams") ?: return@runCatching StreamSnapshot(emptyMap(), 0)
             val active = linkedMapOf<String, String>()
             var pending = 0
             for (index in 0 until streams.length()) {
@@ -175,11 +192,7 @@ class TaskNotificationService : Service() {
                 }
             }
             StreamSnapshot(active, pending)
-        } catch (_: Exception) {
-            null
-        } finally {
-            connection?.disconnect()
-        }
+        }.getOrNull()
     }
 
     private fun resolveCompletedSessionLabel(sessionIds: Set<String>): String? {
@@ -205,32 +218,65 @@ class TaskNotificationService : Service() {
     }
 
     private fun fetchSessionTitles(sessionIds: Set<String>): Map<String, String> {
-        var connection: HttpURLConnection? = null
-        return try {
-            val endpoint = baseUrl.trimEnd('/') + "/api/codex/sessions"
-            connection = openJsonConnection(endpoint)
-
-            val code = connection.responseCode
-            if (code !in 200..299) return emptyMap()
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
-            if (!looksLikeJson(connection.contentType, body)) return emptyMap()
-
-            val root = JSONObject(body)
-            val sessions = root.optJSONArray("sessions") ?: return emptyMap()
-            val result = linkedMapOf<String, String>()
+        val result = requestJson("/api/codex/sessions")
+        val code = result.statusCode ?: return emptyMap()
+        if (code !in 200..299 || !looksLikeJson(result.contentType, result.body)) return emptyMap()
+        return runCatching {
+            val root = JSONObject(result.body)
+            val sessions = root.optJSONArray("sessions") ?: return@runCatching emptyMap()
+            val titles = linkedMapOf<String, String>()
             for (index in 0 until sessions.length()) {
                 val session = sessions.optJSONObject(index) ?: continue
                 val id = session.optString("id").trim()
                 if (id !in sessionIds) continue
                 val title = session.optString("title").trim()
-                if (title.isNotBlank()) result[id] = title
+                if (title.isNotBlank()) titles[id] = title
             }
-            result
+            titles
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun requestJson(path: String): RequestResult {
+        val first = executeJson(path)
+        if (connectionMode != ConnectionMode.QUICK_TUNNEL || !shouldRediscover(first)) {
+            return first
+        }
+        if (!refreshQuickTunnelBaseUrl()) return first
+        return executeJson(path)
+    }
+
+    private fun executeJson(path: String): RequestResult {
+        if (baseUrl.isBlank()) return RequestResult(null, networkFailure = true)
+        var connection: HttpURLConnection? = null
+        return try {
+            val endpoint = baseUrl.trimEnd('/') + path
+            connection = openJsonConnection(endpoint)
+            val code = connection.responseCode
+            val body = runCatching {
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                stream?.bufferedReader()?.use { it.readText().take(256 * 1024) }.orEmpty()
+            }.getOrDefault("")
+            RequestResult(code, body, connection.contentType)
         } catch (_: Exception) {
-            emptyMap()
+            RequestResult(null, networkFailure = true)
         } finally {
             connection?.disconnect()
         }
+    }
+
+    private fun shouldRediscover(result: RequestResult): Boolean =
+        result.networkFailure ||
+            (result.statusCode != null && QuickTunnelRetryPolicy.shouldRediscoverForHttpStatus(result.statusCode))
+
+    private fun refreshQuickTunnelBaseUrl(): Boolean {
+        QuickTunnelDiscoveryClient.invalidate()
+        val discovery = QuickTunnelDiscoveryClient.resolve(forceRefresh = true)
+        val refreshed = discovery.rootUrl?.let {
+            WorkbenchCatalog.combineQuickTunnelUrl(it, quickTunnelPath)
+        }
+        if (refreshed.isNullOrBlank()) return false
+        baseUrl = refreshed
+        return true
     }
 
     private fun openJsonConnection(endpoint: String): HttpURLConnection =

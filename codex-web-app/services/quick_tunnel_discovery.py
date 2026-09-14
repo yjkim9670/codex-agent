@@ -260,3 +260,39 @@ def get_quick_tunnel_discovery_service() -> QuickTunnelDiscoveryService:
         if _service is None:
             _service = QuickTunnelDiscoveryService()
         return _service
+
+
+def discover_quick_tunnel_for_client(force_refresh: bool = False) -> Tuple[dict, int]:
+    """Return a sanitized response tuple for the Android BFF route."""
+    try:
+        state = get_quick_tunnel_discovery_service().discover(force_refresh=force_refresh)
+    except QuickTunnelDiscoveryError as error:
+        return ({
+            "version": 1,
+            "available": False,
+            "status": "error",
+            "url": None,
+            "updated_ts": 0,
+            "error_code": error.error_code,
+            "message": str(error),
+            "retryable": error.retryable,
+        }, error.http_status)
+
+    if not state.available or state.status != "online" or not state.url:
+        return ({
+            "version": 1,
+            "available": False,
+            "status": state.status or "offline",
+            "url": None,
+            "updated_ts": state.updated_ts,
+            "message": "Quick Tunnel이 현재 준비되지 않았습니다",
+            "retryable": False,
+        }, 200)
+
+    return ({
+        "version": 1,
+        "available": True,
+        "status": "online",
+        "url": state.url,
+        "updated_ts": state.updated_ts,
+    }, 200)

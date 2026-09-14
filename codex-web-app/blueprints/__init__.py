@@ -1,1 +1,1 @@
-"""Blueprint package for Codex chat server."""
+"""Blueprint package for Codex Workbench server."""

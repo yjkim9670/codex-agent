@@ -16,8 +16,8 @@ class Clock:
         return self.now
 
 
-def encoded(status, **payload):
-    return status, json.dumps(payload).encode('utf-8')
+def encoded(http_status, **payload):
+    return http_status, json.dumps(payload).encode('utf-8')
 
 
 def test_online_result_is_cached_until_expiry():

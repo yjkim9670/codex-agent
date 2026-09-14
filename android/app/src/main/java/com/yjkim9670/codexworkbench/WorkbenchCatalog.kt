@@ -1,5 +1,7 @@
 package com.yjkim9670.codexworkbench
 
+import java.net.URI
+
 enum class ConnectionMode {
     FUNNEL,
     TAILSCALE,
@@ -26,8 +28,11 @@ data class WorkbenchTarget(
         ConnectionMode.QUICK_TUNNEL -> quickTunnelUrl(WorkbenchCatalog.QUICK_TUNNEL_ROOT)
     }
 
-    fun quickTunnelUrl(rootUrl: String = WorkbenchCatalog.QUICK_TUNNEL_ROOT): String =
-        rootUrl.trimEnd('/') + quickTunnelPath
+    fun quickTunnelUrl(rootUrl: String = WorkbenchCatalog.QUICK_TUNNEL_ROOT): String {
+        val normalizedRoot = WorkbenchCatalog.normalizeQuickTunnelRoot(rootUrl)
+            ?: throw IllegalArgumentException("Invalid Quick Tunnel root URL")
+        return normalizedRoot + quickTunnelPath
+    }
 }
 
 object WorkbenchCatalog {
@@ -82,24 +87,68 @@ object WorkbenchCatalog {
         ),
     )
 
+    fun normalizeQuickTunnelRoot(rawUrl: String?): String? {
+        val value = rawUrl.orEmpty().trim()
+        if (value.isBlank()) return null
+        val uri = runCatching { URI(value) }.getOrNull() ?: return null
+        if (!uri.scheme.equals("https", ignoreCase = true)) return null
+        if (uri.rawUserInfo != null || uri.port != -1 || uri.rawQuery != null || uri.rawFragment != null) return null
+        if (!uri.rawPath.isNullOrEmpty() && uri.rawPath != "/") return null
+        val host = uri.host?.lowercase()?.trimEnd('.') ?: return null
+        if (host == "trycloudflare.com" || !host.endsWith(".trycloudflare.com")) return null
+        val prefix = host.removeSuffix(".trycloudflare.com")
+        if (prefix.isBlank() || prefix.split('.').any { label ->
+                label.isBlank() ||
+                    label.length > 63 ||
+                    label.first() == '-' ||
+                    label.last() == '-' ||
+                    label.any { ch -> !(ch.isLetterOrDigit() || ch == '-') }
+            }
+        ) {
+            return null
+        }
+        return "https://$host"
+    }
+
     fun byId(id: String?): WorkbenchTarget =
         targets.firstOrNull { it.id == id } ?: targets.first()
 
     fun byUrl(url: String?): WorkbenchTarget? {
         val normalized = normalizeUrl(url)
         if (normalized.isBlank()) return null
-        return targets.firstOrNull { target ->
-            ConnectionMode.entries.any { mode -> normalizeUrl(target.urlFor(mode)) == normalized }
+        val staticTarget = targets.firstOrNull { target ->
+            normalizeUrl(target.funnelUrl) == normalized ||
+                normalizeUrl(target.tailscaleUrl) == normalized ||
+                normalizeUrl(target.urlFor(ConnectionMode.QUICK_TUNNEL)) == normalized
         }
+        return staticTarget ?: dynamicQuickTunnelTarget(url)
     }
 
     fun modeForUrl(url: String?): ConnectionMode? {
         val normalized = normalizeUrl(url)
         if (normalized.isBlank()) return null
-        return ConnectionMode.entries.firstOrNull { mode ->
-            targets.any { target -> normalizeUrl(target.urlFor(mode)) == normalized }
+        return when {
+            targets.any { normalizeUrl(it.tailscaleUrl) == normalized } -> ConnectionMode.TAILSCALE
+            targets.any { normalizeUrl(it.funnelUrl) == normalized } -> ConnectionMode.FUNNEL
+            targets.any { normalizeUrl(it.urlFor(ConnectionMode.QUICK_TUNNEL)) == normalized } ->
+                ConnectionMode.QUICK_TUNNEL
+            dynamicQuickTunnelTarget(url) != null -> ConnectionMode.QUICK_TUNNEL
+            else -> null
         }
     }
+
+    private fun dynamicQuickTunnelTarget(url: String?): WorkbenchTarget? {
+        val uri = runCatching { URI(url.orEmpty().trim()) }.getOrNull() ?: return null
+        if (!uri.scheme.equals("https", ignoreCase = true)) return null
+        if (uri.rawUserInfo != null || uri.port != -1 || uri.rawQuery != null || uri.rawFragment != null) return null
+        val host = uri.host ?: return null
+        if (normalizeQuickTunnelRoot("https://$host") == null) return null
+        val normalizedPath = normalizePath(uri.rawPath)
+        return targets.firstOrNull { target -> normalizePath(target.quickTunnelPath) == normalizedPath }
+    }
+
+    private fun normalizePath(path: String?): String =
+        if (path.isNullOrBlank() || path == "/") "/" else "/${path.trim('/')}/"
 
     private fun normalizeUrl(url: String?): String =
         url.orEmpty().trim().trimEnd('/')

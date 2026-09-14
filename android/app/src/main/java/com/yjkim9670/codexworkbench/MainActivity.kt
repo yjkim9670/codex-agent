@@ -80,6 +80,7 @@ class MainActivity : Activity() {
     private var settingsOverlay: View? = null
     private var suppressNextPauseMonitor = false
     private var previousUncaughtHandler: Thread.UncaughtExceptionHandler? = null
+    private var downloadController: WebViewDownloadController? = null
 
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
 
@@ -702,6 +703,9 @@ class MainActivity : Activity() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
                 val scheme = uri.scheme?.lowercase().orEmpty()
+                if (scheme == "blob" || scheme == "data" || scheme == WebViewDownloadController.BRIDGE_SCHEME) {
+                    return downloadController?.handleNavigation(uri) ?: true
+                }
                 if (scheme == "http" || scheme == "https") {
                     if (isSameServerOrigin(uri)) return false
                     return openExternal(uri)
@@ -712,6 +716,7 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                runCatching { downloadController?.installInterceptor() }
                 if (target.isCodexWorkbench) {
                     runCatching { removeDuplicatedPromptSafeArea(view) }
                     runCatching { enableWorkModeByDefault(view) }
@@ -843,6 +848,16 @@ class MainActivity : Activity() {
                 enqueueDownload(url, userAgent, contentDisposition, mimeType)
             },
         )
+        val downloads = WebViewDownloadController(this, browser)
+        downloadController = downloads
+        runCatching { downloads.install() }
+            .onFailure {
+                Toast.makeText(
+                    this,
+                    "다운로드 기능 초기화 실패: ${it.message ?: it.javaClass.simpleName}",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
 
         container.addView(browser, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         reload.setOnClickListener { runCatching { browser.reload() } }
@@ -1230,6 +1245,8 @@ class MainActivity : Activity() {
     }
 
     private fun destroyWebView() {
+        downloadController?.close()
+        downloadController = null
         val browser = webView ?: return
         webView = null
         runCatching { browser.stopLoading() }

@@ -28,6 +28,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -47,6 +48,7 @@ class MainActivity : Activity() {
         private const val PREF_SERVER_URL = "server_url"
         private const val PREF_WORKBENCH_ID = "workbench_id"
         private const val PREF_USE_TAILSCALE = "use_tailscale"
+        private const val PREF_CONNECTION_MODE = "connection_mode"
         private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val PREF_LAST_CRASH = "last_crash"
@@ -103,12 +105,17 @@ class MainActivity : Activity() {
             }
 
             val legacyUrl = prefs.getString(PREF_SERVER_URL, null)
-            if (!prefs.contains(PREF_USE_TAILSCALE)) {
-                WorkbenchCatalog.modeForUrl(legacyUrl)?.let { mode ->
-                    prefs.edit()
-                        .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
-                        .apply()
-                }
+            if (!prefs.contains(PREF_CONNECTION_MODE)) {
+                val migratedMode = WorkbenchCatalog.modeForUrl(legacyUrl)
+                    ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
+                        ConnectionMode.TAILSCALE
+                    } else {
+                        ConnectionMode.FUNNEL
+                    }
+                prefs.edit()
+                    .putString(PREF_CONNECTION_MODE, migratedMode.name)
+                    .putBoolean(PREF_USE_TAILSCALE, migratedMode == ConnectionMode.TAILSCALE)
+                    .apply()
             }
             val savedId = prefs.getString(PREF_WORKBENCH_ID, null)
                 ?: WorkbenchCatalog.byUrl(legacyUrl)?.id
@@ -370,6 +377,46 @@ class MainActivity : Activity() {
         }.also { root.postDelayed(it, SPLASH_DURATION_MS) }
     }
 
+    private fun storedConnectionMode(): ConnectionMode =
+        ConnectionMode.fromPreference(prefs.getString(PREF_CONNECTION_MODE, null))
+            ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
+                ConnectionMode.TAILSCALE
+            } else {
+                ConnectionMode.FUNNEL
+            }
+
+    private fun persistConnectionMode(mode: ConnectionMode) {
+        prefs.edit()
+            .putString(PREF_CONNECTION_MODE, mode.name)
+            .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
+            .apply()
+    }
+
+    private fun connectQuickTunnelTarget(target: WorkbenchTarget, forceRefresh: Boolean) {
+        Toast.makeText(this, "Quick Tunnel 주소를 확인하는 중입니다.", Toast.LENGTH_SHORT).show()
+        Thread({
+            val result = QuickTunnelDiscoveryClient.resolve(forceRefresh = forceRefresh)
+            val resolvedUrl = result.rootUrl?.let { target.quickTunnelUrl(it) }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (resolvedUrl.isNullOrBlank()) {
+                    serverBaseUrl = ""
+                    Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+                    showConnectionScreen(target.id)
+                    return@runOnUiThread
+                }
+                runCatching { showWorkbench(target, ConnectionMode.QUICK_TUNNEL, resolvedUrl) }
+                    .onFailure {
+                        recordCrash(it)
+                        showRecoveryScreen("WebView 시작 오류", formatError(it))
+                    }
+            }
+        }, "quick-tunnel-discovery").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
     private fun showConnectionScreen(initialWorkbenchId: String) {
         splashTransition?.let(root::removeCallbacks)
         splashTransition = null
@@ -396,45 +443,68 @@ class MainActivity : Activity() {
         )
 
         var selectedId = WorkbenchCatalog.byId(initialWorkbenchId).id
-        var useTailscale = prefs.getBoolean(PREF_USE_TAILSCALE, false)
+        var selectedConnectionMode = storedConnectionMode()
         val cards = linkedMapOf<String, TextView>()
+        val modeButtons = linkedMapOf<ConnectionMode, TextView>()
 
-        fun selectedMode(): ConnectionMode =
-            if (useTailscale) ConnectionMode.TAILSCALE else ConnectionMode.FUNNEL
-
-        fun connectionSummary(): String =
-            if (useTailscale) {
+        fun connectionSummary(): String = when (selectedConnectionMode) {
+            ConnectionMode.FUNNEL -> "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
+            ConnectionMode.TAILSCALE ->
                 "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
-            } else {
-                "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
-            }
+            ConnectionMode.QUICK_TUNNEL ->
+                "Cloudflare Quick Tunnel · 접속 시 현재 trycloudflare.com 주소를 자동 검색"
+        }
 
         fun cardLabel(target: WorkbenchTarget): String = buildString {
             append(target.name.removeSuffix(" Codex Workbench"))
             append("\n")
-            append(if (useTailscale) "Tailscale · " else "Funnel · ")
-            append(target.urlFor(selectedMode()))
+            when (selectedConnectionMode) {
+                ConnectionMode.FUNNEL -> append("Funnel · ${target.funnelUrl}")
+                ConnectionMode.TAILSCALE -> append("Tailscale · ${target.tailscaleUrl}")
+                ConnectionMode.QUICK_TUNNEL -> append("Quick Tunnel · 자동 검색 ${target.quickTunnelPath}")
+            }
         }
 
         val modeRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(13), dp(16), dp(13))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
             background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
         }
-        val modeText = simpleText("Tailscale 내부 접속", 14f, COLOR_INK, true)
-        modeRow.addView(modeText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val modeToggle = Switch(this).apply {
-            isChecked = useTailscale
-            showText = false
+        listOf(
+            ConnectionMode.FUNNEL to "Funnel",
+            ConnectionMode.TAILSCALE to "Tailscale",
+            ConnectionMode.QUICK_TUNNEL to "Quick Tunnel",
+        ).forEach { (mode, label) ->
+            val button = simpleText(label, 12.5f, COLOR_INK, true, Gravity.CENTER).apply {
+                isClickable = true
+                isFocusable = true
+                setPadding(dp(6), dp(10), dp(6), dp(10))
+            }
+            modeButtons[mode] = button
+            modeRow.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                if (mode != ConnectionMode.FUNNEL) leftMargin = dp(4)
+            })
         }
-        modeRow.addView(modeToggle)
         panel.addView(modeRow, matchWrap().apply { bottomMargin = dp(6) })
 
         val modeSummary = simpleText(connectionSummary(), 12f, COLOR_MUTED, false).apply {
             setPadding(dp(4), 0, dp(4), 0)
         }
         panel.addView(modeSummary, matchWrap().apply { bottomMargin = dp(14) })
+
+        fun refreshModeButtons() {
+            modeButtons.forEach { (mode, view) ->
+                val selected = mode == selectedConnectionMode
+                view.background = roundedDrawable(
+                    if (selected) COLOR_PRIMARY_SOFT else Color.WHITE,
+                    dp(11).toFloat(),
+                    if (selected) COLOR_PRIMARY else COLOR_BORDER,
+                    if (selected) 2 else 1,
+                )
+                view.setTextColor(if (selected) COLOR_PRIMARY else COLOR_INK)
+            }
+        }
 
         fun refreshCards() {
             modeSummary.text = connectionSummary()
@@ -451,19 +521,38 @@ class MainActivity : Activity() {
             }
         }
 
+        modeButtons.forEach { (mode, view) ->
+            view.setOnClickListener {
+                selectedConnectionMode = mode
+                persistConnectionMode(mode)
+                refreshModeButtons()
+                refreshCards()
+            }
+        }
+
         fun connectToTarget(target: WorkbenchTarget) {
-            val mode = selectedMode()
-            val resolvedUrl = target.urlFor(mode)
-            prefs.edit()
+            val mode = selectedConnectionMode
+            val editor = prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
-                .putString(PREF_SERVER_URL, resolvedUrl)
+                .putString(PREF_CONNECTION_MODE, mode.name)
                 .putBoolean(PREF_USE_TAILSCALE, mode == ConnectionMode.TAILSCALE)
-                .apply()
+            if (mode == ConnectionMode.QUICK_TUNNEL) {
+                editor.remove(PREF_SERVER_URL)
+            } else {
+                editor.putString(PREF_SERVER_URL, target.urlFor(mode))
+            }
+            editor.apply()
+
             suppressNextPauseMonitor = true
             if (target.isCodexWorkbench) {
                 runCatching { requestNotificationPermissionIfNeeded() }
             }
-            runCatching { showWorkbench(target, mode) }
+            if (mode == ConnectionMode.QUICK_TUNNEL) {
+                connectQuickTunnelTarget(target, forceRefresh = false)
+                return
+            }
+            val resolvedUrl = target.urlFor(mode)
+            runCatching { showWorkbench(target, mode, resolvedUrl) }
                 .onFailure {
                     recordCrash(it)
                     showRecoveryScreen("WebView 시작 오류", formatError(it))
@@ -507,13 +596,8 @@ class MainActivity : Activity() {
         WorkbenchCatalog.targets
             .filter { it.isCodexWorkbench }
             .forEach { addTargetCard(it) }
+        refreshModeButtons()
         refreshCards()
-
-        modeToggle.setOnCheckedChangeListener { _, checked ->
-            useTailscale = checked
-            prefs.edit().putBoolean(PREF_USE_TAILSCALE, checked).apply()
-            refreshCards()
-        }
 
         val connect = simpleButton("선택한 서비스 접속", true)
         val settings = simpleButton("앱 설정", false)
@@ -540,14 +624,14 @@ class MainActivity : Activity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode) {
+    private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode, resolvedUrl: String) {
         closeSettingsOverlay()
         destroyWebView()
         root.removeAllViews()
         root.setBackgroundColor(Color.WHITE)
         currentTarget = target
         currentConnectionMode = mode
-        serverBaseUrl = target.urlFor(mode)
+        serverBaseUrl = resolvedUrl
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -562,7 +646,13 @@ class MainActivity : Activity() {
         val title = simpleText(
             buildString {
                 append(target.name.removeSuffix(" Codex Workbench"))
-                append(if (mode == ConnectionMode.TAILSCALE) " · Tailscale" else " · Funnel")
+                append(
+                    when (mode) {
+                        ConnectionMode.FUNNEL -> " · Funnel"
+                        ConnectionMode.TAILSCALE -> " · Tailscale"
+                        ConnectionMode.QUICK_TUNNEL -> " · Quick Tunnel"
+                    },
+                )
             },
             13f,
             COLOR_INK,
@@ -611,6 +701,41 @@ class MainActivity : Activity() {
             setAcceptThirdPartyCookies(browser, false)
         }
 
+        var quickTunnelRetryUsed = false
+        var quickTunnelRecoveryInProgress = false
+
+        fun recoverQuickTunnel(view: WebView?): Boolean {
+            if (mode != ConnectionMode.QUICK_TUNNEL ||
+                quickTunnelRetryUsed ||
+                quickTunnelRecoveryInProgress
+            ) {
+                return false
+            }
+            quickTunnelRetryUsed = true
+            quickTunnelRecoveryInProgress = true
+            QuickTunnelDiscoveryClient.invalidate()
+            Thread({
+                val result = QuickTunnelDiscoveryClient.resolve(forceRefresh = true)
+                val refreshedUrl = result.rootUrl?.let { target.quickTunnelUrl(it) }
+                runOnUiThread {
+                    quickTunnelRecoveryInProgress = false
+                    if (isFinishing || isDestroyed || webView !== view) return@runOnUiThread
+                    if (refreshedUrl.isNullOrBlank()) {
+                        serverBaseUrl = ""
+                        Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
+                        showConnectionScreen(target.id)
+                        return@runOnUiThread
+                    }
+                    serverBaseUrl = refreshedUrl
+                    view?.loadUrl(refreshedUrl)
+                }
+            }, "quick-tunnel-recovery").apply {
+                isDaemon = true
+                start()
+            }
+            return true
+        }
+
         browser.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
@@ -625,6 +750,12 @@ class MainActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                if (mode == ConnectionMode.QUICK_TUNNEL && !quickTunnelRecoveryInProgress) {
+                    val loadedUri = runCatching { Uri.parse(url.orEmpty()) }.getOrNull()
+                    if (loadedUri != null && isSameServerOrigin(loadedUri)) {
+                        quickTunnelRetryUsed = false
+                    }
+                }
                 if (target.isCodexWorkbench) {
                     runCatching { removeDuplicatedPromptSafeArea(view) }
                     runCatching { enableWorkModeByDefault(view) }
@@ -633,14 +764,37 @@ class MainActivity : Activity() {
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
-                if (request?.isForMainFrame == true) {
-                    val message = if (currentConnectionMode == ConnectionMode.TAILSCALE) {
+                if (request?.isForMainFrame != true) return
+                if (mode == ConnectionMode.QUICK_TUNNEL &&
+                    error != null &&
+                    QuickTunnelRetryPolicy.shouldRediscoverForWebViewError(error.errorCode) &&
+                    recoverQuickTunnel(view)
+                ) {
+                    return
+                }
+                val message = when (currentConnectionMode) {
+                    ConnectionMode.TAILSCALE ->
                         "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
-                    } else {
+                    ConnectionMode.QUICK_TUNNEL ->
+                        "Quick Tunnel 연결 오류: ${error?.description ?: "unknown error"}"
+                    ConnectionMode.FUNNEL -> {
                         val label = if (target.isCodexWorkbench) "Workbench" else "대시보드"
                         "$label 연결 오류: ${error?.description ?: "unknown error"}"
                     }
-                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                }
+                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?,
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (request?.isForMainFrame != true || mode != ConnectionMode.QUICK_TUNNEL) return
+                val statusCode = errorResponse?.statusCode ?: return
+                if (QuickTunnelRetryPolicy.shouldRediscoverForHttpStatus(statusCode)) {
+                    recoverQuickTunnel(view)
                 }
             }
 

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.webkit.CookieManager
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -285,6 +286,9 @@ class TaskNotificationService : Service() {
         }
         if (refreshed.isNullOrBlank()) return false
         baseUrl = refreshed
+        cookie = runCatching { CookieManager.getInstance().getCookie(refreshed) }
+            .getOrNull()
+            .orEmpty()
         return true
     }
 

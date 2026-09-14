@@ -33,7 +33,6 @@ from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
 from .services.git_ops import get_current_branch_name
 from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
-from .services.quick_tunnel_discovery import discover_quick_tunnel_for_client
 
 
 def _get_allowed_origins():
@@ -171,7 +170,7 @@ def create_codex_app():
             server_directory_path=runtime_context['server_directory_path'],
             tmp_directory_path=runtime_context['tmp_directory_path'],
             workspace_directory_name=runtime_context['workspace_directory_name'],
-            workspace_directory_path=runtime_context['workspace_directory_path'],
+            workspace_directory_path=str(workspace_directory),
             shared_knowledge_directory_path=runtime_context['shared_knowledge_directory_path'],
             internal_multiuser_mode=is_internal_multiuser_mode(),
             current_internal_user=(
@@ -194,13 +193,6 @@ def create_codex_app():
             'feature_flags': runtime_context['feature_flags'],
             'security_policy': runtime_context['security_policy'],
         })
-
-    @app.route('/api/android/quick-tunnel')
-    def android_quick_tunnel_discovery():
-        payload, status_code = discover_quick_tunnel_for_client(
-            force_refresh=request.args.get('refresh') == '1'
-        )
-        return jsonify(payload), status_code
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])
     def codex_preflight(_):

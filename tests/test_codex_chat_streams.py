@@ -856,24 +856,65 @@ def test_account_usage_auto_refresh_runs_on_30_minute_kst_slots():
 
 
 def test_usage_keepalive_cycle_targets_use_only_five_hour_zero_usage_slots():
-    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    now = datetime(2026, 8, 4, 2, 30, tzinfo=codex_chat.KST)
     targets = codex_chat._usage_keepalive_cycle_targets({
-        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T17:00:00+09:00'},
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T07:30:00+09:00'},
         'weekly': {'used_percent': 0, 'resets_at': '2026-08-10T00:00:00+09:00'},
     }, now)
-    assert targets == {'five_hour': 'five_hour:zero-usage-slot:99211'}
+    assert targets == {'five_hour': 'five_hour:dawn-alignment:2026-08-04'}
     assert codex_chat._usage_keepalive_cycle_targets({
         'weekly': {'used_percent': 1, 'resets_at': '2026-08-10T00:00:00+09:00'},
     }, now) == {}
 
 
 def test_usage_keepalive_ignores_provisional_future_reset_timestamp():
-    now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
+    now = datetime(2026, 8, 4, 2, 30, tzinfo=codex_chat.KST)
     targets = codex_chat._usage_keepalive_cycle_targets({
-        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
-        'weekly': {'used_percent': 0, 'resets_at': '2026-08-04T12:31:00+09:00'},
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T02:31:00+09:00'},
+        'weekly': {'used_percent': 0, 'resets_at': '2026-08-04T02:31:00+09:00'},
     }, now)
-    assert targets == {'five_hour': 'five_hour:zero-usage-slot:99211'}
+    assert targets == {'five_hour': 'five_hour:dawn-alignment:2026-08-04'}
+
+
+def test_usage_keepalive_uses_dawn_alignment_then_recovers_missed_days_at_next_zero_window():
+    zero_usage = {'five_hour': {'used_percent': 0}}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        zero_usage, datetime(2026, 8, 4, 2, 39, 59, tzinfo=codex_chat.KST)
+    ) == {'five_hour': 'five_hour:dawn-alignment:2026-08-04'}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        zero_usage, datetime(2026, 8, 4, 2, 40, tzinfo=codex_chat.KST)
+    ) == {'five_hour': 'five_hour:fallback:2026-08-04T02:00:00+0900'}
+    assert codex_chat._usage_keepalive_cycle_targets(
+        {'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T22:30:00+09:00'}},
+        datetime(2026, 8, 4, 17, 30, tzinfo=codex_chat.KST)
+    ) == {'five_hour': 'five_hour:fallback:2026-08-04T22:30:00+09:00'}
+
+
+def test_usage_keepalive_fallback_waits_for_today_dawn_probe_to_fail():
+    now = datetime(2026, 8, 4, 7, 30, tzinfo=codex_chat.KST)
+    snapshot = {
+        'five_hour': {'used_percent': 0, 'resets_at': '2026-08-04T12:30:00+09:00'},
+        'usage_keepalive': {
+            'last_attempt_at': '2026-08-04T02:30:00+09:00',
+            'automatic_cycle_targets': {'five_hour': 'five_hour:dawn-alignment:2026-08-04'},
+            'verification_status': 'verified',
+            'alignment_status': 'aligned',
+        },
+    }
+    assert codex_chat._usage_keepalive_cycle_targets(snapshot, now) == {}
+    snapshot['usage_keepalive']['alignment_status'] = 'misaligned'
+    assert codex_chat._usage_keepalive_cycle_targets(snapshot, now) == {
+        'five_hour': 'five_hour:fallback:2026-08-04T12:30:00+09:00'
+    }
+
+
+def test_usage_keepalive_reset_alignment_checks_the_1730_boundary_phase():
+    aligned = codex_chat._usage_keepalive_reset_alignment('2026-08-04T17:34:00+09:00')
+    assert aligned['status'] == 'aligned'
+    assert aligned['target_boundary_kst'] == '17:30'
+    assert codex_chat._usage_keepalive_reset_alignment(
+        '2026-08-04T17:41:00+09:00'
+    )['status'] == 'misaligned'
 
 
 def test_usage_keepalive_followup_refresh_and_verification_state_machine():
@@ -943,20 +984,24 @@ def test_usage_keepalive_global_claim_blocks_other_workspaces_and_allows_next_wi
         codex_chat, '_usage_keepalive_coordination_path', lambda context: coordination_path)
     context = {'account': {'id': 'workspace-a'}, 'codex_home': tmp_path / 'codex-home'}
     now = datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
-    first_targets = {'five_hour': 'five_hour:fallback:1234'}
+    first_targets = {'five_hour': 'five_hour:dawn-alignment:2026-08-04'}
 
     assert codex_chat._usage_keepalive_global_claim(context, first_targets, now) == (True, '')
     # Same cycle in another Workbench copy cannot create another request.
     assert codex_chat._usage_keepalive_global_claim(
         {**context, 'account': {'id': 'workspace-b'}}, first_targets, now
     ) == (False, 'account_cycle_already_submitted')
-    # A moving provisional reset value is also blocked for the full 5h window.
+    # A fallback can immediately replace a missed dawn alignment, but repeat
+    # fallback probes retain a five-hour cross-workbench cooldown.
     assert codex_chat._usage_keepalive_global_claim(
         context, {'five_hour': 'five_hour:fallback:1235'}, now + timedelta(minutes=15)
-    ) == (False, 'account_window_cooldown')
-    # The next genuine 5h window is eligible for exactly one new probe.
+    ) == (True, '')
     assert codex_chat._usage_keepalive_global_claim(
-        context, {'five_hour': 'five_hour:fallback:1235'}, now + timedelta(hours=5)
+        context, {'five_hour': 'five_hour:fallback:1236'}, now + timedelta(hours=1)
+    ) == (False, 'account_window_cooldown')
+    # The next dawn-alignment day is eligible for exactly one new probe.
+    assert codex_chat._usage_keepalive_global_claim(
+        context, {'five_hour': 'five_hour:dawn-alignment:2026-08-05'}, now + timedelta(days=1, minutes=15)
     ) == (True, '')
 
 
@@ -985,7 +1030,10 @@ def test_usage_keepalive_reuses_locked_snapshot_for_stream_preflight(monkeypatch
     monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'keepalive-session'})
     monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **kwargs: captured.update(kwargs) or {'id': 'keepalive-stream'})
 
-    result = codex_chat._submit_usage_keepalive_locked(context, snapshot, automatic=True)
+    result = codex_chat._submit_usage_keepalive_locked(
+        context, snapshot, automatic=True,
+        now=datetime(2026, 8, 4, 2, 30, tzinfo=codex_chat.KST),
+    )
 
     assert result['submitted'] is True
     assert captured['preflight_usage_snapshot'] is snapshot

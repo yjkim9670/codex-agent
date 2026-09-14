@@ -8079,10 +8079,20 @@ def _account_usage_refresh_is_due(snapshot, now=None):
 _USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
 _USAGE_KEEPALIVE_REASONING_EFFORT = 'medium'
 _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
+# Automatic activation is deliberately confined to the quiet KST dawn slot.
+# Starting at 02:30 yields the five-hour boundaries 07:30, 12:30, 17:30 and
+# 22:30, splitting the observed afternoon peak at 17:30.  The preceding
+# 01:30–02:30 period is consequently an implicit no-submit buffer.
+_USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST = 2
+_USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST = 30
+_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS = 10 * 60
+_USAGE_KEEPALIVE_ALIGNMENT_TOLERANCE_SECONDS = 10 * 60
+_USAGE_KEEPALIVE_ALIGNMENT_TARGET_KST = '17:30'
 # A keepalive is an activation probe, not a retry mechanism.  Retrying a
 # provisional rate-limit response consumed a large amount of quota without
 # making the server's reset timestamp any more authoritative.
-_USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN = timedelta(hours=5)
+_USAGE_KEEPALIVE_GLOBAL_DAILY_COOLDOWN = timedelta(days=1)
+_USAGE_KEEPALIVE_GLOBAL_FALLBACK_COOLDOWN = timedelta(hours=5)
 _USAGE_KEEPALIVE_PROMPT = (
     'Perform a read-only workspace health review.\n\n'
     '1. Inspect the top-level project structure and read up to three representative '
@@ -8097,22 +8107,74 @@ _USAGE_KEEPALIVE_PROMPT = (
 )
 
 
+def _usage_keepalive_alignment_slot(now=None):
+    """Return today's 02:30 KST activation slot while its 10-minute window is open."""
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    slot = current.replace(
+        hour=_USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST,
+        minute=_USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST,
+        second=0,
+        microsecond=0,
+    )
+    if slot <= current < slot + timedelta(seconds=_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS):
+        return slot
+    return None
+
+
 def _usage_keepalive_cycle_targets(snapshot, now=None):
-    """Return the five-hour zero-usage window that may need activation.
+    """Return an automatic activation target for a zero-use five-hour limit.
 
     ``resets_at`` is deliberately not used to identify a submission cycle.
     Before the service has activated a window it can expose a plausible,
     future-looking provisional value, so it is not reliable enough to drive a
-    token-consuming request.  A bounded five-hour observation slot plus the
-    account-wide cooldown guarantees at most one automatic request per slot.
+    token-consuming request.  The 02:30–02:40 KST slot is reserved for the
+    preferred 17:30 phase.  If that opportunity is missed because the limit
+    was not yet at 0%, fall back for the remainder of the day: submit as soon
+    as an observed zero-use window appears, then use its reported reset time
+    as the next five-hour cycle key.  This restores capacity promptly without
+    letting repeated polls submit duplicate work for one observed window.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    alignment_slot = _usage_keepalive_alignment_slot(current)
     targets = {}
     limit = snapshot.get('five_hour') if isinstance(snapshot, dict) else None
-    if isinstance(limit, dict) and _normalize_used_percent(limit.get('used_percent')) == 0:
-        epoch_slot = int(current.timestamp() // (5 * 60 * 60))
-        targets['five_hour'] = 'five_hour:zero-usage-slot:%s' % epoch_slot
+    if not isinstance(limit, dict) or _normalize_used_percent(limit.get('used_percent')) != 0:
+        return targets
+    if alignment_slot is not None:
+        targets['five_hour'] = 'five_hour:dawn-alignment:%s' % alignment_slot.date().isoformat()
+        return targets
+
+    # Do not activate early: 01:30–02:30 remains the quiet alignment buffer.
+    preferred_slot = current.replace(
+        hour=_USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST,
+        minute=_USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST,
+        second=0,
+        microsecond=0,
+    )
+    if current < preferred_slot + timedelta(seconds=_USAGE_KEEPALIVE_ALIGNMENT_WINDOW_SECONDS):
+        return targets
+    keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
+    keepalive = keepalive if isinstance(keepalive, dict) else {}
+    attempted_at = parse_timestamp(keepalive.get('last_attempt_at'))
+    attempted_today = bool(attempted_at and attempted_at.astimezone(KST).date() == current.date())
+    previous_targets = keepalive.get('automatic_cycle_targets')
+    previous_targets = previous_targets if isinstance(previous_targets, dict) else {}
+    has_today_dawn_probe = attempted_today and str(previous_targets.get('five_hour') or '').startswith(
+        'five_hour:dawn-alignment:'
+    )
+    # A successful dawn probe already established the preferred cadence.  A
+    # still-running or still-verifying probe is also given a chance to settle;
+    # only an explicit failure/unverified result can move it to fallback.
+    if has_today_dawn_probe and (
+        keepalive.get('alignment_status') == 'aligned'
+        or keepalive.get('verification_status') in {'submitted', 'pending', 'stability_pending'}
+    ):
+        return targets
+    reset_at = parse_timestamp(limit.get('resets_at'))
+    cycle_key = normalize_timestamp(reset_at) if reset_at else current.strftime('%Y-%m-%dT%H:00:00%z')
+    targets['five_hour'] = 'five_hour:fallback:%s' % cycle_key
     return targets
 
 
@@ -8130,6 +8192,40 @@ def _usage_keepalive_followup_is_due(snapshot, now=None):
     # Follow-ups are read-only stability checks.  In particular, a failed
     # check must never make the scheduler submit another model request.
     return bool(due_at and due_at <= current)
+
+
+def _usage_keepalive_reset_alignment(reset_at):
+    """Describe whether a stable reset preserves the 17:30 KST boundary.
+
+    A 02:30 activation has five-hour reset boundaries at hours congruent to
+    02:30 modulo five hours, including 17:30.  The service owns the actual
+    reset timestamp, so this is a diagnostic check rather than a retry trigger.
+    """
+    reset = parse_timestamp(reset_at)
+    if reset is None:
+        return {'status': 'unknown'}
+    reset = reset.astimezone(KST) if reset.tzinfo else reset.replace(tzinfo=KST)
+    period_seconds = 5 * 60 * 60
+    # This is a daily wall-clock cadence, not a duration measured from a
+    # historical epoch: 24 hours is not divisible by five.  Compare the KST
+    # time-of-day phase so every date retains 02:30/07:30/.../17:30.
+    seconds_since_midnight = (
+        reset.hour * 60 * 60 + reset.minute * 60 + reset.second
+        + reset.microsecond / 1_000_000
+    )
+    phase_seconds = (seconds_since_midnight - (
+        _USAGE_KEEPALIVE_ALIGNMENT_HOUR_KST * 60 * 60
+        + _USAGE_KEEPALIVE_ALIGNMENT_MINUTE_KST * 60
+    )) % period_seconds
+    deviation_seconds = min(phase_seconds, period_seconds - phase_seconds)
+    aligned = deviation_seconds <= _USAGE_KEEPALIVE_ALIGNMENT_TOLERANCE_SECONDS
+    return {
+        'status': 'aligned' if aligned else 'misaligned',
+        'target_boundary_kst': _USAGE_KEEPALIVE_ALIGNMENT_TARGET_KST,
+        'tolerance_seconds': _USAGE_KEEPALIVE_ALIGNMENT_TOLERANCE_SECONDS,
+        'observed_reset_at': normalize_timestamp(reset),
+        'phase_deviation_seconds': int(round(deviation_seconds)),
+    }
 
 
 def _usage_keepalive_coordination_path(context):
@@ -8154,9 +8250,10 @@ def _usage_keepalive_coordination_path(context):
 def _usage_keepalive_global_claim(context, cycle_targets, now=None):
     """Atomically reserve one automatic submission across all workspaces.
 
-    A moving provisional reset value is never used here.  The five-hour
-    zero-usage slot is guarded by a window-sized cooldown, so another
-    Workbench copy cannot turn polling into a submission storm.
+    The dawn-alignment target is guarded for a full day.  A missed alignment
+    instead uses reset-time cycle keys, with a five-hour guard: this permits a
+    fast first recovery and later genuine zero-use windows, but still makes
+    all Workbench copies share one submission per observed window.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     path = _usage_keepalive_coordination_path(context)
@@ -8172,7 +8269,13 @@ def _usage_keepalive_global_claim(context, cycle_targets, now=None):
         for name, target in cycle_targets.items():
             prior = windows.get(name) if isinstance(windows.get(name), dict) else {}
             prior_at = parse_timestamp(prior.get('submitted_at'))
-            cooldown = _USAGE_KEEPALIVE_GLOBAL_FIVE_HOUR_COOLDOWN
+            fallback_target = str(target).startswith('five_hour:fallback:')
+            prior_fallback = str(prior.get('target') or '').startswith('five_hour:fallback:')
+            cooldown = (
+                _USAGE_KEEPALIVE_GLOBAL_FALLBACK_COOLDOWN
+                if fallback_target and prior_fallback
+                else timedelta(0) if fallback_target else _USAGE_KEEPALIVE_GLOBAL_DAILY_COOLDOWN
+            )
             if prior.get('target') == target:
                 continue
             changed_windows.append((name, target))
@@ -8207,18 +8310,23 @@ def _account_has_active_codex_stream(account_id):
     return False
 
 
-def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
+def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None):
     """Submit one isolated Terra/medium request while account snapshot lock is held."""
     account_id = context['account']['id']
     previous_keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
     previous_keepalive = previous_keepalive if isinstance(previous_keepalive, dict) else {}
-    attempted_at = normalize_timestamp(None)
-    cycle_targets = _usage_keepalive_cycle_targets(snapshot)
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    attempted_at = normalize_timestamp(current)
+    cycle_targets = _usage_keepalive_cycle_targets(snapshot, current)
     if automatic:
         previous_targets = previous_keepalive.get('automatic_cycle_targets')
         previous_targets = previous_targets if isinstance(previous_targets, dict) else {}
         if not cycle_targets:
-            return {'submitted': False, 'reason': 'no_zero_usage_window'}
+            reason = (
+                'no_zero_usage_window'
+            )
+            return {'submitted': False, 'reason': reason}
         same_targets = previous_targets == cycle_targets
         if same_targets:
             return {'submitted': False, 'reason': 'cycle_already_submitted'}
@@ -8229,7 +8337,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False):
     if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(context['codex_home']):
         return {'submitted': False, 'reason': 'account_login_required'}
     if automatic:
-        claimed, claim_reason = _usage_keepalive_global_claim(context, cycle_targets)
+        claimed, claim_reason = _usage_keepalive_global_claim(context, cycle_targets, current)
         if not claimed:
             return {'submitted': False, 'reason': claim_reason}
 
@@ -8352,6 +8460,10 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
         keepalive['verification_due_at'] = None
         keepalive['next_retry_at'] = None
         keepalive['last_verified_at'] = normalize_timestamp(current)
+        five_hour_reset = candidates.get('five_hour')
+        alignment = _usage_keepalive_reset_alignment(five_hour_reset)
+        keepalive['alignment'] = alignment
+        keepalive['alignment_status'] = alignment['status']
         event = 'verified_stable_reset'
     else:
         # A changed candidate is still provisional.  Preserve that outcome for
@@ -8365,7 +8477,8 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
     history.append({'at': normalize_timestamp(current), 'event': event,
                     'mode': 'automatic', 'targets': targets,
                     'candidate_resets': candidates,
-                    'previous_candidate_resets': previous_candidates})
+                    'previous_candidate_resets': previous_candidates,
+                    'alignment': keepalive.get('alignment') if event == 'verified_stable_reset' else None})
     keepalive['history'] = history
     snapshot['usage_keepalive'] = keepalive
     return True

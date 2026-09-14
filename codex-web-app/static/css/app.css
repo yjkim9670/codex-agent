@@ -995,13 +995,15 @@ textarea {
         font-weight: 800;
     }
 
-    .chat-compose-tool-plan.is-active {
+    /* Match the regular Plan control state.  Include .btn so this wins over
+     * the later generic .btn.ghost reset in the stylesheet. */
+    .btn.chat-compose-tool-plan.is-active {
         background-color: var(--accent);
         border-color: var(--accent-dark);
         color: #fff;
     }
 
-    .chat-compose-tool-plan.is-plan-and-execute {
+    .btn.chat-compose-tool-plan.is-plan-and-execute {
         background-color: #23704f;
         border-color: #175137;
         color: #fff;

@@ -4,32 +4,48 @@ Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin clie
 
 ## Workbench connection modes
 
-앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`과 `Tailscale 내부 접속` 두 가지이며, 기본값은 기존과 동일한 Funnel입니다.
+앱 시작 후 5개 Codex Workbench 또는 `Mac Process Dashboard`를 선택합니다. 기본 선택은 Common TG입니다. 접속 방식은 `Funnel`, `Tailscale`, `Quick Tunnel` 세 가지이며, 기본값은 기존과 동일한 Funnel입니다.
 
-| Service | Funnel | Tailscale direct |
-|---|---|---|
-| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` |
-| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` |
-| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` |
-| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` |
-| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` |
-| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` |
+| Service | Funnel | Tailscale direct | Quick Tunnel path |
+|---|---|---|---|
+| Common TG Codex Workbench | `https://dinya.wind-mintaka.ts.net/tg/` | `http://dinya.wind-mintaka.ts.net:3000/` | `/tg/` |
+| Finance Codex Workbench | `https://dinya.wind-mintaka.ts.net/finance-codex/` | `http://dinya.wind-mintaka.ts.net:3001/` | `/finance-codex/` |
+| Local Codex Workbench | `https://dinya.wind-mintaka.ts.net/local/` | `http://dinya.wind-mintaka.ts.net:3002/` | `/local/` |
+| Constraint Codex Workbench | `https://dinya.wind-mintaka.ts.net/constraint/` | `http://dinya.wind-mintaka.ts.net:3003/` | `/constraint/` |
+| Dev Codex Workbench | `https://dinya.wind-mintaka.ts.net/dev/` | `http://dinya.wind-mintaka.ts.net:3004/` | `/dev/` |
+| Mac Process Dashboard | `https://dinya.wind-mintaka.ts.net/` | `http://dinya.wind-mintaka.ts.net:18000/` | `/` |
 
-Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. 선택한 접속 방식은 SharedPreferences에 저장되고 다음 실행에도 유지됩니다.
+Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기가 tailnet에 연결된 상태에서 MagicDNS host와 각 서비스 포트로 직접 접근합니다. Quick Tunnel 모드는 Cloudflare Quick Tunnel의 현재 hostname을 접속 시 자동으로 조회한 뒤 위의 안전한 상대경로를 결합합니다. 선택한 접속 방식은 SharedPreferences에 저장되지만, 재시작 시 변경될 수 있는 Quick Tunnel hostname 자체는 저장하지 않습니다.
 
-선택된 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager에 동일하게 사용합니다. Codex Workbench에서는 background completion monitor API에도 같은 URL을 사용합니다. 따라서 Funnel과 Tailscale 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않고 Tailscale 연결 상태를 확인하거나 Funnel 모드로 전환하라는 안내를 표시합니다.
+선택된 실제 URL은 WebView뿐 아니라 same-origin 판정, 인증 cookie, DownloadManager 및 background completion monitor에 동일하게 사용합니다. 따라서 Funnel, Tailscale, Quick Tunnel 주소가 한 세션에서 섞이지 않습니다. Tailscale direct 연결이 실패하면 앱은 자동으로 Funnel로 전환하지 않습니다.
+
+### Quick Tunnel discovery
+
+Android APK에는 Proc Manager discovery Bearer token을 포함하지 않습니다. Android는 고정 Funnel 주소의 Workbench BFF만 호출하고, Workbench 서버가 서버 환경변수에 저장된 Secret으로 Proc Manager discovery API를 호출합니다.
+
+- Android BFF: `https://dinya.wind-mintaka.ts.net/tg/api/android/quick-tunnel`
+- Proc Manager discovery: `${PROC_MANAGER_DISCOVERY_BASE_URL}/__funnel_auth/api/quick-tunnel`
+- Server environment:
+  - `PROC_MANAGER_DISCOVERY_BASE_URL`
+  - `PROC_MANAGER_QUICK_TUNNEL_API_TOKEN`
+- discovery 결과는 서버와 Android에서 45초 동안만 메모리 캐시합니다.
+- `available=true`, `status=online`, `https://*.trycloudflare.com` root URL을 모두 만족할 때만 사용합니다.
+- offline/non-online이면 이전 URL을 버리고 `Quick Tunnel이 현재 준비되지 않았습니다` 상태를 반환합니다.
+- upstream HTTP 401은 discovery Secret 설정 오류로 처리하며 자동 재시도하지 않습니다.
+- upstream HTTP 503은 discovery 서비스/설정 문제로 처리합니다.
+- Quick Tunnel target이 네트워크/DNS 오류 또는 HTTP 502/503/504로 실패하면 캐시를 즉시 무효화하고 discovery를 한 번 강제 갱신한 뒤 target 요청을 한 번만 재시도합니다.
+- discovery Bearer token은 Workbench 접근 인증으로 사용하지 않으며 URL query parameter, Android 설정, JavaScript, 로그에 전달하지 않습니다.
+- BFF 요청에 필요한 Funnel 로그인 세션은 Android WebView의 기존 Funnel cookie를 같은 Funnel origin에만 재사용합니다.
 
 `Mac Process Dashboard`는 일반 관리 페이지로 취급하며 Codex 전용 `/api/codex/streams` polling, 세션 완료 알림, Work Mode 활성화, prompt safe-area CSS injection 대상에서 제외합니다.
-
-앱은 OpenAI/GitHub/Workbench 비밀키를 APK에 포함하지 않습니다.
 
 ## Mobile defaults
 
 - 상태바, display cutout, navigation/gesture 영역에 Android `WindowInsets` 기반 safe area를 적용합니다.
-- WebView text zoom 기본값은 85%입니다.
+- WebView text zoom 기본값은 100%입니다.
 - 설정에서 text zoom을 60~125%, 5% 단위로 변경할 수 있습니다.
 - text zoom 설정은 저장되며 현재 열린 WebView에도 즉시 적용됩니다.
-- 설정에서 `85%로 초기화`할 수 있습니다.
+- 설정에서 `100%로 초기화`할 수 있습니다.
 - Codex Workbench 페이지 로딩 후 `codex-work-mode-toggle`을 찾아 작업모드를 기본으로 활성화합니다.
 - 파일 선택은 Android document picker를 사용합니다.
 - 다운로드는 Android DownloadManager를 사용합니다.
@@ -40,9 +56,9 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 
 네이티브 UI는 별도 font binary 없이 Android `sans-serif` 계열을 사용하고, 밝은 canvas / rounded card / primary action 구조를 사용합니다. 앱 이름은 `코덱스 워크벤치`입니다.
 
-서버 선택 화면에는 `Tailscale 내부 접속` 토글이 있으며, 각 서비스 card에 현재 선택된 방식의 실제 URL을 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 `Funnel` 또는 `Tailscale` 모드를 표시합니다.
+서버 선택 화면에는 Funnel/Tailscale/Quick Tunnel 세 가지 mode button이 있으며, 각 서비스 card에 고정 URL 또는 Quick Tunnel에서 사용할 안전한 상대경로를 표시합니다. Workbench 또는 Dashboard toolbar에도 현재 연결 모드를 표시합니다.
 
-## v1.1.6 crash-safe recovery mode
+## Crash-safe recovery mode
 
 일부 Galaxy 기기에서 앱 실행 직후 Activity가 종료되는 문제를 ADB 없이도 확인할 수 있도록 시작 구조를 단순화했습니다.
 
@@ -64,14 +80,15 @@ Funnel은 외부에서 접근할 수 있고, Tailscale 모드는 Android 기기�
 1. 사용자가 Workbench에서 작업을 시작합니다.
 2. 앱이 실제로 백그라운드로 전환될 때 현재 WebView 인증 쿠키를 메모리로만 foreground service에 전달합니다.
 3. service는 현재 선택한 접속 방식의 `/api/codex/streams?include_done=1`을 5초 간격으로 확인합니다.
-4. 실행 중이던 stream과 pending queue가 모두 끝나면 세션 제목을 포함한 `작업 완료` Android 알림을 시도합니다.
-5. 완료되거나 실행 중인 작업이 확인되지 않으면 service는 자동 종료합니다.
+4. Quick Tunnel mode에서 target hostname이 실패하면 discovery를 한 번 강제 갱신하고 새 hostname으로 한 번 재시도합니다.
+5. 실행 중이던 stream과 pending queue가 모두 끝나면 세션 제목을 포함한 `작업 완료` Android 알림을 시도합니다.
+6. 완료되거나 실행 중인 작업이 확인되지 않으면 service는 자동 종료합니다.
 
 foreground monitor 알림은 별도 minimum-importance silent channel을 사용하고 기존 `작업 완료를 확인하는 중` 문구는 표시하지 않습니다. 인증 쿠키는 앱 설정이나 파일에 별도로 저장하지 않습니다. Android 13 이상에서는 알림 권한이 필요합니다.
 
 ## Build
 
-현재 Android client source fallback 버전은 `1.1.10` (`versionCode 12`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
+현재 Android client source fallback 버전은 `1.1.15` (`versionCode 17`)입니다. GitHub Actions에서는 run number를 versionCode로 사용해 자동 증가시킵니다.
 
 - Android Gradle Plugin 8.11.1
 - Kotlin 2.1.20
@@ -81,7 +98,7 @@ foreground monitor 알림은 별도 minimum-importance silent channel을 사용�
 - minSdk 26
 
 ```bash
-gradle -p android :app:assembleDebug
+gradle -p android :app:testDebugUnitTest :app:assembleDebug
 ```
 
 APK 출력 위치:
@@ -90,7 +107,7 @@ APK 출력 위치:
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-GitHub Actions의 `Android APK` workflow도 동일한 debug APK를 artifact로 업로드합니다.
+GitHub Actions의 `Android APK` workflow는 unit test를 먼저 실행한 뒤 debug APK를 artifact로 업로드합니다.
 
 ## Stable in-place updates
 
@@ -107,7 +124,8 @@ GitHub Actions의 `Android APK` workflow도 동일한 debug APK를 artifact로 �
 
 ## Security
 
-- APK에 OpenAI/GitHub/Workbench credentials를 넣지 않습니다.
+- APK에 OpenAI/GitHub/Workbench/Proc Manager discovery credentials를 넣지 않습니다.
+- Proc Manager Quick Tunnel Bearer token은 Workbench 서버 환경변수에만 둡니다.
 - WebView 인증 쿠키는 Android WebView가 관리합니다.
 - background completion monitor에 넘기는 쿠키는 메모리로만 전달하며 별도 파일에 저장하지 않습니다.
 - SSL 오류 우회 및 자동 HTTP Basic credential 제출을 사용하지 않습니다.

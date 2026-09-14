@@ -48,6 +48,7 @@ class MainActivity : Activity() {
         private const val PREF_WORKBENCH_ID = "workbench_id"
         private const val PREF_USE_TAILSCALE = "use_tailscale"
         private const val PREF_CONNECTION_MODE = "connection_mode"
+        private const val PREF_QUICK_TUNNEL_ROOT = "quick_tunnel_root"
         private const val PREF_WEB_TEXT_ZOOM = "web_text_zoom"
         private const val PREF_NOTIFICATIONS_ENABLED = "notifications_enabled"
         private const val PREF_LAST_CRASH = "last_crash"
@@ -391,6 +392,35 @@ class MainActivity : Activity() {
             .apply()
     }
 
+    private fun quickTunnelRoot(): String =
+        WorkbenchCatalog.normalizeQuickTunnelRoot(prefs.getString(PREF_QUICK_TUNNEL_ROOT, null))
+            ?: WorkbenchCatalog.QUICK_TUNNEL_ROOT
+
+    private fun resolvedTargetUrl(target: WorkbenchTarget, mode: ConnectionMode): String =
+        if (mode == ConnectionMode.QUICK_TUNNEL) {
+            target.quickTunnelUrl(quickTunnelRoot())
+        } else {
+            target.urlFor(mode)
+        }
+
+    private fun persistQuickTunnelRoot(normalizedRoot: String?): String {
+        val effectiveRoot = normalizedRoot ?: WorkbenchCatalog.QUICK_TUNNEL_ROOT
+        val editor = prefs.edit()
+        if (normalizedRoot == null) {
+            editor.remove(PREF_QUICK_TUNNEL_ROOT)
+        } else {
+            editor.putString(PREF_QUICK_TUNNEL_ROOT, effectiveRoot)
+        }
+        if (storedConnectionMode() == ConnectionMode.QUICK_TUNNEL) {
+            val savedTarget = WorkbenchCatalog.byId(
+                prefs.getString(PREF_WORKBENCH_ID, null) ?: WorkbenchCatalog.DEFAULT_ID,
+            )
+            editor.putString(PREF_SERVER_URL, savedTarget.quickTunnelUrl(effectiveRoot))
+        }
+        editor.apply()
+        return effectiveRoot
+    }
+
     private fun showConnectionScreen(initialWorkbenchId: String) {
         splashTransition?.let(root::removeCallbacks)
         splashTransition = null
@@ -426,7 +456,7 @@ class MainActivity : Activity() {
             ConnectionMode.TAILSCALE ->
                 "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
             ConnectionMode.QUICK_TUNNEL ->
-                "Cloudflare Quick Tunnel · ${WorkbenchCatalog.QUICK_TUNNEL_ROOT}"
+                "Cloudflare Quick Tunnel · ${quickTunnelRoot()}"
         }
 
         fun cardLabel(target: WorkbenchTarget): String = buildString {
@@ -436,7 +466,7 @@ class MainActivity : Activity() {
                 ConnectionMode.FUNNEL -> append("Funnel · ${target.funnelUrl}")
                 ConnectionMode.TAILSCALE -> append("Tailscale · ${target.tailscaleUrl}")
                 ConnectionMode.QUICK_TUNNEL ->
-                    append("Quick Tunnel · ${target.urlFor(ConnectionMode.QUICK_TUNNEL)}")
+                    append("Quick Tunnel · ${target.quickTunnelUrl(quickTunnelRoot())}")
             }
         }
 
@@ -507,7 +537,7 @@ class MainActivity : Activity() {
 
         fun connectToTarget(target: WorkbenchTarget) {
             val mode = selectedConnectionMode
-            val resolvedUrl = target.urlFor(mode)
+            val resolvedUrl = resolvedTargetUrl(target, mode)
             prefs.edit()
                 .putString(PREF_WORKBENCH_ID, target.id)
                 .putString(PREF_CONNECTION_MODE, mode.name)
@@ -911,6 +941,34 @@ class MainActivity : Activity() {
         displayCard.addView(resetScale, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
         panel.addView(displayCard, matchWrap().apply { bottomMargin = dp(12) })
 
+        val quickTunnelCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(15), dp(16), dp(15))
+            background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
+        }
+        quickTunnelCard.addView(simpleText("Quick Tunnel", 14f, COLOR_INK, true), matchWrap().apply {
+            bottomMargin = dp(5)
+        })
+        val quickTunnelValue = simpleText(quickTunnelRoot(), 12.5f, COLOR_INK, false).apply {
+            setTextIsSelectable(true)
+        }
+        quickTunnelCard.addView(quickTunnelValue, matchWrap().apply { bottomMargin = dp(5) })
+        quickTunnelCard.addView(
+            simpleText(
+                "Quick Tunnel 주소가 바뀌면 Root 주소만 변경하세요. /tg/, /dev/ 등의 경로는 자동으로 붙습니다.",
+                12f,
+                COLOR_MUTED,
+                false,
+            ),
+            matchWrap().apply { bottomMargin = dp(9) },
+        )
+        val changeQuickTunnel = simpleButton("Quick Tunnel 주소 변경", false)
+        quickTunnelCard.addView(
+            changeQuickTunnel,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)),
+        )
+        panel.addView(quickTunnelCard, matchWrap().apply { bottomMargin = dp(12) })
+
         val notificationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -948,6 +1006,12 @@ class MainActivity : Activity() {
                 (DEFAULT_WEB_TEXT_ZOOM_PERCENT - MIN_WEB_TEXT_ZOOM_PERCENT) / WEB_TEXT_ZOOM_STEP_PERCENT
         }
 
+        changeQuickTunnel.setOnClickListener {
+            showQuickTunnelRootDialog { updatedRoot ->
+                quickTunnelValue.text = updatedRoot
+            }
+        }
+
         notificationToggle.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean(PREF_NOTIFICATIONS_ENABLED, checked).apply()
             if (checked) {
@@ -967,6 +1031,61 @@ class MainActivity : Activity() {
         overlay.addView(scroll, fillFrame())
         settingsOverlay = overlay
         root.addView(overlay, fillFrame())
+    }
+
+    private fun showQuickTunnelRootDialog(onSaved: ((String) -> Unit)? = null) {
+        val input = android.widget.EditText(this).apply {
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setText(quickTunnelRoot())
+            selectAll()
+        }
+        val inputFrame = FrameLayout(this).apply {
+            setPadding(dp(20), 0, dp(20), 0)
+            addView(
+                input,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Quick Tunnel Root")
+            .setMessage("https://xxxxx.trycloudflare.com 형식의 Root 주소만 입력하세요.")
+            .setView(inputFrame)
+            .setNegativeButton("취소", null)
+            .setNeutralButton("기본값", null)
+            .setPositiveButton("저장", null)
+            .create()
+
+        fun finishUpdate(updatedRoot: String, message: String) {
+            onSaved?.invoke(updatedRoot)
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            dialog.dismiss()
+            if (currentTarget == null && webView == null) {
+                val savedId = prefs.getString(PREF_WORKBENCH_ID, null) ?: WorkbenchCatalog.DEFAULT_ID
+                runCatching { showConnectionScreen(savedId) }
+                    .onFailure { showRecoveryScreen("연결 화면 오류", formatError(it)) }
+            }
+        }
+
+        dialog.setOnShowListener {
+            dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+                val normalized = WorkbenchCatalog.normalizeQuickTunnelRoot(input.text?.toString())
+                if (normalized == null) {
+                    input.error = "https://xxxxx.trycloudflare.com 형식의 Root 주소를 입력하세요."
+                    return@setOnClickListener
+                }
+                val updatedRoot = persistQuickTunnelRoot(normalized)
+                finishUpdate(updatedRoot, "Quick Tunnel 주소를 저장했습니다.")
+            }
+            dialog.getButton(android.content.DialogInterface.BUTTON_NEUTRAL).setOnClickListener {
+                val updatedRoot = persistQuickTunnelRoot(null)
+                finishUpdate(updatedRoot, "Quick Tunnel 주소를 기본값으로 복원했습니다.")
+            }
+        }
+        dialog.show()
     }
 
     private fun webTextZoomPercent(): Int {

@@ -392,6 +392,29 @@ def test_read_file_preview_ceiling_truncates_at_64_kib(isolated_browser_roots):
     assert len(result['content']) == 64 * 1024
 
 
+def test_read_markdown_preview_allows_512_kib(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    content = '# Large document\n\n' + ('markdown content\n' * 25000)
+    (server_root / 'large.md').write_text(content, encoding='utf-8')
+
+    result = file_browser.read_file(root_key='server', relative_path='large.md')
+
+    assert result['language'] == 'markdown'
+    assert result['truncated'] is False
+    assert result['content'] == content
+
+
+def test_read_markdown_preview_ceiling_truncates_at_512_kib(isolated_browser_roots):
+    server_root = isolated_browser_roots['server_root']
+    content = 'a' * (768 * 1024)
+    (server_root / 'very-large.md').write_text(content, encoding='utf-8')
+
+    result = file_browser.read_file(root_key='server', relative_path='very-large.md')
+
+    assert result['truncated'] is True
+    assert len(result['content']) == 512 * 1024
+
+
 def test_raw_preview_rejects_files_larger_than_one_mebibyte(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'large.pdf').write_bytes(b'0' * (1024 * 1024 + 1))

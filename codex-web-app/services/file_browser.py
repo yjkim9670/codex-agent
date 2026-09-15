@@ -26,9 +26,11 @@ BROWSER_ROOT_SHARED = 'shared'
 
 _MAX_LIST_ENTRIES = 2000
 # Text is sent as JSON and may be highlighted or rendered client-side. Keep the
-# ceiling deliberately small: previews must stay responsive even for dense logs
-# and minified source. Users can download a file when they need the full body.
+# general ceiling deliberately small: previews must stay responsive even for
+# dense logs and minified source. Markdown is rendered as a document rather
+# than syntax-highlighted source, so it can safely use a more generous limit.
 _MAX_FILE_PREVIEW_BYTES = 64 * 1024
+_MAX_MARKDOWN_PREVIEW_BYTES = 512 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 # Raw previews feed browser document/media parsers, which can be much more
 # expensive than their byte size suggests. Limit them independently as well.
@@ -63,6 +65,7 @@ _LANGUAGE_BY_SUFFIX = {
     '.lua': 'lua',
     '.mjs': 'javascript',
     '.md': 'markdown',
+    '.markdown': 'markdown',
     '.php': 'php',
     '.ps1': 'powershell',
     '.py': 'python',
@@ -131,6 +134,7 @@ _EDITABLE_TEXT_SUFFIXES = {
     '.log',
     '.lua',
     '.md',
+    '.markdown',
     '.mjs',
     '.php',
     '.ps1',
@@ -645,7 +649,7 @@ def _decode_utf8_preview(raw: bytes):
     return content, line_count, is_utf8_text
 
 
-def _normalize_file_preview_byte_limit(value):
+def _normalize_file_preview_byte_limit(value, *, maximum=_MAX_FILE_PREVIEW_BYTES):
     if value is None:
         return None
     try:
@@ -654,7 +658,7 @@ def _normalize_file_preview_byte_limit(value):
         return None
     if limit <= 0:
         return None
-    return max(_MIN_FILE_PREVIEW_BYTES, min(_MAX_FILE_PREVIEW_BYTES, limit))
+    return max(_MIN_FILE_PREVIEW_BYTES, min(maximum, limit))
 
 
 def _is_editable_text_path(path: Path):
@@ -953,8 +957,15 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
 
     metadata = _extract_file_metadata(target_path)
 
-    preview_byte_limit = _MAX_FILE_PREVIEW_BYTES
-    requested_preview_byte_limit = _normalize_file_preview_byte_limit(preview_max_bytes)
+    language = _guess_language(target_path)
+    preview_byte_limit = (
+        _MAX_MARKDOWN_PREVIEW_BYTES if language == 'markdown'
+        else _MAX_FILE_PREVIEW_BYTES
+    )
+    requested_preview_byte_limit = _normalize_file_preview_byte_limit(
+        preview_max_bytes,
+        maximum=preview_byte_limit,
+    )
     if requested_preview_byte_limit and metadata['size'] > _MAX_FILE_EDIT_BYTES:
         preview_byte_limit = requested_preview_byte_limit
 
@@ -973,7 +984,6 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
         raw = raw[:preview_byte_limit]
 
     is_binary = _is_binary_content(raw)
-    language = _guess_language(target_path)
     mime_type = mimetypes.guess_type(target_path.name)[0] or ''
     is_html = language in _HTML_LANGUAGES
     is_script = language in _SCRIPT_LANGUAGES

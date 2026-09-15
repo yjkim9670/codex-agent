@@ -323,14 +323,15 @@ const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
 const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
 const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';
 const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;
+const FILE_BROWSER_MARKDOWN_READ_MAX_BYTES = 512 * 1024;
 // Keep the switch to the lightweight text preview aligned with its display limits.
 // Otherwise medium-sized, line-dense files take the expensive full-DOM path.
 const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 32 * 1024;
 const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 750;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 16 * 1024;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 250;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 24 * 1024;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 400;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 512 * 1024;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 6000;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
 const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;
@@ -20961,7 +20962,9 @@ async function fetchFileBrowserFile(root, path) {
     return fetchEncryptedFileBrowserJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
-        preview_max_bytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
+        preview_max_bytes: isMarkdownFilePath(path)
+            ? FILE_BROWSER_MARKDOWN_READ_MAX_BYTES
+            : FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
     }, {
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
     });
@@ -22445,6 +22448,11 @@ function isMarkdownLanguage(language) {
     return String(language || '').trim().toLowerCase() === 'markdown';
 }
 
+function isMarkdownFilePath(path) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
+    return normalizedPath.endsWith('.md') || normalizedPath.endsWith('.markdown');
+}
+
 function normalizeFileBrowserPreviewText(content) {
     return String(content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
@@ -22491,16 +22499,16 @@ function shouldUseLargeFileBrowserTextPreview(content, {
     const text = String(content || '');
     if (!text) return false;
     if (truncated) return true;
-    const fileSize = Number(size);
-    if (Number.isFinite(fileSize) && fileSize > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
     const normalizedLineCount = getFileBrowserPreviewLineCount(text, lineCount);
-    if (text.length > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
-    if (normalizedLineCount > FILE_BROWSER_TEXT_DETAIL_MAX_LINES) return true;
-    if (text.length > FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD && hasFileBrowserLongPreviewLine(text)) return true;
     if (isMarkdown) {
         return text.length > FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS
             || normalizedLineCount > FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES;
     }
+    const fileSize = Number(size);
+    if (Number.isFinite(fileSize) && fileSize > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
+    if (text.length > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
+    if (normalizedLineCount > FILE_BROWSER_TEXT_DETAIL_MAX_LINES) return true;
+    if (text.length > FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD && hasFileBrowserLongPreviewLine(text)) return true;
     return false;
 }
 

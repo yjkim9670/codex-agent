@@ -31,6 +31,7 @@ from .services.codex_chat import (
 )
 from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
+from .services.git_branch_switch import list_remote_branches, switch_remote_branch
 from .services.git_ops import get_current_branch_name
 from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
 
@@ -60,6 +61,32 @@ def _is_company_mode_enabled() -> bool:
     return str(os.environ.get('CODEX_COMPANY_MODE') or '').strip().lower() in {
         '1', 'true', 'yes', 'on',
     }
+
+
+def _parse_bool_flag(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value or '').strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    return bool(default)
+
+
+def _inject_git_ui_enhancement_assets(content):
+    html = str(content or '')
+    css_tag = '<link rel="stylesheet" href="/static/css/git_ui_enhancements.css?v=1">'
+    js_tag = '<script src="/static/js/git_ui_enhancements.js?v=1"></script>'
+    if css_tag not in html and '</head>' in html:
+        html = html.replace('</head>', f'    {css_tag}\n</head>', 1)
+    if js_tag not in html and '</body>' in html:
+        html = html.replace('</body>', f'    {js_tag}\n</body>', 1)
+    return html
 
 
 def create_codex_app():
@@ -158,7 +185,7 @@ def create_codex_app():
                 'health': '/health',
                 'runtime': runtime_context,
             })
-        return render_template(
+        html = render_template(
             'index.html',
             model_options=get_codex_model_options(),
             reasoning_options=CODEX_REASONING_OPTIONS,
@@ -181,6 +208,7 @@ def create_codex_app():
             current_branch_name=runtime_context['current_branch_name'],
             company_mode_enabled=_is_company_mode_enabled(),
         )
+        return _inject_git_ui_enhancement_assets(html)
 
     @app.route('/health')
     def codex_health():
@@ -193,6 +221,33 @@ def create_codex_app():
             'feature_flags': runtime_context['feature_flags'],
             'security_policy': runtime_context['security_policy'],
         })
+
+    @app.route('/api/codex/git/branches/remote', methods=['GET'])
+    def codex_git_remote_branches():
+        if not CODEX_ENABLE_GIT_API:
+            return jsonify({'error': 'git 기능이 비활성화되어 있습니다.'}), 404
+        result = list_remote_branches(
+            request.args.get('repo_target') or 'workspace',
+            fetch=_parse_bool_flag(request.args.get('fetch'), default=False),
+        )
+        status_code = 400 if isinstance(result, dict) and result.get('error') else 200
+        return jsonify(result), status_code
+
+    @app.route('/api/codex/git/branches/switch', methods=['POST'])
+    def codex_git_remote_branch_switch():
+        if not CODEX_ENABLE_GIT_API:
+            return jsonify({'error': 'git 기능이 비활성화되어 있습니다.'}), 404
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        result = switch_remote_branch(
+            payload.get('repo_target') or 'workspace',
+            remote=payload.get('remote') or '',
+            branch=payload.get('branch') or '',
+            fetch=_parse_bool_flag(payload.get('fetch'), default=True),
+        )
+        status_code = 400 if isinstance(result, dict) and result.get('error') else 200
+        return jsonify(result), status_code
 
     @app.route('/api/<path:_>', methods=['OPTIONS'])
     def codex_preflight(_):

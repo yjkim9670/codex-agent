@@ -323,15 +323,15 @@ const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
 const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
 const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';
 const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;
-const FILE_BROWSER_MARKDOWN_READ_MAX_BYTES = 512 * 1024;
+const FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES = 4 * 1024 * 1024;
 // Keep the switch to the lightweight text preview aligned with its display limits.
 // Otherwise medium-sized, line-dense files take the expensive full-DOM path.
 const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 32 * 1024;
 const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 750;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 16 * 1024;
 const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 250;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 512 * 1024;
-const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 6000;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 4 * 1024 * 1024;
+const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 50000;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
 const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
 const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;
@@ -20962,8 +20962,8 @@ async function fetchFileBrowserFile(root, path) {
     return fetchEncryptedFileBrowserJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
-        preview_max_bytes: isMarkdownFilePath(path)
-            ? FILE_BROWSER_MARKDOWN_READ_MAX_BYTES
+        preview_max_bytes: isRenderedDocumentFilePath(path)
+            ? FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES
             : FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
     }, {
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
@@ -22451,6 +22451,13 @@ function isMarkdownLanguage(language) {
 function isMarkdownFilePath(path) {
     const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
     return normalizedPath.endsWith('.md') || normalizedPath.endsWith('.markdown');
+}
+
+function isRenderedDocumentFilePath(path) {
+    const normalizedPath = normalizeFileBrowserRelativePath(path).toLowerCase();
+    return isMarkdownFilePath(normalizedPath)
+        || normalizedPath.endsWith('.html')
+        || normalizedPath.endsWith('.htm');
 }
 
 function normalizeFileBrowserPreviewText(content) {
@@ -25169,14 +25176,19 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     const text = typeof result?.content === 'string' ? result.content : '';
     const previewLineCount = getFileBrowserPreviewLineCount(text, result?.line_count);
     const isMarkdown = isMarkdownLanguage(language);
-    const useLargeTextPreview = !isHtml && shouldUseLargeFileBrowserTextPreview(text, {
+    // The larger document allowance only applies while the file is actually
+    // rendered. Template HTML and Markdown opened at a specific source line
+    // fall back to the source viewer, which must retain normal text limits.
+    const canRenderHtmlPreview = isHtml && Boolean(result?.html_previewable);
+    const rendersMarkdownPreview = isMarkdown && !requestedLine;
+    const usesRenderedDocumentPreview = canRenderHtmlPreview || rendersMarkdownPreview;
+    const useLargeTextPreview = !usesRenderedDocumentPreview && shouldUseLargeFileBrowserTextPreview(text, {
         lineCount: previewLineCount,
-        isMarkdown,
+        isMarkdown: false,
         truncated: Boolean(result?.truncated),
         size: result?.size
     });
     const normalizedText = useLargeTextPreview ? '' : normalizeFileBrowserPreviewText(text);
-    const canRenderHtmlPreview = isHtml;
     const sizeText = formatFileBrowserSize(result?.size);
     const infoParts = [normalizedPath || '(unknown path)'];
     if (sizeText && sizeText !== '--') {
@@ -25199,7 +25211,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
     hydrateFilePanelEditStateFromResult(variant, result, { root: previewRoot });
     setFilePanelViewerMetaText(elements, infoParts.join(' · '), {
-        truncated: Boolean(result?.truncated) && !isHtml,
+        truncated: Boolean(result?.truncated) && !canRenderHtmlPreview,
         noteText: useLargeTextPreview
             ? '큰 텍스트는 성능을 위해 경량 모드로 표시됩니다.'
             : ''

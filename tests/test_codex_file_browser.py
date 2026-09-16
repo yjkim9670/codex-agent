@@ -361,22 +361,20 @@ def test_read_file_detects_html_and_script(isolated_browser_roots):
     assert 'answer = 42' in script_result['content']
 
 
-def test_read_large_html_can_still_use_raw_rendered_preview(isolated_browser_roots):
+def test_read_large_html_uses_rendered_document_preview_allowance(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     html = '<!doctype html><html><body><h1 id="rendered">Rendered</h1>'
     html += ''.join(f'<p>line {index}</p>' for index in range(40000))
+    html += 'x' * (2 * 1024 * 1024)
     html += '</body></html>'
     (server_root / 'long.html').write_text(html, encoding='utf-8')
 
-    result = file_browser.read_file(
-        root_key='server',
-        relative_path='long.html',
-        preview_max_bytes=16 * 1024,
-    )
+    result = file_browser.read_file(root_key='server', relative_path='long.html')
     raw_result = file_browser.read_file_raw(root_key='server', relative_path='long.html')
 
     assert result['is_html'] is True
-    assert result['truncated'] is True
+    assert result['truncated'] is False
+    assert result['content'] == html
     assert raw_result['mime_type'].startswith('text/html')
     assert b'id="rendered"' in raw_result['content']
 
@@ -392,7 +390,7 @@ def test_read_file_preview_ceiling_truncates_at_64_kib(isolated_browser_roots):
     assert len(result['content']) == 64 * 1024
 
 
-def test_read_markdown_preview_allows_512_kib(isolated_browser_roots):
+def test_read_markdown_preview_allows_rendered_document_limit(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     content = '# Large document\n\n' + ('markdown content\n' * 25000)
     (server_root / 'large.md').write_text(content, encoding='utf-8')
@@ -404,15 +402,15 @@ def test_read_markdown_preview_allows_512_kib(isolated_browser_roots):
     assert result['content'] == content
 
 
-def test_read_markdown_preview_ceiling_truncates_at_512_kib(isolated_browser_roots):
+def test_read_markdown_preview_ceiling_truncates_at_four_mebibytes(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
-    content = 'a' * (768 * 1024)
+    content = 'a' * (4 * 1024 * 1024 + 1)
     (server_root / 'very-large.md').write_text(content, encoding='utf-8')
 
     result = file_browser.read_file(root_key='server', relative_path='very-large.md')
 
     assert result['truncated'] is True
-    assert len(result['content']) == 512 * 1024
+    assert len(result['content']) == 4 * 1024 * 1024
 
 
 def test_raw_preview_rejects_files_larger_than_one_mebibyte(isolated_browser_roots):
@@ -490,10 +488,22 @@ def test_html_preview_uses_an_opaque_origin_sandbox_and_moderate_text_limit():
 
     assert "const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';" in app_js
     assert "const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;" in app_js
+    assert "const FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES = 4 * 1024 * 1024;" in app_js
+    assert "const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 50000;" in app_js
     assert "const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;" in app_js
     assert "allow-same-origin allow-scripts allow-forms" not in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(normalizedRoot, normalizedPath)' in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(previewRoot, normalizedPath)' in app_js
+
+
+def test_document_files_falling_back_to_source_use_normal_text_preview_limits():
+    app_js = (CODEX_APP_ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+
+    assert 'const canRenderHtmlPreview = isHtml && Boolean(result?.html_previewable);' in app_js
+    assert 'const rendersMarkdownPreview = isMarkdown && !requestedLine;' in app_js
+    assert 'const usesRenderedDocumentPreview = canRenderHtmlPreview || rendersMarkdownPreview;' in app_js
+    assert 'const useLargeTextPreview = !usesRenderedDocumentPreview && shouldUseLargeFileBrowserTextPreview(text, {' in app_js
+    assert 'isMarkdown: false,' in app_js
 
 
 def test_read_file_marks_binary_content(isolated_browser_roots):

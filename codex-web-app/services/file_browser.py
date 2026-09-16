@@ -27,14 +27,18 @@ BROWSER_ROOT_SHARED = 'shared'
 _MAX_LIST_ENTRIES = 2000
 # Text is sent as JSON and may be highlighted or rendered client-side. Keep the
 # general ceiling deliberately small: previews must stay responsive even for
-# dense logs and minified source. Markdown is rendered as a document rather
-# than syntax-highlighted source, so it can safely use a more generous limit.
+# dense logs and minified source. Markdown and standalone HTML are rendered as
+# documents rather than syntax-highlighted source, so they can use a more
+# generous limit.
 _MAX_FILE_PREVIEW_BYTES = 64 * 1024
-_MAX_MARKDOWN_PREVIEW_BYTES = 512 * 1024
+_MAX_RENDERED_DOCUMENT_PREVIEW_BYTES = 4 * 1024 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 # Raw previews feed browser document/media parsers, which can be much more
-# expensive than their byte size suggests. Limit them independently as well.
+# expensive than their byte size suggests. HTML is sandboxed and rendered in
+# an iframe, so let it use the document-preview allowance without relaxing the
+# limit for images, PDFs, or other raw file types.
 _MAX_FILE_RAW_BYTES = 1024 * 1024
+_MAX_HTML_RAW_BYTES = _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES)
@@ -959,7 +963,8 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
 
     language = _guess_language(target_path)
     preview_byte_limit = (
-        _MAX_MARKDOWN_PREVIEW_BYTES if language == 'markdown'
+        _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES
+        if language in {'markdown', 'html'}
         else _MAX_FILE_PREVIEW_BYTES
     )
     requested_preview_byte_limit = _normalize_file_preview_byte_limit(
@@ -1434,9 +1439,10 @@ def read_file_raw(root_key=None, relative_path=''):
             status_code=500,
         ) from exc
 
-    if total_bytes > _MAX_FILE_RAW_BYTES:
+    raw_byte_limit = _MAX_HTML_RAW_BYTES if _guess_language(target_path) == 'html' else _MAX_FILE_RAW_BYTES
+    if total_bytes > raw_byte_limit:
         raise FileBrowserError(
-            '동적 미리보기 제공 크기 제한(1MB)을 초과했습니다.',
+            f'동적 미리보기 제공 크기 제한({_format_byte_limit(raw_byte_limit)})을 초과했습니다.',
             error_code='file_too_large',
             status_code=413,
         )

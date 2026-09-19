@@ -31,27 +31,35 @@ The five stages are run separately:
 brief → research → outline → draft → review
 ```
 
-## Daily topic refresh
+## Five-run article cycle
 
-On the first pipeline run of each KST calendar day, Workbench appends one new
-date-keyed topic candidate to `backlog.json`. This is a local deterministic
-rotation, so refreshing the topic does **not** create an additional model
-request or spend tokens. Customize the rotation with `daily_topic_seeds` (or
-set `daily_topic_enabled` to `false`):
+One article always remains active until its five stages have completed:
+
+```text
+brief → research → outline → draft → review/final
+```
+
+This is stage-count based, not calendar based. If fewer than five lightweight
+tasks run in a day, the same article simply resumes at its next stage on a
+later run. After `review` succeeds, Workbench marks that article complete and
+appends one new deterministic topic candidate to `backlog.json`; this local
+rotation does not create an additional model request or spend tokens.
+Customize the completion rotation with `topic_rotation_seeds` (or set
+`topic_rotation_enabled` to `false`):
 
 ```json
 {
-  "daily_topic_enabled": true,
-  "daily_topic_seeds": [
+  "topic_rotation_enabled": true,
+  "topic_rotation_seeds": [
     "반복 업무를 줄이는 작은 AI 활용법",
     "AI 결과물을 안전하게 검토하는 방법"
   ]
 }
 ```
 
-The date-keyed ID prevents duplicate entries when a manual and automatic run
-occur on the same day. A new candidate is queued behind existing work; the
-pipeline still completes the active article one stage at a time.
+The completion-counted ID prevents duplicates if completion handling is
+replayed. A new candidate is queued behind any existing topics; the pipeline
+still completes the active article one stage at a time.
 
 After review, the completed article is in `blog/posts/<post-id>/final.md`, and
 the next queued topic becomes active. The pipeline reads only the small set of
@@ -71,11 +79,12 @@ curl -X POST http://127.0.0.1:5000/api/codex/blog/run \
 
 ## Workbench collision policy
 
-Each run claims `account identity + project_id` in the shared account state.
-The claim has a two-hour lease for crash recovery and a six-hour default
-cooldown after success. Therefore two Workbench copies cannot run the same
-project at once, even when their local workspace paths or Workbench-local
-account IDs differ. Give independent blogs different `project_id` values.
+Each run claims `account identity + project_id` in the shared account state
+under an inter-process file lock. The claim has a two-hour lease for crash
+recovery and a six-hour default cooldown after success. An active claim is
+authoritative even for a forced manual run, so simultaneous Usage-panel or API
+submissions from separate Workbenches yield `project_busy` rather than starting
+a second stage. Give independent blogs different `project_id` values.
 
 There is no separate blog polling worker. Automatic execution is driven only
 by the existing usage refresh: when the five-hour usage is observed at exactly

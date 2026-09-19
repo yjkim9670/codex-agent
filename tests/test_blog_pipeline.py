@@ -125,12 +125,12 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     assert status['recent_runs'][-1]['token_usage']['total_tokens'] == 125
 
 
-def test_pipeline_adds_one_date_keyed_topic_without_a_model_call(blog_environment, monkeypatch):
+def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
-        'project_id': 'daily-series',
+        'project_id': 'rotation-series',
         'enabled': True,
-        'daily_topic_seeds': ['업무 기록을 남기는 방법'],
-        'backlog': [],
+        'topic_rotation_seeds': ['업무 기록을 남기는 방법'],
+        'backlog': ['첫 글'],
     })
     fixed_now = datetime(2026, 9, 20, 9, 0, tzinfo=blog_pipeline.KST)
     monkeypatch.setattr(blog_pipeline, '_now', lambda: fixed_now)
@@ -140,11 +140,32 @@ def test_pipeline_adds_one_date_keyed_topic_without_a_model_call(blog_environmen
     started = blog_pipeline.run_blog_pipeline(force=True)
 
     assert started['started'] is True
+    assert started['stage'] == 'brief'
     backlog = blog_pipeline._load_backlog(blog_environment / 'blog')
-    daily_items = [item for item in backlog if item['id'] == 'daily-20260920']
-    assert len(daily_items) == 1
-    assert daily_items[0]['source'] == 'daily_rotation'
-    assert blog_pipeline.get_blog_pipeline_status()['state']['last_daily_topic_date'] == '2026-09-20'
+    assert len(backlog) == 1
+    claim_path = str(blog_pipeline._claim_path(
+        {'codex_home': blog_environment.parent / 'codex-home', 'account': {'id': 'default'}},
+        'rotation-series',
+    ))
+
+    for stage in ('brief', 'research', 'outline', 'draft', 'review'):
+        assert blog_pipeline.record_blog_pipeline_completion({
+            'project_id': 'rotation-series',
+            'run_id': started['run_id'],
+            'stage': stage,
+            'post_id': started['post_id'],
+            'blog_root': str(blog_environment / 'blog'),
+            'claim_path': claim_path,
+        }, True)
+        if stage != 'review':
+            assert len(blog_pipeline._load_backlog(blog_environment / 'blog')) == 1
+            started = blog_pipeline.run_blog_pipeline(force=True)
+
+    backlog = blog_pipeline._load_backlog(blog_environment / 'blog')
+    rotation_items = [item for item in backlog if item['id'] == 'rotation-0001']
+    assert len(rotation_items) == 1
+    assert rotation_items[0]['source'] == 'completion_rotation'
+    assert blog_pipeline.get_blog_pipeline_status()['state']['completed_post_count'] == 1
 
 
 def test_blog_claim_is_shared_across_workbenches(blog_environment):
@@ -160,8 +181,7 @@ def test_blog_claim_is_shared_across_workbenches(blog_environment):
         {**context, 'account': {'id': 'local-account-b'}},
         project,
         'run-b',
-        now,
-        force=False,
+        now, force=True,
     )
 
     assert first[0] is True

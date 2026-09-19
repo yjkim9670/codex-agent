@@ -37,14 +37,14 @@ _RUN_LEASE_SECONDS = 2 * 60 * 60
 _RETRY_DELAY_MINUTES = 30
 _MAX_RUN_HISTORY = 512
 _MAX_PROJECT_TEXT = 12000
-_DEFAULT_DAILY_TOPIC_SEEDS = (
+_DEFAULT_TOPIC_ROTATION_SEEDS = (
     '반복 업무를 줄이는 작은 AI 활용법',
     'AI 결과물을 안전하게 검토하는 방법',
     '긴 업무를 이어 가기 위한 프로젝트 기록법',
     '개인 업무 흐름에 자동화를 무리 없이 더하는 방법',
     'AI 도구 사용을 회고하고 개선하는 방법',
 )
-_DAILY_TOPIC_SUFFIXES = (
+_TOPIC_ROTATION_SUFFIXES = (
     '오늘 바로 적용하는 15분 실험',
     '실수를 줄이는 간단한 체크리스트',
     '처음 도입할 때 놓치기 쉬운 기준',
@@ -144,8 +144,11 @@ def _project_defaults():
         'cadence_minutes': _DEFAULT_CADENCE_MINUTES,
         'model': '',
         'reasoning_effort': 'low',
-        'daily_topic_enabled': True,
-        'daily_topic_seeds': list(_DEFAULT_DAILY_TOPIC_SEEDS),
+        # Topics rotate after an article is completed, never merely because a
+        # new calendar day started.  This keeps one article aligned with the
+        # five durable stages below even on days with fewer executions.
+        'topic_rotation_enabled': True,
+        'topic_rotation_seeds': list(_DEFAULT_TOPIC_ROTATION_SEEDS),
         'updated_at': normalize_timestamp(None),
     }
 
@@ -171,16 +174,30 @@ def _normalize_project(raw, existing=None):
     except (TypeError, ValueError):
         cadence = _DEFAULT_CADENCE_MINUTES
     cadence = max(_MIN_CADENCE_MINUTES, min(_MAX_CADENCE_MINUTES, cadence))
-    raw_seeds = base.get('daily_topic_seeds')
+    # Accept the old daily fields when loading existing projects.  They are
+    # deliberately not emitted again, so saving a project migrates it.
+    raw = raw if isinstance(raw, dict) else {}
+    existing = existing if isinstance(existing, dict) else {}
+    if 'topic_rotation_enabled' not in raw:
+        if 'daily_topic_enabled' in raw:
+            base['topic_rotation_enabled'] = raw['daily_topic_enabled']
+        elif 'topic_rotation_enabled' not in existing and 'daily_topic_enabled' in existing:
+            base['topic_rotation_enabled'] = existing['daily_topic_enabled']
+    if 'topic_rotation_seeds' not in raw:
+        if 'daily_topic_seeds' in raw:
+            base['topic_rotation_seeds'] = raw['daily_topic_seeds']
+        elif 'topic_rotation_seeds' not in existing and 'daily_topic_seeds' in existing:
+            base['topic_rotation_seeds'] = existing['daily_topic_seeds']
+    raw_seeds = base.get('topic_rotation_seeds')
     if not isinstance(raw_seeds, list):
         raw_seeds = []
-    daily_topic_seeds = []
+    topic_rotation_seeds = []
     for seed in raw_seeds:
         normalized_seed = str(seed or '').strip()
-        if normalized_seed and normalized_seed not in daily_topic_seeds:
-            daily_topic_seeds.append(normalized_seed[:300])
-    if not daily_topic_seeds:
-        daily_topic_seeds = list(_DEFAULT_DAILY_TOPIC_SEEDS)
+        if normalized_seed and normalized_seed not in topic_rotation_seeds:
+            topic_rotation_seeds.append(normalized_seed[:300])
+    if not topic_rotation_seeds:
+        topic_rotation_seeds = list(_DEFAULT_TOPIC_ROTATION_SEEDS)
     return {
         'version': 1,
         'project_id': project_id,
@@ -193,8 +210,8 @@ def _normalize_project(raw, existing=None):
         'cadence_minutes': cadence,
         'model': str(base.get('model') or '').strip()[:80],
         'reasoning_effort': str(base.get('reasoning_effort') or 'low').strip()[:40],
-        'daily_topic_enabled': bool(base.get('daily_topic_enabled')),
-        'daily_topic_seeds': daily_topic_seeds[:40],
+        'topic_rotation_enabled': bool(base.get('topic_rotation_enabled')),
+        'topic_rotation_seeds': topic_rotation_seeds[:40],
         'updated_at': normalize_timestamp(None),
     }
 
@@ -212,7 +229,7 @@ def _default_state(project_id):
         'last_run_at': None,
         'last_result': None,
         'last_error': '',
-        'last_daily_topic_date': '',
+        'completed_post_count': 0,
         'updated_at': normalize_timestamp(None),
     }
 
@@ -291,32 +308,30 @@ def _save_backlog(root, items):
     _write_json_atomic(_backlog_path(root), {'version': 1, 'items': items})
 
 
-def _refresh_daily_topic(root, project, state, now):
-    """Append exactly one inexpensive, date-keyed topic candidate per KST day."""
-    if not project.get('daily_topic_enabled'):
+def _queue_rotation_topic(root, project, state, now):
+    """Append one local topic only after a five-stage article completes."""
+    if not project.get('topic_rotation_enabled'):
         return False
-    today = now.astimezone(KST).date().isoformat()
-    if state.get('last_daily_topic_date') == today:
+    completed_count = max(0, int(state.get('completed_post_count') or 0))
+    if not completed_count:
         return False
-    item_id = f'daily-{today.replace("-", "")}'
+    item_id = f'rotation-{completed_count:04d}'
     items = _load_backlog(root)
     if any(str(item.get('id') or '') == item_id for item in items):
-        state['last_daily_topic_date'] = today
         return False
-    seeds = project.get('daily_topic_seeds') or list(_DEFAULT_DAILY_TOPIC_SEEDS)
-    day_index = now.astimezone(KST).date().toordinal()
-    seed = str(seeds[day_index % len(seeds)]).strip()
-    suffix = _DAILY_TOPIC_SUFFIXES[day_index % len(_DAILY_TOPIC_SUFFIXES)]
+    seeds = project.get('topic_rotation_seeds') or list(_DEFAULT_TOPIC_ROTATION_SEEDS)
+    rotation_index = completed_count - 1
+    seed = str(seeds[rotation_index % len(seeds)]).strip()
+    suffix = _TOPIC_ROTATION_SUFFIXES[rotation_index % len(_TOPIC_ROTATION_SUFFIXES)]
     items.append({
         'id': item_id,
         'title': f'{seed}: {suffix}',
         'status': 'queued',
-        'source': 'daily_rotation',
-        'scheduled_for': today,
+        'source': 'completion_rotation',
+        'completed_post_count': completed_count,
         'created_at': normalize_timestamp(now),
     })
     _save_backlog(root, items)
-    state['last_daily_topic_date'] = today
     return True
 
 
@@ -665,7 +680,6 @@ def _start_pipeline_run(force=False, account_id=None):
         next_run_at = parse_timestamp(state.get('next_run_at'))
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
-        _refresh_daily_topic(root, project, state, now)
         if state.get('stage') == 'select' and not any(
                 item.get('status') not in {'done', 'cancelled'}
                 for item in _load_backlog(root)):
@@ -807,6 +821,8 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
         if succeeded and stage in _STAGES:
             if stage == 'review':
                 _mark_backlog_done(root, state, now)
+                state['completed_post_count'] = int(state.get('completed_post_count') or 0) + 1
+                _queue_rotation_topic(root, project, state, now)
                 state['stage'] = 'select'
                 state['active_post_id'] = ''
                 state['active_topic'] = ''

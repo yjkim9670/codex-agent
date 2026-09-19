@@ -141,6 +141,7 @@ from ..services.codex_chat import (
     stop_codex_stream,
     switch_codex_account,
 )
+from ..services import blog_pipeline
 from ..services.file_browser import (
     FileBrowserError,
     build_download_payload,
@@ -1201,7 +1202,7 @@ def codex_usage_refresh():
 
 @bp.route('/api/codex/usage/keepalive', methods=['POST'])
 def codex_usage_keepalive():
-    """Submit a user-requested concise Terra/medium usage keepalive task."""
+    """Manually advance the configured blog pipeline from the Usage panel."""
     ensure_usage_snapshot_background_worker()
     account_id = get_active_account_id()
     result = submit_usage_keepalive(account_id=account_id)
@@ -1216,11 +1217,56 @@ def codex_usage_keepalive():
         reasons = {
             'account_busy': '현재 계정에서 Codex 작업이 실행 중입니다. 완료 후 다시 시도해 주세요.',
             'account_login_required': '선택한 계정에 로그인이 필요합니다.',
-            'terra_requires_codex_backend': '경량 작업은 Codex backend에서만 실행할 수 있습니다.',
+            'not_configured': '블로그 프로젝트가 아직 설정되지 않았습니다.',
+            'disabled': '블로그 자동 집필이 비활성화되어 있습니다.',
+            'project_busy': '다른 워크벤치에서 같은 블로그 프로젝트가 실행 중입니다.',
+            'run_in_flight': '현재 블로그 단계가 이미 실행 중입니다.',
+            'backlog_empty': '대기 중인 블로그 주제가 없습니다.',
         }
         response['error'] = reasons.get(result.get('reason'), '경량 작업을 제출하지 못했습니다.')
         return jsonify(response), 409
     return jsonify(response), 202
+
+
+@bp.route('/api/codex/blog', methods=['GET'])
+def codex_blog_status():
+    """Return the durable blog project state without loading article contents."""
+    return jsonify(blog_pipeline.get_blog_pipeline_status())
+
+
+@bp.route('/api/codex/blog', methods=['PUT'])
+def codex_blog_configure():
+    """Create or update blog settings and, optionally, the topic backlog."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        result = blog_pipeline.configure_blog_project(payload)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(result)
+
+
+@bp.route('/api/codex/blog/run', methods=['POST'])
+def codex_blog_run():
+    """Request one due blog stage; ``force`` is explicit to avoid surprise usage."""
+    payload = request.get_json(silent=True) or {}
+    force = bool(payload.get('force')) if isinstance(payload, dict) else False
+    result = blog_pipeline.run_blog_pipeline(force=force, account_id=get_active_account_id())
+    if result.get('started'):
+        return jsonify(result), 202
+    reasons = {
+        'not_configured': '블로그 프로젝트가 아직 설정되지 않았습니다.',
+        'disabled': '블로그 자동 집필이 비활성화되어 있습니다.',
+        'account_busy': '현재 계정에서 다른 Codex 작업이 실행 중입니다.',
+        'account_login_required': '선택한 계정에 로그인이 필요합니다.',
+        'project_busy': '다른 워크벤치에서 같은 블로그 프로젝트가 실행 중입니다.',
+        'run_in_flight': '현재 블로그 단계가 이미 실행 중입니다.',
+        'not_due': '아직 다음 집필 단계 실행 시간이 아닙니다.',
+        'backlog_empty': '대기 중인 블로그 주제가 없습니다.',
+    }
+    status_code = 409 if result.get('reason') in {
+        'account_busy', 'project_busy', 'run_in_flight', 'not_due',
+    } else 400
+    return jsonify({**result, 'error': reasons.get(result.get('reason'), '블로그 단계 실행을 시작하지 못했습니다.')}), status_code
 
 
 @bp.route('/api/codex/usage/history')

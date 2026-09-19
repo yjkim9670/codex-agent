@@ -3503,7 +3503,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (usageKeepaliveSubmitBtn) {
         usageKeepaliveSubmitBtn.addEventListener('click', async () => {
             const confirmed = window.confirm(
-                'Terra medium effort 경량 작업을 제출할까요? 읽기 전용 워크스페이스 검토가 실행되어 사용량이 발생합니다.'
+                '블로그의 다음 집필 단계를 실행할까요? 한 단계만 진행하며 사용량이 발생합니다.'
             );
             if (!confirmed) return;
             usageKeepaliveSubmitBtn.disabled = true;
@@ -3514,7 +3514,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.settings.usage = result?.usage || state.settings.usage;
                 state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
                 updateUsageSummary(state.settings.usage);
-                showToast('Terra medium effort 경량 작업을 제출했습니다.', { type: 'success' });
+                showToast('블로그의 다음 집필 단계를 제출했습니다.', { type: 'success' });
                 const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
                 if (streamId) void watchManualUsageKeepalive(streamId);
             } catch (error) {

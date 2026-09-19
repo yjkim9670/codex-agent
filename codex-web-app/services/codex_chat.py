@@ -8382,18 +8382,114 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
 
 
 def submit_usage_keepalive(account_id=None):
-    """Manually submit the same isolated keepalive request used by automation."""
+    """Manually advance one configured blog stage from the Usage panel.
+
+    The endpoint name is retained for the existing Usage-panel contract.  The
+    durable blog state, rather than chat history, determines the next stage.
+    """
     context = _account_storage_context(account_id)
     if context is None:
         return {'submitted': False, 'reason': 'account_not_found'}
+    return _run_usage_blog_pipeline(context['account']['id'], automatic=False)
+
+
+def _run_usage_blog_pipeline(account_id, automatic):
+    """Start one blog stage and retain the legacy Usage-panel response shape."""
+    from .blog_pipeline import run_blog_pipeline
+
+    result = run_blog_pipeline(force=True, account_id=account_id)
+    started = bool(result.get('started'))
+    return {
+        'submitted': started,
+        'stream': {'id': result.get('stream_id') or ''} if started else {},
+        'reason': '' if started else str(result.get('reason') or 'start_failed'),
+        'blog_pipeline': result,
+        'mode': 'automatic' if automatic else 'manual',
+    }
+
+
+def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
+    """Reserve one zero-use window before queueing its single blog stage.
+
+    This executes while the account snapshot file is locked.  It never starts
+    a Codex stream there: starting the stream refreshes usage and would try to
+    acquire the same cross-process lock.
+    """
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    previous = snapshot.get('usage_keepalive') if isinstance(snapshot, dict) else {}
+    previous = previous if isinstance(previous, dict) else {}
+    # Do not consume a once-per-window account claim until a project has been
+    # explicitly enabled.  This keeps an unconfigured Workbench inert.
+    from .blog_pipeline import get_blog_pipeline_status
+    blog_status = get_blog_pipeline_status()
+    if not blog_status.get('configured'):
+        return {'submitted': False, 'reason': 'not_configured'}
+    if not blog_status.get('enabled'):
+        return {'submitted': False, 'reason': 'disabled'}
+    targets = _usage_keepalive_cycle_targets(snapshot, current)
+    if not targets:
+        return {'submitted': False, 'reason': 'no_zero_usage_window'}
+    if previous.get('automatic_cycle_targets') == targets:
+        return {'submitted': False, 'reason': 'cycle_already_submitted'}
+    if _account_has_active_codex_stream(context['account']['id']):
+        return {'submitted': False, 'reason': 'account_busy'}
+    claimed, reason = _usage_keepalive_global_claim(context, targets, current)
+    if not claimed:
+        return {'submitted': False, 'reason': reason}
+    history = previous.get('history') if isinstance(previous.get('history'), list) else []
+    history = [item for item in history[-49:] if isinstance(item, dict)]
+    history.append({
+        'at': normalize_timestamp(current),
+        'event': 'queued',
+        'mode': 'automatic',
+        'stream_id': '',
+        'error': '',
+    })
+    snapshot['usage_keepalive'] = {
+        **previous,
+        'last_attempt_at': normalize_timestamp(current),
+        'last_mode': 'automatic',
+        'last_status': 'queued',
+        'last_error': '',
+        'automatic_cycle_targets': targets,
+        'automatic_attempts': 1,
+        'history': history,
+    }
+    return {'submitted': True, 'reason': '', 'state': snapshot['usage_keepalive']}
+
+
+def _start_reserved_automatic_usage_blog(account_id):
+    """Run after the usage-snapshot lock has been released."""
+    result = _run_usage_blog_pipeline(account_id, automatic=True)
+    context = _account_storage_context(account_id)
+    if context is None:
+        return result
     with _acquire_path_file_lock(context['account_usage_snapshot_path']):
         snapshot = _load_account_usage_snapshot(context)
-        result = _submit_usage_keepalive_locked(context, snapshot, automatic=False)
-        if result.get('submitted'):
-            snapshot['version'] = snapshot.get('version') or 1
-            snapshot['account_id'] = context['account']['id']
-            _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
-        return result
+        keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot.get('usage_keepalive'), dict) else {}
+        now = normalize_timestamp(None)
+        history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
+        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history.append({
+            'at': now,
+            'event': 'submitted' if result.get('submitted') else 'submission_failed',
+            'mode': 'automatic',
+            'stream_id': result.get('stream', {}).get('id') or '',
+            'error': '' if result.get('submitted') else str(result.get('reason') or '')[:1000],
+        })
+        keepalive.update({
+            'last_submission_at': now if result.get('submitted') else keepalive.get('last_submission_at'),
+            'last_stream_id': result.get('stream', {}).get('id') or keepalive.get('last_stream_id'),
+            'last_status': 'submitted' if result.get('submitted') else 'failed',
+            'last_error': '' if result.get('submitted') else str(result.get('reason') or '')[:1000],
+            'history': history,
+        })
+        snapshot['usage_keepalive'] = keepalive
+        snapshot['version'] = snapshot.get('version') or 1
+        snapshot['account_id'] = context['account']['id']
+        _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+    return result
 
 
 def _record_usage_keepalive_completion(account_id, succeeded, error='', token_usage=None):
@@ -8583,8 +8679,20 @@ def refresh_account_usage_snapshot_if_due(
             _reconcile_usage_calibration(context['account']['id'], snapshot)
             keepalive = {'submitted': False, 'reason': 'not_automatic'}
             if resolved_limit_sample_source == 'automatic':
-                keepalive = _submit_usage_keepalive_locked(context, snapshot, automatic=True)
+                keepalive = _reserve_automatic_usage_blog_locked(context, snapshot)
                 _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+                if keepalive.get('submitted'):
+                    # The pipeline starts after this function releases the
+                    # snapshot lock.  It deliberately has no independent
+                    # cadence worker: a 0% five-hour observation is the only
+                    # automatic trigger.
+                    worker = threading.Thread(
+                        target=_start_reserved_automatic_usage_blog,
+                        args=(context['account']['id'],),
+                        name='codex-usage-blog-stage',
+                        daemon=True,
+                    )
+                    worker.start()
             if schedule_retry:
                 _schedule_usage_keepalive_followup(
                     context['account']['id'], (
@@ -14203,7 +14311,8 @@ def create_codex_stream(
         account_id=None,
         usage_operation='chat',
         internal_api_key=None,
-        preflight_usage_snapshot=None):
+        preflight_usage_snapshot=None,
+        operation_metadata=None):
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -14289,6 +14398,9 @@ def create_codex_stream(
         'account_id': resolved_account_id,
         'usage_limits_before': usage_limits_before,
         'usage_operation': str(usage_operation or 'chat'),
+        'operation_metadata': (
+            deepcopy(operation_metadata) if isinstance(operation_metadata, dict) else {}
+        ),
         'question_only': bool(question_only or structured_report_preset_id),
         'attachments': normalized_attachments,
         'user_prompt': str(user_prompt or '').strip(),
@@ -15443,6 +15555,17 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             error=error if message_role != 'assistant' else '',
             token_usage=token_usage,
         )
+    if stream.get('usage_operation') == 'blog_pipeline':
+        try:
+            from .blog_pipeline import record_blog_pipeline_completion
+            record_blog_pipeline_completion(
+                stream.get('operation_metadata') or {},
+                succeeded=message_role == 'assistant',
+                error=error if message_role != 'assistant' else '',
+                token_usage=token_usage,
+            )
+        except Exception:
+            _LOGGER.exception('Blog pipeline completion update skipped (stream_id=%s)', stream_id)
     # Store a fresh account-limit observation for every completed Codex task.
     # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.

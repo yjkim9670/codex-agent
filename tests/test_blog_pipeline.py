@@ -123,6 +123,27 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     assert status['state']['in_flight'] is None
     assert status['state']['stage'] == 'research'
     assert status['recent_runs'][-1]['token_usage']['total_tokens'] == 125
+    assert status['dashboard'] == {
+        'current_topic': '첫 번째 글의 주제',
+        'current_stage': 'research',
+        'current_stage_number': 2,
+        'completed_stage_count': 1,
+        'total_stage_count': 5,
+        'progress_percent': 20,
+        'is_running': False,
+        'running_stage': '',
+        'completed_post_count': 0,
+        'backlog_count': 1,
+        'last_status': 'completed',
+        'last_completed_at': status['state']['last_result']['completed_at'],
+        'last_token_usage': {
+            'input_tokens': 100,
+            'cached_input_tokens': 0,
+            'output_tokens': 25,
+            'reasoning_output_tokens': 0,
+            'total_tokens': 125,
+        },
+    }
 
 
 def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environment, monkeypatch):

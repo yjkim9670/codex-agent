@@ -572,12 +572,12 @@
                                 <div class="usage-label">Usage</div>
                                 <div class="usage-header-btns">
                                     <button
-                                        class="btn ghost icon-only usage-keepalive-submit"
+                                        class="btn ghost icon-only blog-dashboard-open"
                                         type="button"
-                                        id="codex-usage-keepalive-submit"
-                                        aria-label="Terra medium effort 경량 작업 제출"
-                                        title="Terra medium effort 경량 작업 제출"
-                                    ><span class="sr-only">Terra medium effort 경량 작업 제출</span></button>
+                                        id="codex-blog-dashboard-open"
+                                        aria-label="블로그 자동 작성 상황판 열기"
+                                        title="블로그 자동 작성 상황판 열기"
+                                    ><span class="sr-only">블로그 자동 작성 상황판 열기</span></button>
                                     <button
                                         class="btn ghost icon-only usage-keepalive-history-open"
                                         type="button"
@@ -1318,6 +1318,25 @@
             </div>
             <div class="usage-keepalive-history-overlay-footer">
                 <button class="btn ghost" type="button" id="codex-usage-keepalive-history-close-footer">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="blog-dashboard-overlay" id="codex-blog-dashboard-overlay" aria-hidden="true">
+        <div class="blog-dashboard-overlay-backdrop" data-action="close"></div>
+        <div class="blog-dashboard-overlay-card" role="dialog" aria-modal="true" aria-labelledby="codex-blog-dashboard-title">
+            <div class="blog-dashboard-overlay-header">
+                <div>
+                    <div class="blog-dashboard-title" id="codex-blog-dashboard-title">블로그 자동 작성 상황판</div>
+                    <div class="blog-dashboard-subtitle" id="codex-blog-dashboard-subtitle">상태를 불러오는 중...</div>
+                </div>
+                <button class="btn ghost icon-only" type="button" id="codex-blog-dashboard-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
+            </div>
+            <div class="blog-dashboard-overlay-body" id="codex-blog-dashboard-body"></div>
+            <div class="blog-dashboard-overlay-footer">
+                <button class="btn ghost" type="button" id="codex-blog-dashboard-refresh">새로고침</button>
+                <button class="btn primary" type="button" id="codex-blog-dashboard-submit">다음 경량 작업 제출</button>
+                <button class="btn ghost" type="button" id="codex-blog-dashboard-close-footer">닫기</button>
             </div>
         </div>
     </div>

@@ -2299,7 +2299,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageHistoryOpen = document.getElementById('codex-usage-history-open');
     const usageKeepaliveHistoryOpen = document.getElementById('codex-usage-keepalive-history-open');
     const usageRefreshBtn = document.getElementById('codex-usage-refresh');
-    const usageKeepaliveSubmitBtn = document.getElementById('codex-usage-keepalive-submit');
+    const blogDashboardOpen = document.getElementById('codex-blog-dashboard-open');
     const accountSelect = document.getElementById('codex-account-select');
     const accountManageOpen = document.getElementById('codex-account-manage-open');
     const accountOverlay = document.getElementById('codex-account-overlay');
@@ -2406,6 +2406,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const usageKeepaliveHistoryClose = document.getElementById('codex-usage-keepalive-history-close');
     const usageKeepaliveHistoryCloseFooter = document.getElementById('codex-usage-keepalive-history-close-footer');
     const usageKeepaliveHistoryMore = document.getElementById('codex-usage-keepalive-history-more');
+    const blogDashboardOverlay = document.getElementById('codex-blog-dashboard-overlay');
+    const blogDashboardClose = document.getElementById('codex-blog-dashboard-close');
+    const blogDashboardCloseFooter = document.getElementById('codex-blog-dashboard-close-footer');
+    const blogDashboardRefresh = document.getElementById('codex-blog-dashboard-refresh');
+    const blogDashboardSubmit = document.getElementById('codex-blog-dashboard-submit');
     const usageHistoryZoomControls = document.getElementById('codex-usage-history-zoom-controls');
     const fileBrowserOverlay = document.getElementById('codex-file-browser-overlay');
     const fileBrowserOverlayClose = document.getElementById('codex-file-browser-overlay-close');
@@ -3500,30 +3505,16 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    if (usageKeepaliveSubmitBtn) {
-        usageKeepaliveSubmitBtn.addEventListener('click', async () => {
-            const confirmed = window.confirm(
-                '블로그의 다음 집필 단계를 실행할까요? 한 단계만 진행하며 사용량이 발생합니다.'
-            );
-            if (!confirmed) return;
-            usageKeepaliveSubmitBtn.disabled = true;
-            try {
-                const result = await fetchJson('/api/codex/usage/keepalive', {
-                    method: 'POST', cache: 'no-store'
-                });
-                state.settings.usage = result?.usage || state.settings.usage;
-                state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
-                updateUsageSummary(state.settings.usage);
-                showToast('블로그의 다음 집필 단계를 제출했습니다.', { type: 'success' });
-                const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
-                if (streamId) void watchManualUsageKeepalive(streamId);
-            } catch (error) {
-                showToast(normalizeError(error, '경량 작업을 제출하지 못했습니다.'), { type: 'error' });
-            } finally {
-                usageKeepaliveSubmitBtn.disabled = false;
-            }
+    if (blogDashboardOpen) blogDashboardOpen.addEventListener('click', () => { void openBlogDashboardOverlay(); });
+    if (blogDashboardOverlay) {
+        blogDashboardOverlay.addEventListener('click', event => {
+            if (event.target?.dataset?.action === 'close') closeBlogDashboardOverlay();
         });
     }
+    if (blogDashboardClose) blogDashboardClose.addEventListener('click', closeBlogDashboardOverlay);
+    if (blogDashboardCloseFooter) blogDashboardCloseFooter.addEventListener('click', closeBlogDashboardOverlay);
+    if (blogDashboardRefresh) blogDashboardRefresh.addEventListener('click', () => { void refreshBlogDashboard(); });
+    if (blogDashboardSubmit) blogDashboardSubmit.addEventListener('click', () => { void submitBlogDashboardStage(); });
     if (usageHistoryOverlay) {
         usageHistoryOverlay.addEventListener('click', event => {
             const target = event.target;
@@ -9569,7 +9560,7 @@ function updateUsageSummary(usage) {
     }
     const showUsageLimits = state.settings?.usageLimitsEnabled !== false;
     const historyButton = document.getElementById('codex-usage-history-open');
-    const keepaliveButton = document.getElementById('codex-usage-keepalive-submit');
+    const blogDashboardButton = document.getElementById('codex-blog-dashboard-open');
     const keepaliveHistoryButton = document.getElementById('codex-usage-keepalive-history-open');
     const keepaliveStatus = document.getElementById('codex-usage-keepalive-status');
     if (historyButton) {
@@ -9578,8 +9569,8 @@ function updateUsageSummary(usage) {
         historyButton.classList.toggle('is-hidden', !showUsageLimits);
         historyButton.classList.toggle('is-ready', hasHistory);
     }
-    if (keepaliveButton) {
-        keepaliveButton.classList.toggle('is-hidden', !showUsageLimits);
+    if (blogDashboardButton) {
+        blogDashboardButton.classList.toggle('is-hidden', !showUsageLimits);
     }
     if (keepaliveHistoryButton) {
         const hasKeepaliveHistory = Array.isArray(usage?.usage_keepalive?.history)
@@ -16970,6 +16961,150 @@ function closeUsageKeepaliveHistoryOverlay() {
         && !isMessageLogOverlayOpen() && !isFileBrowserOverlayOpen() && !isMailComposeOverlayOpen()
         && !isMobileSessionOverlayOpen() && !isTerminalOverlayOpen()) {
         document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function isBlogDashboardOverlayOpen() {
+    const overlay = document.getElementById('codex-blog-dashboard-overlay');
+    return overlay ? overlay.classList.contains('is-visible') : false;
+}
+
+function closeBlogDashboardOverlay() {
+    const overlay = document.getElementById('codex-blog-dashboard-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('is-visible');
+    overlay.setAttribute('aria-hidden', 'true');
+    if (!isUsageHistoryOverlayOpen() && !isUsageKeepaliveHistoryOverlayOpen()
+        && !isGitBranchOverlayOpen() && !isGitSyncOverlayOpen() && !isMessageLogOverlayOpen()
+        && !isFileBrowserOverlayOpen() && !isMailComposeOverlayOpen() && !isMobileSessionOverlayOpen()
+        && !isTerminalOverlayOpen()) {
+        document.body.classList.remove('is-overlay-open');
+    }
+}
+
+function blogDashboardStageLabel(stage) {
+    return ({ brief: '기획', research: '조사', outline: '구성', draft: '초고', review: '검수' })[stage] || '새 주제 준비';
+}
+
+function renderBlogDashboard(status) {
+    const body = document.getElementById('codex-blog-dashboard-body');
+    const subtitle = document.getElementById('codex-blog-dashboard-subtitle');
+    const submit = document.getElementById('codex-blog-dashboard-submit');
+    if (!body || !subtitle) return;
+    body.replaceChildren();
+    if (!status?.configured) {
+        subtitle.textContent = '블로그 프로젝트가 설정되지 않았습니다.';
+        const empty = document.createElement('div');
+        empty.className = 'blog-dashboard-empty';
+        empty.textContent = '프로젝트 설정을 완료한 뒤 경량 작업을 제출할 수 있습니다.';
+        body.appendChild(empty);
+        if (submit) submit.disabled = true;
+        return;
+    }
+    const dashboard = status.dashboard || {};
+    const project = status.project || {};
+    const stage = String(dashboard.current_stage || 'select');
+    const stageNumber = Number(dashboard.current_stage_number || 0);
+    const completed = Number(dashboard.completed_stage_count || 0);
+    const total = Number(dashboard.total_stage_count || 5);
+    const running = Boolean(dashboard.is_running);
+    subtitle.textContent = `${project.name || '블로그'} · ${status.enabled ? (running ? '작업 실행 중' : '활성화됨') : '비활성화됨'}`;
+    if (submit) submit.disabled = !status.enabled || running;
+
+    const topic = document.createElement('div');
+    topic.className = 'blog-dashboard-topic';
+    topic.textContent = dashboard.current_topic || '다음 주제를 선택하는 중입니다.';
+    body.appendChild(topic);
+
+    const meta = document.createElement('div');
+    meta.className = 'blog-dashboard-meta';
+    meta.textContent = stage === 'select' ? '새 글 준비 중' : `${completed}/${total} 단계 완료 · 다음 단계: ${blogDashboardStageLabel(stage)}`;
+    body.appendChild(meta);
+    const track = document.createElement('div');
+    track.className = 'blog-dashboard-progress-track';
+    const bar = document.createElement('div');
+    bar.className = 'blog-dashboard-progress-bar';
+    bar.style.width = `${Math.max(0, Math.min(100, Number(dashboard.progress_percent || 0)))}%`;
+    track.appendChild(bar);
+    body.appendChild(track);
+
+    const stages = document.createElement('div');
+    stages.className = 'blog-dashboard-stages';
+    ['brief', 'research', 'outline', 'draft', 'review'].forEach((item, index) => {
+        const cell = document.createElement('div');
+        cell.className = 'blog-dashboard-stage';
+        if (index < completed) cell.classList.add('is-complete');
+        if (item === stage) cell.classList.add('is-current');
+        cell.textContent = blogDashboardStageLabel(item);
+        stages.appendChild(cell);
+    });
+    body.appendChild(stages);
+
+    const stats = document.createElement('div');
+    stats.className = 'blog-dashboard-stats';
+    const values = [
+        ['완성된 글', `${Number(dashboard.completed_post_count || 0)}개`],
+        ['대기 주제', `${Number(dashboard.backlog_count || 0)}개`],
+        ['최근 결과', dashboard.last_status === 'completed' ? '완료' : (dashboard.last_status === 'failed' ? '실패' : '없음')],
+        ['최근 토큰', formatUsageKeepaliveHistoryTokens(dashboard.last_token_usage) || '기록 없음'],
+    ];
+    values.forEach(([label, value]) => {
+        const item = document.createElement('div');
+        item.className = 'blog-dashboard-stat';
+        const caption = document.createElement('div');
+        caption.className = 'blog-dashboard-meta';
+        caption.textContent = label;
+        const strong = document.createElement('strong');
+        strong.textContent = value;
+        item.append(caption, strong);
+        stats.appendChild(item);
+    });
+    body.appendChild(stats);
+}
+
+async function refreshBlogDashboard() {
+    const refresh = document.getElementById('codex-blog-dashboard-refresh');
+    if (refresh) refresh.disabled = true;
+    try {
+        const status = await fetchJson('/api/codex/blog', { cache: 'no-store' });
+        renderBlogDashboard(status);
+        return status;
+    } catch (error) {
+        showToast(normalizeError(error, '블로그 상태를 불러오지 못했습니다.'), { type: 'error' });
+        return null;
+    } finally {
+        if (refresh) refresh.disabled = false;
+    }
+}
+
+async function openBlogDashboardOverlay() {
+    const overlay = document.getElementById('codex-blog-dashboard-overlay');
+    if (!overlay) return;
+    if (isUsageHistoryOverlayOpen()) closeUsageHistoryOverlay();
+    if (isUsageKeepaliveHistoryOverlayOpen()) closeUsageKeepaliveHistoryOverlay();
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-overlay-open');
+    await refreshBlogDashboard();
+}
+
+async function submitBlogDashboardStage() {
+    const button = document.getElementById('codex-blog-dashboard-submit');
+    const confirmed = window.confirm('블로그의 다음 집필 단계를 실행할까요? 한 단계만 진행하며 사용량이 발생합니다.');
+    if (!confirmed) return;
+    if (button) button.disabled = true;
+    try {
+        const result = await fetchJson('/api/codex/usage/keepalive', { method: 'POST', cache: 'no-store' });
+        state.settings.usage = result?.usage || state.settings.usage;
+        state.settings.usageHistory = result?.usage_history || state.settings.usageHistory;
+        updateUsageSummary(state.settings.usage);
+        showToast('블로그의 다음 집필 단계를 제출했습니다.', { type: 'success' });
+        const streamId = String(result?.usage_keepalive?.stream?.id || '').trim();
+        if (streamId) void watchManualUsageKeepalive(streamId);
+        await refreshBlogDashboard();
+    } catch (error) {
+        showToast(normalizeError(error, '경량 작업을 제출하지 못했습니다.'), { type: 'error' });
+        await refreshBlogDashboard();
     }
 }
 

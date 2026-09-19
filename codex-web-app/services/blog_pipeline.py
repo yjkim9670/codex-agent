@@ -578,13 +578,38 @@ def _status_payload(root=None):
         }
     project = _normalize_project(project_payload)
     state = _load_state(root, project['project_id'])
+    stage = str(state.get('stage') or 'select')
+    stage_number = _STAGES.index(stage) + 1 if stage in _STAGES else 0
+    completed_stage_count = max(0, stage_number - 1)
+    in_flight = state.get('in_flight') if isinstance(state.get('in_flight'), dict) else None
+    last_result = state.get('last_result') if isinstance(state.get('last_result'), dict) else {}
+    queued_count = sum(
+        1 for item in _load_backlog(root)
+        if item.get('status') not in {'done', 'cancelled'}
+    )
+    dashboard = {
+        'current_topic': str(state.get('active_topic') or ''),
+        'current_stage': stage,
+        'current_stage_number': stage_number,
+        'completed_stage_count': completed_stage_count,
+        'total_stage_count': len(_STAGES),
+        'progress_percent': int((completed_stage_count / len(_STAGES)) * 100),
+        'is_running': bool(in_flight and in_flight.get('run_id')),
+        'running_stage': str((in_flight or {}).get('stage') or ''),
+        'completed_post_count': max(0, int(state.get('completed_post_count') or 0)),
+        'backlog_count': queued_count,
+        'last_status': str(last_result.get('status') or ''),
+        'last_completed_at': last_result.get('completed_at') or state.get('last_run_at'),
+        'last_token_usage': _normalize_tokens(last_result.get('token_usage')),
+    }
     return {
         'configured': True,
         'enabled': bool(project.get('enabled')),
         'path': str(root),
         'project': project,
         'state': state,
-        'backlog_count': len(_load_backlog(root)),
+        'backlog_count': dashboard['backlog_count'],
+        'dashboard': dashboard,
         'recent_runs': _read_jsonl_tail(_runs_path(root)),
         'artifacts': sorted(
             str(path.relative_to(root)).replace('\\', '/')

@@ -398,6 +398,7 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-usage-keepalive: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M13.2 3.8 6.9 13h4.7L10.8 20.2l6.3-9.2h-4.7z'/></svg>");
     --icon-usage-keepalive-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 12a8 8 0 1 0 2.35-5.65'/><path d='M4 4.5v4h4'/><path d='M12 7.8V12l3 1.9'/></svg>");
+    --icon-blog-dashboard: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='4' width='16' height='16' rx='2'/><path d='M8 16v-3m4 3V9m4 7v-5'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
     --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
@@ -570,6 +571,7 @@
     --icon-usage-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 18V6'/><path d='M4 18h16'/><path d='m7.5 14.6 3.1-3.1 2.7 2.7 3.2-4.2'/><circle cx='7.5' cy='14.6' r='1.05'/><circle cx='10.6' cy='11.5' r='1.05'/><circle cx='13.3' cy='14.2' r='1.05'/><circle cx='16.5' cy='10' r='1.05'/></svg>");
     --icon-usage-keepalive: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M13.2 3.8 6.9 13h4.7L10.8 20.2l6.3-9.2h-4.7z'/></svg>");
     --icon-usage-keepalive-history: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M4 12a8 8 0 1 0 2.35-5.65'/><path d='M4 4.5v4h4'/><path d='M12 7.8V12l3 1.9'/></svg>");
+    --icon-blog-dashboard: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='4' width='16' height='16' rx='2'/><path d='M8 16v-3m4 3V9m4 7v-5'/></svg>");
     --icon-chat-add: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='M12 7.9v4.8'/><path d='M9.6 10.3h4.8'/></svg>");
     --icon-chat-return: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 7.1A2.1 2.1 0 0 1 7.1 5h9.8A2.1 2.1 0 0 1 19 7.1v6.4a2.1 2.1 0 0 1-2.1 2.1h-5.4l-3.6 3v-3H7.1A2.1 2.1 0 0 1 5 13.5z'/><path d='m11.4 8.7-3.1 3.1 3.1 3.1'/><path d='M8.6 11.8h6.4'/></svg>");
     --icon-chat-switch: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.85' stroke-linecap='round' stroke-linejoin='round'><path d='M5 6.4a2.2 2.2 0 0 1 2.2-2.2h9.6A2.2 2.2 0 0 1 19 6.4v7.2a2.2 2.2 0 0 1-2.2 2.2h-4.9L8.4 19v-3.2H7.2A2.2 2.2 0 0 1 5 13.6z'/><path d='M8.6 9.1h6.8'/><path d='M8.6 12.2h4.9'/></svg>");
@@ -8993,6 +8995,36 @@ body.is-work-mode-resizing * {
     background-position: center;
     background-size: 15px 15px;
 }
+
+.blog-dashboard-open {
+    background-image: var(--icon-blog-dashboard);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 16px 16px;
+}
+
+.blog-dashboard-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 8px; z-index: 2377; }
+.blog-dashboard-overlay.is-visible { display: flex; }
+.blog-dashboard-overlay-backdrop { position: absolute; inset: 0; background: rgba(12, 20, 30, .45); }
+.blog-dashboard-overlay-card { position: relative; width: min(640px, calc(100vw - 16px)); max-height: min(680px, calc(100dvh - 16px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shell-shadow); }
+.blog-dashboard-overlay-header, .blog-dashboard-overlay-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 18px; background: var(--surface-raised); }
+.blog-dashboard-overlay-header { border-bottom: 1px solid var(--border); }
+.blog-dashboard-overlay-footer { justify-content: flex-end; border-top: 1px solid var(--border); }
+.blog-dashboard-title { color: var(--text-primary); font-size: 15px; font-weight: 700; }
+.blog-dashboard-subtitle, .blog-dashboard-meta { color: var(--text-tertiary); font-size: 12px; }
+.blog-dashboard-subtitle { margin-top: 4px; }
+.blog-dashboard-overlay-body { min-height: 0; overflow-y: auto; padding: 16px 18px; }
+.blog-dashboard-topic { color: var(--text-primary); font-size: 15px; font-weight: 650; line-height: 1.45; }
+.blog-dashboard-progress-track { height: 8px; margin: 12px 0 8px; overflow: hidden; border-radius: 99px; background: var(--surface-hover); }
+.blog-dashboard-progress-bar { height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }
+.blog-dashboard-stages { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin: 14px 0 18px; }
+.blog-dashboard-stage { padding: 7px 3px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-tertiary); font-size: 11px; text-align: center; }
+.blog-dashboard-stage.is-complete { color: var(--accent); border-color: var(--accent); }
+.blog-dashboard-stage.is-current { color: var(--text-primary); background: var(--surface-hover); font-weight: 700; }
+.blog-dashboard-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.blog-dashboard-stat { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-raised); }
+.blog-dashboard-stat strong { display: block; margin-top: 3px; color: var(--text-primary); font-size: 16px; }
+.blog-dashboard-empty { padding: 16px; color: var(--text-tertiary); text-align: center; }
 
 .usage-keepalive-status {
     margin: -5px 0 8px;

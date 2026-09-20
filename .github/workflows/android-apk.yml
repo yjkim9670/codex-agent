@@ -63,8 +63,9 @@ jobs:
 
       - name: Report missing stable signing secrets
         if: >-
-          env.ANDROID_KEYSTORE_BASE64 == '' ||
-          env.ANDROID_KEYSTORE_PASSWORD == ''
+          github.event_name != 'pull_request' &&
+          (env.ANDROID_KEYSTORE_BASE64 == '' ||
+          env.ANDROID_KEYSTORE_PASSWORD == '')
         run: |
           echo "::warning::Stable Android release signing is not configured. Debug APK is validation-only and must not be used as the long-lived installed app."
           {

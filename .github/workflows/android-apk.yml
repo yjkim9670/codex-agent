@@ -2,6 +2,12 @@ name: Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_artifact:
+        description: Publish a downloadable APK artifact
+        required: false
+        default: true
+        type: boolean
   push:
     branches:
       - main
@@ -53,7 +59,11 @@ jobs:
         run: gradle -p android :app:assembleDebug --stacktrace
 
       - name: Upload debug validation APK
-        if: github.event_name != 'pull_request'
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
+          (env.ANDROID_KEYSTORE_BASE64 == '' ||
+          env.ANDROID_KEYSTORE_PASSWORD == '')
         uses: actions/upload-artifact@v4
         with:
           name: codex-workbench-android-debug-validation-only
@@ -63,7 +73,8 @@ jobs:
 
       - name: Report missing stable signing secrets
         if: >-
-          github.event_name != 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
           (env.ANDROID_KEYSTORE_BASE64 == '' ||
           env.ANDROID_KEYSTORE_PASSWORD == '')
         run: |
@@ -78,7 +89,8 @@ jobs:
 
       - name: Prepare stable release keystore
         if: >-
-          github.event_name != 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
           env.ANDROID_KEYSTORE_BASE64 != '' &&
           env.ANDROID_KEYSTORE_PASSWORD != ''
         run: |
@@ -92,14 +104,16 @@ jobs:
 
       - name: Build signed release APK
         if: >-
-          github.event_name != 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
           env.ANDROID_KEYSTORE_BASE64 != '' &&
           env.ANDROID_KEYSTORE_PASSWORD != ''
         run: gradle -p android :app:assembleRelease --stacktrace
 
       - name: Verify release APK signature
         if: >-
-          github.event_name != 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
           env.ANDROID_KEYSTORE_BASE64 != '' &&
           env.ANDROID_KEYSTORE_PASSWORD != ''
         run: |
@@ -116,7 +130,8 @@ jobs:
 
       - name: Upload signed release APK
         if: >-
-          github.event_name != 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.publish_artifact &&
           env.ANDROID_KEYSTORE_BASE64 != '' &&
           env.ANDROID_KEYSTORE_PASSWORD != ''
         uses: actions/upload-artifact@v4
@@ -125,3 +140,8 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Report validation-only build
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          echo "::notice::Validation-only CI run. No APK artifact is uploaded, so routine pushes and pull requests do not consume Actions artifact storage."

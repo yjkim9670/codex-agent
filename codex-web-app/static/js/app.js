@@ -16983,7 +16983,7 @@ function closeBlogDashboardOverlay() {
 }
 
 function blogDashboardStageLabel(stage) {
-    return ({ brief: '기획', research: '조사', outline: '구성', draft: '초고', review: '검수' })[stage] || '새 주제 준비';
+    return ({ topic: '주제 생성', brief: '기획', research: '조사', outline: '구성', draft: '초고', review: '검수' })[stage] || '새 주제 준비';
 }
 
 function renderBlogDashboard(status) {
@@ -17018,7 +17018,11 @@ function renderBlogDashboard(status) {
 
     const meta = document.createElement('div');
     meta.className = 'blog-dashboard-meta';
-    meta.textContent = stage === 'select' ? '새 글 준비 중' : `${completed}/${total} 단계 완료 · 다음 단계: ${blogDashboardStageLabel(stage)}`;
+    meta.textContent = stage === 'select'
+        ? '새 글 준비 중'
+        : (stage === 'topic'
+            ? 'AI가 다음 글의 주제를 만들고 있습니다.'
+            : `${completed}/${total} 단계 완료 · 다음 단계: ${blogDashboardStageLabel(stage)}`);
     body.appendChild(meta);
     const track = document.createElement('div');
     track.className = 'blog-dashboard-progress-track';
@@ -17042,9 +17046,13 @@ function renderBlogDashboard(status) {
 
     const stats = document.createElement('div');
     stats.className = 'blog-dashboard-stats';
+    const workspacePath = String(status.workspace?.path || '');
+    const workspaceName = workspacePath.split('/').filter(Boolean).pop() || '확인 불가';
     const values = [
         ['완성된 글', `${Number(dashboard.completed_post_count || 0)}개`],
         ['대기 주제', `${Number(dashboard.backlog_count || 0)}개`],
+        ['주제 참고', `${Number(dashboard.topic_inspiration_count || 0)}개`],
+        ['작업공간', `${workspaceName} · ${String(status.workspace?.scope_id || '').slice(0, 8) || '확인 불가'}`],
         ['최근 결과', dashboard.last_status === 'completed' ? '완료' : (dashboard.last_status === 'failed' ? '실패' : '없음')],
         ['최근 토큰', formatUsageKeepaliveHistoryTokens(dashboard.last_token_usage) || '기록 없음'],
     ];

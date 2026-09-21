@@ -54,9 +54,9 @@ def test_usage_panel_advances_the_same_blog_pipeline(blog_environment, monkeypat
 
     assert result['submitted'] is True
     assert result['stream']['id'] == 'usage-blog-stream'
-    assert result['blog_pipeline']['stage'] == 'brief'
+    assert result['blog_pipeline']['stage'] == 'topic'
     state = blog_pipeline.get_blog_pipeline_status()['state']
-    assert state['in_flight']['stage'] == 'brief'
+    assert state['in_flight']['stage'] == 'topic'
 
 
 def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, monkeypatch):
@@ -96,7 +96,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
 
     started = blog_pipeline.run_blog_pipeline(force=True)
     assert started['started'] is True
-    assert started['stage'] == 'brief'
+    assert started['stage'] == 'topic'
 
     in_flight = blog_pipeline.get_blog_pipeline_status()['state']['in_flight']
     assert in_flight['stream_id'] == 'blog-stream'
@@ -105,12 +105,12 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
         {
             'project_id': 'series-a',
             'run_id': started['run_id'],
-            'stage': 'brief',
+            'stage': 'topic',
             'post_id': started['post_id'],
             'blog_root': str(blog_environment / 'blog'),
             'claim_path': str(
-                blog_pipeline._claim_path(
-                    {'codex_home': Path('/missing'), 'account': {'id': 'default'}},
+                    blog_pipeline._claim_path(
+                        {'codex_home': blog_environment.parent / 'codex-home', 'account': {'id': 'default'}},
                     'series-a',
                 )
             ),
@@ -119,12 +119,41 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
         token_usage={'input_tokens': 100, 'output_tokens': 25, 'total_tokens': 125},
     ) is True
 
+    # The topic-stage model output is the sole source of the next article
+    # title.  Legacy backlog entries are only inspirations.
+    (blog_environment / 'blog' / 'topic_proposal.json').write_text(
+        json.dumps({'title': 'AI가 만든 다음 글', 'rationale': '독자에게 실용적입니다.'}),
+        encoding='utf-8',
+    )
+    # Re-run completion now that the model artifact exists.  The first call
+    # above intentionally exercises invalid-proposal recovery.
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    assert state['last_error'] == 'topic_proposal_invalid'
+    started = blog_pipeline.run_blog_pipeline(force=True)
+    assert started['stage'] == 'topic'
+    assert blog_pipeline.record_blog_pipeline_completion(
+        {
+            'project_id': 'series-a', 'run_id': started['run_id'], 'stage': 'topic',
+                'post_id': '', 'blog_root': str(blog_environment / 'blog'),
+                'claim_path': str(blog_pipeline._claim_path(
+                    {'codex_home': blog_environment.parent / 'codex-home', 'account': {'id': 'default'}}, 'series-a')),
+        }, True,
+    ) is True
+    started = blog_pipeline.run_blog_pipeline(force=True)
+    assert started['stage'] == 'brief'
+    assert blog_pipeline.record_blog_pipeline_completion({
+        'project_id': 'series-a', 'run_id': started['run_id'], 'stage': 'brief',
+        'post_id': started['post_id'], 'blog_root': str(blog_environment / 'blog'),
+        'claim_path': str(blog_pipeline._claim_path(
+            {'codex_home': blog_environment.parent / 'codex-home', 'account': {'id': 'default'}}, 'series-a')),
+    }, True, token_usage={'input_tokens': 100, 'output_tokens': 25, 'total_tokens': 125}) is True
+
     status = blog_pipeline.get_blog_pipeline_status()
     assert status['state']['in_flight'] is None
     assert status['state']['stage'] == 'research'
     assert status['recent_runs'][-1]['token_usage']['total_tokens'] == 125
     assert status['dashboard'] == {
-        'current_topic': '첫 번째 글의 주제',
+        'current_topic': 'AI가 만든 다음 글',
         'current_stage': 'research',
         'current_stage_number': 2,
         'completed_stage_count': 1,
@@ -134,6 +163,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
         'running_stage': '',
         'completed_post_count': 0,
         'backlog_count': 1,
+        'topic_inspiration_count': 1,
         'last_status': 'completed',
         'last_completed_at': status['state']['last_result']['completed_at'],
         'last_token_usage': {
@@ -146,7 +176,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     }
 
 
-def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environment, monkeypatch):
+def test_pipeline_uses_ai_topic_before_and_after_each_article(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
         'project_id': 'rotation-series',
         'enabled': True,
@@ -161,7 +191,11 @@ def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environme
     started = blog_pipeline.run_blog_pipeline(force=True)
 
     assert started['started'] is True
-    assert started['stage'] == 'brief'
+    assert started['stage'] == 'topic'
+    (blog_environment / 'blog' / 'topic_proposal.json').write_text(
+        json.dumps({'title': 'AI가 만든 첫 글', 'rationale': '연속성을 반영했습니다.'}),
+        encoding='utf-8',
+    )
     backlog = blog_pipeline._load_backlog(blog_environment / 'blog')
     assert len(backlog) == 1
     claim_path = str(blog_pipeline._claim_path(
@@ -169,6 +203,11 @@ def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environme
         'rotation-series',
     ))
 
+    assert blog_pipeline.record_blog_pipeline_completion({
+        'project_id': 'rotation-series', 'run_id': started['run_id'], 'stage': 'topic',
+        'post_id': '', 'blog_root': str(blog_environment / 'blog'), 'claim_path': claim_path,
+    }, True)
+    started = blog_pipeline.run_blog_pipeline(force=True)
     for stage in ('brief', 'research', 'outline', 'draft', 'review'):
         assert blog_pipeline.record_blog_pipeline_completion({
             'project_id': 'rotation-series',
@@ -179,14 +218,12 @@ def test_pipeline_queues_one_new_topic_only_after_the_fifth_stage(blog_environme
             'claim_path': claim_path,
         }, True)
         if stage != 'review':
-            assert len(blog_pipeline._load_backlog(blog_environment / 'blog')) == 1
             started = blog_pipeline.run_blog_pipeline(force=True)
 
     backlog = blog_pipeline._load_backlog(blog_environment / 'blog')
-    rotation_items = [item for item in backlog if item['id'] == 'rotation-0001']
-    assert len(rotation_items) == 1
-    assert rotation_items[0]['source'] == 'completion_rotation'
+    assert [item for item in backlog if item.get('source') == 'completion_rotation'] == []
     assert blog_pipeline.get_blog_pipeline_status()['state']['completed_post_count'] == 1
+    assert blog_pipeline.run_blog_pipeline(force=True)['stage'] == 'topic'
 
 
 def test_blog_claim_is_shared_across_workbenches(blog_environment):
@@ -218,7 +255,7 @@ def test_blog_prompt_limits_stage_context(blog_environment):
     })
     root = blog_environment / 'blog'
     state = blog_pipeline._load_state(root, 'prompt-series')
-    state = blog_pipeline._select_topic(root, state)
+    state.update({'stage': 'brief', 'active_post_id': 'test-post', 'active_topic': '짧은 주제'})
     project = blog_pipeline._load_project(root)
     prompt = blog_pipeline._build_prompt(project, state)
 
@@ -226,3 +263,41 @@ def test_blog_prompt_limits_stage_context(blog_environment):
     assert 'pipeline_state.json' in prompt
     assert 'Do not inspect chat history, the repository, or unrelated files.' in prompt
     assert 'Target 300-500 words.' in prompt
+
+
+def test_topic_stage_generates_article_from_legacy_backlog(blog_environment, monkeypatch):
+    blog_pipeline.configure_blog_project({
+        'project_id': 'ai-topic-series', 'enabled': True, 'backlog': ['기존에 정한 방향'],
+    })
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'blog-stream'})
+
+    started = blog_pipeline.run_blog_pipeline(force=True)
+    assert started['stage'] == 'topic'
+    root = blog_environment / 'blog'
+    assert blog_pipeline._load_backlog(root)[0]['kind'] == 'topic_inspiration'
+    assert 'Existing queued entries are inspirations' in blog_pipeline._build_prompt(
+        blog_pipeline._load_project(root), blog_pipeline._load_state(root, 'ai-topic-series'))
+    (root / 'topic_proposal.json').write_text(
+        json.dumps({'title': 'AI가 새로 만든 주제', 'rationale': '기존 방향을 더 구체화했습니다.'}), encoding='utf-8')
+    assert blog_pipeline.record_blog_pipeline_completion({
+        'project_id': 'ai-topic-series', 'run_id': started['run_id'], 'stage': 'topic',
+        'post_id': '', 'blog_root': str(root), 'claim_path': str(blog_pipeline._claim_path(
+            {'codex_home': Path('/missing'), 'account': {'id': 'default'}}, 'ai-topic-series')),
+    }, True)
+    generated = [item for item in blog_pipeline._load_backlog(root) if item.get('kind') == 'article']
+    assert generated[0]['title'] == 'AI가 새로 만든 주제'
+
+
+def test_completion_rejects_a_different_workspace_owner(blog_environment, monkeypatch):
+    blog_pipeline.configure_blog_project({'project_id': 'scoped-series', 'enabled': True})
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'blog-stream'})
+    started = blog_pipeline.run_blog_pipeline(force=True)
+    root = blog_environment / 'blog'
+
+    assert blog_pipeline.record_blog_pipeline_completion({
+        'project_id': 'scoped-series', 'run_id': started['run_id'], 'stage': 'topic',
+        'blog_root': str(root), 'workspace_path': '/another/workbench/workspace',
+    }, True) is False
+    assert blog_pipeline.get_blog_pipeline_status()['state']['in_flight']['run_id'] == started['run_id']

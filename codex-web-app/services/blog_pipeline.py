@@ -30,6 +30,8 @@ _MEMORY_FILENAME = 'editorial_memory.md'
 _RUNS_FILENAME = 'runs.jsonl'
 _POSTS_DIR_NAME = 'posts'
 _STAGES = ('brief', 'research', 'outline', 'draft', 'review')
+_TOPIC_STAGE = 'topic'
+_TOPIC_PROPOSAL_FILENAME = 'topic_proposal.json'
 _DEFAULT_CADENCE_MINUTES = 360
 _MIN_CADENCE_MINUTES = 60
 _MAX_CADENCE_MINUTES = 10080
@@ -43,13 +45,6 @@ _DEFAULT_TOPIC_ROTATION_SEEDS = (
     '긴 업무를 이어 가기 위한 프로젝트 기록법',
     '개인 업무 흐름에 자동화를 무리 없이 더하는 방법',
     'AI 도구 사용을 회고하고 개선하는 방법',
-)
-_TOPIC_ROTATION_SUFFIXES = (
-    '오늘 바로 적용하는 15분 실험',
-    '실수를 줄이는 간단한 체크리스트',
-    '처음 도입할 때 놓치기 쉬운 기준',
-    '작은 업무 흐름으로 시작하는 방법',
-    '다음 주에도 이어 갈 수 있게 만드는 기록법',
 )
 
 
@@ -87,6 +82,10 @@ def _runs_path(root):
 
 def _posts_path(root):
     return root / _POSTS_DIR_NAME
+
+
+def _topic_proposal_path(root):
+    return root / _TOPIC_PROPOSAL_FILENAME
 
 
 def _read_json(path, default=None):
@@ -144,9 +143,8 @@ def _project_defaults():
         'cadence_minutes': _DEFAULT_CADENCE_MINUTES,
         'model': '',
         'reasoning_effort': 'low',
-        # Topics rotate after an article is completed, never merely because a
-        # new calendar day started.  This keeps one article aligned with the
-        # five durable stages below even on days with fewer executions.
+        # Kept as an editorial inspiration list for compatibility.  A model,
+        # not deterministic string concatenation, chooses each next topic.
         'topic_rotation_enabled': True,
         'topic_rotation_seeds': list(_DEFAULT_TOPIC_ROTATION_SEEDS),
         'updated_at': normalize_timestamp(None),
@@ -270,7 +268,13 @@ def _load_state(root, project_id):
     if isinstance(payload, dict):
         state.update(payload)
     state['project_id'] = project_id
-    state['stage'] = state.get('stage') if state.get('stage') in ('select', *_STAGES) else 'select'
+    state['stage'] = state.get('stage') if state.get('stage') in ('select', _TOPIC_STAGE, *_STAGES) else 'select'
+    # State is workspace-local.  Derive its owner from the state root rather
+    # than a process-global setting: completion callbacks carry an explicit
+    # root and must never make a different Workbench look like its owner.
+    workspace_path = str(Path(root).resolve().parent)
+    state['workspace_path'] = workspace_path
+    state['workspace_scope_id'] = hashlib.sha1(workspace_path.encode('utf-8')).hexdigest()[:12]
     return state
 
 
@@ -308,27 +312,42 @@ def _save_backlog(root, items):
     _write_json_atomic(_backlog_path(root), {'version': 1, 'items': items})
 
 
-def _queue_rotation_topic(root, project, state, now):
-    """Append one local topic only after a five-stage article completes."""
-    if not project.get('topic_rotation_enabled'):
-        return False
-    completed_count = max(0, int(state.get('completed_post_count') or 0))
-    if not completed_count:
-        return False
-    item_id = f'rotation-{completed_count:04d}'
+def _migrate_backlog_to_inspirations(root):
+    """Turn legacy queued titles into input for the next AI topic choice.
+
+    This intentionally preserves user-provided titles instead of silently
+    dropping them, while ensuring that a previously queued title cannot bypass
+    the new topic-generation step.
+    """
     items = _load_backlog(root)
-    if any(str(item.get('id') or '') == item_id for item in items):
+    changed = False
+    for item in items:
+        if item.get('status') == 'queued' and item.get('kind') != 'article':
+            item['kind'] = 'topic_inspiration'
+            item['source'] = item.get('source') or 'legacy_backlog'
+            changed = True
+    if changed:
+        _save_backlog(root, items)
+    return items
+
+
+def _queue_generated_topic(root, proposal, now):
+    title = str(proposal.get('title') or '').strip()[:300]
+    if not title:
         return False
-    seeds = project.get('topic_rotation_seeds') or list(_DEFAULT_TOPIC_ROTATION_SEEDS)
-    rotation_index = completed_count - 1
-    seed = str(seeds[rotation_index % len(seeds)]).strip()
-    suffix = _TOPIC_ROTATION_SUFFIXES[rotation_index % len(_TOPIC_ROTATION_SUFFIXES)]
+    items = _load_backlog(root)
+    # A completion callback may be retried; title de-duplication makes the
+    # transition idempotent without suppressing genuinely later topics.
+    if any(item.get('kind') == 'article' and item.get('title') == title
+           and item.get('status') not in {'done', 'cancelled'} for item in items):
+        return True
     items.append({
-        'id': item_id,
-        'title': f'{seed}: {suffix}',
+        'id': f'ai-topic-{uuid.uuid4().hex[:16]}',
+        'title': title,
         'status': 'queued',
-        'source': 'completion_rotation',
-        'completed_post_count': completed_count,
+        'kind': 'article',
+        'source': 'ai_generated',
+        'rationale': str(proposal.get('rationale') or '').strip()[:1200],
         'created_at': normalize_timestamp(now),
     })
     _save_backlog(root, items)
@@ -346,7 +365,8 @@ def _select_topic(root, state):
     if state.get('active_post_id'):
         return state
     items = _load_backlog(root)
-    selected = next((item for item in items if item.get('status') not in {'done', 'cancelled'}), None)
+    selected = next((item for item in items if item.get('kind') == 'article'
+                     and item.get('status') not in {'done', 'cancelled'}), None)
     if not selected:
         return state
     post_id = f"{_now().strftime('%Y%m%d')}-{_slug(selected['title'])}"
@@ -380,6 +400,10 @@ def _stage_files(root, state):
     if post_dir is None:
         return []
     files = {
+        _TOPIC_STAGE: [
+            'blog/project.json', 'blog/continuity.json', 'blog/backlog.json',
+            'blog/editorial_memory.md', 'blog/topic_proposal.json',
+        ],
         'brief': [
             'blog/project.json', 'blog/continuity.json', 'blog/backlog.json',
             f'{post_prefix}/brief.md',
@@ -424,7 +448,18 @@ def _build_prompt(project, state):
         'Allowed files for this stage:\n'
         f'{allowed}\n\n'
     )
-    if stage == 'brief':
+    if stage == _TOPIC_STAGE:
+        task = (
+            'Read project.json, continuity.json, editorial_memory.md, and backlog.json. '
+            'Generate one timely, specific next article topic that fits the project and '
+            'does not repeat completed or in-progress articles. Existing queued entries '
+            'are inspirations, not fixed titles: improve, combine, or replace them as '
+            'appropriate. Create or replace blog/topic_proposal.json as valid JSON only, '
+            'with exactly these useful fields: "title" (a concrete Korean article title, '
+            'max 120 characters) and "rationale" (one short Korean paragraph). Do not '
+            'write an article, brief, or markdown file in this stage.'
+        )
+    elif stage == 'brief':
         task = (
             'Read project.json, continuity.json, and backlog.json. Create or replace '
             f'blog/posts/{post_id}/brief.md with a focused brief: reader problem, '
@@ -585,7 +620,11 @@ def _status_payload(root=None):
     last_result = state.get('last_result') if isinstance(state.get('last_result'), dict) else {}
     queued_count = sum(
         1 for item in _load_backlog(root)
-        if item.get('status') not in {'done', 'cancelled'}
+        if item.get('kind') == 'article' and item.get('status') not in {'done', 'cancelled'}
+    )
+    inspiration_count = sum(
+        1 for item in _load_backlog(root)
+        if item.get('kind') == 'topic_inspiration' and item.get('status') not in {'done', 'cancelled'}
     )
     dashboard = {
         'current_topic': str(state.get('active_topic') or ''),
@@ -598,6 +637,7 @@ def _status_payload(root=None):
         'running_stage': str((in_flight or {}).get('stage') or ''),
         'completed_post_count': max(0, int(state.get('completed_post_count') or 0)),
         'backlog_count': queued_count,
+        'topic_inspiration_count': inspiration_count,
         'last_status': str(last_result.get('status') or ''),
         'last_completed_at': last_result.get('completed_at') or state.get('last_run_at'),
         'last_token_usage': _normalize_tokens(last_result.get('token_usage')),
@@ -606,6 +646,10 @@ def _status_payload(root=None):
         'configured': True,
         'enabled': bool(project.get('enabled')),
         'path': str(root),
+        'workspace': {
+            'path': state['workspace_path'],
+            'scope_id': state['workspace_scope_id'],
+        },
         'project': project,
         'state': state,
         'backlog_count': dashboard['backlog_count'],
@@ -648,7 +692,15 @@ def configure_blog_project(payload):
                     continue
                 title = str(item.get('title') or item.get('topic') or '').strip()
                 if title:
-                    items.append({**item, 'id': str(item.get('id') or f'item-{index + 1}'), 'title': title})
+                    items.append({
+                        **item,
+                        'id': str(item.get('id') or f'item-{index + 1}'),
+                        'title': title,
+                        # Newly configured titles are creative direction for
+                        # the model, not a way around AI topic selection.
+                        'kind': 'topic_inspiration',
+                        'status': str(item.get('status') or 'queued'),
+                    })
             _save_backlog(root, items)
         state['project_id'] = project['project_id']
         _save_state(root, state)
@@ -676,6 +728,7 @@ def _start_pipeline_run(force=False, account_id=None):
     claim_path = None
     with codex_chat._acquire_path_file_lock(_state_path(root)):
         state = _load_state(root, project['project_id'])
+        _migrate_backlog_to_inspirations(root)
         in_flight = state.get('in_flight')
         if isinstance(in_flight, dict) and in_flight.get('run_id'):
             started_at = parse_timestamp(in_flight.get('started_at'))
@@ -705,21 +758,26 @@ def _start_pipeline_run(force=False, account_id=None):
         next_run_at = parse_timestamp(state.get('next_run_at'))
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
-        if state.get('stage') == 'select' and not any(
-                item.get('status') not in {'done', 'cancelled'}
-                for item in _load_backlog(root)):
-            _save_state(root, state)
-            return {'started': False, 'reason': 'backlog_empty'}
         claimed, reason, claim_path = _claim_global(context, project, run_id, now, force=force)
         if not claimed:
             return {'started': False, 'reason': reason, 'claim_path': str(claim_path)}
-        state = _select_topic(root, state)
-        if state.get('stage') == 'select' or not state.get('active_post_id'):
+        if state.get('stage') == 'select':
+            # A validated proposal is consumed on the next run.  If none is
+            # ready, topic generation runs first and has no post directory.
+            if any(item.get('kind') == 'article' and item.get('status') not in {'done', 'cancelled'}
+                   for item in _load_backlog(root)):
+                state = _select_topic(root, state)
+            else:
+                state['stage'] = _TOPIC_STAGE
+        elif state.get('stage') != _TOPIC_STAGE:
+            state = _select_topic(root, state)
+        if state.get('stage') == 'select' or (
+                state.get('stage') != _TOPIC_STAGE and not state.get('active_post_id')):
             _finish_claim(claim_path, project, run_id, False, now)
             _save_state(root, state)
             return {'started': False, 'reason': 'backlog_empty'}
         stage = state['stage']
-        post_id = state['active_post_id']
+        post_id = state.get('active_post_id') or ''
         state['in_flight'] = {
             'run_id': run_id,
             'stage': stage,
@@ -757,6 +815,8 @@ def _start_pipeline_run(force=False, account_id=None):
                 'post_id': post_id,
                 'blog_root': str(root),
                 'claim_path': str(claim_path),
+                'workspace_path': str(Path(codex_chat.WORKSPACE_DIR).resolve()),
+                'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
             },
         )
     except Exception as exc:
@@ -817,7 +877,7 @@ def _mark_backlog_done(root, state, now):
 def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=None):
     if not isinstance(operation, dict):
         return False
-    root = Path(str(operation.get('blog_root') or _blog_root()))
+    root = Path(str(operation.get('blog_root') or _blog_root())).resolve()
     project_id = _project_id(operation.get('project_id'))
     run_id = str(operation.get('run_id') or '').strip()
     if not project_id or not run_id:
@@ -828,6 +888,18 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
     now = _now()
     with codex_chat._acquire_path_file_lock(_state_path(root)):
         state = _load_state(root, project_id)
+        expected_workspace_path = str((root.parent if root.name == _BLOG_DIR_NAME else root).resolve())
+        expected_workspace_scope = hashlib.sha1(
+            expected_workspace_path.encode('utf-8')
+        ).hexdigest()[:12]
+        if (operation.get('workspace_path') and
+                str(operation.get('workspace_path')) != expected_workspace_path):
+            _LOGGER.warning('Ignoring blog completion from a different workspace: %s', operation.get('workspace_path'))
+            return False
+        if (operation.get('workspace_scope_id') and
+                str(operation.get('workspace_scope_id')) != expected_workspace_scope):
+            _LOGGER.warning('Ignoring blog completion with a different workspace scope: %s', operation.get('workspace_scope_id'))
+            return False
         in_flight = state.get('in_flight') if isinstance(state.get('in_flight'), dict) else {}
         if in_flight.get('run_id') != run_id:
             return state.get('last_result', {}).get('run_id') == run_id if isinstance(state.get('last_result'), dict) else False
@@ -843,11 +915,21 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'completed_at': normalize_timestamp(now),
             'token_usage': _normalize_tokens(token_usage),
         }
-        if succeeded and stage in _STAGES:
+        if succeeded and stage == _TOPIC_STAGE:
+            proposal = _read_json(_topic_proposal_path(root), {})
+            if not isinstance(proposal, dict) or not _queue_generated_topic(root, proposal, now):
+                succeeded = False
+                state['last_error'] = 'topic_proposal_invalid'
+                state['last_result']['status'] = 'failed'
+                state['last_result']['error'] = 'topic_proposal_invalid'
+                state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=_RETRY_DELAY_MINUTES))
+            else:
+                state['stage'] = 'select'
+                state['revision'] = int(state.get('revision') or 0) + 1
+        elif succeeded and stage in _STAGES:
             if stage == 'review':
                 _mark_backlog_done(root, state, now)
                 state['completed_post_count'] = int(state.get('completed_post_count') or 0) + 1
-                _queue_rotation_topic(root, project, state, now)
                 state['stage'] = 'select'
                 state['active_post_id'] = ''
                 state['active_topic'] = ''

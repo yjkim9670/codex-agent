@@ -38,6 +38,7 @@ from ..config import (
     CODEX_AGENT_BACKEND_OPTIONS,
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
+    CODEX_INTERNAL_USER_MAP_PATH,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_CLI_MODEL_PROVIDER,
@@ -90,7 +91,14 @@ from ..config import (
     resolve_codex_git_commit_message_model,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
-from .multiuser import get_active_user
+from .multiuser import (
+    InternalUser,
+    activate_user,
+    deactivate_user,
+    get_active_user,
+    load_ip_user_map,
+    storage_key_for_ip,
+)
 
 try:
     import fcntl
@@ -225,8 +233,11 @@ _TOKENS_PER_PERCENT_HIGH_SAMPLES = 6
 _TOKENS_PER_PERCENT_HIGH_PERCENT_SUM = 4.0
 _USAGE_SNAPSHOT_POLL_SECONDS = 60
 _USAGE_ACCOUNT_REFRESH_GRACE_SECONDS = 10 * 60
+_USAGE_ACCOUNT_REFRESH_MAX_RETRIES_PER_SLOT = 3
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
+_INTERNAL_USAGE_SNAPSHOT_WORKER_STARTED = False
+_USAGE_AUTOMATIC_HISTORY_LIMIT = 500
 _USAGE_KEEPALIVE_FOLLOWUP_LOCK = threading.Lock()
 _USAGE_KEEPALIVE_FOLLOWUP_TIMERS = {}
 _USAGE_CALIBRATION_FOLLOWUP_LOCK = threading.Lock()
@@ -1582,6 +1593,13 @@ def _write_json_atomic(path, payload):
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding='utf-8'
     )
+    temp_path.replace(path)
+
+
+def _write_text_atomic(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    temp_path.write_text(text, encoding='utf-8')
     temp_path.replace(path)
 
 
@@ -8073,6 +8091,10 @@ def _account_usage_refresh_is_due(snapshot, now=None):
     if slot is None:
         return False
     last_slot = parse_timestamp((snapshot or {}).get('last_automatic_attempt_slot_at'))
+    if last_slot is not None and last_slot >= slot:
+        failed_slot = parse_timestamp((snapshot or {}).get('automatic_refresh_failure_slot_at'))
+        failures = _coerce_non_negative_int((snapshot or {}).get('automatic_refresh_failure_count')) or 0
+        return bool(failed_slot == slot and failures < _USAGE_ACCOUNT_REFRESH_MAX_RETRIES_PER_SLOT)
     return last_slot is None or last_slot < slot
 
 
@@ -8489,6 +8511,17 @@ def _start_reserved_automatic_usage_blog(account_id):
         snapshot['version'] = snapshot.get('version') or 1
         snapshot['account_id'] = context['account']['id']
         _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+    # The reservation record is written before the stream exists.  Append a
+    # second diagnostic record once its stream ID (or start failure) is known.
+    _record_automatic_usage_refresh_history(context, {
+        'refreshed': True,
+        'snapshot': snapshot,
+        'usage_keepalive': {
+            'submitted': bool(result.get('submitted')),
+            'reason': result.get('reason') or '',
+            'stream_id': result.get('stream', {}).get('id') or '',
+        },
+    })
     return result
 
 
@@ -8543,6 +8576,42 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
     if mode == 'automatic' and succeeded:
         _schedule_usage_keepalive_followup(account_id)
     return mode
+
+
+def _record_automatic_usage_blog_completion(account_id, stream_id, succeeded, error='', token_usage=None):
+    """Close the Usage history entry for an automatically queued blog stage."""
+    context = _account_storage_context(account_id)
+    if context is None:
+        return False
+    with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+        snapshot = _load_account_usage_snapshot(context)
+        keepalive = snapshot.get('usage_keepalive')
+        if (
+            not isinstance(keepalive, dict)
+            or keepalive.get('last_mode') != 'automatic'
+            or str(keepalive.get('last_stream_id') or '') != str(stream_id or '')
+        ):
+            return False
+        completed_at = normalize_timestamp(None)
+        history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
+        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history.append({
+            'at': completed_at,
+            'event': 'completed' if succeeded else 'failed',
+            'mode': 'automatic',
+            'stream_id': str(stream_id or ''),
+            'token_usage': _normalize_token_usage(token_usage) or _zero_token_usage(),
+            'error': '' if succeeded else str(error or '')[:1000],
+        })
+        keepalive.update({
+            'last_completed_at': completed_at,
+            'last_status': 'completed' if succeeded else 'failed',
+            'last_error': '' if succeeded else str(error or '')[:1000],
+            'history': history,
+        })
+        snapshot['usage_keepalive'] = keepalive
+        _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+    return True
 
 
 def _schedule_usage_keepalive_followup(account_id, delay_seconds=None):
@@ -8686,9 +8755,13 @@ def refresh_account_usage_snapshot_if_due(
                     # snapshot lock.  It deliberately has no independent
                     # cadence worker: a 0% five-hour observation is the only
                     # automatic trigger.
+                    # ContextVars do not cross thread boundaries by default;
+                    # preserve the mapped internal user so the blog state and
+                    # stream run in the same scoped workspace as the sample.
+                    worker_context = copy_context()
                     worker = threading.Thread(
-                        target=_start_reserved_automatic_usage_blog,
-                        args=(context['account']['id'],),
+                        target=worker_context.run,
+                        args=(_start_reserved_automatic_usage_blog, context['account']['id']),
                         name='codex-usage-blog-stage',
                         daemon=True,
                     )
@@ -8699,8 +8772,16 @@ def refresh_account_usage_snapshot_if_due(
                         _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS
                     ),
                 )
-            return {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
+            result = {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
+            if resolved_limit_sample_source == 'automatic':
+                _record_automatic_usage_refresh_history(context, result)
+            return result
         except Exception as exc:
+            failure_slot_key = normalize_timestamp(automatic_slot) if automatic_slot else ''
+            prior_failure_slot = str(previous.get('automatic_refresh_failure_slot_at') or '')
+            prior_failure_count = _coerce_non_negative_int(
+                previous.get('automatic_refresh_failure_count')
+            ) or 0
             failed = {
                 **previous,
                 'version': 1,
@@ -8711,11 +8792,69 @@ def refresh_account_usage_snapshot_if_due(
                 'last_automatic_attempt_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
                 ),
+                # A transient App Server error should not make the entire
+                # ten-minute observation window disappear.  The due check
+                # allows up to three total attempts in this slot.
+                'automatic_refresh_failure_slot_at': failure_slot_key or prior_failure_slot,
+                'automatic_refresh_failure_count': (
+                    prior_failure_count + 1 if failure_slot_key and prior_failure_slot == failure_slot_key
+                    else (1 if failure_slot_key else prior_failure_count)
+                ),
                 'error': str(exc)[:1000],
             }
             _write_json_atomic(context['account_usage_snapshot_path'], failed)
             _LOGGER.warning('account usage App Server refresh failed: %s', exc)
-            return {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
+            result = {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
+            if str(limit_sample_source or '').strip().lower() == 'automatic' or not force:
+                _record_automatic_usage_refresh_history(context, result)
+            return result
+
+
+def _automatic_usage_refresh_history_path(context):
+    """Keep a bounded, append-only diagnostic log beside the account state."""
+    return Path(context['root']) / 'codex_automatic_usage_refresh_history.jsonl'
+
+
+def _record_automatic_usage_refresh_history(context, result):
+    """Persist why an unattended observation did or did not start a stage.
+
+    This is intentionally separate from the latest snapshot: overwriting the
+    snapshot made it impossible to distinguish a missed reset from a skipped
+    submission after the fact.
+    """
+    snapshot = result.get('snapshot') if isinstance(result, dict) else {}
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    keepalive = result.get('usage_keepalive') if isinstance(result, dict) else {}
+    keepalive = keepalive if isinstance(keepalive, dict) else {}
+    five_hour = snapshot.get('five_hour') if isinstance(snapshot.get('five_hour'), dict) else {}
+    weekly = snapshot.get('weekly') if isinstance(snapshot.get('weekly'), dict) else {}
+    outcome = 'submitted' if keepalive.get('submitted') else str(
+        keepalive.get('reason') or ('refreshed' if result.get('refreshed') else 'refresh_failed')
+    )
+    entry = {
+        'at': normalize_timestamp(None),
+        'account_id': context['account']['id'],
+        'result': outcome,
+        'refreshed': bool(result.get('refreshed')),
+        'five_hour_used_percent': five_hour.get('used_percent'),
+        'five_hour_resets_at': five_hour.get('resets_at'),
+        'weekly_used_percent': weekly.get('used_percent'),
+        'stream_id': str(keepalive.get('stream_id') or ''),
+        'error': str(result.get('error') or '')[:1000],
+    }
+    path = _automatic_usage_refresh_history_path(context)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _acquire_path_file_lock(path):
+            try:
+                lines = path.read_text(encoding='utf-8').splitlines()
+            except OSError:
+                lines = []
+            lines = lines[-(_USAGE_AUTOMATIC_HISTORY_LIMIT - 1):]
+            lines.append(json.dumps(entry, ensure_ascii=False, separators=(',', ':')))
+            _write_text_atomic(path, '\n'.join(lines) + '\n')
+    except OSError:
+        _LOGGER.debug('automatic usage refresh history write skipped', exc_info=True)
 
 
 def _usage_snapshot_worker_loop():
@@ -8728,14 +8867,67 @@ def _usage_snapshot_worker_loop():
         time.sleep(_USAGE_SNAPSHOT_POLL_SECONDS)
 
 
+def _internal_usage_snapshot_worker_loop():
+    """Refresh every mapped user's active account without an HTTP request.
+
+    ScopedPath values resolve through the ContextVar, so activation must cover
+    the complete refresh (including blog status and its cross-workspace
+    claims), and must always be undone before moving to another user.
+    """
+    while True:
+        try:
+            mapping = load_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH)
+            for client_ip, record in mapping.items():
+                user = InternalUser(
+                    record['username'], record['role'], client_ip,
+                    storage_key_for_ip(client_ip), record.get('profile_configured', False),
+                )
+                token = activate_user(user)
+                try:
+                    account_id = get_active_account_id()
+                    context = _account_storage_context(account_id) if account_id else None
+                    if not context or not _codex_home_has_auth(context['codex_home']):
+                        continue
+                    # An internal user's scheduler is inert until that user
+                    # explicitly enables a blog project; this avoids polling
+                    # inactive accounts simply because they are listed in the
+                    # access map.
+                    from .blog_pipeline import get_blog_pipeline_status
+                    blog_status = get_blog_pipeline_status()
+                    if not blog_status.get('configured') or not blog_status.get('enabled'):
+                        continue
+                    refresh_account_usage_snapshot_if_due(account_id=account_id)
+                    record_usage_snapshot_if_due(account_id=account_id)
+                except Exception:
+                    _LOGGER.exception(
+                        'internal usage snapshot worker failed (user=%s)', user.username
+                    )
+                finally:
+                    deactivate_user(token)
+        except Exception:
+            _LOGGER.exception('internal usage snapshot scheduler cycle failed')
+        time.sleep(_USAGE_SNAPSHOT_POLL_SECONDS)
+
+
 def ensure_usage_snapshot_background_worker():
-    # A process-wide worker has no request identity.  Starting it in internal
-    # mode would resolve paths outside the requesting user's scope.  Usage is
-    # still recorded/refreshable on each user's request; a scoped scheduler is
-    # deliberately a later internal-operations concern.
+    """Start the appropriate unattended usage scheduler once per process."""
+    global _USAGE_SNAPSHOT_WORKER_STARTED, _INTERNAL_USAGE_SNAPSHOT_WORKER_STARTED
+    if is_internal_multiuser_mode():
+        with _USAGE_SNAPSHOT_WORKER_LOCK:
+            if _INTERNAL_USAGE_SNAPSHOT_WORKER_STARTED:
+                return False
+            worker = threading.Thread(
+                target=_internal_usage_snapshot_worker_loop,
+                name='codex-internal-usage-snapshot-worker',
+                daemon=True,
+            )
+            worker.start()
+            _INTERNAL_USAGE_SNAPSHOT_WORKER_STARTED = True
+        return True
+    # A request-scoped user can only exist in internal mode, but retain this
+    # guard for callers embedding the services with a custom context.
     if get_active_user() is not None:
         return False
-    global _USAGE_SNAPSHOT_WORKER_STARTED
     with _USAGE_SNAPSHOT_WORKER_LOCK:
         if _USAGE_SNAPSHOT_WORKER_STARTED:
             return False
@@ -15566,6 +15758,15 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             )
         except Exception:
             _LOGGER.exception('Blog pipeline completion update skipped (stream_id=%s)', stream_id)
+        try:
+            _record_automatic_usage_blog_completion(
+                account_id, stream_id,
+                succeeded=message_role == 'assistant',
+                error=error if message_role != 'assistant' else '',
+                token_usage=token_usage,
+            )
+        except Exception:
+            _LOGGER.exception('Automatic blog Usage-history completion update skipped (stream_id=%s)', stream_id)
     # Store a fresh account-limit observation for every completed Codex task.
     # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.

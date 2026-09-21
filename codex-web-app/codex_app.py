@@ -148,8 +148,10 @@ def create_codex_app():
             deactivate_user(token)
 
     app.register_blueprint(codex_chat.bp)
+    # In internal mode this starts the user-scoped scheduler, which activates
+    # each mapped user before touching any scoped account state.
+    ensure_usage_snapshot_background_worker()
     if not is_internal_multiuser_mode():
-        ensure_usage_snapshot_background_worker()
         ensure_pending_queue_background_worker()
 
     def _build_runtime_context():

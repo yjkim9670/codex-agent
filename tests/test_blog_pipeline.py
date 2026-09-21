@@ -289,6 +289,18 @@ def test_topic_stage_generates_article_from_legacy_backlog(blog_environment, mon
     assert generated[0]['title'] == 'AI가 새로 만든 주제'
 
 
+def test_topic_prompt_prefers_broad_everyday_subjects(blog_environment):
+    blog_pipeline.configure_blog_project({'project_id': 'broad-topics', 'enabled': True})
+    root = blog_environment / 'blog'
+    state = blog_pipeline._load_state(root, 'broad-topics')
+    state['stage'] = 'topic'
+
+    prompt = blog_pipeline._build_prompt(blog_pipeline._load_project(root), state)
+
+    assert 'Favor broadly useful everyday themes' in prompt
+    assert 'Do not make AI, software, or technology the default subject' in prompt
+
+
 def test_completion_rejects_a_different_workspace_owner(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({'project_id': 'scoped-series', 'enabled': True})
     monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})

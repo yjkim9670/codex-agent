@@ -369,6 +369,7 @@
     --tooltip-text: #f7fbff;
     --tooltip-border: rgba(130, 153, 178, 0.42);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
+    --blog-dashboard-close-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a61b3d' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
     --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m12 2.8 1.4 2.3 2.6.5 1.9-1.6 2.1 2.1-1.6 1.9.5 2.6 2.3 1.4-2.3 1.4-.5 2.6 1.6 1.9-2.1 2.1-1.9-1.6-2.6.5-1.4 2.3-1.4-2.3-2.6-.5-1.9 1.6-2.1-2.1 1.6-1.9-.5-2.6-2.3-1.4 2.3-1.4.5-2.6L4 6.1 6.1 4 8 5.6l2.6-.5z'/><circle cx='12' cy='12' r='3.25'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232b4664' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
@@ -542,6 +543,7 @@
     --icon-button-active-bg: color-mix(in srgb, var(--accent) 24%, var(--surface-raised) 76%);
     --icon-button-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     --icon-close: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
+    --blog-dashboard-close-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff9db0' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><line x1='6' y1='6' x2='18' y2='18'/><line x1='6' y1='18' x2='18' y2='6'/></svg>");
     --icon-settings: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='m12 2.8 1.4 2.3 2.6.5 1.9-1.6 2.1 2.1-1.6 1.9.5 2.6 2.3 1.4-2.3 1.4-.5 2.6 1.6 1.9-2.1 2.1-1.9-1.6-2.6.5-1.4 2.3-1.4-2.3-2.6-.5-1.9 1.6-2.1-2.1 1.6-1.9-.5-2.6-2.3-1.4 2.3-1.4.5-2.6L4 6.1 6.1 4 8 5.6l2.6-.5z'/><circle cx='12' cy='12' r='3.25'/></svg>");
     --icon-refresh: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 1 1-2.34-5.66'/><path d='M20 4v6h-6'/></svg>");
     --icon-fullscreen-enter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c7d0da' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/></svg>");
@@ -1000,13 +1002,13 @@ textarea {
     /* Match the regular Plan control state.  Include .btn so this wins over
      * the later generic .btn.ghost reset in the stylesheet. */
     .btn.chat-compose-tool-plan.is-active {
-        background-color: var(--accent);
-        border-color: var(--accent-dark);
+        background-color: #315f9e;
+        border-color: #244a80;
         color: #fff;
     }
 
     .btn.chat-compose-tool-plan.is-plan-and-execute {
-        background-color: #23704f;
+        background-color: #1f6f4a;
         border-color: #175137;
         color: #fff;
     }
@@ -9003,6 +9005,19 @@ body.is-work-mode-resizing * {
     background-size: 16px 16px;
 }
 
+.blog-dashboard-close {
+    background-image: var(--blog-dashboard-close-icon);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 17px 17px;
+}
+
+.blog-dashboard-close:hover,
+.blog-dashboard-close:focus-visible {
+    border-color: color-mix(in srgb, #c72d50 56%, var(--icon-button-border));
+    background-color: color-mix(in srgb, #c72d50 12%, var(--icon-button-bg));
+}
+
 .blog-dashboard-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 8px; z-index: 2377; }
 .blog-dashboard-overlay.is-visible { display: flex; }
 .blog-dashboard-overlay-backdrop { position: absolute; inset: 0; background: rgba(12, 20, 30, .45); }
@@ -13324,6 +13339,25 @@ label.hover-tooltip,
         right: 8px;
         bottom: calc(100% + 6px);
         z-index: 20;
+    }
+
+    /* A tapped button may also match the later .btn.ghost:hover rule.  Give
+     * the selected mobile Plan control a more specific final state so it
+     * retains the same deep blue as the desktop Plan control. */
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-active,
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-active:hover,
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-active:focus-visible {
+        background-color: var(--accent);
+        border-color: var(--accent-dark);
+        color: #fff;
+    }
+
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-plan-and-execute,
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-plan-and-execute:hover,
+    #codex-chat-compose-tools-menu .btn.chat-compose-tool-plan.is-plan-and-execute:focus-visible {
+        background-color: #1f6f4a;
+        border-color: #175137;
+        color: #fff;
     }
 
     .chat-compose-main,

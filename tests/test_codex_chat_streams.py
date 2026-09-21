@@ -855,6 +855,27 @@ def test_account_usage_auto_refresh_runs_on_30_minute_kst_slots():
     ) is True
 
 
+def test_account_usage_uses_fresh_shared_snapshot_for_project_evaluation(
+        isolated_codex_workspace, monkeypatch):
+    """A different Workbench's refresh slot must not hide this project's run."""
+    expected = {
+        'refreshed': False,
+        'snapshot': {'five_hour': {'used_percent': 0}},
+        'usage_keepalive': {'submitted': True},
+    }
+    monkeypatch.setattr(codex_chat, '_account_usage_refresh_is_due', lambda _snapshot: False)
+    monkeypatch.setattr(
+        codex_chat, '_evaluate_automatic_usage_blog_from_shared_snapshot',
+        lambda context: expected,
+    )
+    monkeypatch.setattr(
+        codex_chat, 'call_codex_app_server_method',
+        lambda *_args, **_kwargs: pytest.fail('an already-owned slot must not call the API again'),
+    )
+
+    assert codex_chat.refresh_account_usage_snapshot_if_due() is expected
+
+
 def test_usage_keepalive_cycle_targets_use_only_five_hour_zero_usage_slots():
     now = datetime(2026, 8, 4, 3, 17, tzinfo=codex_chat.KST)
     targets = codex_chat._usage_keepalive_cycle_targets({

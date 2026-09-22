@@ -9518,9 +9518,30 @@ async function refreshUsageSummary({
             );
         }
     } catch (error) {
+        // The refresh endpoint deliberately returns the latest retained
+        // snapshot when a live App Server poll is temporarily unavailable.
+        // Apply that payload even with a non-2xx status; otherwise the card
+        // stays blank until the user reloads the whole page.
+        const fallback = error?.payload;
+        if (fallback?.usage) {
+            state.settings.usage = fallback.usage;
+            state.settings.usageHistory = fallback.usage_history || state.settings.usageHistory;
+            if (fallback?.accounts) applyCodexAccountsSummary(fallback.accounts);
+            updateUsageSummary(fallback.usage);
+            updateRenderedLimitUsageEstimates();
+        }
         const message = normalizeError(error, '사용량 갱신에 실패했습니다.');
-        setStatus(message, true);
+        if (!silent) setStatus(message, true);
     }
+}
+
+function scheduleUsageSummaryFollowup() {
+    // Provider-side usage limits can lag final stream metadata by a few
+    // seconds.  A second, forced sample keeps the visible 5h/weekly values
+    // current without requiring a page refresh.
+    window.setTimeout(() => {
+        void refreshUsageSummary({ silent: true, forceAccountRefresh: true });
+    }, 5000);
 }
 
 function buildAccountUsageRefreshToastMessage(usage) {
@@ -10083,7 +10104,8 @@ async function watchManualUsageKeepalive(streamId, attempts = 0) {
         } else {
             showToast(`Terra medium effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
         }
-        await refreshUsageSummary({ silent: true, forceAccountRefresh: false });
+        await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
+        scheduleUsageSummaryFollowup();
     } catch (error) {
         if (attempts < 5) {
             window.setTimeout(() => { void watchManualUsageKeepalive(streamId, attempts + 1); }, 1000);
@@ -29911,6 +29933,7 @@ async function finishStream(streamId, result) {
     // Fetch the account limits after finalization so both real 5h and weekly
     // percentages update without requiring the user to reload the page.
     await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
+    scheduleUsageSummaryFollowup();
     void refreshWorktreeTasks({ silent: true });
     void flushQueuedPrompts(sessionId);
 }

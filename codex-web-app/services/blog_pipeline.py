@@ -354,6 +354,16 @@ def _queue_generated_topic(root, proposal, now):
     return True
 
 
+def _discard_topic_proposal(root):
+    """Ensure a topic run can only consume the proposal it just requested."""
+    try:
+        _topic_proposal_path(root).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        _LOGGER.warning('Unable to remove a previous topic proposal', exc_info=True)
+
+
 def _slug(value):
     normalized = str(value or '').strip().lower()
     normalized = re.sub(r'[^0-9a-z가-힣]+', '-', normalized)
@@ -774,6 +784,11 @@ def _start_pipeline_run(force=False, account_id=None):
                 state = _select_topic(root, state)
             else:
                 state['stage'] = _TOPIC_STAGE
+        # topic_proposal.json is an output artifact, not durable pipeline
+        # state.  Leaving it in place makes a later manual run accept the
+        # previous run's title if the new model run does not replace it.
+        if state.get('stage') == _TOPIC_STAGE:
+            _discard_topic_proposal(root)
         elif state.get('stage') != _TOPIC_STAGE:
             state = _select_topic(root, state)
         if state.get('stage') == 'select' or (

@@ -131,6 +131,10 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     assert state['last_error'] == 'topic_proposal_invalid'
     started = blog_pipeline.run_blog_pipeline(force=True)
     assert started['stage'] == 'topic'
+    (blog_environment / 'blog' / 'topic_proposal.json').write_text(
+        json.dumps({'title': 'AI가 만든 다음 글', 'rationale': '독자에게 실용적입니다.'}),
+        encoding='utf-8',
+    )
     assert blog_pipeline.record_blog_pipeline_completion(
         {
             'project_id': 'series-a', 'run_id': started['run_id'], 'stage': 'topic',
@@ -174,6 +178,24 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
             'total_tokens': 125,
         },
     }
+
+
+def test_topic_run_discards_stale_proposal_before_manual_submission(blog_environment, monkeypatch):
+    blog_pipeline.configure_blog_project({
+        'project_id': 'fresh-topic', 'enabled': True, 'backlog': ['이전 참고 주제'],
+    })
+    proposal_path = blog_environment / 'blog' / 'topic_proposal.json'
+    proposal_path.write_text(
+        json.dumps({'title': '이전 실행의 주제', 'rationale': '남은 파일입니다.'}),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'blog-stream'})
+
+    started = blog_pipeline.run_blog_pipeline(force=True)
+
+    assert started['stage'] == 'topic'
+    assert not proposal_path.exists()
 
 
 def test_pipeline_uses_ai_topic_before_and_after_each_article(blog_environment, monkeypatch):

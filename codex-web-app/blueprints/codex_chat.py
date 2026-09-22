@@ -58,6 +58,7 @@ from ..config import (
 )
 from ..services.codex_chat import (
     append_message,
+    _compact_usage_limit_snapshot,
     branch_session_from_message,
     build_codex_prompt,
     build_codex_app_server_thread_lifecycle_preview,
@@ -134,6 +135,7 @@ from ..services.codex_chat import (
     enqueue_codex_stream_for_session,
     format_assistant_response_content,
     update_settings,
+    update_message,
     resolve_response_mode_label,
     resolve_response_model_name,
     resolve_response_reasoning_effort,
@@ -1198,6 +1200,50 @@ def codex_usage_refresh():
     if not refresh.get('refreshed'):
         response['error'] = refresh.get('error') or '현재 계정 사용량을 조회하지 못했습니다.'
     return jsonify(response), (200 if refresh.get('refreshed') else 502)
+
+
+@bp.route('/api/codex/sessions/<session_id>/messages/<message_id>/usage-limits', methods=['POST'])
+def codex_session_message_usage_limits(session_id, message_id):
+    """Refresh and persist the final quota sample for one completed reply."""
+    try:
+        crypto_session_id = _get_chat_response_crypto_session_id()
+    except FileCryptoError as exc:
+        return _file_crypto_error_response(exc)
+
+    chat_session = get_session(session_id)
+    if not chat_session:
+        return jsonify({'error': '대화를 찾을 수 없습니다.'}), 404
+    message = next((item for item in chat_session.get('messages', [])
+                    if isinstance(item, dict) and item.get('id') == message_id), None)
+    if not message or message.get('role') not in ('assistant', 'error'):
+        return jsonify({'error': '완료된 응답을 찾을 수 없습니다.'}), 404
+
+    account_id = str(message.get('account_id') or '').strip()
+    active_account_id = get_active_account_id()
+    # A final sample must stay attached to the account that produced this
+    # reply.  Never let an account switch overwrite an older message.
+    if not account_id or account_id != active_account_id:
+        return jsonify({'error': '현재 계정과 응답 계정이 일치하지 않습니다.'}), 409
+
+    refresh = refresh_account_usage_snapshot_if_due(account_id=account_id, force=True)
+    usage = get_usage_summary(account_id=account_id)
+    snapshot = refresh.get('snapshot') if isinstance(refresh, dict) else None
+    compact_snapshot = _compact_usage_limit_snapshot(
+        snapshot if isinstance(snapshot, dict) else usage
+    )
+    updated_message = update_message(
+        session_id, message_id, metadata={'usage_limits_after': compact_snapshot},
+    )
+    if not updated_message:
+        return jsonify({'error': '응답 사용량을 저장하지 못했습니다.'}), 404
+    return _jsonify_chat_payload_or_crypto_error({
+        'message': updated_message,
+        'usage': usage,
+        'account_usage_refresh': {
+            'refreshed': bool(refresh.get('refreshed')) if isinstance(refresh, dict) else False,
+            'error': refresh.get('error') if isinstance(refresh, dict) else '',
+        },
+    }, crypto_session_id)
 
 
 @bp.route('/api/codex/usage/keepalive', methods=['POST'])

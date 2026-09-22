@@ -385,6 +385,59 @@ def _open_test_chat_crypto_session(client):
     }
 
 
+def test_message_usage_limit_refresh_updates_only_its_completed_message(
+        chat_route_client, monkeypatch):
+    chat_session = codex_chat.create_session('usage-limit-message-refresh')
+    message = codex_chat.append_message(
+        chat_session['id'], 'assistant', '완료', {
+            'account_id': 'default',
+            'usage_limits_before': {
+                'observed_at': '2026-09-22T01:00:00+00:00',
+                'five_hour': {'used_percent': 1, 'resets_at': None},
+                'weekly': {'used_percent': 2, 'resets_at': None},
+            },
+        },
+    )
+    refreshed_usage = {
+        'limits_observed_at': '2026-09-22T01:01:00+00:00',
+        'five_hour': {'used_percent': 3, 'resets_at': None},
+        'weekly': {'used_percent': 4, 'resets_at': None},
+    }
+    monkeypatch.setattr(codex_chat_blueprint, 'refresh_account_usage_snapshot_if_due',
+                        lambda **_kwargs: {'refreshed': True, 'snapshot': refreshed_usage})
+    monkeypatch.setattr(codex_chat_blueprint, 'get_usage_summary',
+                        lambda **_kwargs: refreshed_usage)
+
+    crypto_session = _open_test_chat_crypto_session(chat_route_client)
+    response = chat_route_client.post(
+        f"/api/codex/sessions/{chat_session['id']}/messages/{message['id']}/usage-limits",
+        headers={'X-Codex-Chat-Crypto-Session': crypto_session['id']},
+    )
+
+    assert response.status_code == 200
+    payload = _decrypt_test_chat_payload(crypto_session, response.get_json())
+    assert payload['message']['usage_limits_after']['five_hour']['used_percent'] == 3
+    assert payload['message']['usage_limits_after']['weekly']['used_percent'] == 4
+    persisted = codex_chat.get_session(chat_session['id'])['messages'][0]
+    assert persisted['usage_limits_after'] == payload['message']['usage_limits_after']
+
+
+def test_message_usage_limit_refresh_rejects_a_different_active_account(
+        chat_route_client):
+    chat_session = codex_chat.create_session('usage-limit-account-guard')
+    message = codex_chat.append_message(
+        chat_session['id'], 'assistant', '완료', {'account_id': 'another-account'},
+    )
+    crypto_session = _open_test_chat_crypto_session(chat_route_client)
+
+    response = chat_route_client.post(
+        f"/api/codex/sessions/{chat_session['id']}/messages/{message['id']}/usage-limits",
+        headers={'X-Codex-Chat-Crypto-Session': crypto_session['id']},
+    )
+
+    assert response.status_code == 409
+
+
 def _encrypt_test_chat_payload(session, payload):
     iv = os.urandom(12)
     raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')

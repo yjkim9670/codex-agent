@@ -36,6 +36,7 @@ const state = {
     loading: false,
     sessionStates: {},
     streams: {},
+    usageLimitFollowups: new Map(),
     remoteStreamSessions: new Set(),
     remoteAttachInFlightSessions: new Set(),
     remoteStreams: [],
@@ -9535,10 +9536,67 @@ async function refreshUsageSummary({
     }
 }
 
+function usageLimitSnapshotsDiffer(before, after) {
+    const beforeObservedAt = String(before?.observed_at || '');
+    const afterObservedAt = String(after?.observed_at || '');
+    if (afterObservedAt && afterObservedAt !== beforeObservedAt) return true;
+    return ['five_hour', 'weekly'].some(name => (
+        Number(before?.[name]?.used_percent) !== Number(after?.[name]?.used_percent)
+    ));
+}
+
+function applyRefreshedMessageUsageLimits(message, sessionId) {
+    if (!message || sessionId !== state.activeSessionId) return;
+    const entry = findMessageEntryById(message.id);
+    if (!entry) return;
+    setMessageTokenUsage(entry.footer, message);
+}
+
+function scheduleMessageUsageLimitFollowups(sessionId, message) {
+    const messageId = String(message?.id || '').trim();
+    if (!sessionId || !messageId) return;
+    const existing = state.usageLimitFollowups.get(messageId);
+    if (existing) existing.cancelled = true;
+    const followup = { cancelled: false, initialAfter: resolveMessageUsageLimitSnapshot(message, 'usage_limits_after') };
+    state.usageLimitFollowups.set(messageId, followup);
+    const delays = [0, 5000, 10000, 20000];
+
+    const refresh = async index => {
+        if (followup.cancelled || state.usageLimitFollowups.get(messageId) !== followup) return;
+        try {
+            const result = await fetchChatResponseJson(
+                `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/usage-limits`,
+                { method: 'POST', timeoutMs: USAGE_HISTORY_REQUEST_TIMEOUT_MS }
+            );
+            const updatedMessage = result?.message;
+            if (result?.usage) {
+                state.settings.usage = result.usage;
+                updateUsageSummary(result.usage);
+            }
+            applyRefreshedMessageUsageLimits(updatedMessage, sessionId);
+            const after = resolveMessageUsageLimitSnapshot(updatedMessage, 'usage_limits_after');
+            if (usageLimitSnapshotsDiffer(followup.initialAfter, after) || index === delays.length - 1) {
+                state.usageLimitFollowups.delete(messageId);
+                return;
+            }
+        } catch (error) {
+            // A transient provider refresh failure is expected just after a
+            // task completes. Keep the existing footer and try the next slot.
+            if (error?.status === 404 || error?.status === 409) {
+                state.usageLimitFollowups.delete(messageId);
+                return;
+            }
+        }
+        if (!followup.cancelled && index < delays.length - 1) {
+            window.setTimeout(() => { void refresh(index + 1); }, delays[index + 1] - delays[index]);
+        } else {
+            state.usageLimitFollowups.delete(messageId);
+        }
+    };
+    void refresh(0);
+}
+
 function scheduleUsageSummaryFollowup() {
-    // Provider-side usage limits can lag final stream metadata by a few
-    // seconds.  A second, forced sample keeps the visible 5h/weekly values
-    // current without requiring a page refresh.
     window.setTimeout(() => {
         void refreshUsageSummary({ silent: true, forceAccountRefresh: true });
     }, 5000);
@@ -29934,6 +29992,7 @@ async function finishStream(streamId, result) {
     // percentages update without requiring the user to reload the page.
     await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
     scheduleUsageSummaryFollowup();
+    scheduleMessageUsageLimitFollowups(sessionId, savedMessage || result?.saved_message || null);
     void refreshWorktreeTasks({ silent: true });
     void flushQueuedPrompts(sessionId);
 }

@@ -1,4 +1,4 @@
-const { test, expect } = require('playwright/test');
+const { test, expect } = require('@playwright/test');
 
 const targetUrl = process.env.CODEX_VERIFY_URL;
 const targetSelector = process.env.CODEX_VERIFY_SELECTOR || 'body';

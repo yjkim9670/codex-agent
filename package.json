@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "name": "codex-workbench-browser-verification",
+  "version": "1.0.0",
+  "description": "Pinned browser verification tooling for Codex Workbench.",
+  "scripts": {
+    "playwright:install": "PLAYWRIGHT_BROWSERS_PATH=./.playwright-browsers playwright install chromium",
+    "playwright:verify": "python3 scripts/verify_browser_ui.py"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
+  }
+}

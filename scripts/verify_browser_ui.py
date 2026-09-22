@@ -16,6 +16,9 @@ from urllib.parse import urlparse
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 CONFIG_PATH = SCRIPT_DIR / 'playwright.config.cjs'
+PACKAGE_ROOT = REPO_ROOT
+LOCAL_PLAYWRIGHT_CLI = PACKAGE_ROOT / 'node_modules' / '.bin' / 'playwright'
+PLAYWRIGHT_BROWSERS_PATH = PACKAGE_ROOT / '.playwright-browsers'
 
 
 def _parse_args():
@@ -39,12 +42,40 @@ def _validate_args(args):
         raise ValueError('--timeout-ms must be between 1000 and 120000.')
 
 
-def _node_modules_root(playwright_cli):
-    resolved = Path(playwright_cli).resolve()
-    for parent in (resolved.parent, *resolved.parents):
-        if parent.name == 'node_modules':
-            return parent
-    return None
+def _browser_executable_path(env):
+    """Return the Chromium path expected by this project's pinned Playwright."""
+    command = [
+        'node',
+        '-e',
+        "const { chromium } = require('playwright'); process.stdout.write(chromium.executablePath());",
+    ]
+    result = subprocess.run(
+        command,
+        cwd=str(PACKAGE_ROOT),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        return None
+    return Path(result.stdout.strip()) if result.stdout.strip() else None
+
+
+def _installation_error(expected_browser=None):
+    details = [
+        'browser verification unavailable: the project-local Playwright runtime is incomplete.',
+        f'Required CLI: {LOCAL_PLAYWRIGHT_CLI}',
+    ]
+    if expected_browser:
+        details.append(f'Required Chromium executable: {expected_browser}')
+    details.extend([
+        'Recovery:',
+        f'  cd {PACKAGE_ROOT}',
+        '  npm install',
+        '  npm run playwright:install',
+    ])
+    return '\n'.join(details)
 
 
 def main():
@@ -55,13 +86,10 @@ def main():
         print(f'browser verification configuration error: {exc}', file=sys.stderr)
         return 2
 
-    playwright_cli = shutil.which('playwright')
-    if not playwright_cli:
-        print(
-            'browser verification unavailable: `playwright` was not found on PATH. '
-            'Install the Playwright CLI and Chromium before retrying.',
-            file=sys.stderr,
-        )
+    # Never fall back to a PATH/global CLI: its package version and browser
+    # revision can drift independently from this repository.
+    if not LOCAL_PLAYWRIGHT_CLI.is_file():
+        print(_installation_error(), file=sys.stderr)
         return 127
 
     if args.output_dir:
@@ -73,18 +101,17 @@ def main():
         remove_on_success = True
 
     env = os.environ.copy()
+    env['PLAYWRIGHT_BROWSERS_PATH'] = str(PLAYWRIGHT_BROWSERS_PATH)
     env['CODEX_VERIFY_URL'] = str(args.url).strip()
     env['CODEX_VERIFY_SELECTOR'] = str(args.selector).strip()
     env['CODEX_VERIFY_TIMEOUT_MS'] = str(int(args.timeout_ms))
-    node_modules_root = _node_modules_root(playwright_cli)
-    if node_modules_root:
-        existing_node_path = env.get('NODE_PATH', '').strip()
-        env['NODE_PATH'] = os.pathsep.join(
-            item for item in (str(node_modules_root), existing_node_path) if item
-        )
+    expected_browser = _browser_executable_path(env)
+    if not expected_browser or not expected_browser.is_file():
+        print(_installation_error(expected_browser), file=sys.stderr)
+        return 127
 
     command = [
-        playwright_cli,
+        str(LOCAL_PLAYWRIGHT_CLI),
         'test',
         '--config',
         str(CONFIG_PATH),

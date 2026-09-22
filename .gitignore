@@ -14,6 +14,8 @@ workspace/*_token_usage.json
 .sync_runtime/
 .local/
 .venv/
+node_modules/
+.playwright-browsers/
 model_agent/
 deploy/vercel/*.env
 deploy/codex-backend.env

@@ -192,6 +192,35 @@ def test_model_catalog_reads_workbench_auth_home_cache(monkeypatch, tmp_path):
     }
 
 
+def test_model_catalog_uses_cached_reasoning_levels_for_current_model(monkeypatch, tmp_path):
+    codex_home = tmp_path / 'codex-home'
+    codex_home.mkdir(parents=True)
+    (codex_home / 'models_cache.json').write_text(json.dumps({
+        'models': [{
+            'slug': 'gpt-6-astra',
+            'visibility': 'list',
+            'default_reasoning_level': 'low',
+            'supported_reasoning_levels': [
+                {'effort': 'low'},
+                {'effort': 'medium'},
+                {'effort': 'high'},
+                {'effort': 'xhigh'},
+                {'effort': 'max'},
+                {'effort': 'ultra'},
+            ],
+        }],
+    }), encoding='utf-8')
+
+    monkeypatch.setenv('CODEX_MODEL_CACHE_PATH', str(codex_home / 'models_cache.json'))
+    monkeypatch.delenv('CODEX_MODEL_OPTIONS', raising=False)
+
+    astra = codex_config.get_codex_model_metadata('gpt-6-astra')
+    assert astra['default_reasoning_effort'] == 'low'
+    assert astra['reasoning_options'] == [
+        'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+    ]
+
+
 def test_git_summary_model_tracks_live_chat_catalog(monkeypatch):
     monkeypatch.setattr(
         codex_config,
@@ -351,7 +380,7 @@ def test_model_catalog_default_starts_with_gpt56(monkeypatch, tmp_path):
         'gpt-5.5',
     ]
     assert codex_config.get_codex_reasoning_options('gpt-6-astra') == [
-        'low', 'medium', 'high', 'xhigh', 'max'
+        'low', 'medium', 'high', 'xhigh', 'max', 'ultra'
     ]
 
 

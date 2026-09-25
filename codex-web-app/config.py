@@ -581,7 +581,7 @@ _current_codex_model_catalog = _normalize_model_catalog([
     {
         'slug': 'gpt-6-astra',
         'default_reasoning_effort': 'medium',
-        'reasoning_options': ['low', 'medium', 'high', 'xhigh', 'max'],
+        'reasoning_options': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     },
     {
         'slug': 'gpt-5.6-sol',
@@ -678,11 +678,24 @@ def _supplement_codex_model_catalog(catalog):
     normalized_catalog = _normalize_model_catalog(catalog)
     # The CLI's on-disk catalog can lag a newly released first-party model.
     # Keep the curated current list present even when the cache contains an
-    # older subset, then retain any extra account-specific entries from cache.
-    return _prioritize_current_codex_models(_merge_model_catalogs(
-        _current_codex_model_catalog,
-        normalized_catalog,
-    ))
+    # older subset, but use the cache metadata for models it knows about.
+    # This lets the UI expose newly enabled reasoning levels without waiting
+    # for a Workbench release, while preserving the curated fallback for
+    # models or metadata absent from an old cache.
+    cached_by_slug = {
+        entry['slug']: entry
+        for entry in normalized_catalog
+    }
+    supplemented_catalog = [
+        cached_by_slug.get(entry['slug'], entry)
+        for entry in _current_codex_model_catalog
+    ]
+    supplemented_catalog.extend(
+        entry
+        for entry in normalized_catalog
+        if entry['slug'] not in _current_codex_model_order
+    )
+    return _prioritize_current_codex_models(supplemented_catalog)
 
 
 def _read_model_options_from_env():

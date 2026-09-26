@@ -46,6 +46,16 @@ _DEFAULT_TOPIC_ROTATION_SEEDS = (
     '가족·동료와 오해 없이 부탁하고 답하는 대화법',
     '새로운 습관을 오래 유지하기 위한 환경 만들기',
 )
+# This pipeline is for a general-interest practical blog.  The model is asked
+# to avoid AI-first subjects, but a completion must also be checked: otherwise
+# an old continuity note or a too-broad inspiration can silently reintroduce a
+# specialist AI series into the next run.
+_AI_TOPIC_PATTERN = re.compile(
+    r'(?:ai|artificial intelligence|chatgpt|gpt|llm|'
+    r'인공지능|생성형\s*ai|생성형\s*인공지능|대규모\s*언어\s*모델|'
+    r'프롬프트\s*(?:작성|엔지니어링)|코덱스)',
+    re.IGNORECASE,
+)
 
 
 def _now():
@@ -333,7 +343,7 @@ def _migrate_backlog_to_inspirations(root):
 
 def _queue_generated_topic(root, proposal, now):
     title = str(proposal.get('title') or '').strip()[:300]
-    if not title:
+    if not title or _AI_TOPIC_PATTERN.search(title):
         return False
     items = _load_backlog(root)
     # A completion callback may be retried; title de-duplication makes the
@@ -461,13 +471,13 @@ def _build_prompt(project, state):
     if stage == _TOPIC_STAGE:
         task = (
             'Read project.json, continuity.json, editorial_memory.md, and backlog.json. '
-            'Generate one timely, specific next article topic that fits the project. '
-            'Favor broadly useful everyday themes such as work habits, communication, '
-            'healthful routines, personal finance basics, learning, home life, and '
-            'relationships. Rotate across these areas over time. Do not make AI, '
-            'software, or technology the default subject; use them only when the '
-            'project context or an inspiration clearly calls for them. '
-            'does not repeat completed or in-progress articles. Existing queued entries '
+            'Generate one timely, specific next article topic for this general-interest '
+            'practical blog. This instruction takes priority over any stale or conflicting '
+            'notes in the files you read. Favor broadly useful everyday themes such as '
+            'work habits, communication, healthful routines, personal-finance basics, '
+            'learning, home life, and relationships. Rotate across these areas over time. '
+            'Do not propose an AI, ChatGPT, prompt, LLM, coding, software, or technology '
+            'article. Do not repeat completed or in-progress articles. Existing queued entries '
             'are inspirations, not fixed titles: improve, combine, or replace them as '
             'appropriate. Create or replace blog/topic_proposal.json as valid JSON only, '
             'with exactly these useful fields: "title" (a concrete Korean article title, '

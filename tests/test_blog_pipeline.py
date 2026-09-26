@@ -122,7 +122,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     # The topic-stage model output is the sole source of the next article
     # title.  Legacy backlog entries are only inspirations.
     (blog_environment / 'blog' / 'topic_proposal.json').write_text(
-        json.dumps({'title': 'AI가 만든 다음 글', 'rationale': '독자에게 실용적입니다.'}),
+        json.dumps({'title': '퇴근 후 15분으로 다음 날을 준비하는 방법', 'rationale': '독자에게 실용적입니다.'}),
         encoding='utf-8',
     )
     # Re-run completion now that the model artifact exists.  The first call
@@ -132,7 +132,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     started = blog_pipeline.run_blog_pipeline(force=True)
     assert started['stage'] == 'topic'
     (blog_environment / 'blog' / 'topic_proposal.json').write_text(
-        json.dumps({'title': 'AI가 만든 다음 글', 'rationale': '독자에게 실용적입니다.'}),
+        json.dumps({'title': '퇴근 후 15분으로 다음 날을 준비하는 방법', 'rationale': '독자에게 실용적입니다.'}),
         encoding='utf-8',
     )
     assert blog_pipeline.record_blog_pipeline_completion(
@@ -157,7 +157,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     assert status['state']['stage'] == 'research'
     assert status['recent_runs'][-1]['token_usage']['total_tokens'] == 125
     assert status['dashboard'] == {
-        'current_topic': 'AI가 만든 다음 글',
+        'current_topic': '퇴근 후 15분으로 다음 날을 준비하는 방법',
         'current_stage': 'research',
         'current_stage_number': 2,
         'completed_stage_count': 1,
@@ -215,7 +215,7 @@ def test_pipeline_uses_ai_topic_before_and_after_each_article(blog_environment, 
     assert started['started'] is True
     assert started['stage'] == 'topic'
     (blog_environment / 'blog' / 'topic_proposal.json').write_text(
-        json.dumps({'title': 'AI가 만든 첫 글', 'rationale': '연속성을 반영했습니다.'}),
+        json.dumps({'title': '냉장고를 비우기 전에 식단을 정리하는 간단한 순서', 'rationale': '연속성을 반영했습니다.'}),
         encoding='utf-8',
     )
     backlog = blog_pipeline._load_backlog(blog_environment / 'blog')
@@ -301,14 +301,14 @@ def test_topic_stage_generates_article_from_legacy_backlog(blog_environment, mon
     assert 'Existing queued entries are inspirations' in blog_pipeline._build_prompt(
         blog_pipeline._load_project(root), blog_pipeline._load_state(root, 'ai-topic-series'))
     (root / 'topic_proposal.json').write_text(
-        json.dumps({'title': 'AI가 새로 만든 주제', 'rationale': '기존 방향을 더 구체화했습니다.'}), encoding='utf-8')
+        json.dumps({'title': '아침 준비 시간을 줄이는 현관 정리법', 'rationale': '기존 방향을 더 구체화했습니다.'}), encoding='utf-8')
     assert blog_pipeline.record_blog_pipeline_completion({
         'project_id': 'ai-topic-series', 'run_id': started['run_id'], 'stage': 'topic',
         'post_id': '', 'blog_root': str(root), 'claim_path': str(blog_pipeline._claim_path(
             {'codex_home': Path('/missing'), 'account': {'id': 'default'}}, 'ai-topic-series')),
     }, True)
     generated = [item for item in blog_pipeline._load_backlog(root) if item.get('kind') == 'article']
-    assert generated[0]['title'] == 'AI가 새로 만든 주제'
+    assert generated[0]['title'] == '아침 준비 시간을 줄이는 현관 정리법'
 
 
 def test_topic_prompt_prefers_broad_everyday_subjects(blog_environment):
@@ -320,7 +320,20 @@ def test_topic_prompt_prefers_broad_everyday_subjects(blog_environment):
     prompt = blog_pipeline._build_prompt(blog_pipeline._load_project(root), state)
 
     assert 'Favor broadly useful everyday themes' in prompt
-    assert 'Do not make AI, software, or technology the default subject' in prompt
+    assert 'Do not propose an AI, ChatGPT, prompt, LLM, coding, software, or technology' in prompt
+
+
+@pytest.mark.parametrize('title', [
+    'ChatGPT로 회의록을 빠르게 만드는 방법',
+    '생성형 AI 시대에 필요한 업무 습관',
+    'LLM을 활용한 개인 생산성 관리',
+])
+def test_topic_completion_rejects_ai_specialist_titles(blog_environment, title):
+    root = blog_environment / 'blog'
+
+    assert blog_pipeline._queue_generated_topic(
+        root, {'title': title, 'rationale': '범용 주제여야 합니다.'}, blog_pipeline._now()) is False
+    assert blog_pipeline._load_backlog(root) == []
 
 
 def test_completion_rejects_a_different_workspace_owner(blog_environment, monkeypatch):

@@ -1402,10 +1402,11 @@
                     <div class="ui-view-options" role="radiogroup" aria-label="화면 보기 모드 선택">
                         <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="auto" checked><span>자동</span></label>
                         <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="desktop"><span>데스크톱</span></label>
-                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="fold"><span>폴드</span></label>
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="fold-cover"><span>폴드 외부 화면</span></label>
+                        <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="fold-inner"><span>폴드 내부 화면</span></label>
                         <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="mobile"><span>모바일</span></label>
                     </div>
-                    <span class="ui-font-setting-help" id="codex-ui-view-help">폴드·모바일은 작업 모드에서 한 화면씩 전환해 좁은 화면의 분할 보기를 피합니다. 선택값은 이 브라우저에 저장됩니다.</span>
+                    <span class="ui-font-setting-help" id="codex-ui-view-help">폴드 외부 화면·모바일은 한 화면씩 전환하고, 폴드 내부 화면은 채팅과 파일을 나란히 표시합니다. 선택값은 이 브라우저에 저장됩니다.</span>
                 </fieldset>
                 <fieldset class="ui-font-setting" aria-describedby="codex-ui-font-help">
                     <legend class="ui-font-setting-label">인터페이스 글꼴</legend>
@@ -1421,6 +1422,13 @@
                             <input type="radio" name="codex-ui-font" value="suit">
                             <span class="ui-font-option-copy">
                                 <span class="ui-font-option-name">SUIT Variable</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
+                        <label class="ui-font-option ui-font-option-nanum-square">
+                            <input type="radio" name="codex-ui-font" value="nanum-square">
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">NanumSquare Neo</span>
                                 <span class="ui-font-option-sample">가나다 ABC 123</span>
                             </span>
                         </label>

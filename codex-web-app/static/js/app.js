@@ -166,7 +166,7 @@ const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
 const UI_VIEW_MODE_STORAGE_KEY = 'codex-ui-view-mode';
 const UI_VIEW_MODE_AUTO = 'auto';
-const UI_VIEW_MODES = Object.freeze(['auto', 'desktop', 'fold', 'mobile']);
+const UI_VIEW_MODES = Object.freeze(['auto', 'desktop', 'fold-cover', 'fold-inner', 'mobile']);
 let uiViewMode = UI_VIEW_MODE_AUTO;
 const MOBILE_VIEWPORT_HEIGHT_VAR = '--mobile-viewport-height';
 const MOBILE_VIEWPORT_TOP_VAR = '--mobile-viewport-top';
@@ -2507,7 +2507,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
-    const normalizeUiFont = value => value === 'suit' ? 'suit' : DEFAULT_UI_FONT;
+    const normalizeUiFont = value => ['suit', 'nanum-square'].includes(value) ? value : DEFAULT_UI_FONT;
     const applyUiFont = (value, { persist = true } = {}) => {
         const font = normalizeUiFont(value);
         if (font === DEFAULT_UI_FONT) {
@@ -2526,7 +2526,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
-    const viewModeLabel = mode => ({ desktop: '데스크톱', fold: '폴드', mobile: '모바일' }[mode] || '알 수 없음');
+    const viewModeLabel = mode => ({
+        desktop: '데스크톱',
+        'fold-cover': '폴드 외부 화면',
+        'fold-inner': '폴드 내부 화면',
+        mobile: '모바일'
+    }[mode] || '알 수 없음');
     const updateUiViewModeControls = () => {
         const detected = detectUiViewMode();
         const effective = resolveUiViewMode();
@@ -7384,12 +7389,12 @@ function isPhoneLayout() {
 }
 
 function isFoldLayout() {
-    return resolveUiViewMode() === 'fold';
+    return resolveUiViewMode() === 'fold-cover';
 }
 
 function isCompactLayout() {
     const mode = resolveUiViewMode();
-    return mode === 'fold' || mode === 'mobile';
+    return mode === 'fold-cover' || mode === 'mobile';
 }
 
 function isMobileLayout() {
@@ -7397,6 +7402,8 @@ function isMobileLayout() {
 }
 
 function normalizeUiViewMode(value) {
+    // Preserve the former single fold preference as the cover-screen layout.
+    if (value === 'fold') return 'fold-cover';
     return UI_VIEW_MODES.includes(value) ? value : UI_VIEW_MODE_AUTO;
 }
 
@@ -7413,8 +7420,13 @@ function hasFoldableWindowSignal() {
 }
 
 function detectUiViewMode() {
-    if (window.matchMedia(PHONE_MEDIA_QUERY).matches) return 'mobile';
-    return hasFoldableWindowSignal() ? 'fold' : 'desktop';
+    if (hasFoldableWindowSignal()) {
+        // Fold covers are phone-width; unfolded panels provide enough width for
+        // the parallel chat/file work surface.  This also works when Window
+        // Segments is unavailable on Android WebView.
+        return window.innerWidth >= 600 ? 'fold-inner' : 'fold-cover';
+    }
+    return window.matchMedia(PHONE_MEDIA_QUERY).matches ? 'mobile' : 'desktop';
 }
 
 function resolveUiViewMode() {

@@ -426,6 +426,7 @@
     --font-ibm-ui-ko: "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-ibm-ui-ja: "IBM Plex Sans JP", "IBM Plex Sans KR", sans-serif;
     --font-suit-ui: "SUIT Variable", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-nanum-square-ui: "NanumSquareNeo", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-naver-ui: var(--font-ibm-ui-ko);
     --font-naver-code: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     --font-session-list-title: var(--font-naver-ui);
@@ -455,6 +456,15 @@
 
 [data-ui-font="suit"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
     font-family: var(--font-suit-ui);
+}
+
+[data-ui-font="nanum-square"] {
+    --font-naver-ui: var(--font-nanum-square-ui);
+    --font-sans: var(--font-nanum-square-ui);
+}
+
+[data-ui-font="nanum-square"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-nanum-square-ui);
 }
 
 [data-theme="dark"] {
@@ -9168,7 +9178,7 @@ body.is-work-mode-resizing * {
 
 .ui-view-options {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
 }
 
@@ -9217,7 +9227,7 @@ body.is-work-mode-resizing * {
 
 .ui-font-options {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
 }
 
@@ -9266,6 +9276,7 @@ body.is-work-mode-resizing * {
 }
 
 .ui-font-option-suit .ui-font-option-sample { font-family: var(--font-suit-ui); }
+.ui-font-option-nanum-square .ui-font-option-sample { font-family: var(--font-nanum-square-ui); }
 
 .ui-font-setting-help {
     font-weight: 400;
@@ -13998,20 +14009,20 @@ html.is-windows-desktop .windows-small-text {
 
 /* Explicit view modes are deliberately scoped to work mode.  This preserves
    the established desktop/tablet layout unless a user selects another mode. */
-:root[data-view-mode="fold"] .app.is-work-mode .layout,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .layout,
 :root[data-view-mode="mobile"] .app.is-work-mode .layout {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .sidebar-stack,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .sidebar-stack,
 :root[data-view-mode="mobile"] .app.is-work-mode .sidebar-stack {
     display: none;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .chat,
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .chat,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview,
 :root[data-view-mode="mobile"] .app.is-work-mode .chat,
 :root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview {
     width: auto;
@@ -14020,7 +14031,7 @@ html.is-windows-desktop .windows-small-text {
     border-radius: 10px;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview,
 :root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview {
     display: flex;
     padding: 10px;
@@ -14029,19 +14040,19 @@ html.is-windows-desktop .windows-small-text {
 
 /* Fold work mode is intentionally single-panel: chat first, then the file
    browser.  File list/viewer state remains independent inside the browser. */
-:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-chat .work-mode-preview,
-:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-list .chat,
-:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-viewer .chat {
+:root[data-view-mode="fold-cover"] .app.is-work-mode.is-work-mode-fold-chat .work-mode-preview,
+:root[data-view-mode="fold-cover"] .app.is-work-mode.is-work-mode-fold-list .chat,
+:root[data-view-mode="fold-cover"] .app.is-work-mode.is-work-mode-fold-viewer .chat {
     display: none !important;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-list .work-mode-preview,
-:root[data-view-mode="fold"] .app.is-work-mode.is-work-mode-fold-viewer .work-mode-preview {
+:root[data-view-mode="fold-cover"] .app.is-work-mode.is-work-mode-fold-list .work-mode-preview,
+:root[data-view-mode="fold-cover"] .app.is-work-mode.is-work-mode-fold-viewer .work-mode-preview {
     display: flex !important;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat,
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-back,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview-chat,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview-back,
 :root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview-chat,
 :root[data-view-mode="mobile"] .app.is-work-mode .work-mode-preview-back {
     display: inline-flex;
@@ -14051,7 +14062,7 @@ html.is-windows-desktop .windows-small-text {
     display: none;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat {
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview-chat {
     width: var(--icon-button-size);
     min-width: var(--icon-button-size);
     flex: 0 0 var(--icon-button-size);
@@ -14061,11 +14072,11 @@ html.is-windows-desktop .windows-small-text {
     background-position: center;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-preview-chat-label {
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-preview-chat-label {
     display: none;
 }
 
-:root[data-view-mode="fold"] .app.is-work-mode .work-mode-divider,
+:root[data-view-mode="fold-cover"] .app.is-work-mode .work-mode-divider,
 :root[data-view-mode="mobile"] .app.is-work-mode .work-mode-divider {
     display: none !important;
 }
@@ -14094,8 +14105,36 @@ html.is-windows-desktop .windows-small-text {
     display: block !important;
 }
 
+/* The unfolded Fold canvas is a true work surface: retain the parallel
+   chat/file panes instead of inheriting the cover screen's single-pane flow. */
+:root[data-view-mode="fold-inner"] .app.is-work-mode .layout {
+    display: flex;
+    flex-direction: row;
+    gap: 0;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode .chat {
+    flex: 0 0 var(--work-mode-chat-width, 52%);
+    width: var(--work-mode-chat-width, 52%);
+    min-width: 0;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-preview {
+    display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-divider {
+    display: block !important;
+}
+
 @media (max-width: 420px) {
     .ui-view-options {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ui-font-options {
+        grid-template-columns: minmax(0, 1fr);
     }
 }

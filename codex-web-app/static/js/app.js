@@ -260,8 +260,8 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     label: DEFAULT_WEATHER_LOCATION_LABEL,
     isDefault: true
 });
-const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for Codex. (Shift+Enter for newline)';
-const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for Codex. (Enter for newline)';
+const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for the selected agent. (Shift+Enter for newline)';
+const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for the selected agent. (Enter for newline)';
 const CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 120000;
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
@@ -5276,7 +5276,7 @@ function getRecognizedViewportWidth() {
 async function showHeaderDetailsToast() {
     const descriptionElement = document.getElementById('codex-header-description');
     const storageElement = document.getElementById('codex-session-storage');
-    const descriptionText = String(descriptionElement?.textContent || 'Manage Codex Workbench sessions.').trim();
+    const descriptionText = String(descriptionElement?.textContent || 'Manage LLM Workbench sessions.').trim();
     const storageText = String(storageElement?.textContent || '').trim();
     const restartPolicy = await fetchCodexRestartPolicy();
     const useReloader = restartPolicy?.use_reloader;
@@ -15936,7 +15936,7 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
     } else if (item?.limit_sample_source === 'manual') {
         parts.push('수동 조회');
     } else if (item?.limit_sample_source === 'post_task') {
-        parts.push('Codex 작업 완료 후 조회');
+        parts.push('에이전트 작업 완료 후 조회');
     } else if (item?.limit_sample_source === 'post_keepalive') {
         parts.push('5h/Weekly 리셋 감지 또는 수동 경량 작업 완료 후 조회 (Terra medium)');
     } else if (item?.limit_sample_source === 'post_keepalive_automatic') {

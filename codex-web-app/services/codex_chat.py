@@ -569,7 +569,7 @@ _APP_SERVER_RPC_TIMEOUT_SECONDS = float(os.environ.get('CODEX_APP_SERVER_RPC_TIM
 _APP_SERVER_REMOTE_START_GRACE_SECONDS = float(os.environ.get('CODEX_APP_SERVER_REMOTE_START_GRACE_SECONDS', '0.35'))
 _APP_SERVER_CLIENT_INFO = {
     'name': 'codex_workbench',
-    'title': 'Codex Workbench',
+    'title': 'LLM Workbench',
     'version': '0.1.0',
 }
 _APP_SERVER_READ_METHODS = {

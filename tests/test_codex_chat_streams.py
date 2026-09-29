@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -956,6 +957,89 @@ def test_account_usage_uses_fresh_shared_snapshot_for_project_evaluation(
     )
 
     assert codex_chat.refresh_account_usage_snapshot_if_due() is expected
+
+
+def test_account_usage_app_server_calls_run_outside_shared_snapshot_lock(
+        isolated_codex_workspace, monkeypatch):
+    lock_depth = 0
+
+    @contextmanager
+    def tracked_lock(_path, timeout_seconds=5.0):
+        nonlocal lock_depth
+        del timeout_seconds
+        lock_depth += 1
+        try:
+            yield
+        finally:
+            lock_depth -= 1
+
+    def fake_call(method, params=None, **kwargs):
+        del params
+        del kwargs
+        assert lock_depth == 0
+        if method == 'account/rateLimits/read':
+            return {'result': {'rateLimits': {}}, 'elapsed_ms': 1}
+        return {'result': {'usage': {}}, 'elapsed_ms': 1}
+
+    monkeypatch.setattr(codex_chat, '_acquire_path_file_lock', tracked_lock)
+    monkeypatch.setattr(codex_chat, 'call_codex_app_server_method', fake_call)
+    monkeypatch.setattr(codex_chat, 'record_usage_snapshot_if_due', lambda **_kwargs: {})
+    monkeypatch.setattr(codex_chat, '_reconcile_usage_calibration', lambda *_args: None)
+
+    result = codex_chat.refresh_account_usage_snapshot_if_due(force=True)
+
+    assert result['refreshed'] is True
+    assert lock_depth == 0
+
+
+@pytest.mark.skipif(codex_chat.fcntl is None, reason='POSIX flock is unavailable')
+def test_path_file_lock_times_out_instead_of_waiting_forever(tmp_path):
+    target = tmp_path / 'shared.json'
+    lock_path = codex_chat._lock_path_for(target)
+    lock_path.touch()
+    holder_script = (
+        'import fcntl, pathlib, sys, time\n'
+        'handle = pathlib.Path(sys.argv[1]).open("a+")\n'
+        'fcntl.flock(handle.fileno(), fcntl.LOCK_EX)\n'
+        'print("locked", flush=True)\n'
+        'time.sleep(10)\n'
+    )
+    holder = subprocess.Popen(
+        [sys.executable, '-c', holder_script, str(lock_path)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == 'locked'
+        started_at = time.monotonic()
+        with pytest.raises(TimeoutError, match='file lock'):
+            with codex_chat._acquire_path_file_lock(target, timeout_seconds=0.1):
+                pytest.fail('contended lock must not be acquired')
+        assert time.monotonic() - started_at < 1
+    finally:
+        holder.terminate()
+        holder.wait(timeout=3)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX process groups are required')
+def test_app_server_timeout_kills_descendants_that_inherit_stderr():
+    hanging_tree_script = (
+        'import subprocess, sys, time\n'
+        'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])\n'
+        'time.sleep(10)\n'
+    )
+    started_at = time.monotonic()
+
+    with pytest.raises(codex_chat.CodexAppServerError) as error:
+        codex_chat._call_codex_app_server_process(
+            [sys.executable, '-c', hanging_tree_script],
+            'account/rateLimits/read',
+            {},
+            timeout_seconds=0.1,
+        )
+
+    assert error.value.error_code == 'app_server_timeout'
+    assert time.monotonic() - started_at < 2
 
 
 def test_usage_keepalive_cycle_targets_use_only_five_hour_zero_usage_slots():

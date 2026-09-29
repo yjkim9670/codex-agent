@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -1608,7 +1609,7 @@ def _lock_path_for(path):
 
 
 @contextmanager
-def _acquire_path_file_lock(path):
+def _acquire_path_file_lock(path, timeout_seconds=5.0):
     lock_path = _lock_path_for(path)
     lock_handle = None
     try:
@@ -1621,7 +1622,7 @@ def _acquire_path_file_lock(path):
         yield
         return
     try:
-        _lock_file_handle(lock_handle)
+        _lock_file_handle(lock_handle, timeout_seconds=timeout_seconds)
         yield
     finally:
         try:
@@ -2797,9 +2798,20 @@ def _apply_auth_failure_guard(text):
     return normalized
 
 
-def _lock_file_handle(handle):
+def _lock_file_handle(handle, timeout_seconds=None):
     if fcntl is not None:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        if timeout_seconds is None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            return
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('timed out waiting for file lock')
+                time.sleep(0.05)
         return
     if msvcrt is not None:  # pragma: no cover - Windows only
         while True:
@@ -3435,14 +3447,55 @@ def _finish_app_server_process(process):
         pass
 
 
-def _read_app_server_stderr(process):
+def _read_app_server_stderr(process, timeout_seconds=1.0):
     try:
         stderr = getattr(process, 'stderr', None)
         if stderr is None:
             return ''
-        return stderr.read() or ''
+        try:
+            fileno = stderr.fileno()
+        except Exception:
+            return stderr.read() or ''
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        chunks = []
+        was_blocking = os.get_blocking(fileno)
+        try:
+            os.set_blocking(fileno, False)
+            while time.monotonic() < deadline:
+                try:
+                    chunk = os.read(fileno, 4096)
+                except BlockingIOError:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.01)
+                    continue
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            try:
+                os.set_blocking(fileno, was_blocking)
+            except OSError:
+                pass
+        return b''.join(chunks).decode('utf-8', errors='replace')
     except Exception:
         return ''
+
+
+def _kill_app_server_process_tree(process):
+    """Stop descendants too, so inherited stdio pipes cannot block cleanup."""
+    if process.poll() is not None:
+        return
+    try:
+        if os.name != 'nt':
+            os.killpg(process.pid, signal.SIGKILL)
+        else:  # pragma: no cover - Windows only
+            process.kill()
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
 
 
 def _call_codex_app_server_process(
@@ -3459,6 +3512,7 @@ def _call_codex_app_server_process(
             stderr=subprocess.PIPE,
             env=_build_codex_app_server_env(account_id=account_id),
             text=True,
+            start_new_session=(os.name != 'nt'),
         )
     except FileNotFoundError as exc:
         raise CodexAppServerError(
@@ -3486,11 +3540,8 @@ def _call_codex_app_server_process(
             if method_response is None:
                 raise subprocess.TimeoutExpired(command, timeout_seconds)
         except subprocess.TimeoutExpired as exc:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            stderr_text = _read_app_server_stderr(process)
+            _kill_app_server_process_tree(process)
+            stderr_text = _read_app_server_stderr(process, timeout_seconds=0.25)
             raise CodexAppServerError(
                 'App Server 요청 시간이 초과되었습니다.',
                 status_code=504,
@@ -3512,8 +3563,12 @@ def _call_codex_app_server_process(
     try:
         stdout_text, stderr_text = process.communicate(request_body, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
-        process.kill()
-        stdout_text, stderr_text = process.communicate()
+        _kill_app_server_process_tree(process)
+        try:
+            stdout_text, stderr_text = process.communicate(timeout=1)
+        except (subprocess.TimeoutExpired, ValueError):
+            stdout_text = ''
+            stderr_text = _read_app_server_stderr(process, timeout_seconds=0.25)
         raise CodexAppServerError(
             'App Server 요청 시간이 초과되었습니다.',
             status_code=504,
@@ -8736,8 +8791,9 @@ def refresh_account_usage_snapshot_if_due(
     context = _account_storage_context(account_id)
     if context is None:
         return {'refreshed': False, 'error': 'account_not_found'}
-    # This file lives in the shared account state, so the lock also coordinates
-    # workers started by Workbench copies in other directories.
+    # Reserve the refresh slot while locked, then release the cross-process
+    # lock before starting App Server subprocesses.  A stalled external process
+    # must never block every Workbench that shares this account state.
     with _acquire_path_file_lock(context['account_usage_snapshot_path']):
         previous = _load_account_usage_snapshot(context)
         if not force and not _account_usage_refresh_is_due(previous):
@@ -8752,124 +8808,138 @@ def refresh_account_usage_snapshot_if_due(
             evaluate_shared_snapshot = True
         else:
             evaluate_shared_snapshot = False
-        if evaluate_shared_snapshot:
-            pass
-        else:
-            attempted_at = normalize_timestamp(None)
-            automatic_slot = _account_usage_refresh_slot() if not force else None
-            try:
-                rate_response = call_codex_app_server_method(
-                    'account/rateLimits/read', {}, account_id=context['account']['id'],
-                    require_pilot=False, force_process=True,
-                )
-                usage_response = call_codex_app_server_method(
-                    'account/usage/read', {}, account_id=context['account']['id'],
-                    require_pilot=False, force_process=True,
-                )
-                rate_result = rate_response.get('result') if isinstance(rate_response, dict) else {}
-                usage_result = usage_response.get('result') if isinstance(usage_response, dict) else {}
-                raw_limits = (
-                    rate_result.get('rateLimits')
-                    or rate_result.get('rate_limits')
-                    or rate_result
-                ) if isinstance(rate_result, dict) else {}
-                limits = _extract_limits(raw_limits) or {'five_hour': None, 'weekly': None}
-                normalized_usage = _normalize_account_usage_api_result(usage_result)
-                snapshot = {
-                    'version': 1,
-                    'account_id': context['account']['id'],
-                    'last_attempt_at': attempted_at,
-                    'last_success_at': attempted_at,
-                    'source': 'codex_app_server',
-                    'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                    'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
-                    'last_automatic_refresh_slot_at': (
-                        normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_refresh_slot_at')
-                    ),
-                    'last_automatic_attempt_slot_at': (
-                        normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
-                    ),
-                    'five_hour': limits.get('five_hour'),
-                    'weekly': limits.get('weekly'),
-                    'account_usage': normalized_usage,
-                    'rate_limits_raw': raw_limits,
-                    'elapsed_ms': int(rate_response.get('elapsed_ms') or 0) + int(usage_response.get('elapsed_ms') or 0),
-                    'error': '',
-                    'usage_keepalive': previous.get('usage_keepalive') if isinstance(previous.get('usage_keepalive'), dict) else {},
-                }
-                verification_updated = _verify_usage_keepalive_locked(snapshot)
-                verification_state = snapshot.get('usage_keepalive') if verification_updated else {}
-                verification_status = (
-                    verification_state.get('verification_status')
-                    if isinstance(verification_state, dict) else ''
-                )
-                schedule_retry = verification_status == 'stability_pending'
-                _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
-                resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
-                if resolved_limit_sample_source not in {'automatic', 'manual', 'post_task', 'post_keepalive', 'post_keepalive_automatic'}:
-                    resolved_limit_sample_source = 'manual' if force else 'automatic'
-                record_usage_snapshot_if_due(
-                    force=True,
-                    usage_summary=get_usage_summary(account_id=context['account']['id']),
-                    account_id=context['account']['id'],
-                    limit_sample_source=resolved_limit_sample_source,
-                )
-                _reconcile_usage_calibration(context['account']['id'], snapshot)
-                keepalive = {'submitted': False, 'reason': 'not_automatic'}
-                if resolved_limit_sample_source == 'automatic':
-                    keepalive = _reserve_automatic_usage_blog_locked(context, snapshot)
-                    _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
-                    if keepalive.get('submitted'):
-                        # The pipeline starts after this function releases the
-                        # snapshot lock.  It deliberately has no independent
-                        # cadence worker: a 0% five-hour observation is the only
-                        # automatic trigger.
-                        _start_reserved_automatic_usage_blog_worker(context, keepalive)
-                if schedule_retry:
-                    _schedule_usage_keepalive_followup(
-                        context['account']['id'], (
-                            _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS
-                        ),
-                    )
-                result = {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
-                if resolved_limit_sample_source == 'automatic':
-                    _record_automatic_usage_refresh_history(context, result)
-                return result
-            except Exception as exc:
-                failure_slot_key = normalize_timestamp(automatic_slot) if automatic_slot else ''
-                prior_failure_slot = str(previous.get('automatic_refresh_failure_slot_at') or '')
-                prior_failure_count = _coerce_non_negative_int(
-                    previous.get('automatic_refresh_failure_count')
-                ) or 0
-                failed = {
-                    **previous,
-                    'version': 1,
-                    'account_id': context['account']['id'],
-                    'last_attempt_at': attempted_at,
-                    'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                    'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
-                    'last_automatic_attempt_slot_at': (
-                        normalize_timestamp(automatic_slot) if automatic_slot else previous.get('last_automatic_attempt_slot_at')
-                    ),
-                    # A transient App Server error should not make the entire
-                    # ten-minute observation window disappear.  The due check
-                    # allows up to three total attempts in this slot.
-                    'automatic_refresh_failure_slot_at': failure_slot_key or prior_failure_slot,
-                    'automatic_refresh_failure_count': (
-                        prior_failure_count + 1 if failure_slot_key and prior_failure_slot == failure_slot_key
-                        else (1 if failure_slot_key else prior_failure_count)
-                    ),
-                    'error': str(exc)[:1000],
-                }
-                _write_json_atomic(context['account_usage_snapshot_path'], failed)
-                _LOGGER.warning('account usage App Server refresh failed: %s', exc)
-                result = {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
-                if str(limit_sample_source or '').strip().lower() == 'automatic' or not force:
-                    _record_automatic_usage_refresh_history(context, result)
-                return result
+        attempted_at = normalize_timestamp(None)
+        automatic_slot = _account_usage_refresh_slot() if not force else None
+        if not evaluate_shared_snapshot and automatic_slot:
+            reserved = {
+                **previous,
+                'last_attempt_at': attempted_at,
+                'last_automatic_attempt_slot_at': normalize_timestamp(automatic_slot),
+            }
+            _write_json_atomic(context['account_usage_snapshot_path'], reserved)
     # The slot was refreshed elsewhere.  Reacquire the shared file only for
     # the project-specific zero-window evaluation, never for another API call.
-    return _evaluate_automatic_usage_blog_from_shared_snapshot(context)
+    if evaluate_shared_snapshot:
+        return _evaluate_automatic_usage_blog_from_shared_snapshot(context)
+
+    resolved_limit_sample_source = str(limit_sample_source or '').strip().lower()
+    if resolved_limit_sample_source not in {
+            'automatic', 'manual', 'post_task', 'post_keepalive',
+            'post_keepalive_automatic'}:
+        resolved_limit_sample_source = 'manual' if force else 'automatic'
+    try:
+        rate_response = call_codex_app_server_method(
+            'account/rateLimits/read', {}, account_id=context['account']['id'],
+            require_pilot=False, force_process=True,
+        )
+        usage_response = call_codex_app_server_method(
+            'account/usage/read', {}, account_id=context['account']['id'],
+            require_pilot=False, force_process=True,
+        )
+        rate_result = rate_response.get('result') if isinstance(rate_response, dict) else {}
+        usage_result = usage_response.get('result') if isinstance(usage_response, dict) else {}
+        raw_limits = (
+            rate_result.get('rateLimits')
+            or rate_result.get('rate_limits')
+            or rate_result
+        ) if isinstance(rate_result, dict) else {}
+        limits = _extract_limits(raw_limits) or {'five_hour': None, 'weekly': None}
+        normalized_usage = _normalize_account_usage_api_result(usage_result)
+        with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+            latest = _load_account_usage_snapshot(context)
+            snapshot = {
+                'version': 1,
+                'account_id': context['account']['id'],
+                'last_attempt_at': attempted_at,
+                'last_success_at': attempted_at,
+                'source': 'codex_app_server',
+                'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
+                'last_automatic_refresh_slot_at': (
+                    normalize_timestamp(automatic_slot) if automatic_slot
+                    else latest.get('last_automatic_refresh_slot_at')
+                ),
+                'last_automatic_attempt_slot_at': (
+                    normalize_timestamp(automatic_slot) if automatic_slot
+                    else latest.get('last_automatic_attempt_slot_at')
+                ),
+                'five_hour': limits.get('five_hour'),
+                'weekly': limits.get('weekly'),
+                'account_usage': normalized_usage,
+                'rate_limits_raw': raw_limits,
+                'elapsed_ms': (
+                    int(rate_response.get('elapsed_ms') or 0)
+                    + int(usage_response.get('elapsed_ms') or 0)
+                ),
+                'error': '',
+                'usage_keepalive': (
+                    latest.get('usage_keepalive')
+                    if isinstance(latest.get('usage_keepalive'), dict) else {}
+                ),
+            }
+            verification_updated = _verify_usage_keepalive_locked(snapshot)
+            verification_state = snapshot.get('usage_keepalive') if verification_updated else {}
+            schedule_retry = (
+                isinstance(verification_state, dict)
+                and verification_state.get('verification_status') == 'stability_pending'
+            )
+            _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+
+        record_usage_snapshot_if_due(
+            force=True,
+            usage_summary=get_usage_summary(account_id=context['account']['id']),
+            account_id=context['account']['id'],
+            limit_sample_source=resolved_limit_sample_source,
+        )
+        _reconcile_usage_calibration(context['account']['id'], snapshot)
+        keepalive = {'submitted': False, 'reason': 'not_automatic'}
+        if resolved_limit_sample_source == 'automatic':
+            with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+                snapshot = _load_account_usage_snapshot(context)
+                keepalive = _reserve_automatic_usage_blog_locked(context, snapshot)
+                _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
+            if keepalive.get('submitted'):
+                _start_reserved_automatic_usage_blog_worker(context, keepalive)
+        if schedule_retry:
+            _schedule_usage_keepalive_followup(
+                context['account']['id'], _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS)
+        result = {'refreshed': True, 'snapshot': snapshot, 'usage_keepalive': keepalive}
+        if resolved_limit_sample_source == 'automatic':
+            _record_automatic_usage_refresh_history(context, result)
+        return result
+    except Exception as exc:
+        failure_slot_key = normalize_timestamp(automatic_slot) if automatic_slot else ''
+        with _acquire_path_file_lock(context['account_usage_snapshot_path']):
+            latest = _load_account_usage_snapshot(context)
+            prior_failure_slot = str(latest.get('automatic_refresh_failure_slot_at') or '')
+            prior_failure_count = _coerce_non_negative_int(
+                latest.get('automatic_refresh_failure_count')) or 0
+            failed = {
+                **latest,
+                'version': 1,
+                'account_id': context['account']['id'],
+                'last_attempt_at': attempted_at,
+                'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
+                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
+                'last_automatic_attempt_slot_at': (
+                    failure_slot_key or latest.get('last_automatic_attempt_slot_at')
+                ),
+                'automatic_refresh_failure_slot_at': (
+                    failure_slot_key or prior_failure_slot
+                ),
+                'automatic_refresh_failure_count': (
+                    prior_failure_count + 1
+                    if failure_slot_key and prior_failure_slot == failure_slot_key
+                    else (1 if failure_slot_key else prior_failure_count)
+                ),
+                'error': str(exc)[:1000],
+            }
+            _write_json_atomic(context['account_usage_snapshot_path'], failed)
+        _LOGGER.warning('account usage App Server refresh failed: %s', exc)
+        result = {'refreshed': False, 'snapshot': failed, 'error': str(exc)}
+        if resolved_limit_sample_source == 'automatic':
+            _record_automatic_usage_refresh_history(context, result)
+        return result
 
 
 def _automatic_usage_refresh_history_path(context):

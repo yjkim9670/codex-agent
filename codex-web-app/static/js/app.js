@@ -3099,7 +3099,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            } else if (isFoldLayout()) {
+            } else if (usesWorkModeSingleFilePane()) {
                 setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
             void refreshWorkModeFileDirectory({
@@ -3124,7 +3124,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
                 return;
             }
-            if (isFoldLayout()) {
+            if (usesWorkModeSingleFilePane()) {
                 setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
         });
@@ -6216,7 +6216,7 @@ function normalizeWorkModeMobileBrowseView(value) {
 
 function setWorkModeBrowseView(view = WORK_MODE_MOBILE_VIEW_LIST) {
     workModeMobileBrowseView = normalizeWorkModeMobileBrowseView(view);
-    setWorkModeMobileView(isFoldLayout() ? workModeMobileBrowseView : workModeMobileView);
+    setWorkModeMobileView(usesWorkModeSingleFilePane() ? workModeMobileBrowseView : workModeMobileView);
 }
 
 function syncWorkModeFileFullscreenButtonState() {
@@ -6259,6 +6259,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     const fileElements = getWorkModeFileElements();
     const mobile = isMobileLayout();
     const fold = isFoldLayout();
+    const singleFilePane = usesWorkModeSingleFilePane();
     // A fullscreen preview owns the fold surface, so release it before an
     // explicit return to the chat surface.
     if (fold && nextView === WORK_MODE_MOBILE_VIEW_CHAT && workModePreviewFullscreen) {
@@ -6266,7 +6267,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     }
     const enabled = isWorkModeEnabled();
     const applyMobileView = mobile && enabled;
-    const applyFoldBrowseView = fold && enabled;
+    const applyFoldBrowseView = singleFilePane && enabled;
     const foldBrowseView = normalizeWorkModeMobileBrowseView(workModeMobileBrowseView);
 
     if (
@@ -6317,7 +6318,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         );
     }
 
-    const showMobileBrowserButton = (applyMobileView || applyFoldBrowseView)
+    const showMobileBrowserButton = (applyMobileView || (fold && applyFoldBrowseView))
         && nextView === WORK_MODE_MOBILE_VIEW_CHAT;
     if (elements?.mobileBrowserBtn) {
         const mobileBrowserLabel = isWorkModeTerminalPanelActive() ? 'Terminal로 이동' : '브라우저로 이동';
@@ -6333,7 +6334,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         }
     }
 
-    const showChatButton = (applyMobileView || applyFoldBrowseView)
+    const showChatButton = (applyMobileView || (fold && applyFoldBrowseView))
         && nextView !== WORK_MODE_MOBILE_VIEW_CHAT;
     const showBackButton = (
         applyMobileView && nextView === WORK_MODE_MOBILE_VIEW_VIEWER
@@ -7137,7 +7138,11 @@ function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } =
         if (mobile && !wasEnabled) {
             workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
         }
-        setWorkModeMobileView(workModeMobileView);
+        setWorkModeMobileView(
+            isFoldInnerLayout()
+                ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
+                : workModeMobileView
+        );
         setWorkModePreviewFullscreen(workModePreviewFullscreen);
         syncWorkModePanelModeState();
         requestAnimationFrame(() => {
@@ -7179,6 +7184,8 @@ function initializeWorkMode(isMobile) {
     setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
     const initialMobileView = (isMobile || isFoldLayout())
         ? WORK_MODE_MOBILE_VIEW_CHAT
+        : isFoldInnerLayout()
+            ? WORK_MODE_MOBILE_VIEW_LIST
         : normalizeWorkModeMobileView(workModeMobileView) === WORK_MODE_MOBILE_VIEW_CHAT
             ? WORK_MODE_MOBILE_VIEW_LIST
             : normalizeWorkModeMobileView(workModeMobileView);
@@ -7197,14 +7204,18 @@ function handleWorkModeMediaChange(isMobile) {
     if (!isMobile && isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
-    if ((isMobile || isFoldLayout()) && isWorkModeEnabled()) {
+    if ((isMobile || usesWorkModeSingleFilePane()) && isWorkModeEnabled()) {
         setWorkModeFileViewerFullscreen(false);
     }
     updateWorkModeToggleButton(elements.toggle, isWorkModeEnabled(), { disabled: false });
     if (readWorkModePreference() && !isWorkModeEnabled()) {
         setWorkModeEnabled(true, { persist: false, notifyOnMobile: false });
     }
-    setWorkModeMobileView(workModeMobileView);
+    setWorkModeMobileView(
+        isFoldInnerLayout()
+            ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
+            : workModeMobileView
+    );
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
@@ -7390,6 +7401,16 @@ function isPhoneLayout() {
 
 function isFoldLayout() {
     return resolveUiViewMode() === 'fold-cover';
+}
+
+function isFoldInnerLayout() {
+    return resolveUiViewMode() === 'fold-inner';
+}
+
+// Both Fold surfaces need a single, readable file pane. The cover also
+// switches between chat and files, while the inner screen keeps chat visible.
+function usesWorkModeSingleFilePane() {
+    return isFoldLayout() || isFoldInnerLayout();
 }
 
 function isCompactLayout() {
@@ -18678,7 +18699,7 @@ function setWorkModeFileDirectoryLoading(isLoading, message = '디렉터리 목�
     if (!elements) return;
     const loading = Boolean(isLoading);
     const mobile = isMobileLayout();
-    const fold = isFoldLayout();
+    const fold = usesWorkModeSingleFilePane();
     const canGoBack = isWorkModeEnabled() && (
         (mobile && workModeMobileView === WORK_MODE_MOBILE_VIEW_VIEWER)
         || (fold && normalizeWorkModeMobileBrowseView(workModeMobileBrowseView) === WORK_MODE_MOBILE_VIEW_VIEWER)
@@ -18813,7 +18834,7 @@ async function openMessageInWorkModePreview(title, text, subtitle = '') {
     setWorkModePanelMode(WORK_MODE_PANEL_MODE_FILE, { persist: true });
     if (isMobileLayout()) {
         setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
-    } else if (isFoldLayout()) {
+    } else if (usesWorkModeSingleFilePane()) {
         setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_VIEWER);
     }
 
@@ -19608,7 +19629,7 @@ function renderWorkModeFileList(entries, { includeParentEntry = false, parentEnt
             schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            } else if (isFoldLayout()) {
+            } else if (usesWorkModeSingleFilePane()) {
                 setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
             void refreshWorkModeFileDirectory({
@@ -19789,7 +19810,7 @@ async function navigateWorkModeFileRoot(root) {
     clearFilePanelSelection(FILE_PANEL_VARIANT_WORK_MODE);
     if (isMobileLayout()) {
         setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-    } else if (isFoldLayout()) {
+    } else if (usesWorkModeSingleFilePane()) {
         setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
     }
     clearWorkModeFileViewer('파일을 선택하세요.');
@@ -19858,7 +19879,7 @@ async function openFileInWorkModePanel(
         applyWorkModeFileSelectionState();
         if (showViewerOnSuccess && isMobileLayout()) {
             setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);
-        } else if (showViewerOnSuccess && isFoldLayout()) {
+        } else if (showViewerOnSuccess && usesWorkModeSingleFilePane()) {
             setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_VIEWER);
         }
         schedulePersistWorkModeFileViewState();
@@ -19870,7 +19891,7 @@ async function openFileInWorkModePanel(
             schedulePersistWorkModeFileViewState();
             if (isMobileLayout()) {
                 setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_LIST);
-            } else if (isFoldLayout()) {
+            } else if (usesWorkModeSingleFilePane()) {
                 setWorkModeBrowseView(WORK_MODE_MOBILE_VIEW_LIST);
             }
             clearWorkModeFileViewer('폴더가 선택되었습니다. 목록에서 파일을 선택하세요.');
@@ -19931,7 +19952,7 @@ function openWorkModeFileTarget(target, options = {}) {
         setWorkModeMobileView(
             requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST
         );
-    } else if (isFoldLayout()) {
+    } else if (usesWorkModeSingleFilePane()) {
         setWorkModeBrowseView(
             requestedFilePath ? WORK_MODE_MOBILE_VIEW_VIEWER : WORK_MODE_MOBILE_VIEW_LIST
         );

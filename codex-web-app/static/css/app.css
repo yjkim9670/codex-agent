@@ -14129,6 +14129,37 @@ html.is-windows-desktop .windows-small-text {
     display: block !important;
 }
 
+/* The inner Fold keeps the useful outer split (chat | File Preview), but its
+   narrower file pane shows either the browser or the viewer—not both. */
+:root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-file-layout {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-file-divider,
+:root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-preview-chat {
+    display: none !important;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode.is-work-mode-fold-list .work-mode-file-list-panel {
+    display: flex;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode.is-work-mode-fold-list .file-browser-viewer-panel {
+    display: none;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode.is-work-mode-fold-viewer .work-mode-file-list-panel {
+    display: none;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode.is-work-mode-fold-viewer .file-browser-viewer-panel {
+    display: flex;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-work-mode.is-work-mode-fold-viewer .work-mode-preview-back {
+    display: inline-flex;
+}
+
 @media (max-width: 420px) {
     .ui-view-options {
         grid-template-columns: repeat(2, minmax(0, 1fr));

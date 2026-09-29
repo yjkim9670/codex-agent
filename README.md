@@ -140,7 +140,7 @@ adds them, and `Off` omits them. The injected instruction points to one stable
 runner invocation:
 
 ```bash
-python3 scripts/verify_browser_ui.py --url http://127.0.0.1:3100 --selector body
+python3.14 scripts/verify_browser_ui.py --url http://127.0.0.1:3100 --selector body
 ```
 
 The runner invokes the project-local pinned Playwright CLI once with headless Chromium and a

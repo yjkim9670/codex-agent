@@ -351,7 +351,7 @@ _SUBJOB_PROMPT_SUFFIX = (
 _BROWSER_VERIFICATION_PROMPT_SUFFIX = (
     "## Browser Verification In Workbench\n"
     "- Use the deterministic Workbench browser runner once after the local server is ready: "
-    f"`python3 {REPO_ROOT / 'scripts' / 'verify_browser_ui.py'} --url <URL>` "
+    f"`python3.14 {REPO_ROOT / 'scripts' / 'verify_browser_ui.py'} --url <URL>` "
     "(add `--selector <CSS>` when one stable target identifies the changed UI).\n"
     "- The runner uses headless Chromium with a temporary profile, checks the response, DOM, "
     "and browser console in one pass, and saves a screenshot only on failure.\n"

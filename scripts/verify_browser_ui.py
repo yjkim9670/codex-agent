@@ -13,6 +13,46 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
+REQUIRED_PYTHON = (3, 14)
+
+
+def _require_python_314():
+    """Re-exec with the Workbench Python when invoked through a generic python3."""
+    if sys.version_info[:2] == REQUIRED_PYTHON:
+        return
+
+    candidates = [
+        os.environ.get('CODEX_PYTHON_BIN'),
+        os.environ.get('PYTHON_BIN'),
+        os.environ.get('PYTHON'),
+        '/opt/homebrew/opt/python@3.14/bin/python3.14',
+        shutil.which('python3.14'),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        python_bin = Path(candidate)
+        if not python_bin.is_file() or not os.access(python_bin, os.X_OK):
+            continue
+        probe = subprocess.run(
+            [str(python_bin), '-c', 'import sys; print(sys.version_info[:2])'],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+        if probe.returncode == 0 and probe.stdout.strip() == '(3, 14)':
+            os.execv(str(python_bin), [str(python_bin), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+    required = '.'.join(map(str, REQUIRED_PYTHON))
+    raise RuntimeError(
+        f'Python {required}.x is required for browser verification. '
+        'Install python@3.14 or set CODEX_PYTHON_BIN to a Python 3.14 executable.'
+    )
+
+
+_require_python_314()
+
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 CONFIG_PATH = SCRIPT_DIR / 'playwright.config.cjs'

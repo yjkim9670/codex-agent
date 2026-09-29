@@ -3890,6 +3890,18 @@ def test_build_codex_child_env_strips_parent_runtime_logs(monkeypatch, tmp_path)
     assert env['CODEX_MODEL_CACHE_PATH'] == str(explicit_home / 'models_cache.json')
 
 
+def test_build_codex_child_env_pins_python_314(monkeypatch):
+    monkeypatch.setenv('CODEX_PYTHON_BIN', sys.executable)
+    monkeypatch.setenv('PATH', '/usr/bin')
+
+    env = codex_chat._build_codex_child_base_env()
+
+    assert env['CODEX_PYTHON_BIN'] == sys.executable
+    assert env['PYTHON_BIN'] == sys.executable
+    assert env['PYTHON'] == sys.executable
+    assert env['PATH'].split(os.pathsep)[0] == str(Path(sys.executable).resolve().parent)
+
+
 def test_app_server_blocks_unallowlisted_methods(monkeypatch):
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'app_server_pilot_enabled': True})
 

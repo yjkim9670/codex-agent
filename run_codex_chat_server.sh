@@ -100,31 +100,37 @@ resolve_host_python() {
         [[ -n "${candidate}" ]] || continue
         if [[ "${candidate}" == */* ]]; then
             if [[ -x "${candidate}" ]]; then
+                if python_is_314 "${candidate}"; then
+                    echo "${candidate}"
+                    return 0
+                fi
+                echo "Configured Python must be Python 3.14.x: ${candidate}" >&2
+                return 1
+            fi
+        elif command -v "${candidate}" >/dev/null 2>&1; then
+            candidate="$(command -v "${candidate}")"
+            if python_is_314 "${candidate}"; then
                 echo "${candidate}"
                 return 0
             fi
-        elif command -v "${candidate}" >/dev/null 2>&1; then
-            command -v "${candidate}"
-            return 0
+            echo "Configured Python must be Python 3.14.x: ${candidate}" >&2
+            return 1
         fi
         echo "Configured Python executable not found or not executable: ${candidate}" >&2
         return 1
     done
 
-    if command -v python3 >/dev/null 2>&1; then
-        echo "python3"
-        return 0
-    fi
-    if command -v python >/dev/null 2>&1; then
-        echo "python"
-        return 0
-    fi
     return 1
+}
+
+python_is_314() {
+    local python_bin="$1"
+    "${python_bin}" -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 14) else 1)" >/dev/null 2>&1
 }
 
 python_ready_for_workbench() {
     local python_bin="$1"
-    "${python_bin}" -c "import sys; sys.exit(1) if sys.version_info < (3, 10) else None; import flask, cryptography" >/dev/null 2>&1
+    python_is_314 "${python_bin}" && "${python_bin}" -c "import flask, cryptography, _cffi_backend" >/dev/null 2>&1
 }
 
 resolve_global_python() {
@@ -136,23 +142,16 @@ resolve_global_python() {
         fi
     done
 
-    local fallback=""
     local resolved=""
-    for candidate in /opt/homebrew/opt/python@3.14/bin/python3.14 python3.14 python3 python; do
+    for candidate in /opt/homebrew/opt/python@3.14/bin/python3.14 python3.14; do
         if command -v "${candidate}" >/dev/null 2>&1; then
             resolved="$(command -v "${candidate}")"
-            [[ -n "${fallback}" ]] || fallback="${resolved}"
             if python_ready_for_workbench "${resolved}"; then
                 echo "${resolved}"
                 return 0
             fi
         fi
     done
-
-    if [[ -n "${fallback}" ]]; then
-        echo "${fallback}"
-        return 0
-    fi
 
     return 1
 }
@@ -178,6 +177,12 @@ ensure_venv_python() {
 
     if [[ ! -x "${venv_dir}/bin/python" ]]; then
         echo "[INFO] Venv python missing at ${venv_dir}/bin/python. Recreating..." >&2
+        rm -rf "${venv_dir}"
+        "${host_python}" -m venv "${venv_dir}"
+    fi
+
+    if ! python_is_314 "${venv_dir}/bin/python"; then
+        echo "Venv at ${venv_dir} is not Python 3.14.x. Recreating..." >&2
         rm -rf "${venv_dir}"
         "${host_python}" -m venv "${venv_dir}"
     fi
@@ -221,8 +226,8 @@ check_global_requirements() {
         return 0
     fi
 
-    if ! "${python_bin}" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1; then
-        echo "Python 3.10+ is required for Workbench. Configured global Python is: ${python_bin}" >&2
+    if ! python_is_314 "${python_bin}"; then
+        echo "Python 3.14.x is required for Workbench. Configured global Python is: ${python_bin}" >&2
         return 1
     fi
 
@@ -255,6 +260,12 @@ else
     PYTHON_BIN="$(ensure_venv_python "${VENV_DIR}")"
     ensure_requirements "${PYTHON_BIN}" "${SCRIPT_DIR}/requirements.txt"
 fi
+
+PYTHON_BIN_DIR="$(cd "$(dirname "${PYTHON_BIN}")" && pwd)"
+export CODEX_PYTHON_BIN="${PYTHON_BIN}"
+export PYTHON_BIN
+export PYTHON="${PYTHON_BIN}"
+export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
 cd "${PARENT_DIR}"
 

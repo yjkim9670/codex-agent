@@ -3,7 +3,7 @@
 Codex Workbench server for Codex chat sessions, workspace files, terminal sessions, Git sync, and usage monitoring.
 
 ## Requirements
-- Python 3.10+
+- Python 3.14.x (the Workbench and every `codex exec` child are pinned to this minor version)
 - Codex CLI available on PATH (`codex` on macOS/Linux, `codex.cmd` on Windows)
 
 Set `CODEX_CLI_BIN=/absolute/path/to/codex` when the CLI is installed outside
@@ -16,7 +16,7 @@ standalone CLI releases.
 source ./activate_venv.sh
 ```
 
-`activate_venv.sh` creates or reuses the shared virtual environment at `../.venv` and installs `requirements.txt`.
+`activate_venv.sh` validates Python 3.14.x and exports it as `CODEX_PYTHON_BIN`, `PYTHON_BIN`, and `PYTHON`. The launcher places that executable first on `PATH`, including for `codex exec` children.
 
 ## Run
 ```bash
@@ -143,8 +143,15 @@ runner invocation:
 python3 scripts/verify_browser_ui.py --url http://127.0.0.1:3100 --selector body
 ```
 
-The runner invokes the global Playwright CLI once with headless Chromium and a
+The runner invokes the project-local pinned Playwright CLI once with headless Chromium and a
 temporary profile. It checks HTTP status, the requested DOM selector, console
 errors, and page errors. Screenshots and artifacts are retained only when the
 check fails. Use an unused local port and leave active Workbench processes
 running during verification.
+
+Install the pinned browser runtime once after cloning or updating this folder:
+
+```bash
+npm install
+npm run playwright:install
+```

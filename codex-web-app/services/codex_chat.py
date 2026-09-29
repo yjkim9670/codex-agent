@@ -140,6 +140,8 @@ _QUEUED_CODEX_HOME_SYNC_FILES = ('auth.json', 'auth_state.json', 'config.toml')
 _UNAUTHENTICATED_CODEX_HOME_SYNC_FILES = ('config.toml',)
 _CODEX_CLI_IDENTITY_FILENAME = '.codex-workbench-cli.json'
 _CODEX_MODELS_CACHE_FILENAME = 'models_cache.json'
+_WORKBENCH_PYTHON_VERSION = (3, 14)
+_WORKBENCH_PYTHON_DEFAULT = '/opt/homebrew/opt/python@3.14/bin/python3.14'
 _QUEUED_CODEX_HOME_LINK_ENTRIES = ('skills', 'plugins', 'rules')
 _QUEUED_CODEX_HOME_COPY_ENTRIES = ('memories',)
 _QUEUED_CODEX_RUNTIME_DIRS = {
@@ -10401,7 +10403,39 @@ def _build_codex_child_base_env():
             continue
         if any(key.startswith(prefix) for prefix in _CODEX_CHILD_ENV_STRIP_PREFIXES):
             env.pop(key, None)
-    return env
+    return _apply_workbench_python_env(env)
+
+
+def _apply_workbench_python_env(env):
+    """Require and expose one Python 3.14 runtime to every Codex child."""
+    configured = [str(env.get(key) or '').strip() for key in ('CODEX_PYTHON_BIN', 'PYTHON_BIN', 'PYTHON')]
+    candidates = [candidate for candidate in configured if candidate]
+    if not candidates:
+        candidates = [_WORKBENCH_PYTHON_DEFAULT, 'python3.14']
+
+    for candidate in candidates:
+        python_bin = candidate if os.path.isabs(candidate) else shutil.which(candidate)
+        if not python_bin or not os.path.isfile(python_bin) or not os.access(python_bin, os.X_OK):
+            if candidate in configured:
+                raise RuntimeError(f'Configured Python executable is unavailable: {candidate}')
+            continue
+        probe = subprocess.run(
+            [python_bin, '-c', 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")'],
+            capture_output=True, text=True, check=False,
+        )
+        if probe.returncode == 0 and probe.stdout.strip() == '3.14':
+            python_dir = os.path.dirname(os.path.realpath(python_bin))
+            inherited_path = str(env.get('PATH') or '')
+            env['PATH'] = os.pathsep.join([python_dir] + [
+                part for part in inherited_path.split(os.pathsep) if part and os.path.realpath(part) != python_dir
+            ])
+            env['CODEX_PYTHON_BIN'] = python_bin
+            env['PYTHON_BIN'] = python_bin
+            env['PYTHON'] = python_bin
+            return env
+        if candidate in configured:
+            raise RuntimeError(f'Configured Python must be Python 3.14.x: {candidate}')
+    raise RuntimeError('Python 3.14.x is required for Codex Workbench children; install python@3.14 or configure CODEX_PYTHON_BIN.')
 
 
 def _build_codex_exec_env(queued_execution=False, account_id=None, internal_api_key=None):

@@ -164,6 +164,12 @@ const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const PHONE_MEDIA_QUERY = '(max-width: 599px)';
 const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
+// The unfolded Fold viewport is landscape-shaped.  It is wider than the
+// compact breakpoint, so it needs its own fallback when the browser does not
+// expose a foldable UA or Window Segments (for example, device emulation).
+const FOLD_INNER_VIEWPORT_MIN_WIDTH = 840;
+const FOLD_INNER_VIEWPORT_MAX_WIDTH = 980;
+const FOLD_INNER_VIEWPORT_MAX_HEIGHT = 680;
 const UI_VIEW_MODE_STORAGE_KEY = 'codex-ui-view-mode';
 const UI_VIEW_MODE_AUTO = 'auto';
 const UI_VIEW_MODES = Object.freeze(['auto', 'desktop', 'fold-cover', 'fold-inner', 'mobile']);
@@ -7440,6 +7446,16 @@ function hasFoldableWindowSignal() {
         || /(?:SM-F\d|Pixel Fold|Surface Duo|\bFold\b)/i.test(String(navigator.userAgent || ''));
 }
 
+function hasFoldInnerViewportProfile() {
+    const width = Math.round(Number(window.innerWidth) || 0);
+    const height = Math.round(Number(window.innerHeight) || 0);
+    return width >= FOLD_INNER_VIEWPORT_MIN_WIDTH
+        && width <= FOLD_INNER_VIEWPORT_MAX_WIDTH
+        && height > 0
+        && height <= FOLD_INNER_VIEWPORT_MAX_HEIGHT
+        && width > height;
+}
+
 function detectUiViewMode() {
     if (hasFoldableWindowSignal()) {
         // Fold covers are phone-width; unfolded panels provide enough width for
@@ -7447,6 +7463,10 @@ function detectUiViewMode() {
         // Segments is unavailable on Android WebView.
         return window.innerWidth >= 600 ? 'fold-inner' : 'fold-cover';
     }
+    // Some embedded browsers and desktop device emulators do not provide a
+    // foldable signal.  Recognize the compact, horizontal inner canvas (such
+    // as 932 × 568px) before falling back to the general desktop layout.
+    if (hasFoldInnerViewportProfile()) return 'fold-inner';
     return window.matchMedia(PHONE_MEDIA_QUERY).matches ? 'mobile' : 'desktop';
 }
 

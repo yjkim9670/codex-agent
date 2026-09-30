@@ -108,7 +108,7 @@ const state = {
         serviceTier: null,
         serviceTierOptions: [],
         verificationMode: null,
-        gitCommitMessageModel: 'gpt-5.6-luna',
+        gitCommitMessageModel: 'gpt-6-luna',
         securityPolicy: normalizeSecurityPolicy(CODEX_SECURITY_POLICY_CONFIG),
         structuredReportPresets: [],
         usage: null,
@@ -287,8 +287,8 @@ const GIT_CANCEL_REQUEST_TIMEOUT_MS = 12000;
 const GIT_DIFF_REQUEST_TIMEOUT_MS = 60000;
 const GIT_SYNC_TARGET_WORKSPACE = 'workspace';
 const GIT_SYNC_TARGET_CODEX_AGENT = 'codex_agent';
-const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.6-luna';
-const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';
+const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-6-luna';
+const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'low';
 const GIT_COMMIT_MESSAGE_REASONING_OPTIONS = ['low', 'medium', 'high'];
 const GIT_COMMIT_MESSAGE_MODEL_STORAGE_KEY = 'codex.gitCommitMessageModel';
 const GIT_COMMIT_MESSAGE_REASONING_STORAGE_KEY = 'codex.gitCommitMessageReasoningEffort';

@@ -3720,8 +3720,8 @@ def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeyp
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
 
-    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-5.6-luna'
-    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'medium'
+    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-6-luna'
+    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'low'
 
     updated = codex_chat.update_settings(
         git_commit_message_model='gpt-5.6-terra',
@@ -3740,8 +3740,8 @@ def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeyp
         git_commit_message_model='',
         git_commit_message_reasoning_effort='',
     )
-    assert restored['git_commit_message_model'] == 'gpt-5.6-luna'
-    assert restored['git_commit_message_reasoning_effort'] == 'medium'
+    assert restored['git_commit_message_model'] == 'gpt-6-luna'
+    assert restored['git_commit_message_reasoning_effort'] == 'low'
 
 
 def test_service_tier_setting_round_trips(tmp_path, monkeypatch):

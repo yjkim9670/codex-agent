@@ -2083,14 +2083,14 @@ def test_git_commit_message_generation_ui_is_available_in_branch_and_sync_overla
     assert "fetchJson('/api/codex/git/message'" in app_js
     assert "agent_backend='dtgpt'" in (CODEX_APP_ROOT / 'services' / 'git_ops.py').read_text(encoding='utf-8')
     assert '.git-message-model-overlay' in app_css
-    assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-5.6-luna';" in app_js
+    assert "const GIT_COMMIT_MESSAGE_DEFAULT_MODEL = 'gpt-6-luna';" in app_js
     assert 'const normalizedOptions = options.length > 0 ? options : [GIT_COMMIT_MESSAGE_DEFAULT_MODEL];' in app_js
     assert '[GIT_COMMIT_MESSAGE_DEFAULT_MODEL, ...options]' not in app_js
     assert 'currentOption.textContent' not in app_js
-    assert "const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'medium';" in app_js
+    assert "const GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT = 'low';" in app_js
     assert "const GIT_COMMIT_MESSAGE_REASONING_OPTIONS = ['low', 'medium', 'high'];" in app_js
-    assert '<option value="low">low</option>' in template
-    assert '<option value="medium">medium (기본값)</option>' in template
+    assert '<option value="low">low (기본값)</option>' in template
+    assert '<option value="medium">medium</option>' in template
     assert '<option value="high">high</option>' in template
     assert 'git_commit_message_reasoning_effort: selectedReasoning' in app_js
     assert 'reasoning_effort: gitCommitMessageReasoningEffort' in app_js

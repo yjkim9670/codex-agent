@@ -579,9 +579,24 @@ def _normalize_model_catalog(entries):
 
 _current_codex_model_catalog = _normalize_model_catalog([
     {
+        'slug': 'gpt-6.1-sol',
+        'default_reasoning_effort': 'low',
+        'reasoning_options': _GPT56_REASONING_OPTIONS,
+    },
+    {
         'slug': 'gpt-6-astra',
-        'default_reasoning_effort': 'medium',
+        'default_reasoning_effort': 'low',
         'reasoning_options': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    },
+    {
+        'slug': 'gpt-6-sol',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _GPT56_REASONING_OPTIONS,
+    },
+    {
+        'slug': 'gpt-6-luna',
+        'default_reasoning_effort': 'medium',
+        'reasoning_options': _GPT56_LUNA_REASONING_OPTIONS,
     },
     {
         'slug': 'gpt-5.6-sol',
@@ -818,8 +833,14 @@ def _iter_model_cache_paths():
         return _unique_paths([explicit_cache_path])
     auth_home = _expand_path_value(os.environ.get('CODEX_WORKBENCH_AUTH_HOME'))
     env_home = _expand_path_value(os.environ.get('CODEX_HOME'))
+    queued_home = _expand_path_value(os.environ.get('CODEX_QUEUE_CODEX_HOME'))
     login_home = _get_login_codex_home()
     return _unique_paths([
+        # Queued executions redirect CODEX_HOME to this writable runtime home.
+        # Prefer its cache so the UI offers exactly the catalog the Codex child
+        # process will use, rather than an older login-home cache.
+        queued_home / 'models_cache.json' if queued_home is not None else None,
+        CODEX_STORAGE_DIR / 'queued_codex_home' / 'models_cache.json',
         auth_home / 'models_cache.json' if auth_home is not None else None,
         env_home / 'models_cache.json' if env_home is not None else None,
         CODEX_HOME / 'models_cache.json',

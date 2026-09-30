@@ -2490,11 +2490,12 @@ document.addEventListener('DOMContentLoaded', () => {
     syncFileBrowserOpenButtonState(false);
 
     const UI_SCALE_STORAGE_KEY = 'codex-ui-scale';
+    const UI_SCALE_BY_VIEW_MODE_STORAGE_KEY = 'codex-ui-scale-by-view-mode';
     const UI_FONT_STORAGE_KEY = 'codex-ui-font';
     const DEFAULT_UI_SCALE = 90;
     const FOLD_INNER_DEFAULT_UI_SCALE = 85;
     const DEFAULT_UI_FONT = 'ibm-plex';
-    let uiScaleUserOverride = false;
+    let uiScalesByViewMode = {};
     let uiSettingsTrigger = null;
     const normalizeUiScale = value => {
         if (value === null || value === undefined || String(value).trim() === '') return DEFAULT_UI_SCALE;
@@ -2502,14 +2503,40 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!Number.isFinite(numeric)) return DEFAULT_UI_SCALE;
         return Math.min(110, Math.max(80, Math.round(numeric / 5) * 5));
     };
-    const applyUiScale = (value, { persist = true } = {}) => {
+    const defaultUiScaleForViewMode = mode => (
+        mode === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE
+    );
+    const normalizeUiScalesByViewMode = value => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+        return UI_VIEW_MODES.reduce((scales, mode) => {
+            if (mode === UI_VIEW_MODE_AUTO) return scales;
+            const scale = value[mode];
+            if (scale !== null && scale !== undefined && String(scale).trim() !== '') {
+                scales[mode] = normalizeUiScale(scale);
+            }
+            return scales;
+        }, {});
+    };
+    const uiScaleForViewMode = mode => (
+        uiScalesByViewMode[mode] ?? defaultUiScaleForViewMode(mode)
+    );
+    const applyUiScale = (value, { persist = true, viewMode = resolveUiViewMode() } = {}) => {
         const scale = normalizeUiScale(value);
         document.documentElement.style.setProperty('--ui-scale', String(scale / 100));
         if (uiSettingsScaleInput) uiSettingsScaleInput.value = String(scale);
         if (uiSettingsScaleValue) uiSettingsScaleValue.textContent = `${scale}%`;
         if (persist) {
             try {
-                window.localStorage.setItem(UI_SCALE_STORAGE_KEY, String(scale));
+                // Each physical surface gets its own preference.  A Fold's
+                // cover-screen setting must not replace its inner-screen one.
+                uiScalesByViewMode = {
+                    ...uiScalesByViewMode,
+                    [viewMode]: scale
+                };
+                window.localStorage.setItem(
+                    UI_SCALE_BY_VIEW_MODE_STORAGE_KEY,
+                    JSON.stringify(uiScalesByViewMode)
+                );
             } catch (_error) {
                 // The setting remains active for this page when storage is unavailable.
             }
@@ -2560,9 +2587,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.documentElement.dataset.viewMode = effective;
         document.documentElement.dataset.viewModeSource = uiViewMode;
         document.querySelector('.app')?.setAttribute('data-view-mode', effective);
-        if (!uiScaleUserOverride) {
-            applyUiScale(effective === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE, { persist: false });
-        }
+        applyUiScale(uiScaleForViewMode(effective), { persist: false, viewMode: effective });
         if (persist) {
             try {
                 window.localStorage.setItem(UI_VIEW_MODE_STORAGE_KEY, uiViewMode);
@@ -2599,13 +2624,18 @@ document.addEventListener('DOMContentLoaded', () => {
         window.setTimeout(() => uiSettingsFontInputs.find(input => input.checked)?.focus(), 0);
     };
     try {
-        const storedUiScale = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
-        uiScaleUserOverride = storedUiScale !== null && storedUiScale !== undefined && String(storedUiScale).trim() !== '';
+        const storedUiScalesByViewMode = window.localStorage.getItem(UI_SCALE_BY_VIEW_MODE_STORAGE_KEY);
+        uiScalesByViewMode = normalizeUiScalesByViewMode(
+            storedUiScalesByViewMode ? JSON.parse(storedUiScalesByViewMode) : null
+        );
+        // The former key held one value for every layout.  Its origin surface
+        // cannot be recovered, so discard it and use the documented per-mode
+        // defaults instead (inner 85%, all other modes 90%).
+        window.localStorage.removeItem(UI_SCALE_STORAGE_KEY);
         applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
         applyUiViewMode(window.localStorage.getItem(UI_VIEW_MODE_STORAGE_KEY), { persist: false, refresh: false });
-        applyUiScale(storedUiScale ?? (resolveUiViewMode() === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE), { persist: false });
     } catch (_error) {
-        uiScaleUserOverride = false;
+        uiScalesByViewMode = {};
         applyUiScale(DEFAULT_UI_SCALE, { persist: false });
         applyUiFont(DEFAULT_UI_FONT, { persist: false });
         applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
@@ -2617,7 +2647,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (event.target?.dataset?.action === 'close') closeUiSettingsOverlay();
     });
     uiSettingsScaleInput?.addEventListener('input', () => {
-        uiScaleUserOverride = true;
         applyUiScale(uiSettingsScaleInput.value);
     });
     uiSettingsFontInputs.forEach(input => {
@@ -2627,10 +2656,11 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('change', () => applyUiViewMode(input.value));
     });
     uiSettingsReset?.addEventListener('click', () => {
-        uiScaleUserOverride = false;
-        applyUiScale(resolveUiViewMode() === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE, { persist: false });
+        uiScalesByViewMode = {};
+        applyUiScale(defaultUiScaleForViewMode(resolveUiViewMode()), { persist: false });
         try {
             window.localStorage.removeItem(UI_SCALE_STORAGE_KEY);
+            window.localStorage.removeItem(UI_SCALE_BY_VIEW_MODE_STORAGE_KEY);
         } catch (_error) {
             // The reset remains active for this page when storage is unavailable.
         }

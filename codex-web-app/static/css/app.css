@@ -14169,3 +14169,79 @@ html.is-windows-desktop .windows-small-text {
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+/* Keep the entire shell inside the visual viewport. The root must include
+   its panned origin too, otherwise overflow:hidden clips the composer at
+   visualViewport.height before the actual visible bottom. */
+html[data-view-mode="fold-inner"].is-mobile-keyboard-open {
+    height: calc(var(--mobile-viewport-top) + var(--mobile-viewport-height));
+}
+
+html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
+    height: calc((var(--mobile-viewport-top) + var(--mobile-viewport-height)) / var(--ui-scale));
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open {
+    position: fixed;
+    top: calc(var(--mobile-viewport-top) / var(--ui-scale));
+    left: 0;
+    height: var(--scaled-viewport-height);
+    min-height: 0;
+    padding: 4px;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .app-header,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .stream-monitor,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-controls.is-collapsed,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-runtime-strip {
+    display: none;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat {
+    gap: 0;
+    padding: 4px;
+    min-height: 0;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-frame {
+    flex: 1 1 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-input {
+    --fold-keyboard-compose-height: min(110px, calc(var(--scaled-viewport-height) * 0.45));
+    --chat-action-short-height: 24px;
+    --chat-action-send-height: 28px;
+    --chat-action-gap: 3px;
+    flex: 0 0 auto;
+    height: var(--fold-keyboard-compose-height);
+    min-height: 0;
+    position: relative;
+    transform: none;
+    padding-bottom: 0;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-compose-main,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-prompt-field,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-input textarea,
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column {
+    height: 100%;
+    min-height: 0;
+    max-height: 100%;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-input textarea {
+    resize: none;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column .btn {
+    min-height: 0;
+    height: 100%;
+}

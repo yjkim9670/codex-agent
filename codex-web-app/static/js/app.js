@@ -2492,7 +2492,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const UI_SCALE_STORAGE_KEY = 'codex-ui-scale';
     const UI_FONT_STORAGE_KEY = 'codex-ui-font';
     const DEFAULT_UI_SCALE = 90;
+    const FOLD_INNER_DEFAULT_UI_SCALE = 85;
     const DEFAULT_UI_FONT = 'ibm-plex';
+    let uiScaleUserOverride = false;
     let uiSettingsTrigger = null;
     const normalizeUiScale = value => {
         if (value === null || value === undefined || String(value).trim() === '') return DEFAULT_UI_SCALE;
@@ -2558,6 +2560,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.documentElement.dataset.viewMode = effective;
         document.documentElement.dataset.viewModeSource = uiViewMode;
         document.querySelector('.app')?.setAttribute('data-view-mode', effective);
+        if (!uiScaleUserOverride) {
+            applyUiScale(effective === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE, { persist: false });
+        }
         if (persist) {
             try {
                 window.localStorage.setItem(UI_VIEW_MODE_STORAGE_KEY, uiViewMode);
@@ -2594,10 +2599,13 @@ document.addEventListener('DOMContentLoaded', () => {
         window.setTimeout(() => uiSettingsFontInputs.find(input => input.checked)?.focus(), 0);
     };
     try {
-        applyUiScale(window.localStorage.getItem(UI_SCALE_STORAGE_KEY), { persist: false });
+        const storedUiScale = window.localStorage.getItem(UI_SCALE_STORAGE_KEY);
+        uiScaleUserOverride = storedUiScale !== null && storedUiScale !== undefined && String(storedUiScale).trim() !== '';
         applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
         applyUiViewMode(window.localStorage.getItem(UI_VIEW_MODE_STORAGE_KEY), { persist: false, refresh: false });
+        applyUiScale(storedUiScale ?? (resolveUiViewMode() === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE), { persist: false });
     } catch (_error) {
+        uiScaleUserOverride = false;
         applyUiScale(DEFAULT_UI_SCALE, { persist: false });
         applyUiFont(DEFAULT_UI_FONT, { persist: false });
         applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
@@ -2608,7 +2616,10 @@ document.addEventListener('DOMContentLoaded', () => {
     uiSettingsOverlay?.addEventListener('click', event => {
         if (event.target?.dataset?.action === 'close') closeUiSettingsOverlay();
     });
-    uiSettingsScaleInput?.addEventListener('input', () => applyUiScale(uiSettingsScaleInput.value));
+    uiSettingsScaleInput?.addEventListener('input', () => {
+        uiScaleUserOverride = true;
+        applyUiScale(uiSettingsScaleInput.value);
+    });
     uiSettingsFontInputs.forEach(input => {
         input.addEventListener('change', () => applyUiFont(input.value));
     });
@@ -2616,7 +2627,13 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('change', () => applyUiViewMode(input.value));
     });
     uiSettingsReset?.addEventListener('click', () => {
-        applyUiScale(DEFAULT_UI_SCALE);
+        uiScaleUserOverride = false;
+        applyUiScale(resolveUiViewMode() === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE, { persist: false });
+        try {
+            window.localStorage.removeItem(UI_SCALE_STORAGE_KEY);
+        } catch (_error) {
+            // The reset remains active for this page when storage is unavailable.
+        }
         applyUiFont(DEFAULT_UI_FONT);
         applyUiViewMode(UI_VIEW_MODE_AUTO);
     });
@@ -7555,7 +7572,7 @@ function isLikelyVirtualKeyboardEnvironment() {
 }
 
 function isMobileViewportBehaviorActive(mediaMatches = isCompactLayout()) {
-    return Boolean(mediaMatches || isLikelyVirtualKeyboardEnvironment());
+    return Boolean(mediaMatches || isFoldInnerLayout() || isLikelyVirtualKeyboardEnvironment());
 }
 
 function isEditableElement(element) {
@@ -7607,6 +7624,13 @@ function getVisualViewportMetrics() {
 }
 
 function getUsableMobileViewportHeight(metrics = getVisualViewportMetrics()) {
+    // On the unfolded Fold, the app shell is deliberately resized to the
+    // visible area while the keyboard is open. `offsetTop` describes browser
+    // panning inside the layout viewport; adding it back makes the shell too
+    // tall and leaves the composer below the visible keyboard edge.
+    if (isFoldInnerLayout() && metrics.hasVisualHeight) {
+        return metrics.visualHeight;
+    }
     const visualBottom = metrics.hasVisualHeight
         ? metrics.visualHeight + metrics.offsetTop
         : NaN;
@@ -7734,7 +7758,7 @@ function applyMobileViewportHeight() {
     // open.  The composer is then lifted above the keyboard by
     // applyMobilePromptLift(), rather than being constrained to the much
     // shorter visual viewport.
-    if (keyboardOpen) {
+    if (keyboardOpen && !isFoldInnerLayout()) {
         const currentWidth = getMobileViewportWidthForStability();
         const stableHeight = Number(lastStableMobileViewportHeight);
         const stableWidth = Number(lastStableMobileViewportWidth);
@@ -7756,7 +7780,8 @@ function applyMobileViewportHeight() {
         }
     }
     if (Number.isFinite(appHeightSource) && appHeightSource > 0) {
-        const clamped = Math.max(320, Math.round(appHeightSource));
+        const minimumHeight = isFoldInnerLayout() ? 1 : 320;
+        const clamped = Math.max(minimumHeight, Math.round(appHeightSource));
         if (lastAppliedMobileViewportHeight !== clamped) {
             lastAppliedMobileViewportHeight = clamped;
             root.style.setProperty(MOBILE_VIEWPORT_HEIGHT_VAR, `${clamped}px`);
@@ -7817,7 +7842,7 @@ function applyMobilePromptLift({ isMobile = isMobileViewportBehaviorActive(), ke
 
     let nextLift = 0;
     const promptForm = document.getElementById('codex-chat-form');
-    if (isMobile && keyboardOpen && promptForm?.contains(document.activeElement)) {
+    if (isMobile && keyboardOpen && !isFoldInnerLayout() && promptForm?.contains(document.activeElement)) {
         const rect = promptForm.getBoundingClientRect();
         const viewportBottom = getPromptViewportBottom(metrics);
         if (Number.isFinite(rect?.bottom) && Number.isFinite(viewportBottom)) {
@@ -7873,8 +7898,11 @@ function setupMobileViewportBehavior(mobileMedia, input) {
     const syncViewportState = ({ normalizeScroll = false } = {}) => {
         applyMobileViewportHeight();
         const isMobile = isMobileViewportBehaviorActive(mobileMedia.matches);
-        syncMobileKeyboardState(isMobile);
-        if (normalizeScroll) {
+        const keyboardOpen = syncMobileKeyboardState(isMobile);
+        // On the inner Fold, visualViewport.offsetTop is reflected in the app
+        // position. Resetting document scroll during the keyboard animation
+        // fights that browser pan and moves the whole UI too far upward.
+        if (normalizeScroll && !isFoldInnerLayout()) {
             normalizeMobileDocumentScroll(isMobile);
         }
     };

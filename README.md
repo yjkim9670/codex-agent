@@ -132,6 +132,14 @@ Keep `8080` reserved for `code-server`. A successful remote check typically retu
 - Aggregated counters are stored at `<repo>/workspace/.agent_state/codex_token_usage.json` (default parent-workspace mode).
 - `GET /api/codex/usage` returns both rate-limit info and `token_usage` summary (`today`, `all_time`, `recent_days`).
 
+## Consolidated History
+
+The standalone header's **통합 기록** link opens `/history`, where registered
+projects share one conversation viewer. A backup-protected CLI imports existing
+JSON histories without modifying original histories or SQLite execution state.
+See [history consolidation](docs/HISTORY_CONSOLIDATION.md) for import commands,
+custom paths, fallback behavior, and the remaining execution-server rollout.
+
 ## Browser Verification
 
 The model settings card exposes `Auto`, `Browser`, and `Off` verification modes.

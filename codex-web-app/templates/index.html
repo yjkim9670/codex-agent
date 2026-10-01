@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=241">
+    <link rel="stylesheet" href="/static/css/app.css?v=242">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -1390,7 +1390,7 @@
         <section class="ui-settings-card" role="dialog" aria-modal="true" aria-labelledby="codex-ui-settings-title" aria-describedby="codex-ui-settings-description">
             <div class="ui-settings-header">
                 <div>
-                    <div class="ui-settings-title" id="codex-ui-settings-title">화면 설정</div>
+                    <div class="ui-settings-title" id="codex-ui-settings-title">워크벤치 설정</div>
                     <div class="ui-settings-description" id="codex-ui-settings-description">글꼴, 인터페이스 크기와 작업 화면 레이아웃을 조정합니다.</div>
                 </div>
                 <button class="btn ghost icon-only ui-settings-close" type="button" id="codex-ui-settings-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
@@ -1441,6 +1441,13 @@
                     <input id="codex-ui-scale-input" type="range" min="80" max="110" step="5" value="90" aria-describedby="codex-ui-scale-help">
                     <span class="ui-scale-setting-help" id="codex-ui-scale-help">80%부터 110%까지 조절할 수 있으며, 화면 모드별로 별도 저장됩니다.</span>
                 </label>
+                <section class="ui-settings-usage" aria-labelledby="codex-ui-settings-usage-title">
+                    <div>
+                        <h3 id="codex-ui-settings-usage-title">사용량 통계</h3>
+                        <p>모든 수집 환경의 토큰과 한도 차감 추정치를 별도 탭에서 확인합니다.</p>
+                    </div>
+                    <a class="btn secondary" href="/usage" target="_blank" rel="noopener">사용량 통계 열기</a>
+                </section>
             </div>
             <div class="ui-settings-footer">
                 <button class="btn ghost" type="button" id="codex-ui-settings-reset">기본 설정으로 초기화</button>
@@ -1923,6 +1930,6 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=258"></script>
+    <script src="/static/js/app.js?v=259"></script>
 </body>
 </html>

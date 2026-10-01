@@ -5727,6 +5727,8 @@ def record_usage_event(
         'metadata': metadata if isinstance(metadata, dict) else {},
     }
     event_recorded = _append_usage_event(context['usage_events_path'], event)
+    from .usage_dashboard import request_collection
+    request_collection()
     if recorded_workspace or recorded_account:
         record_usage_snapshot_if_due(force=True, account_id=context['account']['id'])
     return recorded_workspace or recorded_account or event_recorded
@@ -10915,6 +10917,16 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
             '</message>'
         ])
     )
+    canonical_workbench = Path('/Users/dinya/works/dev_workspace/codex_workbench')
+    if canonical_workbench.is_dir():
+        sections.append(
+            '## Codex Workbench Code Modification Scope\n'
+            'For Codex Workbench code, tests, assets, documentation, and project instructions '
+            'on this PC, modify only /Users/dinya/works/dev_workspace/codex_workbench/. '
+            'Other Workbench checkouts are read-only references and usage-data sources. '
+            'The user handles Git synchronization. This scope applies to Workbench source '
+            'changes; unrelated project work uses its own workspace and instructions.'
+        )
     if _should_include_imagegen_workbench_overlay(prompt_text, recent_blocks):
         sections.append(f'## Image Generation Workbench Overlay\n{_build_imagegen_workbench_overlay()}')
     if _should_include_spreadsheet_workbench_overlay(prompt_text, recent_blocks):

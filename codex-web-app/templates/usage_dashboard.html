@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>사용량 통계 · Codex Workbench</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/usage_dashboard.css') }}">
+<script defer src="{{ url_for('static', filename='js/usage_dashboard.js') }}"></script>
+</head>
+<body>
+<main id="usage-dashboard">
+<header><a href="/" class="back">‹ Workbench</a><span class="eyebrow">CODEX WORKBENCH</span><h1>사용량 통계</h1><p>모델별 토큰과 계정 한도 차감을 한눈에.</p></header>
+<form id="filters" class="filters" aria-label="통계 필터">
+<label>기간<select name="days"><option value="7">최근 7일</option><option value="30" selected>최근 30일</option><option value="90">최근 90일</option></select></label>
+<label>Effort<select name="effort"><option value="medium">medium</option><option value="all">전체</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="unknown">미확인</option></select></label>
+<label>계정<select name="account_id" id="accounts"><option value="">활성 계정</option></select></label>
+<label>환경<select name="environment" id="environments"><option value="all">전체 환경</option></select></label>
+<button type="button" id="refresh">새로고침</button>
+</form>
+<p id="status" role="status" aria-live="polite">기록을 불러오는 중…</p>
+<div class="summary" id="summary"></div>
+<section class="panel comparison"><div class="section-title"><div><h2>100만 토큰당 한도 차감</h2><p>관측된 차감 합계 ÷ 검증 토큰 합계 × 100만 · 단위 %p</p></div><div class="segments" role="group" aria-label="한도 창"><button type="button" data-window="five_hour" aria-pressed="true">5시간</button><button type="button" data-window="weekly" aria-pressed="false">주간</button></div></div>
+<div id="comparison" aria-label="모델별 한도 차감 비교"></div>
+<p class="note">관측 기반 추정치입니다. 공식 모델 환산율이 아니며, 표본 3개 미만은 관측 부족으로 표시합니다. 추적되지 않은 다른 PC·클라우드 사용, 정수 반올림과 조회 지연이 영향을 줄 수 있습니다.</p>
+<details id="group-details"><summary>검증 구간과 제외 사유</summary><div id="groups"></div></details>
+</section>
+<div class="chart-grid"><section class="panel"><h2>날짜별 모델 토큰</h2><p>한국시간 기준 · 오늘은 진행 중</p><div id="token-chart" class="chart"></div></section><section class="panel"><h2>계정 한도 사용률</h2><p>토큰 그래프와 같은 시간축 · 리셋 구간은 연결하지 않음</p><div id="quota-chart" class="chart"></div></section></div>
+<section class="panel"><h2>모델 상세</h2><p>전체 수집 토큰과 각 한도 창의 검증 토큰을 구분합니다.</p><div class="table-wrap"><table><thead><tr><th>모델</th><th>수집 토큰</th><th>5h 검증 토큰</th><th>5h %p / 100만</th><th>5h 구간</th><th>주간 검증 토큰</th><th>주간 %p / 100만</th><th>주간 구간</th></tr></thead><tbody id="model-rows"></tbody></table></div></section>
+<section class="panel"><h2>수집 상태</h2><p id="collection-note"></p><div class="table-wrap"><table><thead><tr><th>기록 출처</th><th>최근 기록</th><th>스레드</th><th>상태</th></tr></thead><tbody id="source-rows"></tbody></table></div><div id="warnings" class="note"></div></section>
+<section class="panel"><h2>계정 조회값과 수집 원장 차이</h2><p>전체 환경·전체 effort 기준. 계정 API 날짜의 시간대는 미확인입니다.</p><p id="reconciliation-summary"></p><details><summary>날짜별 차이 보기</summary><div class="table-wrap"><table><thead><tr><th>날짜</th><th>계정 조회 토큰</th><th>수집 토큰</th><th>차이</th></tr></thead><tbody id="reconciliation-rows"></tbody></table></div></details></section>
+<footer>접근 가능한 이 PC의 기록만 수집합니다. 날짜·모델·effort가 불명확한 누적값은 임의로 배분하지 않습니다.</footer>
+</main>
+</body></html>

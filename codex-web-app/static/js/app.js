@@ -7781,6 +7781,14 @@ function applyMobileViewportHeight() {
     const root = document.documentElement;
     if (!root) return;
     const metrics = getVisualViewportMetrics();
+    // Dialogs always follow the visible viewport, even when the cover-screen
+    // app shell intentionally keeps its pre-keyboard height.
+    const overlayHeight = metrics.hasVisualHeight ? metrics.visualHeight : metrics.layoutHeight;
+    if (Number.isFinite(overlayHeight) && overlayHeight > 0) {
+        root.style.setProperty('--overlay-viewport-height', `${overlayHeight}px`);
+        root.style.setProperty('--overlay-viewport-top', `${metrics.offsetTop}px`);
+        root.classList.toggle('is-short-overlay-viewport', overlayHeight <= 600);
+    }
     const nextHeight = getUsableMobileViewportHeight(metrics);
     const keyboardOpen = isMobileKeyboardOpen(isMobileViewportBehaviorActive(), metrics);
     let appHeightSource = nextHeight;

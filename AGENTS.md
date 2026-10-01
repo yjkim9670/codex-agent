@@ -17,3 +17,10 @@ For UI, infographic, dashboard, and design-system work under this project:
 
 - Do not stop or restart proc manager tasks, Codex Workbench servers, Flask servers, or active development servers unless the user explicitly asks for it.
 - When code changes require a restart to take effect, leave the running process alone and tell the user which proc manager task or server should be restarted.
+
+## Canonical Code Modification Scope
+
+- For all future Codex Workbench code, tests, assets, documentation, and project instruction changes on this PC, edit only `/Users/dinya/works/dev_workspace/codex_workbench/`.
+- Other Workbench checkouts are read-only references and usage data sources. Do not modify or synchronize their code; the user handles Git sync.
+- Shared usage data may be updated by the authorized application collectors; this does not authorize editing code outside the canonical checkout.
+- The structured execution prompt repeats this Workbench-only scope when the canonical checkout exists, so Git-synced copies keep the instruction even when Codex runs from another workspace.

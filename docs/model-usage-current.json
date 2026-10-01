@@ -1,0 +1,1657 @@
+{
+  "start": "2026-09-02T00:00:00+09:00",
+  "end": "2026-10-01T19:01:52+09:00",
+  "total_tokens": 336549631,
+  "events": 1895,
+  "calibration_first_at": "2026-09-10T19:38:02+09:00",
+  "models": {
+    "gpt-5.6-terra": {
+      "events": 1665,
+      "input_tokens": 268177353,
+      "cached_input_tokens": 242523264,
+      "output_tokens": 2343223,
+      "total_tokens": 270520576,
+      "share_percent": 80.38058909653061,
+      "input_cache_percent": 90.4339092346847
+    },
+    "gpt-5.6-luna": {
+      "events": 116,
+      "input_tokens": 11242183,
+      "cached_input_tokens": 9298432,
+      "output_tokens": 111107,
+      "total_tokens": 11353290,
+      "share_percent": 3.3734370667011664,
+      "input_cache_percent": 82.7101996115879
+    },
+    "gpt-5.6-sol": {
+      "events": 67,
+      "input_tokens": 38533541,
+      "cached_input_tokens": 34856960,
+      "output_tokens": 297711,
+      "total_tokens": 38831252,
+      "share_percent": 11.538046226531147,
+      "input_cache_percent": 90.45875124738731
+    },
+    "gpt-6-astra": {
+      "events": 10,
+      "input_tokens": 4012288,
+      "cached_input_tokens": 3694976,
+      "output_tokens": 45484,
+      "total_tokens": 4057772,
+      "share_percent": 1.2056979494950033,
+      "input_cache_percent": 92.09149492758246
+    },
+    "gpt-5-codex": {
+      "events": 2,
+      "input_tokens": 0,
+      "cached_input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 20,
+      "token_component_mismatches": 2,
+      "share_percent": 5.9426599103892645e-06,
+      "input_cache_percent": null
+    },
+    "gpt-6.1-sol": {
+      "events": 27,
+      "input_tokens": 10216255,
+      "cached_input_tokens": 9309824,
+      "output_tokens": 101572,
+      "total_tokens": 10317827,
+      "share_percent": 3.0657668437615966,
+      "input_cache_percent": 91.12756093108483
+    },
+    "gpt-6-luna": {
+      "events": 8,
+      "input_tokens": 1455066,
+      "cached_input_tokens": 1310976,
+      "output_tokens": 13828,
+      "total_tokens": 1468894,
+      "share_percent": 0.4364568743205664,
+      "input_cache_percent": 90.09735640857528
+    }
+  },
+  "windows": {
+    "five_hour": {
+      "models": {
+        "gpt-5.6-sol": {
+          "groups": 20,
+          "records": 20,
+          "tokens": 8149477,
+          "deduction_pp": 55.0,
+          "pp_per_million_tokens": 6.748899346547024,
+          "tokens_per_one_pp": 148172.30909090908
+        },
+        "gpt-5.6-terra": {
+          "groups": 111,
+          "records": 115,
+          "tokens": 69524474,
+          "deduction_pp": 341.0,
+          "pp_per_million_tokens": 4.904747643254374,
+          "tokens_per_one_pp": 203884.0879765396
+        },
+        "gpt-5.6-luna": {
+          "groups": 2,
+          "records": 2,
+          "tokens": 7441928,
+          "deduction_pp": 3.0,
+          "pp_per_million_tokens": 0.4031213416738243,
+          "tokens_per_one_pp": 2480642.6666666665
+        },
+        "gpt-6.1-sol": {
+          "groups": 8,
+          "records": 8,
+          "tokens": 4245567,
+          "deduction_pp": 18.0,
+          "pp_per_million_tokens": 4.239716391238202,
+          "tokens_per_one_pp": 235864.83333333334
+        }
+      },
+      "excluded": {
+        "record_excluded": 9,
+        "unverified_or_changed_reset": 102,
+        "overlapping_local_execution": 86,
+        "concurrent_flag": 2,
+        "mixed_model_group": 10
+      },
+      "groups": [
+        {
+          "group_id": "five_hour:stream:28a08c294f6b459e8311460497a61ce3:2026-09-10T19:38:03+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-10T19:38:03+09:00",
+          "records": 1,
+          "tokens": 1722240,
+          "deduction_pp": 10.0
+        },
+        {
+          "group_id": "five_hour:stream:e8c7ed9df952462ba2bd850123f3f038:2026-09-11T16:10:54+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T16:10:54+09:00",
+          "records": 1,
+          "tokens": 578786,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:629d9e8c9ba444d5b7ad4fef518c7001:2026-09-11T16:14:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T16:14:44+09:00",
+          "records": 1,
+          "tokens": 454388,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:0ab56f107619428fa3694d2fa1a6c6f6:2026-09-11T16:45:22+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T16:45:22+09:00",
+          "records": 1,
+          "tokens": 71791,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:ed2b0789247e42aba0efddb89e0ca801:2026-09-11T16:55:04+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T16:55:04+09:00",
+          "records": 2,
+          "tokens": 757115,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:8725630e730c41858563fe2fe5c40335:2026-09-11T17:15:48+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T17:15:48+09:00",
+          "records": 1,
+          "tokens": 427822,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:1a750df4ffb24cd291d839579adc1ebc:2026-09-11T18:12:16+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T18:12:16+09:00",
+          "records": 1,
+          "tokens": 1209965,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:79269295ddb2440d84e450dc8107279a:2026-09-11T18:41:19+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T18:41:19+09:00",
+          "records": 1,
+          "tokens": 237119,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:9f492a14e8a7488a9f02e073be9f2e15:2026-09-11T18:46:35+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T18:46:35+09:00",
+          "records": 1,
+          "tokens": 1258061,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:b96d10ead24244d89c7be6fc14612bbb:2026-09-12T08:33:47+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T08:33:47+09:00",
+          "records": 1,
+          "tokens": 1440601,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:e0f151273a7640fe96cb2d5a25e2451f:2026-09-12T08:35:36+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T08:35:36+09:00",
+          "records": 1,
+          "tokens": 295422,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:b921bad652ca43009470481dd40ee2eb:2026-09-12T09:05:52+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T09:05:52+09:00",
+          "records": 1,
+          "tokens": 166817,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:dd86bb2850a84e0ab6c7a9ca19e25938:2026-09-12T09:22:00+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T09:22:00+09:00",
+          "records": 1,
+          "tokens": 584458,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:25869651ec824fed8a932358f7155814:2026-09-12T12:05:51+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T12:05:51+09:00",
+          "records": 1,
+          "tokens": 335257,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:f349a50ddb9c430aa5f4cbb9e5936b02:2026-09-12T12:10:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T12:10:59+09:00",
+          "records": 1,
+          "tokens": 866288,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:d42d0bf0252d4759b08435fc4bcdae86:2026-09-12T12:34:03+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T12:34:03+09:00",
+          "records": 1,
+          "tokens": 730857,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:03ee2952bb2940f7a754822c780d08be:2026-09-12T13:39:58+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T13:39:58+09:00",
+          "records": 2,
+          "tokens": 299066,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:802dae1e27324a73b42327d05557635d:2026-09-12T13:51:17+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T13:51:17+09:00",
+          "records": 1,
+          "tokens": 325416,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:3311f2e8e72f44b38d160375accc6989:2026-09-12T13:58:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T13:58:44+09:00",
+          "records": 1,
+          "tokens": 249315,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:1fbdfbd61b4245edbcd93bb6580ab5ef:2026-09-12T14:04:15+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T14:04:15+09:00",
+          "records": 1,
+          "tokens": 551859,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:bb0b4846d0134d15ad9a0d2f37aeefd0:2026-09-12T14:30:12+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-12T14:30:12+09:00",
+          "records": 1,
+          "tokens": 634190,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:b397dca3c9fa44049933f22c67db4486:2026-09-12T14:40:34+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T14:40:34+09:00",
+          "records": 1,
+          "tokens": 1862318,
+          "deduction_pp": 7.0
+        },
+        {
+          "group_id": "five_hour:stream:aa7896abe9e44da4859379c1721e1a23:2026-09-12T14:48:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T14:48:59+09:00",
+          "records": 1,
+          "tokens": 514143,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:c6155dd1a39246f7a0ac2a8b08789fe0:2026-09-12T15:13:02+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T15:13:02+09:00",
+          "records": 1,
+          "tokens": 1179914,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:113b7dd33d524aaaa164ba1cc3c0cd46:2026-09-12T18:49:12+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T18:49:12+09:00",
+          "records": 2,
+          "tokens": 450812,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:23adfbb4659a4316bfd716771137e658:2026-09-14T16:31:07+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T16:31:07+09:00",
+          "records": 1,
+          "tokens": 82319,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:fa63b0e6caff4a6fb72af0ed49adbb76:2026-09-14T16:53:32+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T16:53:32+09:00",
+          "records": 1,
+          "tokens": 245403,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:a08ef4cf614442fba66d1b147e8c4288:2026-09-14T16:54:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T16:54:44+09:00",
+          "records": 1,
+          "tokens": 262164,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:575026a1e4204429b24223a5685decfd:2026-09-14T16:56:08+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T16:56:08+09:00",
+          "records": 1,
+          "tokens": 141946,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:5104e88649f04950a902209777820dae:2026-09-14T17:03:09+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T17:03:09+09:00",
+          "records": 1,
+          "tokens": 351621,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:0c16e0a929a14497b128828974715e42:2026-09-14T17:09:19+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T17:09:19+09:00",
+          "records": 1,
+          "tokens": 595233,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:f5e6bc9bfbda41deb3f777d64c7a0b5e:2026-09-14T17:38:06+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T17:38:06+09:00",
+          "records": 1,
+          "tokens": 66915,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:32cb904995514164b5f83be0a91eeb4b:2026-09-14T17:58:54+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T17:58:54+09:00",
+          "records": 1,
+          "tokens": 84086,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:30d2b687fb754514aa25474ed5edd76f:2026-09-14T18:04:14+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T18:04:14+09:00",
+          "records": 1,
+          "tokens": 803518,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:b53e4c39f02f4eb391d682c58111d832:2026-09-14T18:10:27+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T18:10:27+09:00",
+          "records": 1,
+          "tokens": 1254237,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:0a820d681e32498c99ed0207cbc731b7:2026-09-14T18:57:02+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T18:57:02+09:00",
+          "records": 2,
+          "tokens": 91320,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:c1037a27d5f941f28af25f2eac797740:2026-09-14T19:32:14+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T19:32:14+09:00",
+          "records": 1,
+          "tokens": 116859,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:977791589c2b4a60aabcf2491db94a83:2026-09-14T19:36:20+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-14T19:36:20+09:00",
+          "records": 1,
+          "tokens": 224078,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:ed2a61dc1e8f4cbf8d8ff3426a96db8c:2026-09-14T19:38:40+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T19:38:40+09:00",
+          "records": 1,
+          "tokens": 453734,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:6e40f212d7a442dcbf5402b7a78cb288:2026-09-14T23:04:55+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T23:04:55+09:00",
+          "records": 1,
+          "tokens": 82704,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:b08e1ee7941343a79a03d05be4f78275:2026-09-14T23:11:01+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T23:11:01+09:00",
+          "records": 1,
+          "tokens": 501088,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:63174d477f1b42c7b9462da6301cd87e:2026-09-15T07:12:51+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T07:12:51+09:00",
+          "records": 1,
+          "tokens": 877713,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:e920a55207214e85b004575a7fceab51:2026-09-15T07:26:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T07:26:59+09:00",
+          "records": 1,
+          "tokens": 548757,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:416e09dbb1cc4846808d1a1752a27158:2026-09-15T09:58:00+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-15T09:58:00+09:00",
+          "records": 1,
+          "tokens": 473346,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:a07eaca024f743f3a8789c1e8dd6eb17:2026-09-15T10:03:00+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T10:03:00+09:00",
+          "records": 1,
+          "tokens": 469571,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:a08426272c75410dbd9fccd4ab8783f0:2026-09-15T10:42:45+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T10:42:45+09:00",
+          "records": 1,
+          "tokens": 384932,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:c9d76f9151ad47b5ad8dc6c4ffe33736:2026-09-15T10:49:36+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T10:49:36+09:00",
+          "records": 1,
+          "tokens": 268793,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:2910b2f918ad4b588eb4e8d403a62ab9:2026-09-15T11:02:56+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T11:02:56+09:00",
+          "records": 1,
+          "tokens": 1860647,
+          "deduction_pp": 8.0
+        },
+        {
+          "group_id": "five_hour:stream:9929737ade814146b19d97836f3b6795:2026-09-15T11:08:17+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T11:08:17+09:00",
+          "records": 1,
+          "tokens": 251134,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:845fa9e8cea7473a9f4b6399d88f49bb:2026-09-15T13:07:28+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T13:07:28+09:00",
+          "records": 1,
+          "tokens": 395403,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:d132cee5121c4bdbb334dc16375f039a:2026-09-15T13:32:56+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T13:32:56+09:00",
+          "records": 1,
+          "tokens": 1277626,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:3913893b204c4e08ae2b1af7132bd4b0:2026-09-15T15:16:49+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T15:16:49+09:00",
+          "records": 1,
+          "tokens": 116997,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:bd5fab14798f4190b888218857d875b7:2026-09-15T15:29:38+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T15:29:38+09:00",
+          "records": 1,
+          "tokens": 957158,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:63920f894d7a4335bb9a82e7d2ed93e1:2026-09-15T16:03:17+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T16:03:17+09:00",
+          "records": 1,
+          "tokens": 379243,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:6349c1e2a15c40f79265850adb8be075:2026-09-15T16:22:58+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-15T16:22:58+09:00",
+          "records": 1,
+          "tokens": 511618,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:309a0d45ca63469a808e4afd2b9fb3d5:2026-09-15T16:31:33+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T16:31:33+09:00",
+          "records": 1,
+          "tokens": 991531,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:38a6e09a9af34b24a858ca092de3bc43:2026-09-15T17:37:48+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T17:37:48+09:00",
+          "records": 1,
+          "tokens": 95463,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:1b99879dc97045cf9759ffee4b289697:2026-09-15T17:49:28+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T17:49:28+09:00",
+          "records": 1,
+          "tokens": 212784,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:15376f7000a041e8a7dea78b07c9e250:2026-09-15T18:34:48+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T18:34:48+09:00",
+          "records": 1,
+          "tokens": 441680,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:85967561c8b547949d55ac64b3eb32c2:2026-09-16T10:38:34+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T10:38:34+09:00",
+          "records": 1,
+          "tokens": 126631,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:c2df6bb40797411b8169124a32a7590b:2026-09-16T13:04:50+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T13:04:50+09:00",
+          "records": 1,
+          "tokens": 304218,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:7ac2142090a14e299493a543bbcb28e8:2026-09-16T15:22:36+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T15:22:36+09:00",
+          "records": 1,
+          "tokens": 61780,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:6eea02104cb9451fa65d7c150719e3d8:2026-09-16T15:27:54+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T15:27:54+09:00",
+          "records": 1,
+          "tokens": 315290,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:f8199035d65d493781d80645dc0b57d0:2026-09-16T17:55:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T17:55:44+09:00",
+          "records": 1,
+          "tokens": 562388,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:45bc455682004e2ea402b943781e9221:2026-09-16T18:24:14+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T18:24:14+09:00",
+          "records": 1,
+          "tokens": 328117,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:c26f234cff0d4772abe8d5eadab250e9:2026-09-16T18:27:22+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-16T18:27:22+09:00",
+          "records": 1,
+          "tokens": 155916,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:c6eb8ed1310146988c55f0b0788b3c7e:2026-09-16T19:48:34+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T19:48:34+09:00",
+          "records": 1,
+          "tokens": 1361312,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:3a7276145d034ffb840f05f97f636569:2026-09-18T08:57:43+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-18T08:57:43+09:00",
+          "records": 1,
+          "tokens": 159692,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:43916caf40e14eff9056b3c4c935963c:2026-09-18T09:09:34+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-18T09:09:34+09:00",
+          "records": 1,
+          "tokens": 85909,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:8a8afde05053402ba446fd9d725261cf:2026-09-18T11:15:50+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-18T11:15:50+09:00",
+          "records": 1,
+          "tokens": 455588,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:c274ee30b74d4d7096e98d7452726959:2026-09-18T11:21:13+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-18T11:21:13+09:00",
+          "records": 1,
+          "tokens": 647106,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:aabb45ed61bd45e59974edb1cdfcfa8f:2026-09-18T11:26:27+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-18T11:26:27+09:00",
+          "records": 1,
+          "tokens": 68936,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:8fa7b1c5d721496c958f949941220f8f:2026-09-18T11:30:40+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-18T11:30:40+09:00",
+          "records": 1,
+          "tokens": 425080,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:487d58ee5cbb4b989118b124084ee00b:2026-09-18T14:54:16+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-18T14:54:16+09:00",
+          "records": 1,
+          "tokens": 228653,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:4409efe66d364964804435a25d5674f2:2026-09-18T23:13:13+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-18T23:13:13+09:00",
+          "records": 1,
+          "tokens": 663229,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:aaf03894d3f0401b8ea2165853e08e8e:2026-09-19T13:18:28+09:00",
+          "model": "gpt-5.6-luna",
+          "observed_at": "2026-09-19T13:18:28+09:00",
+          "records": 1,
+          "tokens": 5183695,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:579e7200ceea426593e883913ce97883:2026-09-19T15:16:32+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T15:16:32+09:00",
+          "records": 1,
+          "tokens": 1110038,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:61f79b4ba9a3426db1e462bbb68d9475:2026-09-19T18:59:21+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T18:59:21+09:00",
+          "records": 1,
+          "tokens": 925087,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:5853ec3bd6664a40b1bb6d7f89a06e22:2026-09-19T19:02:17+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T19:02:17+09:00",
+          "records": 1,
+          "tokens": 236922,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:d44a81597c744d76b3b463513e320e4b:2026-09-19T19:13:18+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T19:13:18+09:00",
+          "records": 1,
+          "tokens": 380338,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:cebeb1c298bd4af288526b2583d02714:2026-09-19T19:40:26+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T19:40:26+09:00",
+          "records": 1,
+          "tokens": 328738,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:0144a421110d49fba98de0375fbd8a70:2026-09-19T19:57:29+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T19:57:29+09:00",
+          "records": 1,
+          "tokens": 712724,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:ea64c3176bb14bdbaf1867c0a9539422:2026-09-19T20:51:18+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T20:51:18+09:00",
+          "records": 1,
+          "tokens": 1182778,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:2ade0bcfbb5944ef81cecaebc5a234aa:2026-09-21T17:19:13+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T17:19:13+09:00",
+          "records": 1,
+          "tokens": 308182,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:5c8be850e26d4e4ea8c65534e478a2c2:2026-09-21T17:28:39+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T17:28:39+09:00",
+          "records": 1,
+          "tokens": 1454951,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:b69ac1abd66544699149c0791714cd35:2026-09-21T18:49:37+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T18:49:37+09:00",
+          "records": 1,
+          "tokens": 405846,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:73936a3e52ea45aea11ed9c15cd5a23a:2026-09-21T19:13:54+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-21T19:13:54+09:00",
+          "records": 1,
+          "tokens": 284870,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:d18cde430bc0454d8dffac3125bff697:2026-09-21T19:22:34+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-21T19:22:34+09:00",
+          "records": 1,
+          "tokens": 102151,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:d87271de3e1244bc84cce561274b43f5:2026-09-21T20:30:17+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T20:30:17+09:00",
+          "records": 1,
+          "tokens": 655393,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:2b508afe15694191a4ea281b2d525f07:2026-09-21T20:32:47+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T20:32:47+09:00",
+          "records": 1,
+          "tokens": 550118,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:9fe3e78dc9df4570a6cfcb42ccf594d5:2026-09-21T20:57:13+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T20:57:13+09:00",
+          "records": 1,
+          "tokens": 629736,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:ef83d2bb1c664e9c9c2af9a701f545a8:2026-09-22T00:22:12+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T00:22:12+09:00",
+          "records": 1,
+          "tokens": 381925,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:a5b3290b7ccf49febf4a887e9bbc63e5:2026-09-22T00:39:43+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T00:39:43+09:00",
+          "records": 1,
+          "tokens": 520754,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:ea25450b285544fca2303958ba191f12:2026-09-22T01:04:25+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T01:04:25+09:00",
+          "records": 1,
+          "tokens": 137651,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:7d9dac7c9c5a4d38b1b11a959c6e7c53:2026-09-22T08:02:26+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T08:02:26+09:00",
+          "records": 1,
+          "tokens": 2521540,
+          "deduction_pp": 9.0
+        },
+        {
+          "group_id": "five_hour:stream:eacd02ebd5b5414195d70c614ebe7c15:2026-09-22T08:03:45+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T08:03:45+09:00",
+          "records": 1,
+          "tokens": 298035,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:8a25e7b2f4b34135860b7c555a130e51:2026-09-22T09:17:40+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:17:40+09:00",
+          "records": 1,
+          "tokens": 828782,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:5df16e1271bc47d3ad7dbdb8799aac3d:2026-09-22T09:21:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:21:59+09:00",
+          "records": 1,
+          "tokens": 1390308,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:a94ac46a43914eeabfb7f0ee2d9d576e:2026-09-22T09:33:07+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:33:07+09:00",
+          "records": 1,
+          "tokens": 417290,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:b9a516a6bb8d4b9da9badf1525685436:2026-09-22T09:49:23+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:49:23+09:00",
+          "records": 1,
+          "tokens": 194024,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:0496191b980c4bea878bdb99642e2132:2026-09-22T09:52:06+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:52:06+09:00",
+          "records": 1,
+          "tokens": 234940,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:2ce0c8446b2947e9808ec9fd04267cf3:2026-09-22T10:09:51+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T10:09:51+09:00",
+          "records": 1,
+          "tokens": 1835394,
+          "deduction_pp": 7.0
+        },
+        {
+          "group_id": "five_hour:stream:6e58f1f103534569b263670fa5bce173:2026-09-22T10:26:04+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T10:26:04+09:00",
+          "records": 1,
+          "tokens": 1771939,
+          "deduction_pp": 8.0
+        },
+        {
+          "group_id": "five_hour:stream:5b5c2e7a6a98426aad7c5711c15422b9:2026-09-22T11:07:30+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-22T11:07:30+09:00",
+          "records": 1,
+          "tokens": 380231,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:6b0c33914a104efcb1156e504cd059fe:2026-09-22T11:15:43+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T11:15:43+09:00",
+          "records": 1,
+          "tokens": 2812994,
+          "deduction_pp": 10.0
+        },
+        {
+          "group_id": "five_hour:stream:25f48d2ad544415bbb594cacd1957995:2026-09-22T12:13:30+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T12:13:30+09:00",
+          "records": 1,
+          "tokens": 172439,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:8302005f52e44723b63d28c3e2135964:2026-09-22T12:21:57+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T12:21:57+09:00",
+          "records": 1,
+          "tokens": 176381,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:fb512722879d424586eda404f43b860f:2026-09-22T13:08:16+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-22T13:08:16+09:00",
+          "records": 1,
+          "tokens": 558275,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:38deb4ae2cb04684ade9761dc46113a8:2026-09-22T13:12:08+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T13:12:08+09:00",
+          "records": 1,
+          "tokens": 1667596,
+          "deduction_pp": 6.0
+        },
+        {
+          "group_id": "five_hour:stream:e2ed28ef0d414a63921d244829e163bb:2026-09-22T13:45:20+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T13:45:20+09:00",
+          "records": 1,
+          "tokens": 1323341,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:d9255687d2b640829112444fe21e0728:2026-09-22T15:58:57+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-22T15:58:57+09:00",
+          "records": 1,
+          "tokens": 191108,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:8b0e079130394c629a3ddcc9b41f6ded:2026-09-22T16:03:24+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T16:03:24+09:00",
+          "records": 1,
+          "tokens": 1254308,
+          "deduction_pp": 5.0
+        },
+        {
+          "group_id": "five_hour:stream:548c9ff96fee4e309b23a4ac0fd7efe1:2026-09-22T16:27:43+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-22T16:27:43+09:00",
+          "records": 1,
+          "tokens": 402954,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:cb24c1eae669472c9ca635848a934abf:2026-09-22T16:37:49+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T16:37:49+09:00",
+          "records": 1,
+          "tokens": 510762,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:6b22189a86114e0bb6f97b5af5bb97f9:2026-09-22T17:09:16+09:00",
+          "model": "gpt-5.6-luna",
+          "observed_at": "2026-09-22T17:09:16+09:00",
+          "records": 1,
+          "tokens": 2258233,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:8f0ca1c5e24b455ca242b1e93e0a5267:2026-09-22T19:45:07+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T19:45:07+09:00",
+          "records": 1,
+          "tokens": 490393,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:ccb977c6c74b4948bc145d3831745824:2026-09-26T00:14:24+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-26T00:14:24+09:00",
+          "records": 1,
+          "tokens": 501955,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:56e73a79eede41e79f2693b5af102681:2026-09-26T00:28:11+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-26T00:28:11+09:00",
+          "records": 1,
+          "tokens": 540393,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:197b1c7d41924d60af20d241aa1986df:2026-09-27T02:02:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-27T02:02:44+09:00",
+          "records": 1,
+          "tokens": 751286,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:f0ce698edb144a6daff682539885babc:2026-09-29T13:31:16+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-29T13:31:16+09:00",
+          "records": 1,
+          "tokens": 670938,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:8721283bb0574088a8787eb832868783:2026-09-29T17:21:11+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-29T17:21:11+09:00",
+          "records": 1,
+          "tokens": 47818,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:7067d0c02e2c4407bea7a8ff50cc6a9d:2026-09-29T20:56:46+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-29T20:56:46+09:00",
+          "records": 1,
+          "tokens": 385562,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:e05bde87ac0c4249a234c1d5683016e0:2026-09-29T21:14:27+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-29T21:14:27+09:00",
+          "records": 1,
+          "tokens": 814467,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:c948d6f1bda44c71a27d4f99ce476aaa:2026-09-29T23:29:03+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-29T23:29:03+09:00",
+          "records": 1,
+          "tokens": 335127,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:58be6c84335a4c4ba60d3e634bbf4ea5:2026-09-29T23:31:42+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-29T23:31:42+09:00",
+          "records": 1,
+          "tokens": 214877,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:da144a410bc04f63985d966fb9604028:2026-09-30T07:50:11+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T07:50:11+09:00",
+          "records": 1,
+          "tokens": 2157361,
+          "deduction_pp": 7.0
+        },
+        {
+          "group_id": "five_hour:stream:163549127beb40c5bda3ca263a11ccad:2026-09-30T09:16:17+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-30T09:16:17+09:00",
+          "records": 1,
+          "tokens": 118175,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:48cf966053ac4489ad6f5c5e5718d8ca:2026-09-30T10:20:58+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T10:20:58+09:00",
+          "records": 1,
+          "tokens": 246911,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:66d79412fe3440b0adc2f78550780fdc:2026-09-30T11:17:14+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T11:17:14+09:00",
+          "records": 1,
+          "tokens": 167618,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:70cbc0c0f52042b0bd58e507df4b09f5:2026-09-30T14:03:25+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T14:03:25+09:00",
+          "records": 1,
+          "tokens": 708266,
+          "deduction_pp": 4.0
+        },
+        {
+          "group_id": "five_hour:stream:e93f66ee2f034d1a9fbee9fa9f6a2166:2026-09-30T15:26:02+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T15:26:02+09:00",
+          "records": 1,
+          "tokens": 758660,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:f03f9b5c7b3a48c1b40d3557bdaf231d:2026-09-30T15:36:43+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-09-30T15:36:43+09:00",
+          "records": 1,
+          "tokens": 85494,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:75ac7a4e6731432295920a271823d683:2026-09-30T16:10:50+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T16:10:50+09:00",
+          "records": 1,
+          "tokens": 323751,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:a919940575dc4f91b49e63f7b7e0f7be:2026-09-30T16:12:58+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-09-30T16:12:58+09:00",
+          "records": 1,
+          "tokens": 147768,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:613759949a174e4eae2681238e06cc0c:2026-10-01T15:07:38+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T15:07:38+09:00",
+          "records": 1,
+          "tokens": 2323721,
+          "deduction_pp": 8.0
+        },
+        {
+          "group_id": "five_hour:stream:833e7046d8064267bda9002a5eea601e:2026-10-01T15:27:51+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T15:27:51+09:00",
+          "records": 1,
+          "tokens": 123087,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:84c655fd2d0f458cb8368ae4dbe9aebb:2026-10-01T15:37:26+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T15:37:26+09:00",
+          "records": 1,
+          "tokens": 1040071,
+          "deduction_pp": 3.0
+        },
+        {
+          "group_id": "five_hour:stream:a63bfbb5edff4323bf5a5b8786ec468c:2026-10-01T16:44:35+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T16:44:35+09:00",
+          "records": 1,
+          "tokens": 155314,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:4002250c2a2a46b5b1fb957dfa59c202:2026-10-01T16:46:45+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T16:46:45+09:00",
+          "records": 1,
+          "tokens": 20803,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "five_hour:stream:bbbb585fbc0d4d02a1a9ebf83a3e51ee:2026-10-01T17:25:12+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T17:25:12+09:00",
+          "records": 1,
+          "tokens": 349309,
+          "deduction_pp": 2.0
+        },
+        {
+          "group_id": "five_hour:stream:ef032640c30b4018b8d40d5a1f560e70:2026-10-01T17:28:19+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-10-01T17:28:19+09:00",
+          "records": 1,
+          "tokens": 164064,
+          "deduction_pp": 1.0
+        }
+      ]
+    },
+    "weekly": {
+      "models": {
+        "gpt-5.6-sol": {
+          "groups": 5,
+          "records": 6,
+          "tokens": 4998200,
+          "deduction_pp": 5.0,
+          "pp_per_million_tokens": 1.0003601296466729,
+          "tokens_per_one_pp": 999640.0
+        },
+        "gpt-5.6-terra": {
+          "groups": 36,
+          "records": 62,
+          "tokens": 42195024,
+          "deduction_pp": 36.0,
+          "pp_per_million_tokens": 0.8531811713153665,
+          "tokens_per_one_pp": 1172084.0
+        },
+        "gpt-6.1-sol": {
+          "groups": 3,
+          "records": 4,
+          "tokens": 3836188,
+          "deduction_pp": 3.0,
+          "pp_per_million_tokens": 0.7820263240487693,
+          "tokens_per_one_pp": 1278729.3333333333
+        }
+      },
+      "excluded": {
+        "record_excluded": 7,
+        "unverified_or_changed_reset": 24,
+        "overlapping_local_execution": 69,
+        "mixed_model_group": 32,
+        "concurrent_flag": 3
+      },
+      "groups": [
+        {
+          "group_id": "weekly:stream:28a08c294f6b459e8311460497a61ce3:2026-09-10T19:38:03+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-10T19:38:03+09:00",
+          "records": 1,
+          "tokens": 1722240,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:1a750df4ffb24cd291d839579adc1ebc:2026-09-11T18:12:16+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T18:12:16+09:00",
+          "records": 1,
+          "tokens": 1209965,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:9f492a14e8a7488a9f02e073be9f2e15:2026-09-11T18:46:35+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-11T18:46:35+09:00",
+          "records": 1,
+          "tokens": 1258061,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b96d10ead24244d89c7be6fc14612bbb:2026-09-12T08:33:47+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T08:33:47+09:00",
+          "records": 1,
+          "tokens": 1440601,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:05f5f1f90e354bc6924fd531cc35fdf3:2026-09-12T12:01:27+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T12:01:27+09:00",
+          "records": 3,
+          "tokens": 979799,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:bb0b4846d0134d15ad9a0d2f37aeefd0:2026-09-12T14:30:12+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-12T14:30:12+09:00",
+          "records": 1,
+          "tokens": 634190,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b397dca3c9fa44049933f22c67db4486:2026-09-12T14:40:34+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T14:40:34+09:00",
+          "records": 1,
+          "tokens": 1862318,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:aa7896abe9e44da4859379c1721e1a23:2026-09-12T14:48:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T14:48:59+09:00",
+          "records": 1,
+          "tokens": 514143,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:c6155dd1a39246f7a0ac2a8b08789fe0:2026-09-12T15:13:02+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-12T15:13:02+09:00",
+          "records": 1,
+          "tokens": 1179914,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b53e4c39f02f4eb391d682c58111d832:2026-09-14T18:10:27+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-14T18:10:27+09:00",
+          "records": 1,
+          "tokens": 1254237,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:a07eaca024f743f3a8789c1e8dd6eb17:2026-09-15T10:03:00+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T10:03:00+09:00",
+          "records": 1,
+          "tokens": 469571,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:9929737ade814146b19d97836f3b6795:2026-09-15T13:07:28+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T13:07:28+09:00",
+          "records": 2,
+          "tokens": 646537,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:d132cee5121c4bdbb334dc16375f039a:2026-09-15T13:32:56+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T13:32:56+09:00",
+          "records": 1,
+          "tokens": 1277626,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:7ceb218442924af49299f97c03b25ff1:2026-09-15T15:44:21+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T15:44:21+09:00",
+          "records": 1,
+          "tokens": 2675534,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:309a0d45ca63469a808e4afd2b9fb3d5:2026-09-15T16:31:33+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T16:31:33+09:00",
+          "records": 1,
+          "tokens": 991531,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:f4fe2912509745198e8c35e4aaff2bf5:2026-09-15T18:34:48+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-15T18:34:48+09:00",
+          "records": 2,
+          "tokens": 1019823,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:9cd978a012184452842f41c68483474b:2026-09-16T12:01:26+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T12:01:26+09:00",
+          "records": 2,
+          "tokens": 771827,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:c6eb8ed1310146988c55f0b0788b3c7e:2026-09-16T19:48:34+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-16T19:48:34+09:00",
+          "records": 1,
+          "tokens": 1361312,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b7e4b9827966421b97023765632680e4:2026-09-17T04:01:19+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-17T04:01:19+09:00",
+          "records": 2,
+          "tokens": 380758,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:8fa7b1c5d721496c958f949941220f8f:2026-09-18T11:30:40+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-18T11:30:40+09:00",
+          "records": 1,
+          "tokens": 425080,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:5853ec3bd6664a40b1bb6d7f89a06e22:2026-09-19T19:13:18+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-19T19:13:18+09:00",
+          "records": 2,
+          "tokens": 617260,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:5c8be850e26d4e4ea8c65534e478a2c2:2026-09-21T17:28:39+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-21T17:28:39+09:00",
+          "records": 1,
+          "tokens": 1454951,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:7d9dac7c9c5a4d38b1b11a959c6e7c53:2026-09-22T08:02:26+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T08:02:26+09:00",
+          "records": 1,
+          "tokens": 2521540,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:eacd02ebd5b5414195d70c614ebe7c15:2026-09-22T08:03:45+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T08:03:45+09:00",
+          "records": 1,
+          "tokens": 298035,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:8a25e7b2f4b34135860b7c555a130e51:2026-09-22T09:21:59+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:21:59+09:00",
+          "records": 2,
+          "tokens": 2219090,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:a94ac46a43914eeabfb7f0ee2d9d576e:2026-09-22T09:33:07+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T09:33:07+09:00",
+          "records": 1,
+          "tokens": 417290,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b9a516a6bb8d4b9da9badf1525685436:2026-09-22T10:09:51+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T10:09:51+09:00",
+          "records": 3,
+          "tokens": 2264358,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:6e58f1f103534569b263670fa5bce173:2026-09-22T10:26:04+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T10:26:04+09:00",
+          "records": 1,
+          "tokens": 1771939,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:5b5c2e7a6a98426aad7c5711c15422b9:2026-09-22T11:07:30+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-22T11:07:30+09:00",
+          "records": 1,
+          "tokens": 380231,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:6b0c33914a104efcb1156e504cd059fe:2026-09-22T11:15:43+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T11:15:43+09:00",
+          "records": 1,
+          "tokens": 2812994,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:25f48d2ad544415bbb594cacd1957995:2026-09-22T12:21:57+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T12:21:57+09:00",
+          "records": 2,
+          "tokens": 348820,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:38deb4ae2cb04684ade9761dc46113a8:2026-09-22T13:12:08+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T13:12:08+09:00",
+          "records": 1,
+          "tokens": 1667596,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:e2ed28ef0d414a63921d244829e163bb:2026-09-22T13:45:20+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T13:45:20+09:00",
+          "records": 1,
+          "tokens": 1323341,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:8b0e079130394c629a3ddcc9b41f6ded:2026-09-22T16:03:24+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-22T16:03:24+09:00",
+          "records": 1,
+          "tokens": 1254308,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:8f0ca1c5e24b455ca242b1e93e0a5267:2026-09-23T00:31:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-23T00:31:44+09:00",
+          "records": 2,
+          "tokens": 560725,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:b4b9a53e98f44e8282fa82279d2b9160:2026-09-24T19:01:05+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-24T19:01:05+09:00",
+          "records": 8,
+          "tokens": 585392,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:0ba3572ed0854a58a178cdf3627d3436:2026-09-26T00:28:11+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-26T00:28:11+09:00",
+          "records": 7,
+          "tokens": 1367646,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:dce3bed7cdcd4c34936d4c7a340a981d:2026-09-27T02:02:44+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-27T02:02:44+09:00",
+          "records": 2,
+          "tokens": 823484,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:7067d0c02e2c4407bea7a8ff50cc6a9d:2026-09-29T21:14:27+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-29T21:14:27+09:00",
+          "records": 2,
+          "tokens": 1200029,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:9ee646e1968a409e897f62742d05f47c:2026-09-30T09:30:18+09:00",
+          "model": "gpt-5.6-sol",
+          "observed_at": "2026-09-30T09:30:18+09:00",
+          "records": 1,
+          "tokens": 1061510,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:66d79412fe3440b0adc2f78550780fdc:2026-09-30T11:17:14+09:00",
+          "model": "gpt-5.6-terra",
+          "observed_at": "2026-09-30T11:17:14+09:00",
+          "records": 1,
+          "tokens": 167618,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:613759949a174e4eae2681238e06cc0c:2026-10-01T15:07:38+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T15:07:38+09:00",
+          "records": 1,
+          "tokens": 2323721,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:833e7046d8064267bda9002a5eea601e:2026-10-01T15:37:26+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T15:37:26+09:00",
+          "records": 2,
+          "tokens": 1163158,
+          "deduction_pp": 1.0
+        },
+        {
+          "group_id": "weekly:stream:bbbb585fbc0d4d02a1a9ebf83a3e51ee:2026-10-01T17:25:12+09:00",
+          "model": "gpt-6.1-sol",
+          "observed_at": "2026-10-01T17:25:12+09:00",
+          "records": 1,
+          "tokens": 349309,
+          "deduction_pp": 1.0
+        }
+      ]
+    }
+  },
+  "quota_sample_count": 2160,
+  "current_limits": {
+    "five_hour": {
+      "used_percent": 25.0,
+      "window_minutes": 300,
+      "resets_at": 1790859684
+    },
+    "weekly": {
+      "used_percent": 37.0,
+      "window_minutes": 10080,
+      "resets_at": 1791054102
+    }
+  },
+  "method": "Sum same-model complete observed groups; exclude local overlapping executions, ineligible records and unverified/reset-changing windows. Use group_actual_percent once per group, never allocated actual_percent or predicted/weighted tokens. Percent values are percentage points.",
+  "limitations": [
+    "Local logs cannot rule out untracked CLI/cloud/account activity.",
+    "Positive-delta groups omit unresolved zero changes; integer quota reporting and delayed updates can bias estimates.",
+    "Observed token mixes and historical periods differ by model; these are not intrinsic model multipliers or official rates.",
+    "Missing quota observations are excluded, not reconstructed."
+  ]
+}

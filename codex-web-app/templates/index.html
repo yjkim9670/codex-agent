@@ -312,9 +312,6 @@
                 </div>
             </div>
             <div class="header-actions">
-                {% if not internal_multiuser_mode and not company_mode_enabled %}
-                <a href="/history" class="app-header-details-summary">통합 기록</a>
-                {% endif %}
                 {% if current_internal_user %}
                 <button class="internal-profile-trigger" type="button" id="codex-internal-profile-trigger" title="내 username 설정">
                     <span class="internal-profile-label">{{ current_internal_user.username }}</span>

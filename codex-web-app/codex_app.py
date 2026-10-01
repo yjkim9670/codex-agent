@@ -30,7 +30,6 @@ from .services.codex_chat import (
     ensure_usage_snapshot_background_worker,
 )
 from .services.codex_cli_output_filter import install_codex_cli_output_filter
-from .services.history_library import HistoryLibraryError, get_history_session, list_history
 from .services.file_browser import get_tmp_root_path
 from .services.git_branch_switch import list_remote_branches, switch_remote_branch
 from .services.git_ops import get_current_branch_name
@@ -212,27 +211,6 @@ def create_codex_app():
             company_mode_enabled=_is_company_mode_enabled(),
         )
         return _inject_git_ui_enhancement_assets(html)
-
-    @app.route('/history')
-    def consolidated_history():
-        # Standalone histories must never bypass internal-user isolation or
-        # company-mode chat transport encryption.
-        if is_internal_multiuser_mode() or _is_company_mode_enabled() or CODEX_API_ONLY_MODE:
-            return jsonify({'error': '통합 기록은 개인 Workbench 화면에서만 사용할 수 있습니다.'}), 404
-        project = request.args.get('project') or None
-        session_id = request.args.get('session') or None
-        try:
-            history = list_history(project)
-            detail = get_history_session(project, session_id) if project and session_id else None
-        except KeyError:
-            return render_template('history.html', history=None, detail=None,
-                                   error='프로젝트 또는 대화를 찾을 수 없습니다.'), 404
-        except HistoryLibraryError:
-            app.logger.exception('Consolidated history is unavailable')
-            return render_template('history.html', history=None, detail=None,
-                                   error='통합 기록을 읽을 수 없습니다. 원본 기록은 보존되어 있습니다.'), 503
-        return render_template('history.html', history=history, detail=detail,
-                               selected_project=project, selected_session=session_id, error=None)
 
     @app.route('/health')
     def codex_health():

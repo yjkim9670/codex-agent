@@ -1241,11 +1241,12 @@ def test_create_codex_stream_skips_refresh_when_preflight_snapshot_is_provided(
     assert stream['usage_limits_before']['five_hour']['used_percent'] == 0.0
 
 
-def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace):
+def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace, monkeypatch):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)
     expected_hours = codex_chat._USAGE_HISTORY_MAX_ITEMS
     expected_days = codex_chat._USAGE_HISTORY_RETENTION_DAYS
+    monkeypatch.setattr(codex_chat, '_usage_history_retention_start', lambda: start + timedelta(hours=48))
 
     workspace_total = 0
     items = []
@@ -1283,7 +1284,7 @@ def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolat
     }, path=history_path)
 
     loaded = codex_chat._load_usage_history_ledger(path=history_path)
-    assert len(loaded['items']) == expected_hours
+    assert len(loaded['items']) == expected_hours + 1  # Counter baseline precedes the retained dates.
 
     summary = codex_chat.get_usage_history_summary(
         hours=expected_hours,
@@ -2022,6 +2023,8 @@ def test_local_account_registry_merges_into_existing_shared_storage(tmp_path, mo
 
 
 def test_existing_shared_account_imports_its_local_usage_history(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_chat, '_usage_history_retention_start',
+                        lambda: datetime(2026, 6, 1, tzinfo=codex_chat.KST))
     account_id = 'same-account'
     shared_root = tmp_path / 'shared'
     shared_account_root = shared_root / 'accounts' / account_id
@@ -2090,7 +2093,9 @@ def test_existing_shared_account_imports_its_local_usage_history(tmp_path, monke
 
 
 def test_import_codex_account_histories_deduplicates_by_latest_snapshot(
-        isolated_codex_workspace, tmp_path):
+        isolated_codex_workspace, tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_chat, '_usage_history_retention_start',
+                        lambda: datetime(2026, 6, 1, tzinfo=codex_chat.KST))
     source = tmp_path / 'history-source-home'
     source.mkdir()
     (source / 'auth.json').write_text('{"tokens": {}}', encoding='utf-8')
@@ -6521,3 +6526,80 @@ def test_run_codex_stream_times_out_waiting_for_imagegen_output_after_final_text
         assert stream.get('saved') is True
         assert stream.get('exit_code') == 124
         assert not stream.get('imagegen_workbench_outputs')
+
+
+def test_usage_retention_keeps_dense_dates_and_sparse_workspace_baselines(monkeypatch, tmp_path):
+    cutoff = datetime(2026, 7, 4, tzinfo=codex_chat.KST)
+    monkeypatch.setattr(codex_chat, '_usage_history_retention_start', lambda: cutoff)
+    recent = codex_chat.normalize_timestamp(cutoff)
+    old = codex_chat.normalize_timestamp(cutoff - timedelta(days=2))
+    baseline = codex_chat.normalize_timestamp(cutoff - timedelta(hours=1))
+    limits = [{
+        'bucket_start': codex_chat.normalize_timestamp(cutoff + timedelta(seconds=index)),
+        'limits_observed_at': codex_chat.normalize_timestamp(cutoff + timedelta(seconds=index)),
+        'limit_sample_source': 'post_task',
+        'weekly_used_percent': 10,
+    } for index in range(2500)]
+    tokens = [{
+        'bucket_start': date, 'workspace_scope_id': scope, 'token_workspace_total': total,
+    } for scope in ('a', 'b') for date, total in ((old, 1), (baseline, 2), (recent, 3))]
+    path = tmp_path / 'history.json'
+    codex_chat._save_usage_history_ledger({
+        'account_limit_samples': [
+            {'bucket_start': old, 'limits_observed_at': old, 'weekly_used_percent': 5},
+            *limits,
+        ],
+        'workspace_token_samples': tokens,
+    }, path=path)
+    loaded = codex_chat._load_usage_history_ledger(path)
+    assert len(loaded['account_limit_samples']) == 2500
+    assert len(loaded['workspace_token_samples']) == 4
+    assert {item['bucket_start'] for item in loaded['workspace_token_samples']} == {baseline, recent}
+
+
+def test_usage_reconciliation_observations_are_shared_and_do_not_rewrite_counters(tmp_path):
+    path = tmp_path / 'codex_account_token_usage.json'
+    context = {'account_token_usage_path': path}
+    ledger = {'all_time': {'total_tokens': 100}, 'by_day': {}}
+    path.write_text(json.dumps(ledger))
+    before = path.read_bytes()
+    observed = codex_chat.normalize_timestamp(None)
+    snapshot = {'last_success_at': observed, 'account_usage': {'total_tokens': 120}}
+    codex_chat._record_account_usage_reconciliation(context, snapshot)
+    assert path.read_bytes() == before
+    ledger['all_time']['total_tokens'] = 110
+    path.write_text(json.dumps(ledger))
+    codex_chat._record_account_usage_reconciliation(context, snapshot)
+    result = codex_chat._get_account_usage_reconciliation(context, snapshot)
+    assert result['observation_count'] == 1
+    assert result['latest_observation']['local_lifetime_tokens'] == 100
+    assert result['local_lifetime_tokens'] == 110
+    snapshot['last_success_at'] = codex_chat.normalize_timestamp(
+        codex_chat.parse_timestamp(observed) + timedelta(seconds=1))
+    snapshot['account_usage']['total_tokens'] = 135
+    codex_chat._record_account_usage_reconciliation(context, snapshot)
+    result = codex_chat._get_account_usage_reconciliation(context, snapshot)
+    assert result['observation_count'] == 2
+    assert result['trend'][-1]['account_delta_tokens'] == 15
+    assert result['trend'][-1]['local_delta_tokens'] == 10
+    assert result['trend'][-1]['difference_delta_tokens'] == 5
+
+
+def test_automatic_usage_diagnostics_retain_dates_instead_of_500_entries(tmp_path, monkeypatch):
+    cutoff = datetime(2026, 7, 4, tzinfo=codex_chat.KST)
+    monkeypatch.setattr(codex_chat, '_usage_history_retention_start', lambda: cutoff)
+    context = {'root': tmp_path, 'account': {'id': 'shared'}}
+    path = codex_chat._automatic_usage_refresh_history_path(context)
+    old = {'at': codex_chat.normalize_timestamp(cutoff - timedelta(seconds=1))}
+    kept = {'at': codex_chat.normalize_timestamp(cutoff), 'result': 'refresh_failed'}
+    path.write_text('\n'.join(json.dumps(item) for item in [old, *([kept] * 600)]) + '\n')
+    codex_chat._record_automatic_usage_refresh_history(context, {'refreshed': True})
+    entries = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(entries) == 601
+    assert entries[0] == kept
+    assert entries[-1]['refreshed']
+
+
+def test_usage_retention_uses_kst_midnight():
+    now = datetime(2026, 10, 1, 23, 59, tzinfo=codex_chat.KST)
+    assert codex_chat._usage_history_retention_start(now) == datetime(2026, 7, 4, tzinfo=codex_chat.KST)

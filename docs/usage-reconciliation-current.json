@@ -1,0 +1,293 @@
+{
+  "observed_at": "2026-10-01T18:51:15+09:00",
+  "evaluated_at": "2026-10-01T18:51:37.836640+09:00",
+  "local_updated_at": "2026-10-01T18:50:22+09:00",
+  "refresh_error": "",
+  "window_start": "2026-09-02",
+  "window_end": "2026-10-01",
+  "days": 30,
+  "timezone": "Asia/Seoul",
+  "date_alignment": "API date labels compared with KST ledger dates; API timezone unverified",
+  "scope_note": "Account API covers the account; local ledger covers recorded Workbench activity. Differences do not prove missing records.",
+  "account_lifetime_tokens": 13126419604,
+  "local_lifetime_tokens": 4045508259,
+  "lifetime_difference_tokens": 9080911345,
+  "local_window_tokens": 334809914,
+  "account_reported_window_tokens": 366589056,
+  "comparable_local_tokens": 327952485,
+  "comparable_difference_tokens": 38636571,
+  "comparable_days": 28,
+  "account_missing_days": 2,
+  "daily": [
+    {
+      "date": "2026-09-02",
+      "account_tokens": null,
+      "local_tokens": 0,
+      "local_record_present": false,
+      "difference_tokens": null,
+      "status": "account_data_missing",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-03",
+      "account_tokens": 12991946,
+      "local_tokens": 12971805,
+      "local_record_present": true,
+      "difference_tokens": 20141,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-04",
+      "account_tokens": 33752627,
+      "local_tokens": 33482885,
+      "local_record_present": true,
+      "difference_tokens": 269742,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-05",
+      "account_tokens": 38743474,
+      "local_tokens": 33765712,
+      "local_record_present": true,
+      "difference_tokens": 4977762,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-06",
+      "account_tokens": 11123014,
+      "local_tokens": 9513490,
+      "local_record_present": true,
+      "difference_tokens": 1609524,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-07",
+      "account_tokens": 10897803,
+      "local_tokens": 15290748,
+      "local_record_present": true,
+      "difference_tokens": -4392945,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-08",
+      "account_tokens": 13782688,
+      "local_tokens": 10321029,
+      "local_record_present": true,
+      "difference_tokens": 3461659,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-09",
+      "account_tokens": 11729174,
+      "local_tokens": 16212059,
+      "local_record_present": true,
+      "difference_tokens": -4482885,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-10",
+      "account_tokens": 25740077,
+      "local_tokens": 18383149,
+      "local_record_present": true,
+      "difference_tokens": 7356928,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-11",
+      "account_tokens": 25951377,
+      "local_tokens": 9516673,
+      "local_record_present": true,
+      "difference_tokens": 16434704,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-12",
+      "account_tokens": 17265451,
+      "local_tokens": 19194428,
+      "local_record_present": true,
+      "difference_tokens": -1928977,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-13",
+      "account_tokens": 432686,
+      "local_tokens": 301325,
+      "local_record_present": true,
+      "difference_tokens": 131361,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-14",
+      "account_tokens": 18241210,
+      "local_tokens": 10054071,
+      "local_record_present": true,
+      "difference_tokens": 8187139,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-15",
+      "account_tokens": 16354349,
+      "local_tokens": 21451375,
+      "local_record_present": true,
+      "difference_tokens": -5097026,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-16",
+      "account_tokens": 10451804,
+      "local_tokens": 10420130,
+      "local_record_present": true,
+      "difference_tokens": 31674,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-17",
+      "account_tokens": 659392,
+      "local_tokens": 611750,
+      "local_record_present": true,
+      "difference_tokens": 47642,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-18",
+      "account_tokens": 4317949,
+      "local_tokens": 4403356,
+      "local_record_present": true,
+      "difference_tokens": -85407,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-19",
+      "account_tokens": 11221137,
+      "local_tokens": 11461218,
+      "local_record_present": true,
+      "difference_tokens": -240081,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-20",
+      "account_tokens": 63879,
+      "local_tokens": 0,
+      "local_record_present": false,
+      "difference_tokens": 63879,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-21",
+      "account_tokens": 29014211,
+      "local_tokens": 15283687,
+      "local_record_present": true,
+      "difference_tokens": 13730524,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-22",
+      "account_tokens": 26626460,
+      "local_tokens": 35620491,
+      "local_record_present": true,
+      "difference_tokens": -8994031,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-23",
+      "account_tokens": 325583,
+      "local_tokens": 375911,
+      "local_record_present": true,
+      "difference_tokens": -50328,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-24",
+      "account_tokens": 632639,
+      "local_tokens": 298627,
+      "local_record_present": true,
+      "difference_tokens": 334012,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-25",
+      "account_tokens": 1414910,
+      "local_tokens": 325298,
+      "local_record_present": true,
+      "difference_tokens": 1089612,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-26",
+      "account_tokens": 1995921,
+      "local_tokens": 1425229,
+      "local_record_present": true,
+      "difference_tokens": 570692,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-27",
+      "account_tokens": 376713,
+      "local_tokens": 1074068,
+      "local_record_present": true,
+      "difference_tokens": -697355,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-28",
+      "account_tokens": 78057,
+      "local_tokens": 255531,
+      "local_record_present": true,
+      "difference_tokens": -177474,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-29",
+      "account_tokens": 26407429,
+      "local_tokens": 15990911,
+      "local_record_present": true,
+      "difference_tokens": 10416518,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-09-30",
+      "account_tokens": 15997096,
+      "local_tokens": 19947529,
+      "local_record_present": true,
+      "difference_tokens": -3950433,
+      "status": "different",
+      "is_partial_day": false
+    },
+    {
+      "date": "2026-10-01",
+      "account_tokens": null,
+      "local_tokens": 6857429,
+      "local_record_present": true,
+      "difference_tokens": null,
+      "status": "account_data_missing",
+      "is_partial_day": true
+    }
+  ]
+}

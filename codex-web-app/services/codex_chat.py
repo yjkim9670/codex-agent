@@ -92,6 +92,7 @@ from ..config import (
     resolve_codex_git_commit_message_model,
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
+from .usage_reconciliation import build_usage_reconciliation
 from .multiuser import (
     InternalUser,
     activate_user,
@@ -240,7 +241,6 @@ _USAGE_ACCOUNT_REFRESH_MAX_RETRIES_PER_SLOT = 3
 _USAGE_SNAPSHOT_WORKER_LOCK = threading.Lock()
 _USAGE_SNAPSHOT_WORKER_STARTED = False
 _INTERNAL_USAGE_SNAPSHOT_WORKER_STARTED = False
-_USAGE_AUTOMATIC_HISTORY_LIMIT = 500
 _USAGE_KEEPALIVE_FOLLOWUP_LOCK = threading.Lock()
 _USAGE_KEEPALIVE_FOLLOWUP_TIMERS = {}
 _USAGE_CALIBRATION_FOLLOWUP_LOCK = threading.Lock()
@@ -4939,11 +4939,11 @@ def import_codex_account_usage_histories(account_id, source_paths):
                     or item.get('recorded_at')
                     or ''
                 ),
-            )[-_USAGE_HISTORY_MAX_ITEMS:]
+            )
             target['account_token_samples'] = _usage_history_latest_by_key(
                 account_samples,
                 lambda item: item.get('bucket_start') or '',
-            )[-_USAGE_HISTORY_MAX_ITEMS:]
+            )
             target['workspace_token_samples'] = _usage_history_latest_by_key(
                 workspace_samples,
                 lambda item: (
@@ -4955,7 +4955,7 @@ def import_codex_account_usage_histories(account_id, source_paths):
                 target['account_limit_samples'],
                 target['account_token_samples'],
                 scope='account',
-            )[-_USAGE_HISTORY_MAX_ITEMS:]
+            )
             target['updated_at'] = normalize_timestamp(None)
             _save_usage_history_ledger(target, path=context['usage_history_path'])
     return {
@@ -6292,6 +6292,41 @@ def _normalize_limit_sample_events(value, fallback_source='', fallback_observed_
     return sorted(normalized, key=lambda event: (event['observed_at'], event['source']))
 
 
+def _usage_history_retention_start(now=None):
+    current = now if now is not None else datetime.now(KST)
+    return current.astimezone(KST).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+        days=_USAGE_HISTORY_RETENTION_DAYS - 1,
+    )
+
+
+def _retain_usage_diagnostic_history(items):
+    cutoff = _usage_history_retention_start()
+    return [item for item in items if isinstance(item, dict)
+            and (observed := parse_timestamp(item.get('at'))) is not None
+            and observed >= cutoff]
+
+
+def _retain_usage_history_samples(items):
+    """Keep 90 KST calendar dates, plus one counter baseline per scope."""
+    cutoff = _usage_history_retention_start()
+    retained = []
+    baselines = {}
+    for item in items:
+        observed = parse_timestamp(item.get('bucket_start'))
+        if observed is None:
+            continue
+        if observed >= cutoff:
+            retained.append(item)
+        elif 'token_account_total' in item or 'token_workspace_total' in item:
+            scope = item.get('workspace_scope_id') or 'account'
+            previous = baselines.get(scope)
+            if previous is None or observed > parse_timestamp(previous['bucket_start']):
+                baselines[scope] = item
+    return sorted([*baselines.values(), *retained], key=lambda item: (
+        item.get('bucket_start') or '', item.get('workspace_scope_id') or '',
+    ))
+
+
 def _usage_history_latest_by_key(items, key_builder, timestamp_builder=None):
     deduped = {}
     for item in items:
@@ -6311,13 +6346,13 @@ def _usage_history_latest_by_key(items, key_builder, timestamp_builder=None):
         )
         if current is None or timestamp >= current_timestamp:
             deduped[key] = item
-    return sorted(
+    return _retain_usage_history_samples(sorted(
         deduped.values(),
         key=lambda item: (
             item.get('bucket_start') or '',
             item.get('workspace_scope_id') or '',
         ),
-    )
+    ))
 
 
 def _split_usage_history_snapshot(snapshot):
@@ -6513,11 +6548,11 @@ def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
         limit_samples,
         lambda item: item.get('bucket_start') or '',
         lambda item: item.get('limits_observed_at') or item.get('recorded_at') or '',
-    )[-_USAGE_HISTORY_MAX_ITEMS:]
+    )
     account_samples = _usage_history_latest_by_key(
         account_samples,
         lambda item: item.get('bucket_start') or '',
-    )[-_USAGE_HISTORY_MAX_ITEMS:]
+    )
     workspace_samples = _usage_history_latest_by_key(
         workspace_samples,
         lambda item: (
@@ -6525,12 +6560,6 @@ def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
             item.get('workspace_scope_id') or '',
         ),
     )
-    workspace_ids = {
-        str(item.get('workspace_scope_id') or '').strip()
-        for item in workspace_samples
-    }
-    workspace_limit = _USAGE_HISTORY_MAX_ITEMS * max(1, len(workspace_ids))
-    workspace_samples = workspace_samples[-workspace_limit:]
 
     ledger['account_limit_samples'] = limit_samples
     ledger['account_token_samples'] = account_samples
@@ -6539,7 +6568,7 @@ def _load_usage_history_ledger(path=CODEX_USAGE_HISTORY_PATH):
         limit_samples,
         account_samples,
         scope='account',
-    )[-_USAGE_HISTORY_MAX_ITEMS:]
+    )
     return ledger
 
 
@@ -6554,6 +6583,10 @@ def _save_usage_history_ledger(ledger, path=CODEX_USAGE_HISTORY_PATH):
         )
     ):
         payload['version'] = _USAGE_HISTORY_VERSION
+        for key in ('account_limit_samples', 'account_token_samples', 'workspace_token_samples'):
+            payload[key] = _retain_usage_history_samples(payload.get(key) or [])
+        payload['retention_policy'] = 'kst_calendar_days_with_counter_baseline'
+        payload['retention_days'] = _USAGE_HISTORY_RETENTION_DAYS
         payload.pop('items', None)
         payload.pop('snapshots', None)
     _write_json_atomic(path, payload)
@@ -6592,14 +6625,14 @@ def _merge_local_usage_history_into_shared_account(source_path, destination_path
                         or item.get('recorded_at')
                         or ''
                     ),
-                )[-_USAGE_HISTORY_MAX_ITEMS:]
+                )
                 account_samples = _usage_history_latest_by_key(
                     [
                         *(target_ledger.get('account_token_samples') or []),
                         *(source_ledger.get('account_token_samples') or []),
                     ],
                     lambda item: item.get('bucket_start') or '',
-                )[-_USAGE_HISTORY_MAX_ITEMS:]
+                )
                 workspace_samples = _usage_history_latest_by_key(
                     [
                         *(target_ledger.get('workspace_token_samples') or []),
@@ -6610,12 +6643,6 @@ def _merge_local_usage_history_into_shared_account(source_path, destination_path
                         item.get('workspace_scope_id') or '',
                     ),
                 )
-                workspace_ids = {
-                    str(item.get('workspace_scope_id') or '').strip()
-                    for item in workspace_samples
-                }
-                workspace_limit = _USAGE_HISTORY_MAX_ITEMS * max(1, len(workspace_ids))
-                workspace_samples = workspace_samples[-workspace_limit:]
                 changed = any((
                     limit_samples != (target_ledger.get('account_limit_samples') or []),
                     account_samples != (target_ledger.get('account_token_samples') or []),
@@ -6812,11 +6839,11 @@ def record_usage_snapshot_if_due(
                             or item.get('recorded_at')
                             or ''
                         ),
-                    )[-_USAGE_HISTORY_MAX_ITEMS:]
+                    )
                     ledger['account_token_samples'] = _usage_history_latest_by_key(
                         account_samples,
                         lambda item: item.get('bucket_start') or '',
-                    )[-_USAGE_HISTORY_MAX_ITEMS:]
+                    )
                     ledger['workspace_token_samples'] = _usage_history_latest_by_key(
                         workspace_samples,
                         lambda item: (
@@ -6828,7 +6855,7 @@ def record_usage_snapshot_if_due(
                         ledger['account_limit_samples'],
                         ledger['account_token_samples'],
                         scope='account',
-                    )[-_USAGE_HISTORY_MAX_ITEMS:]
+                    )
                     ledger['updated_at'] = normalize_timestamp(None)
                     _save_usage_history_ledger(ledger, path=context['usage_history_path'])
         except Exception:
@@ -8002,6 +8029,8 @@ def get_usage_history_summary(
         'requested_hours': requested_hours,
         'requested_scope': requested_scope,
         'available_scopes': ['account', 'workspace'],
+        'retention_policy': 'kst_calendar_days_with_counter_baseline',
+        'retention_start': normalize_timestamp(_usage_history_retention_start()),
         'retention_hours': _USAGE_HISTORY_MAX_ITEMS,
         'retention_days': _USAGE_HISTORY_RETENTION_DAYS,
         'count': len(history_items),
@@ -8085,6 +8114,89 @@ def _load_account_usage_snapshot(context):
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+
+def _account_usage_reconciliation_path(context):
+    return Path(context['account_token_usage_path']).with_name('codex_usage_reconciliation.json')
+
+
+def _record_account_usage_reconciliation(context, snapshot, capture_source='refresh'):
+    """Freeze the local counters at each successful API observation, under a shared lock."""
+    try:
+        with _acquire_path_file_lock(context['account_token_usage_path']):
+            local = _load_token_usage_ledger(context['account_token_usage_path'])
+        comparison = build_usage_reconciliation(snapshot, local)
+        comparison['capture_source'] = capture_source
+        observed = parse_timestamp(comparison['observed_at'])
+        if observed is None or observed < _usage_history_retention_start():
+            return False
+        path = _account_usage_reconciliation_path(context)
+        with _acquire_path_file_lock(path):
+            try:
+                stored = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                stored = {}
+            observations = {
+                item['observed_at']: item for item in stored.get('observations', [])
+                if isinstance(item, dict) and item.get('observed_at')
+                and (observed := parse_timestamp(item['observed_at'])) is not None
+                and observed >= _usage_history_retention_start()
+            }
+            # A cached observation must not be paired with a later local counter.
+            observations.setdefault(comparison['observed_at'], comparison)
+            ordered = sorted(observations.values(), key=lambda item: item['observed_at'])
+            for index, item in enumerate(ordered):
+                previous = ordered[index - 1] if index else {}
+                for field, delta in (
+                    ('account_lifetime_tokens', 'account_delta_tokens'),
+                    ('local_lifetime_tokens', 'local_delta_tokens'),
+                    ('lifetime_difference_tokens', 'difference_delta_tokens'),
+                ):
+                    before, after = previous.get(field), item.get(field)
+                    item[delta] = None if before is None or after is None else after - before
+                item['counter_decrease_detected'] = any(
+                    item.get(key) is not None and item[key] < 0
+                    for key in ('account_delta_tokens', 'local_delta_tokens')
+                )
+            _write_json_atomic(path, {
+                'version': 1,
+                'retention_days': _USAGE_HISTORY_RETENTION_DAYS,
+                'timezone': 'Asia/Seoul',
+                'updated_at': normalize_timestamp(None),
+                'observations': ordered,
+            })
+        return True
+    except Exception:
+        _LOGGER.exception('account usage reconciliation could not be recorded')
+        return False
+
+
+def _get_account_usage_reconciliation(context, snapshot):
+    with _acquire_path_file_lock(context['account_token_usage_path']):
+        local = _load_token_usage_ledger(context['account_token_usage_path'])
+    result = build_usage_reconciliation(snapshot, local)
+    path = _account_usage_reconciliation_path(context)
+    result['path'] = str(path)
+    try:
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        observations = [
+            item for item in stored.get('observations', [])
+            if (observed := parse_timestamp(item.get('observed_at'))) is not None
+            and observed >= _usage_history_retention_start()
+        ]
+    except (OSError, ValueError, TypeError):
+        observations = []
+    result['observation_count'] = len(observations)
+    result['latest_observation'] = observations[-1] if observations else None
+    result['trend'] = [{key: item.get(key) for key in (
+        'observed_at', 'local_updated_at', 'account_lifetime_tokens',
+        'capture_source',
+        'local_lifetime_tokens', 'lifetime_difference_tokens',
+        'comparable_difference_tokens', 'comparable_days', 'account_missing_days',
+        'account_delta_tokens', 'local_delta_tokens', 'difference_delta_tokens',
+        'counter_decrease_detected',
+    )} for item in observations]
+    return result
 
 
 def _find_usage_number(value, keys):
@@ -8346,7 +8458,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         error = ''
     history = previous_keepalive.get('history')
     history = history if isinstance(history, list) else []
-    history = [item for item in history[-49:] if isinstance(item, dict)]
+    history = _retain_usage_diagnostic_history(history)
     history.append({
         'at': attempted_at,
         'event': 'submitted' if started else 'submission_failed',
@@ -8422,7 +8534,7 @@ def _verify_usage_keepalive_locked(snapshot, now=None):
         if reset_at:
             candidates[name] = normalize_timestamp(reset_at)
     history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
-    history = [item for item in history[-49:] if isinstance(item, dict)]
+    history = _retain_usage_diagnostic_history(history)
     previous_candidates = keepalive.get('verification_candidate_resets')
     previous_candidates = previous_candidates if isinstance(previous_candidates, dict) else {}
     candidate_complete = bool(targets) and len(candidates) == len(targets)
@@ -8517,7 +8629,7 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
     if not claimed:
         return {'submitted': False, 'reason': reason}
     history = previous.get('history') if isinstance(previous.get('history'), list) else []
-    history = [item for item in history[-49:] if isinstance(item, dict)]
+    history = _retain_usage_diagnostic_history(history)
     history.append({
         'at': normalize_timestamp(current),
         'event': 'queued',
@@ -8549,7 +8661,7 @@ def _start_reserved_automatic_usage_blog(account_id):
         keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot.get('usage_keepalive'), dict) else {}
         now = normalize_timestamp(None)
         history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
-        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history = _retain_usage_diagnostic_history(history)
         history.append({
             'at': now,
             'event': 'submitted' if result.get('submitted') else 'submission_failed',
@@ -8653,7 +8765,7 @@ def _record_usage_keepalive_completion(account_id, succeeded, error='', token_us
             mode = 'manual'
         history = keepalive.get('history')
         history = history if isinstance(history, list) else []
-        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history = _retain_usage_diagnostic_history(history)
         history.append({
             'at': completed_at,
             'event': 'completed' if succeeded else 'failed',
@@ -8707,7 +8819,7 @@ def _record_automatic_usage_blog_completion(account_id, stream_id, succeeded, er
             return False
         completed_at = normalize_timestamp(None)
         history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
-        history = [item for item in history[-49:] if isinstance(item, dict)]
+        history = _retain_usage_diagnostic_history(history)
         history.append({
             'at': completed_at,
             'event': 'completed' if succeeded else 'failed',
@@ -8887,6 +8999,7 @@ def refresh_account_usage_snapshot_if_due(
             )
             _write_json_atomic(context['account_usage_snapshot_path'], snapshot)
 
+        _record_account_usage_reconciliation(context, snapshot)
         record_usage_snapshot_if_due(
             force=True,
             usage_summary=get_usage_summary(account_id=context['account']['id']),
@@ -8945,7 +9058,7 @@ def refresh_account_usage_snapshot_if_due(
 
 
 def _automatic_usage_refresh_history_path(context):
-    """Keep a bounded, append-only diagnostic log beside the account state."""
+    """Keep a date-retained diagnostic log beside the account state."""
     return Path(context['root']) / 'codex_automatic_usage_refresh_history.jsonl'
 
 
@@ -8984,7 +9097,15 @@ def _record_automatic_usage_refresh_history(context, result):
                 lines = path.read_text(encoding='utf-8').splitlines()
             except OSError:
                 lines = []
-            lines = lines[-(_USAGE_AUTOMATIC_HISTORY_LIMIT - 1):]
+            retained = []
+            for line in lines:
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    continue
+                if _retain_usage_diagnostic_history([value]):
+                    retained.append(line)
+            lines = retained
             lines.append(json.dumps(entry, ensure_ascii=False, separators=(',', ':')))
             _write_text_atomic(path, '\n'.join(lines) + '\n')
     except OSError:
@@ -9127,6 +9248,7 @@ def get_usage_summary(account_id=None):
         # alongside the frequently refreshed Usage-panel payload.
         'codex_cli_version': _current_codex_cli_identity().get('cli_version') or '',
         'account_usage': api_account_usage,
+        'usage_reconciliation': _get_account_usage_reconciliation(context, api_snapshot),
         'account_usage_refresh': {
             'source': api_snapshot.get('source') or '',
             'last_attempt_at': api_snapshot.get('last_attempt_at'),

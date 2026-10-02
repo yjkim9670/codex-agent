@@ -1175,9 +1175,7 @@ def test_usage_keepalive_global_claim_blocks_other_workspaces_and_allows_next_wi
     ) == (True, '')
 
 
-def test_usage_keepalive_uses_terra_with_a_read_only_workspace_review():
-    assert codex_chat._USAGE_KEEPALIVE_MODEL == 'gpt-5.6-terra'
-    assert codex_chat._USAGE_KEEPALIVE_REASONING_EFFORT == 'medium'
+def test_usage_keepalive_keeps_read_only_workspace_review():
     assert 'read-only workspace health review' in codex_chat._USAGE_KEEPALIVE_PROMPT
     assert 'up to three representative source or configuration files' in codex_chat._USAGE_KEEPALIVE_PROMPT
     assert 'exactly three concrete risks or maintainability issues' in codex_chat._USAGE_KEEPALIVE_PROMPT
@@ -1193,6 +1191,7 @@ def test_usage_keepalive_reuses_locked_snapshot_for_stream_preflight(monkeypatch
     context = {'account': {'id': 'keepalive-account'}, 'codex_home': Path('/tmp/codex-home')}
     captured = {}
 
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low'})
     monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: 'dtgpt')
     monkeypatch.setattr(codex_chat, '_account_has_active_codex_stream', lambda _account_id: False)
     monkeypatch.setattr(codex_chat, '_codex_home_has_auth', lambda _codex_home: True)
@@ -1207,6 +1206,9 @@ def test_usage_keepalive_reuses_locked_snapshot_for_stream_preflight(monkeypatch
 
     assert result['submitted'] is True
     assert captured['preflight_usage_snapshot'] is snapshot
+    assert captured['model_override'] == 'gpt-6-luna'
+    assert captured['reasoning_override'] == 'low'
+    assert captured['model_role'] == 'secondary'
 
 
 def test_create_codex_stream_skips_refresh_when_preflight_snapshot_is_provided(
@@ -2818,7 +2820,7 @@ def test_build_codex_command_prefers_standalone_candidate_over_app_bundle_path(
     assert cmd[0] == str(standalone_bin)
 
 
-def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, monkeypatch):
+def test_build_codex_command_overrides_legacy_fast_with_standard(isolated_codex_workspace, monkeypatch):
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: {
         'model': None,
         'reasoning_effort': None,
@@ -2830,7 +2832,7 @@ def test_build_codex_command_passes_fast_service_tier(isolated_codex_workspace, 
 
     cmd = codex_chat._build_codex_command('sync prompt')
 
-    service_tier_index = cmd.index('service_tier="priority"')
+    service_tier_index = cmd.index('service_tier="default"')
     assert cmd[service_tier_index - 1] == '--config'
 
 
@@ -3725,8 +3727,8 @@ def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeyp
     monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', settings_path)
     monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy_settings.json')
 
-    assert codex_chat.get_settings()['git_commit_message_model'] == 'gpt-6-luna'
-    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] == 'low'
+    assert codex_chat.get_settings()['git_commit_message_model'] is None
+    assert codex_chat.get_settings()['git_commit_message_reasoning_effort'] is None
 
     updated = codex_chat.update_settings(
         git_commit_message_model='gpt-5.6-terra',
@@ -3745,8 +3747,8 @@ def test_git_commit_message_ai_settings_default_and_round_trip(tmp_path, monkeyp
         git_commit_message_model='',
         git_commit_message_reasoning_effort='',
     )
-    assert restored['git_commit_message_model'] == 'gpt-6-luna'
-    assert restored['git_commit_message_reasoning_effort'] == 'low'
+    assert restored['git_commit_message_model'] is None
+    assert restored['git_commit_message_reasoning_effort'] is None
 
 
 def test_service_tier_setting_round_trips(tmp_path, monkeypatch):
@@ -3756,10 +3758,10 @@ def test_service_tier_setting_round_trips(tmp_path, monkeypatch):
 
     updated = codex_chat.update_settings(service_tier='fast')
 
-    assert updated['service_tier'] == 'priority'
-    assert codex_chat.get_settings()['service_tier'] == 'priority'
+    assert updated['service_tier'] is None
+    assert codex_chat.get_settings()['service_tier'] is None
     stored = json.loads(settings_path.read_text(encoding='utf-8'))
-    assert stored['service_tier'] == 'priority'
+    assert stored['service_tier'] is None
 
     disabled = codex_chat.update_settings(service_tier='')
 
@@ -6603,3 +6605,100 @@ def test_automatic_usage_diagnostics_retain_dates_instead_of_500_entries(tmp_pat
 def test_usage_retention_uses_kst_midnight():
     now = datetime(2026, 10, 1, 23, 59, tzinfo=codex_chat.KST)
     assert codex_chat._usage_history_retention_start(now) == datetime(2026, 7, 4, tzinfo=codex_chat.KST)
+
+
+def test_secondary_settings_survive_unrelated_update(tmp_path, monkeypatch):
+    path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy.json')
+    codex_chat.update_settings(model='gpt-6.1-sol', reasoning_effort='medium',
+                               secondary_model='gpt-6-luna', secondary_reasoning_effort='low')
+    codex_chat.update_settings(verification_mode='off', service_tier='fast')
+    settings = codex_chat.get_settings()
+    assert codex_chat.resolve_model_role_settings('secondary', settings) == ('gpt-6-luna', 'low')
+    assert settings['service_tier'] is None
+    assert json.loads(path.read_text())['secondary_model'] == 'gpt-6-luna'
+    codex_chat.update_settings(secondary_model='', secondary_reasoning_effort='')
+    assert codex_chat.resolve_model_role_settings('secondary') == ('gpt-6.1-sol', 'medium')
+
+
+def test_queue_captures_secondary_model_and_effort(monkeypatch):
+    settings = {'model': 'gpt-6.1-sol', 'reasoning_effort': 'medium',
+                'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low'}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'get_active_account_id', lambda: 'default')
+    entry = codex_chat._build_pending_queue_entry('small task', model_role='secondary')
+    settings['secondary_model'] = 'gpt-6-astra'
+    saved = codex_chat._normalize_pending_queue_entry(entry)
+    assert saved['model_role'] == 'secondary'
+    assert saved['model_override'] == 'gpt-6-luna'
+    assert saved['reasoning_override'] == 'low'
+    assert saved['model_settings_snapshot'] is True
+    legacy = codex_chat._normalize_pending_queue_entry({'prompt': 'old task', 'plan_mode': True})
+    assert legacy['model_role'] == 'plan'
+    assert legacy['model_settings_snapshot'] is False
+
+
+def test_plan_role_takes_precedence_over_secondary(monkeypatch):
+    settings = {'model': 'gpt-6.1-sol', 'reasoning_effort': 'medium',
+                'plan_mode_model': 'gpt-6-astra', 'plan_mode_reasoning_effort': 'high',
+                'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low'}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'get_active_account_id', lambda: 'default')
+    entry = codex_chat._build_pending_queue_entry('plan task', plan_mode=True, model_role='secondary')
+    assert entry['model_role'] == 'plan'
+    assert entry['model_override'] == 'gpt-6-astra'
+    assert entry['reasoning_override'] == 'high'
+
+
+def test_queued_secondary_execution_uses_saved_selection(monkeypatch, isolated_codex_workspace):
+    settings = {'model': 'gpt-6.1-sol', 'reasoning_effort': 'medium',
+                'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low'}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    session = codex_chat.create_session('secondary-queue')
+    active = _build_stream_state('busy', session['id'], started_at=time.time(),
+                                output_path=isolated_codex_workspace['workspace_dir'] / 'busy.txt')
+    active['done'] = False
+    state.codex_streams['busy'] = active
+    result = codex_chat.enqueue_codex_stream_for_session(session['id'], 'small task', model_role='secondary')
+    assert result['queued'] is True
+    settings['secondary_model'] = 'gpt-6-astra'
+    settings['secondary_reasoning_effort'] = 'high'
+    captured = {}
+
+    def fake_create(session_id, prompt, **kwargs):
+        captured.update(kwargs)
+        return {'id': 'secondary-result', 'started_at': time.time(), 'created_at': time.time()}
+
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', fake_create)
+    active['done'] = True
+    started = codex_chat._start_next_queued_codex_stream_locked(session['id'])
+    assert started['started'] is True
+    assert captured['model_role'] == 'secondary'
+    assert captured['model_override'] == 'gpt-6-luna'
+    assert captured['reasoning_override'] == 'low'
+    message = codex_chat.get_session(session['id'])['messages'][-1]
+    assert message['model_role'] == 'secondary'
+
+
+def test_settings_api_can_reset_dedicated_commit_model_to_secondary(chat_route_client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(codex_chat_blueprint, 'update_settings', lambda **kwargs: captured.update(kwargs) or kwargs)
+    response = chat_route_client.patch('/api/codex/settings', json={
+        'git_commit_message_model': '', 'git_commit_message_reasoning_effort': '',
+        'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low',
+    })
+    assert response.status_code == 200
+    assert captured['git_commit_message_model'] == ''
+    assert captured['git_commit_message_reasoning_effort'] == ''
+    assert captured['secondary_model'] == 'gpt-6-luna'
+    assert captured['secondary_reasoning_effort'] == 'low'
+
+
+def test_queue_never_uses_display_default_as_model_id(monkeypatch):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {})
+    monkeypatch.setattr(codex_chat, 'get_active_account_id', lambda: 'default')
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: 'dtgpt')
+    monkeypatch.setattr(codex_chat, '_read_codex_config_text', lambda: '')
+    entry = codex_chat._build_pending_queue_entry('default task')
+    assert entry['model_override'] is None

@@ -14415,3 +14415,78 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
     .ui-font-option { min-height: 0; }
     .ui-settings-usage { flex-wrap: wrap; }
 }
+
+/* Settings tools and notification archive stay scrollable on short displays. */
+.workbench-settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.workbench-settings-actions .model-input { flex: 1 1 160px; min-width: 0; }
+.workbench-settings-actions .model-select { flex: 0 1 110px; }
+.ui-settings-body > fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+.workbench-execution-settings .model-row { margin: 8px 0; }
+.ui-settings-body .company-credential-card { width: 100%; min-width: 0; }
+.toast-history-list { padding: 0; margin: 8px 0; list-style: none; max-height: 260px; overflow-y: auto; overscroll-behavior: contain; }
+.toast-history-list li { border-bottom: 1px solid var(--border-color, #d8dce3); padding: 8px 0; }
+.toast-history-meta { font-size: 12px; opacity: .7; }
+.toast-history-message { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+@media (max-height: 560px) { .toast-history-list { max-height: 160px; } }
+
+/* Preserve the original composer width; Secondary uses the compact Sec label. */
+.ui-settings-card { font-size: 13px; line-height: 1.45; }
+.ui-settings-card :is(.btn, .model-input, .model-select, .model-sub-label) {
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.45;
+}
+.ui-settings-card :is(.usage-keepalive-status, .codex-cli-version-label, .codex-cli-version-value) {
+    font-size: 12px;
+    line-height: 1.45;
+ }
+.ui-settings-card :is(.usage-keepalive-status, .codex-cli-version-card) { margin: 8px 0; }
+.workbench-settings-actions .btn {
+    background-image: none;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    height: auto;
+    min-height: 32px;
+    padding: 6px 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.toast-history-overlay { z-index: 2410; }
+.toast-history-overlay .ui-settings-card { width: min(640px, calc(100vw - 32px)); }
+.toast-history-overlay .ui-settings-body { display: block; }
+.toast-history-overlay .toast-history-list { max-height: none; overflow: visible; }
+.toast-history-overlay .toast-history-meta { color: var(--text-tertiary); opacity: 1; }
+
+.chat-submit-column .btn.chat-plan-mode-toggle { padding: 0 1px; font-size: 11px; }
+
+/* The settings dialog uses its own available width, including UI scaling. */
+#codex-ui-settings-overlay .ui-settings-card {
+    width: min(1040px, 90%);
+    container: workbench-settings / inline-size;
+}
+#codex-ui-settings-overlay .ui-settings-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+}
+.workbench-settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+}
+.workbench-settings-group > * { flex-shrink: 0; min-width: 0; }
+.workbench-settings-group > fieldset { border: 0; padding: 0; margin: 0; }
+:root.is-short-overlay-viewport .workbench-settings-group { gap: 10px; }
+@media (min-width: 720px) {
+    @container workbench-settings (min-width: 720px) {
+        #codex-ui-settings-overlay .ui-settings-body {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            column-gap: 28px;
+        }
+    }
+}
+@media (max-width: 600px) {
+    #codex-ui-settings-overlay .ui-settings-card { width: 100%; }
+}

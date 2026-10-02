@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=242">
+    <link rel="stylesheet" href="/static/css/app.css?v=244">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -571,29 +571,7 @@
                             <div class="usage-header">
                                 <div class="usage-label">Usage</div>
                                 <div class="usage-header-btns">
-                                    <button
-                                        class="btn ghost icon-only blog-dashboard-open"
-                                        type="button"
-                                        id="codex-blog-dashboard-open"
-                                        aria-label="블로그 자동 작성 상황판 열기"
-                                        title="블로그 자동 작성 상황판 열기"
-                                    ><span class="sr-only">블로그 자동 작성 상황판 열기</span></button>
-                                    <button
-                                        class="btn ghost icon-only usage-keepalive-history-open"
-                                        type="button"
-                                        id="codex-usage-keepalive-history-open"
-                                        aria-label="경량 작업 이력 열기"
-                                        title="경량 작업 이력 열기"
-                                    ><span class="sr-only">경량 작업 이력 열기</span></button>
-                                    <button
-                                        class="btn ghost icon-only usage-history-open"
-                                        type="button"
-                                        id="codex-usage-history-open"
-                                        aria-label="Usage 추이 그래프 열기"
-                                        title="Usage 추이 그래프 열기"
-                                    >
-                                        <span class="sr-only">Usage 추이 그래프 열기</span>
-                                    </button>
+
                                     <button
                                         class="btn ghost icon-only usage-refresh"
                                         type="button"
@@ -605,20 +583,18 @@
                                     </button>
                                 </div>
                             </div>
-                            <div class="usage-keepalive-status" id="codex-usage-keepalive-status"></div>
+
                             <div class="account-switcher">
                                 <label class="sr-only" for="codex-account-select">실행 계정</label>
                                 <select id="codex-account-select" class="model-select account-select" aria-label="실행 계정 선택" disabled>
                                     <option value="">계정 불러오는 중...</option>
                                 </select>
-                                <button class="btn ghost account-manage-open" type="button" id="codex-account-manage-open">관리</button>
+
                             </div>
                             <div class="account-switcher-status" id="codex-account-switcher-status"></div>
+                            <div id="codex-usage-keepalive-error" class="is-hidden" role="status"></div>
                             <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
-                            <div class="codex-cli-version-card" id="codex-cli-version-card" aria-live="polite">
-                                <span class="codex-cli-version-label">Codex CLI</span>
-                                <span class="codex-cli-version-value" id="codex-cli-version-value">확인 중...</span>
-                            </div>
+
                         </div>
                         <div class="model-card" id="codex-model-card">
                             <label id="codex-agent-backend-label" class="model-label is-hidden" for="codex-agent-backend-select">Agent backend</label>
@@ -631,7 +607,7 @@
                                     </select>
                                 </div>
                             </div>
-                            <label id="codex-model-label" class="model-label" for="codex-model-input">Model · Reasoning effort</label>
+                            <label id="codex-model-label" class="model-label" for="codex-model-input">메인 · Model / Effort</label>
                             <div class="model-row model-row-combined">
                                 <div class="model-field model-field-model">
                                     <select id="codex-model-select" class="model-select is-hidden" aria-label="Select model" data-options='{{ model_options|default([], true)|tojson }}'></select>
@@ -653,25 +629,15 @@
                                     <input id="codex-plan-mode-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
-                            <label id="codex-service-tier-label" class="model-sub-label" for="codex-service-tier-select">Speed mode</label>
-                            <div id="codex-service-tier-row" class="model-row model-row-single">
-                                <div class="model-field model-field-service-tier">
-                                    <select id="codex-service-tier-select" class="model-select" aria-label="Select Codex service tier" data-options='{{ service_tier_options|default([], true)|tojson }}'>
-                                        <option value="">Standard</option>
-                                        {% for option in service_tier_options|default([], true) %}
-                                        <option value="{{ option.id }}">{{ option.name }}{% if option.description %} · {{ option.description }}{% endif %}</option>
-                                        {% endfor %}
-                                    </select>
+                            <label id="codex-secondary-model-label" class="model-sub-label" for="codex-secondary-model-input">세컨더리 · Model / Effort</label>
+                            <div class="model-row">
+                                <div class="model-field model-field-plan-model">
+                                    <select id="codex-secondary-model-select" class="model-select is-hidden" aria-label="Select secondary model" data-options='{{ model_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-secondary-model-input" class="model-input" type="text" placeholder="메인 모델 상속">
                                 </div>
-                            </div>
-                            <label class="model-sub-label" for="codex-verification-mode-select">Browser verification</label>
-                            <div class="model-row model-row-single">
-                                <div class="model-field model-field-verification-mode">
-                                    <select id="codex-verification-mode-select" class="model-select" aria-label="Select browser verification mode">
-                                        <option value="auto">Auto · UI changes only</option>
-                                        <option value="browser">Browser · always verify</option>
-                                        <option value="off">Off · no browser prompt</option>
-                                    </select>
+                                <div class="model-field model-field-reasoning">
+                                    <select id="codex-secondary-reasoning-select" class="model-select is-hidden" aria-label="Select secondary reasoning effort" data-options='{{ reasoning_options|default([], true)|tojson }}'></select>
+                                    <input id="codex-secondary-reasoning-input" class="model-input" type="text" placeholder="Use default effort">
                                 </div>
                             </div>
                             <div class="model-footer-row">
@@ -687,49 +653,7 @@
                                 </button>
                             </div>
                         </div>
-                        {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
-                        <section class="company-credential-card" id="codex-internal-api-key-allocation-card" data-internal-admin-only aria-labelledby="codex-internal-api-key-allocation-title">
-                            <div class="company-credential-header">
-                                <div>
-                                    <div class="model-label" id="codex-internal-api-key-allocation-title">Internal API Key Pool</div>
-                                    <div class="company-credential-summary">관리자만 Key를 등록합니다. 각 Codex/Claude 요청은 등록 순서대로 자동 선택됩니다.</div>
-                                </div>
-                                <button class="btn secondary" type="button" id="codex-internal-api-key-pool-open">Key Pool 열기</button>
-                            </div>
-                        </section>
-                        {% elif company_mode_enabled %}
-                        <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
-                            <div class="company-credential-header">
-                                <div>
-                                    <div class="model-label" id="codex-company-credential-title">Company API Key</div>
-                                    <div class="company-credential-summary" id="codex-company-credential-summary">보안 상태 확인 중...</div>
-                                </div>
-                                <button class="btn ghost company-credential-logout is-hidden" type="button" id="codex-company-credential-logout">로그아웃</button>
-                            </div>
-                            <div class="company-admin-login" id="codex-company-admin-login">
-                                <label class="sr-only" for="codex-company-admin-secret">관리자 암호 또는 토큰</label>
-                                <input class="model-input" id="codex-company-admin-secret" type="password" autocomplete="current-password" placeholder="관리자 암호 또는 토큰">
-                                <button class="btn secondary" type="button" id="codex-company-admin-login-button">관리자 로그인</button>
-                            </div>
-                            <div class="company-credential-editor is-hidden" id="codex-company-credential-editor">
-                                <div class="company-credential-input-row">
-                                    <label class="sr-only" for="codex-company-api-key">Company API Key</label>
-                                    <input class="model-input" id="codex-company-api-key" type="password" autocomplete="new-password" placeholder="새 API Key 입력">
-                                    <button class="btn ghost company-secret-toggle" type="button" id="codex-company-api-key-toggle" aria-pressed="false">표시</button>
-                                </div>
-                                <div class="company-credential-storage" role="radiogroup" aria-label="API Key 저장 방식">
-                                    <label><input type="radio" name="codex-company-credential-storage" value="session" checked> 이번 실행에서만 사용</label>
-                                    <label id="codex-company-persistent-option"><input type="radio" name="codex-company-credential-storage" value="windows_dpapi"> 이 Windows 계정에 저장 (DPAPI)</label>
-                                </div>
-                                <div class="company-credential-actions">
-                                    <button class="btn primary" type="button" id="codex-company-api-key-save">저장</button>
-                                    <button class="btn secondary" type="button" id="codex-company-api-key-test">연결 테스트</button>
-                                    <button class="btn ghost" type="button" id="codex-company-api-key-delete">저장된 키 삭제</button>
-                                </div>
-                            </div>
-                            <div class="company-credential-status" id="codex-company-credential-status" aria-live="polite"></div>
-                        </section>
-                        {% endif %}
+
                     </div>
                 </div>
 
@@ -749,7 +673,7 @@
                             ><span class="sr-only">More compose options</span></button>
                             <div class="chat-compose-tools-menu is-hidden" id="codex-chat-compose-tools-menu" role="menu" aria-label="Compose options">
                                 <button class="btn ghost icon-only chat-compose-tool-attach" type="button" data-chat-compose-action="attach" role="menuitem" aria-label="Attach files" title="Attach files"><span class="sr-only">Attach files</span></button>
-                                <button class="btn ghost chat-compose-tool-plan" type="button" data-chat-compose-action="plan" role="menuitem" aria-label="Change plan mode" title="Change plan mode">Plan</button>
+                                <button class="btn ghost chat-compose-tool-plan" type="button" data-chat-compose-action="plan" role="menuitem" aria-label="Change execution mode" title="Shift+Tab: Work → Plan → Secondary → Plan+">Work</button>
                             </div>
                         </div>
                         <div id="codex-chat-attachments" class="chat-attachments is-empty" aria-live="polite"></div>
@@ -759,7 +683,7 @@
                         <button class="btn ghost icon-only chat-attach-image" type="button" id="codex-chat-image-attach" aria-label="Attach files" title="Attach files">
                             <span class="sr-only">Attach files</span>
                         </button>
-                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Plan mode off" title="Plan mode off">Plan</button>
+                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-label="Work · 메인 모델로 실행" title="Shift+Tab: Work → Plan → Secondary → Plan+">Work</button>
                         <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
                             <span class="sr-only">Send</span>
                         </button>
@@ -1385,17 +1309,136 @@
         </div>
     </div>
 
+    <div class="ui-settings-overlay toast-history-overlay" id="toast-history-overlay" aria-hidden="true">
+        <div class="ui-settings-overlay-backdrop" data-action="close"></div>
+        <section class="ui-settings-card" role="dialog" aria-modal="true" aria-labelledby="toast-history-title">
+            <div class="ui-settings-header">
+                <div class="ui-settings-title" id="toast-history-title">알림 이력</div>
+                <button class="btn ghost icon-only ui-settings-close" type="button" id="toast-history-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
+            </div>
+            <div class="ui-settings-body">
+                <div class="workbench-settings-actions">
+                    <select id="toast-history-tone" class="model-select" aria-label="알림 종류"><option value="">전체</option><option value="error">오류</option><option value="success">완료</option><option value="warning">주의</option><option value="default">안내</option></select>
+                    <button type="button" class="btn ghost" id="toast-history-export">내보내기</button>
+                </div>
+                <div id="toast-history-status" role="status"></div>
+                <ol id="toast-history-list" class="toast-history-list"></ol>
+                <button type="button" class="btn ghost" id="toast-history-more">이전 알림 더 보기</button>
+            </div>
+            <div class="ui-settings-footer"><button type="button" class="btn secondary" id="toast-history-done">완료</button></div>
+        </section>
+    </div>
+
     <div class="ui-settings-overlay" id="codex-ui-settings-overlay" aria-hidden="true">
         <div class="ui-settings-overlay-backdrop" data-action="close"></div>
         <section class="ui-settings-card" role="dialog" aria-modal="true" aria-labelledby="codex-ui-settings-title" aria-describedby="codex-ui-settings-description">
             <div class="ui-settings-header">
                 <div>
                     <div class="ui-settings-title" id="codex-ui-settings-title">워크벤치 설정</div>
-                    <div class="ui-settings-description" id="codex-ui-settings-description">글꼴, 인터페이스 크기와 작업 화면 레이아웃을 조정합니다.</div>
+                    <div class="ui-settings-description" id="codex-ui-settings-description">실행 설정, 도구, 알림 이력과 화면 레이아웃을 관리합니다.</div>
                 </div>
                 <button class="btn ghost icon-only ui-settings-close" type="button" id="codex-ui-settings-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
             </div>
             <div class="ui-settings-body">
+                <div class="workbench-settings-group workbench-settings-management">
+                <fieldset class="workbench-execution-settings">
+                    <legend class="ui-font-setting-label">실행 설정 · 도구</legend>
+                    <div class="workbench-settings-actions"><button
+                                        class="btn ghost blog-dashboard-open"
+                                        type="button"
+                                        id="codex-blog-dashboard-open"
+                                        aria-label="블로그 자동 작성 상황판 열기"
+                                        title="블로그 자동 작성 상황판 열기"
+                                    >블로그 상황판</button><button
+                                        class="btn ghost usage-keepalive-history-open"
+                                        type="button"
+                                        id="codex-usage-keepalive-history-open"
+                                        aria-label="경량 작업 이력 열기"
+                                        title="경량 작업 이력 열기"
+                                    >경량 작업 이력</button><button
+                                        class="btn ghost usage-history-open"
+                                        type="button"
+                                        id="codex-usage-history-open"
+                                        aria-label="Usage 추이 그래프 열기"
+                                        title="Usage 추이 그래프 열기"
+                                    >
+                                        Usage 추이 그래프
+                                    </button><button class="btn ghost account-manage-open" type="button" id="codex-account-manage-open">계정 관리</button></div>
+                                                <label class="model-sub-label" for="codex-verification-mode-select">Browser verification</label>
+                            <div class="model-row model-row-single">
+                                <div class="model-field model-field-verification-mode">
+                                    <select id="codex-verification-mode-select" class="model-select" aria-label="Select browser verification mode">
+                                        <option value="auto">Auto · UI changes only</option>
+                                        <option value="browser">Browser · always verify</option>
+                                        <option value="off">Off · no browser prompt</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                    <button type="button" class="btn secondary" id="codex-execution-settings-save">실행 설정 저장</button>
+                    <div class="usage-keepalive-status" id="codex-usage-keepalive-status"></div><div class="codex-cli-version-card" id="codex-cli-version-card" aria-live="polite">
+                                <span class="codex-cli-version-label">Codex CLI</span>
+                                <span class="codex-cli-version-value" id="codex-cli-version-value">확인 중...</span>
+                            </div>
+                </fieldset>
+                {% if company_mode_enabled or (internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin') %}<fieldset><legend class="ui-font-setting-label">인증 관리</legend>                        {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
+                        <section class="company-credential-card" id="codex-internal-api-key-allocation-card" data-internal-admin-only aria-labelledby="codex-internal-api-key-allocation-title">
+                            <div class="company-credential-header">
+                                <div>
+                                    <div class="model-label" id="codex-internal-api-key-allocation-title">Internal API Key Pool</div>
+                                    <div class="company-credential-summary">관리자만 Key를 등록합니다. 각 Codex/Claude 요청은 등록 순서대로 자동 선택됩니다.</div>
+                                </div>
+                                <button class="btn secondary" type="button" id="codex-internal-api-key-pool-open">Key Pool 열기</button>
+                            </div>
+                        </section>
+                        {% elif company_mode_enabled %}
+                        <section class="company-credential-card" id="codex-company-credential-card" aria-labelledby="codex-company-credential-title">
+                            <div class="company-credential-header">
+                                <div>
+                                    <div class="model-label" id="codex-company-credential-title">Company API Key</div>
+                                    <div class="company-credential-summary" id="codex-company-credential-summary">보안 상태 확인 중...</div>
+                                </div>
+                                <button class="btn ghost company-credential-logout is-hidden" type="button" id="codex-company-credential-logout">로그아웃</button>
+                            </div>
+                            <div class="company-admin-login" id="codex-company-admin-login">
+                                <label class="sr-only" for="codex-company-admin-secret">관리자 암호 또는 토큰</label>
+                                <input class="model-input" id="codex-company-admin-secret" type="password" autocomplete="current-password" placeholder="관리자 암호 또는 토큰">
+                                <button class="btn secondary" type="button" id="codex-company-admin-login-button">관리자 로그인</button>
+                            </div>
+                            <div class="company-credential-editor is-hidden" id="codex-company-credential-editor">
+                                <div class="company-credential-input-row">
+                                    <label class="sr-only" for="codex-company-api-key">Company API Key</label>
+                                    <input class="model-input" id="codex-company-api-key" type="password" autocomplete="new-password" placeholder="새 API Key 입력">
+                                    <button class="btn ghost company-secret-toggle" type="button" id="codex-company-api-key-toggle" aria-pressed="false">표시</button>
+                                </div>
+                                <div class="company-credential-storage" role="radiogroup" aria-label="API Key 저장 방식">
+                                    <label><input type="radio" name="codex-company-credential-storage" value="session" checked> 이번 실행에서만 사용</label>
+                                    <label id="codex-company-persistent-option"><input type="radio" name="codex-company-credential-storage" value="windows_dpapi"> 이 Windows 계정에 저장 (DPAPI)</label>
+                                </div>
+                                <div class="company-credential-actions">
+                                    <button class="btn primary" type="button" id="codex-company-api-key-save">저장</button>
+                                    <button class="btn secondary" type="button" id="codex-company-api-key-test">연결 테스트</button>
+                                    <button class="btn ghost" type="button" id="codex-company-api-key-delete">저장된 키 삭제</button>
+                                </div>
+                            </div>
+                            <div class="company-credential-status" id="codex-company-credential-status" aria-live="polite"></div>
+                        </section>
+                        {% endif %}</fieldset>{% endif %}
+                <fieldset id="workbench-toast-history">
+                    <legend class="ui-font-setting-label">알림 이력</legend>
+                    <p class="ui-font-setting-help">이 브라우저에서 표시한 모든 토스트를 자동 저장합니다. 새로고침 후에도 유지되며, 브라우저 데이터 삭제 시 제거됩니다.</p>
+                    <button type="button" class="btn ghost" id="toast-history-open">알림 이력 열기</button>
+                </fieldset>
+
+                <section class="ui-settings-usage" aria-labelledby="codex-ui-settings-usage-title">
+                    <div>
+                        <h3 id="codex-ui-settings-usage-title">사용량 통계</h3>
+                        <p>모든 수집 환경의 토큰과 한도 차감 추정치를 별도 탭에서 확인합니다.</p>
+                    </div>
+                    <a class="btn secondary" href="/usage" target="_blank" rel="noopener">사용량 통계 열기</a>
+                </section>
+                </div>
+                <div class="workbench-settings-group workbench-settings-appearance">
                 <fieldset class="ui-view-setting" aria-describedby="codex-ui-view-help">
                     <legend class="ui-font-setting-label">화면 보기 모드</legend>
                     <div class="ui-view-detected" id="codex-ui-view-detected" role="status">현재 화면 감지 중…</div>
@@ -1441,13 +1484,8 @@
                     <input id="codex-ui-scale-input" type="range" min="80" max="110" step="5" value="90" aria-describedby="codex-ui-scale-help">
                     <span class="ui-scale-setting-help" id="codex-ui-scale-help">80%부터 110%까지 조절할 수 있으며, 화면 모드별로 별도 저장됩니다.</span>
                 </label>
-                <section class="ui-settings-usage" aria-labelledby="codex-ui-settings-usage-title">
-                    <div>
-                        <h3 id="codex-ui-settings-usage-title">사용량 통계</h3>
-                        <p>모든 수집 환경의 토큰과 한도 차감 추정치를 별도 탭에서 확인합니다.</p>
-                    </div>
-                    <a class="btn secondary" href="/usage" target="_blank" rel="noopener">사용량 통계 열기</a>
-                </section>
+
+                </div>
             </div>
             <div class="ui-settings-footer">
                 <button class="btn ghost" type="button" id="codex-ui-settings-reset">기본 설정으로 초기화</button>
@@ -1656,7 +1694,7 @@
                 <div class="git-message-model-status" id="codex-git-message-model-status">모델 목록을 불러오는 중...</div>
             </div>
             <div class="git-message-model-footer">
-                <button class="btn ghost" type="button" id="codex-git-message-model-clear">기본값 선택</button>
+                <button class="btn ghost" type="button" id="codex-git-message-model-clear">세컨더리 상속 선택</button>
                 <button class="btn primary" type="button" id="codex-git-message-model-apply">저장</button>
             </div>
         </div>
@@ -1930,6 +1968,7 @@
     </script>
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
-    <script src="/static/js/app.js?v=259"></script>
+    <script src="/static/js/toast_history.js?v=2"></script>
+    <script src="/static/js/app.js?v=261"></script>
 </body>
 </html>

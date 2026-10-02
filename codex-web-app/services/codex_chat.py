@@ -1117,6 +1117,10 @@ def _normalize_pending_queue_entry(entry):
         'id': str(entry.get('id') or uuid.uuid4().hex),
         'prompt': prompt,
         'plan_mode': bool(entry.get('plan_mode')),
+        'model_role': 'plan' if entry.get('plan_mode') else ('secondary' if entry.get('model_role') == 'secondary' else 'main'),
+        'model_override': entry.get('model_override'),
+        'reasoning_override': entry.get('reasoning_override'),
+        'model_settings_snapshot': bool(entry.get('model_settings_snapshot')),
         'attachments': attachments,
         'structured_report_preset': normalize_structured_report_preset_id(
             entry.get('structured_report_preset')
@@ -2539,24 +2543,28 @@ def _read_workspace_settings():
         return {}
     model = _normalize_model_setting(data.get('model'))
     reasoning = data.get('reasoning_effort')
+    secondary_model = _normalize_model_setting(data.get('secondary_model'))
+    secondary_reasoning_effort = data.get('secondary_reasoning_effort')
     plan_mode_model = _normalize_model_setting(data.get('plan_mode_model'))
     plan_mode_reasoning_effort = data.get('plan_mode_reasoning_effort')
-    service_tier = normalize_codex_service_tier(data.get('service_tier'))
+    service_tier = None
     agent_backend = _normalize_agent_backend_setting(data.get('agent_backend'))
     verification_mode = normalize_verification_mode(data.get('verification_mode'))
     app_server_pilot_enabled = _normalize_app_server_pilot_enabled(
         data.get('app_server_pilot_enabled')
     )
     git_commit_message_model = (
-        resolve_codex_git_commit_message_model(data.get('git_commit_message_model'))
+        _normalize_model_setting(data.get('git_commit_message_model')) or None
     )
     git_commit_message_reasoning_effort = (
         str(data.get('git_commit_message_reasoning_effort') or '').strip()
-        or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+        or None
     )
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
+        'secondary_model': secondary_model or None,
+        'secondary_reasoning_effort': secondary_reasoning_effort or None,
         'plan_mode_model': plan_mode_model or None,
         'plan_mode_reasoning_effort': plan_mode_reasoning_effort or None,
         'service_tier': service_tier or None,
@@ -2572,20 +2580,22 @@ def _write_workspace_settings(settings):
     payload = {
         'model': _normalize_model_setting(settings.get('model')),
         'reasoning_effort': settings.get('reasoning_effort') or None,
+        'secondary_model': _normalize_model_setting(settings.get('secondary_model')),
+        'secondary_reasoning_effort': settings.get('secondary_reasoning_effort') or None,
         'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
         'plan_mode_reasoning_effort': settings.get('plan_mode_reasoning_effort') or None,
-        'service_tier': normalize_codex_service_tier(settings.get('service_tier')) or None,
+        'service_tier': None,
         'agent_backend': _normalize_agent_backend_setting(settings.get('agent_backend')),
         'verification_mode': normalize_verification_mode(settings.get('verification_mode')),
         'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
             settings.get('app_server_pilot_enabled')
         ),
         'git_commit_message_model': (
-            resolve_codex_git_commit_message_model(settings.get('git_commit_message_model'))
+            _normalize_model_setting(settings.get('git_commit_message_model')) or None
         ),
         'git_commit_message_reasoning_effort': (
             str(settings.get('git_commit_message_reasoning_effort') or '').strip()
-            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+            or None
         ),
     }
     settings_path = CODEX_ORGANIZATION_SETTINGS_PATH if is_internal_multiuser_mode() else CODEX_SETTINGS_PATH
@@ -2968,7 +2978,7 @@ def _parse_top_level_config(text):
         'model': _normalize_model_setting(model),
         'reasoning_effort': reasoning or None,
         'model_provider': str(model_provider or '').strip() or None,
-        'service_tier': normalize_codex_service_tier(service_tier) or None,
+        'service_tier': None,
     }
 
 
@@ -2986,6 +2996,10 @@ def _get_effective_cli_model_provider():
 
 def _merge_runtime_cli_settings(settings):
     payload = dict(settings or {})
+    payload['service_tier'] = None
+    payload.setdefault('secondary_model', None)
+    payload.setdefault('secondary_reasoning_effort', None)
+    payload['git_commit_message_inherits_secondary'] = not bool(payload.get('git_commit_message_model'))
     payload['agent_backend'] = _normalize_agent_backend_setting(payload.get('agent_backend'))
     payload['agent_backend_label'] = _agent_backend_label(payload.get('agent_backend'))
     payload['verification_mode'] = normalize_verification_mode(payload.get('verification_mode'))
@@ -3061,8 +3075,8 @@ def get_settings():
             fallback['agent_backend'] = _normalize_agent_backend_setting(None)
             fallback['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             fallback['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
-            fallback['git_commit_message_model'] = resolve_codex_git_commit_message_model()
-            fallback['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+            fallback['git_commit_message_model'] = None
+            fallback['git_commit_message_reasoning_effort'] = None
             _write_workspace_settings(fallback)
             return _merge_runtime_cli_settings(_read_workspace_settings())
     return _merge_runtime_cli_settings({
@@ -3074,14 +3088,16 @@ def get_settings():
         'agent_backend': _normalize_agent_backend_setting(None),
         'verification_mode': _DEFAULT_VERIFICATION_MODE,
         'app_server_pilot_enabled': _default_app_server_pilot_enabled(),
-        'git_commit_message_model': resolve_codex_git_commit_message_model(),
-        'git_commit_message_reasoning_effort': CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
+        'git_commit_message_model': None,
+        'git_commit_message_reasoning_effort': None,
     })
 
 
 def update_settings(
         model=None,
         reasoning_effort=None,
+        secondary_model=None,
+        secondary_reasoning_effort=None,
         plan_mode_model=None,
         plan_mode_reasoning_effort=None,
         service_tier=None,
@@ -3101,25 +3117,27 @@ def update_settings(
             current['agent_backend'] = _normalize_agent_backend_setting(None)
             current['verification_mode'] = _DEFAULT_VERIFICATION_MODE
             current['app_server_pilot_enabled'] = _default_app_server_pilot_enabled()
-            current['git_commit_message_model'] = resolve_codex_git_commit_message_model()
-            current['git_commit_message_reasoning_effort'] = CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+            current['git_commit_message_model'] = None
+            current['git_commit_message_reasoning_effort'] = None
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
+            'secondary_model': current.get('secondary_model'),
+            'secondary_reasoning_effort': current.get('secondary_reasoning_effort'),
             'plan_mode_model': current.get('plan_mode_model'),
             'plan_mode_reasoning_effort': current.get('plan_mode_reasoning_effort'),
-            'service_tier': normalize_codex_service_tier(current.get('service_tier')) or None,
+            'service_tier': None,
             'agent_backend': _normalize_agent_backend_setting(current.get('agent_backend')),
             'verification_mode': normalize_verification_mode(current.get('verification_mode')),
             'app_server_pilot_enabled': _normalize_app_server_pilot_enabled(
                 current.get('app_server_pilot_enabled')
             ),
             'git_commit_message_model': (
-                resolve_codex_git_commit_message_model(current.get('git_commit_message_model'))
+                _normalize_model_setting(current.get('git_commit_message_model')) or None
             ),
             'git_commit_message_reasoning_effort': (
                 str(current.get('git_commit_message_reasoning_effort') or '').strip()
-                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+                or None
             ),
         }
         if model is not None:
@@ -3127,13 +3145,17 @@ def update_settings(
         if reasoning_effort is not None:
             reasoning_effort = str(reasoning_effort).strip()
             next_settings['reasoning_effort'] = reasoning_effort or None
+        if secondary_model is not None:
+            next_settings['secondary_model'] = _normalize_model_setting(secondary_model)
+        if secondary_reasoning_effort is not None:
+            next_settings['secondary_reasoning_effort'] = str(secondary_reasoning_effort).strip() or None
         if plan_mode_model is not None:
             next_settings['plan_mode_model'] = _normalize_model_setting(plan_mode_model)
         if plan_mode_reasoning_effort is not None:
             plan_mode_reasoning_effort = str(plan_mode_reasoning_effort).strip()
             next_settings['plan_mode_reasoning_effort'] = plan_mode_reasoning_effort or None
         if service_tier is not None:
-            next_settings['service_tier'] = normalize_codex_service_tier(service_tier) or None
+            next_settings['service_tier'] = None
         if agent_backend is not None:
             next_settings['agent_backend'] = _normalize_agent_backend_setting(agent_backend)
         if verification_mode is not None:
@@ -3142,12 +3164,12 @@ def update_settings(
             next_settings['app_server_pilot_enabled'] = bool(app_server_pilot_enabled)
         if git_commit_message_model is not None:
             next_settings['git_commit_message_model'] = (
-                resolve_codex_git_commit_message_model(git_commit_message_model)
+                _normalize_model_setting(git_commit_message_model) or None
             )
         if git_commit_message_reasoning_effort is not None:
             next_settings['git_commit_message_reasoning_effort'] = (
                 str(git_commit_message_reasoning_effort).strip()
-                or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
+                or None
             )
         _write_workspace_settings(next_settings)
         return _merge_runtime_cli_settings(next_settings)
@@ -5788,7 +5810,7 @@ def get_account_token_usage_summary(recent_days=7, account_id=None):
 def record_token_usage_for_message(
         session_id, message_id, token_usage, source='message', account_id=None,
         operation='chat', model='', reasoning_effort='', service_tier='standard',
-        backend='dtgpt', status='completed', duration_ms=None):
+        backend='dtgpt', status='completed', duration_ms=None, metadata=None):
     message_key = str(message_id or '').strip() or uuid.uuid4().hex
     return record_usage_event(
         event_id=f'message:{message_key}',
@@ -5804,6 +5826,7 @@ def record_token_usage_for_message(
         backend=backend,
         status=status,
         duration_ms=duration_ms,
+        metadata=metadata,
     )
 
 
@@ -8269,8 +8292,6 @@ def _account_usage_refresh_is_due(snapshot, now=None):
     return last_slot is None or last_slot < slot
 
 
-_USAGE_KEEPALIVE_MODEL = 'gpt-5.6-terra'
-_USAGE_KEEPALIVE_REASONING_EFFORT = 'medium'
 _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
 # A keepalive is an activation probe, not a retry mechanism.  Retrying a
 # provisional rate-limit response consumed a large amount of quota without
@@ -8420,7 +8441,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         if same_targets:
             return {'submitted': False, 'reason': 'cycle_already_submitted'}
     if get_selected_agent_backend() != 'dtgpt':
-        return {'submitted': False, 'reason': 'terra_requires_codex_backend'}
+        return {'submitted': False, 'reason': 'secondary_requires_codex_backend'}
     if _account_has_active_codex_stream(account_id):
         return {'submitted': False, 'reason': 'account_busy'}
     if CODEX_REQUIRE_ACCOUNT_LOGIN and not _codex_home_has_auth(context['codex_home']):
@@ -8430,6 +8451,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         if not claimed:
             return {'submitted': False, 'reason': claim_reason}
 
+    secondary_model, secondary_effort = resolve_model_role_settings('secondary')
     session = create_session(
         title='Usage keepalive',
         metadata={'session_type': 'usage_keepalive', 'internal': True},
@@ -8438,8 +8460,9 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         started = create_codex_stream(
             session['id'],
             _USAGE_KEEPALIVE_PROMPT,
-            model_override=_USAGE_KEEPALIVE_MODEL,
-            reasoning_override=_USAGE_KEEPALIVE_REASONING_EFFORT,
+            model_override=secondary_model,
+            model_role='secondary',
+            reasoning_override=secondary_effort,
             # Ephemeral/read-only execution may not establish the account's
             # usage window.  The prompt remains deliberately no-tools and
             # no-changes, but use a normal Codex request so the service can
@@ -8476,8 +8499,8 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
         'last_mode': 'automatic' if automatic else 'manual',
         'last_status': 'submitted' if started else 'failed',
         'last_error': error,
-        'model': _USAGE_KEEPALIVE_MODEL,
-        'reasoning_effort': _USAGE_KEEPALIVE_REASONING_EFFORT,
+        'model': secondary_model,
+        'reasoning_effort': secondary_effort,
         'history': history,
     }
     if automatic:
@@ -11069,10 +11092,8 @@ def _build_codex_command(
     if reasoning_effort:
         escaped_reasoning = _escape_toml_string(reasoning_effort)
         cmd.extend(['--config', f'model_reasoning_effort="{escaped_reasoning}"'])
-    service_tier = normalize_codex_service_tier(settings.get('service_tier'))
-    if service_tier:
-        escaped_service_tier = _escape_toml_string(service_tier)
-        cmd.extend(['--config', f'service_tier="{escaped_service_tier}"'])
+    # Override CLI/user config as well as legacy Workbench Fast settings.
+    cmd.extend(['--config', 'service_tier="default"'])
     model_provider = str(CODEX_CLI_MODEL_PROVIDER or '').strip()
     if model_provider:
         escaped_provider = _escape_toml_string(model_provider)
@@ -13263,6 +13284,7 @@ def _build_partial_stream_message_metadata(stream):
         reasoning_override=stream.get('reasoning_override'),
     )
     metadata = {
+        'model_role': stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main'),
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
@@ -13285,6 +13307,7 @@ def _build_partial_stream_message_metadata(stream):
     usage = _normalize_token_usage(stream.get('token_usage'))
     metadata = _attach_token_usage_metadata(metadata, usage)
     return metadata if isinstance(metadata, dict) else {
+        'model_role': stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main'),
         'response_mode': response_mode,
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
@@ -14802,9 +14825,11 @@ def create_codex_stream(
         worktree_task=None,
         account_id=None,
         usage_operation='chat',
+        model_role=None,
         internal_api_key=None,
         preflight_usage_snapshot=None,
         operation_metadata=None):
+    model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -14890,6 +14915,7 @@ def create_codex_stream(
         'account_id': resolved_account_id,
         'usage_limits_before': usage_limits_before,
         'usage_operation': str(usage_operation or 'chat'),
+        'model_role': model_role,
         'operation_metadata': (
             deepcopy(operation_metadata) if isinstance(operation_metadata, dict) else {}
         ),
@@ -15126,6 +15152,14 @@ def _append_subjob_guardrails(prompt_text):
     return f'{normalized}\n\n{_SUBJOB_PROMPT_SUFFIX}'
 
 
+def resolve_model_role_settings(model_role='main', settings=None):
+    settings = get_settings() if settings is None else settings
+    prefix = {'main': '', 'plan': 'plan_mode_', 'secondary': 'secondary_'}.get(model_role, '')
+    model = settings.get(f'{prefix}model') or settings.get('model')
+    effort = settings.get(f'{prefix}reasoning_effort') or settings.get('reasoning_effort')
+    return str(model or '').strip() or None, str(effort or '').strip() or None
+
+
 def _resolve_codex_overrides_for_plan_mode(plan_mode=False):
     if not plan_mode:
         return None, None
@@ -15151,12 +15185,16 @@ def _start_codex_stream_for_session_locked(
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
+        model_role=None,
         attachments=None,
         queued_execution=False,
         question_only=False,
         structured_report_preset=None,
         worktree_mode=False,
         account_id=None):
+    model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
+    if model_override is None and reasoning_override is None:
+        model_override, reasoning_override = resolve_model_role_settings(model_role)
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:
@@ -15193,6 +15231,7 @@ def _start_codex_stream_for_session_locked(
                 'error_code': exc.error_code,
             }
     user_metadata = {
+        'model_role': model_role,
         'account_id': resolved_account_id,
         'account_label': account_profile.get('label') or resolved_account_id,
     }
@@ -15231,6 +15270,7 @@ def _start_codex_stream_for_session_locked(
         'response_agent_backend': agent_backend,
         'streaming': True,
         'execution_policy': execution_policy,
+        'model_role': model_role,
         'account_id': resolved_account_id,
         'account_label': account_profile.get('label') or resolved_account_id,
     }
@@ -15257,6 +15297,7 @@ def _start_codex_stream_for_session_locked(
         }
 
     stream_kwargs = {
+        'model_role': model_role,
         'model_override': model_override,
         'reasoning_override': reasoning_override,
         'plan_mode': plan_mode,
@@ -15296,15 +15337,32 @@ def _start_codex_stream_for_session_locked(
 def _build_pending_queue_entry(
         prompt,
         plan_mode=False,
+        model_role=None,
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
         account_id=None):
+    model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
+    model, effort = resolve_model_role_settings(model_role)
+    # Display labels such as 'codex-default' are never executable model ids.
+    if not model:
+        backend = get_selected_agent_backend()
+        if backend == 'claude':
+            model = _resolve_claude_model()
+        elif backend == 'opencode':
+            model = _resolve_opencode_model()
+        else:
+            model = _parse_top_level_config(_read_codex_config_text()).get('model')
+    effort = effort or resolve_response_reasoning_effort(model_override=model)
     normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,
         'prompt': str(prompt or '').strip(),
         'plan_mode': bool(plan_mode),
+        'model_role': model_role,
+        'model_override': model,
+        'reasoning_override': effort,
+        'model_settings_snapshot': True,
         'attachments': normalized_attachments,
         'structured_report_preset': normalize_structured_report_preset_id(structured_report_preset),
         'worktree_mode': bool(worktree_mode),
@@ -15317,6 +15375,7 @@ def _enqueue_pending_queue_entry(
         session_id,
         prompt,
         plan_mode=False,
+        model_role=None,
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
@@ -15331,6 +15390,7 @@ def _enqueue_pending_queue_entry(
         entry = _build_pending_queue_entry(
             prompt,
             plan_mode=plan_mode,
+            model_role=model_role,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -15402,7 +15462,12 @@ def _start_next_queued_codex_stream_locked(session_id):
                 prompt_with_context,
                 structured_report_preset,
             )
-        model_override, reasoning_override = _resolve_codex_overrides_for_plan_mode(plan_mode=plan_mode)
+        model_role = pending_entry.get('model_role') or ('plan' if plan_mode else 'main')
+        if pending_entry.get('model_settings_snapshot'):
+            model_override = pending_entry.get('model_override')
+            reasoning_override = pending_entry.get('reasoning_override')
+        else:
+            model_override, reasoning_override = resolve_model_role_settings(model_role)
         start_result = _start_codex_stream_for_session_locked(
             session_id,
             prompt,
@@ -15411,6 +15476,7 @@ def _start_next_queued_codex_stream_locked(session_id):
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
             attachments=attachments,
+            model_role=model_role,
             queued_execution=True,
             question_only=bool(structured_report_preset),
             structured_report_preset=structured_report_preset,
@@ -15439,6 +15505,7 @@ def start_codex_stream_for_session(
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
+        model_role=None,
         attachments=None,
         question_only=False,
         structured_report_preset=None,
@@ -15453,6 +15520,7 @@ def start_codex_stream_for_session(
             model_override=model_override,
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
+            model_role=model_role,
             attachments=attachments,
             queued_execution=False,
             question_only=question_only,
@@ -15494,6 +15562,7 @@ def start_codex_subjob_for_session(parent_session_id, prompt, attachments=None):
         child_session_id,
         prompt_text,
         prompt_with_context,
+        model_role='secondary',
         model_override=None,
         reasoning_override=None,
         plan_mode=False,
@@ -15513,6 +15582,7 @@ def enqueue_codex_stream_for_session(
         session_id,
         prompt,
         plan_mode=False,
+        model_role=None,
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
@@ -15523,6 +15593,7 @@ def enqueue_codex_stream_for_session(
             session_id,
             prompt,
             plan_mode=plan_mode,
+            model_role=model_role,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -15829,6 +15900,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     if not isinstance(metadata, dict):
         metadata = {}
+    metadata['model_role'] = stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main')
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
@@ -16024,6 +16096,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         duration_ms=metadata.get('duration_ms'),
         metadata={
             'finalize_reason': finalize_reason,
+            'model_role': metadata['model_role'],
             'execution_policy': execution_policy,
             'usage_prediction': metadata.get('usage_prediction') or {},
             **({'internal_api_key_id': internal_api_key_id} if internal_api_key_id else {}),
@@ -16184,6 +16257,7 @@ def stop_codex_stream(stream_id):
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     if not isinstance(metadata, dict):
         metadata = {}
+    metadata['model_role'] = stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main')
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
     metadata['response_reasoning_effort'] = response_reasoning_effort
@@ -16244,7 +16318,7 @@ def stop_codex_stream(stream_id):
         backend=agent_backend,
         status='cancelled',
         duration_ms=metadata.get('duration_ms'),
-        metadata={'execution_policy': execution_policy},
+        metadata={'execution_policy': execution_policy, 'model_role': metadata['model_role']},
     )
 
     with state.codex_streams_lock:

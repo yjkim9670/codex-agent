@@ -616,3 +616,18 @@ def test_git_sync_blocks_diverged_overlap_before_merge(tmp_path, monkeypatch):
     assert result['sync_preflight']['state'] == 'diverged'
     assert result['sync_overlap_files'] == ['shared.txt']
     assert not (repo_root / '.git' / 'MERGE_HEAD').exists()
+
+
+def test_commit_message_inherits_secondary_and_honors_dedicated_override(monkeypatch):
+    settings = {'model': 'gpt-6.1-sol', 'reasoning_effort': 'medium',
+                'secondary_model': 'gpt-6-luna', 'secondary_reasoning_effort': 'low'}
+    captured = {}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'execute_codex_prompt', lambda prompt, **kwargs: captured.update(kwargs) or ('ok', None, {}, {}))
+    git_ops._execute_commit_message_prompt('commit prompt')
+    assert captured['model_override'] == 'gpt-6-luna'
+    assert captured['reasoning_override'] == 'low'
+    settings.update(git_commit_message_model='gpt-6-astra', git_commit_message_reasoning_effort='high')
+    git_ops._execute_commit_message_prompt('commit prompt')
+    assert captured['model_override'] == 'gpt-6-astra'
+    assert captured['reasoning_override'] == 'high'

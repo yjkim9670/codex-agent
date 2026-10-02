@@ -2076,12 +2076,16 @@ def _execute_commit_message_prompt(
     if not resolved_model:
         resolved_model = str(
             settings.get('git_commit_message_model')
+            or settings.get('secondary_model')
+            or settings.get('model')
             or resolve_codex_git_commit_message_model()
         ).strip()
     resolved_reasoning = str(reasoning_override or '').strip()
     if not resolved_reasoning:
         resolved_reasoning = str(
             settings.get('git_commit_message_reasoning_effort')
+            or settings.get('secondary_reasoning_effort')
+            or settings.get('reasoning_effort')
             or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         ).strip()
 
@@ -2113,11 +2117,15 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         if not model_override:
             model_override = str(
                 settings.get('git_commit_message_model')
+                or settings.get('secondary_model')
+                or settings.get('model')
                 or resolve_codex_git_commit_message_model()
             ).strip()
         if not reasoning_override:
             reasoning_override = str(
                 settings.get('git_commit_message_reasoning_effort')
+                or settings.get('secondary_reasoning_effort')
+                or settings.get('reasoning_effort')
                 or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             ).strip()
     output_text, error_text, token_usage, timing = _execute_commit_message_prompt(
@@ -2142,6 +2150,7 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
             status='failed' if error_text else 'completed',
             duration_ms=(timing or {}).get('cli_runtime_ms') if isinstance(timing, dict) else None,
             metadata={
+                'model_role': 'secondary',
                 'included_files': len(diff_context.get('included_paths') or []),
                 'diff_truncated': bool(diff_context.get('diff_truncated')),
             },

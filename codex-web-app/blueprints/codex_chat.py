@@ -656,7 +656,10 @@ def _read_codex_restart_policy():
     return result
 
 
-def _resolve_model_override(plan_mode=False):
+def _resolve_model_override(plan_mode=False, model_role=None):
+    if not plan_mode and model_role == 'secondary':
+        settings = get_settings()
+        return settings.get('secondary_model') or settings.get('model')
     if not plan_mode:
         return None
     settings = get_settings()
@@ -667,7 +670,10 @@ def _resolve_model_override(plan_mode=False):
     return default_model or None
 
 
-def _resolve_reasoning_override(plan_mode=False):
+def _resolve_reasoning_override(plan_mode=False, model_role=None):
+    if not plan_mode and model_role == 'secondary':
+        settings = get_settings()
+        return settings.get('secondary_reasoning_effort') or settings.get('reasoning_effort')
     settings = get_settings()
     if plan_mode:
         plan_mode_reasoning = str(settings.get('plan_mode_reasoning_effort') or '').strip()
@@ -702,7 +708,7 @@ def _build_runtime_info():
         'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
-        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'service_tier_options': [],
         'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'security_policy': get_codex_security_policy(),
@@ -1131,7 +1137,7 @@ def codex_settings():
         'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
-        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'service_tier_options': [],
         'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
@@ -1405,6 +1411,11 @@ def codex_settings_update():
     payload = request.get_json(silent=True) or {}
     model = payload.get('model')
     reasoning = payload.get('reasoning_effort')
+    secondary_model = payload.get('secondary_model')
+    secondary_reasoning = payload.get('secondary_reasoning_effort')
+    for key, value, limit in [('secondary_model', secondary_model, CODEX_MAX_MODEL_CHARS), ('secondary_reasoning_effort', secondary_reasoning, CODEX_MAX_REASONING_CHARS)]:
+        if value is not None and (not isinstance(value, str) or len(value.strip()) > limit):
+            return jsonify({'error': f'{key} 값이 올바르지 않습니다.'}), 400
     plan_mode_model = payload.get('plan_mode_model')
     plan_mode_reasoning = payload.get('plan_mode_reasoning_effort')
     service_tier = payload.get('service_tier')
@@ -1474,7 +1485,7 @@ def codex_settings_update():
         if len(git_commit_message_model) > CODEX_MAX_MODEL_CHARS:
             return jsonify({'error': 'git_commit_message_model이 너무 깁니다.'}), 400
         git_commit_message_model = (
-            resolve_codex_git_commit_message_model(git_commit_message_model)
+            resolve_codex_git_commit_message_model(git_commit_message_model) if git_commit_message_model else ''
         )
     if git_commit_message_reasoning_effort is not None:
         git_commit_message_reasoning_effort = str(git_commit_message_reasoning_effort).strip()
@@ -1482,11 +1493,12 @@ def codex_settings_update():
             return jsonify({'error': 'git_commit_message_reasoning_effort가 너무 깁니다.'}), 400
         git_commit_message_reasoning_effort = (
             git_commit_message_reasoning_effort
-            or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         )
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
+        secondary_model=secondary_model,
+        secondary_reasoning_effort=secondary_reasoning,
         plan_mode_model=plan_mode_model,
         plan_mode_reasoning_effort=plan_mode_reasoning,
         service_tier=service_tier,
@@ -1508,7 +1520,7 @@ def codex_settings_update():
         'model_catalogs_by_agent_backend': get_codex_model_catalogs_by_agent_backend(),
         'model_catalog_source': get_codex_model_catalog_source(),
         'reasoning_options': get_codex_reasoning_options_for_backend(agent_backend),
-        'service_tier_options': CODEX_SERVICE_TIER_OPTIONS,
+        'service_tier_options': [],
         'verification_mode_options': get_verification_mode_options(),
         'agent_backend_options': get_agent_backend_options(),
         'execution_policy_presets': get_execution_policy_presets(),
@@ -2009,6 +2021,9 @@ def codex_session_message(session_id):
         return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    model_role = 'plan' if plan_mode else payload.get('model_role', 'main')
+    if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
+        return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
     try:
         attachments = _parse_attachments(payload)
     except CodexAttachmentError as exc:
@@ -2032,8 +2047,8 @@ def codex_session_message(session_id):
         return _shared_knowledge_error_response(exc)
     if plan_mode:
         prompt_with_context = _append_plan_mode_guardrails(prompt_with_context)
-    model_override = _resolve_model_override(plan_mode=plan_mode)
-    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
+    model_override = _resolve_model_override(plan_mode=plan_mode, model_role=model_role)
+    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode, model_role=model_role)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
     response_agent_backend = get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
@@ -2045,7 +2060,7 @@ def codex_session_message(session_id):
         get_settings().get('service_tier')
     ) or 'standard'
     account_id = get_active_account_id()
-    user_metadata = {'account_id': account_id}
+    user_metadata = {'account_id': account_id, 'model_role': model_role}
     if knowledge_revision:
         user_metadata['knowledge_revision'] = knowledge_revision
     if attachments:
@@ -2072,6 +2087,7 @@ def codex_session_message(session_id):
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
         'response_agent_backend': response_agent_backend,
+        'model_role': model_role,
     }
     if isinstance(timing, dict):
         queue_wait_ms = int(timing.get('queue_wait_ms') or 0)
@@ -2122,6 +2138,7 @@ def codex_session_message(session_id):
             backend=response_agent_backend,
             status='failed' if error else 'completed',
             duration_ms=duration_ms,
+            metadata={'model_role': model_role},
         )
 
     session = get_session(session_id)
@@ -2133,6 +2150,7 @@ def codex_session_message(session_id):
         'response_model': response_model,
         'response_reasoning_effort': response_reasoning_effort,
         'response_agent_backend': response_agent_backend,
+        'model_role': model_role,
     }, crypto_session_id)
 
 
@@ -2147,6 +2165,9 @@ def codex_session_message_stream(session_id):
         return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    model_role = 'plan' if plan_mode else payload.get('model_role', 'main')
+    if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
+        return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
@@ -2191,8 +2212,8 @@ def codex_session_message_stream(session_id):
             prompt_with_context,
             structured_report_preset,
         )
-    model_override = _resolve_model_override(plan_mode=plan_mode)
-    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode)
+    model_override = _resolve_model_override(plan_mode=plan_mode, model_role=model_role)
+    reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode, model_role=model_role)
     start_result = start_codex_stream_for_session(
         session_id,
         prompt,
@@ -2200,6 +2221,7 @@ def codex_session_message_stream(session_id):
         model_override=model_override,
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
+        model_role=model_role,
         attachments=attachments,
         question_only=bool(structured_report_preset),
         structured_report_preset=structured_report_preset,
@@ -2247,6 +2269,9 @@ def codex_session_message_queue(session_id):
         return _file_crypto_error_response(exc)
     prompt = (payload.get('prompt') or '').strip()
     plan_mode = _parse_plan_mode(payload.get('plan_mode'))
+    model_role = 'plan' if plan_mode else payload.get('model_role', 'main')
+    if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
+        return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
@@ -2272,6 +2297,7 @@ def codex_session_message_queue(session_id):
         session_id,
         prompt,
         plan_mode=plan_mode,
+        model_role=model_role,
         attachments=attachments,
         structured_report_preset=structured_report_preset,
         worktree_mode=worktree_mode,

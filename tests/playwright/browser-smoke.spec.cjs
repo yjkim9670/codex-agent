@@ -22,6 +22,9 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_WORKBENCH_CONTROLS === '1') {
+        await require('./workbench-controls.cjs').verifyWorkbenchControls(page, expect);
+    }
     if (process.env.CODEX_VERIFY_DIALOG_LAYOUT === '1') {
         await require('./dialog-layout.cjs').verifyDialogLayout(page, expect);
     }

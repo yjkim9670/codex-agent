@@ -493,6 +493,7 @@ const GIT_SYNC_TARGET_LABELS = Object.freeze({
 });
 const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
+const PLAN_MODE_STATE_SECONDARY = 'secondary';
 const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
 const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
@@ -929,7 +930,7 @@ function syncSessionPendingQueue(sessionId, queue, { render = true } = {}) {
     return sessionState.pendingQueue;
 }
 
-function enqueuePrompt(sessionId, prompt, { planMode = false } = {}) {
+function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getComposeModelRole() } = {}) {
     const sessionState = ensureSessionState(sessionId);
     if (!sessionState) return 0;
     if (!Array.isArray(sessionState.queuedPrompts)) {
@@ -938,6 +939,7 @@ function enqueuePrompt(sessionId, prompt, { planMode = false } = {}) {
     sessionState.queuedPrompts.push({
         prompt: String(prompt || ''),
         planMode: Boolean(planMode),
+        modelRole,
         queuedAt: Date.now()
     });
     return sessionState.queuedPrompts.length;
@@ -961,7 +963,8 @@ async function flushQueuedPrompts(sessionId) {
             }
             await sendPrompt(next.prompt, {
                 sessionId,
-                planMode: Boolean(next.planMode)
+                planMode: Boolean(next.planMode),
+                modelRole: next.modelRole || 'main'
             });
         }
     } finally {
@@ -1811,12 +1814,12 @@ function syncModelCardForBackend(agentBackend = getActiveAgentBackend()) {
     if (modelLabel) {
         modelLabel.textContent = noReasoning
             ? (claudeBackend ? 'Claude model' : 'Model')
-            : (claudeBackend ? 'Claude model · Effort' : 'Model · Reasoning effort');
+            : (claudeBackend ? '메인 · Claude model / Effort' : '메인 · Model / Effort');
     }
     if (planModeModelLabel) {
         planModeModelLabel.textContent = noReasoning
             ? (claudeBackend ? 'Plan mode Claude model' : 'Plan mode model')
-            : (claudeBackend ? 'Plan mode Claude model · Effort' : 'Plan mode model · Reasoning effort');
+            : (claudeBackend ? '플랜 · Claude model / Effort' : '플랜 · Model / Effort');
     }
 }
 
@@ -1831,6 +1834,10 @@ function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) 
     const nextPlanModeModel = clearIncompatibleModel
         ? getCompatibleModelForBackend(state.settings.planModeModel, backend)
         : (state.settings.planModeModel || '');
+    state.settings.secondaryModel = getCompatibleModelForBackend(state.settings.secondaryModel, backend) || null;
+    state.settings.secondaryReasoningEffort = getCompatibleReasoningForModel(state.settings.secondaryReasoningEffort, state.settings.secondaryModel || nextModel, reasoningOptions) || null;
+    updatePlanModeModelControls(state.settings.secondaryModel, modelOptions, 'secondary');
+    updatePlanModeReasoningControls(state.settings.secondaryReasoningEffort, reasoningOptions, state.settings.secondaryModel || nextModel, 'secondary');
     state.settings.modelCatalog = catalog;
     state.settings.modelOptions = modelOptions;
     state.settings.reasoningOptions = reasoningOptions;
@@ -2742,6 +2749,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setCoverComposeToolsOpen(true);
             }
         });
+        composeToolsMenu.querySelector('[data-chat-compose-action="plan"]')?.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
         composeToolsMenu.addEventListener('click', event => {
             const action = event.target.closest('[data-chat-compose-action]')?.dataset.chatComposeAction;
             if (!action) return;
@@ -2754,7 +2762,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
             }
             // Keep the menu open so repeated presses can cycle through the
-            // visible Plan / Plan+ states.  The document click handler below
+            // visible Work / Plan / Secondary / Plan+ states.  The document click handler below
             // closes it only when the user touches outside this menu.
         });
         document.addEventListener('click', event => {
@@ -4368,6 +4376,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (planModeToggle) {
+        planModeToggle.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
         planModeToggle.addEventListener('click', () => {
             setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
         });
@@ -5168,6 +5177,7 @@ function createToast(message, {
 } = {}) {
     const text = String(message || '').trim();
     if (!text) return null;
+    window.workbenchToastHistory?.record(text, tone);
     const layer = ensureToastLayer();
     if (!layer) return null;
 
@@ -5229,7 +5239,7 @@ function createToast(message, {
     return { element: toast, update, dismiss };
 }
 
-function showToast(message, { tone = 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
+function showToast(message, { type, tone = type === 'success' ? 'success' : 'error', durationMs = WEATHER_LOCATION_FAILURE_TOAST_MS } = {}) {
     return createToast(message, { tone, durationMs });
 }
 
@@ -9470,7 +9480,7 @@ function syncInternalSettingsEditability() {
     if (!internalMode) return;
     const isAdmin = document.body.dataset.internalRole === 'admin';
     const readOnly = !isAdmin || document.body.classList.contains('is-internal-member-view');
-    document.querySelectorAll('#codex-model-card input, #codex-model-card select').forEach(control => {
+    document.querySelectorAll('#codex-model-card input, #codex-model-card select, #codex-verification-mode-select, #codex-execution-settings-save').forEach(control => {
         control.disabled = readOnly;
     });
     const apply = document.getElementById('codex-model-apply');
@@ -9521,6 +9531,8 @@ async function loadSettings({ silent = true } = {}) {
             executionPolicyPresets,
             appServerPilotEnabled: Boolean(result?.settings?.app_server_pilot_enabled),
             modelProvider: result?.settings?.model_provider || null,
+            secondaryModel: result?.settings?.secondary_model || null,
+            secondaryReasoningEffort: result?.settings?.secondary_reasoning_effort || null,
             planModeModel: result?.settings?.plan_mode_model || null,
             planModeReasoningEffort: result?.settings?.plan_mode_reasoning_effort || null,
             planModeState: normalizePlanModeState(state.settings?.planModeState),
@@ -9776,6 +9788,13 @@ function updateUsageSummary(usage) {
         keepaliveHistoryButton.classList.toggle('is-hidden', !showUsageLimits);
         keepaliveHistoryButton.classList.toggle('is-ready', hasKeepaliveHistory);
     }
+    const keepaliveError = document.getElementById('codex-usage-keepalive-error');
+    if (keepaliveError) {
+        const failed = /fail|error/.test(String(usage?.usage_keepalive?.last_status || ''));
+        keepaliveError.classList.toggle('is-hidden', !showUsageLimits || !failed);
+        keepaliveError.textContent = failed ? '경량 작업 오류 · 설정에서 이력 확인' : '';
+        keepaliveError.title = String(usage?.usage_keepalive?.last_error || '');
+    }
     if (keepaliveStatus) {
         const keepalive = usage?.usage_keepalive || {};
         const status = String(keepalive?.last_status || '').trim();
@@ -9885,22 +9904,22 @@ function updateModelControls(model, options) {
     setSettingsStatus(model, state.settings.reasoningEffort);
 }
 
-function updatePlanModeModelControls(planModeModel, options) {
-    const select = document.getElementById('codex-plan-mode-model-select');
-    const input = document.getElementById('codex-plan-mode-model-input');
+function updatePlanModeModelControls(planModeModel, options, role = 'plan-mode') {
+    const select = document.getElementById(`codex-${role}-model-select`);
+    const input = document.getElementById(`codex-${role}-model-input`);
     const field = select ? select.closest('.model-field') : null;
     const catalogOptions = normalizeOptionList(options);
     const selectedModel = typeof planModeModel === 'string' ? planModeModel.trim() : '';
     const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
-    const defaultPlaceholder = isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model';
+    const defaultPlaceholder = role === 'secondary' ? '메인 모델 상속' : (isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = 'Use default';
+            placeholder.textContent = role === 'secondary' ? '메인 모델 상속' : 'Use default';
             select.appendChild(placeholder);
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
@@ -9984,14 +10003,15 @@ function updateReasoningControls(reasoning, options, model = state.settings.mode
 function updatePlanModeReasoningControls(
     reasoning,
     options,
-    model = state.settings.planModeModel || state.settings.model
+    model = state.settings.planModeModel || state.settings.model,
+    role = 'plan-mode'
 ) {
-    const select = document.getElementById('codex-plan-mode-reasoning-select');
-    const input = document.getElementById('codex-plan-mode-reasoning-input');
+    const select = document.getElementById(`codex-${role}-reasoning-select`);
+    const input = document.getElementById(`codex-${role}-reasoning-input`);
     const field = select ? select.closest('.model-field') : null;
     const profile = getReasoningProfile(model, reasoning, options);
     const hasOptions = profile.reasoningOptions.length > 0;
-    const placeholderText = buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
+    const placeholderText = role === 'secondary' ? '메인 effort 상속' : buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -10174,9 +10194,6 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
         state.settings.planModeModel || model,
         state.settings.planModeReasoningEffort
     ) : '';
-    const showSpeed = normalizeServiceTierOptions(state.settings.serviceTierOptions).length > 1;
-    const speedText = formatServiceTierStatus(state.settings.serviceTier);
-    const verificationText = normalizeVerificationMode(state.settings.verificationMode);
     const routingParts = [];
     if (state.settings.modelProvider) routingParts.push(`Provider: ${state.settings.modelProvider}`);
     if (state.settings.cliProfile) routingParts.push(`Profile: ${state.settings.cliProfile}`);
@@ -10193,8 +10210,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
         fullTextParts.push(`Plan reasoning: ${planModeReasoningText}`);
     }
-    if (showSpeed) fullTextParts.push(`Speed: ${speedText}`);
-    fullTextParts.push(`Browser verification: ${verificationText}`);
+    fullTextParts.push(`Secondary: ${state.settings.secondaryModel || modelText} · ${state.settings.secondaryReasoningEffort || reasoningText}`);
     const fullText = `${fullTextParts.join(' · ')}${routingText}`;
     const displayTextParts = [];
     if (showBackend && backendText) displayTextParts.push(`Agent: ${truncateMiddleText(backendText, 18)}`);
@@ -10208,8 +10224,6 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
         displayTextParts.push(`Plan reasoning: ${truncateMiddleText(planModeReasoningText, 14)}`);
     }
-    if (showSpeed) displayTextParts.push(`Speed: ${truncateMiddleText(speedText, 18)}`);
-    displayTextParts.push(`Verify: ${verificationText}`);
     if (state.settings.modelProvider) {
         displayTextParts.push(`Provider: ${truncateMiddleText(state.settings.modelProvider, 16)}`);
     }
@@ -10236,10 +10250,7 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
         compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
     }
-    if (state.settings.serviceTier) {
-        compactSummaryParts.push(`Speed:${compactToken(speedText)}`);
-    }
-    compactSummaryParts.push(`Verify:${verificationText}`);
+    if (state.settings.secondaryModel) compactSummaryParts.push(`Secondary:${compactToken(state.settings.secondaryModel)}`);
     if (state.settings.modelProvider) {
         compactSummaryParts.push(`Provider:${compactToken(state.settings.modelProvider)}`);
     }
@@ -10277,9 +10288,9 @@ async function watchManualUsageKeepalive(streamId, attempts = 0) {
             ? ` · ${formatCompactTokenCount(totalTokens)} tokens`
             : '';
         if (Number(result?.exit_code) === 0 && !result?.error) {
-            showToast(`Terra medium effort 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
+            showToast(`세컨더리 경량 작업이 완료되었습니다${tokenText}`, { type: 'success' });
         } else {
-            showToast(`Terra medium effort 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
+            showToast(`세컨더리 경량 작업이 실패했습니다${tokenText}`, { type: 'error' });
         }
         await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
         scheduleUsageSummaryFollowup();
@@ -10323,7 +10334,9 @@ async function updateSettings() {
     const plan_mode_reasoning_effort = planModeReasoningSelect && !planModeReasoningSelect.classList.contains('is-hidden')
         ? planModeReasoningSelect.value.trim()
         : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
-    const service_tier = serviceTierSelect ? normalizeServiceTierValue(serviceTierSelect.value) : '';
+    const secondary_model = getRoleControlValue('secondary', 'model');
+    const secondary_reasoning_effort = getRoleControlValue('secondary', 'reasoning');
+    const service_tier = '';
     const verification_mode = verificationModeSelect
         ? normalizeVerificationMode(verificationModeSelect.value)
         : normalizeVerificationMode(state.settings.verificationMode);
@@ -10336,7 +10349,7 @@ async function updateSettings() {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_backend, model, plan_mode_model, reasoning_effort, plan_mode_reasoning_effort, service_tier, verification_mode })
+            body: JSON.stringify({ agent_backend, model, plan_mode_model, secondary_model, secondary_reasoning_effort, reasoning_effort, plan_mode_reasoning_effort, service_tier, verification_mode })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
@@ -10360,6 +10373,8 @@ async function updateSettings() {
         state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
         state.settings.modelProvider = result?.settings?.model_provider || null;
+        state.settings.secondaryModel = result?.settings?.secondary_model || null;
+        state.settings.secondaryReasoningEffort = result?.settings?.secondary_reasoning_effort || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
         state.settings.reasoningEffort = result?.settings?.reasoning_effort || null;
         state.settings.planModeReasoningEffort = result?.settings?.plan_mode_reasoning_effort || null;
@@ -10410,8 +10425,10 @@ async function updateSettings() {
         setSettingsStatus(state.settings.model, state.settings.reasoningEffort);
         syncInternalSettingsEditability();
         if (status) status.textContent = 'Saved';
+        showToast('실행 설정을 저장했습니다.', { tone: 'success', durationMs: 2200 });
     } catch (error) {
         if (status) status.textContent = normalizeError(error, 'Failed to update settings.');
+        showToast(normalizeError(error, '실행 설정을 저장하지 못했습니다.'), { tone: 'error' });
     } finally {
         if (refreshBtn) refreshBtn.classList.remove('is-loading');
     }
@@ -13065,8 +13082,8 @@ function applyGitCommitMessageGenerationSettings(model, reasoningEffort) {
 function applyGitCommitMessageModelFromSettings(settings) {
     if (!settings || typeof settings !== 'object') return gitCommitMessageModel;
     return applyGitCommitMessageGenerationSettings(
-        settings.git_commit_message_model,
-        settings.git_commit_message_reasoning_effort
+        settings.git_commit_message_model || settings.secondary_model || settings.model,
+        settings.git_commit_message_reasoning_effort || settings.secondary_reasoning_effort || settings.reasoning_effort
     );
 }
 
@@ -13283,19 +13300,21 @@ async function applyGitCommitMessageModelSelection() {
     }
 }
 
-function clearGitCommitMessageModelSelection() {
+async function clearGitCommitMessageModelSelection() {
     const elements = getGitCommitMessageModelOverlayElements();
-    if (!elements?.select || !elements.reasoningSelect) return;
-    const options = getGitCommitMessageModelOptions();
-    const defaultModel = options.includes(GIT_COMMIT_MESSAGE_DEFAULT_MODEL)
-        ? GIT_COMMIT_MESSAGE_DEFAULT_MODEL
-        : (options[0] || GIT_COMMIT_MESSAGE_DEFAULT_MODEL);
-    elements.select.value = defaultModel;
-    renderGitCommitMessageReasoningOptions(GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT);
-    if (elements.status) {
-        elements.status.textContent = `기본값 선택: ${defaultModel} · Reasoning ${GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT}`;
-        elements.status.classList.remove('is-error');
-    }
+    if (!elements || gitCommitMessageModelSaveInFlight) return;
+    gitCommitMessageModelSaveInFlight = true;
+    try {
+        const result = await fetchJson('/api/codex/settings', {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ git_commit_message_model: '', git_commit_message_reasoning_effort: '' })
+        });
+        applyGitCommitMessageModelFromSettings(result.settings);
+        renderGitCommitMessageModelOptions();
+        if (elements.status) elements.status.textContent = '세컨더리 설정을 상속합니다.';
+    } catch (error) {
+        if (elements.status) elements.status.textContent = normalizeError(error, '설정을 저장하지 못했습니다.');
+    } finally { gitCommitMessageModelSaveInFlight = false; }
 }
 
 function setGitCommitMessageStatus(elements, message = '', isError = false) {
@@ -27606,6 +27625,9 @@ function normalizePlanModeState(value) {
         if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
             return PLAN_MODE_STATE_PLAN_ONLY;
         }
+        if (normalized === PLAN_MODE_STATE_SECONDARY) {
+            return PLAN_MODE_STATE_SECONDARY;
+        }
         if (
             normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
             || normalized === 'auto'
@@ -27641,7 +27663,8 @@ function cyclePlanModeFromKeyboardEvent(event) {
 }
 
 function shouldUsePlanModeForRequest(planModeState = getPlanModeState()) {
-    return planModeState !== PLAN_MODE_STATE_OFF;
+    const normalized = normalizePlanModeState(planModeState);
+    return normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
 }
 
 function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
@@ -27653,6 +27676,9 @@ function getNextPlanModeState(currentState = getPlanModeState()) {
         return PLAN_MODE_STATE_PLAN_ONLY;
     }
     if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
+        return PLAN_MODE_STATE_SECONDARY;
+    }
+    if (currentState === PLAN_MODE_STATE_SECONDARY) {
         return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
     }
     return PLAN_MODE_STATE_OFF;
@@ -28078,7 +28104,7 @@ async function cleanupWorktreeTask(taskId, { force = false } = {}) {
 async function queuePromptOnServer(
     sessionId,
     prompt,
-    { planMode = false, attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
+    { planMode = false, modelRole = getComposeModelRole(), attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
 ) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
@@ -28091,6 +28117,7 @@ async function queuePromptOnServer(
         {
             prompt,
             plan_mode: Boolean(planMode),
+            model_role: planMode ? 'plan' : modelRole,
             structured_report_preset: structuredReportPreset || '',
             worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
             attachments: normalizedAttachments
@@ -28149,6 +28176,7 @@ async function queuePromptWithPlanMode(
         };
     }
     const normalizedPlanModeState = normalizePlanModeState(planModeState);
+    const modelRole = normalizedPlanModeState === PLAN_MODE_STATE_SECONDARY ? 'secondary' : 'main';
     const queueItems = [];
     if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
         queueItems.push({ prompt: normalizedPrompt, planMode: true, attachments });
@@ -28166,6 +28194,7 @@ async function queuePromptWithPlanMode(
     for (const item of queueItems) {
         lastResult = await queuePromptOnServer(sessionId, item.prompt, {
             planMode: item.planMode,
+            modelRole,
             attachments: item.attachments || [],
             worktreeMode
         });
@@ -28187,20 +28216,25 @@ function setPlanModeToggleState(nextState) {
     const button = document.getElementById('codex-plan-mode-toggle');
     const isActive = normalized !== PLAN_MODE_STATE_OFF;
     const isPlanAndExecute = normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-    let label = 'Plan mode off';
-    let buttonText = 'Plan';
+    let label = 'Work · 메인 모델로 실행';
+    let buttonText = 'Work';
     if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
-        label = 'Plan mode on (planning only)';
+        label = 'Plan · 플랜 모델로 계획만 작성';
+        buttonText = 'Plan';
+    } else if (normalized === PLAN_MODE_STATE_SECONDARY) {
+        label = 'Secondary · 세컨더리 모델로 실행';
+        buttonText = 'Secondary';
     } else if (isPlanAndExecute) {
-        label = 'Plan then execute mode on';
+        label = 'Plan+ · 계획 작성 후 메인 모델로 실행';
         buttonText = 'Plan+';
     }
+    label += ' (Shift+Tab: Work → Plan → Secondary → Plan+)';
     if (button) {
         button.classList.toggle('is-active', isActive);
         button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
         button.setAttribute('aria-pressed', String(isActive));
         button.dataset.planModeState = normalized;
-        button.textContent = buttonText;
+        button.textContent = normalized === PLAN_MODE_STATE_SECONDARY ? 'Sec' : buttonText;
         button.setAttribute('aria-label', label);
         button.setAttribute('title', label);
     }
@@ -29652,6 +29686,7 @@ async function sendPrompt(
     {
         sessionId: sessionIdOverride = null,
         planMode = false,
+        modelRole = getComposeModelRole(),
         attachments = [],
         structuredReportPreset = '',
         worktreeMode = false
@@ -29692,6 +29727,7 @@ async function sendPrompt(
             {
                 prompt,
                 plan_mode: Boolean(planMode),
+            model_role: planMode ? 'plan' : modelRole,
                 structured_report_preset: structuredReportPreset || '',
                 worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
                 attachments: normalizedAttachments
@@ -29733,6 +29769,7 @@ async function sendPrompt(
             try {
                 const queueResult = await queuePromptOnServer(sessionId, prompt, {
                     planMode: Boolean(planMode),
+                    modelRole,
                     attachments: normalizedAttachments,
                     structuredReportPreset,
                     worktreeMode
@@ -34108,4 +34145,33 @@ function normalizeError(error, fallback) {
         }
     }
     return fallback || 'An unknown error occurred.';
+}
+
+function getRoleControlValue(role, field) {
+    const select = document.getElementById(`codex-${role}-${field}-select`);
+    const input = document.getElementById(`codex-${role}-${field}-input`);
+    return String(select && !select.classList.contains('is-hidden') ? select.value : input?.value || '').trim();
+}
+
+function getComposeModelRole() {
+    return getPlanModeState() === PLAN_MODE_STATE_SECONDARY ? 'secondary' : 'main';
+}
+
+document.getElementById('codex-execution-settings-save')?.addEventListener('click', () => void updateSettings());
+document.getElementById('codex-secondary-model-select')?.addEventListener('change', event => {
+    const effort = getRoleControlValue('secondary', 'reasoning');
+    updatePlanModeReasoningControls(effort, state.settings.reasoningOptions, event.target.value || state.settings.model, 'secondary');
+});
+for (const field of ['model', 'reasoning']) {
+    document.getElementById(`codex-secondary-${field}-input`)?.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); void updateSettings(); }
+    });
+}
+
+for (const id of ['codex-blog-dashboard-open', 'codex-usage-keepalive-history-open', 'codex-usage-history-open', 'codex-account-manage-open', 'codex-internal-api-key-pool-open']) {
+    document.getElementById(id)?.addEventListener('click', () => {
+        const settings = document.getElementById('codex-ui-settings-overlay');
+        settings?.classList.remove('is-visible');
+        settings?.setAttribute('aria-hidden', 'true');
+    });
 }

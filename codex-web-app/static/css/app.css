@@ -11,6 +11,62 @@
 }
 
 @font-face {
+    font-family: "Wanted Sans";
+    src: url("/static/fonts/wanted-sans/WantedSansVariable.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "LINE Seed Sans KR";
+    src: url("/static/fonts/line-seed-kr/LINESeedKR-Thin.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 300 399;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "LINE Seed Sans KR";
+    src: url("/static/fonts/line-seed-kr/LINESeedKR-Regular.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400 600;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "LINE Seed Sans KR";
+    src: url("/static/fonts/line-seed-kr/LINESeedKR-Bold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 700 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Goorm Sans";
+    src: url("/static/fonts/goorm-sans/goorm-sans-regular.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Goorm Sans";
+    src: url("/static/fonts/goorm-sans/goorm-sans-medium.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 500 600;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Goorm Sans";
+    src: url("/static/fonts/goorm-sans/goorm-sans-bold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 700 900;
+    font-display: swap;
+}
+
+@font-face {
     font-family: "IBM Plex Sans KR";
     src: url("/static/fonts/ibm-plex/IBMPlexSansKR-Regular.woff2") format("woff2");
     font-style: normal;
@@ -427,6 +483,9 @@
     --font-ibm-ui-ja: "IBM Plex Sans JP", "IBM Plex Sans KR", sans-serif;
     --font-suit-ui: "SUIT Variable", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-nanum-square-ui: "NanumSquareNeo", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-wanted-sans-ui: "Wanted Sans", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-line-seed-ui: "LINE Seed Sans KR", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-goorm-sans-ui: "Goorm Sans", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-naver-ui: var(--font-ibm-ui-ko);
     --font-naver-code: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     --font-session-list-title: var(--font-naver-ui);
@@ -465,6 +524,33 @@
 
 [data-ui-font="nanum-square"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
     font-family: var(--font-nanum-square-ui);
+}
+
+[data-ui-font="wanted-sans"] {
+    --font-naver-ui: var(--font-wanted-sans-ui);
+    --font-sans: var(--font-wanted-sans-ui);
+}
+
+[data-ui-font="wanted-sans"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-wanted-sans-ui);
+}
+
+[data-ui-font="line-seed-kr"] {
+    --font-naver-ui: var(--font-line-seed-ui);
+    --font-sans: var(--font-line-seed-ui);
+}
+
+[data-ui-font="line-seed-kr"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-line-seed-ui);
+}
+
+[data-ui-font="goorm-sans"] {
+    --font-naver-ui: var(--font-goorm-sans-ui);
+    --font-sans: var(--font-goorm-sans-ui);
+}
+
+[data-ui-font="goorm-sans"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-goorm-sans-ui);
 }
 
 [data-theme="dark"] {
@@ -9269,14 +9355,18 @@ body.is-work-mode-resizing * {
 
 .ui-font-option-sample {
     color: var(--text-secondary);
-    font-family: var(--font-ibm-ui-ko);
+    font-family: sans-serif;
     font-size: 12px;
     line-height: 1.25;
     white-space: nowrap;
 }
 
-.ui-font-option-suit .ui-font-option-sample { font-family: var(--font-suit-ui); }
-.ui-font-option-nanum-square .ui-font-option-sample { font-family: var(--font-nanum-square-ui); }
+.ui-font-option:has(input:checked[value="ibm-plex"]) .ui-font-option-sample { font-family: var(--font-ibm-ui-ko); }
+.ui-font-option:has(input:checked[value="suit"]) .ui-font-option-sample { font-family: var(--font-suit-ui); }
+.ui-font-option:has(input:checked[value="nanum-square"]) .ui-font-option-sample { font-family: var(--font-nanum-square-ui); }
+.ui-font-option:has(input:checked[value="wanted-sans"]) .ui-font-option-sample { font-family: var(--font-wanted-sans-ui); }
+.ui-font-option:has(input:checked[value="line-seed-kr"]) .ui-font-option-sample { font-family: var(--font-line-seed-ui); }
+.ui-font-option:has(input:checked[value="goorm-sans"]) .ui-font-option-sample { font-family: var(--font-goorm-sans-ui); }
 
 .ui-settings-usage {
     display: flex;

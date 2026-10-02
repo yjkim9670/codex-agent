@@ -2549,7 +2549,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     };
-    const normalizeUiFont = value => ['suit', 'nanum-square'].includes(value) ? value : DEFAULT_UI_FONT;
+    const normalizeUiFont = value => [
+        'suit',
+        'nanum-square',
+        'wanted-sans',
+        'line-seed-kr',
+        'goorm-sans'
+    ].includes(value) ? value : DEFAULT_UI_FONT;
     const applyUiFont = (value, { persist = true } = {}) => {
         const font = normalizeUiFont(value);
         if (font === DEFAULT_UI_FONT) {

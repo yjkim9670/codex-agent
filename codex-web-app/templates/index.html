@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=244">
+    <link rel="stylesheet" href="/static/css/app.css?v=245">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -1475,6 +1475,27 @@
                                 <span class="ui-font-option-sample">가나다 ABC 123</span>
                             </span>
                         </label>
+                        <label class="ui-font-option ui-font-option-wanted-sans">
+                            <input type="radio" name="codex-ui-font" value="wanted-sans">
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">Wanted Sans</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
+                        <label class="ui-font-option ui-font-option-line-seed">
+                            <input type="radio" name="codex-ui-font" value="line-seed-kr">
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">LINE Seed Sans KR</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
+                        <label class="ui-font-option ui-font-option-goorm-sans">
+                            <input type="radio" name="codex-ui-font" value="goorm-sans">
+                            <span class="ui-font-option-copy">
+                                <span class="ui-font-option-name">Goorm Sans</span>
+                                <span class="ui-font-option-sample">가나다 ABC 123</span>
+                            </span>
+                        </label>
                     </div>
                     <span class="ui-font-setting-help" id="codex-ui-font-help">변경사항은 바로 적용되며, 이 브라우저에 저장됩니다.</span>
                 </fieldset>
@@ -1969,6 +1990,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=261"></script>
+    <script src="/static/js/app.js?v=262"></script>
 </body>
 </html>

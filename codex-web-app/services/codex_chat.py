@@ -9840,6 +9840,10 @@ def _clone_message_for_branch(message):
     return cloned
 
 
+class BranchSessionStreamingError(ValueError):
+    """The requested branch includes an unfinished response."""
+
+
 def branch_session_from_message(session_id, message_id, title=None):
     session_key = str(session_id or '').strip()
     message_key = str(message_id or '').strip()
@@ -9873,6 +9877,13 @@ def branch_session_from_message(session_id, message_id, title=None):
 
         if not found_message:
             return None
+
+        # Validate the entire prefix under the same lock as the snapshot/save.
+        # Later streaming messages do not prevent branching completed history.
+        if any(message.get('streaming') for message in branch_messages):
+            raise BranchSessionStreamingError(
+                '생성 중인 응답이 포함된 대화는 브랜치할 수 없습니다.'
+            )
 
         now = normalize_timestamp(None)
         source_title = str(source_session.get('title') or '').strip() or 'New session'

@@ -628,6 +628,81 @@ def test_branch_session_from_message_copies_history_through_target(isolated_code
     assert source['messages'][-1]['id'] == third['id']
 
 
+def test_branch_route_allows_completed_history_during_active_stream(chat_route_client, monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', False)
+    source = codex_chat.create_session('running-source')
+    completed = codex_chat.append_message(source['id'], 'assistant', 'completed answer')
+    live = codex_chat.append_message(source['id'], 'assistant', 'partial', metadata={'streaming': True})
+    stream = _build_stream_state('branch-active-stream', source['id'], time.time(),
+                                 isolated_codex_workspace['workspace_dir'] / 'branch-output.txt')
+    stream['assistant_message_id'] = live['id']
+    with state.codex_streams_lock:
+        state.codex_streams[stream['id']] = stream
+    assert codex_chat.get_active_stream_id_for_session(source['id']) == stream['id']
+
+    response = chat_route_client.post(
+        f"/api/codex/sessions/{source['id']}/messages/{completed['id']}/branch", json={}
+    )
+    assert response.status_code == 200
+    branch = response.get_json()['session']
+    assert [message['content'] for message in branch['messages']] == ['completed answer']
+    assert branch['pending_queue'] == []
+    assert codex_chat.get_session(source['id'])['messages'][-1]['streaming'] is True
+
+    assert codex_chat.get_active_stream_id_for_session(source['id']) == stream['id']
+    stream.update({'done': True, 'exit_code': 0, 'output': 'finished answer'})
+    codex_chat.finalize_codex_stream(stream['id'], trigger_queue=False)
+    assert codex_chat.get_session(source['id'])['messages'][-1]['content'] == 'finished answer'
+    assert codex_chat.get_session(source['id'])['messages'][-1]['streaming'] is False
+    assert codex_chat.get_session(branch['id'])['messages'] == branch['messages']
+
+
+@pytest.mark.parametrize('target_after_live', [False, True])
+def test_branch_route_rejects_any_streaming_message_in_prefix(chat_route_client, monkeypatch, target_after_live):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', False)
+    source = codex_chat.create_session('unfinished-source')
+    live = codex_chat.append_message(source['id'], 'assistant', 'partial', metadata={'streaming': True})
+    target = codex_chat.append_message(source['id'], 'user', 'later prompt') if target_after_live else live
+    before = codex_chat.get_session(source['id'])
+    response = chat_route_client.post(
+        f"/api/codex/sessions/{source['id']}/messages/{target['id']}/branch", json={}
+    )
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'branch_contains_streaming_message'
+    assert codex_chat.get_session(source['id']) == before
+    assert len(codex_chat.list_sessions()) == 1
+
+
+def test_branch_and_concurrent_stream_updates_preserve_both_sessions(isolated_codex_workspace):
+    source = codex_chat.create_session('concurrent-source')
+    completed = codex_chat.append_message(source['id'], 'assistant', 'stable history')
+    live = codex_chat.append_message(source['id'], 'assistant', '', metadata={'streaming': True})
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def update_stream():
+        try:
+            barrier.wait(timeout=5)
+            for index in range(10):
+                codex_chat.update_message(source['id'], live['id'], content=f'partial {index}')
+            codex_chat.update_message(source['id'], live['id'], content='finished', metadata={'streaming': False})
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=update_stream)
+    worker.start()
+    barrier.wait(timeout=5)
+    branches = [codex_chat.branch_session_from_message(source['id'], completed['id']) for _ in range(10)]
+    worker.join(timeout=10)
+    assert not worker.is_alive()
+    assert not errors
+    assert codex_chat.get_session(source['id'])['messages'][-1]['content'] == 'finished'
+    assert codex_chat.get_session(source['id'])['messages'][-1]['streaming'] is False
+    for branch in branches:
+        assert [message['content'] for message in codex_chat.get_session(branch['id'])['messages']] == ['stable history']
+    assert len(codex_chat.list_sessions()) == 11
+
+
 def test_merge_message_lists_does_not_wrap_message_payload():
     existing = [{
         'id': 'message-1',

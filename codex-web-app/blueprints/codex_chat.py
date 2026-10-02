@@ -60,6 +60,7 @@ from ..services.codex_chat import (
     append_message,
     _compact_usage_limit_snapshot,
     branch_session_from_message,
+    BranchSessionStreamingError,
     build_codex_prompt,
     build_codex_app_server_thread_lifecycle_preview,
     build_repo_skill_preview,
@@ -1993,15 +1994,10 @@ def codex_session_message_branch(session_id, message_id):
     if len(title) > CODEX_MAX_TITLE_CHARS:
         return jsonify({'error': '세션 이름이 너무 깁니다.'}), 400
 
-    active_stream_id = get_active_stream_id_for_session(session_id)
-    if active_stream_id:
-        return jsonify({
-            'error': '세션 응답이 실행 중일 때는 브랜치 세션을 만들 수 없습니다.',
-            'active_stream_id': active_stream_id,
-            'already_running': True
-        }), 409
-
-    session = branch_session_from_message(session_id, message_id, title=title or None)
+    try:
+        session = branch_session_from_message(session_id, message_id, title=title or None)
+    except BranchSessionStreamingError as exc:
+        return jsonify({'error': str(exc), 'code': 'branch_contains_streaming_message'}), 409
     if not session:
         return jsonify({'error': '브랜치 기준 대화를 찾을 수 없습니다.'}), 404
     return _jsonify_chat_payload_or_crypto_error({

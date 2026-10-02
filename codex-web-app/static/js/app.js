@@ -27420,6 +27420,7 @@ function renderMessages(messages) {
         const timestampValue = getMessageTimestampValue(message);
         setMessageWrapperIdentity(wrapper, roleClass, timestampValue, message?.id);
         syncMessageResponseModeClass(wrapper, roleClass, message);
+        wrapper.dataset.messageStreaming = message?.streaming ? 'true' : 'false';
 
         const metaText = buildMessageMetaText(roleClass, timestampValue, message);
         const meta = buildMessageMeta(metaText, wrapper);
@@ -30893,8 +30894,8 @@ async function branchMessageFromWrapper(wrapper, button) {
         showToast(message, { tone: 'error', durationMs: 2800 });
         return;
     }
-    if (isSessionBusy(sessionId)) {
-        const message = 'Cannot branch a session while it is running.';
+    if (wrapper?.classList.contains('is-streaming') || wrapper?.dataset?.messageStreaming === 'true') {
+        const message = 'Cannot branch a response while it is being generated.';
         setStatus(message, true);
         showToast(message, { tone: 'error', durationMs: 3200 });
         return;
@@ -30925,9 +30926,6 @@ async function branchMessageFromWrapper(wrapper, button) {
             throw new Error('Branched session was not returned.');
         }
         upsertSessionSummary(branched);
-        state.activeSessionId = branched.id;
-        ensureSessionState(branched.id);
-        renderSessions();
         await loadSession(branched.id);
         setStatus('Branched session created.');
         showToast('Branched session created.', { tone: 'success', durationMs: 2600 });
@@ -32140,6 +32138,7 @@ function buildTokenUsageEntry(entry, label) {
 
 function setMessageStreaming(wrapper, isStreaming) {
     if (!wrapper) return;
+    wrapper.dataset.messageStreaming = isStreaming ? 'true' : 'false';
     wrapper.classList.toggle('is-streaming', Boolean(isStreaming));
     if (!isStreaming) {
         removeQueuedPromptWaitlist(wrapper);

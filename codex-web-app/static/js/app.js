@@ -9796,18 +9796,20 @@ function updateUsageSummary(usage) {
     }
     const keepaliveError = document.getElementById('codex-usage-keepalive-error');
     if (keepaliveError) {
-        const failed = /fail|error/.test(String(usage?.usage_keepalive?.last_status || ''));
+        const recovered = usage?.usage_keepalive?.last_error === 'stale_run_recovered';
+        const failed = !recovered && /fail|error/.test(String(usage?.usage_keepalive?.last_status || ''));
         keepaliveError.classList.toggle('is-hidden', !showUsageLimits || !failed);
         keepaliveError.textContent = failed ? '경량 작업 오류 · 설정에서 이력 확인' : '';
         keepaliveError.title = String(usage?.usage_keepalive?.last_error || '');
     }
     if (keepaliveStatus) {
         const keepalive = usage?.usage_keepalive || {};
-        const status = String(keepalive?.last_status || '').trim();
+        const status = keepalive?.last_error === 'stale_run_recovered'
+            ? 'recovered' : String(keepalive?.last_status || '').trim();
         const timestamp = formatResetTimestamp(keepalive?.last_completed_at || keepalive?.last_submission_at || keepalive?.last_attempt_at);
         keepaliveStatus.classList.toggle('is-hidden', !showUsageLimits || (!status && !timestamp));
         keepaliveStatus.textContent = status || timestamp
-            ? `경량 작업: ${status || '기록됨'}${timestamp ? ` · ${timestamp}` : ''}`
+            ? `경량 작업: ${formatUsageKeepaliveHistoryEvent(status) || '기록됨'}${timestamp ? ` · ${timestamp}` : ''}`
             : '';
         if (keepalive?.last_error) keepaliveStatus.title = String(keepalive.last_error);
         else keepaliveStatus.removeAttribute('title');
@@ -17095,7 +17097,10 @@ function isUsageKeepaliveHistoryOverlayOpen() {
 
 function formatUsageKeepaliveHistoryEvent(event) {
     const labels = {
-        submitted: '제출됨',
+        queued: '제출 대기',
+        submitted: '실행 중',
+        recovered: '이전 작업 중단 감지 · 정리 완료',
+        deferred: '실행 보류 · 다음 조회에서 재확인',
         completed: '완료',
         failed: '실패',
         submission_failed: '제출 실패',
@@ -17150,14 +17155,16 @@ function renderUsageKeepaliveHistory() {
         const heading = document.createElement('div');
         heading.className = 'usage-keepalive-history-item-heading';
         const event = document.createElement('strong');
-        event.textContent = formatUsageKeepaliveHistoryEvent(item?.event);
+        event.textContent = formatUsageKeepaliveHistoryEvent(
+            item?.error === 'stale_run_recovered' ? 'recovered' : item?.event);
         const mode = document.createElement('span');
         mode.textContent = String(item?.mode || 'manual') === 'automatic' ? '자동' : '수동';
         heading.append(event, mode);
         const details = document.createElement('div');
         details.className = 'usage-keepalive-history-item-details';
         const parts = [formatResetTimestamp(item?.at), formatUsageKeepaliveHistoryTokens(item?.token_usage)].filter(Boolean);
-        if (item?.error) parts.push(String(item.error));
+        if (item?.error) parts.push(item.error === 'stale_run_recovered'
+            ? '중단된 이전 실행 기록을 정리했습니다.' : String(item.error));
         if (item?.candidate_resets && Object.keys(item.candidate_resets).length) parts.push('리셋 후보 기록됨');
         details.textContent = parts.join(' · ') || '세부 정보 없음';
         row.append(heading, details);
@@ -17277,7 +17284,7 @@ function renderBlogDashboard(status) {
         ['대기 주제', `${Number(dashboard.backlog_count || 0)}개`],
         ['주제 참고', `${Number(dashboard.topic_inspiration_count || 0)}개`],
         ['작업공간', `${workspaceName} · ${String(status.workspace?.scope_id || '').slice(0, 8) || '확인 불가'}`],
-        ['최근 결과', dashboard.last_status === 'completed' ? '완료' : (dashboard.last_status === 'failed' ? '실패' : '없음')],
+        ['최근 결과', dashboard.last_status ? formatUsageKeepaliveHistoryEvent(dashboard.last_status) : '없음'],
         ['최근 토큰', formatUsageKeepaliveHistoryTokens(dashboard.last_token_usage) || '기록 없음'],
     ];
     values.forEach(([label, value]) => {

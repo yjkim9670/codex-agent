@@ -8643,6 +8643,9 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
         return {'submitted': False, 'reason': 'not_configured'}
     if not blog_status.get('enabled'):
         return {'submitted': False, 'reason': 'disabled'}
+    retry_at = parse_timestamp(previous.get('next_retry_at'))
+    if retry_at and retry_at > current:
+        return {'submitted': False, 'reason': 'retry_pending'}
     targets = _usage_keepalive_cycle_targets(snapshot, current)
     if not targets:
         return {'submitted': False, 'reason': 'no_zero_usage_window'}
@@ -8670,37 +8673,85 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
         'last_error': '',
         'automatic_cycle_targets': targets,
         'automatic_attempts': 1,
+        'next_retry_at': None,
         'history': history,
     }
     return {'submitted': True, 'reason': '', 'state': snapshot['usage_keepalive']}
 
 
-def _start_reserved_automatic_usage_blog(account_id):
+def _start_reserved_automatic_usage_blog(account_id, reservation=None):
     """Run after the usage-snapshot lock has been released."""
-    result = _run_usage_blog_pipeline(account_id, automatic=True)
+    try:
+        result = _run_usage_blog_pipeline(account_id, automatic=True)
+    except Exception as exc:
+        _LOGGER.exception('Automatic blog stage failed to start')
+        result = {'submitted': False, 'reason': 'start_failed', 'error': str(exc)[:1000]}
     context = _account_storage_context(account_id)
     if context is None:
         return result
     with _acquire_path_file_lock(context['account_usage_snapshot_path']):
         snapshot = _load_account_usage_snapshot(context)
         keepalive = snapshot.get('usage_keepalive') if isinstance(snapshot.get('usage_keepalive'), dict) else {}
+        if reservation and (keepalive.get('last_attempt_at') != reservation.get('last_attempt_at')
+                            or keepalive.get('automatic_cycle_targets') != reservation.get('automatic_cycle_targets')):
+            return result
         now = normalize_timestamp(None)
         history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
         history = _retain_usage_diagnostic_history(history)
+        reason = str(result.get('reason') or '')
+        deferred = not result.get('submitted') and reason in {
+            'account_busy', 'run_in_flight', 'project_busy', 'not_due',
+            'disabled', 'not_configured', 'stale_run_recovered',
+        }
+        if result.get('submitted'):
+            outcome = 'submitted'
+        elif reason == 'stale_run_recovered':
+            outcome = 'recovered'
+        else:
+            outcome = 'deferred' if deferred else 'failed'
         history.append({
             'at': now,
-            'event': 'submitted' if result.get('submitted') else 'submission_failed',
+            'event': outcome if outcome != 'failed' else 'submission_failed',
             'mode': 'automatic',
             'stream_id': result.get('stream', {}).get('id') or '',
             'error': '' if result.get('submitted') else str(result.get('reason') or '')[:1000],
         })
+        completed_early = (result.get('submitted')
+                           and keepalive.get('last_stream_id') == result.get('stream', {}).get('id')
+                           and keepalive.get('last_status') in {'completed', 'failed'})
+        final_status = keepalive.get('last_status') if completed_early else outcome
+        final_error = keepalive.get('last_error', '') if completed_early else (
+            '' if result.get('submitted') or deferred else str(result.get('error') or reason)[:1000])
         keepalive.update({
             'last_submission_at': now if result.get('submitted') else keepalive.get('last_submission_at'),
             'last_stream_id': result.get('stream', {}).get('id') or keepalive.get('last_stream_id'),
-            'last_status': 'submitted' if result.get('submitted') else 'failed',
-            'last_error': '' if result.get('submitted') else str(result.get('reason') or '')[:1000],
+            'last_status': final_status,
+            'last_error': final_error,
+            'last_reason': reason,
             'history': history,
         })
+        if not result.get('submitted'):
+            # Only release our exact reservation. A newer claim from another
+            # workspace must survive this worker's delayed result.
+            claim_path = _usage_keepalive_coordination_path(context)
+            with _acquire_path_file_lock(claim_path):
+                try:
+                    claim = json.loads(claim_path.read_text(encoding='utf-8'))
+                except (OSError, ValueError):
+                    claim = {}
+                claim = claim if isinstance(claim, dict) else {}
+                windows = claim.get('windows') or {}
+                for name, target in (keepalive.get('automatic_cycle_targets') or {}).items():
+                    prior = windows.get(name) or {}
+                    if (prior.get('target') == target
+                            and prior.get('submitted_at') == keepalive.get('last_attempt_at')
+                            and prior.get('workspace_scope_id') == _WORKSPACE_SCOPE_ID):
+                        windows.pop(name, None)
+                claim['windows'] = windows
+                _write_json_atomic(claim_path, claim)
+            keepalive.pop('automatic_cycle_targets', None)
+            keepalive['next_retry_at'] = normalize_timestamp(
+                datetime.now(KST) + timedelta(minutes=30))
         snapshot['usage_keepalive'] = keepalive
         snapshot['version'] = snapshot.get('version') or 1
         snapshot['account_id'] = context['account']['id']
@@ -8716,6 +8767,17 @@ def _start_reserved_automatic_usage_blog(account_id):
             'stream_id': result.get('stream', {}).get('id') or '',
         },
     })
+    if result.get('submitted'):
+        # A very short run can complete before last_stream_id is persisted.
+        # Replay its durable result now that the Usage entry is bound to it.
+        from .blog_pipeline import get_blog_pipeline_status
+        last = ((get_blog_pipeline_status().get('state') or {}).get('last_result') or {})
+        if (last.get('run_id') == (result.get('blog_pipeline') or {}).get('run_id')
+                and last.get('status') in {'completed', 'failed'}):
+            _record_automatic_usage_blog_completion(
+                account_id, result.get('stream', {}).get('id'),
+                succeeded=last['status'] == 'completed',
+                error=last.get('error') or '', token_usage=last.get('token_usage'))
     return result
 
 
@@ -8728,7 +8790,8 @@ def _start_reserved_automatic_usage_blog_worker(context, reservation):
     worker_context = copy_context()
     worker = threading.Thread(
         target=worker_context.run,
-        args=(_start_reserved_automatic_usage_blog, context['account']['id']),
+        args=(_start_reserved_automatic_usage_blog, context['account']['id'],
+              deepcopy(reservation.get('state') or {})),
         name='codex-usage-blog-stage',
         daemon=True,
     )
@@ -8842,6 +8905,8 @@ def _record_automatic_usage_blog_completion(account_id, stream_id, succeeded, er
             or str(keepalive.get('last_stream_id') or '') != str(stream_id or '')
         ):
             return False
+        if keepalive.get('last_completed_at') and keepalive.get('last_status') in {'completed', 'failed'}:
+            return True
         completed_at = normalize_timestamp(None)
         history = keepalive.get('history') if isinstance(keepalive.get('history'), list) else []
         history = _retain_usage_diagnostic_history(history)

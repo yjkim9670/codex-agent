@@ -348,3 +348,180 @@ def test_completion_rejects_a_different_workspace_owner(blog_environment, monkey
         'blog_root': str(root), 'workspace_path': '/another/workbench/workspace',
     }, True) is False
     assert blog_pipeline.get_blog_pipeline_status()['state']['in_flight']['run_id'] == started['run_id']
+
+
+def _interrupted_blog_run(workspace, monkeypatch, *, stream=None):
+    from datetime import timedelta
+    blog_pipeline.configure_blog_project({'project_id': 'recovery-series', 'enabled': True})
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'recovery-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'recovery-stream'})
+    monkeypatch.setattr(codex_chat, 'get_session', lambda _id: None)
+    started = blog_pipeline.run_blog_pipeline(force=True)
+    root = workspace / 'blog'
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    state['in_flight']['started_at'] = blog_pipeline.normalize_timestamp(
+        blog_pipeline._now() - timedelta(hours=3))
+    blog_pipeline._save_state(root, state)
+    if stream:
+        monkeypatch.setitem(codex_chat.state.codex_streams, 'recovery-stream', stream)
+    return root, started
+
+
+def test_interrupted_run_is_recovered_and_restarted_in_same_call(blog_environment, monkeypatch):
+    root, original = _interrupted_blog_run(blog_environment, monkeypatch)
+    result = blog_pipeline.run_blog_pipeline(force=False)
+    assert result['started'] is True
+    assert result['run_id'] != original['run_id']
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    assert state['last_error'] == ''
+    assert state['last_result']['status'] == 'recovered'
+    history = blog_pipeline._read_jsonl_tail(root / 'runs.jsonl')
+    assert [item['status'] for item in history] == ['started', 'recovered', 'started']
+    assert history[1]['stream_id'] == 'recovery-stream'
+
+
+def test_long_running_stream_is_never_recovered(blog_environment, monkeypatch):
+    _, original = _interrupted_blog_run(blog_environment, monkeypatch, stream={'done': False})
+    result = blog_pipeline.run_blog_pipeline(force=True)
+    assert result['reason'] == 'run_in_flight'
+    assert blog_pipeline.get_blog_pipeline_status()['state']['in_flight']['run_id'] == original['run_id']
+
+
+def test_missing_start_timestamp_can_be_recovered(blog_environment, monkeypatch):
+    root, _ = _interrupted_blog_run(blog_environment, monkeypatch)
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    state['in_flight']['started_at'] = None
+    blog_pipeline._save_state(root, state)
+    assert blog_pipeline.run_blog_pipeline(force=True)['started'] is True
+
+
+def test_foreign_live_owner_is_protected(blog_environment, monkeypatch):
+    root, _ = _interrupted_blog_run(blog_environment, monkeypatch)
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    state['in_flight']['owner_pid'] = 123456
+    blog_pipeline._save_state(root, state)
+    monkeypatch.setattr(blog_pipeline.os, 'kill', lambda *_args: None)
+    assert blog_pipeline.run_blog_pipeline(force=True)['reason'] == 'run_in_flight'
+
+
+def test_saved_completion_restores_stage_instead_of_repeating_it(blog_environment, monkeypatch):
+    root, original = _interrupted_blog_run(blog_environment, monkeypatch)
+    (root / 'topic_proposal.json').write_text(json.dumps({'title': '하루 계획을 정리하는 방법'}))
+    monkeypatch.setattr(codex_chat, 'get_session', lambda _id: {'messages': [{
+        'role': 'assistant', 'content': '완료',
+        'metadata': {'streaming': False, 'token_usage': {'total_tokens': 42}},
+    }]})
+    result = blog_pipeline.run_blog_pipeline(force=True)
+    assert result['stage'] == 'brief'
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    assert state['last_result']['run_id'] == original['run_id']
+    assert state['last_result']['status'] == 'completed'
+    assert state['last_result']['token_usage']['total_tokens'] == 42
+
+
+@pytest.mark.parametrize('reason, expected', [('run_in_flight', 'deferred'), ('stale_run_recovered', 'recovered'), ('start_failed', 'failed')])
+def test_unsubmitted_automatic_work_releases_only_its_reservation(blog_environment, monkeypatch, reason, expected):
+    snapshot_path = blog_environment / 'usage.json'
+    claim_path = blog_environment / 'usage-claim.json'
+    attempted_at = blog_pipeline.normalize_timestamp(None)
+    snapshot = {'usage_keepalive': {
+        'last_mode': 'automatic', 'last_status': 'queued', 'last_attempt_at': attempted_at,
+        'automatic_cycle_targets': {'five_hour': 'target'},
+    }}
+    context = {'account': {'id': 'default'}, 'account_usage_snapshot_path': snapshot_path}
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda _id: context)
+    monkeypatch.setattr(codex_chat, '_load_account_usage_snapshot', lambda _context: snapshot)
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_coordination_path', lambda _context: claim_path)
+    monkeypatch.setattr(codex_chat, '_run_usage_blog_pipeline', lambda *_args, **_kw: {'submitted': False, 'reason': reason})
+    monkeypatch.setattr(codex_chat, '_record_automatic_usage_refresh_history', lambda *_args: None)
+    claim_path.write_text(json.dumps({'windows': {
+        'five_hour': {'target': 'target', 'submitted_at': attempted_at, 'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID},
+        'weekly': {'target': 'unrelated'},
+    }}))
+    codex_chat._start_reserved_automatic_usage_blog('default')
+    keepalive = json.loads(snapshot_path.read_text())['usage_keepalive']
+    assert keepalive['last_status'] == expected
+    assert 'automatic_cycle_targets' not in keepalive
+    assert keepalive['next_retry_at']
+    assert keepalive['last_error'] == ('start_failed' if expected == 'failed' else '')
+    assert json.loads(claim_path.read_text())['windows'] == {'weekly': {'target': 'unrelated'}}
+
+
+def test_done_stream_is_finalized_before_recovery(blog_environment, monkeypatch):
+    root, original = _interrupted_blog_run(blog_environment, monkeypatch, stream={'done': True})
+    finalized = []
+
+    def finalize(stream_id):
+        finalized.append(stream_id)
+        (root / 'topic_proposal.json').write_text(json.dumps({'title': '주말 시간을 정리하는 방법'}))
+        blog_pipeline.record_blog_pipeline_completion({
+            'run_id': original['run_id'], 'project_id': 'recovery-series',
+            'stage': 'topic', 'blog_root': str(root),
+            'claim_path': blog_pipeline.get_blog_pipeline_status()['state']['in_flight']['claim_path'],
+        }, True)
+
+    monkeypatch.setattr(codex_chat, 'finalize_codex_stream', finalize)
+    assert blog_pipeline.run_blog_pipeline(force=True)['stage'] == 'brief'
+    assert finalized == ['recovery-stream']
+    assert not any(item['status'] == 'recovered' for item in blog_pipeline._read_jsonl_tail(root / 'runs.jsonl'))
+
+
+def test_partial_message_does_not_restore_completion(blog_environment, monkeypatch):
+    _, _ = _interrupted_blog_run(blog_environment, monkeypatch)
+    monkeypatch.setattr(codex_chat, 'get_session', lambda _id: {'messages': [{
+        'role': 'assistant', 'content': '진행 중', 'metadata': {'streaming': True},
+    }]})
+    result = blog_pipeline.run_blog_pipeline(force=True)
+    assert result['stage'] == 'topic'
+    assert blog_pipeline.get_blog_pipeline_status()['state']['last_result']['status'] == 'recovered'
+
+
+def test_newer_global_reservation_survives_old_worker(blog_environment, monkeypatch):
+    snapshot_path = blog_environment / 'usage.json'
+    claim_path = blog_environment / 'claim.json'
+    snapshot = {'usage_keepalive': {
+        'last_mode': 'automatic', 'last_status': 'queued', 'last_attempt_at': '2026-10-05T00:00:00+09:00',
+        'automatic_cycle_targets': {'five_hour': 'target'},
+    }}
+    newer = {'target': 'target', 'submitted_at': '2026-10-05T01:00:00+09:00',
+             'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID}
+    claim_path.write_text(json.dumps({'windows': {'five_hour': newer}}))
+    context = {'account': {'id': 'default'}, 'account_usage_snapshot_path': snapshot_path}
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda _id: context)
+    monkeypatch.setattr(codex_chat, '_load_account_usage_snapshot', lambda _context: snapshot)
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_coordination_path', lambda _context: claim_path)
+    monkeypatch.setattr(codex_chat, '_run_usage_blog_pipeline', lambda *_args, **_kw: {'submitted': False, 'reason': 'run_in_flight'})
+    monkeypatch.setattr(codex_chat, '_record_automatic_usage_refresh_history', lambda *_args: None)
+    codex_chat._start_reserved_automatic_usage_blog('default')
+    assert json.loads(claim_path.read_text())['windows']['five_hour'] == newer
+
+
+def test_retry_wait_does_not_consume_global_claim(blog_environment, monkeypatch):
+    from datetime import timedelta
+    blog_pipeline.configure_blog_project({'project_id': 'retry-series', 'enabled': True})
+    snapshot = {'usage_keepalive': {'next_retry_at': blog_pipeline.normalize_timestamp(
+        blog_pipeline._now() + timedelta(minutes=30))}}
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *_args: pytest.fail('Claim consumed during retry delay'))
+    result = codex_chat._reserve_automatic_usage_blog_locked({'account': {'id': 'default'}}, snapshot)
+    assert result['reason'] == 'retry_pending'
+
+
+def test_completion_before_submission_record_is_restored_once(blog_environment, monkeypatch):
+    snapshot_path = blog_environment / 'usage.json'
+    snapshot = {'usage_keepalive': {'last_mode': 'automatic', 'last_status': 'queued'}}
+    context = {'account': {'id': 'default'}, 'account_usage_snapshot_path': snapshot_path}
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda _id: context)
+    monkeypatch.setattr(codex_chat, '_load_account_usage_snapshot', lambda _context: snapshot)
+    monkeypatch.setattr(codex_chat, '_record_automatic_usage_refresh_history', lambda *_args: None)
+    monkeypatch.setattr(codex_chat, '_run_usage_blog_pipeline', lambda *_args, **_kw: {
+        'submitted': True, 'stream': {'id': 'instant-stream'}, 'blog_pipeline': {'run_id': 'instant-run'},
+    })
+    monkeypatch.setattr(blog_pipeline, 'get_blog_pipeline_status', lambda: {'state': {'last_result': {
+        'run_id': 'instant-run', 'status': 'completed', 'token_usage': {'total_tokens': 17},
+    }}})
+    codex_chat._start_reserved_automatic_usage_blog('default')
+    assert snapshot['usage_keepalive']['last_status'] == 'completed'
+    codex_chat._record_automatic_usage_blog_completion('default', 'instant-stream', True)
+    events = snapshot['usage_keepalive']['history']
+    assert [event['event'] for event in events] == ['submitted', 'completed']
+    assert events[-1]['token_usage']['total_tokens'] == 17

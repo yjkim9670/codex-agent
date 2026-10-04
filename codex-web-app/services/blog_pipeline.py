@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import uuid
@@ -559,7 +560,7 @@ def _claim_global(context, project, run_id, now, force=False):
             payload = {}
         active = payload.get('active') if isinstance(payload.get('active'), dict) else None
         active_until = parse_timestamp(active.get('lease_until')) if active else None
-        if active and active_until and active_until > now:
+        if active and ((active_until and active_until > now) or _run_is_alive(active)):
             return False, 'project_busy', path
         next_allowed = parse_timestamp(payload.get('next_allowed_at'))
         if not force and next_allowed and next_allowed > now:
@@ -575,6 +576,7 @@ def _claim_global(context, project, run_id, now, force=False):
                 'started_at': normalize_timestamp(now),
                 'lease_until': normalize_timestamp(now + timedelta(seconds=_RUN_LEASE_SECONDS)),
                 'stream_id': '',
+                'owner_pid': os.getpid(),
             },
         })
         _write_json_atomic(path, payload)
@@ -594,7 +596,7 @@ def _update_claim_stream(claim_path, run_id, stream_id):
         _write_json_atomic(claim_path, payload)
 
 
-def _finish_claim(claim_path, project, run_id, succeeded, now):
+def _finish_claim(claim_path, project, run_id, succeeded, now, recovered=False):
     if not claim_path:
         return
     with codex_chat._acquire_path_file_lock(claim_path):
@@ -605,9 +607,11 @@ def _finish_claim(claim_path, project, run_id, succeeded, now):
         payload['active'] = None
         payload['last_run_id'] = run_id
         payload['last_completed_at'] = normalize_timestamp(now)
-        payload['last_status'] = 'completed' if succeeded else 'failed'
+        payload['last_status'] = 'recovered' if recovered else ('completed' if succeeded else 'failed')
+        delay_minutes = 0 if recovered else (
+            project['cadence_minutes'] if succeeded else _RETRY_DELAY_MINUTES)
         payload['next_allowed_at'] = normalize_timestamp(
-            now + timedelta(minutes=(project['cadence_minutes'] if succeeded else _RETRY_DELAY_MINUTES))
+            now + timedelta(minutes=delay_minutes)
         )
         payload['updated_at'] = normalize_timestamp(now)
         _write_json_atomic(claim_path, payload)
@@ -732,6 +736,51 @@ def configure_blog_project(payload):
     return _status_payload(root)
 
 
+def _run_is_alive(in_flight):
+    stream_id = in_flight.get('stream_id')
+    if stream_id:
+        with codex_chat.state.codex_streams_lock:
+            stream = codex_chat.state.codex_streams.get(stream_id)
+            if stream and not stream.get('done'):
+                return True
+    # Another server can share the durable state but not the stream registry.
+    owner_pid = in_flight.get('owner_pid')
+    if isinstance(owner_pid, int) and owner_pid != os.getpid():
+        try:
+            os.kill(owner_pid, 0)
+            return True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            return True
+    return False
+
+
+def _restore_finished_run(root, project):
+    """Replay completion outside the state lock; finalization acquires it."""
+    pending = _load_state(root, project['project_id']).get('in_flight')
+    if not isinstance(pending, dict) or not pending.get('run_id'):
+        return
+    stream_id = pending.get('stream_id')
+    if stream_id:
+        with codex_chat.state.codex_streams_lock:
+            stream = codex_chat.state.codex_streams.get(stream_id)
+            done = bool(stream and stream.get('done'))
+        if done:
+            codex_chat.finalize_codex_stream(stream_id)
+    # Finalization may have already persisted the message before a crash in
+    # the pipeline completion callback. Each run owns a dedicated session.
+    session = codex_chat.get_session(pending['session_id']) if pending.get('session_id') else None
+    for message in reversed((session or {}).get('messages', [])):
+        metadata = message.get('metadata') or {}
+        if message.get('role') not in {'assistant', 'error'} or metadata.get('streaming') is not False:
+            continue
+        record_blog_pipeline_completion({
+            **pending, 'project_id': project['project_id'], 'blog_root': str(root),
+        }, message.get('role') == 'assistant', message.get('content') or '', metadata.get('token_usage'))
+        break
+
+
 def _start_pipeline_run(force=False, account_id=None):
     root = _blog_root()
     if not _project_path(root).exists():
@@ -748,6 +797,7 @@ def _start_pipeline_run(force=False, account_id=None):
     if codex_chat.CODEX_REQUIRE_ACCOUNT_LOGIN and not codex_chat._codex_home_has_auth(context['codex_home']):
         return {'started': False, 'reason': 'account_login_required'}
 
+    _restore_finished_run(root, project)
     run_id = uuid.uuid4().hex
     now = _now()
     claim_path = None
@@ -757,29 +807,29 @@ def _start_pipeline_run(force=False, account_id=None):
         in_flight = state.get('in_flight')
         if isinstance(in_flight, dict) and in_flight.get('run_id'):
             started_at = parse_timestamp(in_flight.get('started_at'))
-            if started_at and started_at + timedelta(seconds=_RUN_LEASE_SECONDS) <= now:
-                stale_run_id = str(in_flight.get('run_id'))
-                stale_claim_path = in_flight.get('claim_path')
-                state['in_flight'] = None
-                state['last_error'] = 'stale_run_recovered'
-                state['next_run_at'] = normalize_timestamp(
-                    now + timedelta(minutes=_RETRY_DELAY_MINUTES)
-                )
-                state['last_result'] = {
-                    'run_id': stale_run_id,
-                    'status': 'recovered',
-                    'completed_at': normalize_timestamp(now),
-                }
-                _save_state(root, state)
-                _finish_claim(
-                    Path(stale_claim_path) if stale_claim_path else None,
-                    project,
-                    stale_run_id,
-                    False,
-                    now,
-                )
-                return {'started': False, 'reason': 'stale_run_recovered'}
-            return {'started': False, 'reason': 'run_in_flight', 'run_id': in_flight.get('run_id')}
+            expired = not started_at or started_at + timedelta(seconds=_RUN_LEASE_SECONDS) <= now
+            if not expired or _run_is_alive(in_flight):
+                return {'started': False, 'reason': 'run_in_flight', 'run_id': in_flight.get('run_id')}
+            stale_run_id = str(in_flight['run_id'])
+            stale_claim_path = in_flight.get('claim_path')
+            state['in_flight'] = None
+            state['last_error'] = ''
+            state['next_run_at'] = None
+            state['last_result'] = {
+                **in_flight, 'status': 'recovered',
+                'completed_at': normalize_timestamp(now),
+                'reason': 'stale_run_recovered',
+            }
+            _append_jsonl(_runs_path(root), {
+                **in_flight, 'project_id': project['project_id'],
+                'status': 'recovered', 'at': normalize_timestamp(now),
+                'reason': 'stale_run_recovered',
+            })
+            _save_state(root, state)
+            _finish_claim(Path(stale_claim_path) if stale_claim_path else None,
+                          project, stale_run_id, False, now, recovered=True)
+            _LOGGER.warning('Recovered interrupted blog run (run_id=%s, stream_id=%s)',
+                            stale_run_id, in_flight.get('stream_id'))
         next_run_at = parse_timestamp(state.get('next_run_at'))
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
@@ -815,6 +865,8 @@ def _start_pipeline_run(force=False, account_id=None):
             'started_at': normalize_timestamp(now),
             'stream_id': '',
             'claim_path': str(claim_path),
+            'owner_pid': os.getpid(),
+            'account_id': context['account']['id'],
         }
         state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=project['cadence_minutes']))
         state['last_error'] = ''
@@ -831,6 +883,11 @@ def _start_pipeline_run(force=False, account_id=None):
                 'blog_run_id': run_id,
             },
         )
+        with codex_chat._acquire_path_file_lock(_state_path(root)):
+            current = _load_state(root, project['project_id'])
+            if (current.get('in_flight') or {}).get('run_id') == run_id:
+                current['in_flight']['session_id'] = session['id']
+                _save_state(root, current)
         stream = codex_chat.create_codex_stream(
             session['id'],
             _build_prompt(project, state),
@@ -871,6 +928,13 @@ def _start_pipeline_run(force=False, account_id=None):
         if isinstance(current.get('in_flight'), dict) and current['in_flight'].get('run_id') == run_id:
             current['in_flight']['stream_id'] = stream.get('id') or ''
             _save_state(root, current)
+        _append_jsonl(_runs_path(root), {
+            'run_id': run_id, 'project_id': project['project_id'],
+            'stage': stage, 'post_id': post_id, 'status': 'started',
+            'at': normalize_timestamp(now), 'session_id': session['id'],
+            'stream_id': stream.get('id') or '',
+        })
+    _LOGGER.info('Started blog run (run_id=%s, stream_id=%s)', run_id, stream.get('id'))
     _update_claim_stream(claim_path, run_id, stream.get('id') or '')
     return {
         'started': True,
@@ -944,6 +1008,7 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'status': 'completed' if succeeded else 'failed',
             'completed_at': normalize_timestamp(now),
             'token_usage': _normalize_tokens(token_usage),
+            'error': '' if succeeded else str(error or '')[:1000],
         }
         if succeeded and stage == _TOPIC_STAGE:
             proposal = _read_json(_topic_proposal_path(root), {})
@@ -976,6 +1041,9 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'stage': stage,
             'post_id': operation.get('post_id') or in_flight.get('post_id') or '',
             'status': 'completed' if succeeded else 'failed',
+            'started_at': in_flight.get('started_at'),
+            'stream_id': in_flight.get('stream_id') or '',
+            'session_id': in_flight.get('session_id') or '',
             'at': normalize_timestamp(now),
             'token_usage': _normalize_tokens(token_usage),
             'error': '' if succeeded else str(error or '')[:1000],

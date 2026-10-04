@@ -13,6 +13,7 @@ workspace/*_usage_summary.json
 workspace/*_token_usage.json
 .sync_runtime/
 .local/
+/tmp/
 .venv/
 node_modules/
 .playwright-browsers/

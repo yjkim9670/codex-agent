@@ -1208,7 +1208,7 @@ function syncActiveSessionControls() {
             ? 'Another client is responding for this session...'
             : localBusy
                 ? `Response in progress... queue ready${queueCount > 0 ? ` (${queueCount} queued)` : ''}`
-            : (isCompactLayout() ? CHAT_INPUT_MOBILE_PLACEHOLDER : CHAT_INPUT_DEFAULT_PLACEHOLDER);
+            : (isMobileViewportBehaviorActive() ? CHAT_INPUT_MOBILE_PLACEHOLDER : CHAT_INPUT_DEFAULT_PLACEHOLDER);
     }
     if (sendBtn) {
         sendBtn.disabled = remoteBusy && !localBusy;
@@ -2701,10 +2701,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (input) {
         input.addEventListener('keydown', event => {
+            if (event.isComposing || event.keyCode === 229) return;
             if (cyclePlanModeFromKeyboardEvent(event)) {
                 return;
             }
-            if (event.key === 'Enter' && !event.shiftKey && !isCompactLayout()) {
+            // Tablets can use a desktop layout (and iPadOS can report a Mac UA).
+            // Keep Enter as a newline on mobile devices, including hardware keyboards.
+            if (event.key === 'Enter' && !event.shiftKey && !isMobileViewportBehaviorActive()) {
                 event.preventDefault();
                 handleSubmit();
             }

@@ -93,6 +93,7 @@ from ..config import (
 )
 from ..utils.time import normalize_timestamp, parse_timestamp
 from .usage_reconciliation import build_usage_reconciliation
+from .usage_prediction import fit_quota_relation, predict_percent, token_components
 from .multiuser import (
     InternalUser,
     activate_user,
@@ -219,8 +220,8 @@ _USAGE_EVENT_VERSION = 2
 _USAGE_EVENT_DEFAULT_ANALYSIS_HOURS = 24 * 30
 _USAGE_ACCOUNT_REFRESH_SECONDS = 30 * 60
 _USAGE_HISTORY_VERSION = 3
-_USAGE_CALIBRATION_VERSION = 1
-_USAGE_CALIBRATION_ALGORITHM = 'sol_weighted_observation_v1'
+_USAGE_CALIBRATION_VERSION = 2
+_USAGE_CALIBRATION_ALGORITHM = 'observed_token_mix_v2'
 _USAGE_CALIBRATION_MAX_RECORDS = 1000
 _USAGE_CALIBRATION_STALE_HOURS = 24 * 8
 _USAGE_CALIBRATION_FOLLOWUP_SECONDS = 90
@@ -7264,7 +7265,7 @@ def _compact_calibration_limits(value):
     return result
 
 
-def _calibration_relation_from_records(records, limit_name, model=''):
+def _calibration_relation_from_records(records, limit_name, model='', reasoning_effort=None):
     model_key = str(model or '').strip().lower()
     candidates = []
     for record in records:
@@ -7283,18 +7284,24 @@ def _calibration_relation_from_records(records, limit_name, model=''):
             continue
         candidates.append((record, weighted_tokens, actual_percent, outcome))
 
-    # Model-specific fitting is restricted to single-model observation groups.
-    # A mixed group is still useful globally but cannot identify which model
-    # caused the difference without inventing an attribution rule.
+    # Check membership against ALL records before filtering. A partial batch
+    # cannot identify a model's or effort's consumption from allocated shares.
     if model_key:
-        group_models = {}
-        for record, _tokens, _actual, outcome in candidates:
-            group_id = str(outcome.get('group_id') or '')
-            group_models.setdefault(group_id, set()).add(str(record.get('model') or '').strip().lower())
-        candidates = [
-            item for item in candidates
-            if len(group_models.get(str(item[3].get('group_id') or ''), set())) == 1
-        ]
+        all_groups = {}
+        for record in records:
+            outcome = (record.get('outcomes') or {}).get(limit_name, {})
+            if outcome.get('status') == 'observed':
+                group_id = str(outcome.get('group_id') or record.get('id') or '')
+                all_groups.setdefault(group_id, []).append(record)
+        candidates = [item for item in candidates if all(
+            str(member.get('model') or '').strip().lower() == model_key
+            and (reasoning_effort is None or member.get('reasoning_effort') == reasoning_effort)
+            and member.get('learning_eligible') is not False
+            and member.get('status') in {'completed', 'failed'}
+            and (member.get('outcomes') or {}).get(limit_name, {}).get('group_size', 1)
+                == len(all_groups.get(str(item[3].get('group_id') or item[0].get('id') or ''), []))
+            for member in all_groups.get(str(item[3].get('group_id') or item[0].get('id') or ''), [])
+        ) and (reasoning_effort is None or item[0].get('reasoning_effort') == reasoning_effort)]
 
     groups = {}
     for record, weighted_tokens, actual_percent, outcome in candidates:
@@ -7393,13 +7400,45 @@ def _calibration_relation_from_records(records, limit_name, model=''):
     }
 
 
+def _calibration_records_with_token_usage(records, events_path):
+    """Enrich old records in memory; preserve the on-disk ledger and predictions."""
+    events = {}
+    try:
+        with Path(events_path).open(encoding='utf-8') as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                    event_id = str(event.get('event_id') or '')
+                    if ':stream:' in event_id:
+                        events.setdefault('stream:' + event_id.split(':stream:', 1)[1], []).append(event)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+    except (OSError, TypeError):
+        pass
+    enriched = []
+    for record in records:
+        item = dict(record)
+        if token_components(item.get('token_usage')) is None:
+            matches = [event for event in events.get(str(item.get('id')), [])
+                       if event.get('model') == item.get('model')
+                       and event.get('reasoning_effort') == item.get('reasoning_effort')
+                       and event.get('total_tokens') == item.get('raw_tokens')]
+            if len(matches) == 1 and token_components(matches[0]) is not None:
+                item['token_usage'] = {key: matches[0][key] for key in
+                                      ('input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens')}
+        enriched.append(item)
+    return enriched
+
+
 def _build_usage_calibration_summary(account_id=None):
     context = _account_storage_context(account_id)
     if context is None:
         return {'algorithm': _USAGE_CALIBRATION_ALGORITHM, 'records': 0, 'models': {}}
     with _acquire_path_file_lock(context['usage_calibration_path']):
         ledger = _load_usage_calibration_ledger(context['usage_calibration_path'])
-    records = ledger.get('records') or []
+    records = _calibration_records_with_token_usage(
+        ledger.get('records') or [], context.get('usage_events_path'),
+    )
     model_names = sorted({str(item.get('model') or '').strip() for item in records if str(item.get('model') or '').strip()})
     pending = sum(
         1 for item in records
@@ -7425,19 +7464,59 @@ def _build_usage_calibration_summary(account_id=None):
             }
             for model in model_names
         },
+        'conditions': {
+            model: {
+                effort: {
+                    name: _calibration_relation_from_records(records, name, model, effort)
+                    for name in ('five_hour', 'weekly')
+                }
+                for effort in sorted({str(item.get('reasoning_effort') or '') for item in records
+                                      if item.get('model') == model})
+            } for model in model_names
+        },
+        'token_mix': {
+            model: {
+                'model': {name: fit_quota_relation(records, name, model)
+                          for name in ('five_hour', 'weekly')},
+                'efforts': {
+                    effort: {name: fit_quota_relation(records, name, model, effort)
+                             for name in ('five_hour', 'weekly')}
+                    for effort in sorted({str(item.get('reasoning_effort') or '') for item in records
+                                          if item.get('model') == model})
+                },
+            } for model in model_names
+        },
         'recent': records[-20:],
     }
 
 
-def _resolve_usage_prediction_scales(account_id=None, model=''):
+def _resolve_usage_prediction_scales(account_id=None, model='', reasoning_effort='', usage=None, service_tier='standard'):
     history = get_usage_history_summary(account_id=account_id, scope='account')
     calibration = history.get('calibration') if isinstance(history, dict) else {}
     model_calibration = (calibration.get('models') or {}).get(str(model or '').strip(), {})
+    conditions = ((calibration.get('conditions') or {}).get(model) or {}).get(reasoning_effort, {})
+    mix = (calibration.get('token_mix') or {}).get(model, {})
+    weighted = _calculate_sol_weighted_tokens(model, usage, service_tier)
     scales = {}
     sources = {}
     for name in ('five_hour', 'weekly'):
-        selected = model_calibration.get(name) if isinstance(model_calibration, dict) else None
-        source = 'model_calibration'
+        if service_tier == 'standard' and weighted:
+            for relation, source in (
+                ((mix.get('efforts', {}).get(reasoning_effort) or {}).get(name, {}), 'effort_token_mix'),
+                ((mix.get('model') or {}).get(name, {}), 'model_token_mix'),
+            ):
+                predicted = predict_percent(relation, usage)
+                if predicted is not None and predicted > 0:
+                    scales[name] = weighted / predicted
+                    sources[name] = source
+                    break
+            if name in scales:
+                continue
+        selected = conditions.get(name)
+        source = 'effort_calibration'
+        if not isinstance(selected, dict) or not selected.get('is_applied'):
+            selected = model_calibration.get(name) if isinstance(model_calibration, dict) else None
+            source = 'model_calibration'
         if not isinstance(selected, dict) or not selected.get('is_applied'):
             selected = (calibration.get('limits') or {}).get(name, {})
             source = 'global_calibration'
@@ -7477,6 +7556,7 @@ def _create_usage_calibration_record(
         'service_tier': str(service_tier or 'standard'),
         'raw_tokens': (_normalize_token_usage(usage) or _zero_token_usage()).get('total_tokens', 0),
         'weighted_tokens': weighted_tokens,
+        'token_usage': _normalize_token_usage(usage),
         'weighting_basis': 'gpt-5.6-sol-api-rate-equivalent',
         'calculation_version': _USAGE_CALIBRATION_ALGORITHM,
         'limits_before': compact_before,
@@ -16123,6 +16203,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     try:
         prediction_scales, prediction_sources = _resolve_usage_prediction_scales(
             account_id=account_id, model=response_model,
+            reasoning_effort=response_reasoning_effort, usage=token_usage,
+            service_tier=metadata['service_tier'],
         )
         calibration_record = _create_usage_calibration_record(
             account_id=account_id,

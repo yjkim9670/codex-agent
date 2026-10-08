@@ -31239,16 +31239,53 @@ function formatMessageTokenSummary(message) {
     return parts.join(' · ');
 }
 
-function resolveLimitTokenScale(limitName, history = state.settings?.usageHistory, message = null) {
+function resolveLimitTokenScale(limitName, history = state.settings?.usageHistory, message = null, usage = null) {
     const relation = history?.relation || {};
     const metadata = message ? resolveMessageLimitModelMetadata(message) : {};
     const modelName = String(metadata?.model || '').trim();
     const calibration = history?.calibration || {};
+    const effort = String(metadata?.reasoningEffort || '').trim();
+    const effortLimit = calibration?.conditions?.[modelName]?.[effort]?.[limitName];
+    const mix = calibration?.token_mix?.[modelName];
+    if (usage && !usage.estimated && (!metadata.serviceTier || metadata.serviceTier === 'standard')) {
+        const inputs = Number(usage.inputTokens);
+        const cached = Number(usage.cachedInputTokens);
+        const outputs = Number(usage.outputTokens);
+        const total = Number(usage.totalTokens);
+        const validMix = [inputs, cached, outputs, total].every(value => Number.isFinite(value) && value >= 0)
+            && cached <= inputs && Math.abs(inputs + outputs - total) <= 1 && total > 0;
+        if (validMix) {
+            for (const [entry, scope] of [
+                [mix?.efforts?.[effort]?.[limitName], 'effort'],
+                [mix?.model?.[limitName], 'model']
+            ]) {
+                const scale = Number(entry?.tokens_per_percent);
+                const weights = entry?.weights;
+                const coefficients = [weights?.uncached_input, weights?.cached_input, weights?.output].map(Number);
+                if (!entry?.is_applied || !Number.isFinite(scale) || scale <= 0
+                    || !coefficients.every(value => Number.isFinite(value) && value > 0)) continue;
+                const load = (inputs - cached) * coefficients[0] + cached * coefficients[1] + outputs * coefficients[2];
+                return {
+                    tokensPerPercent: scale,
+                    predictedPercent: load / scale,
+                    scope: resolveUsageHistoryRelationScope(history),
+                    confidence: 'medium',
+                    sampleCount: Number(entry.observation_group_count),
+                    isReliable: true,
+                    usesRawFallback: false,
+                    calibrationScope: scope
+                };
+            }
+        }
+    }
     const modelLimit = modelName ? calibration?.models?.[modelName]?.[limitName] : null;
     const globalLimit = calibration?.limits?.[limitName];
     let limit = relation?.[limitName] || {};
     let calibrationScope = '';
-    if (modelLimit?.is_applied && Number(modelLimit?.tokens_per_percent) > 0) {
+    if (effortLimit?.is_applied && Number(effortLimit?.tokens_per_percent) > 0) {
+        limit = effortLimit;
+        calibrationScope = 'effort';
+    } else if (modelLimit?.is_applied && Number(modelLimit?.tokens_per_percent) > 0) {
         limit = modelLimit;
         calibrationScope = 'model';
     } else if (globalLimit?.is_applied && Number(globalLimit?.tokens_per_percent) > 0) {
@@ -31362,10 +31399,10 @@ function buildLimitUsageEstimate(usage, { subjectLabel = 'message', includeZero 
     const estimateUsage = weighted?.usage || usage;
     const totalTokens = Number(estimateUsage.totalTokens);
     if (!Number.isFinite(totalTokens) || totalTokens < 0 || (!includeZero && totalTokens <= 0)) return null;
-    const scale = resolveLimitTokenScale(limitName, state.settings?.usageHistory, message);
+    const scale = resolveLimitTokenScale(limitName, state.settings?.usageHistory, message, usage);
     if (!scale) return null;
 
-    const percent = totalTokens / scale.tokensPerPercent;
+    const percent = scale.predictedPercent ?? (totalTokens / scale.tokensPerPercent);
     const percentText = formatLimitUsagePercent(percent, { allowZero: includeZero });
     if (!percentText) return null;
 

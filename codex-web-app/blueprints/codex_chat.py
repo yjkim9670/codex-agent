@@ -62,6 +62,8 @@ from ..services.codex_chat import (
     branch_session_from_message,
     BranchSessionStreamingError,
     build_codex_prompt,
+    read_context_record,
+    refresh_session_context_memory,
     build_codex_app_server_thread_lifecycle_preview,
     build_repo_skill_preview,
     build_subagent_cockpit_preview,
@@ -2065,6 +2067,7 @@ def codex_session_message(session_id):
     if not user_message:
         return jsonify({'error': '메시지를 저장하지 못했습니다.'}), 500
 
+    refresh_session_context_memory(session_id)
     started_at = time.time()
     output, error, token_usage, timing = execute_codex_prompt(
         prompt_with_context,
@@ -2077,6 +2080,7 @@ def codex_session_message(session_id):
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))
     metadata = {
+        'context_selection': read_context_record(prompt_with_context),
         'duration_ms': duration_ms,
         'account_id': account_id,
         'response_mode': response_mode,

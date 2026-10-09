@@ -1,15 +1,17 @@
 # codex-workbench
 
-Codex Workbench server for Codex chat sessions, workspace files, terminal sessions, Git sync, and usage monitoring.
+Codex Workbench server for coding-agent chat sessions (Codex, Claude, and OpenCode), workspace files, terminal sessions, Git sync, and usage monitoring.
 
 ## Requirements
-- Python 3.14.x (the Workbench and every `codex exec` child are pinned to this minor version)
-- Codex CLI available on PATH (`codex` on macOS/Linux, `codex.cmd` on Windows)
+- Python 3.14.x (the Workbench and every coding-agent child are pinned to this minor version)
+- The selected agent CLI available on PATH: Codex (`codex` / `codex.cmd`), Claude (`claude`), or OpenCode (`opencode`). Backend-specific setup and command options still apply.
 
 Set `CODEX_CLI_BIN=/absolute/path/to/codex` when the CLI is installed outside
 `PATH`. Launchers prefer standalone installs under `.local/bin` and npm prefix
 paths before falling back to the macOS Codex app bundle, which can lag behind
 standalone CLI releases.
+
+Conversation context and selection records: [agent-context.md](docs/agent-context.md).
 
 ## Setup
 ```bash

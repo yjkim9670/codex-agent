@@ -22,7 +22,7 @@ import time
 from . import codex_chat as _codex_chat
 from .. import state
 
-_GENERIC_CLI_FAILURE = "Codex CLI 작업 중 오류가 발생했습니다. 상세 로그에서 원인을 확인하세요."
+_GENERIC_CLI_FAILURE = "에이전트 작업 중 오류가 발생했습니다. 상세 로그에서 원인을 확인하세요."
 _DIAGNOSTIC_LIMIT = 12
 _DIAGNOSTIC_TEXT_LIMIT = 12000
 

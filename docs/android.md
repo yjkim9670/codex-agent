@@ -1,6 +1,6 @@
 # 코덱스 워크벤치 Android
 
-Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin client입니다. Codex CLI, workspace, Git, terminal 및 인증 정보는 Workbench host에 유지되고 Android에서는 WebView와 모바일 기능만 담당합니다.
+Android 앱은 기존 Codex Workbench 서버를 그대로 사용하는 thin client입니다. 에이전트 CLI(Codex·Claude·OpenCode), workspace, Git, terminal 및 인증 정보는 Workbench host에 유지되고 Android에서는 WebView와 모바일 기능만 담당합니다.
 
 ## Workbench connection modes
 

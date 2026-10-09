@@ -100,5 +100,5 @@ def test_final_message_does_not_append_raw_cli_detail():
     ) == '보호 목록 검증 중 명령이 정책에 의해 거부되어 안전한 방식으로 다시 확인했습니다.'
 
     assert codex_chat._combine_stream_output_and_error('', RAW_REJECTED_COMMAND) == (
-        'Codex CLI 작업 중 오류가 발생했습니다. 상세 로그에서 원인을 확인하세요.'
+        '에이전트 작업 중 오류가 발생했습니다. 상세 로그에서 원인을 확인하세요.'
     )

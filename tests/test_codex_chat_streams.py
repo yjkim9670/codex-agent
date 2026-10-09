@@ -2601,7 +2601,7 @@ def test_execute_codex_prompt_does_not_surface_raw_json_events_as_response(
     output, error, token_usage, timing = codex_chat.execute_codex_prompt('sync prompt')
 
     assert error is None
-    assert output == 'Codex completed without a final response.'
+    assert output == 'The agent completed without a final response.'
     assert 'item.completed' not in output
     assert token_usage is None
     assert isinstance(timing, dict)
@@ -4607,7 +4607,7 @@ def test_finalize_stream_suppresses_stale_output_file_after_work_without_final(
         stream['exit_code'] = 1
         stream['output'] = '먼저 상태를 확인하겠습니다.'
         stream['output_last_message'] = '먼저 상태를 확인하겠습니다.'
-        stream['error'] = 'Codex CLI가 작업 명령 실행 후 최종 응답 없이 turn.completed를 반환했습니다.'
+        stream['error'] = '에이전트가 작업 명령 실행 후 최종 응답 없이 turn.completed를 반환했습니다.'
         stream['work_item_seen'] = True
         stream['work_item_completed_seen'] = True
         stream['progress_output_invalidated'] = True
@@ -6129,7 +6129,7 @@ def test_finalize_failed_stream_hides_internal_stderr_but_keeps_work_details(
 
     assert saved_message is not None
     assert saved_message['role'] == 'error'
-    assert saved_message['content'] == 'Codex 실행에 실패했습니다.'
+    assert saved_message['content'] == '에이전트 실행에 실패했습니다.'
     assert 'exec_command failed' not in saved_message['content']
     assert 'exec_command failed' in (saved_message.get('work_details') or '')
 
@@ -6164,7 +6164,7 @@ def test_run_codex_stream_errors_when_event_stream_lag_hides_final_response(
 
     assert saved_message['role'] == 'error'
     assert saved_message['finalize_reason'] == 'event_stream_incomplete'
-    assert 'Codex CLI event stream이 유실되어 최종 응답을 확인하지 못했습니다.' in saved_message['content']
+    assert '에이전트 event stream이 유실되어 최종 응답을 확인하지 못했습니다.' in saved_message['content']
     assert '진행 중 메시지' not in saved_message['content']
     assert saved_message.get('event_stream_lagged') is True
     assert saved_message.get('dropped_event_count') == 519
@@ -6777,3 +6777,73 @@ def test_queue_never_uses_display_default_as_model_id(monkeypatch):
     monkeypatch.setattr(codex_chat, '_read_codex_config_text', lambda: '')
     entry = codex_chat._build_pending_queue_entry('default task')
     assert entry['model_override'] is None
+
+
+@pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
+@pytest.mark.parametrize('phase', ['progress', 'completed', 'cancelled'])
+def test_context_selection_persists_across_agent_lifecycle(
+        monkeypatch, isolated_codex_workspace, backend, phase):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': name, 'name': name} for name in ('dtgpt', 'claude', 'opencode')
+    ])
+    session = codex_chat.create_session('context-audit')
+    assistant = codex_chat.append_message(session['id'], 'assistant', '', {'streaming': True})
+    composed = codex_chat.build_codex_prompt([
+        {'id': 'scope-source', 'role': 'user', 'content': '재시작 하지 마. 코드만 수정해줘.'},
+    ], '개선해줘')
+    audit = codex_chat.read_context_record(composed)
+    stream_id = 'context-audit-stream'
+    stream = _build_stream_state(stream_id, session['id'], time.time(),
+                                 isolated_codex_workspace['workspace_dir'] / 'audit-output.txt')
+    stream.update(agent_backend=backend, assistant_message_id=assistant['id'],
+                  context_selection=audit, output='진행 기록', output_length=5)
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = stream
+    if phase == 'progress':
+        codex_chat._persist_stream_progress(stream_id, force=True)
+    elif phase == 'completed':
+        stream.update(done=True, exit_code=0, output_last_message='완료 응답')
+        codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+    else:
+        codex_chat.stop_codex_stream(stream_id)
+    saved = next(message for message in codex_chat.get_session(session['id'])['messages']
+                 if message['id'] == assistant['id'])
+    assert saved['context_selection'] == audit
+    assert saved['response_agent_backend'] == backend
+    assert saved['context_selection']['memory'][0]['source_id'] == 'scope-source'
+
+
+@pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
+def test_create_agent_stream_captures_context_selection(
+        monkeypatch, isolated_codex_workspace, backend):
+    class NoopThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(codex_chat.threading, 'Thread', NoopThread)
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: backend)
+    session = codex_chat.create_session('context-create')
+    prompt = codex_chat.build_codex_prompt([], '이번 요청 그대로 보존')
+    result = codex_chat.create_codex_stream(
+        session['id'], prompt, account_id='default', preflight_usage_snapshot={})
+    with state.codex_streams_lock:
+        stream = state.codex_streams[result['id']]
+    assert stream['agent_backend'] == backend
+    assert stream['context_selection']['submitted_prompt_sha256'] == hashlib.sha256(prompt.encode()).hexdigest()
+    assert stream['context_selection']['request_truncated'] is False
+
+
+def test_session_context_memory_retains_notes_outside_prompt_budget(isolated_codex_workspace):
+    session = codex_chat.create_session('durable-context')
+    source = codex_chat.append_message(session['id'], 'user', '재시작 금지. 확인만 해줘.')
+    proposal = codex_chat.append_message(session['id'], 'assistant', '제안: 모든 경로 수정.')
+    memory = codex_chat.refresh_session_context_memory(session['id'])
+    assert {note['source_id'] for note in memory['notes']} == {source['id'], proposal['id']}
+    assert codex_chat.get_session(session['id'])['context_memory'] == memory
+    codex_chat.delete_session_message(session['id'], proposal['id'])
+    refreshed = codex_chat.refresh_session_context_memory(session['id'])
+    assert all(note['source_id'] != proposal['id'] for note in refreshed['notes'])
+    assert all(note['role'] == 'user' for note in refreshed['notes'])

@@ -41,18 +41,18 @@ const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf
             const input = page.locator('#codex-chat-input');
             const button = width < 600 ? page.locator('[data-chat-compose-action="plan"]') : page.locator('#codex-plan-mode-toggle');
             if (width < 600) await page.locator('#codex-chat-compose-tools-toggle').click();
-            for (const label of ['Plan', 'Secondary', 'Plan+', 'Work']) {
+            for (const label of ['Plan', 'Team', 'Plan+', 'Work']) {
                 await button.click();
-                assert.equal(await button.textContent(), width >= 600 && label === 'Secondary' ? 'Sec' : label);
+                assert.equal(await button.textContent(), label);
                 const geometry = await button.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, right: el.getBoundingClientRect().right, width: el.getBoundingClientRect().width }));
                 if (width >= 600) assert.ok(geometry.width <= 52, `${width}: composer button widened`);
                 assert.ok(geometry.scroll <= geometry.client + 1, `${width}: ${label} clipped`);
                 assert.ok(geometry.right <= width + 1, `${width}: ${label} outside viewport`);
             }
             await input.fill('유지할 입력');
-            for (const [label, role, plan] of [['Plan', 'main', true], ['Secondary', 'secondary', false], ['Plan+', 'main', true], ['Work', 'main', false]]) {
+            for (const [label, role, plan] of [['Plan', 'main', true], ['Team', 'main', false], ['Plan+', 'main', true], ['Work', 'main', false]]) {
                 await input.press('Shift+Tab');
-                assert.equal(await button.textContent(), width >= 600 && label === 'Secondary' ? 'Sec' : label);
+                assert.equal(await button.textContent(), label);
                 assert.equal(await input.inputValue(), '유지할 입력');
                 assert.equal(await input.evaluate(el => document.activeElement === el), true);
                 assert.equal(await page.evaluate(() => getComposeModelRole()), role);

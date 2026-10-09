@@ -52,6 +52,17 @@ The MacBook is the runtime host for Workbench services. The Android app remains
 a thin native/WebView client and may be built either locally on the MacBook or
 through the repository's `Android APK` GitHub Actions workflow.
 
+## Team mode
+
+The composer cycles through `Work → Plan → Team → Plan+` with Shift+Tab.
+Team replaces the former Secondary execution mode and currently supports only
+the Codex backend. Set a secondary model in execution settings before using it.
+The main model analyzes the request, up to four secondary workers run sequentially,
+and the main model verifies the actual changes and finishes the request.
+Secondary model settings remain available for Sub jobs and commit messages.
+
+See [Team execution](docs/team-mode.md) for state, cancellation, and recovery details.
+
 ## Codex CLI Stability Options
 Workbench serializes mutable, interactive `codex exec` runs per workspace by
 default. Read-only subjobs and structured reports can still run in parallel.

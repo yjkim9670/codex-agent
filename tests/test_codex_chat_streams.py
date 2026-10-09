@@ -6847,3 +6847,210 @@ def test_session_context_memory_retains_notes_outside_prompt_budget(isolated_cod
     refreshed = codex_chat.refresh_session_context_memory(session['id'])
     assert all(note['source_id'] != proposal['id'] for note in refreshed['notes'])
     assert all(note['role'] == 'user' for note in refreshed['notes'])
+
+# Team orchestration uses mocked executors: no paid model calls or real edits.
+@pytest.mark.parametrize('worker_failure,malformed', [(False, False), (True, False), (False, True)])
+def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worker_failure, malformed):
+    from codex_agent.services import team_execution
+    parent_session = codex_chat.create_session('Team parent')
+    parent = {
+        'id': 'team-parent', 'session_id': parent_session['id'], 'account_id': 'default',
+        'attachments': [{'name': 'reference.png'}], 'worktree_task': {'id': 'same-worktree'},
+        'execution_cwd': str(isolated_codex_workspace['workspace_dir']),
+        'user_prompt': 'original task', 'cancelled': False, 'output': '',
+        'team_settings': {'main_model': 'main-model', 'main_effort': 'high',
+                          'worker_model': 'worker-model', 'worker_effort': 'low'},
+        'team_run': {'stream_id': 'team-parent', 'status': 'running', 'phase': 'analysis', 'steps': []},
+    }
+    state.codex_streams['team-parent'] = parent
+    calls, saved, finalizations = [], [], []
+    def create_child(session_id, prompt, **kwargs):
+        child_id = f'child-{len(calls)}'
+        calls.append((prompt, kwargs))
+        state.codex_streams[child_id] = {'id': child_id, 'session_id': session_id, **kwargs}
+        return {'id': child_id}
+    def execute_child(child_id, prompt):
+        child = state.codex_streams[child_id]
+        assert child['execution_cwd'] == parent['execution_cwd']
+        if len(calls) == 1:
+            result = 'not JSON' if malformed else json.dumps({'tasks': [
+                {'goal': 'step one', 'files': 'src/one.py', 'validation': 'unit test'},
+                {'goal': 'step two depends on one', 'files': 'src/two.py', 'validation': 'integration test'},
+            ]})
+        elif child['model_role'] == 'secondary':
+            result = 'changed src/one.py; unit checks passed'
+        else:
+            assert 'actual diff' in prompt
+            assert ('analysis_failed' in prompt) if malformed else ('changed src/one.py' in prompt)
+            result = 'Final answer after integration checks'
+        child.update(output_last_message=result, exit_code=1 if worker_failure and child['model_role'] == 'secondary' else 0)
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', create_child)
+    monkeypatch.setattr(codex_chat, '_run_codex_stream', execute_child)
+    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *a, **k: saved.append(json.loads(json.dumps(parent['team_run']))))
+    monkeypatch.setattr(codex_chat, 'finalize_codex_stream', lambda sid: finalizations.append(sid))
+    team_execution.run(codex_chat, 'team-parent', 'Original context with history')
+    roles = [kwargs['model_role'] for _, kwargs in calls]
+    assert roles == (['main', 'main'] if malformed else ['main', 'secondary', 'main'] if worker_failure else ['main', 'secondary', 'secondary', 'main'])
+    assert [kwargs['model_override'] for _, kwargs in calls] == ['worker-model' if role == 'secondary' else 'main-model' for role in roles]
+    for _, kwargs in calls:
+        assert kwargs['attachments'] == parent['attachments']
+        assert kwargs['worktree_task'] == parent['worktree_task']
+        assert kwargs['agent_backend_override'] == 'codex'
+        assert kwargs['deferred_start'] is True
+    assert calls[0][1]['question_only'] is True
+    assert all(not kwargs['question_only'] for _, kwargs in calls[1:])
+    assert parent['team_run']['status'] == 'completed'
+    assert parent['output_last_message'].startswith('Final answer')
+    assert finalizations == ['team-parent']
+    assert saved[0]['phase'] == 'analysis'
+    assert saved[-1]['status'] == 'completed'
+    assert all(step['session_id'] for step in parent['team_run']['steps'])
+
+
+def test_team_cancel_between_child_registration_and_execution(monkeypatch, isolated_codex_workspace):
+    from codex_agent.services import team_execution
+    session = codex_chat.create_session('cancel')
+    parent = {'session_id': session['id'], 'account_id': 'default', 'attachments': [],
+              'worktree_task': None, 'execution_cwd': '/tmp', 'user_prompt': 'task',
+              'cancelled': False, 'output': '',
+              'team_settings': {'main_model': 'main', 'main_effort': 'high', 'worker_model': 'worker', 'worker_effort': 'low'},
+              'team_run': {'status': 'running', 'steps': []}}
+    state.codex_streams['parent'] = parent
+    def create_child(*args, **kwargs):
+        parent['cancelled'] = True
+        return {'id': 'child'}
+    stopped, started = [], []
+    state.codex_streams['child'] = {}
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', create_child)
+    monkeypatch.setattr(codex_chat, '_run_codex_stream', lambda *a: started.append(a))
+    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *a, **k: None)
+    monkeypatch.setattr(codex_chat, 'stop_codex_stream', lambda sid: stopped.append(sid))
+    team_execution.run(codex_chat, 'parent', 'context')
+    assert stopped == ['child']
+    assert started == []
+    assert len(parent['team_run']['steps']) == 1
+    assert parent['team_run']['steps'][0]['status'] == 'cancelled'
+
+
+def test_team_queue_settings_survive_normalization_and_changes(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: 'codex')
+    settings = {'model': 'main-a', 'reasoning_effort': 'high', 'secondary_model': 'worker-a', 'secondary_reasoning_effort': 'low'}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    session = codex_chat.create_session('queue')
+    state.codex_streams['running'] = {'session_id': session['id'], 'done': False, 'cancelled': False}
+    result = codex_chat.enqueue_codex_stream_for_session(session['id'], 'task', execution_mode='team')
+    assert result['queued']
+    settings.update(model='main-b', secondary_model='worker-b')
+    entry = codex_chat.get_session(session['id'])['pending_queue'][0]
+    assert entry['execution_mode'] == 'team'
+    assert entry['team_settings']['main_model'] == 'main-a'
+    assert entry['team_settings']['worker_model'] == 'worker-a'
+    assert entry['team_settings']['worker_effort'] == 'low'
+
+
+@pytest.mark.parametrize('backend,secondary,plan,report', [
+    ('claude', 'worker', False, None), ('opencode', 'worker', False, None),
+    ('codex', None, False, None), ('codex', 'worker', True, None),
+    ('codex', 'worker', False, 'report'),
+])
+def test_team_invalid_configuration_does_not_enqueue(monkeypatch, isolated_codex_workspace, backend, secondary, plan, report):
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: backend)
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'model': 'main', 'secondary_model': secondary})
+    session = codex_chat.create_session('validation')
+    result = codex_chat.enqueue_codex_stream_for_session(session['id'], 'task', execution_mode='team', plan_mode=plan, structured_report_preset=report)
+    assert not result['ok']
+    assert result['error_code'] == 'team_configuration'
+    assert codex_chat.get_session(session['id'])['pending_queue'] == []
+
+
+def test_team_restart_marks_interrupted_without_replaying(monkeypatch, isolated_codex_workspace):
+    session = codex_chat.create_session('restart')
+    codex_chat.append_message(session['id'], 'assistant', 'Worker already edited files', {
+        'streaming': True, 'execution_mode': 'team',
+        'team_run': {'stream_id': 'lost-after-restart', 'status': 'running', 'phase': 'worker', 'steps': []},
+    })
+    restored = codex_chat.get_session(session['id'])['messages'][0]
+    assert restored['team_run']['status'] == 'interrupted'
+    assert restored['streaming'] is False
+    assert restored['content'].startswith('Worker already edited files')
+    assert codex_chat.get_session(session['id'])['messages'][0]['content'] == restored['content']
+
+
+def test_team_parser_bounds_tasks():
+    from codex_agent.services import team_execution
+    task = {'goal': 'edit', 'files': 'src/file.py', 'validation': 'pytest'}
+    assert team_execution.parse_tasks('```json\n' + json.dumps({'tasks': [task]}) + '\n```') == [task]
+    for tasks in ([], [task] * 5, [{'goal': 'edit'}], ['arbitrary text']):
+        with pytest.raises(ValueError):
+            team_execution.parse_tasks(json.dumps({'tasks': tasks}))
+
+
+def test_team_queue_dispatch_uses_submission_backend_and_models(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat, 'CODEX_REQUIRE_ACCOUNT_LOGIN', False)
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **k: {})
+    monkeypatch.setattr(codex_chat, 'get_usage_summary', lambda **k: {})
+    settings = {'model': 'main-a', 'reasoning_effort': 'high', 'secondary_model': 'worker-a', 'secondary_reasoning_effort': 'low', 'agent_backend': 'codex'}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: settings['agent_backend'])
+    session = codex_chat.create_session('queue dispatch')
+    state.codex_streams['running'] = {'session_id': session['id'], 'done': False, 'cancelled': False}
+    codex_chat.enqueue_codex_stream_for_session(session['id'], 'task', execution_mode='team')
+    state.codex_streams['running']['done'] = True
+    settings.update(model='different-model', secondary_model='different-worker', agent_backend='claude')
+    real_create = codex_chat.create_codex_stream
+    def deferred_create(*args, **kwargs):
+        return real_create(*args, deferred_start=True, preflight_usage_snapshot={}, **kwargs)
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', deferred_create)
+    result = codex_chat.trigger_next_queued_codex_stream(session['id'])
+    assert result['started'] is True
+    stream = state.codex_streams[result['stream_id']]
+    assert stream['agent_backend'] == 'codex'
+    assert stream['model_override'] == 'main-a'
+    assert stream['reasoning_override'] == 'high'
+    assert stream['team_settings']['worker_model'] == 'worker-a'
+    assert codex_chat.get_session(session['id'])['pending_queue'] == []
+
+
+def test_team_deadline_prevents_stage_start(monkeypatch, isolated_codex_workspace):
+    from codex_agent.services import team_execution
+    session = codex_chat.create_session('deadline')
+    parent = {'session_id': session['id'], 'account_id': 'default', 'attachments': [],
+              'worktree_task': None, 'execution_cwd': '/tmp', 'user_prompt': 'task',
+              'cancelled': False, 'output': '', 'error': '', 'team_settings': {},
+              'team_run': {'status': 'running', 'steps': []}}
+    state.codex_streams['parent'] = parent
+    finalizations = []
+    monkeypatch.setattr(team_execution, 'MAX_RUN_SECONDS', -1)
+    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *a, **k: None)
+    monkeypatch.setattr(codex_chat, 'finalize_codex_stream', lambda sid: finalizations.append(sid))
+    team_execution.run(codex_chat, 'parent', 'context')
+    assert parent['team_run']['status'] == 'failed'
+    assert parent['team_run']['steps'] == []
+    assert parent['exit_code'] == 1
+    assert '제한 시간' in parent['error']
+    assert finalizations == ['parent']
+
+
+def test_team_parent_stop_cascades_and_persists(monkeypatch, isolated_codex_workspace):
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: {'model': 'main', 'agent_backend': 'codex'})
+    monkeypatch.setattr(codex_chat, 'record_usage_event', lambda **k: None)
+    monkeypatch.setattr(codex_chat, 'trigger_next_queued_codex_stream', lambda sid: None)
+    parent_session = codex_chat.create_session('parent')
+    child_session = codex_chat.create_session('child')
+    parent_message = codex_chat.append_message(parent_session['id'], 'assistant', '', {'streaming': True})
+    child_message = codex_chat.append_message(child_session['id'], 'assistant', '', {'streaming': True})
+    parent_info = codex_chat.create_codex_stream(parent_session['id'], 'task', execution_mode='team', team_settings={},
+        assistant_message_id=parent_message['id'], deferred_start=True, preflight_usage_snapshot={})
+    child_info = codex_chat.create_codex_stream(child_session['id'], 'worker', assistant_message_id=child_message['id'],
+        deferred_start=True, preflight_usage_snapshot={})
+    parent = state.codex_streams[parent_info['id']]
+    parent['team_child_stream_id'] = child_info['id']
+    parent['team_run']['steps'] = [{'status': 'running', 'stream_id': child_info['id']}]
+    result = codex_chat.stop_codex_stream(parent_info['id'])
+    assert result['status'] == 'stopped'
+    assert parent['cancelled'] is True
+    assert state.codex_streams[child_info['id']]['cancelled'] is True
+    stored = codex_chat.get_session(parent_session['id'])['messages'][0]
+    assert stored['team_run']['status'] == 'cancelled'
+    assert stored['team_run']['steps'][0]['status'] == 'cancelled'
+    assert stored['streaming'] is False

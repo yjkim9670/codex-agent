@@ -17,7 +17,7 @@ const context = vm.createContext({
     queuePromptOnServer: async (sessionId, prompt, options) => {
         calls.push({ sessionId, prompt, ...options });
         // Simulate changing composer state while the first request is pending.
-        context.setPlanModeToggleState('secondary');
+        context.setPlanModeToggleState('team');
         return { queueCount: calls.length };
     }
 });
@@ -34,12 +34,12 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
         for (const [mode, label, role, plan, auto] of [
             ['off', 'Work', 'main', false, false],
             ['plan', 'Plan', 'main', true, false],
-            ['secondary', 'Secondary', 'secondary', false, false],
+            ['team', 'Team', 'main', false, false],
             ['plan_and_execute', 'Plan+', 'main', true, true]
         ]) {
             assert.equal(context.getPlanModeState(), mode);
             context.setPlanModeToggleState(mode);
-            assert.equal(elements.get('codex-plan-mode-toggle').textContent, mode === 'secondary' ? 'Sec' : label);
+            assert.equal(elements.get('codex-plan-mode-toggle').textContent, label);
             assert.equal(elements.get('mobile-mode').textContent, label);
             assert.equal(context.getComposeModelRole(), role);
             assert.equal(context.shouldUsePlanModeForRequest(), plan);
@@ -56,15 +56,17 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
     assert.equal(context.normalizePlanModeState(true), 'plan');
     assert.equal(context.normalizePlanModeState('auto'), 'plan_and_execute');
     assert.equal(context.normalizePlanModeState('invalid'), 'off');
+    assert.equal(context.normalizePlanModeState('secondary'), 'team');
     for (const [mode, expected] of [
         ['off', [[false, 'main']]], ['plan', [[true, 'main']]],
-        ['secondary', [[false, 'secondary']]], ['plan_and_execute', [[true, 'main'], [false, 'main']]]
+        ['team', [[false, 'main']]], ['plan_and_execute', [[true, 'main'], [false, 'main']]]
     ]) {
         calls.length = 0;
         context.setPlanModeToggleState('off');
         const result = await context.queuePromptWithPlanMode('session', 'task', mode);
         assert.equal(result.addedCount, expected.length);
         assert.deepEqual(calls.map(item => [item.planMode, item.modelRole]), expected);
+        assert.ok(calls.every(item => item.executionMode === (mode === 'team' ? 'team' : '')));
     }
     console.log('PASS: mode cycle, keyboard modifiers, desktop/mobile state, legacy values, queued roles and Plan+ continuation');
 })().catch(error => { console.error(error); process.exitCode = 1; });

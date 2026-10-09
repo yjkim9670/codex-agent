@@ -493,7 +493,7 @@ const GIT_SYNC_TARGET_LABELS = Object.freeze({
 });
 const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
-const PLAN_MODE_STATE_SECONDARY = 'secondary';
+const PLAN_MODE_STATE_TEAM = 'team';
 const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
 const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
@@ -930,7 +930,7 @@ function syncSessionPendingQueue(sessionId, queue, { render = true } = {}) {
     return sessionState.pendingQueue;
 }
 
-function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getComposeModelRole() } = {}) {
+function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getComposeModelRole(), executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '' } = {}) {
     const sessionState = ensureSessionState(sessionId);
     if (!sessionState) return 0;
     if (!Array.isArray(sessionState.queuedPrompts)) {
@@ -940,6 +940,7 @@ function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getCom
         prompt: String(prompt || ''),
         planMode: Boolean(planMode),
         modelRole,
+        executionMode,
         queuedAt: Date.now()
     });
     return sessionState.queuedPrompts.length;
@@ -964,7 +965,8 @@ async function flushQueuedPrompts(sessionId) {
             await sendPrompt(next.prompt, {
                 sessionId,
                 planMode: Boolean(next.planMode),
-                modelRole: next.modelRole || 'main'
+                modelRole: next.modelRole || 'main',
+                executionMode: next.executionMode || ''
             });
         }
     } finally {
@@ -27642,8 +27644,8 @@ function normalizePlanModeState(value) {
         if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
             return PLAN_MODE_STATE_PLAN_ONLY;
         }
-        if (normalized === PLAN_MODE_STATE_SECONDARY) {
-            return PLAN_MODE_STATE_SECONDARY;
+        if (normalized === PLAN_MODE_STATE_TEAM || normalized === 'secondary') {
+            return PLAN_MODE_STATE_TEAM;
         }
         if (
             normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
@@ -27693,9 +27695,9 @@ function getNextPlanModeState(currentState = getPlanModeState()) {
         return PLAN_MODE_STATE_PLAN_ONLY;
     }
     if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
-        return PLAN_MODE_STATE_SECONDARY;
+        return PLAN_MODE_STATE_TEAM;
     }
-    if (currentState === PLAN_MODE_STATE_SECONDARY) {
+    if (currentState === PLAN_MODE_STATE_TEAM) {
         return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
     }
     return PLAN_MODE_STATE_OFF;
@@ -28121,7 +28123,7 @@ async function cleanupWorktreeTask(taskId, { force = false } = {}) {
 async function queuePromptOnServer(
     sessionId,
     prompt,
-    { planMode = false, modelRole = getComposeModelRole(), attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
+    { planMode = false, modelRole = getComposeModelRole(), executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '', attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
 ) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
@@ -28135,6 +28137,7 @@ async function queuePromptOnServer(
             prompt,
             plan_mode: Boolean(planMode),
             model_role: planMode ? 'plan' : modelRole,
+            execution_mode: planMode || structuredReportPreset ? '' : executionMode,
             structured_report_preset: structuredReportPreset || '',
             worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
             attachments: normalizedAttachments
@@ -28193,7 +28196,8 @@ async function queuePromptWithPlanMode(
         };
     }
     const normalizedPlanModeState = normalizePlanModeState(planModeState);
-    const modelRole = normalizedPlanModeState === PLAN_MODE_STATE_SECONDARY ? 'secondary' : 'main';
+    const modelRole = 'main';
+    const executionMode = normalizedPlanModeState === PLAN_MODE_STATE_TEAM ? 'team' : '';
     const queueItems = [];
     if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
         queueItems.push({ prompt: normalizedPrompt, planMode: true, attachments });
@@ -28212,6 +28216,7 @@ async function queuePromptWithPlanMode(
         lastResult = await queuePromptOnServer(sessionId, item.prompt, {
             planMode: item.planMode,
             modelRole,
+            executionMode,
             attachments: item.attachments || [],
             worktreeMode
         });
@@ -28238,20 +28243,20 @@ function setPlanModeToggleState(nextState) {
     if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
         label = 'Plan · 플랜 모델로 계획만 작성';
         buttonText = 'Plan';
-    } else if (normalized === PLAN_MODE_STATE_SECONDARY) {
-        label = 'Secondary · 세컨더리 모델로 실행';
-        buttonText = 'Secondary';
+    } else if (normalized === PLAN_MODE_STATE_TEAM) {
+        label = 'Team · 메인 분석 → 세컨더리 워커 → 메인 검토 (Codex 전용)';
+        buttonText = 'Team';
     } else if (isPlanAndExecute) {
         label = 'Plan+ · 계획 작성 후 메인 모델로 실행';
         buttonText = 'Plan+';
     }
-    label += ' (Shift+Tab: Work → Plan → Secondary → Plan+)';
+    label += ' (Shift+Tab: Work → Plan → Team → Plan+)';
     if (button) {
         button.classList.toggle('is-active', isActive);
         button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
         button.setAttribute('aria-pressed', String(isActive));
         button.dataset.planModeState = normalized;
-        button.textContent = normalized === PLAN_MODE_STATE_SECONDARY ? 'Sec' : buttonText;
+        button.textContent = buttonText;
         button.setAttribute('aria-label', label);
         button.setAttribute('title', label);
     }
@@ -29704,6 +29709,7 @@ async function sendPrompt(
         sessionId: sessionIdOverride = null,
         planMode = false,
         modelRole = getComposeModelRole(),
+        executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '',
         attachments = [],
         structuredReportPreset = '',
         worktreeMode = false
@@ -29744,7 +29750,8 @@ async function sendPrompt(
             {
                 prompt,
                 plan_mode: Boolean(planMode),
-            model_role: planMode ? 'plan' : modelRole,
+                model_role: planMode ? 'plan' : modelRole,
+                execution_mode: planMode || structuredReportPreset ? '' : executionMode,
                 structured_report_preset: structuredReportPreset || '',
                 worktree_mode: Boolean(worktreeMode) && !structuredReportPreset,
                 attachments: normalizedAttachments
@@ -29787,6 +29794,7 @@ async function sendPrompt(
                 const queueResult = await queuePromptOnServer(sessionId, prompt, {
                     planMode: Boolean(planMode),
                     modelRole,
+                    executionMode,
                     attachments: normalizedAttachments,
                     structuredReportPreset,
                     worktreeMode
@@ -30647,6 +30655,16 @@ function buildMessageDetailText(message) {
         ].join('\n'));
     }
 
+    if (message.team_run && Array.isArray(message.team_run.steps)) {
+        sections.push([
+            `## Team · ${message.team_run.status || ''}`,
+            ...message.team_run.steps.map(step => [
+                `### ${step.title} · ${step.model || 'default'} · ${step.status}`,
+                `세션: ${step.session_id}`,
+                step.result || '', step.error || ''
+            ].filter(Boolean).join('\n\n'))
+        ].join('\n\n'));
+    }
     const workDetails = normalizeDetailText(message.work_details);
     if (workDetails) {
         sections.push([
@@ -34206,7 +34224,7 @@ function getRoleControlValue(role, field) {
 }
 
 function getComposeModelRole() {
-    return getPlanModeState() === PLAN_MODE_STATE_SECONDARY ? 'secondary' : 'main';
+    return 'main';
 }
 
 document.getElementById('codex-execution-settings-save')?.addEventListener('click', () => void updateSettings());

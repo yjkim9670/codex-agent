@@ -1123,6 +1123,8 @@ def _normalize_pending_queue_entry(entry):
         'model_override': entry.get('model_override'),
         'reasoning_override': entry.get('reasoning_override'),
         'model_settings_snapshot': bool(entry.get('model_settings_snapshot')),
+        'execution_mode': entry.get('execution_mode'),
+        'team_settings': deepcopy(entry.get('team_settings')),
         'attachments': attachments,
         'structured_report_preset': normalize_structured_report_preset_id(
             entry.get('structured_report_preset')
@@ -9708,11 +9710,26 @@ def list_sessions():
 
 
 def get_session(session_id):
+    # A process restart loses live stream handles. Never replay a Team stage:
+    # its workspace changes might already be on disk.
+    with state.codex_streams_lock:
+        known_stream_ids = set(state.codex_streams)
     with _session_store_transaction():
         data = _load_data()
-    session = _find_session(data.get('sessions', []), session_id)
-    if not session:
-        return None
+        session = _find_session(data.get('sessions', []), session_id)
+        if not session:
+            return None
+        changed = False
+        for message in session.get('messages', []):
+            team = message.get('team_run')
+            if (isinstance(team, dict) and team.get('status') == 'running'
+                    and team.get('stream_id') not in known_stream_ids):
+                team['status'] = 'interrupted'
+                message['streaming'] = False
+                message['content'] = str(message.get('content') or '') + '\n\n[Team 실행 중단: 서버 재시작 후 변경사항을 확인하고 새 요청으로 재개해 주세요.]'
+                changed = True
+        if changed:
+            _save_data(data)
     return _build_session_response(session)
 
 
@@ -13391,6 +13408,8 @@ def _build_partial_stream_message_metadata(stream):
         'response_reasoning_effort': response_reasoning_effort,
         'response_agent_backend': agent_backend,
         'execution_policy': str(stream.get('execution_policy') or 'standard').strip() or 'standard',
+        'team_run': deepcopy(stream.get('team_run')),
+        'execution_mode': stream.get('execution_mode'),
         'context_selection': deepcopy(stream.get('context_selection')),
         'streaming': True,
     }
@@ -14372,6 +14391,7 @@ def _run_codex_stream(stream_id, prompt):
         queued_execution = bool(stream.get('queued_execution')) if stream else False
         account_id = str(stream.get('account_id') or '').strip() if stream else ''
         question_only = bool(stream.get('question_only')) if stream else False
+        inherit_model_settings = stream.get('inherit_model_settings', True) if stream else True
         execution_cwd = stream.get('execution_cwd') if stream else None
         worktree_task = _normalize_worktree_task_payload(stream.get('worktree_task')) if stream else None
         json_output = True
@@ -14428,6 +14448,7 @@ def _run_codex_stream(stream_id, prompt):
         question_only=question_only,
         execution_cwd=execution_cwd,
         agent_backend=agent_backend,
+        inherit_model_settings=inherit_model_settings,
     )
     _apply_agent_backend_exec_env(
         exec_env,
@@ -14449,6 +14470,11 @@ def _run_codex_stream(stream_id, prompt):
                     stream['internal_api_key_id'] = str(exec_env.get('CODEX_WORKBENCH_INTERNAL_API_KEY_ID') or '')
                     stream['internal_api_key_label'] = str(exec_env.get('CODEX_WORKBENCH_INTERNAL_API_KEY_LABEL') or '')
                     stream['updated_at'] = cli_started_at
+
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream and stream.get('cancelled'):
+                return
 
         try:
             _prepare_imagegen_workbench_dirs(prompt)
@@ -14476,6 +14502,11 @@ def _run_codex_stream(stream_id, prompt):
                 errors=_CODEX_EXEC_TEXT_ERRORS,
                 bufsize=1
             )
+            with state.codex_streams_lock:
+                cancelled_before_prompt = bool((state.codex_streams.get(stream_id) or {}).get('cancelled'))
+            if cancelled_before_prompt:
+                _terminate_stream_process(process, terminate_grace_seconds)
+                return
             _write_codex_prompt_to_stdin(process, prompt)
         except FileNotFoundError:
             command_label = 'claude' if agent_backend == 'claude' else 'codex'
@@ -14511,6 +14542,12 @@ def _run_codex_stream(stream_id, prompt):
             if stream:
                 stream['process'] = process
                 stream['output_path'] = output_path
+
+        with state.codex_streams_lock:
+            cancelled_after_start = bool((state.codex_streams.get(stream_id) or {}).get('cancelled'))
+        if cancelled_after_start:
+            _terminate_stream_process(process, terminate_grace_seconds)
+            return
 
         stdout_thread = threading.Thread(
             target=_stream_reader,
@@ -14912,6 +14949,21 @@ def _run_codex_stream(stream_id, prompt):
     finalize_codex_stream(stream_id)
 
 
+def _team_settings_snapshot():
+    from . import team_execution
+    return team_execution.settings_snapshot(sys.modules[__name__])
+
+
+def _validate_team_settings(settings, plan_mode=False, read_only=False):
+    from . import team_execution
+    return team_execution.validate_settings(sys.modules[__name__], settings, plan_mode, read_only)
+
+
+def _run_team_stream(stream_id, prompt):
+    from . import team_execution
+    team_execution.run(sys.modules[__name__], stream_id, prompt)
+
+
 def create_codex_stream(
         session_id,
         prompt,
@@ -14930,7 +14982,12 @@ def create_codex_stream(
         model_role=None,
         internal_api_key=None,
         preflight_usage_snapshot=None,
-        operation_metadata=None):
+        operation_metadata=None,
+        agent_backend_override=None,
+        deferred_start=False,
+        inherit_model_settings=True,
+        execution_mode=None,
+        team_settings=None):
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
     stream_id = uuid.uuid4().hex
     created_at = time.time()
@@ -14949,12 +15006,15 @@ def create_codex_stream(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
     )
-    agent_backend = get_selected_agent_backend()
+    agent_backend = agent_backend_override or get_selected_agent_backend()
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    if agent_backend_override == 'codex':
+        response_model = str(model_override or 'codex-default')
+        response_reasoning_effort = reasoning_override
     execution_policy = (
         'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
         else ('worktree_isolated' if worktree_task_payload else 'standard')
@@ -14987,6 +15047,10 @@ def create_codex_stream(
         from .company_credentials import reserve_internal_api_key
         internal_api_key = reserve_internal_api_key()
     stream = {
+        'inherit_model_settings': bool(inherit_model_settings),
+        'execution_mode': execution_mode,
+        'team_settings': deepcopy(team_settings),
+        'team_run': {'stream_id': stream_id, 'status': 'running', 'phase': 'analysis', 'steps': []} if execution_mode == 'team' else None,
         'id': stream_id,
         'owner_username': (get_active_user().storage_key if get_active_user() is not None else ''),
         'session_id': session_id,
@@ -15082,10 +15146,11 @@ def create_codex_stream(
     refresh_session_context_memory(session_id)
     request_context = copy_context()
     thread = threading.Thread(
-        target=lambda: request_context.run(_run_codex_stream, stream_id, prompt),
+        target=lambda: request_context.run(_run_team_stream if execution_mode == 'team' else _run_codex_stream, stream_id, prompt),
         daemon=True
     )
-    thread.start()
+    if not deferred_start:
+        thread.start()
     return {
         'id': stream_id,
         'started_at': int(created_at * 1000),
@@ -15295,9 +15360,18 @@ def _start_codex_stream_for_session_locked(
         question_only=False,
         structured_report_preset=None,
         worktree_mode=False,
-        account_id=None):
+        account_id=None,
+        execution_mode=None,
+        team_settings=None):
+    if execution_mode == 'team':
+        team_settings = team_settings or _team_settings_snapshot()
+        error = _validate_team_settings(team_settings, plan_mode, question_only or structured_report_preset)
+        if error:
+            return {'ok': False, 'error': error, 'error_code': 'team_configuration'}
+        model_override = team_settings['main_model']
+        reasoning_override = team_settings['main_effort']
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
-    if model_override is None and reasoning_override is None:
+    if execution_mode != 'team' and model_override is None and reasoning_override is None:
         model_override, reasoning_override = resolve_model_role_settings(model_role)
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
@@ -15310,7 +15384,7 @@ def _start_codex_stream_for_session_locked(
 
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     account_profile = _get_account_profile(resolved_account_id)
-    agent_backend = get_selected_agent_backend()
+    agent_backend = 'codex' if execution_mode == 'team' else get_selected_agent_backend()
     if account_profile is None:
         return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
     if (
@@ -15335,6 +15409,8 @@ def _start_codex_stream_for_session_locked(
                 'error_code': exc.error_code,
             }
     user_metadata = {
+        'execution_mode': execution_mode,
+        'team_settings': team_settings,
         'model_role': model_role,
         'account_id': resolved_account_id,
         'account_label': account_profile.get('label') or resolved_account_id,
@@ -15359,6 +15435,9 @@ def _start_codex_stream_for_session_locked(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    if execution_mode == 'team':
+        response_model = str(model_override or 'codex-default')
+        response_reasoning_effort = reasoning_override
     execution_policy = (
         'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
         else ('worktree_isolated' if worktree_task else 'standard')
@@ -15402,6 +15481,9 @@ def _start_codex_stream_for_session_locked(
         }
 
     stream_kwargs = {
+        'agent_backend_override': 'codex' if execution_mode == 'team' else None,
+        'execution_mode': execution_mode,
+        'team_settings': team_settings,
         'model_role': model_role,
         'model_override': model_override,
         'reasoning_override': reasoning_override,
@@ -15446,7 +15528,9 @@ def _build_pending_queue_entry(
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
-        account_id=None):
+        account_id=None,
+        execution_mode=None,
+        team_settings=None):
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
     model, effort = resolve_model_role_settings(model_role)
     # Display labels such as 'codex-default' are never executable model ids.
@@ -15465,6 +15549,8 @@ def _build_pending_queue_entry(
         'prompt': str(prompt or '').strip(),
         'plan_mode': bool(plan_mode),
         'model_role': model_role,
+        'execution_mode': execution_mode,
+        'team_settings': deepcopy(team_settings),
         'model_override': model,
         'reasoning_override': effort,
         'model_settings_snapshot': True,
@@ -15484,7 +15570,9 @@ def _enqueue_pending_queue_entry(
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
-        account_id=None):
+        account_id=None,
+        execution_mode=None,
+        team_settings=None):
     with _session_store_transaction():
         data = _load_data()
         sessions = data.get('sessions', [])
@@ -15496,6 +15584,8 @@ def _enqueue_pending_queue_entry(
             prompt,
             plan_mode=plan_mode,
             model_role=model_role,
+            execution_mode=execution_mode,
+            team_settings=team_settings,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -15583,6 +15673,8 @@ def _start_next_queued_codex_stream_locked(session_id):
             attachments=attachments,
             model_role=model_role,
             queued_execution=True,
+            execution_mode=pending_entry.get('execution_mode'),
+            team_settings=pending_entry.get('team_settings'),
             question_only=bool(structured_report_preset),
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -15615,7 +15707,9 @@ def start_codex_stream_for_session(
         question_only=False,
         structured_report_preset=None,
         worktree_mode=False,
-        account_id=None):
+        account_id=None,
+        execution_mode=None,
+        team_settings=None):
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         return _start_codex_stream_for_session_locked(
@@ -15626,6 +15720,8 @@ def start_codex_stream_for_session(
             reasoning_override=reasoning_override,
             plan_mode=plan_mode,
             model_role=model_role,
+            execution_mode=execution_mode,
+            team_settings=team_settings,
             attachments=attachments,
             queued_execution=False,
             question_only=question_only,
@@ -15691,7 +15787,14 @@ def enqueue_codex_stream_for_session(
         attachments=None,
         structured_report_preset=None,
         worktree_mode=False,
-        account_id=None):
+        account_id=None,
+        execution_mode=None,
+        team_settings=None):
+    if execution_mode == 'team':
+        team_settings = team_settings or _team_settings_snapshot()
+        error = _validate_team_settings(team_settings, plan_mode, structured_report_preset)
+        if error:
+            return {'ok': False, 'error': error, 'error_code': 'team_configuration'}
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         queued = _enqueue_pending_queue_entry(
@@ -15699,6 +15802,8 @@ def enqueue_codex_stream_for_session(
             prompt,
             plan_mode=plan_mode,
             model_role=model_role,
+            execution_mode=execution_mode,
+            team_settings=team_settings,
             attachments=attachments,
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -15860,6 +15965,8 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'error_length': int(stream.get('error_length') or len(error)),
             'events': new_events,
             'event_length': event_count,
+            'team_run': deepcopy(stream.get('team_run')),
+            'execution_mode': stream.get('execution_mode'),
             'done': stream['done'],
             'exit_code': stream['exit_code'],
             'saved': stream.get('saved', False),
@@ -16005,6 +16112,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     if not isinstance(metadata, dict):
         metadata = {}
+    metadata['team_run'] = deepcopy(stream.get('team_run'))
+    metadata['execution_mode'] = stream.get('execution_mode')
     metadata['model_role'] = stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main')
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model
@@ -16299,6 +16408,12 @@ def stop_codex_stream(stream_id):
         stream['completed_at'] = now
         stream['updated_at'] = now
         stream['finalize_reason'] = 'user_cancelled'
+        team_child = stream.get('team_child_stream_id')
+        if stream.get('team_run'):
+            stream['team_run']['status'] = 'cancelled'
+            for step in stream['team_run'].get('steps', []):
+                if step.get('status') == 'running':
+                    step['status'] = 'cancelled'
         process = stream.get('process')
         opencode_session_id = str(stream.get('opencode_session_id') or '').strip()
         session_id = stream.get('session_id')
@@ -16334,6 +16449,8 @@ def stop_codex_stream(stream_id):
         default_value=3,
         minimum=0.5
     )
+    if team_child:
+        stop_codex_stream(team_child)
     _terminate_stream_process(process, grace_seconds)
     if opencode_session_id:
         _abort_opencode_stream({'opencode_session_id': opencode_session_id})
@@ -16365,6 +16482,8 @@ def stop_codex_stream(stream_id):
     metadata = _attach_token_usage_metadata(metadata, token_usage)
     if not isinstance(metadata, dict):
         metadata = {}
+    metadata['team_run'] = deepcopy(stream.get('team_run'))
+    metadata['execution_mode'] = stream.get('execution_mode')
     metadata['model_role'] = stream.get('model_role') or ('plan' if stream.get('plan_mode') else 'main')
     metadata['response_mode'] = response_mode
     metadata['response_model'] = response_model

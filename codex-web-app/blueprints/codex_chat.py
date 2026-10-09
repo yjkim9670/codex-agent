@@ -2168,6 +2168,9 @@ def codex_session_message_stream(session_id):
     model_role = 'plan' if plan_mode else payload.get('model_role', 'main')
     if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
         return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
+    execution_mode = payload.get('execution_mode')
+    if execution_mode not in (None, '', 'team'):
+        return jsonify({'error': 'execution_mode 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
@@ -2222,6 +2225,7 @@ def codex_session_message_stream(session_id):
         reasoning_override=reasoning_override,
         plan_mode=plan_mode,
         model_role=model_role,
+        execution_mode=execution_mode,
         attachments=attachments,
         question_only=bool(structured_report_preset),
         structured_report_preset=structured_report_preset,
@@ -2272,6 +2276,9 @@ def codex_session_message_queue(session_id):
     model_role = 'plan' if plan_mode else payload.get('model_role', 'main')
     if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
         return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
+    execution_mode = payload.get('execution_mode')
+    if execution_mode not in (None, '', 'team'):
+        return jsonify({'error': 'execution_mode 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:
         attachments = _parse_attachments(payload)
@@ -2298,6 +2305,7 @@ def codex_session_message_queue(session_id):
         prompt,
         plan_mode=plan_mode,
         model_role=model_role,
+        execution_mode=execution_mode,
         attachments=attachments,
         structured_report_preset=structured_report_preset,
         worktree_mode=worktree_mode,

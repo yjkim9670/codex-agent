@@ -48,3 +48,19 @@ running Team request as interrupted. Completed reports and existing workspace
 changes remain. No stage is automatically replayed: review the changes and submit
 a follow-up request to continue. Automatic checkpoint resume and parallel workers
 are not included in this version.
+
+## Team P1 safeguards
+
+Workers now report explicit JSON status and per-check commands, exit codes, and
+validation status. Failed, skipped, missing or malformed check results stop
+dependent workers and go to main review. These results are model-reported;
+independent verification of the recorded commands is not yet provided.
+
+The controller fingerprints dirty/untracked Git paths before and after each
+worker, compares changes with allowed relative path/glob scopes, and flags
+out-of-scope modifications or new Git HEAD revisions. It never resets edits.
+Non-Git workspaces fail closed for workers.
+
+An OS advisory Codex execution lock spans the whole Team lifecycle, including
+gaps between stages. Team child threads inherit permission to share the lock
+without deadlock. The 30-minute limit includes waiting for that lock.

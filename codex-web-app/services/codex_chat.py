@@ -1,7 +1,7 @@
 """Codex chat session storage and execution helpers."""
 
 import base64
-from contextvars import copy_context
+from contextvars import copy_context, ContextVar
 import hashlib
 import json
 import logging
@@ -136,6 +136,7 @@ _CODEX_HOME = Path.home() / '.codex'
 _CODEX_AUTH_PATH = _CODEX_HOME / 'auth.json'
 _CODEX_AUTH_STATE_PATH = _CODEX_HOME / 'auth_state.json'
 _CODEX_EXEC_LOCK_PATH = _CODEX_HOME / 'codex_exec.lock'
+_TEAM_GATE_INHERITED = ContextVar('team_gate_inherited', default=False)
 _VERIFICATION_MODES = ('auto', 'browser', 'off')
 _DEFAULT_VERIFICATION_MODE = 'auto'
 _QUEUED_CODEX_HOME_ENV = 'CODEX_QUEUE_CODEX_HOME'
@@ -2858,14 +2859,14 @@ def _workspace_interactive_exec_lock_path():
 
 
 @contextmanager
-def _acquire_codex_exec_lock(lock_path=None, lock_scope='global'):
+def _acquire_codex_exec_lock(lock_path=None, lock_scope='global', timeout_seconds=None):
     resolved_lock_path = Path(lock_path or _CODEX_EXEC_LOCK_PATH)
     resolved_lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_handle = resolved_lock_path.open('a+', encoding='utf-8')
     wait_started_at = time.time()
     acquired_at = wait_started_at
     try:
-        _lock_file_handle(lock_handle)
+        _lock_file_handle(lock_handle, timeout_seconds=timeout_seconds)
         acquired_at = time.time()
         try:
             lock_handle.seek(0)
@@ -2895,7 +2896,24 @@ def _acquire_codex_exec_lock(lock_path=None, lock_scope='global'):
 
 
 @contextmanager
+def _team_execution_gate(timeout_seconds=1800):
+    # One OS advisory lock spans all Team stages. Child threads inherit this token.
+    path = _CODEX_EXEC_LOCK_PATH if CODEX_CLI_EXEC_LOCK else _workspace_interactive_exec_lock_path()
+    with _acquire_codex_exec_lock(lock_path=path, lock_scope='team',
+                                  timeout_seconds=timeout_seconds):
+        token = _TEAM_GATE_INHERITED.set(True)
+        try:
+            yield
+        finally:
+            _TEAM_GATE_INHERITED.reset(token)
+
+
+@contextmanager
 def _codex_exec_gate(question_only=False):
+    if _TEAM_GATE_INHERITED.get():
+        yield {'wait_ms': 0, 'acquired_at': time.time(),
+               'parallel': False, 'scope': 'team'}
+        return
     if CODEX_CLI_EXEC_LOCK:
         with _acquire_codex_exec_lock(lock_scope='global') as lock_info:
             lock_payload = dict(lock_info or {})

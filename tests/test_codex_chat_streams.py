@@ -6864,6 +6864,7 @@ def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worke
     }
     state.codex_streams['team-parent'] = parent
     calls, saved, finalizations = [], [], []
+    monkeypatch.setattr(team_execution, 'workspace_snapshot', lambda cwd: {'head': 'unchanged', 'files': {}})
     def create_child(session_id, prompt, **kwargs):
         child_id = f'child-{len(calls)}'
         calls.append((prompt, kwargs))
@@ -6878,7 +6879,8 @@ def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worke
                 {'goal': 'step two depends on one', 'files': 'src/two.py', 'validation': 'integration test'},
             ]})
         elif child['model_role'] == 'secondary':
-            result = 'changed src/one.py; unit checks passed'
+            result = json.dumps({'status': 'completed', 'summary': 'changed src/one.py',
+                'validation': [{'command': 'unit test', 'exit_code': 0, 'status': 'passed'}]})
         else:
             assert 'actual diff' in prompt
             assert ('analysis_failed' in prompt) if malformed else ('changed src/one.py' in prompt)

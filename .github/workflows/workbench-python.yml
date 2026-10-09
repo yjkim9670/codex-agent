@@ -46,3 +46,6 @@ jobs:
 
       - name: Team P1 regression tests
         run: pytest -q tests/test_team_safety.py
+
+      - name: Team orchestration regression tests
+        run: pytest -q tests/test_codex_chat_streams.py -k team

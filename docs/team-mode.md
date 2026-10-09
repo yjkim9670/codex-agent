@@ -64,3 +64,8 @@ Non-Git workspaces fail closed for workers.
 An OS advisory Codex execution lock spans the whole Team lifecycle, including
 gaps between stages. Team child threads inherit permission to share the lock
 without deadlock. The 30-minute limit includes waiting for that lock.
+
+CLI event summaries with observable nonzero exit codes from recognized test
+commands also flag the worker as failed, even if its JSON report claimed
+success. Event logs are not complete test attestation; missing events cannot
+prove that a command ran.

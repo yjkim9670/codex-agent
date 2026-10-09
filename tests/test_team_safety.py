@@ -71,3 +71,18 @@ def test_scope_validation(scope):
 def test_non_git_workspace_fails_closed(tmp_path):
     with pytest.raises(team.WorkspaceGuardError):
         team.workspace_snapshot(tmp_path)
+
+
+def test_recorded_cli_check_failures_override_worker_claims():
+    events = [
+        {'item_type': 'command_execution',
+         'detail': 'status=completed command=pytest -q exit_code=1 stdout=failed'},
+        {'item_type': 'command_execution',
+         'detail': 'status=completed command=grep absent-file exit_code=1'},
+        {'item_type': 'command_execution',
+         'detail': 'status=completed command=npm test exit_code=2'},
+    ]
+    assert team.observed_failed_validation_events(events) == [
+        'pytest -q (exit_code=1)', 'npm test (exit_code=2)'
+    ]
+    assert team.observed_failed_validation_events([]) == []

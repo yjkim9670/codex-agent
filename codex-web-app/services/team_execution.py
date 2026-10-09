@@ -6,6 +6,7 @@ replayed automatically: code edits may already have happened before a restart.
 from copy import deepcopy
 from contextvars import copy_context
 import json
+import re
 import fnmatch
 import threading
 import time
@@ -55,6 +56,35 @@ def parse_worker_report(text):
         if status not in ('passed', 'failed', 'skipped'):
             raise ValueError('Unknown validation status')
     return data
+
+
+
+_VALIDATION_COMMAND_RE = re.compile(
+    r'(?:^|[\s/])(pytest|unittest|tox|ctest|iverilog|vcs|xrun|verilator|'
+    r'lint|gradle|gradlew|mvn|cargo|jest)(?:[\s./]|$)|'
+    r'\b(?:npm|pnpm|yarn|bun|go|make|node)\s+(?:run\s+)?(?:test|check)\b',
+    re.IGNORECASE,
+)
+
+
+def observed_failed_validation_events(events):
+    """Corroborate model check reports against recorded Codex command exit codes.
+
+    Event summaries may be truncated or absent; this detects contradictions,
+    not proof that all claimed tests ran.
+    """
+    failures = []
+    for item in events if isinstance(events, list) else []:
+        if not isinstance(item, dict):
+            continue
+        detail = str(item.get('detail') or '')
+        command = re.search(r'(?:^|\s)command=(.*?)(?=\s+exit_code=)', detail)
+        exit_code = re.search(r'(?:^|\s)exit_code=(-?\d+)(?:\s|$)', detail)
+        if not command or not exit_code:
+            continue
+        if int(exit_code.group(1)) != 0 and _VALIDATION_COMMAND_RE.search(command.group(1)):
+            failures.append(f'{command.group(1)} (exit_code={exit_code.group(1)})')
+    return failures
 
 
 def _file_patterns(files):
@@ -270,6 +300,7 @@ def _run_exclusive(chat, stream_id, original_context, started):
             error = child_stream.get('error') or ''
             cli_ok = (child_stream.get('exit_code') == 0
                       and not child_stream.get('codex_error_seen') and bool(result.strip()))
+            observed_events = list(child_stream.get('codex_events') or [])
             parent['team_child_stream_id'] = None
         issues, report, changed, violations = [], None, [], []
         if worker:
@@ -287,6 +318,11 @@ def _run_exclusive(chat, stream_id, original_context, started):
                     issues.append('Out-of-scope edits: ' + ', '.join(violations))
             except WorkspaceGuardError as exc:
                 issues.append(f'Workspace verification error: {exc}')
+        if worker:
+            observed_failures = observed_failed_validation_events(observed_events)
+            if observed_failures:
+                issues.append('Recorded test/validation commands exited nonzero: '
+                              + '; '.join(observed_failures))
         if not cli_ok:
             issues.append(error or 'Codex worker execution failed')
         with chat.state.codex_streams_lock:

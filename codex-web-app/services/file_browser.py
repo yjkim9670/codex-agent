@@ -35,10 +35,10 @@ _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES = 4 * 1024 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 # Raw previews feed browser document/media parsers, which can be much more
 # expensive than their byte size suggests. HTML is sandboxed and rendered in
-# an iframe, so let it use the document-preview allowance without relaxing the
-# limit for images, PDFs, or other raw file types.
+# an iframe fetched separately from JSON/source. Allow larger HTML documents
+# without relaxing the limit for images, PDFs, or other raw file types.
 _MAX_FILE_RAW_BYTES = 1024 * 1024
-_MAX_HTML_RAW_BYTES = _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES
+_MAX_HTML_RAW_BYTES = 64 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
 _MAX_MULTI_DOWNLOAD_TOTAL_BYTES = int(CODEX_FILE_MAX_ARCHIVE_DOWNLOAD_BYTES)
@@ -1003,6 +1003,7 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
     editable = (
         not is_binary
         and not truncated
+        and metadata['size'] <= _MAX_FILE_EDIT_BYTES
         and is_utf8_text
         and _is_editable_text_path(target_path)
         and normalized_root != BROWSER_ROOT_TMP

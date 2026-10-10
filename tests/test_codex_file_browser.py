@@ -2253,3 +2253,17 @@ def test_multi_patch_route(browser_test_client, isolated_browser_roots, monkeypa
     assert response.status_code == 200
     assert 'content' not in response.get_json()
     assert target.read_bytes() == b'Abc\r\nDef\r\n'
+
+
+def test_large_html_renders_complete_document_without_source_editing(browser_test_client, isolated_browser_roots):
+    original = b'<!doctype html><html><body><!--' + b'x' * (5 * 1024 * 1024)
+    original += b'--><div id="large-rendered">Large document ready</div></body></html>'
+    (isolated_browser_roots['server_root'] / 'large.html').write_bytes(original)
+    source = file_browser.read_file(root_key='server', relative_path='large.html')
+    assert source['truncated'] and not source['editable']
+    assert source['html_previewable']
+    response = browser_test_client.get('/api/codex/files/raw/server/large.html?preview=html')
+    assert response.status_code == 200
+    assert b'Large document ready' in response.data
+    assert response.headers['Content-Security-Policy'].startswith('sandbox allow-scripts allow-forms;')
+    assert (isolated_browser_roots['server_root'] / 'large.html').read_bytes() == original

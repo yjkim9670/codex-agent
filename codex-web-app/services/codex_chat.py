@@ -5710,7 +5710,8 @@ def record_usage_event(
         event_id, session_id, usage, source='stream', account_id=None,
         operation='chat', message_id=None, model='', reasoning_effort='',
         service_tier='standard', backend='dtgpt', status='completed',
-        duration_ms=None, metadata=None):
+        duration_ms=None, metadata=None, run_id='', thread_id='', turn_id='',
+        execution_started_at=None, execution_completed_at=None):
     normalized_usage = _normalize_token_usage(usage)
     event_key = str(event_id or '').strip()
     if not event_key:
@@ -5750,6 +5751,11 @@ def record_usage_event(
         'workspace_id': _WORKSPACE_SCOPE_ID,
         'workspace_path': str(WORKSPACE_DIR),
         'session_id': session_key,
+        'run_id': str(run_id or event_key),
+        'thread_id': str(thread_id or ''),
+        'turn_id': str(turn_id or ''),
+        'execution_started_at': execution_started_at,
+        'execution_completed_at': execution_completed_at,
         'message_id': str(message_id or ''),
         'operation': str(operation or 'chat'),
         'source': str(source or 'stream'),
@@ -12797,6 +12803,8 @@ def _extract_codex_session_id_from_exec_event(event):
     if not isinstance(event, dict):
         return ''
     event_type = str(event.get('type') or '').strip().lower()
+    if event_type == 'thread.started':
+        return str(event.get('thread_id') or '').strip()
     if event_type != 'session_meta':
         return ''
     payload = event.get('payload')
@@ -13046,13 +13054,55 @@ def _event_has_imagegen_workbench_activity(event):
 
 def _record_stream_codex_session_id(stream_id, event):
     codex_session_id = _extract_codex_session_id_from_exec_event(event)
-    if not codex_session_id:
+    payload = event.get('payload')
+    payload = payload if isinstance(payload, dict) else {}
+    turn_id = event.get('turn_id') or payload.get('turn_id')
+    if not codex_session_id and not turn_id:
         return
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
-        if stream and not str(stream.get('codex_session_id') or '').strip():
-            stream['codex_session_id'] = codex_session_id
+        if stream:
+            if codex_session_id:
+                stream['codex_session_id'] = codex_session_id
+            if turn_id:
+                stream['codex_turn_id'] = str(turn_id)
             stream['updated_at'] = time.time()
+
+
+def _stream_usage_identity(stream_id, stream):
+    """Resolve exec's missing turn ID only inside its known thread/run interval."""
+    thread_id = str(stream.get('codex_session_id') or '')
+    turn_id = str(stream.get('codex_turn_id') or '')
+    start = stream.get('cli_started_at')
+    end = stream.get('completed_at') or stream.get('process_exited_at') or time.time()
+    if thread_id and not turn_id and isinstance(start, (int, float)):
+        turns = set()
+        home = Path(stream.get('codex_home') or _CODEX_HOME)
+        # Only inspect this thread; never identify a run by matching token counts.
+        if re.fullmatch(r'[0-9a-fA-F-]{20,}', thread_id):
+            for folder in ('sessions', 'archived_sessions'):
+                for path in (home / folder).rglob(f'*{thread_id}*.jsonl'):
+                    try:
+                        with path.open(encoding='utf-8') as source:
+                            for line in source:
+                                event = json.loads(line)
+                                if not isinstance(event, dict):
+                                    continue
+                                payload = event.get('payload')
+                                payload = payload if isinstance(payload, dict) else {}
+                                if event.get('type') == 'turn_context' and payload.get('turn_id'):
+                                    at = datetime.fromisoformat(event['timestamp'].replace('Z', '+00:00')).timestamp()
+                                    if start <= at <= end:
+                                        turns.add(str(payload['turn_id']))
+                    except (OSError, ValueError, KeyError, TypeError):
+                        continue
+            if len(turns) == 1:
+                turn_id = turns.pop()
+    return {
+        'run_id': stream_id, 'thread_id': thread_id, 'turn_id': turn_id,
+        'execution_started_at': _iso_timestamp_from_epoch(start) if isinstance(start, (int, float)) else None,
+        'execution_completed_at': _iso_timestamp_from_epoch(end),
+    }
 
 
 def _mark_stream_imagegen_workbench_activity(stream_id):
@@ -15157,6 +15207,7 @@ def create_codex_stream(
         'work_item_completed_seen': False,
         'final_agent_message_after_work_seen': False,
         'codex_session_id': '',
+        'codex_turn_id': '',
         'codex_home': '',
         'assistant_final_empty': False,
         'turn_completed_seen': False,
@@ -16326,6 +16377,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
 
     record_usage_event(
         event_id=f'stream:{stream_id}',
+        **_stream_usage_identity(stream_id, stream),
         session_id=session_id,
         usage=token_usage,
         source=usage_source,
@@ -16567,6 +16619,7 @@ def stop_codex_stream(stream_id):
         )
     record_usage_event(
         event_id=f'stream-stop:{stream_id}',
+        **_stream_usage_identity(stream_id, stream),
         session_id=session_id,
         usage=token_usage,
         source='stream_user_cancelled',

@@ -7149,3 +7149,16 @@ def test_team_parent_runtime_tracks_child_and_tool_activity(monkeypatch):
     parent = {'team_child_stream_id': 'child', 'created_at': 70}
     result = codex_chat._snapshot_stream_runtime_locked(parent)
     assert result == {'process_running': True, 'process_pid': 4321, 'runtime_ms': 30000, 'idle_ms': 1000}
+
+
+def test_usage_event_persists_run_thread_and_turn_identity(isolated_codex_workspace):
+    codex_chat.record_usage_event(
+        event_id='identity-run', session_id='workbench-session',
+        usage={'input_tokens': 90, 'output_tokens': 10},
+        run_id='run', thread_id='thread', turn_id='turn',
+        execution_started_at='2026-10-01T01:00:00Z',
+        execution_completed_at='2026-10-01T01:01:00Z',
+    )
+    event = codex_chat.get_usage_event_summary()['recent'][0]
+    assert (event['run_id'], event['thread_id'], event['turn_id']) == ('run', 'thread', 'turn')
+    assert event['execution_started_at'] == '2026-10-01T01:00:00Z'

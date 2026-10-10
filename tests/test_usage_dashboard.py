@@ -120,3 +120,62 @@ def test_mixed_effort_group_is_not_attributed_even_in_all_mode(tmp_path):
     assert len(result['model_efforts'])==2
     assert result['windows']['five_hour']['excluded']['mixed_effort_group']==1
     assert not result['windows']['five_hour']['models']
+
+
+def test_identified_concurrent_runs_keep_equal_and_different_usage():
+    for tokens in (100, 200):
+        ledger = event(thread_id='a', turn_id='one')
+        log = event('rollout:b', thread_id='b', turn_id='one', total_tokens=tokens)
+        rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': tokens, 'events': [log]}])
+        assert sum(row['total_tokens'] for row in rows) == 100 + tokens
+        assert diagnostics.get('ambiguous_tokens', 0) == 0
+
+
+def test_identified_turn_matches_delayed_ledger_and_preserves_other_turn():
+    ledger = event(thread_id='a', turn_id='one', recorded_at='2026-10-01T10:05:00+09:00')
+    logs = [event('rollout:one', thread_id='a', turn_id='one'),
+            event('rollout:two', thread_id='a', turn_id='two')]
+    rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': 200, 'events': logs}])
+    assert sum(row['total_tokens'] for row in rows) == 200
+    assert diagnostics['matched_rollout_tokens'] == 100
+
+
+def test_partial_identified_ledger_retains_rollout_remainder():
+    ledger = event(thread_id='a', turn_id='one', total_tokens=80, input_tokens=70)
+    log = event('rollout:one', thread_id='a', turn_id='one')
+    rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': 100, 'events': [log]}])
+    assert sum(row['total_tokens'] for row in rows) == 100
+    assert diagnostics['supplemental_tokens'] == 20
+
+
+def test_exec_identity_reads_only_current_turn_from_resumed_thread(tmp_path):
+    thread = '12345678-1234-1234-1234-123456789abc'
+    folder = tmp_path / 'sessions'; folder.mkdir()
+    rows = [{'type': 'turn_context', 'timestamp': at, 'payload': {'turn_id': turn}}
+            for at, turn in [('2026-10-01T01:00:00Z', 'old'), ('2026-10-01T02:00:00Z', 'current')]]
+    (folder / f'rollout-{thread}.jsonl').write_text('\n'.join(json.dumps(row) for row in rows))
+    start = datetime.fromisoformat('2026-10-01T01:59:00+00:00').timestamp()
+    result = chat._stream_usage_identity('run', {'codex_session_id': thread, 'codex_home': str(tmp_path),
+                                              'cli_started_at': start, 'completed_at': start + 120})
+    assert result['run_id'] == 'run'
+    assert result['thread_id'] == thread
+    assert result['turn_id'] == 'current'
+    assert chat._extract_codex_session_id_from_exec_event({'type': 'thread.started', 'thread_id': thread}) == thread
+
+
+def test_thread_with_missing_turn_id_links_only_unique_run_interval():
+    ledger = event(thread_id='a', execution_started_at='2026-10-01T10:00:00+09:00',
+                   execution_completed_at='2026-10-01T10:02:00+09:00')
+    log = event('rollout:one', thread_id='a', turn_id='one', begin_at='2026-10-01T10:00:30+09:00')
+    rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': 100, 'events': [log]}])
+    assert sum(row['total_tokens'] for row in rows) == 100
+    assert diagnostics['matched_rollout_tokens'] == 100
+
+
+def test_multiple_model_segments_of_identified_turn_are_counted_once():
+    ledger = event(thread_id='a', turn_id='one', total_tokens=200, input_tokens=180, output_tokens=20)
+    logs = [event('rollout:medium', thread_id='a', turn_id='one'),
+            event('rollout:low', thread_id='a', turn_id='one', reasoning_effort='low')]
+    rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': 200, 'events': logs}])
+    assert sum(row['total_tokens'] for row in rows) == 200
+    assert diagnostics['matched_rollout_tokens'] == 200

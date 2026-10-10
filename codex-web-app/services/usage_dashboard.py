@@ -113,7 +113,7 @@ def _rollout(path, fallback):
                 key = (turn, model, effort)
                 row = segments.setdefault(key, {
                     'event_id': f'rollout:{thread}:{turn}:{model}:{effort}',
-                    'thread_id': thread, 'workspace_path': workspace, 'model': model,
+                    'thread_id': thread, 'turn_id': turn, 'workspace_path': workspace, 'model': model,
                     'reasoning_effort': effort, 'recorded_at': at.isoformat(),
                     'begin_at': (begin or at).isoformat(), 'source': 'rollout',
                     'input_tokens': 0, 'cached_input_tokens': 0,
@@ -130,15 +130,19 @@ def _rollout(path, fallback):
 
 
 def merge_events(ledger, threads):
-    """Only unique exact token/component/time matches suppress a rollout.
+    """Match identified runs by thread/turn; retain legacy fallback for old rows.
 
-    Ambiguous matches are quarantined, rather than increasing totals. DB-only
-    cumulative balances remain unallocated because their dates/mix are unknown.
+    Identified records never participate in token/time similarity matching.
+    DB-only cumulative balances remain unallocated.
     """
     result = {e['event_id']: e for e in ledger}
     index = {}
     temporal = {}
+    identified = {}
     for event in result.values():
+        if event.get('thread_id'):
+            identified.setdefault(event['thread_id'], []).append(event)
+            continue
         signature = tuple(event.get(k) for k in ('workspace_path', 'model', 'reasoning_effort', 'total_tokens', 'input_tokens', 'output_tokens'))
         index.setdefault(signature, []).append(event)
         temporal.setdefault(signature[:3], []).append(event)
@@ -151,7 +155,50 @@ def merge_events(ledger, threads):
             continue
         log_tokens = sum(e['total_tokens'] for e in thread['events'])
         diagnostics['unallocated_db_tokens'] += max(0, thread['db_tokens'] - thread.get('log_total_tokens', log_tokens))
+        groups = {}
         for event in thread['events']:
+            groups.setdefault((event.get('thread_id'), event.get('turn_id')), []).append(event)
+        handled = set()
+        for (thread_id, turn_id), rows in groups.items():
+            candidates = []
+            for entry in identified.get(thread_id, []):
+                if entry.get('turn_id'):
+                    matches = entry['turn_id'] == turn_id
+                else:
+                    # exec versions without turn IDs can still be linked by the
+                    # exact thread and run interval, without a 120-second guess.
+                    start, end = entry.get('execution_started_at'), entry.get('execution_completed_at')
+                    matches = bool(start and end and rows[0].get('begin_at') and
+                                   _stamp(start) <= _stamp(rows[0]['begin_at']) <= _stamp(end))
+                    if matches:
+                        matches = sum(bool(group[0].get('begin_at') and
+                                           _stamp(start) <= _stamp(group[0]['begin_at']) <= _stamp(end))
+                                      for (tid, _), group in groups.items() if tid == thread_id) == 1
+                if matches:
+                    candidates.append(entry)
+            if not candidates:
+                continue
+            handled.update(row['event_id'] for row in rows)
+            log_total = sum(row['total_tokens'] for row in rows)
+            ledger_total = sum(entry['total_tokens'] for entry in candidates)
+            diagnostics['matched_rollout_tokens'] += min(log_total, ledger_total)
+            # A cancelled/partial ledger can be smaller than the final rollout.
+            # Keep the remainder, rather than silently discarding observed use.
+            if log_total > ledger_total:
+                remainder = dict(rows[-1])
+                remainder['event_id'] += ':remainder'
+                for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens'):
+                    remainder[key] = max(0, sum(row.get(key, 0) for row in rows) -
+                                         sum(entry.get(key, 0) for entry in candidates))
+                result[remainder['event_id']] = remainder
+                diagnostics['supplemental_tokens'] += remainder['total_tokens']
+        for event in thread['events']:
+            if event['event_id'] in handled:
+                continue
+            if event.get('thread_id') in identified:
+                result[event['event_id']] = event
+                diagnostics['supplemental_tokens'] += event['total_tokens']
+                continue
             signature = tuple(event.get(k) for k in ('workspace_path', 'model', 'reasoning_effort', 'total_tokens', 'input_tokens', 'output_tokens'))
             finish = _stamp(event['recorded_at'])
             candidates = [e for e in index.get(signature, []) if e['event_id'] not in used and
@@ -178,7 +225,7 @@ def collect(context, *, force=False, now=None):
     path = Path(context['root']) / 'codex_usage_collection.json'
     with chat._acquire_path_file_lock(path):
         old = _read(path)
-        if old.get('version') == 2 and old.get('collected_at') and (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300):
+        if old.get('version') == 3 and old.get('collected_at') and (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300):
             return old
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=89)
         ledger = []
@@ -196,7 +243,7 @@ def collect(context, *, force=False, now=None):
         except FileNotFoundError:
             pass
         identity = chat._read_auth_identity(context['codex_home']).get('provider_account_id')
-        cached = old.get('files', {}) if old.get('version') == 2 else {}
+        cached = old.get('files', {}) if old.get('version') == 3 else {}
         files = {}
         threads = {}
         for home in discover_homes(context, ledger):
@@ -264,7 +311,7 @@ def collect(context, *, force=False, now=None):
             sources.append(state)
         events, diagnostics = merge_events(ledger, threads.values())
         events = [e for e in events if cutoff <= _stamp(e['recorded_at']) <= now]
-        result = {'version': 2, 'collected_at': now.isoformat(), 'retention_days': 90,
+        result = {'version': 3, 'collected_at': now.isoformat(), 'retention_days': 90,
                   'account_id': context['account']['id'], 'events': events, 'sources': sources,
                   'diagnostics': diagnostics, 'errors': errors, 'files': files}
         chat._write_json_atomic(path, result)

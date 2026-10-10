@@ -28,5 +28,8 @@ test('browser UI smoke check', async ({ page }) => {
     if (process.env.CODEX_VERIFY_DIALOG_LAYOUT === '1') {
         await require('./dialog-layout.cjs').verifyDialogLayout(page, expect);
     }
+    if (process.env.CODEX_VERIFY_TEAM_PROGRESS === '1') {
+        await require('./team-progress.cjs').verifyTeamProgress(page, expect);
+    }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

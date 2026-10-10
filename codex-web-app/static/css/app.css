@@ -14580,3 +14580,21 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 @media (max-width: 600px) {
     #codex-ui-settings-overlay .ui-settings-card { width: 100%; }
 }
+
+/* Team activity uses the chat's existing Carbon-style separators and colors. */
+.message-team-progress {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    white-space: normal;
+    min-width: 0;
+}
+.message-team-header { font-weight: 600; }
+.message-team-step { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.message-team-step:last-child { border-bottom: 0; }
+.message-team-timing { color: var(--text-secondary); font-size: 11px; margin-top: 4px; }
+.message-team-error, .message-team-commentary { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; }
+.message-team-step[data-status="failed"] { border-left: 3px solid var(--text-secondary); padding-left: 8px; }
+.message-team-progress summary { cursor: pointer; margin-top: 6px; }
+.message-team-progress pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }

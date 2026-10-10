@@ -10,9 +10,17 @@ import re
 import fnmatch
 import threading
 import time
+import hashlib
+import os
+import stat
+import subprocess
+from pathlib import Path
 
 MAX_WORKERS = 4
 MAX_RUN_SECONDS = 1800
+MAX_SNAPSHOT_ENTRIES = 100000
+MAX_SNAPSHOT_BYTES = 1024 * 1024 * 1024
+MAX_SNAPSHOT_SECONDS = 25
 
 
 class TeamCancelled(Exception):
@@ -101,15 +109,98 @@ def _file_patterns(files):
     return patterns
 
 
-def workspace_snapshot(cwd):
-    """Record dirty/untracked file fingerprints and HEAD without discarding user edits."""
-    import hashlib
-    import os
-    import subprocess
-    from pathlib import Path
+def _filesystem_snapshot(root):
+    """Bounded scan, including generated files, without following symlinks.
 
-    root = Path(cwd).resolve()
+    Git metadata is excluded; nested repository HEADs are checked separately.
+    Errors abort the guard rather than silently losing scope coverage.
+    """
+    deadline = time.monotonic() + MAX_SNAPSHOT_SECONDS
+    files, repositories = {}, {}
+    entries = total_bytes = 0
+
+    def check_limits():
+        if (entries > MAX_SNAPSHOT_ENTRIES or total_bytes > MAX_SNAPSHOT_BYTES
+                or time.monotonic() >= deadline):
+            raise WorkspaceGuardError(
+                f'파일 스냅샷 한도 초과: {root} '
+                f'(최대 {MAX_SNAPSHOT_ENTRIES}개 경로, {MAX_SNAPSHOT_BYTES}바이트, '
+                f'{MAX_SNAPSHOT_SECONDS}초). 더 작은 작업 폴더를 선택해 주세요.')
+
+    pending = [root]
     try:
+        while pending:
+            directory = pending.pop()
+            check_limits()
+            with os.scandir(directory) as children:
+                for child in children:
+                    entries += 1
+                    check_limits()
+                    path = Path(child.path)
+                    relative = path.relative_to(root).as_posix()
+                    if child.name == '.git':
+                        head = subprocess.run(
+                            ['git', '-C', str(directory), 'rev-parse', '--verify', 'HEAD'],
+                            capture_output=True,
+                            timeout=max(.001, deadline - time.monotonic()),
+                            env={**os.environ, 'LC_ALL': 'C'})
+                        # An unborn repository has no HEAD yet.
+                        if head.returncode and b'Needed a single revision' not in head.stderr:
+                            raise WorkspaceGuardError(f'Git HEAD 검사 실패: {directory}: {os.fsdecode(head.stderr)}')
+                        repositories[directory.relative_to(root).as_posix()] = (
+                            head.stdout.decode('ascii', 'replace').strip() if head.returncode == 0 else None)
+                        continue
+                    info = child.stat(follow_symlinks=False)
+                    mode = stat.S_IMODE(info.st_mode)
+                    if stat.S_ISLNK(info.st_mode):
+                        fingerprint = ('symlink', mode, os.readlink(path))
+                    elif stat.S_ISDIR(info.st_mode):
+                        fingerprint = ('directory', mode)
+                        pending.append(path)
+                    elif stat.S_ISREG(info.st_mode):
+                        if total_bytes + info.st_size > MAX_SNAPSHOT_BYTES:
+                            total_bytes += info.st_size
+                            check_limits()
+                        digest = hashlib.sha256()
+                        # O_NOFOLLOW also protects against a symlink swap while scanning.
+                        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        with os.fdopen(descriptor, 'rb') as source:
+                            opened = os.fstat(source.fileno())
+                            if not stat.S_ISREG(opened.st_mode):
+                                raise WorkspaceGuardError(f'파일 형식 변경: {path}')
+                            for block in iter(lambda: source.read(1024 * 1024), b''):
+                                total_bytes += len(block)
+                                check_limits()
+                                digest.update(block)
+                        fingerprint = ('file', mode, digest.hexdigest())
+                    else:
+                        raise WorkspaceGuardError(f'지원하지 않는 파일 형식: {path}')
+                    files[relative] = fingerprint
+        check_limits()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkspaceGuardError(f'파일 스냅샷 검사 실패: {root}: {exc}') from exc
+    return {'kind': 'filesystem', 'head': None, 'files': files, 'repositories': repositories}
+
+
+def workspace_snapshot(cwd):
+    """Use Git status/HEAD or a complete bounded tree without discarding user edits."""
+    root = Path(cwd).resolve()
+    if not root.is_dir():
+        raise WorkspaceGuardError(f'작업 폴더를 찾을 수 없습니다: {root}')
+    try:
+        repository = subprocess.run(
+            ['git', '-C', str(root), 'rev-parse', '--show-toplevel'],
+            capture_output=True, timeout=10, env={**os.environ, 'LC_ALL': 'C'})
+        if repository.returncode:
+            if b'not a git repository' in repository.stderr:
+                return _filesystem_snapshot(root)
+            raise subprocess.CalledProcessError(repository.returncode, repository.args, stderr=repository.stderr)
+    except FileNotFoundError:
+        return _filesystem_snapshot(root)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorkspaceGuardError(f'작업 폴더 Git 검사 실패: {root}: {exc}') from exc
+    try:
+        git_root = Path(os.fsdecode(repository.stdout).strip())
         stat = subprocess.run(
             ['git', '-C', str(root), 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
             check=True, capture_output=True, timeout=25)
@@ -117,7 +208,13 @@ def workspace_snapshot(cwd):
             ['git', '-C', str(root), 'rev-parse', '--verify', 'HEAD'],
             capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise WorkspaceGuardError(f'Git workspace verification unavailable: {exc}') from exc
+        detail = getattr(exc, 'stderr', b'') or b''
+        if isinstance(detail, bytes):
+            detail = detail.decode('utf-8', 'replace').strip()
+        raise WorkspaceGuardError(
+            f'워커 사전 검사 실패: {root}에서 Git 변경 범위를 확인할 수 없습니다. '
+            f'메인 후속 처리로 전환합니다. '
+            f'({detail or exc})') from exc
     entries = stat.stdout.split(b'\0')
     index = 0
     files = {}
@@ -129,9 +226,10 @@ def workspace_snapshot(cwd):
         if len(entry) < 4 or entry[2:3] != b' ':
             raise WorkspaceGuardError('Malformed git status')
         state = entry[:2].decode('ascii', 'replace')
-        path = entry[3:].decode('utf-8', 'surrogateescape').replace('\\', '/')
+        git_path = entry[3:].decode('utf-8', 'surrogateescape')
+        path = os.path.relpath(git_root / git_path, root).replace('\\', '/')
         if 'R' in state or 'C' in state:
-            source = entries[index].decode('utf-8', 'surrogateescape').replace('\\', '/')
+            source = os.path.relpath(git_root / os.fsdecode(entries[index]), root).replace('\\', '/')
             index += 1
             files[source] = ('rename-source', '')
         target = root / path
@@ -149,7 +247,7 @@ def workspace_snapshot(cwd):
         else:
             digest = 'missing'
         files[path] = (state, digest)
-    return {'head': head.stdout.decode('ascii', 'replace').strip()
+    return {'kind': 'git', 'head': head.stdout.decode('ascii', 'replace').strip()
             if head.returncode == 0 else None, 'files': files}
 
 
@@ -157,10 +255,23 @@ def scope_changes(before, after, file_scope):
     globs = _file_patterns(file_scope)
     old, new = before['files'], after['files']
     changed = sorted(path for path in set(old) | set(new) if old.get(path) != new.get(path))
-    violations = [path for path in changed
-                  if not any(fnmatch.fnmatchcase(path, glob) for glob in globs)]
+    def allowed(path):
+        if any(fnmatch.fnmatchcase(path, glob) for glob in globs):
+            return True
+        # Creating an allowed file may also create its parent directories.
+        values = (old.get(path), new.get(path))
+        directory = all(value is None or value[0] == 'directory' for value in values)
+        return directory and any(glob.startswith(path + '/')
+                                 or fnmatch.fnmatchcase(path + '/', glob) for glob in globs)
+    violations = [path for path in changed if not allowed(path)]
     if before['head'] != after['head']:
         violations.insert(0, '[git HEAD changed]')
+    if before.get('kind') != after.get('kind'):
+        violations.insert(0, '[workspace guard changed]')
+    old_repos, new_repos = before.get('repositories', {}), after.get('repositories', {})
+    for repository in sorted(set(old_repos) | set(new_repos)):
+        if repository not in old_repos or repository not in new_repos or old_repos[repository] != new_repos[repository]:
+            violations.append(f'[git HEAD changed: {repository}]')
     return changed, violations
 
 
@@ -216,6 +327,10 @@ def run(chat, stream_id, original_context):
             if not parent or parent.get('done') or parent.get('cancelled'):
                 return
             parent['team_run']['status'] = 'failed'
+            parent['team_run']['completed_at'] = time.time()
+            for step in parent['team_run'].get('steps', []):
+                if step.get('status') in ('starting', 'preflight', 'running'):
+                    step.update(status='failed', error=str(exc), completed_at=time.time(), process_running=False)
             parent['exit_code'] = 1
             parent['done'] = True
             parent['completed_at'] = time.time()
@@ -249,13 +364,31 @@ def _run_exclusive(chat, stream_id, original_context, started):
 
     def stage(phase, title, prompt, worker=False, allowed_files=None):
         check()
-        before = workspace_snapshot(cwd) if worker else None
+        model = settings['worker_model' if worker else 'main_model']
+        effort = settings['worker_effort' if worker else 'main_effort']
+        step = {'phase': phase, 'title': title, 'model': model, 'effort': effort,
+                'status': 'preflight' if worker else 'starting', 'started_at': time.time(),
+                'last_activity_at': time.time(), 'events': [], 'progress': ''}
+        with chat.state.codex_streams_lock:
+            parent['team_run'].setdefault('started_at', step['started_at'])
+            parent['team_run']['phase'] = phase
+            parent['team_run']['steps'].append(step)
+        persist()
+        try:
+            if worker:
+                _file_patterns(allowed_files)
+            before = workspace_snapshot(cwd) if worker else None
+        except WorkspaceGuardError as exc:
+            with chat.state.codex_streams_lock:
+                step.update(status='failed', error=str(exc), completed_at=time.time(),
+                            last_activity_at=time.time(), failure_kind='preflight')
+            chat._append_stream_chunk(stream_id, 'output', f'\n{title} · 사전 검사 실패\n{exc}\n')
+            persist()
+            raise
         child = chat.create_session(title=f'Team: {title}', metadata={
             'session_type': 'team_worker' if worker else 'team_main',
             'parent_session_id': parent_session_id, 'team_parent_stream_id': stream_id,
         })
-        model = settings['worker_model' if worker else 'main_model']
-        effort = settings['worker_effort' if worker else 'main_effort']
         # Team owns delegation; its children cannot recursively launch agents.
         prompt += '\n\nTeam controller owns delegation. Do not spawn subagents or delegate further. Do not commit, push, or deploy unless the original user explicitly authorized it.'
         if phase == 'analysis':
@@ -275,25 +408,45 @@ def _run_exclusive(chat, stream_id, original_context, started):
             child_stream = chat.state.codex_streams[child_id]
             child_stream['execution_cwd'] = cwd
             parent['team_child_stream_id'] = child_id
-            step = {'phase': phase, 'title': title, 'session_id': child['id'],
-                    'stream_id': child_id, 'model': model, 'effort': effort, 'status': 'running'}
-            parent['team_run']['phase'] = phase
-            parent['team_run']['steps'].append(step)
+            step.update(session_id=child['id'], stream_id=child_id, status='running')
         chat._append_stream_chunk(stream_id, 'output', f'\n{title} · {model or "default"}\n')
         persist()
         ctx = copy_context()
         thread = threading.Thread(target=lambda: ctx.run(chat._run_codex_stream, child_id, prompt), daemon=True)
+        last_save = time.monotonic()
+        def relay():
+            nonlocal last_save
+            with chat.state.codex_streams_lock:
+                events = deepcopy(child_stream.get('codex_events') or [])
+                progress = str(child_stream.get('output') or '')[-6000:]
+                activity = child_stream.get('last_activity_at') or child_stream.get('last_output_at') or step['last_activity_at']
+                step.update(events=events[-100:], progress=progress, last_activity_at=activity)
+                process = child_stream.get('process')
+                running = process is not None and process.poll() is None
+                step['process_running'] = running
+                step['process_pid'] = getattr(process, 'pid', None) if running else None
+                step['activity'] = ('executing' if running else 'finalizing' if child_stream.get('process_exited_at') else 'waiting')
+            # Persist activity even when only tool events arrive; do not write every poll.
+            if time.monotonic() - last_save >= 2:
+                persist()
+                last_save = time.monotonic()
+
         try:
             check()
             thread.start()
             while thread.is_alive():
                 check()
                 thread.join(.25)
+                relay()
+            relay()
             check()
         except (TeamCancelled, TimeoutError):
             chat.stop_codex_stream(child_id)
             with chat.state.codex_streams_lock:
                 step['status'] = 'cancelled' if parent.get('cancelled') else 'failed'
+                step['completed_at'] = time.time()
+                step['process_running'] = False
+                parent['team_child_stream_id'] = None
             persist()
             raise
         with chat.state.codex_streams_lock:
@@ -330,10 +483,15 @@ def _run_exclusive(chat, stream_id, original_context, started):
             step['status'] = 'failed' if issues else 'completed'
             step['result'] = result
             step['error'] = '\n'.join(issues)
+            step['completed_at'] = time.time()
+            step['last_activity_at'] = step['completed_at']
+            step['process_running'] = False
             if worker:
                 step['validation'] = report['validation'] if report else []
                 step['changed_files'] = changed
                 step['scope_violations'] = violations
+        label = '완료' if not issues else '실패 · 메인 후속 처리 예정' if worker else '실패'
+        chat._append_stream_chunk(stream_id, 'output', f'\n{title} · {label}\n' + ('\n'.join(issues) + '\n' if issues else ''))
         persist()
         return result, '\n'.join(issues), step['status']
 
@@ -386,6 +544,7 @@ Never misreport test success or commit, push, or deploy.
         with chat.state.codex_streams_lock:
             parent['team_run']['status'] = 'completed'
             parent['team_run']['phase'] = 'completed'
+            parent['team_run']['completed_at'] = time.time()
             parent['output_last_message'] = final
             parent['task_complete_seen'] = True
             parent['exit_code'] = 0
@@ -396,6 +555,10 @@ Never misreport test success or commit, push, or deploy.
             if parent.get('cancelled'):
                 return
             parent['team_run']['status'] = 'failed'
+            parent['team_run']['completed_at'] = time.time()
+            for step in parent['team_run'].get('steps', []):
+                if step.get('status') in ('starting', 'preflight', 'running'):
+                    step.update(status='failed', error=str(exc), completed_at=time.time(), process_running=False)
             parent['exit_code'] = 1
         chat._append_stream_chunk(stream_id, 'error', str(exc))
     with chat.state.codex_streams_lock:

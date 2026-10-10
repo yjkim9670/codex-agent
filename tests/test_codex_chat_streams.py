@@ -6849,8 +6849,9 @@ def test_session_context_memory_retains_notes_outside_prompt_budget(isolated_cod
     assert all(note['role'] == 'user' for note in refreshed['notes'])
 
 # Team orchestration uses mocked executors: no paid model calls or real edits.
+@pytest.mark.parametrize('real_non_git_snapshot', [False, True])
 @pytest.mark.parametrize('worker_failure,malformed', [(False, False), (True, False), (False, True)])
-def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worker_failure, malformed):
+def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worker_failure, malformed, real_non_git_snapshot):
     from codex_agent.services import team_execution
     parent_session = codex_chat.create_session('Team parent')
     parent = {
@@ -6864,7 +6865,11 @@ def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worke
     }
     state.codex_streams['team-parent'] = parent
     calls, saved, finalizations = [], [], []
-    monkeypatch.setattr(team_execution, 'workspace_snapshot', lambda cwd: {'head': 'unchanged', 'files': {}})
+    if real_non_git_snapshot:
+        monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(isolated_codex_workspace['workspace_dir'].parent))
+        assert team_execution.workspace_snapshot(parent['execution_cwd'])['kind'] == 'filesystem'
+    else:
+        monkeypatch.setattr(team_execution, 'workspace_snapshot', lambda cwd: {'head': 'unchanged', 'files': {}})
     def create_child(session_id, prompt, **kwargs):
         child_id = f'child-{len(calls)}'
         calls.append((prompt, kwargs))
@@ -6879,6 +6884,10 @@ def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worke
                 {'goal': 'step two depends on one', 'files': 'src/two.py', 'validation': 'integration test'},
             ]})
         elif child['model_role'] == 'secondary':
+            if real_non_git_snapshot:
+                source = Path(parent['execution_cwd']) / ('src/one.py' if len(calls) == 2 else 'src/two.py')
+                source.parent.mkdir(exist_ok=True)
+                source.write_text('worker implementation')
             result = json.dumps({'status': 'completed', 'summary': 'changed src/one.py',
                 'validation': [{'command': 'unit test', 'exit_code': 0, 'status': 'passed'}]})
         else:
@@ -6907,6 +6916,10 @@ def test_team_main_worker_main_flow(monkeypatch, isolated_codex_workspace, worke
     assert saved[0]['phase'] == 'analysis'
     assert saved[-1]['status'] == 'completed'
     assert all(step['session_id'] for step in parent['team_run']['steps'])
+    if real_non_git_snapshot and not malformed:
+        worker = parent['team_run']['steps'][1]
+        assert 'src/one.py' in worker['changed_files']
+        assert worker['scope_violations'] == []
 
 
 def test_team_cancel_between_child_registration_and_execution(monkeypatch, isolated_codex_workspace):
@@ -7062,3 +7075,77 @@ def test_team_parent_stop_cascades_and_persists(monkeypatch, isolated_codex_work
     assert stored['team_run']['status'] == 'cancelled'
     assert stored['team_run']['steps'][0]['status'] == 'cancelled'
     assert stored['streaming'] is False
+
+
+def test_team_preflight_failure_is_recorded_and_review_continues(monkeypatch, isolated_codex_workspace):
+    from codex_agent.services import team_execution
+    session = codex_chat.create_session('Team preflight')
+    parent = {'session_id': session['id'], 'account_id': 'default', 'attachments': [],
+              'worktree_task': None, 'execution_cwd': '/non-git', 'user_prompt': 'task',
+              'cancelled': False, 'output': '',
+              'team_settings': {'main_model': 'main', 'main_effort': 'high', 'worker_model': 'worker', 'worker_effort': 'low'},
+              'team_run': {'status': 'running', 'steps': []}}
+    state.codex_streams['parent'] = parent
+    calls, saved = [], []
+    ready, release = threading.Event(), threading.Event()
+    def create_child(session_id, prompt, **kwargs):
+        child_id = f'child-{len(calls)}'
+        calls.append(kwargs)
+        state.codex_streams[child_id] = {'id': child_id, 'session_id': session_id, **kwargs}
+        return {'id': child_id}
+    def execute(child_id, prompt):
+        if len(calls) == 1:
+            result = json.dumps({'tasks': [{'goal': 'task', 'files': 'src/x.py', 'validation': 'pytest'}]})
+        else:
+            assert 'non-git guard unavailable' in prompt
+            result = 'review finished'
+        state.codex_streams[child_id].update(output_last_message=result, exit_code=0,
+            output='작업 파일을 확인하고 있습니다.', last_activity_at=123,
+            codex_events=[{'index': 1, 'type': 'item.completed', 'item_type': 'command_execution', 'detail': 'command=pytest exit_code=0'}])
+        if len(calls) == 1:
+            ready.set()
+            release.wait(5)
+    def unavailable(cwd):
+        raise team_execution.WorkspaceGuardError('non-git guard unavailable')
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', create_child)
+    monkeypatch.setattr(codex_chat, '_run_codex_stream', execute)
+    monkeypatch.setattr(team_execution, 'workspace_snapshot', unavailable)
+    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *a, **k: saved.append(json.loads(json.dumps(parent['team_run']))))
+    monkeypatch.setattr(codex_chat, 'finalize_codex_stream', lambda *a: None)
+    runner = threading.Thread(target=team_execution.run, args=(codex_chat, 'parent', 'context'))
+    runner.start()
+    try:
+        assert ready.wait(2)
+        deadline = time.monotonic() + 2
+        while not parent['team_run']['steps'][0]['events'] and time.monotonic() < deadline:
+            time.sleep(.02)
+        live = parent['team_run']['steps'][0]
+        assert live['status'] == 'running'
+        assert live['progress'] == '작업 파일을 확인하고 있습니다.'
+        assert live['events'][0]['detail'] == 'command=pytest exit_code=0'
+        assert live['last_activity_at'] == 123
+    finally:
+        release.set()
+        runner.join(3)
+    assert not runner.is_alive()
+    assert [x['model_role'] for x in calls] == ['main', 'main']
+    assert parent['team_run']['status'] == 'completed'
+    analysis, worker, review = parent['team_run']['steps']
+    assert worker['status'] == 'failed' and worker['failure_kind'] == 'preflight'
+    assert worker['error'] == 'non-git guard unavailable'
+    assert '사전 검사 실패' in parent['output']
+    assert review['events'][0]['detail'] == 'command=pytest exit_code=0'
+    assert review['progress'] == '작업 파일을 확인하고 있습니다.'
+    assert any(step['status'] == 'preflight' for run in saved for step in run['steps'])
+
+
+def test_team_parent_runtime_tracks_child_and_tool_activity(monkeypatch):
+    class Process:
+        pid = 4321
+        def poll(self): return None
+    monkeypatch.setattr(codex_chat.time, 'time', lambda: 100)
+    child = {'process': Process(), 'created_at': 90, 'last_activity_at': 99, 'last_output_at': 80}
+    state.codex_streams['child'] = child
+    parent = {'team_child_stream_id': 'child', 'created_at': 70}
+    result = codex_chat._snapshot_stream_runtime_locked(parent)
+    assert result == {'process_running': True, 'process_pid': 4321, 'runtime_ms': 30000, 'idle_ms': 1000}

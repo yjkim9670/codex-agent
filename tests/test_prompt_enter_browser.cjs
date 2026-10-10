@@ -61,12 +61,25 @@ function slice(start, end) {
                     await input.dispatchEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...ime });
                     assert.equal(await page.evaluate(() => submissions), baseline, `${device.name}: IME`);
                 }
-                if (device.mobile) {
-                    for (const key of ['Control+Enter', 'Meta+Enter']) await input.press(key);
-                    assert.equal(await page.evaluate(() => submissions), 0, `${device.name}: hardware modifiers`);
+                for (const key of ['Control+Enter', 'Meta+Enter']) {
+                    await input.fill('send this');
+                    const before = await page.evaluate(() => submissions);
+                    await input.press(key);
+                    assert.equal(await page.evaluate(() => submissions), before + 1, `${device.name}: ${key}`);
+                    assert.equal(await input.inputValue(), 'send this', `${device.name}: no newline on send`);
                 }
+                const afterShortcuts = await page.evaluate(() => submissions);
+                for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
+                    for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
+                        await input.dispatchEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...modifiers, ...ime });
+                        assert.equal(await page.evaluate(() => submissions), afterShortcuts, `${device.name}: shortcut during IME`);
+                    }
+                }
+                await input.fill('first');
+                await input.press('Control+Shift+Enter');
+                assert.equal(await page.evaluate(() => submissions), afterShortcuts);
                 await page.getByRole('button', { name: 'Submit' }).click();
-                assert.equal(await page.evaluate(() => submissions), baseline + 1, `${device.name}: Submit`);
+                assert.equal(await page.evaluate(() => submissions), afterShortcuts + 1, `${device.name}: Submit`);
                 console.log(`PASS: ${device.name}`);
             } finally {
                 await page.close();

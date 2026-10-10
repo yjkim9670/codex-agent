@@ -30,8 +30,12 @@ Attachments, account, and execution directory carry through every stage. When
 Worktree is selected, one worktree is created for the request and shared by all
 stages. Team does not create a worktree for each worker.
 
-The parent chat remains active throughout execution. Live output shows the stage
-and model. Its expandable message details retain stage status, reports, and child
+The parent chat remains active throughout execution. Live output shows each stage, its status and model, child progress text,
+elapsed time, last activity time, and the active child process state/PID.
+Expandable per-stage logs show command/file/test event summaries and exit codes.
+Tool-only activity updates the last activity time even without new chat text.
+Progress is persisted at stage transitions and at most every two seconds while
+a child runs, so a refresh restores the same stage and logs. Its expandable message details retain stage status, reports, and child
 session identifiers; the child sessions contain individual execution logs and
 model usage. The server persists phase transitions, so browser refreshes and
 mobile disconnects do not control execution. Team supports up to four workers,
@@ -56,10 +60,37 @@ validation status. Failed, skipped, missing or malformed check results stop
 dependent workers and go to main review. These results are model-reported;
 independent verification of the recorded commands is not yet provided.
 
-The controller fingerprints dirty/untracked Git paths before and after each
-worker, compares changes with allowed relative path/glob scopes, and flags
-out-of-scope modifications or new Git HEAD revisions. It never resets edits.
-Non-Git workspaces fail closed for workers.
+The controller uses Git status and HEAD fingerprints for repository workspaces.
+For non-Git workspaces, it fingerprints the workspace tree before and after each
+worker instead. Both guards compare changes with allowed relative path/glob
+scopes and flag out-of-scope changes without resetting user edits. Secondary
+workers can execute in non-Git folders, including when Git is not installed.
+The existing launcher supplies `--skip-git-repo-check` for non-Git execution.
+Git command errors in a repository still fail visibly rather than silently
+switching to less complete coverage.
+
+The non-Git snapshot detects file creation, content changes, deletion, permission
+changes, directories, and symlink targets. Parent directories needed by an allowed
+file scope are permitted. Symlink targets outside the workspace are not scanned.
+All ordinary files are included, including hidden, ignored, and generated files;
+there are no implicit cache/build exclusions. Nested repository files are scanned
+as part of the tree; `.git` metadata is excluded and nested repository HEADs are
+checked separately. Changing the guard type (for example, initializing Git at the
+workspace root during a worker) is also flagged.
+
+Each non-Git snapshot is bounded to 100,000 paths, 1 GiB of file contents, and
+25 seconds. Unreadable files, unsupported special files, scan errors, and limit
+exhaustion fail the stage visibly and hand off to main review. Use a smaller
+execution directory if the tree exceeds these bounds. Preflight failures create
+a failed stage with the path and reason before launching a worker. Invalid task
+scopes are also checked before launching. Repository subdirectories retain the
+Git guard and execution-relative paths; edits elsewhere in the same repository
+are still detected as scope violations.
+
+Snapshots detect changes after execution; they do not prevent edits or observe
+files outside the monitored workspace. Files edited and restored between
+snapshots are not detected. The final main review checks the actual changed files
+and runs integration checks in both Git and non-Git workspaces.
 
 An OS advisory Codex execution lock spans the whole Team lifecycle, including
 gaps between stages. Team child threads inherit permission to share the lock

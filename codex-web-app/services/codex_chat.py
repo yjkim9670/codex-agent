@@ -9743,6 +9743,10 @@ def get_session(session_id):
             if (isinstance(team, dict) and team.get('status') == 'running'
                     and team.get('stream_id') not in known_stream_ids):
                 team['status'] = 'interrupted'
+                team['completed_at'] = time.time()
+                for step in team.get('steps', []):
+                    if step.get('status') in ('running', 'starting', 'preflight'):
+                        step.update(status='interrupted', process_running=False, completed_at=team['completed_at'])
                 message['streaming'] = False
                 message['content'] = str(message.get('content') or '') + '\n\n[Team 실행 중단: 서버 재시작 후 변경사항을 확인하고 새 요청으로 재개해 주세요.]'
                 changed = True
@@ -13544,6 +13548,7 @@ def _append_stream_chunk(stream_id, key, chunk):
         now = time.time()
         stream['updated_at'] = now
         stream['last_output_at'] = now
+        stream['last_activity_at'] = now
         if key == 'output':
             stream['output_length'] = len(stream.get('output') or '')
         elif key == 'error':
@@ -13684,6 +13689,14 @@ def _event_stream_incomplete_message(dropped_event_count=0):
 
 def _snapshot_stream_runtime_locked(stream):
     now = time.time()
+    child_id = stream.get('team_child_stream_id')
+    child = state.codex_streams.get(child_id) if child_id else None
+    if child is not None and child is not stream:
+        runtime = _snapshot_stream_runtime_locked(child)
+        started = stream.get('started_at') or stream.get('created_at')
+        if isinstance(started, (int, float)):
+            runtime['runtime_ms'] = max(0, int((now - started) * 1000))
+        return runtime
     process = stream.get('process')
     process_running = False
     process_pid = None
@@ -13710,7 +13723,7 @@ def _snapshot_stream_runtime_locked(stream):
             process_pid = None
 
     started_at = stream.get('started_at') or stream.get('created_at')
-    last_output_at = stream.get('last_output_at') or stream.get('updated_at')
+    last_output_at = stream.get('last_activity_at') or stream.get('last_output_at') or stream.get('updated_at')
     runtime_ms = None
     idle_ms = None
 
@@ -13988,6 +14001,7 @@ def _append_stream_event(stream_id, event):
             del events[:-_CODEX_EVENT_LOG_LIMIT]
         stream['codex_event_count'] = count
         stream['updated_at'] = time.time()
+        stream['last_activity_at'] = stream['updated_at']
 
 
 def _set_stream_output_text_delta(stream_id, text, final_after_work=None):
@@ -14928,6 +14942,7 @@ def _run_codex_stream(stream_id, prompt):
                         stream['output'] = selected_output_text
                         stream['output_length'] = len(stream.get('output') or '')
                         stream['last_output_at'] = now
+                        stream['last_activity_at'] = now
                     stream['updated_at'] = now
 
         _cleanup_output_last_message(output_path)
@@ -16430,8 +16445,8 @@ def stop_codex_stream(stream_id):
         if stream.get('team_run'):
             stream['team_run']['status'] = 'cancelled'
             for step in stream['team_run'].get('steps', []):
-                if step.get('status') == 'running':
-                    step['status'] = 'cancelled'
+                if step.get('status') in ('running', 'starting', 'preflight'):
+                    step.update(status='cancelled', completed_at=now, process_running=False)
         process = stream.get('process')
         opencode_session_id = str(stream.get('opencode_session_id') or '').strip()
         session_id = stream.get('session_id')

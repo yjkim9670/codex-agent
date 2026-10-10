@@ -267,7 +267,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for the selected agent. (Shift+Enter for newline)';
-const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for the selected agent. (Enter for newline)';
+const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for the selected agent. (Enter for newline; Ctrl/Cmd+Enter to send)';
 const CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 120000;
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
@@ -2707,9 +2707,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (cyclePlanModeFromKeyboardEvent(event)) {
                 return;
             }
-            // Tablets can use a desktop layout (and iPadOS can report a Mac UA).
-            // Keep Enter as a newline on mobile devices, including hardware keyboards.
-            if (event.key === 'Enter' && !event.shiftKey && !isMobileViewportBehaviorActive()) {
+            // Device/layout detection cannot tell whether an external keyboard is attached.
+            // Preserve mobile Enter for newlines; explicit hardware shortcuts send everywhere.
+            if (event.key === 'Enter' && !event.shiftKey && !event.altKey
+                && (event.ctrlKey || event.metaKey || !isMobileViewportBehaviorActive())) {
                 event.preventDefault();
                 handleSubmit();
             }
@@ -27456,6 +27457,7 @@ function renderMessages(messages) {
 
         wrapper.appendChild(meta);
         wrapper.appendChild(bubble);
+        setMessageTeamProgress(bubble, message?.team_run);
         wrapper.appendChild(streamIndicator);
         wrapper.appendChild(footer);
         container.appendChild(wrapper);
@@ -27598,6 +27600,7 @@ function appendMessageToDOM(message, roleOverride = null) {
 
     wrapper.appendChild(meta);
     wrapper.appendChild(bubble);
+    setMessageTeamProgress(bubble, message?.team_run);
     wrapper.appendChild(streamIndicator);
     wrapper.appendChild(footer);
     container.appendChild(wrapper);
@@ -30028,17 +30031,24 @@ async function pollStream(streamId) {
             current.eventOffset = result.event_length;
         }
         appendCodexEvents(current, result?.events);
+        current.teamRun = result?.team_run || null;
 
         if (result?.output || result?.error) {
             updateStreamEntry(current);
         }
-        setSessionStatus(current.sessionId, buildActiveStreamStatus(current.processRunning));
+        setMessageTeamProgress(current.entry?.bubble, current.teamRun);
+        if (current.teamRun && current.entry?.footer) {
+            setMessageDetailLogLink(current.entry.footer, { team_run: current.teamRun });
+        }
+        setSessionStatus(current.sessionId, current.teamRun
+            ? `Team · ${teamStatusLabel(current.teamRun.status)}`
+            : buildActiveStreamStatus(current.processRunning));
 
         if (result?.done) {
             await finishStream(streamId, result);
             return;
         }
-        if (current.processRunning === false && Number.isFinite(current.idleMs) && current.idleMs >= STREAM_IDLE_WARNING_MS) {
+        if (!current.teamRun && current.processRunning === false && Number.isFinite(current.idleMs) && current.idleMs >= STREAM_IDLE_WARNING_MS) {
             setSessionStatus(current.sessionId, 'Receiving response... (CLI finalizing, no recent output)');
         }
         scheduleStreamPoll(streamId, STREAM_POLL_BASE_MS);
@@ -30117,6 +30127,7 @@ async function finishStream(streamId, result) {
             savedMessage
         );
     }
+    setMessageTeamProgress(bubble, savedMessage?.team_run || result?.team_run || stream.teamRun);
     const savedDurationMs = Number(savedMessage?.duration_ms);
     if (Number.isFinite(savedDurationMs)) {
         setMessageDuration(stream.entry?.footer, savedDurationMs);
@@ -30631,6 +30642,102 @@ function buildFinalizeComparison(message) {
     };
 }
 
+function teamStatusLabel(status) {
+    return ({ running: '진행 중', starting: '시작 대기', preflight: '사전 검사 중',
+        completed: '완료', failed: '실패', cancelled: '취소', interrupted: '중단' })[status] || status || '';
+}
+
+function setMessageTeamProgress(bubble, team, now = Date.now()) {
+    if (!bubble) return;
+    let panel = bubble.querySelector('.message-team-progress');
+    if (!team || !Array.isArray(team.steps)) {
+        panel?.remove();
+        return;
+    }
+    if (!panel) {
+        panel = document.createElement('section');
+        panel.className = 'message-team-progress';
+        panel.setAttribute('aria-label', 'Team 진행 상태');
+        bubble.appendChild(panel);
+    }
+    // Keep disclosure state when the streaming text is replaced at a transition.
+    const wrapper = bubble.closest('.message');
+    const openSteps = new Set(JSON.parse(wrapper?.dataset.teamOpenSteps || '[]'));
+    panel.querySelectorAll('details[data-team-step]').forEach(details => {
+        const index = Number(details.dataset.teamStep);
+        if (details.open) openSteps.add(index); else openSteps.delete(index);
+    });
+    if (wrapper) wrapper.dataset.teamOpenSteps = JSON.stringify([...openSteps]);
+    const signature = JSON.stringify(team) + Math.floor(now / 1000);
+    if (panel.dataset.signature === signature) return;
+    panel.dataset.signature = signature;
+    panel.replaceChildren();
+    const header = document.createElement('div');
+    header.className = 'message-team-header';
+    header.textContent = `Team · ${teamStatusLabel(team.status)}`;
+    panel.appendChild(header);
+    team.steps.forEach((step, index) => {
+        const row = document.createElement('div');
+        row.className = 'message-team-step';
+        row.dataset.status = team.status === 'interrupted' && ['running', 'starting', 'preflight'].includes(step.status)
+            ? 'interrupted' : step.status;
+        const title = document.createElement('div');
+        // Legacy titles contain “중”; status is now shown separately.
+        title.textContent = `${String(step.title || step.phase || '').replace(/ 중$/, '')} · ${teamStatusLabel(row.dataset.status)} · ${step.model || 'default'}`;
+        row.appendChild(title);
+        const started = Number(step.started_at) * 1000;
+        const ended = step.completed_at ? Number(step.completed_at) * 1000 : now;
+        const activity = Number(step.last_activity_at) * 1000;
+        const live = team.status === 'running' && ['running', 'starting', 'preflight'].includes(step.status);
+        const timing = document.createElement('div');
+        timing.className = 'message-team-timing';
+        const parts = [];
+        if (Number.isFinite(started) && started > 0) parts.push(`경과 ${Math.max(0, Math.floor((ended - started) / 1000))}초`);
+        if (Number.isFinite(activity) && activity > 0) {
+            parts.push(`마지막 활동 ${new Date(activity).toLocaleTimeString()}`);
+            if (live) parts.push(`${Math.max(0, Math.floor((now - activity) / 1000))}초 전`);
+        }
+        if (live) {
+            const label = step.status === 'preflight' ? '작업 폴더 검사 중'
+                : step.process_running ? (now - activity > 15000 ? '프로세스 실행 중 · 새 응답 대기' : '프로세스 실행 중')
+                : step.activity === 'finalizing' ? '결과 정리 중' : '실행 시작 대기';
+            parts.push(label);
+            if (step.process_pid) parts.push(`PID ${step.process_pid}`);
+        }
+        timing.textContent = parts.join(' · ');
+        row.appendChild(timing);
+        if (step.error) {
+            const error = document.createElement('div');
+            error.className = 'message-team-error';
+            error.textContent = step.error;
+            row.appendChild(error);
+        }
+        if (step.progress) {
+            const progress = document.createElement('div');
+            progress.className = 'message-team-commentary';
+            progress.textContent = step.progress.slice(-1200);
+            row.appendChild(progress);
+        }
+        if (Array.isArray(step.events) && step.events.length) {
+            const details = document.createElement('details');
+            details.dataset.teamStep = String(index);
+            details.open = openSteps.has(index);
+            const summary = document.createElement('summary');
+            summary.textContent = `실행 로그 (${step.events.length})`;
+            const log = document.createElement('pre');
+            log.textContent = buildCodexEventsDetailText(step.events);
+            details.append(summary, log);
+            details.addEventListener('toggle', () => {
+                if (!details.isConnected) return;
+                if (details.open) openSteps.add(index); else openSteps.delete(index);
+                if (wrapper) wrapper.dataset.teamOpenSteps = JSON.stringify([...openSteps]);
+            });
+            row.appendChild(details);
+        }
+        panel.appendChild(row);
+    });
+}
+
 function buildMessageDetailText(message) {
     if (!message || typeof message !== 'object') return '';
     const sections = [];
@@ -30660,7 +30767,8 @@ function buildMessageDetailText(message) {
             `## Team · ${message.team_run.status || ''}`,
             ...message.team_run.steps.map(step => [
                 `### ${step.title} · ${step.model || 'default'} · ${step.status}`,
-                `세션: ${step.session_id}`,
+                step.session_id ? `세션: ${step.session_id}` : '',
+                step.progress || '', buildCodexEventsDetailText(step.events),
                 step.result || '', step.error || ''
             ].filter(Boolean).join('\n\n'))
         ].join('\n\n'));

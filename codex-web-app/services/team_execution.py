@@ -195,7 +195,8 @@ def settings_snapshot(chat):
 
 
 def validate_settings(chat, settings, plan_mode=False, read_only=False):
-    if settings.get('agent_backend') != 'codex':
+    # Codex's canonical backend ID is dtgpt; codex is a legacy alias.
+    if chat.normalize_codex_agent_backend(settings.get('agent_backend')) != 'dtgpt':
         return 'Team 모드는 Codex 실행 백엔드에서만 지원합니다.'
     if not settings.get('worker_model'):
         return 'Team 실행 전에 세컨더리 모델을 지정해 주세요.'

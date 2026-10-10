@@ -6935,7 +6935,9 @@ def test_team_cancel_between_child_registration_and_execution(monkeypatch, isola
 
 
 def test_team_queue_settings_survive_normalization_and_changes(monkeypatch, isolated_codex_workspace):
-    monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: 'codex')
+    # Exercise the real selector with the default Codex backend catalog.
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': 'dtgpt', 'name': 'Codex'}])
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_DEFAULT', 'dtgpt')
     settings = {'model': 'main-a', 'reasoning_effort': 'high', 'secondary_model': 'worker-a', 'secondary_reasoning_effort': 'low'}
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
     session = codex_chat.create_session('queue')
@@ -6945,6 +6947,7 @@ def test_team_queue_settings_survive_normalization_and_changes(monkeypatch, isol
     settings.update(model='main-b', secondary_model='worker-b')
     entry = codex_chat.get_session(session['id'])['pending_queue'][0]
     assert entry['execution_mode'] == 'team'
+    assert entry['team_settings']['agent_backend'] == 'dtgpt'
     assert entry['team_settings']['main_model'] == 'main-a'
     assert entry['team_settings']['worker_model'] == 'worker-a'
     assert entry['team_settings']['worker_effort'] == 'low'
@@ -6954,6 +6957,8 @@ def test_team_queue_settings_survive_normalization_and_changes(monkeypatch, isol
     ('claude', 'worker', False, None), ('opencode', 'worker', False, None),
     ('codex', None, False, None), ('codex', 'worker', True, None),
     ('codex', 'worker', False, 'report'),
+    ('dtgpt', None, False, None), ('dtgpt', 'worker', True, None),
+    ('dtgpt', 'worker', False, 'report'), ('unknown', 'worker', False, None),
 ])
 def test_team_invalid_configuration_does_not_enqueue(monkeypatch, isolated_codex_workspace, backend, secondary, plan, report):
     monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: backend)
@@ -6987,11 +6992,12 @@ def test_team_parser_bounds_tasks():
             team_execution.parse_tasks(json.dumps({'tasks': tasks}))
 
 
-def test_team_queue_dispatch_uses_submission_backend_and_models(monkeypatch, isolated_codex_workspace):
+@pytest.mark.parametrize('backend', ['codex', 'dtgpt'])
+def test_team_queue_dispatch_uses_submission_backend_and_models(monkeypatch, isolated_codex_workspace, backend):
     monkeypatch.setattr(codex_chat, 'CODEX_REQUIRE_ACCOUNT_LOGIN', False)
     monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **k: {})
     monkeypatch.setattr(codex_chat, 'get_usage_summary', lambda **k: {})
-    settings = {'model': 'main-a', 'reasoning_effort': 'high', 'secondary_model': 'worker-a', 'secondary_reasoning_effort': 'low', 'agent_backend': 'codex'}
+    settings = {'model': 'main-a', 'reasoning_effort': 'high', 'secondary_model': 'worker-a', 'secondary_reasoning_effort': 'low', 'agent_backend': backend}
     monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
     monkeypatch.setattr(codex_chat, 'get_selected_agent_backend', lambda: settings['agent_backend'])
     session = codex_chat.create_session('queue dispatch')

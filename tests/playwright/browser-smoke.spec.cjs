@@ -22,6 +22,9 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_COMPOSE_MODES === '1') {
+        await require('./compose-modes.cjs').verifyComposeModes(page, expect);
+    }
     if (process.env.CODEX_VERIFY_WORKBENCH_CONTROLS === '1') {
         await require('./workbench-controls.cjs').verifyWorkbenchControls(page, expect);
     }
@@ -30,6 +33,9 @@ test('browser UI smoke check', async ({ page }) => {
     }
     if (process.env.CODEX_VERIFY_TEAM_PROGRESS === '1') {
         await require('./team-progress.cjs').verifyTeamProgress(page, expect);
+    }
+    if (process.env.CODEX_VERIFY_USAGE_PANEL === '1') {
+        await require('./usage-panel.cjs').verifyUsagePanel(page, expect);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

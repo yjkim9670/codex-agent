@@ -1,9 +1,9 @@
 # Team execution
 
-Team is a Codex-only execution mode. It replaces Secondary in the desktop and
-mobile composer and Shift+Tab cycle: `Work → Plan → Team → Plan+`. Stored
-`secondary` composer values migrate to `team`; the secondary model and effort
-settings and their other uses remain available.
+Team is a Codex-only execution mode, separate from Sec (direct secondary
+execution). The desktop and mobile composer menus offer `Work / Plan / Plan+ /
+Sec / Team`. Shift+Tab toggles only `Work ↔ Plan`; other modes return to Work.
+Stored `secondary` values remain Sec, while `team` values remain Team.
 
 Set a secondary model explicitly before submitting a Team request. Workbench
 captures the main and secondary model/effort, account, and Codex backend at

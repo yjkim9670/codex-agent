@@ -12,7 +12,7 @@ for (const id of ['codex-plan-mode-toggle', 'codex-chat-compose-tools-toggle', '
 const calls = [];
 const context = vm.createContext({
     state: { settings: { planModeState: 'off' } },
-    document: { getElementById: id => elements.get(id), querySelector: () => elements.get('mobile-mode') },
+    document: { getElementById: id => elements.get(id), querySelector: () => elements.get('mobile-mode'), querySelectorAll: () => [] },
     getWorktreeModeState: () => false,
     queuePromptOnServer: async (sessionId, prompt, options) => {
         calls.push({ sessionId, prompt, ...options });
@@ -34,10 +34,10 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
         for (const [mode, label, role, plan, auto] of [
             ['off', 'Work', 'main', false, false],
             ['plan', 'Plan', 'main', true, false],
+            ['secondary', 'Sec', 'secondary', false, false],
             ['team', 'Team', 'main', false, false],
             ['plan_and_execute', 'Plan+', 'main', true, true]
         ]) {
-            assert.equal(context.getPlanModeState(), mode);
             context.setPlanModeToggleState(mode);
             assert.equal(elements.get('codex-plan-mode-toggle').textContent, label);
             assert.equal(elements.get('mobile-mode').textContent, label);
@@ -48,6 +48,7 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
             assert.equal(context.cyclePlanModeFromKeyboardEvent({ key: 'Tab', shiftKey: true,
                 preventDefault: () => { prevented = true; }, stopPropagation() {} }), true);
             assert.equal(prevented, true);
+            assert.equal(context.getPlanModeState(), mode === 'off' ? 'plan' : 'off');
         }
     }
     for (const event of [{ key: 'Tab' }, { key: 'Tab', shiftKey: true, ctrlKey: true }, { key: 'Enter', shiftKey: true }]) {
@@ -56,10 +57,10 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
     assert.equal(context.normalizePlanModeState(true), 'plan');
     assert.equal(context.normalizePlanModeState('auto'), 'plan_and_execute');
     assert.equal(context.normalizePlanModeState('invalid'), 'off');
-    assert.equal(context.normalizePlanModeState('secondary'), 'team');
+    assert.equal(context.normalizePlanModeState('secondary'), 'secondary');
     for (const [mode, expected] of [
         ['off', [[false, 'main']]], ['plan', [[true, 'main']]],
-        ['team', [[false, 'main']]], ['plan_and_execute', [[true, 'main'], [false, 'main']]]
+        ['secondary', [[false, 'secondary']]], ['team', [[false, 'main']]], ['plan_and_execute', [[true, 'main'], [false, 'main']]]
     ]) {
         calls.length = 0;
         context.setPlanModeToggleState('off');

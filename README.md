@@ -54,9 +54,10 @@ through the repository's `Android APK` GitHub Actions workflow.
 
 ## Team mode
 
-The composer cycles through `Work → Plan → Team → Plan+` with Shift+Tab.
-Team replaces the former Secondary execution mode and currently supports only
-the Codex backend. Set a secondary model in execution settings before using it.
+The composer menu offers `Work / Plan / Plan+ / Sec / Team`. Shift+Tab toggles
+only `Work ↔ Plan`; Plan+, Sec and Team return to Work. Sec directly executes
+with the secondary model. Team currently supports only the Codex backend.
+Set a secondary model in execution settings before using it.
 The main model analyzes the request, up to four secondary workers run sequentially,
 and the main model verifies the actual changes and finishes the request.
 Secondary model settings remain available for Sub jobs and commit messages.

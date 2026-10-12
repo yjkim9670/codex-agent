@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { chromium } = require('playwright');
+const { chromium, expect } = require('@playwright/test');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'codex-web-app/static/js/app.js'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'codex-web-app/templates/index.html'), 'utf8');
@@ -17,48 +17,25 @@ const slice = (start, end) => source.slice(source.indexOf(start), source.indexOf
         page.on('pageerror', error => errors.push(error.message));
         const formStart = template.indexOf('<form id="codex-chat-form"');
         const form = template.slice(formStart, template.indexOf('</form>', formStart) + 7);
-        for (const [width, height] of [[1280, 800], [600, 360], [360, 360]]) {
-            await page.goto('about:blank');
-            await page.setViewportSize({ width, height });
-            await page.setContent(`<style>${css}</style><main style="display:flex;flex-direction:column;justify-content:flex-end;min-height:100dvh">${form}</main>`);
-            await page.addScriptTag({ content: `
-                const state = { settings: { planModeState: 'off' } };
-                ${slice('const PLAN_MODE_STATE_OFF =', 'let hasManualTheme')}
-                ${slice('function normalizePlanModeState(', 'function getChatToolsOverlayElements(')}
-                ${slice('function setPlanModeToggleState(', 'function getExecutionPolicyPreset(')}
-                ${slice('function getComposeModelRole(', "document.getElementById('codex-execution-settings-save')")}
-                const input = document.getElementById('codex-chat-input');
-                input.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
-                for (const button of [document.getElementById('codex-plan-mode-toggle'), document.querySelector('[data-chat-compose-action="plan"]')]) {
-                    button.addEventListener('click', () => setPlanModeToggleState(getNextPlanModeState()));
-                    button.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
-                }
-                document.getElementById('codex-chat-compose-tools-toggle').addEventListener('click', () => {
-                    document.getElementById('codex-chat-compose-tools-menu').classList.remove('is-hidden');
-                });
-                setPlanModeToggleState('off');
-            ` });
-            const input = page.locator('#codex-chat-input');
-            const button = width < 600 ? page.locator('[data-chat-compose-action="plan"]') : page.locator('#codex-plan-mode-toggle');
-            if (width < 600) await page.locator('#codex-chat-compose-tools-toggle').click();
-            for (const label of ['Plan', 'Team', 'Plan+', 'Work']) {
-                await button.click();
-                assert.equal(await button.textContent(), label);
-                const geometry = await button.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth, right: el.getBoundingClientRect().right, width: el.getBoundingClientRect().width }));
-                if (width >= 600) assert.ok(geometry.width <= 52, `${width}: composer button widened`);
-                assert.ok(geometry.scroll <= geometry.client + 1, `${width}: ${label} clipped`);
-                assert.ok(geometry.right <= width + 1, `${width}: ${label} outside viewport`);
+        await page.setContent(`<style>${css}</style><main style="display:flex;flex-direction:column;justify-content:flex-end;min-height:100dvh">${form}</main>`);
+        await page.addScriptTag({ content: `
+            const state = { settings: { planModeState: 'off' } };
+            ${slice('const PLAN_MODE_STATE_OFF =', 'let hasManualTheme')}
+            ${slice('function normalizePlanModeState(', 'function getChatToolsOverlayElements(')}
+            ${slice('function setPlanModeToggleState(', 'function getExecutionPolicyPreset(')}
+            ${slice('function getComposeModelRole(', "document.getElementById('codex-execution-settings-save')")}
+            document.getElementById('codex-chat-input').addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
+            for (const button of [document.getElementById('codex-plan-mode-toggle'), document.querySelector('[data-chat-compose-action="plan"]')]) {
+                button.addEventListener('click', () => openComposeModeMenu(button));
+                button.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
             }
-            await input.fill('유지할 입력');
-            for (const [label, role, plan] of [['Plan', 'main', true], ['Team', 'main', false], ['Plan+', 'main', true], ['Work', 'main', false]]) {
-                await input.press('Shift+Tab');
-                assert.equal(await button.textContent(), label);
-                assert.equal(await input.inputValue(), '유지할 입력');
-                assert.equal(await input.evaluate(el => document.activeElement === el), true);
-                assert.equal(await page.evaluate(() => getComposeModelRole()), role);
-                assert.equal(await page.evaluate(() => shouldUsePlanModeForRequest()), plan);
-            }
-        }
+            document.getElementById('codex-chat-compose-tools-toggle').addEventListener('click', () => {
+                document.getElementById('codex-chat-compose-tools-menu').classList.remove('is-hidden');
+            });
+            setupComposeModeMenu();
+            setPlanModeToggleState('off');
+        ` });
+        await require('./playwright/compose-modes.cjs').verifyComposeModes(page, expect);
         const settingsStart = template.indexOf('<div class="ui-settings-overlay" id="codex-ui-settings-overlay"');
         const settings = template.slice(settingsStart, template.indexOf('<div class="branch-overlay"', settingsStart)).replace(/{%[\s\S]*?%}/g, '');
         let layoutChecks = 0;

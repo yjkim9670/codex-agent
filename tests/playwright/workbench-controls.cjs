@@ -3,31 +3,7 @@ exports.verifyWorkbenchControls = async (page, expect) => {
     await expect(page.locator('#codex-service-tier-select')).toHaveCount(0);
     await expect(page.locator('#codex-secondary-model-select')).toHaveCount(1);
     await expect(page.locator('#codex-secondary-run')).toHaveCount(0);
-    await page.setViewportSize({ width: 1280, height: 800 });
-    const mode = page.locator('#codex-plan-mode-toggle');
-    await expect(mode).toHaveText('Work');
-    for (const label of ['Plan', 'Secondary', 'Plan+', 'Work']) {
-        await mode.click();
-        await expect(mode).toHaveText(label === 'Secondary' ? 'Sec' : label);
-    }
-    const input = page.locator('#codex-chat-input');
-    await input.fill('모드 전환 테스트');
-    for (const label of ['Plan', 'Secondary', 'Plan+', 'Work']) {
-        await input.press('Shift+Tab');
-        await expect(mode).toHaveText(label === 'Secondary' ? 'Sec' : label);
-        await expect(input).toBeFocused();
-        await expect(input).toHaveValue('모드 전환 테스트');
-    }
-    await input.fill('');
-    await page.setViewportSize({ width: 360, height: 360 });
-    await page.locator('#codex-chat-compose-tools-toggle').click();
-    const mobileMode = page.locator('[data-chat-compose-action="plan"]');
-    for (const label of ['Plan', 'Secondary', 'Plan+', 'Work']) {
-        await mobileMode.click();
-        await expect(mobileMode).toHaveText(label);
-        await expect(mode).toHaveText(label === 'Secondary' ? 'Sec' : label);
-    }
-    await page.locator('#codex-chat-input').click();
+    await require('./compose-modes.cjs').verifyComposeModes(page, expect);
     for (const id of ['codex-account-manage-open', 'codex-blog-dashboard-open', 'codex-usage-history-open', 'codex-usage-keepalive-history-open', 'codex-cli-version-card', 'codex-verification-mode-select']) {
         await expect(page.locator(`#codex-ui-settings-overlay #${id}`)).toHaveCount(1);
         await expect(page.locator(`#codex-controls #${id}`)).toHaveCount(0);

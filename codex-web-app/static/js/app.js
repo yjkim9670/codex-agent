@@ -493,6 +493,7 @@ const GIT_SYNC_TARGET_LABELS = Object.freeze({
 });
 const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
+const PLAN_MODE_STATE_SECONDARY = 'secondary';
 const PLAN_MODE_STATE_TEAM = 'team';
 const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
 const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
@@ -2769,13 +2770,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (action === 'attach') {
                 imageAttachBtn?.click();
             } else if (action === 'plan') {
-                // The desktop toggle is hidden on phone layouts.  Update the
-                // shared state directly instead of relying on a hidden button.
-                setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
+                const trigger = event.target.closest('[data-chat-compose-action]');
+                openComposeModeMenu(trigger);
             }
-            // Keep the menu open so repeated presses can cycle through the
-            // visible Work / Plan / Secondary / Plan+ states.  The document click handler below
-            // closes it only when the user touches outside this menu.
         });
         document.addEventListener('click', event => {
             if (!phoneMedia.matches || composeToolsMenu.classList.contains('is-hidden')) return;
@@ -2784,7 +2781,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         document.addEventListener('keydown', event => {
-            if (event.key === 'Escape' && !composeToolsMenu.classList.contains('is-hidden')) {
+            if (event.key === 'Escape' && !composeModeMenuTrigger && !composeToolsMenu.classList.contains('is-hidden')) {
                 setCoverComposeToolsOpen(false);
                 composeToolsToggle.focus();
             }
@@ -4389,10 +4386,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (planModeToggle) {
         planModeToggle.addEventListener('keydown', cyclePlanModeFromKeyboardEvent);
-        planModeToggle.addEventListener('click', () => {
-            setPlanModeToggleState(getNextPlanModeState(getPlanModeState()));
-        });
+        planModeToggle.addEventListener('click', () => openComposeModeMenu(planModeToggle));
     }
+    setupComposeModeMenu();
     setPlanModeToggleState(state.settings.planModeState);
     if (worktreeModeToggle) {
         worktreeModeToggle.addEventListener('click', () => {
@@ -9824,6 +9820,10 @@ function updateUsageSummary(usage) {
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     const tokenUsage = usage?.token_usage || null;
     const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
+    const expandedTokenPeriods = new Set(
+        Array.from(element.querySelectorAll('.usage-token-entry[open]'))
+            .map(entry => entry.querySelector('.usage-token-period')?.textContent)
+    );
     element.innerHTML = '';
     if (accountName) {
         element.appendChild(buildUsageAccount(accountName));
@@ -9835,6 +9835,7 @@ function updateUsageSummary(usage) {
             buildTokenUsageEntry(tokenUsage?.all_time, 'All')
         ].filter(Boolean);
         tokenEntries.forEach(entry => {
+            entry.open = expandedTokenPeriods.has(entry.querySelector('.usage-token-period')?.textContent);
             element.appendChild(entry);
         });
     }
@@ -27647,7 +27648,10 @@ function normalizePlanModeState(value) {
         if (normalized === PLAN_MODE_STATE_PLAN_ONLY || normalized === 'true' || normalized === '1') {
             return PLAN_MODE_STATE_PLAN_ONLY;
         }
-        if (normalized === PLAN_MODE_STATE_TEAM || normalized === 'secondary') {
+        if (normalized === PLAN_MODE_STATE_SECONDARY) {
+            return PLAN_MODE_STATE_SECONDARY;
+        }
+        if (normalized === PLAN_MODE_STATE_TEAM) {
             return PLAN_MODE_STATE_TEAM;
         }
         if (
@@ -27694,16 +27698,84 @@ function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
 }
 
 function getNextPlanModeState(currentState = getPlanModeState()) {
-    if (currentState === PLAN_MODE_STATE_OFF) {
-        return PLAN_MODE_STATE_PLAN_ONLY;
+    return currentState === PLAN_MODE_STATE_OFF ? PLAN_MODE_STATE_PLAN_ONLY : PLAN_MODE_STATE_OFF;
+}
+
+let composeModeMenuTrigger = null;
+
+function closeComposeModeMenu({ restoreFocus = false } = {}) {
+    document.getElementById('codex-compose-mode-menu')?.classList.add('is-hidden');
+    composeModeMenuTrigger?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) composeModeMenuTrigger?.focus();
+    composeModeMenuTrigger = null;
+}
+
+function openComposeModeMenu(trigger) {
+    const menu = document.getElementById('codex-compose-mode-menu');
+    if (!menu) return;
+    if (composeModeMenuTrigger === trigger && !menu.classList.contains('is-hidden')) {
+        closeComposeModeMenu({ restoreFocus: true });
+        return;
     }
-    if (currentState === PLAN_MODE_STATE_PLAN_ONLY) {
-        return PLAN_MODE_STATE_TEAM;
-    }
-    if (currentState === PLAN_MODE_STATE_TEAM) {
-        return PLAN_MODE_STATE_PLAN_AND_EXECUTE;
-    }
-    return PLAN_MODE_STATE_OFF;
+    closeComposeModeMenu();
+    composeModeMenuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+    menu.classList.remove('is-hidden');
+    positionComposeModeMenu(menu);
+    menu.querySelector('[aria-checked="true"]')?.focus();
+}
+
+function positionComposeModeMenu(menu) {
+    const anchor = document.getElementById('codex-chat-form').getBoundingClientRect();
+    const width = Math.min(340, window.innerWidth - 16);
+    menu.style.width = `${width}px`;
+    menu.style.maxHeight = `${Math.min(360, window.innerHeight - 16)}px`;
+    menu.style.left = `${Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8))}px`;
+    menu.style.top = `${Math.max(8, anchor.top - menu.offsetHeight - 6)}px`;
+}
+
+function setupComposeModeMenu() {
+    const menu = document.getElementById('codex-compose-mode-menu');
+    if (!menu) return;
+    // Escape composer stacking contexts so short screens cannot hide options behind the header.
+    document.body.appendChild(menu);
+    // A phone keyboard can change viewport height when focus moves to the menu.
+    window.addEventListener('resize', () => {
+        if (composeModeMenuTrigger) positionComposeModeMenu(menu);
+    });
+    menu.addEventListener('click', event => {
+        const option = event.target.closest('[data-compose-mode]');
+        if (!option) return;
+        setPlanModeToggleState(option.dataset.composeMode);
+        closeComposeModeMenu();
+        document.getElementById('codex-chat-input')?.focus();
+    });
+    document.addEventListener('click', event => {
+        if (composeModeMenuTrigger && !menu.contains(event.target) && !composeModeMenuTrigger.contains(event.target)) {
+            closeComposeModeMenu();
+        }
+    });
+    menu.addEventListener('keydown', event => {
+        if (cyclePlanModeFromKeyboardEvent(event)) return;
+        const options = [...menu.querySelectorAll('[data-compose-mode]')];
+        const index = options.indexOf(document.activeElement);
+        if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            event.preventDefault();
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+                : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+            options[next]?.focus();
+        }
+    });
+    document.addEventListener('keydown', event => {
+        if (!composeModeMenuTrigger) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            closeComposeModeMenu({ restoreFocus: true });
+        } else if (event.key === 'Tab' && !event.shiftKey) {
+            closeComposeModeMenu();
+        }
+    });
 }
 
 function getChatToolsOverlayElements() {
@@ -28199,7 +28271,7 @@ async function queuePromptWithPlanMode(
         };
     }
     const normalizedPlanModeState = normalizePlanModeState(planModeState);
-    const modelRole = 'main';
+    const modelRole = getComposeModelRole(normalizedPlanModeState);
     const executionMode = normalizedPlanModeState === PLAN_MODE_STATE_TEAM ? 'team' : '';
     const queueItems = [];
     if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
@@ -28246,6 +28318,9 @@ function setPlanModeToggleState(nextState) {
     if (normalized === PLAN_MODE_STATE_PLAN_ONLY) {
         label = 'Plan · 플랜 모델로 계획만 작성';
         buttonText = 'Plan';
+    } else if (normalized === PLAN_MODE_STATE_SECONDARY) {
+        label = 'Sec · 세컨더리 모델로 실행';
+        buttonText = 'Sec';
     } else if (normalized === PLAN_MODE_STATE_TEAM) {
         label = 'Team · 메인 분석 → 세컨더리 워커 → 메인 검토 (Codex 전용)';
         buttonText = 'Team';
@@ -28253,7 +28328,7 @@ function setPlanModeToggleState(nextState) {
         label = 'Plan+ · 계획 작성 후 메인 모델로 실행';
         buttonText = 'Plan+';
     }
-    label += ' (Shift+Tab: Work → Plan → Team → Plan+)';
+    label += ' (Shift+Tab: Work ↔ Plan)';
     if (button) {
         button.classList.toggle('is-active', isActive);
         button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
@@ -28267,6 +28342,9 @@ function setPlanModeToggleState(nextState) {
     // The phone-only menu is a second representation of the same state.
     // Synchronize it here so selecting Plan never appears to turn itself off.
     const composeToggle = document.getElementById('codex-chat-compose-tools-toggle');
+    for (const option of document.querySelectorAll('[data-compose-mode]')) {
+        option.setAttribute('aria-checked', String(option.dataset.composeMode === normalized));
+    }
     const composePlanButton = document.querySelector('[data-chat-compose-action="plan"]');
     if (composeToggle) {
         composeToggle.classList.toggle('is-plan-active', isActive);
@@ -29581,6 +29659,8 @@ async function handleSubmit(event) {
     const sendResult = await sendPrompt(prompt, {
         sessionId: activeSessionId,
         planMode: shouldUsePlanModeForRequest(planModeState),
+        modelRole: getComposeModelRole(planModeState),
+        executionMode: planModeState === PLAN_MODE_STATE_TEAM ? 'team' : '',
         attachments,
         worktreeMode: getWorktreeModeState()
     });
@@ -32279,33 +32359,44 @@ function buildTokenUsageEntry(entry, label) {
     const details = normalizeTokenUsageEntry(entry);
     if (!details) return null;
     const uncachedInputTokens = Math.max(0, details.inputTokens - details.cachedInputTokens);
-    const wrapper = document.createElement('div');
-    wrapper.className = 'usage-entry';
-    const row = document.createElement('div');
-    row.className = 'usage-row';
-    const pill = document.createElement('button');
-    pill.type = 'button';
-    pill.className = 'usage-pill';
-    pill.disabled = true;
-    pill.textContent = label;
+    const wrapper = document.createElement('details');
+    wrapper.className = 'usage-entry usage-token-entry';
+    const row = document.createElement('summary');
+    row.className = 'usage-token-summary';
+    row.title = '토큰·요청 사용량 상세 보기';
+    const period = document.createElement('span');
+    period.className = 'usage-token-period';
+    period.textContent = label;
     const value = document.createElement('span');
-    value.className = 'usage-remaining';
-    value.textContent = [
-        `Uncached ${formatCompactTokenCount(uncachedInputTokens)}`,
-        `Cached ${formatCompactTokenCount(details.cachedInputTokens)}`,
-        `Output ${formatCompactTokenCount(details.outputTokens)}`
-    ].join(' · ');
-    row.appendChild(pill);
+    value.className = 'usage-token-total';
+    value.textContent = `${formatCompactTokenCount(details.totalTokens)} tok`;
+    const requests = document.createElement('span');
+    requests.className = 'usage-token-requests';
+    requests.textContent = `${formatCompactTokenCount(details.requests)} req`;
+    row.appendChild(period);
     row.appendChild(value);
+    row.appendChild(requests);
     wrapper.appendChild(row);
 
-    const reset = document.createElement('div');
-    reset.className = 'usage-reset';
-    const totalText = formatNumber(details.totalTokens);
-    const requestText = formatNumber(details.requests);
-    const dateText = details.date ? ` (${details.date})` : '';
-    reset.textContent = `Ledger total ${totalText} · Req ${requestText}${dateText}`;
-    wrapper.appendChild(reset);
+    const breakdown = document.createElement('dl');
+    breakdown.className = 'usage-token-breakdown';
+    const metrics = [
+        ['Total tokens', formatNumber(details.totalTokens)],
+        ['Uncached input', formatNumber(uncachedInputTokens)],
+        ['Cached input', formatNumber(details.cachedInputTokens)],
+        ['Output', formatNumber(details.outputTokens)],
+        ['Requests', formatNumber(details.requests)]
+    ];
+    if (details.date) metrics.push(['Date', details.date]);
+    metrics.forEach(([name, count]) => {
+        const term = document.createElement('dt');
+        term.textContent = name;
+        const definition = document.createElement('dd');
+        definition.textContent = count;
+        breakdown.appendChild(term);
+        breakdown.appendChild(definition);
+    });
+    wrapper.appendChild(breakdown);
     return wrapper;
 }
 
@@ -34331,8 +34422,8 @@ function getRoleControlValue(role, field) {
     return String(select && !select.classList.contains('is-hidden') ? select.value : input?.value || '').trim();
 }
 
-function getComposeModelRole() {
-    return 'main';
+function getComposeModelRole(planModeState = getPlanModeState()) {
+    return normalizePlanModeState(planModeState) === PLAN_MODE_STATE_SECONDARY ? 'secondary' : 'main';
 }
 
 document.getElementById('codex-execution-settings-save')?.addEventListener('click', () => void updateSettings());

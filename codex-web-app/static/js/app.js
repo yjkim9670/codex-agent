@@ -1810,20 +1810,9 @@ function syncModelCardForBackend(agentBackend = getActiveAgentBackend()) {
     const modelLabel = document.getElementById('codex-model-label');
     const planModeModelLabel = document.getElementById('codex-plan-mode-model-label');
     const noReasoning = !hasReasoningControlsForBackend(agentBackend);
-    const claudeBackend = isClaudeBackend(agentBackend);
-    if (modelCard) {
-        modelCard.classList.toggle('is-no-reasoning', noReasoning);
-    }
-    if (modelLabel) {
-        modelLabel.textContent = noReasoning
-            ? (claudeBackend ? 'Claude model' : 'Model')
-            : (claudeBackend ? '메인 · Claude model / Effort' : '메인 · Model / Effort');
-    }
-    if (planModeModelLabel) {
-        planModeModelLabel.textContent = noReasoning
-            ? (claudeBackend ? 'Plan mode Claude model' : 'Plan mode model')
-            : (claudeBackend ? '플랜 · Claude model / Effort' : '플랜 · Model / Effort');
-    }
+    if (modelCard) modelCard.classList.toggle('is-no-reasoning', noReasoning);
+    if (modelLabel) modelLabel.textContent = '메인';
+    if (planModeModelLabel) planModeModelLabel.textContent = 'Plan';
 }
 
 function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) {
@@ -9824,10 +9813,12 @@ function updateUsageSummary(usage) {
         Array.from(element.querySelectorAll('.usage-token-entry[open]'))
             .map(entry => entry.querySelector('.usage-token-period')?.textContent)
     );
+    const expandedLimits = new Set(Array.from(element.querySelectorAll('.usage-limit-entry[open]')).map(entry => entry.dataset.period));
     element.innerHTML = '';
-    if (accountName) {
-        element.appendChild(buildUsageAccount(accountName));
-    }
+    const activeAccount = getActiveCodexAccount();
+    const selectedAccountName = String(activeAccount?.label || '').trim();
+    const showAccountName = accountName && accountName !== selectedAccountName;
+    if (showAccountName) element.appendChild(buildUsageAccount(accountName));
     const hasUsage = showUsageLimits && Boolean(usage?.five_hour || usage?.weekly);
     if (hasTokenUsage) {
         const tokenEntries = [
@@ -9841,7 +9832,7 @@ function updateUsageSummary(usage) {
     }
     if (!hasUsage && !hasTokenUsage) {
         const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
-        if (!accountName) {
+        if (!showAccountName) {
             element.textContent = fallbackText;
             return;
         }
@@ -9856,6 +9847,7 @@ function updateUsageSummary(usage) {
         buildUsageEntry(usage?.weekly, 'Weekly')
     ].filter(Boolean) : [];
     entries.forEach(entry => {
+        entry.open = expandedLimits.has(entry.dataset.period);
         element.appendChild(entry);
     });
 }
@@ -10227,59 +10219,35 @@ function setSettingsStatus(model, reasoning, overrideText = null) {
     }
     fullTextParts.push(`Secondary: ${state.settings.secondaryModel || modelText} · ${state.settings.secondaryReasoningEffort || reasoningText}`);
     const fullText = `${fullTextParts.join(' · ')}${routingText}`;
-    const displayTextParts = [];
-    if (showBackend && backendText) displayTextParts.push(`Agent: ${truncateMiddleText(backendText, 18)}`);
-    displayTextParts.push(`Model: ${truncateMiddleText(modelText, 28)}`);
-    if (planModeModelText !== modelText || state.settings.planModeModel) {
-        displayTextParts.push(`Plan model: ${truncateMiddleText(planModeModelText, 24)}`);
-    }
-    if (showReasoning) {
-        displayTextParts.push(`Reasoning: ${truncateMiddleText(reasoningText, 14)}`);
-    }
-    if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
-        displayTextParts.push(`Plan reasoning: ${truncateMiddleText(planModeReasoningText, 14)}`);
-    }
-    if (state.settings.modelProvider) {
-        displayTextParts.push(`Provider: ${truncateMiddleText(state.settings.modelProvider, 16)}`);
-    }
-    if (state.settings.cliProfile) {
-        displayTextParts.push(`Profile: ${truncateMiddleText(state.settings.cliProfile, 16)}`);
-    }
-    const displayText = displayTextParts.join(' · ');
-    const compactToken = value => {
-        if (value === 'default') return 'def';
-        return truncateMiddleText(value.replace(' (default)', '*'), 18);
-    };
-    const compactSummaryParts = [
-        `Model:${compactToken(modelText)}`
-    ];
-    if (showReasoning) {
-        compactSummaryParts.push(`R:${compactToken(reasoningText)}`);
-    }
-    if (showBackend && backendText) {
-        compactSummaryParts.unshift(`Agent:${compactToken(backendText)}`);
-    }
-    if (planModeModelText !== modelText || state.settings.planModeModel) {
-        compactSummaryParts.push(`Plan:${compactToken(planModeModelText)}`);
-    }
-    if (showPlanModeReasoning && (!showReasoning || planModeReasoningText !== reasoningText || state.settings.planModeReasoningEffort)) {
-        compactSummaryParts.push(`PR:${compactToken(planModeReasoningText)}`);
-    }
-    if (state.settings.secondaryModel) compactSummaryParts.push(`Secondary:${compactToken(state.settings.secondaryModel)}`);
-    if (state.settings.modelProvider) {
-        compactSummaryParts.push(`Provider:${compactToken(state.settings.modelProvider)}`);
-    }
-    if (state.settings.cliProfile) {
-        compactSummaryParts.push(`Profile:${compactToken(state.settings.cliProfile)}`);
-    }
-    const compactSummary = compactSummaryParts.join(' · ');
-
-    status.textContent = displayText || fullText;
+    status.textContent = '설정 적용됨';
     status.title = fullText;
-    if (summary) {
-        summary.textContent = compactSummary;
-        summary.title = fullText;
+    updateControlsModelSummary();
+}
+
+function updateControlsModelSummary() {
+    const summary = document.getElementById('codex-controls-summary');
+    if (!summary || !state.settings.loaded) return;
+    const mode = getPlanModeState();
+    const isPlan = shouldUsePlanModeForRequest(mode);
+    const isSecondary = getComposeModelRole(mode) === 'secondary';
+    const model = (isPlan ? state.settings.planModeModel : isSecondary ? state.settings.secondaryModel : null) || state.settings.model;
+    const effort = (isPlan ? state.settings.planModeReasoningEffort : isSecondary ? state.settings.secondaryReasoningEffort : null) || state.settings.reasoningEffort;
+    const role = isPlan ? 'Plan' : isSecondary ? 'Sec' : '메인';
+    const reasoning = hasReasoningControlsForBackend(getActiveAgentBackend()) ? formatReasoningStatus(model, effort) : '';
+    const text = [role, model || 'default', reasoning].filter(Boolean).join(' · ');
+    const parts = [text];
+    if (!isPlan) {
+        const planModel = state.settings.planModeModel || state.settings.model;
+        const planEffort = state.settings.planModeReasoningEffort || state.settings.reasoningEffort;
+        const planReasoning = hasReasoningControlsForBackend(getActiveAgentBackend()) ? formatReasoningStatus(planModel, planEffort) : '';
+        parts.push(['Plan', planModel || 'default', planReasoning].filter(Boolean).join(' · '));
     }
+    summary.replaceChildren(...parts.map(part => {
+        const item = document.createElement('span');
+        item.textContent = part;
+        return item;
+    }));
+    summary.title = parts.join(' / ');
 }
 
 async function watchManualUsageKeepalive(streamId, attempts = 0) {
@@ -28362,6 +28330,7 @@ function setPlanModeToggleState(nextState) {
         composePlanButton.setAttribute('aria-label', label);
         composePlanButton.setAttribute('title', label);
     }
+    if (typeof updateControlsModelSummary === 'function') updateControlsModelSummary();
 }
 
 function getExecutionPolicyPreset(id) {
@@ -32298,19 +32267,19 @@ function updateSessionsHeaderSummary() {
 function buildUsageEntry(entry, label) {
     const details = formatLimitUsage(entry, label);
     if (!details) return null;
-    const wrapper = document.createElement('div');
-    wrapper.className = 'usage-entry';
-    const row = document.createElement('div');
-    row.className = 'usage-row';
-    const pill = document.createElement('button');
-    pill.type = 'button';
-    pill.className = 'usage-pill';
-    pill.disabled = true;
-    pill.textContent = details.label;
+    const wrapper = document.createElement('details');
+    wrapper.className = 'usage-entry usage-limit-entry';
+    wrapper.dataset.period = label;
+    const row = document.createElement('summary');
+    row.className = 'usage-token-summary usage-limit-summary';
+    row.title = '리셋·예측 상세 보기';
+    const period = document.createElement('span');
+    period.className = 'usage-token-period';
+    period.textContent = details.label;
     const value = document.createElement('span');
     value.className = 'usage-remaining';
     value.textContent = details.remainingText;
-    row.appendChild(pill);
+    row.appendChild(period);
     row.appendChild(value);
     wrapper.appendChild(row);
     const reset = document.createElement('div');

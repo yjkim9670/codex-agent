@@ -35,7 +35,9 @@ test('browser UI smoke check', async ({ page }) => {
         await require('./team-progress.cjs').verifyTeamProgress(page, expect);
     }
     if (process.env.CODEX_VERIFY_USAGE_PANEL === '1') {
-        await require('./usage-panel.cjs').verifyUsagePanel(page, expect);
+        await require('./usage-panel.cjs').verifyUsagePanel(page, expect, {
+            isolated: process.env.CODEX_VERIFY_USAGE_PANEL_ISOLATED === '1',
+        });
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

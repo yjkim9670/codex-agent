@@ -22,6 +22,9 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_TYPOGRAPHY === '1') {
+        await require('./typography.cjs').verifyTypography(page, expect);
+    }
     if (process.env.CODEX_VERIFY_COMPOSE_MODES === '1') {
         await require('./compose-modes.cjs').verifyComposeModes(page, expect);
     }

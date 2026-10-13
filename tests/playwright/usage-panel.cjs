@@ -1,5 +1,6 @@
 async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     if (!isolated) {
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ui-scale').trim())).toBe('0.9');
     // Exercise the real apply handler with an intercepted PATCH; no settings are persisted.
     await page.waitForFunction(() => state.settings.loaded);
     await page.locator('#codex-controls-toggle').click();
@@ -28,7 +29,7 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     const path = require('node:path');
     const root = path.resolve(__dirname, '../..');
     const source = fs.readFileSync(path.join(root, 'codex-web-app/static/js/app.js'), 'utf8');
-    const functions = ['formatCompactTokenCount', 'normalizeTokenUsageEntry', 'buildTokenUsageEntry', 'formatLimitUsage', 'buildUsageEntry', 'buildUsageAccount', 'updateUsageSummary', 'updateControlsModelSummary', 'setPlanModeToggleState', 'syncModelCardForBackend'].map(name => {
+    const functions = ['formatCompactTokenCount', 'normalizeTokenUsageEntry', 'buildTokenUsageEntry', 'parseUsageTimestamp', 'formatProjectedUsagePercent', 'formatFiveHourUsageProjection', 'formatWeeklyUsageProjection', 'formatLimitUsage', 'buildUsageEntry', 'buildUsageAccount', 'updateUsageSummary', 'updateControlsModelSummary', 'setPlanModeToggleState', 'syncModelCardForBackend'].map(name => {
         const start = source.indexOf(`function ${name}(`);
         return source.slice(start, source.indexOf('\nfunction ', start + 1));
     }).join('\n');
@@ -56,12 +57,13 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
         const normalizeUsedPercent = value => Number(value);
         const formatRemainingPercent = value => 100 - value;
         const formatResetTimestamp = value => value || '';
-        const formatWeeklyUsageProjection = () => 'Pace 40% by reset';
+        Date.now = () => new Date('2026-10-13T00:36:00').getTime();
         const isUsageKeepaliveHistoryOverlayOpen = () => false;
         const formatNumber = value => Number(value).toLocaleString('en-US');
         ${functions}
         window.usageFixture = {account_name:'Test account',five_hour:{used_percent:20,resets_at:'2026-10-13 01:00'},weekly:{used_percent:35,resets_at:'2026-10-19 01:00'},token_usage:{today:{input_tokens:1000000,cached_input_tokens:800000,output_tokens:234567,total_tokens:1234567,requests:32,date:'2026-10-12'},all_time:{input_tokens:2400000000,cached_input_tokens:1800000000,output_tokens:100000000,total_tokens:2500000000,requests:15000}}};
         window.updateUsageSummary = updateUsageSummary;
+        window.formatFiveHourUsageProjection = formatFiveHourUsageProjection;
         window.fixtureState = state;
         window.setPlanModeToggleState = setPlanModeToggleState;
         window.updateControlsModelSummary = updateControlsModelSummary;
@@ -103,6 +105,23 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     await expect(weekly.locator('.usage-reset').first()).toBeVisible();
     await expect(limit.locator('.usage-reset').first()).toHaveText('Reset 2026-10-13 01:00');
     await expect(weekly.locator('.usage-reset').first()).toHaveText('Reset 2026-10-19 01:00');
+    await expect(limit.locator('.usage-reset').nth(1)).toHaveText('24 min until reset · Pace 21.7% by reset');
+    const projections = await page.evaluate(() => {
+        const entry = remainingMs => ({resets_at: Date.now() + remainingMs});
+        return [
+            formatFiveHourUsageProjection(entry(24500), 80),
+            formatFiveHourUsageProjection(entry(300 * 60000 - 30000), 1),
+            formatFiveHourUsageProjection(entry(0), 20),
+            formatFiveHourUsageProjection(entry(301 * 60000), 20),
+            formatFiveHourUsageProjection({resets_at:'invalid'}, 20),
+            formatFiveHourUsageProjection(entry(24 * 60000), 0),
+        ];
+    });
+    expect(projections).toEqual([
+        '1 min until reset · Pace 80.1% by reset',
+        '300 min until reset', '', '', '',
+        '24 min until reset · Pace 0% by reset',
+    ]);
     await page.evaluate(() => updateUsageSummary(window.usageFixture));
     await expect(limit.locator('.usage-reset').first()).toBeVisible();
     await expect(weekly.locator('.usage-reset').first()).toBeVisible();
@@ -113,8 +132,41 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     await page.evaluate(() => setPlanModeToggleState('off'));
     await expect(page.locator('#codex-controls-summary > span')).toHaveText(['메인 · very-long-main-model-name-for-layout · high', 'Plan · plan-model · medium']);
     await page.evaluate(() => document.querySelectorAll('.usage-entry[open]').forEach(entry => entry.open = false));
+    const verifyReadability = async () => {
+        const readings = await page.evaluate(() => {
+            const luminance = color => {
+                const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => {
+                    const channel = value / 255;
+                    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+                });
+                return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+            };
+            const selector = '.controls-summary, .usage-reset, .usage-token-period, .usage-token-requests, .usage-token-total, .usage-remaining, .model-columns, .model-setting-row > label, .model-input';
+            return [...document.querySelectorAll(selector)].filter(el => el.getClientRects().length).map(el => {
+                const style = getComputedStyle(el);
+                let surface = el;
+                while (surface.parentElement && getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
+                const text = luminance(style.color);
+                const background = luminance(getComputedStyle(surface).backgroundColor);
+                return {label: el.className, contrast: (Math.max(text, background) + 0.05) / (Math.min(text, background) + 0.05), weight: Number(style.fontWeight), size: parseFloat(style.fontSize)};
+            });
+        });
+        for (const reading of readings) {
+            expect(reading.contrast, `${reading.label} text contrast`).toBeGreaterThanOrEqual(4.5);
+            expect(reading.weight, `${reading.label} text weight`).toBeGreaterThanOrEqual(500);
+            expect(reading.size, `${reading.label} text size`).toBeGreaterThanOrEqual(11);
+        }
+        for (const selector of ['#codex-controls', '.usage-card', '#codex-model-card', '#codex-model-input']) {
+            const radii = await page.locator(selector).evaluate(el => {
+                const style = getComputedStyle(el);
+                return ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius'].map(key => parseFloat(style[key]));
+            });
+            expect(Math.min(...radii), `${selector} rounded corners`).toBeGreaterThan(0);
+        }
+    };
     for (const width of [320, 375, 390, 430, 768, 900, 1280]) {
         await page.setViewportSize({ width, height: 900 });
+        await verifyReadability();
         await expect(limit.locator('.usage-reset').first()).toBeVisible();
         await expect(weekly.locator('.usage-reset').first()).toBeVisible();
         const geometry = await page.evaluate(() => {
@@ -146,17 +198,17 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
         });
         expect(geometry.overflows, `overflow at ${width}px`).toEqual([]);
         expect(Math.abs(geometry.headerRight - geometry.controlsRight), `header background at ${width}px`).toBeLessThanOrEqual(1);
-        expect(Math.max(...geometry.contentWidths)).toBeLessThanOrEqual(306);
+        const visibleContentWidths = geometry.contentWidths.filter(value => value > 0);
+        expect(Math.max(...visibleContentWidths) - Math.min(...visibleContentWidths), `aligned model rows at ${width}px`).toBeLessThanOrEqual(1);
+        expect(Math.max(...visibleContentWidths), `model rows fill card at ${width}px`).toBeGreaterThan(geometry.modelWidth - 20);
         if (geometry.stacked) {
             expect(Math.abs(geometry.modelRight - geometry.usageRight), `settings background at ${width}px`).toBeLessThanOrEqual(1);
-        } else {
-            expect(geometry.modelWidth).toBeLessThanOrEqual(320);
         }
         if (width >= 768) {
             expect(geometry.usageTop).toBe(geometry.modelTop);
-            expect(geometry.usageWidth).toBeGreaterThan(geometry.modelWidth);
+            expect(geometry.modelWidth).toBeGreaterThan(geometry.usageWidth);
         }
-        expect(geometry.usageBackground).not.toBe(geometry.modelBackground);
+        expect(geometry.usageBackground).toBe(geometry.modelBackground);
         for (const pair of geometry.pairs) {
             expect(pair.firstTop).toBe(pair.secondTop);
             expect(pair.firstRight).toBeLessThan(pair.secondLeft);
@@ -194,8 +246,9 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
         await page.evaluate(() => document.getElementById('codex-controls').classList.remove('is-collapsed'));
     }
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+    await verifyReadability();
     const darkSurfaces = await page.evaluate(() => ['.usage-card', '.model-card'].map(selector => getComputedStyle(document.querySelector(selector)).backgroundColor));
-    expect(darkSurfaces[0]).not.toBe(darkSurfaces[1]);
+    expect(darkSurfaces[0]).toBe(darkSurfaces[1]);
     await page.evaluate(() => {
         document.querySelector('.model-card').classList.add('is-no-reasoning');
         updateControlsModelSummary();

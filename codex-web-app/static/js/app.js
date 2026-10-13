@@ -378,7 +378,7 @@ const TERMINAL_RESIZE_DEBOUNCE_MS = 120;
 const TERMINAL_DEFAULT_COLS = 120;
 const TERMINAL_DEFAULT_ROWS = 32;
 const TERMINAL_SHIFT_TAB_SEQUENCE = '\x1b[Z';
-const TERMINAL_FONT_SIZE_PHONE = 12.5;
+const TERMINAL_FONT_SIZE_PHONE = 13;
 const TERMINAL_FONT_SIZE_COMPACT = 13;
 const TERMINAL_FONT_SIZE_DESKTOP = 14;
 const TERMINAL_MOBILE_SHELL_HEIGHT_VAR = '--terminal-mobile-shell-height';
@@ -11663,7 +11663,7 @@ function buildTerminalTheme() {
         cursor,
         cursorAccent: background,
         selectionBackground: readThemeColor('--code-selection-bg', 'rgba(166, 200, 255, 0.36)'),
-        black: readThemeColor('--code-ansi-black', '#393939'),
+        black: readThemeColor('--code-ansi-black', '#c6c6c6'),
         red: readThemeColor('--code-ansi-red', '#ffb3b8'),
         green: readThemeColor('--code-ansi-green', '#a7f0ba'),
         yellow: readThemeColor('--code-ansi-yellow', '#fddc69'),
@@ -11671,7 +11671,7 @@ function buildTerminalTheme() {
         magenta: readThemeColor('--code-ansi-magenta', '#d4bbff'),
         cyan: readThemeColor('--code-ansi-cyan', '#82cfff'),
         white: readThemeColor('--code-ansi-white', '#ffffff'),
-        brightBlack: readThemeColor('--code-ansi-bright-black', '#525252'),
+        brightBlack: readThemeColor('--code-ansi-bright-black', '#e0e0e0'),
         brightRed: readThemeColor('--code-ansi-bright-red', '#ffd7d9'),
         brightGreen: readThemeColor('--code-ansi-bright-green', '#defbe6'),
         brightYellow: readThemeColor('--code-ansi-bright-yellow', '#fcf4d6'),
@@ -18516,7 +18516,7 @@ function getCodexAppStylesheetUrl() {
     if (stylesheet instanceof HTMLLinkElement && stylesheet.href) {
         return stylesheet.href;
     }
-    return new URL('/static/css/app.css', window.location.href).href;
+    return new URL('/static/css/app.css?v=250', window.location.href).href;
 }
 
 function buildFilePanelMarkdownPreviewDocument(payload) {
@@ -18564,7 +18564,7 @@ function buildFilePanelMarkdownPreviewDocument(payload) {
         'body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid,body.file-browser-markdown-preview-page .file-browser-mermaid-source{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}',
         'body.file-browser-markdown-preview-page .markdown-table-scroll{width:100%;overflow-y:hidden;}',
         'body.file-browser-markdown-preview-page .markdown-table-scroll .markdown-table{width:max-content;min-width:100%;max-width:none;}',
-        '@media(max-width:640px){.markdown-preview-shell{max-width:100%;padding:12px 8px 24px;}.markdown-preview-header{gap:4px;margin-bottom:10px;padding-bottom:10px;}.markdown-preview-title{font-size:16px;line-height:1.25;}.markdown-preview-meta{font-size:11px;line-height:1.35;}body.file-browser-markdown-preview-page .file-browser-markdown{font-size:12.5px;line-height:1.5;}body.file-browser-markdown-preview-page .file-browser-markdown h1,body.file-browser-markdown-preview-page .file-browser-markdown h2,body.file-browser-markdown-preview-page .file-browser-markdown h3{margin:7px 0 5px;line-height:1.24;}body.file-browser-markdown-preview-page .file-browser-markdown h4,body.file-browser-markdown-preview-page .file-browser-markdown h5,body.file-browser-markdown-preview-page .file-browser-markdown h6{margin:6px 0 4px;line-height:1.26;}body.file-browser-markdown-preview-page .file-browser-markdown p{margin:5px 0 6px;}body.file-browser-markdown-preview-page .file-browser-markdown ul,body.file-browser-markdown-preview-page .file-browser-markdown ol{margin:5px 0 6px;padding-left:18px;}body.file-browser-markdown-preview-page .file-browser-markdown li+li{margin-top:2px;}body.file-browser-markdown-preview-page .file-browser-markdown blockquote{margin:6px 0;padding-left:9px;}body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid{margin:6px 0 8px;}body.file-browser-markdown-preview-page .file-browser-markdown th,body.file-browser-markdown-preview-page .file-browser-markdown td{padding:5px 6px;}}',
+        '@media(max-width:640px){.markdown-preview-shell{max-width:100%;padding:12px 8px 24px;}.markdown-preview-header{gap:4px;margin-bottom:10px;padding-bottom:10px;}.markdown-preview-title{font-size:16px;line-height:1.25;}.markdown-preview-meta{font-size:12px;line-height:1.35;}body.file-browser-markdown-preview-page .file-browser-markdown{font-size:14px;line-height:1.5;}body.file-browser-markdown-preview-page .file-browser-markdown h1,body.file-browser-markdown-preview-page .file-browser-markdown h2,body.file-browser-markdown-preview-page .file-browser-markdown h3{margin:7px 0 5px;line-height:1.24;}body.file-browser-markdown-preview-page .file-browser-markdown h4,body.file-browser-markdown-preview-page .file-browser-markdown h5,body.file-browser-markdown-preview-page .file-browser-markdown h6{margin:6px 0 4px;line-height:1.26;}body.file-browser-markdown-preview-page .file-browser-markdown p{margin:5px 0 6px;}body.file-browser-markdown-preview-page .file-browser-markdown ul,body.file-browser-markdown-preview-page .file-browser-markdown ol{margin:5px 0 6px;padding-left:18px;}body.file-browser-markdown-preview-page .file-browser-markdown li+li{margin-top:2px;}body.file-browser-markdown-preview-page .file-browser-markdown blockquote{margin:6px 0;padding-left:9px;}body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid{margin:6px 0 8px;}body.file-browser-markdown-preview-page .file-browser-markdown th,body.file-browser-markdown-preview-page .file-browser-markdown td{padding:5px 6px;}}',
         '</style>',
         '</head>',
         `<body class="file-browser-markdown-preview-page" data-mermaid-src="${escapeHtml(mermaidUrl)}">`,
@@ -32177,6 +32177,22 @@ function formatWeeklyUsageProjection(entry, normalizedUsed) {
     return `${elapsedHours.toFixed(1)}h since reset · Pace ${formatProjectedUsagePercent(projectedUsed)}% by reset`;
 }
 
+function formatFiveHourUsageProjection(entry, normalizedUsed) {
+    const resetDate = parseUsageTimestamp(entry?.resets_at);
+    if (!resetDate || !Number.isFinite(normalizedUsed)) return '';
+    const remainingMs = resetDate.getTime() - Date.now();
+    const windowMs = 300 * 60 * 1000;
+    if (remainingMs <= 0 || remainingMs > windowMs) return '';
+    const remainingMinutes = Math.ceil(remainingMs / (60 * 1000));
+    const countdown = `${remainingMinutes} min until reset`;
+    const elapsedMs = windowMs - remainingMs;
+    // Avoid extrapolating from less than one minute of a new window.
+    if (elapsedMs < 60 * 1000) return countdown;
+    const projectedUsed = normalizedUsed * (windowMs / elapsedMs);
+    if (!Number.isFinite(projectedUsed)) return countdown;
+    return `${countdown} · Pace ${formatProjectedUsagePercent(projectedUsed)}% by reset`;
+}
+
 function formatLimitUsage(entry, label) {
     const resetText = formatResetTimestamp(entry?.resets_at);
     const normalizedUsed = normalizeUsedPercent(entry?.used_percent);
@@ -32193,7 +32209,9 @@ function formatLimitUsage(entry, label) {
         label,
         remainingText: `${remaining}% left`,
         resetText,
-        projectionText: formatWeeklyUsageProjection(entry, normalizedUsed)
+        projectionText: label === '5h'
+            ? formatFiveHourUsageProjection(entry, normalizedUsed)
+            : formatWeeklyUsageProjection(entry, normalizedUsed)
     };
 }
 

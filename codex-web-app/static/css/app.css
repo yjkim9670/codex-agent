@@ -5608,7 +5608,7 @@ body.is-mermaid-diagram-viewer-open {
 
 .mobile-session-list .session-title {
     width: 100%;
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.35;
     white-space: normal;
     overflow: visible;
@@ -8171,7 +8171,8 @@ body.is-work-mode-resizing * {
 
 .session-title {
     font-weight: 700;
-    font-size: 13px;
+    font-size: 15px;
+    line-height: 1.4;
     font-family: var(--font-session-list-title);
     white-space: nowrap;
     overflow: hidden;
@@ -13936,7 +13937,6 @@ label.hover-tooltip,
     }
 
     .sessions-header,
-    .session-title,
     .stream-monitor-empty,
     .stream-monitor-session,
     .stream-monitor-output-title,
@@ -14252,7 +14252,6 @@ label.hover-tooltip,
     }
 
     .sessions-header,
-    .session-title,
     .stream-monitor-empty,
     .stream-monitor-session,
     .stream-monitor-output-title,

@@ -518,7 +518,7 @@ let gitBranchStatusCache = {
 // checkout; keep the branch overlay and every mutation on that same target.
 let gitBranchRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
 let gitBranchToastAt = 0;
-let gitBranchStatusInFlight = false;
+let gitBranchStatusInFlight = null;
 let gitBranchPollTimer = null;
 let gitOverlaySelectedFiles = new Set();
 let gitOverlaySelectionTouched = false;
@@ -26125,6 +26125,18 @@ async function refreshGitSyncOverlayHistory({ force = false, silent = false } = 
 }
 
 async function fetchGitStatus(force = false) {
+    if (gitBranchStatusInFlight) {
+        return gitBranchStatusInFlight;
+    }
+    gitBranchStatusInFlight = fetchGitStatusOnce(force);
+    try {
+        return await gitBranchStatusInFlight;
+    } finally {
+        gitBranchStatusInFlight = null;
+    }
+}
+
+async function fetchGitStatusOnce(force = false) {
     const now = Date.now();
     if (!force && gitBranchStatusCache.fetchedAt) {
         const delta = now - gitBranchStatusCache.fetchedAt;
@@ -26132,10 +26144,6 @@ async function fetchGitStatus(force = false) {
             return gitBranchStatusCache;
         }
     }
-    if (gitBranchStatusInFlight) {
-        return gitBranchStatusCache;
-    }
-    gitBranchStatusInFlight = true;
     try {
         const result = await fetchJson('/api/codex/git/status', {
             method: 'POST',
@@ -26212,8 +26220,6 @@ async function fetchGitStatus(force = false) {
             fetchedAt: Date.now()
         };
         return gitBranchStatusCache;
-    } finally {
-        gitBranchStatusInFlight = false;
     }
 }
 
@@ -26529,6 +26535,22 @@ async function handleGitCommit(button) {
     }
 }
 
+async function resolveGitActionRepoTarget(requestedRepoTarget) {
+    if (requestedRepoTarget) {
+        return normalizeGitSyncRepoTarget(requestedRepoTarget);
+    }
+    // Header actions must await the same fallback resolution as the branch pill,
+    // including a status request that was already running when clicked.
+    const status = await fetchGitStatus(true);
+    if (status?.isStale || !status?.repoTarget) {
+        showToast('Git 저장소를 확인할 수 없습니다. 잠시 후 다시 시도해주세요.', {
+            tone: 'error', durationMs: 3800
+        });
+        return '';
+    }
+    return normalizeGitSyncRepoTarget(status.repoTarget);
+}
+
 async function handleGitQuickCommit(button, options = {}) {
     if (gitMutationInFlight) {
         console.warn('[codex-ui] git quick commit blocked: git mutation is already in flight');
@@ -26539,7 +26561,8 @@ async function handleGitQuickCommit(button, options = {}) {
         return;
     }
     const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
-    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || GIT_SYNC_TARGET_WORKSPACE);
+    const repoTarget = await resolveGitActionRepoTarget(requestedRepoTarget);
+    if (!repoTarget || gitMutationInFlight) return;
     const repoLabel = getGitSyncRepoLabel(repoTarget);
     const syncElements = getGitSyncOverlayElements();
     const commitFields = (
@@ -26610,7 +26633,7 @@ async function handleGitQuickCommit(button, options = {}) {
         const commitSummary = summarizeGitOutput(result?.stdout || result?.stderr);
         const commitSuffix = commitSummary ? `: ${commitSummary}` : '';
         showToast(`${repoLabel} · git commit 완료${commitHash}${commitSuffix}`, { tone: 'success', durationMs: 3600 });
-        if (repoTarget === GIT_SYNC_TARGET_WORKSPACE && isGitBranchOverlayOpen()) {
+        if (repoTarget === normalizeGitSyncRepoTarget(gitBranchRepoTarget) && isGitBranchOverlayOpen()) {
             gitOverlaySelectionTouched = false;
             gitOverlaySelectedFiles = new Set();
             const overlayElements = getGitBranchOverlayElements();
@@ -26651,7 +26674,8 @@ async function handleGitPush(button, options = {}) {
         return;
     }
     const requestedRepoTarget = options && typeof options === 'object' ? options.repoTarget : '';
-    const repoTarget = normalizeGitSyncRepoTarget(requestedRepoTarget || gitBranchRepoTarget);
+    const repoTarget = await resolveGitActionRepoTarget(requestedRepoTarget);
+    if (!repoTarget || gitMutationInFlight) return;
     const repoLabel = getGitSyncRepoLabel(repoTarget);
     const confirmed = window.confirm(
         `${repoLabel} 기준으로 현재 브랜치를 원격 저장소로 push하고, 이어서 fetch까지 실행할까요?`

@@ -95,12 +95,17 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
         updateUsageSummary(window.usageFixture);
     });
     const limit = page.locator('.usage-limit-entry').first();
-    await expect(limit.locator('summary')).toHaveText('5h80% left');
-    await expect(limit.locator('.usage-reset').first()).toBeHidden();
-    await limit.locator('summary').click();
+    const weekly = page.locator('.usage-limit-entry').nth(1);
+    await expect(limit.locator('.usage-limit-summary')).toHaveText('5h80% left');
+    await expect(weekly.locator('.usage-limit-summary')).toHaveText('Weekly65% left');
+    await expect(page.locator('.usage-limit-entry summary, details.usage-limit-entry')).toHaveCount(0);
     await expect(limit.locator('.usage-reset').first()).toBeVisible();
+    await expect(weekly.locator('.usage-reset').first()).toBeVisible();
+    await expect(limit.locator('.usage-reset').first()).toHaveText('Reset 2026-10-13 01:00');
+    await expect(weekly.locator('.usage-reset').first()).toHaveText('Reset 2026-10-19 01:00');
     await page.evaluate(() => updateUsageSummary(window.usageFixture));
     await expect(limit.locator('.usage-reset').first()).toBeVisible();
+    await expect(weekly.locator('.usage-reset').first()).toBeVisible();
     await page.evaluate(() => setPlanModeToggleState('plan'));
     await expect(page.locator('#codex-controls-summary')).toHaveText('Plan · plan-model · medium');
     await page.evaluate(() => setPlanModeToggleState('secondary'));
@@ -110,6 +115,8 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     await page.evaluate(() => document.querySelectorAll('.usage-entry[open]').forEach(entry => entry.open = false));
     for (const width of [320, 375, 390, 430, 768, 900, 1280]) {
         await page.setViewportSize({ width, height: 900 });
+        await expect(limit.locator('.usage-reset').first()).toBeVisible();
+        await expect(weekly.locator('.usage-reset').first()).toBeVisible();
         const geometry = await page.evaluate(() => {
             const body = document.getElementById('codex-controls-body');
             body.scrollTop = 0;
@@ -129,7 +136,7 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
                     const [first, second] = [...body.querySelectorAll(selector)].map(el => el.getBoundingClientRect());
                     return {firstTop:first.top, secondTop:second.top, firstRight:first.right, secondLeft:second.left};
                 }),
-                overflows: [...document.querySelectorAll('#codex-controls, .usage-token-summary, .model-setting-row')].filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.className),
+                overflows: [...document.querySelectorAll('#codex-controls, .usage-token-summary, .usage-limit-summary, .usage-reset, .model-setting-row')].filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.className),
                 rows: [...document.querySelectorAll('.model-setting-row')].map(row => {
                     const model = row.querySelector('.model-field').getBoundingClientRect();
                     const effort = row.querySelector('.model-field-reasoning').getBoundingClientRect();

@@ -9813,7 +9813,6 @@ function updateUsageSummary(usage) {
         Array.from(element.querySelectorAll('.usage-token-entry[open]'))
             .map(entry => entry.querySelector('.usage-token-period')?.textContent)
     );
-    const expandedLimits = new Set(Array.from(element.querySelectorAll('.usage-limit-entry[open]')).map(entry => entry.dataset.period));
     element.innerHTML = '';
     const activeAccount = getActiveCodexAccount();
     const selectedAccountName = String(activeAccount?.label || '').trim();
@@ -9847,7 +9846,6 @@ function updateUsageSummary(usage) {
         buildUsageEntry(usage?.weekly, 'Weekly')
     ].filter(Boolean) : [];
     entries.forEach(entry => {
-        entry.open = expandedLimits.has(entry.dataset.period);
         element.appendChild(entry);
     });
 }
@@ -32267,12 +32265,11 @@ function updateSessionsHeaderSummary() {
 function buildUsageEntry(entry, label) {
     const details = formatLimitUsage(entry, label);
     if (!details) return null;
-    const wrapper = document.createElement('details');
+    const wrapper = document.createElement('div');
     wrapper.className = 'usage-entry usage-limit-entry';
     wrapper.dataset.period = label;
-    const row = document.createElement('summary');
-    row.className = 'usage-token-summary usage-limit-summary';
-    row.title = '리셋·예측 상세 보기';
+    const row = document.createElement('div');
+    row.className = 'usage-limit-summary';
     const period = document.createElement('span');
     period.className = 'usage-token-period';
     period.textContent = details.label;

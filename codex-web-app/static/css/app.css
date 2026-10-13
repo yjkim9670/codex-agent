@@ -14802,7 +14802,7 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
     border-bottom: 1px solid var(--border);
     padding: 0 4px;
 }
-/* Open details use the full width so exact counts and reset dates stay readable. */
+/* Open token details use the full width so exact counts stay readable. */
 #codex-controls .usage-entry[open] { grid-column: 1 / -1; }
 #codex-controls .usage-token-summary {
     min-height: 44px;
@@ -14819,10 +14819,18 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 }
 #codex-controls .usage-token-entry .usage-token-requests { grid-column: 2; grid-row: 1; }
 #codex-controls .usage-token-entry summary::after { grid-column: 3; grid-row: 1 / 3; }
-#codex-controls .usage-limit-summary { grid-template-columns: auto minmax(0, 1fr) 8px; min-height: 36px; }
+#codex-controls .usage-limit-summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 2px 4px;
+    min-height: 36px;
+    padding: 4px 0;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+}
 #codex-controls .usage-limit-summary .usage-remaining { text-align: right; }
 #codex-controls .usage-token-summary:hover { background: var(--surface-muted); }
-#codex-controls .usage-limit-entry[open] > summary::after { transform: rotate(45deg); }
 #codex-controls .usage-limit-entry .usage-reset { padding: 4px 0; }
 #codex-model-card .model-columns,
 #codex-model-card .model-setting-row {

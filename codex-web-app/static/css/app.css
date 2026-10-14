@@ -1523,13 +1523,14 @@ textarea {
     align-items: center;
     justify-content: center;
     min-width: 18px;
-    height: 18px;
-    padding: 0 4px;
+    min-height: 20px;
+    padding: 1px 4px;
     border-radius: 6px;
     border: 1px solid var(--border);
     background: var(--surface-muted);
     font-size: var(--font-size-meta);
     font-weight: 700;
+    line-height: 1.2;
     color: var(--text-tertiary);
 }
 
@@ -1591,8 +1592,8 @@ textarea {
 }
 
 .git-file-tree-toggle {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -1600,7 +1601,7 @@ textarea {
     color: var(--text-tertiary);
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3487,14 +3488,14 @@ textarea {
 
 .file-browser-editor-mode-button {
     min-width: 48px;
-    height: 24px;
-    padding: 0 8px;
+    min-height: 28px;
+    padding: 3px 8px;
     border: 0;
     border-right: 1px solid var(--border);
     background: transparent;
     color: var(--text-secondary);
     font: inherit;
-    line-height: 1;
+    line-height: 1.25;
     cursor: pointer;
 }
 
@@ -3650,8 +3651,8 @@ textarea {
     align-items: center;
     justify-content: center;
     min-width: 45px;
-    height: 24px;
-    padding: 0 8px 0 23px;
+    min-height: 26px;
+    padding: 2px 8px 2px 23px;
     border: 1px solid var(--code-border);
     border-radius: 6px;
     background-color: var(--surface-raised);
@@ -3663,7 +3664,7 @@ textarea {
     font-family: var(--font-sans);
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.2;
     cursor: pointer;
     opacity: 0.84;
     transition:
@@ -5157,7 +5158,7 @@ body.is-mermaid-diagram-viewer-open {
     font: inherit;
     font-size: 12px;
     font-weight: 600;
-    line-height: 1;
+    line-height: 1.2;
     white-space: nowrap;
     cursor: pointer;
     transition: border-color 0.16s ease, background-color 0.16s ease, color 0.16s ease;
@@ -5608,7 +5609,7 @@ body.is-mermaid-diagram-viewer-open {
 
 .mobile-session-list .session-title {
     width: 100%;
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1.35;
     white-space: normal;
     overflow: visible;
@@ -7332,7 +7333,7 @@ body.is-work-mode-resizing .work-mode-divider::before {
     display: inline-flex;
     align-items: center;
     flex: 0 0 auto;
-    height: 20px;
+    height: 22px;
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -7342,8 +7343,8 @@ body.is-work-mode-resizing .work-mode-divider::before {
 .work-mode-preview-root-target {
     appearance: none;
     width: 23px;
-    height: 18px;
-    padding: 0;
+    height: 20px;
+    padding: 1px 0;
     border: 0;
     border-left: 1px solid var(--border);
     border-radius: 0;
@@ -7352,7 +7353,7 @@ body.is-work-mode-resizing .work-mode-divider::before {
     font: inherit;
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 18px;
+    line-height: 1.2;
     text-align: center;
     cursor: pointer;
 }
@@ -7983,8 +7984,8 @@ body.is-work-mode-resizing * {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    min-height: 24px;
-    padding: 3px 7px;
+    min-height: 28px;
+    padding: 3px 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
     background: var(--surface-muted);
@@ -7992,7 +7993,7 @@ body.is-work-mode-resizing * {
     font: inherit;
     font-size: var(--font-size-meta);
     font-weight: 500;
-    line-height: 1;
+    line-height: 1.25;
     cursor: pointer;
 }
 
@@ -8007,13 +8008,14 @@ body.is-work-mode-resizing * {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 16px;
-    height: 16px;
+    min-width: 18px;
+    min-height: 18px;
     padding: 0 4px;
     border-radius: var(--radius-pill);
     background: color-mix(in srgb, currentColor 14%, transparent);
     font-size: var(--font-size-meta);
     font-weight: 500;
+    line-height: 1.2;
     font-variant-numeric: tabular-nums;
 }
 
@@ -8171,8 +8173,7 @@ body.is-work-mode-resizing * {
 
 .session-title {
     font-weight: 700;
-    font-size: 15px;
-    line-height: 1.4;
+    font-size: 13px;
     font-family: var(--font-session-list-title);
     white-space: nowrap;
     overflow: hidden;
@@ -8240,8 +8241,8 @@ body.is-work-mode-resizing * {
 .session-task-status {
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
-    padding: 4px 10px;
-    min-height: 24px;
+    padding: 3px 10px;
+    min-height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -8249,7 +8250,7 @@ body.is-work-mode-resizing * {
     color: var(--text-secondary);
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.25;
     white-space: nowrap;
 }
 
@@ -8257,17 +8258,17 @@ body.is-work-mode-resizing * {
     appearance: none;
     border: 1px solid var(--border);
     border-radius: var(--radius-pill);
-    min-height: 24px;
-    padding: 4px 26px 4px 10px;
+    min-height: 28px;
+    padding: 3px 26px 3px 10px;
     background: var(--surface-raised);
     color: var(--text-secondary);
     font: inherit;
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.25;
     cursor: pointer;
     background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-    background-position: calc(100% - 12px) 10px, calc(100% - 8px) 10px;
+    background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
     background-size: 4px 4px, 4px 4px;
     background-repeat: no-repeat;
 }
@@ -8322,13 +8323,13 @@ body.is-work-mode-resizing * {
 .session-response-mode {
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
-    padding: 4px 10px;
-    min-height: 24px;
+    padding: 3px 10px;
+    min-height: 28px;
     background: var(--surface-raised);
     color: var(--text-secondary);
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.25;
     letter-spacing: 0.01em;
     display: inline-flex;
     align-items: center;
@@ -8731,7 +8732,7 @@ body.is-work-mode-resizing * {
 }
 
 .chat-title {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 700;
     font-family: var(--font-chat-title);
 }
@@ -8744,7 +8745,7 @@ body.is-work-mode-resizing * {
     min-width: 0;
     background: transparent;
     color: inherit;
-    font: inherit;
+    line-height: inherit;
     text-align: left;
     cursor: default;
     overflow: hidden;
@@ -10277,11 +10278,11 @@ body.is-work-mode-resizing * {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--accent);
-    min-height: 20px;
-    padding: 2px 5px;
+    min-height: 24px;
+    padding: 3px 5px;
     font-size: var(--font-size-meta);
     font-weight: 800;
-    line-height: 1;
+    line-height: 1.2;
     cursor: pointer;
 }
 
@@ -10490,11 +10491,11 @@ body.is-work-mode-resizing * {
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--accent);
-    min-height: 20px;
-    padding: 2px 5px;
+    min-height: 24px;
+    padding: 3px 5px;
     font-size: var(--font-size-meta);
     font-weight: 800;
-    line-height: 1;
+    line-height: 1.2;
     cursor: pointer;
 }
 
@@ -10708,8 +10709,8 @@ body.is-work-mode-resizing * {
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
     border-radius: 2px;
     background: var(--surface);
@@ -10717,7 +10718,7 @@ body.is-work-mode-resizing * {
     padding: 0;
     font-size: var(--font-size-meta);
     font-weight: 800;
-    line-height: 1;
+    line-height: 1.2;
     letter-spacing: 0;
     cursor: help;
 }
@@ -11020,7 +11021,7 @@ body.is-work-mode-resizing * {
     border-radius: var(--radius-sm);
     font-size: var(--font-size-meta);
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.2;
     letter-spacing: 0;
     overflow: hidden;
     white-space: nowrap;
@@ -12281,7 +12282,7 @@ label.hover-tooltip,
     }
 
     .chat-title {
-        font-size: 14px;
+        font-size: 16px;
     }
 
     .chat-meta {
@@ -13937,6 +13938,7 @@ label.hover-tooltip,
     }
 
     .sessions-header,
+    .session-title,
     .stream-monitor-empty,
     .stream-monitor-session,
     .stream-monitor-output-title,
@@ -13956,9 +13958,12 @@ label.hover-tooltip,
         font-size: 12px;
     }
 
-    .chat-title,
     .chat-input textarea {
         font-size: var(--font-size-body);
+    }
+
+    .chat-title {
+        font-size: 16px;
     }
 
     .message-bubble {
@@ -14038,8 +14043,8 @@ label.hover-tooltip,
 
     .file-browser-editor-mode-button {
         min-width: 42px;
-        height: 22px;
-        padding: 0 6px;
+        min-height: 26px;
+        padding: 3px 6px;
     }
 
     .file-browser-markdown {
@@ -14252,6 +14257,7 @@ label.hover-tooltip,
     }
 
     .sessions-header,
+    .session-title,
     .stream-monitor-empty,
     .stream-monitor-session,
     .stream-monitor-output-title,
@@ -14271,9 +14277,12 @@ label.hover-tooltip,
         font-size: 14.5px;
     }
 
-    .chat-title,
     .chat-input textarea {
         font-size: 15.5px;
+    }
+
+    .chat-title {
+        font-size: 16.5px;
     }
 
     .work-mode-file-col-heading,

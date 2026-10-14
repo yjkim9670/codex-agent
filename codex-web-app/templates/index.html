@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=250">
+    <link rel="stylesheet" href="/static/css/app.css?v=251">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -428,10 +428,10 @@
                         <span id="codex-sessions-title">Sessions</span>
                         <div class="session-status-filters" role="group" aria-label="세션 작업 상태 필터">
                             <button class="session-status-filter is-in-progress" type="button" data-session-status-filter="in_progress" aria-pressed="false" title="작업 중 세션만 보기">
-                                <span>작업 중</span><span class="session-status-filter-count" data-session-status-count="in_progress">0</span>
+                                <span class="control-label">작업 중</span><span class="session-status-filter-count"><span class="control-label" data-session-status-count="in_progress">0</span></span>
                             </button>
                             <button class="session-status-filter is-completed" type="button" data-session-status-filter="completed" aria-pressed="false" title="완료 세션만 보기">
-                                <span>완료</span><span class="session-status-filter-count" data-session-status-count="completed">0</span>
+                                <span class="control-label">완료</span><span class="session-status-filter-count"><span class="control-label" data-session-status-count="completed">0</span></span>
                             </button>
                         </div>
                         <div class="sessions-actions">
@@ -660,7 +660,7 @@
                             ><span class="sr-only">More compose options</span></button>
                             <div class="chat-compose-tools-menu is-hidden" id="codex-chat-compose-tools-menu" role="menu" aria-label="Compose options">
                                 <button class="btn ghost icon-only chat-compose-tool-attach" type="button" data-chat-compose-action="attach" role="menuitem" aria-label="Attach files" title="Attach files"><span class="sr-only">Attach files</span></button>
-                                <button class="btn ghost chat-compose-tool-plan" type="button" data-chat-compose-action="plan" role="menuitem" aria-haspopup="menu" aria-expanded="false" aria-controls="codex-compose-mode-menu" aria-label="Change execution mode" title="Shift+Tab: Work ↔ Plan">Work</button>
+                                <button class="btn ghost chat-compose-tool-plan" type="button" data-chat-compose-action="plan" role="menuitem" aria-haspopup="menu" aria-expanded="false" aria-controls="codex-compose-mode-menu" aria-label="Change execution mode" title="Shift+Tab: Work ↔ Plan"><span class="control-label">Work</span></button>
                             </div>
                         </div>
                         <div id="codex-chat-attachments" class="chat-attachments is-empty" aria-live="polite"></div>
@@ -670,7 +670,7 @@
                         <button class="btn ghost icon-only chat-attach-image" type="button" id="codex-chat-image-attach" aria-label="Attach files" title="Attach files">
                             <span class="sr-only">Attach files</span>
                         </button>
-                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-haspopup="menu" aria-expanded="false" aria-controls="codex-compose-mode-menu" aria-label="Work · 메인 모델로 실행" title="Shift+Tab: Work ↔ Plan">Work</button>
+                        <button class="btn ghost chat-plan-mode-toggle" type="button" id="codex-plan-mode-toggle" aria-pressed="false" aria-haspopup="menu" aria-expanded="false" aria-controls="codex-compose-mode-menu" aria-label="Work · 메인 모델로 실행" title="Shift+Tab: Work ↔ Plan"><span class="control-label">Work</span></button>
                         <button class="btn primary" type="submit" id="codex-chat-send" data-mode="send" aria-label="Send" title="Send">
                             <span class="sr-only">Send</span>
                         </button>
@@ -1131,10 +1131,10 @@
                 <div class="mobile-session-overlay-title" id="codex-mobile-session-overlay-title">Sessions</div>
                 <div class="session-status-filters mobile-session-status-filters" role="group" aria-label="세션 작업 상태 필터">
                     <button class="session-status-filter is-in-progress" type="button" data-session-status-filter="in_progress" aria-pressed="false" title="작업 중 세션만 보기">
-                        <span>작업 중</span><span class="session-status-filter-count" data-session-status-count="in_progress">0</span>
+                        <span class="control-label">작업 중</span><span class="session-status-filter-count"><span class="control-label" data-session-status-count="in_progress">0</span></span>
                     </button>
                     <button class="session-status-filter is-completed" type="button" data-session-status-filter="completed" aria-pressed="false" title="완료 세션만 보기">
-                        <span>완료</span><span class="session-status-filter-count" data-session-status-count="completed">0</span>
+                        <span class="control-label">완료</span><span class="session-status-filter-count"><span class="control-label" data-session-status-count="completed">0</span></span>
                     </button>
                 </div>
                 <button class="btn ghost icon-only mobile-session-overlay-close" type="button" id="codex-mobile-session-overlay-close" aria-label="닫기">
@@ -1984,6 +1984,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=268"></script>
+    <script src="/static/js/app.js?v=269"></script>
 </body>
 </html>

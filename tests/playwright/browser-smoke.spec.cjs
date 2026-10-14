@@ -42,5 +42,8 @@ test('browser UI smoke check', async ({ page }) => {
             isolated: process.env.CODEX_VERIFY_USAGE_PANEL_ISOLATED === '1',
         });
     }
+    if (process.env.CODEX_VERIFY_CONTROL_GEOMETRY === '1') {
+        await require('./control-geometry.cjs').verifyControlGeometry(page, expect);
+    }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

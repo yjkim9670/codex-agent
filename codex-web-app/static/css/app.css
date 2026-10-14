@@ -996,7 +996,7 @@ textarea {
         display: none;
     }
 
-    .chat-input #codex-chat-send {
+    .chat-input .chat-submit-column .btn#codex-chat-send {
         display: inline-flex;
         width: 52px;
         min-width: 52px;
@@ -7980,6 +7980,15 @@ body.is-work-mode-resizing * {
     margin-right: 8px;
 }
 
+/* Center the label's visible cap height rather than the font's asymmetric
+ * ascent/descent space. The line-height remains a fallback on older engines.
+ * Trim only the label, leaving button padding, hit areas and focus rings intact. */
+.control-label {
+    display: block;
+    line-height: 1.25;
+    text-box: trim-both cap alphabetic;
+}
+
 .session-status-filter {
     display: inline-flex;
     align-items: center;
@@ -11898,6 +11907,7 @@ body.is-work-mode-resizing * {
 }
 
 .btn {
+    line-height: 1.25;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     padding: 8px 14px;
@@ -13050,7 +13060,7 @@ label.hover-tooltip,
         --chat-action-button-width: 40px;
         --chat-action-gap: 5px;
         --chat-action-short-height: 32px;
-        --chat-action-send-height: 38px;
+        --chat-action-send-height: 44px;
         --chat-action-separator-height: 7px;
         --mobile-chat-compose-height: calc((var(--chat-action-short-height) * 2) + var(--chat-action-send-height) + var(--chat-action-separator-height) + (var(--chat-action-gap) * 3));
         grid-template-columns: minmax(0, 1fr) var(--chat-action-button-width);
@@ -13586,7 +13596,7 @@ label.hover-tooltip,
         display: none;
     }
 
-    .chat-input #codex-chat-send {
+    .chat-input .chat-submit-column .btn#codex-chat-send {
         display: inline-flex;
         width: 52px;
         min-width: 52px;
@@ -14521,10 +14531,11 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 }
 
 :root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-input {
-    --fold-keyboard-compose-height: min(110px, calc(var(--scaled-viewport-height) * 0.45));
-    --chat-action-short-height: 24px;
-    --chat-action-send-height: 28px;
-    --chat-action-gap: 3px;
+    --fold-keyboard-compose-height: clamp(84px, calc(var(--scaled-viewport-height) * 0.45), 110px);
+    --chat-action-button-width: 92px;
+    --chat-action-short-height: 32px;
+    --chat-action-send-height: 44px;
+    --chat-action-gap: 4px;
     flex: 0 0 auto;
     height: var(--fold-keyboard-compose-height);
     min-height: 0;
@@ -14547,12 +14558,32 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 }
 
 :root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column {
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+    /* Two tool buttons share the top row so Send keeps its touch target even
+     * when the keyboard leaves only a short visible viewport. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(32px, 1fr) 44px;
+    gap: var(--chat-action-gap);
 }
 
 :root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column .btn {
-    min-height: 0;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    min-height: 32px;
     height: 100%;
+    grid-row: 1;
+    grid-column: auto;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column::after {
+    display: none;
+}
+
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-submit-column #codex-chat-send {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    height: 44px;
+    min-height: 44px;
 }
 
 

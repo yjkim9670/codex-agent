@@ -5,6 +5,7 @@ const source = fs.readFileSync(`${__dirname}/../codex-web-app/static/js/app.js`,
 const elements = new Map();
 for (const id of ['codex-plan-mode-toggle', 'codex-chat-compose-tools-toggle', 'mobile-mode']) {
     elements.set(id, { dataset: {}, attributes: {}, classes: new Set(),
+        querySelector() { return null; },
         setAttribute(name, value) { this.attributes[name] = value; },
         classList: { toggle(name, enabled) { const classes = elements.get(id).classes; enabled ? classes.add(name) : classes.delete(name); } }
     });

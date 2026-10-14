@@ -28324,7 +28324,8 @@ function setPlanModeToggleState(nextState) {
         button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
         button.setAttribute('aria-pressed', String(isActive));
         button.dataset.planModeState = normalized;
-        button.textContent = buttonText;
+        const buttonLabel = button.querySelector('.control-label') || button;
+        buttonLabel.textContent = buttonText;
         button.setAttribute('aria-label', label);
         button.setAttribute('title', label);
     }
@@ -28348,7 +28349,8 @@ function setPlanModeToggleState(nextState) {
         composePlanButton.classList.toggle('is-plan-and-execute', isPlanAndExecute);
         composePlanButton.dataset.planModeState = normalized;
         composePlanButton.setAttribute('aria-pressed', String(isActive));
-        composePlanButton.textContent = buttonText;
+        const composeLabel = composePlanButton.querySelector('.control-label') || composePlanButton;
+        composeLabel.textContent = buttonText;
         composePlanButton.setAttribute('aria-label', label);
         composePlanButton.setAttribute('title', label);
     }

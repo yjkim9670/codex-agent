@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import uuid
+import unicodedata
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
@@ -132,17 +134,42 @@ class Progress:
         self.interval = interval
         self.started = time.monotonic()
         self.state = {'phase': 'preparing'}
+        self.output = sys.stdout
+        self.interactive = self.output.isatty()
+        self.last_state = None
+        self.line_width = 0
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self._watch, daemon=True)
 
     def _emit(self):
         # Only identifiers and execution state; never prompts or response bodies.
+        if not self.interactive and self.state == self.last_state:
+            return
         state = ' '.join(f'{key}={value}' for key, value in self.state.items())
         line = (f'{self.label} {state} elapsed={time.monotonic() - self.started:.1f}s '
                 f'timeout={self.timeout:g}s')
+        if self.interactive:
+            line = (f'elapsed={time.monotonic() - self.started:.1f}s {state} '
+                    f'{self.label} timeout={self.timeout:g}s')
         line = ''.join(c if c.isprintable() else ' ' for c in safe_detail(line))
-        print(line, flush=True)
+        if self.interactive:
+            # Leave one column free so long labels cannot wrap into new lines.
+            columns = max(0, shutil.get_terminal_size().columns - 1)
+            visible = []
+            width = 0
+            for char in line:
+                size = 0 if unicodedata.combining(char) else (2 if unicodedata.east_asian_width(char) in ('W', 'F') else 1)
+                if width + size > columns:
+                    break
+                visible.append(char)
+                width += size
+            padding = max(0, min(self.line_width, columns) - width)
+            print('\r' + ''.join(visible) + ' ' * padding, end='', file=self.output, flush=True)
+            self.line_width = width
+        else:
+            print(line, file=self.output, flush=True)
+        self.last_state = dict(self.state)
 
     def update(self, phase, **identifiers):
         with self.lock:
@@ -162,6 +189,8 @@ class Progress:
     def __exit__(self, *exc):
         self.stopped.set()
         self.thread.join()
+        if self.interactive:
+            print(file=self.output, flush=True)
 
 
 def run_case(client, row, args, scenario='echo'):

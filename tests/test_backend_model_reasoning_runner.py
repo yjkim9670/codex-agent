@@ -1,6 +1,8 @@
 """No provider calls: exercise the runner over an actual local HTTP socket."""
 import importlib.util
 import json
+import io
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
@@ -225,7 +227,7 @@ def test_live_progress_during_blocking_submit(fake_server, tmp_path, monkeypatch
 
     def blocking_submit(self, method, path, *args, **kwargs):
         if method == 'POST' and '/message' in path:
-            # A second line must arrive before the blocking request returns.
+            # A second refresh must happen before the blocking request returns.
             assert heartbeat.wait(2), 'No live elapsed update during HTTP submission'
         return original_request(self, method, path, *args, **kwargs)
 
@@ -282,3 +284,38 @@ def test_progress_thread_stops_on_exception():
         with progress:
             raise RuntimeError('interrupted')
     assert not progress.thread.is_alive()
+
+
+def test_progress_rewrites_one_terminal_line(monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr(output, 'isatty', lambda: True)
+    monkeypatch.setattr(runner.sys, 'stdout', output)
+    monkeypatch.setattr(runner.shutil, 'get_terminal_size', lambda: os.terminal_size((80, 24)))
+    progress = runner.Progress({'backend': 'claude', 'model': '모델' * 80, 'reasoning': ''}, 'echo', 1, 1, 90)
+    with progress:
+        progress.update('submitting', session=1)
+        progress._emit()
+        progress.label = ''
+        progress.update('done')
+    rendered = output.getvalue()
+    assert rendered.count('\n') == 1
+    assert rendered.count('\r') == 4
+    assert 'elapsed=' in rendered
+    assert 'phase=submitting' in rendered
+    frames = rendered.rstrip('\n').split('\r')[1:]
+    for frame in frames:
+        assert sum(2 if runner.unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in frame) <= 79
+    assert len(frames[-1]) > len(frames[-1].rstrip(' '))
+
+
+def test_redirected_progress_only_logs_state_changes(monkeypatch):
+    output = io.StringIO()
+    monkeypatch.setattr(runner.sys, 'stdout', output)
+    progress = runner.Progress({'backend': 'claude', 'model': 'a', 'reasoning': ''}, 'echo', 1, 1, 90)
+    with progress:
+        progress._emit()
+        progress.update('submitting', session=1)
+        progress._emit()
+        progress.update('submitting', session=1)
+    assert output.getvalue().count('\n') == 2
+    assert '\r' not in output.getvalue()

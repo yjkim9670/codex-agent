@@ -5138,6 +5138,41 @@ class _HangingProcess:
         return self._return_code
 
 
+def test_stream_environment_failure_is_terminal_and_diagnosable(monkeypatch, isolated_codex_workspace, caplog):
+    session = codex_chat.create_session('environment-failure')
+    stream_id = 'environment-failure'
+    state.codex_streams[stream_id] = _build_stream_state(
+        stream_id, session['id'], started_at=time.time(),
+        output_path=isolated_codex_workspace['workspace_dir'] / 'environment-failure.txt')
+    monkeypatch.setattr(codex_chat, '_prepare_agent_execution', lambda prompt, snapshot: (prompt, {
+        'agent_backend': 'claude', 'execution_cwd': str(isolated_codex_workspace['workspace_dir']),
+        'environment': 'test'}))
+
+    def broken_environment(**kwargs):
+        raise RuntimeError('environment setup failed')
+
+    monkeypatch.setattr(codex_chat, '_build_codex_exec_env', broken_environment)
+    codex_chat._run_codex_stream(stream_id, 'test')
+    stream = state.codex_streams[stream_id]
+    assert stream['done'] and stream['saved']
+    assert stream['exit_code'] == 1
+    assert stream['finalize_reason'] == 'worker_exception'
+    assert stream['worker_error_type'] == 'RuntimeError'
+    phases = [entry['phase'] for entry in stream['diagnostic_timeline']]
+    assert phases[:4] == ['preparing_context', 'context_ready', 'building_environment', 'worker_failed']
+    assert 'Agent worker failed stream=environment-failure' in caplog.text
+
+
+def test_stream_diagnostic_timeline_is_bounded():
+    state.codex_streams['bounded'] = {}
+    for index in range(80):
+        codex_chat._record_stream_diagnostic('bounded', f'phase_{index}')
+    timeline = state.codex_streams['bounded']['diagnostic_timeline']
+    assert len(timeline) == 64
+    assert timeline[0]['phase'] == 'phase_16'
+    assert state.codex_streams['bounded']['diagnostic_phase'] == 'phase_79'
+
+
 def test_run_codex_stream_finalizes_on_post_output_idle(monkeypatch, isolated_codex_workspace):
     monkeypatch.setattr(codex_chat.subprocess, 'Popen', _HangingProcess)
     monkeypatch.setattr(codex_chat, 'CODEX_STREAM_POLL_INTERVAL_SECONDS', 0.01)

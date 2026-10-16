@@ -33,8 +33,27 @@ class Client:
         self.url = url.rstrip('/')
         self.timeout = timeout
         self.opener = build_opener(NoRedirect())
+        self.trace = None
 
     def request(self, method, path, payload=None, raw=None, content_type=None, timeout=None):
+        started = time.monotonic()
+        if self.trace:
+            self.trace('http_start', method=method, path=path.split('?')[0])
+        try:
+            result = self._request(method, path, payload, raw, content_type, timeout)
+        except Exception as exc:
+            if self.trace:
+                self.trace('http_error', method=method, path=path.split('?')[0],
+                           seconds=round(time.monotonic() - started, 3), error_type=type(exc).__name__)
+            raise
+        if self.trace:
+            self.trace('http_complete', method=method, path=path.split('?')[0],
+                       seconds=round(time.monotonic() - started, 3))
+            if path.startswith('/streams/'):
+                self.trace('stream_snapshot', snapshot=stream_snapshot(result))
+        return result
+
+    def _request(self, method, path, payload=None, raw=None, content_type=None, timeout=None):
         headers = {'Accept': 'application/json'}
         # Credentials stay in the environment and never enter reports/argv.
         if os.environ.get('WORKBENCH_TEST_COOKIE'):
@@ -52,6 +71,8 @@ class Client:
                 result = json.load(response)
         except HTTPError as exc:
             # Do not log server bodies: they can contain credentials/prompts.
+            if self.trace:
+                self.trace('http_status', status=exc.code)
             raise RuntimeError(f'{method} {path.split("?")[0]}: HTTP {exc.code}') from None
         if not isinstance(result, dict):
             raise RuntimeError('Expected JSON object (check authentication/base URL)')
@@ -101,13 +122,30 @@ def check_metadata(data, row):
             raise AssertionError(f'{key} mismatch: expected {value!r}, received {actual!r}')
 
 
+def stream_snapshot(data):
+    """Allowlist state; never export provider output, errors, or environment."""
+    keys = ('done', 'saved', 'exit_code', 'finalize_reason', 'process_running', 'process_pid',
+            'output_length', 'error_length', 'event_length', 'runtime_ms', 'idle_ms',
+            'queue_wait_ms', 'cli_runtime_ms', 'started_at', 'cli_started_at',
+            'process_exited_at', 'completed_at', 'saved_at', 'diagnostic_phase',
+            'worker_error_type', 'assistant_message_id', 'persistence_failed', 'persistence_complete')
+    result = {key: data[key] for key in keys if key in data}
+    result['diagnostic_timeline'] = [
+        {key: entry[key] for key in ('phase', 'at') if key in entry}
+        for entry in (data.get('diagnostic_timeline') or [])[-64:] if isinstance(entry, dict)]
+    return result
+
+
 def wait_stream(client, stream_id, deadline):
+    last = {}
     while time.monotonic() < deadline:
-        data = client.request('GET', '/streams/' + quote(stream_id, safe=''))
+        data = client.request('GET', '/streams/' + quote(stream_id, safe=''),
+                              timeout=max(0.001, min(client.timeout, deadline - time.monotonic())))
+        last = stream_snapshot(data)
         if data.get('done') and data.get('saved'):
             return data
         time.sleep(min(0.3, max(0, deadline - time.monotonic())))
-    raise TimeoutError('Stream completion/storage timed out')
+    raise TimeoutError('Stream completion/storage timed out: ' + json.dumps(last, ensure_ascii=False))
 
 
 def stop_owned(client, stream_id):
@@ -202,8 +240,34 @@ def run_case(client, row, args, scenario='echo'):
     payload = {'prompt': f'Reply with exactly {token}. Do not modify any files.'}
     queued_token = None
     progress = getattr(args, 'progress', None)
+    trace_path = getattr(args, 'trace_path', None)
+    previous_trace = client.trace
+
+    def trace(event, **fields):
+        entry = dict(event=event, at=int(time.time() * 1000),
+                     elapsed=round(time.monotonic() - started, 3), **fields)
+        if event == 'stream_snapshot':
+            result['last_stream_snapshot'] = fields['snapshot']
+            if progress is not None:
+                snapshot = fields['snapshot']
+                progress.update(result.get('last_phase', 'waiting-response'),
+                                server_phase=snapshot.get('diagnostic_phase') or 'unknown',
+                                done=snapshot.get('done'), saved=snapshot.get('saved'),
+                                output_chars=snapshot.get('output_length', 0),
+                                error_chars=snapshot.get('error_length', 0))
+        if trace_path:
+            with Path(trace_path).open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+    client.trace = trace
+    if trace_path:
+        result['trace_file'] = Path(trace_path).name
+    trace('case_started', backend=row['backend'], model=row['model'], reasoning=row['reasoning'],
+          scenario=scenario, mode=args.mode, timeout=args.timeout)
 
     def update(phase, **identifiers):
+        result['last_phase'] = phase
+        trace('phase', phase=phase, **identifiers)
         if progress is not None:
             progress.update(phase, **identifiers)
 
@@ -234,6 +298,7 @@ def run_case(client, row, args, scenario='echo'):
             raise
         if use_stream:
             stream_id = data['stream_id']
+            result['stream_id'] = stream_id
             settled = False
         update('submitted' if use_stream else 'verifying', **({'stream': stream_id} if stream_id else {}))
         check_metadata(data, row)
@@ -292,6 +357,10 @@ def run_case(client, row, args, scenario='echo'):
                 raise TimeoutError('Queued response not persisted')
         result['status'] = 'PASS'
     except Exception as exc:
+        result['failure_phase'] = result.get('last_phase', 'preparing')
+        if result.get('last_stream_snapshot') is not None:
+            result['failure_stream_snapshot'] = dict(result['last_stream_snapshot'])
+        trace('case_error', error_type=type(exc).__name__, phase=result['failure_phase'])
         result.update(status='TIMEOUT' if isinstance(exc, TimeoutError) else 'FAIL',
                       detail=safe_detail(str(exc)))
     finally:
@@ -319,6 +388,8 @@ def run_case(client, row, args, scenario='echo'):
             except Exception:
                 result['cleanup_error'] = 'Queued stream cleanup could not be confirmed'
         result['seconds'] = round(time.monotonic() - started, 3)
+        trace('case_finished', status=result.get('status'), seconds=result['seconds'])
+        client.trace = previous_trace
     return result
 
 
@@ -407,7 +478,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', default='http://127.0.0.1:5000')
     parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'],
-                        help='Backend to test (repeatable; default: claude, opencode)')
+                        help='Backend to test (repeatable; default: opencode, claude)')
     parser.add_argument('--model', action='append', default=[])
     parser.add_argument('--reasoning', action='append', default=[])
     parser.add_argument('--all', action='store_true')
@@ -443,7 +514,7 @@ def main(argv=None):
         print('Settings restored.')
         return 0
     snapshot = client.request('GET', '/settings')
-    backends = args.backend or ['claude', 'opencode']
+    backends = args.backend or ['opencode', 'claude']
     rows = matrix(snapshot, backends, args.model, args.reasoning, args.all)
     args.queue_candidates = matrix(snapshot, backends, [], [], True)
     args.queue_candidates = [r for r in args.queue_candidates if r['status'] == 'PLANNED']
@@ -484,6 +555,7 @@ def main(argv=None):
             if row['status'] == 'PLANNED':
                 with Progress(row, scenario, index, len(cases), args.timeout) as progress:
                     args.progress = progress
+                    args.trace_path = directory / f'case-{index:03d}.jsonl'
                     try:
                         result = run_case(client, row, args, scenario)
                     finally:

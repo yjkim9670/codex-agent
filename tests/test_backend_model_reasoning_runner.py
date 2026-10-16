@@ -130,6 +130,20 @@ def test_timeout_stops_only_owned_stream_then_next_case(fake_server, tmp_path):
     assert ('POST', '/streams/1/stop') in fake_server.requests
     assert ('POST', '/streams/2/stop') in fake_server.requests
     assert fake_server.settings['reasoning_effort'] == 'low'
+    assert results[0]['failure_phase'] == 'waiting-response'
+    assert results[0]['failure_stream_snapshot']['done'] is False
+    trace = [json.loads(line) for line in (tmp_path / 'report' / results[0]['trace_file']).read_text().splitlines()]
+    snapshots = [entry['snapshot'] for entry in trace if entry['event'] == 'stream_snapshot']
+    assert snapshots[0]['saved'] is False
+    assert snapshots[-1]['saved'] is True  # Cleanup must not overwrite failure evidence.
+    assert any(entry['event'] == 'http_complete' and entry['seconds'] >= 0 for entry in trace)
+    assert trace[-1]['event'] == 'case_finished'
+
+
+def test_stream_diagnostics_exclude_response_bodies_and_credentials():
+    snapshot = runner.stream_snapshot(dict(done=False, output='private answer', error='secret token',
+        exec_details={'env': 'password'}, diagnostic_timeline=[{'phase': 'starting_process', 'at': 42, 'secret': 'key'}]))
+    assert snapshot == {'done': False, 'diagnostic_timeline': [{'phase': 'starting_process', 'at': 42}]}
 
 
 def test_list_only_never_mutates(fake_server):
@@ -144,6 +158,7 @@ def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path,
 
     def check_candidates(client, row, args, scenario):
         assert {r['backend'] for r in args.queue_candidates} == {'claude', 'opencode'}
+        assert args.queue_candidates[0]['backend'] == 'opencode'
         return original(client, row, args, scenario)
 
     monkeypatch.setattr(runner, 'run_case', check_candidates)
@@ -151,6 +166,7 @@ def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path,
     assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
     results = json.loads((out / 'results.json').read_text())
     assert {r['backend'] for r in results} == {'claude', 'opencode'}
+    assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (2 if extra_args else 1)
     assert len(results) == (3 if extra_args else 2)
     assert all(r['status'] == 'PASS' for r in results)
     assert all(p['agent_backend'] != 'dtgpt' for p in fake_server.patches[:-1])

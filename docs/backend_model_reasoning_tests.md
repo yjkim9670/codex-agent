@@ -10,7 +10,7 @@
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000
 
 # 해당 백엔드의 모든 모델별 지원 reasoning 조합
-.\scripts\test_backend_model_reasoning.ps1 -Backend claude,opencode -All -TimeoutSeconds 300
+.\scripts\test_backend_model_reasoning.ps1 -Backend opencode,claude -All -TimeoutSeconds 300
 
 # 특정 모델/effort 선택, 실패 시 로컬 직접 실행과 비교
 .\scripts\test_backend_model_reasoning.ps1 -Backend claude -Model '실제-카탈로그-모델-ID' -Reasoning low,high -Direct failed
@@ -30,7 +30,7 @@
 
 `-BaseUrl`은 실제 서버 주소/포트로 지정한다. 기본 주소는 예시 기본값이다. `-Python 'C:\path\python.exe'`, `-OutputDirectory 'C:\test-results\new-run'`을 사용할 수 있다. 출력 폴더는 새 경로여야 한다. PowerShell 없이도 `python3 scripts/test_backend_model_reasoning.py --help`로 동일 옵션을 사용한다.
 
-기본 테스트 대상은 `claude`, `opencode`이며 `dtgpt`(Codex)는 제외한다. `-All`과 큐 검사 후보에도 같은 기본 대상이 적용된다. Codex를 테스트하려면 `-Backend codex` 또는 `-Backend dtgpt`를 명시해야 한다. Python 직접 실행에도 같은 기본값을 적용한다.
+기본 테스트는 `opencode` → `claude` 순서로 실행하며 `dtgpt`(Codex)는 제외한다. `-All`과 큐 검사 후보에도 같은 기본 순서가 적용된다. Codex를 테스트하려면 `-Backend codex` 또는 `-Backend dtgpt`를 명시해야 한다. Python 직접 실행에도 같은 기본값을 적용한다. `-Backend`를 명시하면 지정한 순서대로 실행한다.
 
 테스트 한 건당 기본 타임아웃은 90초이며 스트림·동기 API 검사와 CLI 직접 비교 실행에 적용한다. `-TimeoutSeconds`(Python: `--timeout`)로 변경할 수 있다. 설정 조회 등 개별 HTTP 요청과 큐 정리 대기는 최대 30초이며, 정리 작업 때문에 전체 소요 시간은 테스트 타임아웃보다 길어질 수 있다.
 
@@ -51,6 +51,12 @@
 `-Direct off|failed|all`은 추가 모델 호출 옵션이다. 실행한 PC에 저장소의 Python 의존성과 CLI/인증/환경변수가 있어야 한다. Workbench 서버와 다른 PC에서 실행하면 직접 비교는 해당 PC 환경을 검사하므로 동일 환경의 재현이 아니다. Codex/Claude는 기존 `_build_agent_command`를, OpenCode는 `_prepare_agent_execution`과 `_execute_opencode_prompt`를 재사용한다. 직접 실행은 입력 인자/API payload 생성 경로를 재사용했다는 증거이며 원격 모델의 내부 reasoning 사용까지 증명하지 않는다. 직접 실행 성공은 Workbench 실패를 PASS로 바꾸지 않는다. 타임아웃은 로컬 프로세스 트리를 종료하며 OpenCode 원격 세션은 별도 정리가 필요할 수 있다.
 
 결과 폴더에는 `results.json`, UTF-8 BOM `results.csv`, 민감한 응답 본문을 제외한 `diagnostics.jsonl`, `summary.json`, `restore-settings.json`이 생성된다. 결과는 세션 ID와 worktree 정보를 포함한다. 재검토할 수 있도록 테스트 세션·첨부·worktree는 보존한다. 확인 후 Workbench UI/API로 정리한다. 종료 코드: 0 전체 성공, 1 실패/미지원/타임아웃/복원 실패, 2 실행 자체 오류, 130 사용자 중단. `-ListOnly`는 조회가 성공하면 미지원 항목이 있어도 0이다.
+
+각 검사에는 `case-001.jsonl` 형태의 실시간 추적 파일도 생성된다. HTTP 시작/완료와 소요 시간, HTTP 오류 코드 또는 예외 종류, 검사 단계, 스트림 상태를 요청마다 즉시 기록하므로 테스트가 중간에 종료돼도 앞선 기록을 확인할 수 있다. `at`은 서버 타임라인과 대조할 수 있는 Unix 밀리초이며 `elapsed`는 검사 시작 이후 초 단위 시간이다. 요청/응답 본문, 인증 헤더, 환경변수 값은 추적 파일에 기록하지 않는다. `-Direct`의 내부 CLI 실행은 이 HTTP 추적 대상에 포함되지 않는다.
+
+`results.json`에는 `stream_id`, `trace_file`, `failure_phase`, 중단 전 `failure_stream_snapshot`, 정리 후까지 포함한 `last_stream_snapshot`이 추가된다. `done=false`이면 실행 단계와 프로세스·출력 상태를, `done=true`이면 `saved`, `persistence_complete`, `persistence_failed`를 함께 확인한다. 기존 `saved`는 실제 저장 작업이 끝나기 전에도 설정될 수 있으므로 저장 완료 여부는 `persistence_complete`로 구분한다. 서버 업데이트 전에는 새 필드가 없거나 단계가 `unknown`일 수 있다.
+
+서버 로그의 `Agent lifecycle stream=… phase=…` 및 API의 `diagnostic_timeline`에는 환경 준비, 실행 잠금 대기, 프로세스 시작, stdin 전달, 첫 stdout/stderr, 저장 단계가 남는다. OpenCode는 원격 세션 생성, SSE 연결, prompt 제출, 첫 이벤트 수신 단계를 별도로 기록한다. 첫 SSE 이벤트는 응답 본문 수신을 보장하지 않는다. 타임라인은 스트림당 최근 64개를 보존한다. 환경 준비를 포함한 worker의 미처리 예외와 OpenCode 연결 예외는 서버 traceback으로 기록하며, worker 예외는 `worker_exception`으로 종료해 무한 대기를 방지한다. 상세 서버 로그에는 기존 CLI 오류 정보가 포함될 수 있으므로 외부 공유 전 확인한다. 변경 적용을 위한 서버 재시작은 사용자가 직접 수행한다.
 
 모의 서버 검증:
 

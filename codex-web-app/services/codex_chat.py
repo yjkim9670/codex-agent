@@ -14242,6 +14242,13 @@ def _handle_claude_stream_json_output_line(stream_id, line):
 def _stream_reader(stream_id, pipe, key):
     try:
         for line in iter(pipe.readline, ''):
+            with state.codex_streams_lock:
+                current = state.codex_streams.get(stream_id)
+                first = current is not None and not current.get('diagnostic_' + key + '_seen')
+                if current is not None:
+                    current['diagnostic_' + key + '_seen'] = True
+            if first:
+                _record_stream_diagnostic(stream_id, 'first_stdout' if key == 'output' else 'first_stderr')
             _apply_auth_failure_guard(line)
             if key == 'error':
                 _append_stream_raw_stderr(stream_id, line)
@@ -14543,6 +14550,7 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
 
     def transport(execution_cwd, model_name):
         try:
+            _record_stream_diagnostic(stream_id, 'opencode_creating_session')
             session = _opencode_request('POST', '/session', {}, directory=execution_cwd)
             remote_id = str(session.get('id') or '').strip()
             if not remote_id:
@@ -14558,6 +14566,7 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             emit('session', remote_id)
             request = Request(f'{str(CODEX_OPENCODE_SERVER_URL).rstrip("/")}/event?directory={quote(execution_cwd, safe="")}',
                               headers={'Accept': 'text/event-stream'})
+            _record_stream_diagnostic(stream_id, 'opencode_connecting_events')
             with urlopen(request, timeout=CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS) as response:
                 response_holder.append(response)
                 with state.codex_streams_lock:
@@ -14575,8 +14584,10 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
                 if model:
                     payload['model'] = model
                 # Subscribe before submission. Exactly one prompt is submitted.
+                _record_stream_diagnostic(stream_id, 'opencode_submitting')
                 _opencode_request('POST', f'/session/{quote(remote_id, safe="")}/prompt_async', payload,
                                   directory=execution_cwd)
+                _record_stream_diagnostic(stream_id, 'opencode_waiting_events')
                 emit('submitted', remote_id)
                 event_name, data_lines = '', []
                 for raw_line in response:
@@ -14593,6 +14604,8 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
                         data_lines.append(line[5:].lstrip())
             emit('disconnected', None)
         except Exception as exc:
+            _LOGGER.exception('OpenCode transport failed stream=%s', stream_id)
+            _record_stream_diagnostic(stream_id, 'opencode_transport_failed')
             emit('transport_error', str(exc))
 
     def recover(remote_id):
@@ -14653,6 +14666,9 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
                 submitted = True
                 _LOGGER.info('OpenCode submitted stream=%s session=%s', stream_id, session_id)
             elif kind == 'event':
+                if not stream.get('diagnostic_opencode_event_seen'):
+                    stream['diagnostic_opencode_event_seen'] = True
+                    _record_stream_diagnostic(stream_id, 'opencode_first_event')
                 if _handle_opencode_sse_event(stream_id, *value):
                     outcome = 'opencode_error' if stream.get('codex_error_seen') else 'opencode_completed'
                     break
@@ -14717,7 +14733,51 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             threading.Thread(target=_abort_opencode_stream, args=(cleanup,), daemon=True).start()
 
 
+def _record_stream_diagnostic(stream_id, phase):
+    """Bounded lifecycle metadata only: never prompts, argv, or environment values."""
+    now = time.time()
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream is None:
+            return
+        entry = {'phase': phase, 'at': int(now * 1000)}
+        history = stream.setdefault('diagnostic_timeline', [])
+        history.append(entry)
+        del history[:-64]
+        stream['diagnostic_phase'] = phase
+    _LOGGER.info('Agent lifecycle stream=%s phase=%s at=%s', stream_id, phase, entry['at'])
+
+
 def _run_codex_stream(stream_id, prompt):
+    _record_stream_diagnostic(stream_id, 'preparing_context')
+    try:
+        _run_codex_stream_impl(stream_id, prompt)
+    except Exception as exc:
+        # Preparation and gate acquisition can fail before Popen's error handler.
+        _LOGGER.exception('Agent worker failed stream=%s', stream_id)
+        _record_stream_diagnostic(stream_id, 'worker_failed')
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not stream:
+                return
+            process = stream.get('process')
+            stream.update(done=True, exit_code=1, completed_at=time.time(),
+                          finalize_reason='worker_exception', worker_error_type=type(exc).__name__)
+        if process is not None:
+            _terminate_stream_process(process, 3)
+        _append_stream_chunk(stream_id, 'error', f'Agent worker failed ({type(exc).__name__}); inspect server log.\n')
+        try:
+            finalize_codex_stream(stream_id)
+        except Exception as persistence_error:
+            _LOGGER.exception('Agent failure persistence failed stream=%s', stream_id)
+            with state.codex_streams_lock:
+                current = state.codex_streams.get(stream_id)
+                if current is not None:
+                    current['persistence_error'] = type(persistence_error).__name__
+            _record_stream_diagnostic(stream_id, 'persistence_failed')
+
+
+def _run_codex_stream_impl(stream_id, prompt):
     with state.codex_streams_lock:
         initial_stream = state.codex_streams.get(stream_id)
         if not initial_stream or initial_stream.get('cancelled') or initial_stream.get('saved'):
@@ -14726,6 +14786,8 @@ def _run_codex_stream(stream_id, prompt):
     try:
         prompt, execution_context = _prepare_agent_execution(prompt, snapshot)
     except (CodexWorktreeError, CodexAttachmentError, OSError) as exc:
+        _LOGGER.exception('Agent context preparation failed stream=%s', stream_id)
+        _record_stream_diagnostic(stream_id, 'context_preparation_failed')
         _append_stream_chunk(stream_id, 'error', f'{exc}\n')
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
@@ -14748,6 +14810,7 @@ def _run_codex_stream(stream_id, prompt):
             _cleanup_output_last_message(snapshot.get('output_path'))
             _cleanup_output_schema(snapshot.get('output_schema_path'))
         return
+    _record_stream_diagnostic(stream_id, 'context_ready')
     backend = execution_context['agent_backend']
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -14828,6 +14891,7 @@ def _run_codex_stream(stream_id, prompt):
         stream = state.codex_streams.get(stream_id)
         if stream:
             internal_api_key = stream.pop('internal_api_key', None)
+    _record_stream_diagnostic(stream_id, 'building_environment')
     exec_env = _build_codex_exec_env(
         queued_execution=queued_execution,
         account_id=account_id,
@@ -14856,7 +14920,9 @@ def _run_codex_stream(stream_id, prompt):
     if not worktree_task:
         execution_cwd.mkdir(parents=True, exist_ok=True)
 
+    _record_stream_diagnostic(stream_id, 'waiting_execution_gate')
     with _codex_exec_gate(question_only=question_only) as lock_info:
+        _record_stream_diagnostic(stream_id, 'execution_gate_acquired')
         cli_started_at = lock_info.get('acquired_at') or time.time()
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
@@ -14888,6 +14954,7 @@ def _run_codex_stream(stream_id, prompt):
                 stream = state.codex_streams.get(stream_id)
                 if stream:
                     stream['exec_details'] = exec_details
+            _record_stream_diagnostic(stream_id, 'starting_process')
             process = subprocess.Popen(
                 cmd,
                 cwd=str(execution_cwd),
@@ -14905,8 +14972,12 @@ def _run_codex_stream(stream_id, prompt):
             if cancelled_before_prompt:
                 _terminate_stream_process(process, terminate_grace_seconds)
                 return
+            _record_stream_diagnostic(stream_id, 'writing_stdin')
             _write_codex_prompt_to_stdin(process, prompt)
+            _record_stream_diagnostic(stream_id, 'waiting_cli_output')
         except FileNotFoundError:
+            _LOGGER.exception('Agent executable unavailable stream=%s backend=%s', stream_id, agent_backend)
+            _record_stream_diagnostic(stream_id, 'process_start_failed')
             command_label = 'claude' if agent_backend == 'claude' else 'codex'
             _append_stream_chunk(stream_id, 'error', f'{command_label} 명령을 찾을 수 없습니다.\n')
             with state.codex_streams_lock:
@@ -14921,6 +14992,8 @@ def _run_codex_stream(stream_id, prompt):
             _cleanup_output_schema(output_schema_path)
             return
         except Exception as exc:
+            _LOGGER.exception('Agent process start failed stream=%s backend=%s', stream_id, agent_backend)
+            _record_stream_diagnostic(stream_id, 'process_start_failed')
             command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
             _append_stream_chunk(stream_id, 'error', f'{command_label} 실행 중 오류가 발생했습니다: {exc}\n')
             with state.codex_streams_lock:
@@ -16397,6 +16470,11 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'saved_at': _epoch_to_millis(stream.get('saved_at')),
             'updated_at': _epoch_to_millis(stream.get('updated_at')) or 0,
             'finalize_reason': stream.get('finalize_reason'),
+            'diagnostic_phase': stream.get('diagnostic_phase'),
+            'diagnostic_timeline': deepcopy(stream.get('diagnostic_timeline') or []),
+            'worker_error_type': stream.get('worker_error_type'),
+            'persistence_failed': bool(stream.get('persistence_error')),
+            'persistence_complete': bool(stream.get('diagnostic_persistence_complete')),
             'queue_wait_ms': int(stream.get('queue_wait_ms') or 0),
             'cli_runtime_ms': stream.get('cli_runtime_ms'),
             'assistant_message_id': stream.get('assistant_message_id'),
@@ -16500,6 +16578,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         exec_details = deepcopy(stream.get('exec_details')) if isinstance(stream.get('exec_details'), dict) else None
         usage_limits_before = deepcopy(stream.get('usage_limits_before'))
 
+    _record_stream_diagnostic(stream_id, 'finalizing')
     output_from_file = _read_output_last_message(output_path)
     output_file_untrusted_after_work_item = _output_file_is_untrusted_after_work_item(
         output_from_file,
@@ -16806,6 +16885,11 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
     if trigger_queue:
         trigger_next_queued_codex_stream(session_id)
+    with state.codex_streams_lock:
+        current = state.codex_streams.get(stream_id)
+        if current is not None:
+            current['diagnostic_persistence_complete'] = True
+    _record_stream_diagnostic(stream_id, 'finalized')
     return saved_message
 
 

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$BaseUrl = 'http://127.0.0.1:5000',
-    [string[]]$Backend = @('claude', 'opencode'),
+    [string[]]$Backend = @('opencode', 'claude'),
     [string[]]$Model = @(),
     [string[]]$Reasoning = @(),
     [switch]$All,

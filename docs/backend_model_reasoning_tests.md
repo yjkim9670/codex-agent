@@ -34,6 +34,12 @@
 
 테스트 한 건당 기본 타임아웃은 90초이며 스트림·동기 API 검사와 CLI 직접 비교 실행에 적용한다. `-TimeoutSeconds`(Python: `--timeout`)로 변경할 수 있다. 설정 조회 등 개별 HTTP 요청과 큐 정리 대기는 최대 30초이며, 정리 작업 때문에 전체 소요 시간은 테스트 타임아웃보다 길어질 수 있다.
 
+실행 중에는 현재 검사 순번/전체 건수, 백엔드·모델·reasoning·검사 종류, 실행 단계, 세션/스트림 ID와 경과 시간(`elapsed`)을 1초마다 새 줄로 출력한다. 단계가 바뀔 때도 즉시 출력하며, 동기 HTTP 응답이나 직접 실행을 기다리는 동안에도 시간이 갱신된다. `submitting`은 요청 전송/응답 대기, `submitted`는 스트림 ID 수신, `waiting-response`는 스트림 완료 대기, `verifying`는 저장 결과 검사, `stopping-stream`/`cleaning-queue`는 정리를 뜻한다. 큐 검사는 `queued`/`waiting-queue` 및 발견된 큐 스트림 ID를, 직접 비교는 `scenario=…/direct`를 표시한다. 경과 시간은 해당 검사 준비부터 정리까지이며 직접 비교는 별도로 계산한다. 완료 줄에는 상태와 최종 소요 시간을 표시한다. PowerShell 진입점은 Python을 버퍼링 없이 실행하며, 프롬프트와 응답 본문은 진행 로그에 출력하지 않는다.
+
+```text
+[1/2] backend=claude model=claude-a reasoning=low scenario=echo phase=waiting-response session=123 stream=456 elapsed=12.0s timeout=90s
+```
+
 모델은 `/api/codex/settings`의 `model_catalogs_by_agent_backend`에서 수집한다. `codex`는 내부 ID `dtgpt`로 변환한다. `-All`은 모델별 reasoning 목록을 사용하며, 기본 실행은 백엔드별 현재 모델 또는 첫 모델의 기본 reasoning을 선택한다. OpenCode는 reasoning을 전달하지 않는 현재 구현에 맞춰 기본 실행만 검사한다. 명시한 미지원 모델/reasoning은 `UNSUPPORTED`이며 성공으로 계산하지 않는다. 모델 필터는 선택한 각 백엔드에 적용하므로, 백엔드마다 모델 ID가 다르면 따로 실행한다.
 
 검사는 순차 실행한다. 기존 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 설정을 사용하는 UI/다른 클라이언트에서 새 작업이나 설정 변경을 하지 않는다. 일반 모드에서는 설정 세 항목(`agent_backend`, `model`, `reasoning_effort`)만 변경하고 `finally`에서 복원 및 재조회 검증한다. API의 빈 설정 표현에 맞춰 백업의 null은 빈 문자열로 복원한다. 프로세스 강제 종료나 서버 장애 시 복구 파일로 다시 복원한다. 다중 사용자 모드에서 설정 변경은 관리자 권한이 필요하다. 인증이 필요하면 현재 셸의 `WORKBENCH_TEST_COOKIE` 또는 `WORKBENCH_TEST_AUTHORIZATION` 환경변수로 전달한다. 인증값은 인자/결과에 저장하지 않는다. 암호화만 허용하는 서버 구성은 이 클라이언트의 지원 범위 밖이다.

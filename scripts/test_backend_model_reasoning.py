@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from urllib.error import HTTPError
@@ -121,6 +122,48 @@ def upload_text(client, token):
                           content_type='multipart/form-data; boundary=' + boundary)['attachments']
 
 
+class Progress:
+    """Keep elapsed time visible even during blocking HTTP/CLI calls."""
+
+    def __init__(self, row, scenario, index, total, timeout, interval=1):
+        self.label = (f'[{index}/{total}] backend={row["backend"]} model={row["model"]} '
+                      f'reasoning={row["reasoning"] or "(default)"} scenario={scenario}')
+        self.timeout = timeout
+        self.interval = interval
+        self.started = time.monotonic()
+        self.state = {'phase': 'preparing'}
+        self.lock = threading.Lock()
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self._watch, daemon=True)
+
+    def _emit(self):
+        # Only identifiers and execution state; never prompts or response bodies.
+        state = ' '.join(f'{key}={value}' for key, value in self.state.items())
+        line = (f'{self.label} {state} elapsed={time.monotonic() - self.started:.1f}s '
+                f'timeout={self.timeout:g}s')
+        line = ''.join(c if c.isprintable() else ' ' for c in safe_detail(line))
+        print(line, flush=True)
+
+    def update(self, phase, **identifiers):
+        with self.lock:
+            self.state.update(phase=phase, **identifiers)
+            self._emit()
+
+    def _watch(self):
+        while not self.stopped.wait(self.interval):
+            with self.lock:
+                self._emit()
+
+    def __enter__(self):
+        self.update('preparing')
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.stopped.set()
+        self.thread.join()
+
+
 def run_case(client, row, args, scenario='echo'):
     result = dict(row, scenario=scenario, evidence='workbench_metadata_and_persisted_response')
     started = time.monotonic()
@@ -129,6 +172,12 @@ def run_case(client, row, args, scenario='echo'):
     token = 'WBTEST_' + uuid.uuid4().hex
     payload = {'prompt': f'Reply with exactly {token}. Do not modify any files.'}
     queued_token = None
+    progress = getattr(args, 'progress', None)
+
+    def update(phase, **identifiers):
+        if progress is not None:
+            progress.update(phase, **identifiers)
+
     try:
         applied = client.request('PATCH', '/settings', settings_for(row))['settings']
         for key, value in settings_for(row).items():
@@ -147,6 +196,7 @@ def run_case(client, row, args, scenario='echo'):
         session_id = client.request('POST', '/sessions', {'title': 'Backend test ' + uuid.uuid4().hex[:10]})['session']['id']
         result['session_id'] = session_id
         use_stream = args.mode == 'stream' or scenario in ('queue', 'worktree')
+        update('submitting', session=session_id)
         try:
             data = client.request('POST', f'/sessions/{session_id}/message' + ('/stream' if use_stream else ''),
                                   payload, timeout=args.timeout if not use_stream else None)
@@ -156,6 +206,7 @@ def run_case(client, row, args, scenario='echo'):
         if use_stream:
             stream_id = data['stream_id']
             settled = False
+        update('submitted' if use_stream else 'verifying', **({'stream': stream_id} if stream_id else {}))
         check_metadata(data, row)
         if scenario == 'worktree':
             token = (data.get('worktree_task') or {}).get('path')
@@ -164,21 +215,25 @@ def run_case(client, row, args, scenario='echo'):
             result['worktree_task'] = data['worktree_task']
         if scenario == 'queue':
             queued_token = 'WBQUEUE_' + uuid.uuid4().hex
+            update('queue-submitting')
             queue = client.request('POST', f'/sessions/{session_id}/message/queue',
                                    {'prompt': f'Reply with exactly {queued_token}. Do not modify files.'})
             if not queue.get('queued'):
                 raise AssertionError('First response completed before enqueue; queue regression inconclusive')
+            update('queued')
             # Change settings while queued: the queued job must retain its snapshot.
             alternate = next((e for e in args.queue_candidates if settings_for(e) != settings_for(row)), None)
             if alternate is None:
                 raise AssertionError('Queue regression needs a second supported model/reasoning combination')
             client.request('PATCH', '/settings', settings_for(alternate))
         if use_stream:
+            update('waiting-response')
             data = wait_stream(client, stream_id, started + args.timeout)
             settled = True
             check_metadata(data, row)
             if data.get('exit_code') != 0:
                 raise AssertionError('Stream exited unsuccessfully')
+        update('verifying')
         session = client.request('GET', f'/sessions/{session_id}')['session']
         message_id = data.get('assistant_message_id') or (data.get('assistant_message') or {}).get('id')
         message = next((m for m in session['messages'] if m.get('id') == message_id), None)
@@ -188,9 +243,11 @@ def run_case(client, row, args, scenario='echo'):
             raise AssertionError('Persisted assistant response contains an error')
         check_metadata(message.get('metadata') or {}, row)
         if queued_token:
+            update('waiting-queue')
             while time.monotonic() < started + args.timeout:
                 for child in client.request('GET', '/streams?include_done=1')['streams']:
                     if child.get('session_id') == session_id and child['id'] != stream_id:
+                        update('waiting-queue', queued_stream=child['id'])
                         terminal = wait_stream(client, child['id'], started + args.timeout)
                         check_metadata(terminal, row)
                         if terminal.get('exit_code') != 0:
@@ -210,12 +267,14 @@ def run_case(client, row, args, scenario='echo'):
                       detail=safe_detail(str(exc)))
     finally:
         if stream_id and not settled:
+            update('stopping-stream')
             try:
                 stop_owned(client, stream_id)
             except Exception:
                 result['cleanup_error'] = 'Stream stop/storage could not be confirmed; aborting subsequent tests'
         # Also catch queued child streams owned by this test session.
         if session_id and scenario == 'queue':
+            update('cleaning-queue')
             try:
                 deadline = time.monotonic() + 30
                 while True:
@@ -392,13 +451,25 @@ def main(argv=None):
         active = client.request('GET', '/streams')['streams']
         if any(not s.get('done') for s in active):
             raise RuntimeError('Active streams found; run tests when Workbench is idle')
-        for row, scenario in cases:
-            result = run_case(client, row, args, scenario) if row['status'] == 'PLANNED' else dict(row, scenario=scenario)
+        for index, (row, scenario) in enumerate(cases, 1):
+            if row['status'] == 'PLANNED':
+                with Progress(row, scenario, index, len(cases), args.timeout) as progress:
+                    args.progress = progress
+                    try:
+                        result = run_case(client, row, args, scenario)
+                    finally:
+                        args.progress = None
+            else:
+                result = dict(row, scenario=scenario)
             if not result.get('cleanup_error') and row['status'] == 'PLANNED' and (args.direct == 'all' or (args.direct == 'failed' and result['status'] != 'PASS')):
-                result['direct'] = run_direct(row, args.timeout)
+                with Progress(row, scenario + '/direct', index, len(cases), args.timeout) as progress:
+                    progress.update('running-direct')
+                    result['direct'] = run_direct(row, args.timeout)
+                    progress.update('finished-direct', status=result['direct']['status'])
             results.append(result)
             report(directory, results)
-            print(f"{row['backend']} {row['model']} {scenario}: {result['status']}")
+            print(f"{row['backend']} {row['model']} reasoning={row['reasoning'] or '(default)'} "
+                  f"{scenario}: {result['status']} elapsed={result.get('seconds', 0):.3f}s", flush=True)
             if result.get('cleanup_error'):
                 break
     finally:

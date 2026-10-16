@@ -25,7 +25,7 @@ if (-not $Python) {
     }
 }
 if (-not $Python) { throw 'Python 3.9+ executable not found. Use -Python.' }
-$cliArgs = @((Join-Path $PSScriptRoot 'test_backend_model_reasoning.py'), '--base-url', $BaseUrl,
+$cliArgs = @('-u', (Join-Path $PSScriptRoot 'test_backend_model_reasoning.py'), '--base-url', $BaseUrl,
     '--mode', $Mode, '--direct', $Direct, '--timeout', "$TimeoutSeconds")
 foreach ($value in $Backend) { $cliArgs += @('--backend', $value) }
 foreach ($value in $Model) { $cliArgs += @('--model', $value) }

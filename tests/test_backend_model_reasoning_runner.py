@@ -201,3 +201,84 @@ def test_failed_restore_produces_recovery_summary(fake_server, tmp_path, monkeyp
                         '--output-directory', str(out)]) == 1
     assert not json.loads((out / 'summary.json').read_text())['settings_restored']
     assert json.loads((out / 'restore-settings.json').read_text())['settings']['reasoning_effort'] == 'low'
+
+
+@pytest.mark.parametrize('mode', ['stream', 'sync'])
+def test_live_progress_during_blocking_submit(fake_server, tmp_path, monkeypatch, capsys, mode):
+    original_request = runner.Client.request
+    original_emit = runner.Progress._emit
+    heartbeat = threading.Event()
+    submitting_lines = []
+    monitors = []
+
+    class FastProgress(runner.Progress):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs, interval=0.01)
+            monitors.append(self)
+
+        def _emit(self):
+            original_emit(self)
+            if self.state['phase'] == 'submitting':
+                submitting_lines.append(self.started)
+                if len(submitting_lines) >= 2:
+                    heartbeat.set()
+
+    def blocking_submit(self, method, path, *args, **kwargs):
+        if method == 'POST' and '/message' in path:
+            # A second line must arrive before the blocking request returns.
+            assert heartbeat.wait(2), 'No live elapsed update during HTTP submission'
+        return original_request(self, method, path, *args, **kwargs)
+
+    monkeypatch.setattr(runner, 'Progress', FastProgress)
+    monkeypatch.setattr(runner.Client, 'request', blocking_submit)
+    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude', '--mode', mode,
+                        '--output-directory', str(tmp_path / 'report')]) == 0
+    output = capsys.readouterr().out
+    assert '[1/1] backend=claude model=claude-a reasoning=low scenario=echo' in output
+    assert 'phase=submitting session=1 elapsed=' in output
+    assert 'phase=verifying' in output
+    assert 'timeout=90s' in output
+    assert 'PASS elapsed=' in output
+    if mode == 'stream':
+        assert 'phase=waiting-response session=1 stream=1' in output
+    assert all(not monitor.thread.is_alive() for monitor in monitors)
+
+
+def test_direct_progress_and_monitor_cleanup(fake_server, tmp_path, monkeypatch, capsys):
+    original_emit = runner.Progress._emit
+    heartbeat = threading.Event()
+    direct_lines = []
+    monitors = []
+
+    class FastProgress(runner.Progress):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs, interval=0.01)
+            monitors.append(self)
+
+        def _emit(self):
+            original_emit(self)
+            if self.state['phase'] == 'running-direct':
+                direct_lines.append(self.started)
+                if len(direct_lines) >= 2:
+                    heartbeat.set()
+
+    def blocking_direct(row, timeout):
+        assert heartbeat.wait(2), 'No live elapsed update during direct comparison'
+        return {'status': 'PASS'}
+
+    monkeypatch.setattr(runner, 'Progress', FastProgress)
+    monkeypatch.setattr(runner, 'run_direct', blocking_direct)
+    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude', '--direct', 'all',
+                        '--output-directory', str(tmp_path / 'report')]) == 0
+    output = capsys.readouterr().out
+    assert 'scenario=echo/direct phase=running-direct elapsed=' in output
+    assert 'phase=finished-direct status=PASS' in output
+    assert all(not monitor.thread.is_alive() for monitor in monitors)
+
+
+def test_progress_thread_stops_on_exception():
+    progress = runner.Progress({'backend': 'claude', 'model': 'a', 'reasoning': ''}, 'echo', 1, 1, 90)
+    with pytest.raises(RuntimeError, match='interrupted'):
+        with progress:
+            raise RuntimeError('interrupted')
+    assert not progress.thread.is_alive()

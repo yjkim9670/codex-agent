@@ -2076,6 +2076,7 @@ def codex_session_message(session_id):
         attachments=attachments,
         imagegen_prompt=prompt,
         account_id=account_id,
+        agent_backend=response_agent_backend,
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))

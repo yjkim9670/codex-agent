@@ -3,11 +3,13 @@
 import base64
 from contextvars import copy_context, ContextVar
 import hashlib
+from html import escape
 import json
 import logging
 import math
 import mimetypes
 import os
+import queue
 import re
 import signal
 import shlex
@@ -67,6 +69,9 @@ from ..config import (
     CODEX_ORGANIZATION_SETTINGS_PATH,
     CODEX_OPENCODE_SERVER_TIMEOUT_SECONDS,
     CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS,
+    CODEX_OPENCODE_RUN_TIMEOUT_SECONDS,
+    CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS,
+    CODEX_OPENCODE_CLEANUP_TIMEOUT_SECONDS,
     CODEX_OPENCODE_SERVER_URL,
     CODEX_STORAGE_DIR,
     CODEX_TOKEN_USAGE_PATH,
@@ -1100,7 +1105,7 @@ def _append_attachment_exec_context(prompt_text, attachments):
         str(prompt_text or '').strip() or '(empty)',
         '',
         '<attached_files>',
-        *lines,
+        *(escape(line, quote=False) for line in lines),
         '</attached_files>',
     ])
 
@@ -1124,6 +1129,8 @@ def _normalize_pending_queue_entry(entry):
         'model_override': entry.get('model_override'),
         'reasoning_override': entry.get('reasoning_override'),
         'model_settings_snapshot': bool(entry.get('model_settings_snapshot')),
+        'agent_backend': (_normalize_agent_backend_setting(entry['agent_backend'])
+                          if entry.get('agent_backend') else None),
         'execution_mode': entry.get('execution_mode'),
         'team_settings': deepcopy(entry.get('team_settings')),
         'attachments': attachments,
@@ -10155,14 +10162,14 @@ def _format_context_message(message, index, max_chars=1400):
         content = '(empty)'
     content = _clip_text(content, max_chars)
     lines = [
-        f'<message index="{index}" role="{role}">',
-        content,
+        f'<message index="{escape(str(index), quote=True)}" role="{escape(role, quote=True)}">',
+        escape(content, quote=False),
     ]
     attachment_lines = _format_attachment_context_lines((message or {}).get('attachments') or [])
     if attachment_lines:
         lines.extend([
             '<attachments>',
-            *attachment_lines,
+            *(escape(line, quote=False) for line in attachment_lines),
             '</attachments>',
         ])
     lines.append('</message>')
@@ -11011,11 +11018,16 @@ def _codex_host_os_label(platform_name=None):
     return platform_name
 
 
-def _codex_shell_family(platform_name=None):
-    platform_name = str(platform_name or _codex_host_platform())
-    if platform_name == 'win32':
+def _codex_shell_family(platform_name=None, agent_backend='codex'):
+    """Classify only an explicitly configured tool shell, never the host OS."""
+    backend = 'codex' if agent_backend == 'dtgpt' else agent_backend
+    shell = str(os.environ.get(f'CODEX_WORKBENCH_{backend.upper()}_SHELL') or '')
+    name = shell.replace('\\', '/').rsplit('/', 1)[-1].lower().removesuffix('.exe')
+    if name in ('powershell', 'pwsh'):
         return 'powershell'
-    return 'posix'
+    if name in ('sh', 'bash', 'zsh', 'dash', 'ksh'):
+        return 'posix'
+    return 'unknown'
 
 
 def _resolve_execution_workspace_dir(execution_cwd=None):
@@ -11052,20 +11064,27 @@ def _append_execution_path_context(prompt_text, execution_cwd=None):
     return f"{str(prompt_text or '').rstrip()}\n\n## Job Path Context\n{path_overlay}"
 
 
-def _build_execution_environment_overlay(execution_cwd=None):
+def _build_execution_environment_overlay(execution_cwd=None, agent_backend='codex'):
+    """Describe the execution host separately from the agent's tool shell."""
     platform_name = _codex_host_platform()
-    shell_family = _codex_shell_family(platform_name)
-    lines = []
-    workspace_overlay = _build_workspace_path_overlay(execution_cwd=execution_cwd)
-    if workspace_overlay:
-        lines.append(workspace_overlay)
+    backend = str(agent_backend or 'codex')
+    if backend == 'opencode':
+        platform_name = os.environ.get('CODEX_WORKBENCH_OPENCODE_PLATFORM', 'unknown')
+    shell_backend = 'codex' if backend == 'dtgpt' else backend
+    shell = str(os.environ.get(f'CODEX_WORKBENCH_{shell_backend.upper()}_SHELL') or '').strip()
+    shell_family = _codex_shell_family(agent_backend=backend)
+    lines = [
+        f'- Selected backend: {backend}.',
+        f'- Workbench server OS: {_codex_host_os_label()}.',
+        f'- Agent execution host OS: {_codex_host_os_label(platform_name)}.',
+        f'- Job working directory: `{_resolve_execution_workspace_dir(execution_cwd)}`.',
+        f'- Configured agent tool shell: {shell or "unknown"}. Verify the actual tool environment before choosing shell syntax.',
+        '- If tool-reported OS, shell, or paths differ, use the tool-reported environment and report the mismatch.',
+        '- After a shell syntax error, check whether any side effects occurred, correct the command, and retry only the unfinished steps. Report an unresolved failure in the final response.',
+    ]
     if shell_family == 'powershell':
-        host_os = _codex_host_os_label(platform_name)
         lines.extend([
-            f'- Host OS: {host_os} (`sys.platform={platform_name}`).',
-            '- `command_execution` commands run in PowerShell. Use PowerShell syntax, not Bash/POSIX syntax.',
-            '- Create directories with `New-Item -ItemType Directory -Force -Path \'path\'`.',
-            '- Create empty files with `New-Item -ItemType File -Force -Path \'path\'`.',
+            '- When the tool confirms PowerShell, use PowerShell syntax.',
             '- Do not use Bash heredocs such as `cat <<EOF`, `<<\'EOF\'`, or Python stdin heredocs.',
             '- For multiline file writes in PowerShell, here-string delimiters must be alone on their own lines:',
             '```powershell',
@@ -11078,6 +11097,26 @@ def _build_execution_environment_overlay(execution_cwd=None):
             '- If PowerShell returns `ParserError` or a shell syntax error, fix the command and retry before the final response.',
         ])
     return '\n'.join(lines)
+
+
+def _prepare_agent_execution(prompt, stream):
+    """Prepare final paths and attachments before choosing a transport."""
+    backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
+    cwd = _resolve_execution_workspace_dir(stream.get('execution_cwd'))
+    if stream.get('worktree_task') and not cwd.is_dir():
+        raise CodexWorktreeError(f'worktree 경로를 찾을 수 없습니다: {cwd}', error_code='worktree_missing')
+    if backend != 'opencode' and not stream.get('worktree_task'):
+        cwd.mkdir(parents=True, exist_ok=True)
+    attachments = normalize_codex_attachments(stream.get('attachments') or [])
+    context = {
+        'agent_backend': backend,
+        'execution_cwd': str(cwd),
+        'attachments': attachments,
+        'environment': _build_execution_environment_overlay(cwd, backend),
+    }
+    prompt = _append_execution_path_context(prompt, execution_cwd=cwd)
+    prompt = _append_attachment_exec_context(prompt, attachments)
+    return prompt, context
 
 
 def _looks_like_browser_ui_task(prompt_text, recent_blocks=None):
@@ -11126,7 +11165,7 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
         '\n'.join([
             '## Current User Request',
             '<message index="current" role="user">',
-            prompt_text or '(empty)',
+            escape(prompt_text or '(empty)', quote=False),
             '</message>'
         ])
     )
@@ -11144,9 +11183,6 @@ def _compose_structured_prompt(memory_lines, recent_blocks, prompt_text):
         sections.append(f'## Image Generation Workbench Overlay\n{_build_imagegen_workbench_overlay()}')
     if _should_include_spreadsheet_workbench_overlay(prompt_text, recent_blocks):
         sections.append(f'## Spreadsheet Workbench Runtime\n{_SPREADSHEET_WORKBENCH_OVERLAY}')
-    execution_environment = _build_execution_environment_overlay()
-    if execution_environment:
-        sections.append(f'## Execution Environment\n{execution_environment}')
     if _should_include_browser_verification(prompt_text, recent_blocks=recent_blocks):
         sections.append(_BROWSER_VERIFICATION_PROMPT_SUFFIX)
     sections.append(
@@ -11269,7 +11305,8 @@ def _build_claude_command(
         reasoning_override=None,
         attachments=None,
         question_only=False,
-        execution_cwd=None):
+        execution_cwd=None,
+        inherit_model_settings=True):
     del prompt
     del output_path
     del output_schema_path
@@ -11278,11 +11315,12 @@ def _build_claude_command(
     del execution_cwd
 
     cmd = [_claude_cli_command(), '-p']
-    claude_model = _resolve_claude_model(model_override=model_override)
+    claude_model = (_resolve_claude_model(model_override=model_override)
+                    if inherit_model_settings else str(model_override or '').strip())
     cli_claude_model = resolve_claude_cli_model_name(claude_model)
     if cli_claude_model:
         cmd.extend(['--model', cli_claude_model])
-    settings = get_settings()
+    settings = get_settings() if inherit_model_settings else {}
     reasoning_effort = (
         (str(reasoning_override).strip() if reasoning_override is not None else '')
         or settings.get('reasoning_effort')
@@ -11326,6 +11364,8 @@ def _build_agent_command(
         agent_backend=None,
         inherit_model_settings=True):
     backend = _normalize_agent_backend_setting(agent_backend or get_selected_agent_backend())
+    if backend == 'opencode':
+        raise CodexToolingError('OpenCode 실행은 CLI가 아니라 서버 API로 전달해야 합니다.')
     if backend == 'claude':
         return backend, _build_claude_command(
             prompt,
@@ -11338,6 +11378,7 @@ def _build_agent_command(
             attachments=attachments,
             question_only=question_only,
             execution_cwd=execution_cwd,
+            inherit_model_settings=inherit_model_settings,
         )
     return backend, _build_codex_command(
         prompt,
@@ -11835,11 +11876,16 @@ def execute_codex_prompt(
         agent_backend=None,
         inherit_model_settings=True,
         account_id=None):
-    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    agent_backend = _normalize_agent_backend_setting(agent_backend or get_selected_agent_backend())
+    prompt, execution_context = _prepare_agent_execution(prompt, {
+        'agent_backend': agent_backend, 'execution_cwd': str(WORKSPACE_DIR),
+        'attachments': attachments or [],
+    })
+    if agent_backend == 'opencode':
+        return _execute_opencode_prompt(prompt, execution_context, model_override)
     output_path = _new_codex_output_path()
-    normalized_attachments = normalize_codex_attachments(attachments or [])
-    prompt = _append_execution_path_context(prompt, execution_cwd=WORKSPACE_DIR)
-    prompt = _append_attachment_exec_context(prompt, normalized_attachments)
+    normalized_attachments = execution_context['attachments']
+    prompt += '\n\n## Execution Environment\n' + execution_context['environment']
     agent_backend, cmd = _build_agent_command(
         prompt,
         output_path=output_path,
@@ -12394,7 +12440,7 @@ def _build_codex_exec_input_details(
         'prompt_transport': 'stdin',
         'prompt_encoding': _CODEX_EXEC_TEXT_ENCODING,
         'host_platform': _codex_host_platform(),
-        'shell_family': _codex_shell_family(),
+        'shell_family': _codex_shell_family(agent_backend=agent_backend or 'codex'),
         'agent_backend': _normalize_agent_backend_setting(agent_backend),
         'command': command_text,
         'prompt': str(prompt or ''),
@@ -13550,12 +13596,21 @@ def _persist_stream_progress(stream_id, force=False):
             'saved_at': now,
         }
 
-    saved_message = update_message(
-        save_payload.get('session_id'),
-        save_payload.get('assistant_message_id'),
-        content=save_payload.get('content'),
-        metadata=save_payload.get('metadata'),
-    )
+    try:
+        saved_message = update_message(
+            save_payload.get('session_id'),
+            save_payload.get('assistant_message_id'),
+            content=save_payload.get('content'),
+            metadata=save_payload.get('metadata'),
+        )
+    except Exception as exc:
+        with state.codex_streams_lock:
+            current = state.codex_streams.get(stream_id)
+            if not current or current.get('agent_backend') != 'opencode':
+                raise
+            current['persistence_error'] = str(exc)
+        _LOGGER.exception('OpenCode progress persistence failed stream=%s', stream_id)
+        return None
     if not saved_message:
         return None
 
@@ -14224,13 +14279,15 @@ def _stream_reader(stream_id, pipe, key):
             pass
 
 
-def _opencode_request(method, path, payload=None, timeout=None):
+def _opencode_request(method, path, payload=None, timeout=None, directory=None):
     """Call the locally hosted OpenCode server without exposing provider credentials."""
     base_url = str(CODEX_OPENCODE_SERVER_URL or '').rstrip('/')
     if not base_url:
         raise CodexToolingError('CODEX_OPENCODE_SERVER_URL is not configured.')
     body = None
     headers = {'Accept': 'application/json'}
+    if directory:
+        path += ('&' if '?' in path else '?') + 'directory=' + quote(str(directory), safe='')
     if payload is not None:
         body = json.dumps(payload).encode('utf-8')
         headers['Content-Type'] = 'application/json; charset=utf-8'
@@ -14256,11 +14313,51 @@ def _opencode_model_payload(model_name):
     return {'providerID': provider_id, 'modelID': model_id}
 
 
+def _execute_opencode_prompt(prompt, execution_context, model_override=None):
+    """Use the OpenCode API for synchronous requests as well as streams."""
+    started_at = time.time()
+    directory = execution_context['execution_cwd']
+    remote_id = ''
+    output = None
+    error = None
+    try:
+        session = _opencode_request('POST', '/session', {}, directory=directory)
+        remote_id = str(session.get('id') or '').strip()
+        if not remote_id:
+            raise CodexToolingError('OpenCode Server가 세션 ID를 반환하지 않았습니다.')
+        payload = {'parts': [{'type': 'text', 'text': prompt}],
+                   'system': execution_context['environment']}
+        model = _opencode_model_payload(_resolve_opencode_model(model_override=model_override))
+        if model:
+            payload['model'] = model
+        result = _opencode_request('POST', f'/session/{quote(remote_id, safe="")}/message', payload,
+                                   timeout=CODEX_OPENCODE_RUN_TIMEOUT_SECONDS, directory=directory)
+        info = result.get('info') or {}
+        if info.get('error'):
+            raise CodexToolingError(str(info['error']))
+        output = '\n'.join(str(part.get('text') or '') for part in result.get('parts') or []
+                           if isinstance(part, dict) and part.get('type') == 'text').strip()
+        if not output:
+            raise CodexToolingError('OpenCode completed without a final response.')
+    except Exception as exc:
+        error = f'OpenCode Server 실행 중 오류가 발생했습니다: {exc}'
+    finally:
+        if remote_id:
+            cleanup = {'opencode_session_id': remote_id, 'execution_cwd': directory}
+            target = _abort_opencode_stream if error else _delete_opencode_session
+            threading.Thread(target=target, args=(cleanup,), daemon=True).start()
+    completed_at = time.time()
+    return output, error, None, _build_duration_breakdown(
+        started_at, cli_started_at=started_at, completed_at=completed_at, saved_at=completed_at)
+
+
 def _extract_opencode_event_session_id(event):
     if not isinstance(event, dict):
         return ''
     properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
-    session = properties.get('session') or event.get('session') or properties.get('sessionID') or event.get('sessionID')
+    nested = properties.get('part') or properties.get('info') or {}
+    session = (properties.get('session') or event.get('session') or properties.get('sessionID')
+               or event.get('sessionID') or (nested.get('sessionID') if isinstance(nested, dict) else ''))
     if isinstance(session, dict):
         session = session.get('id')
     return str(session or '').strip()
@@ -14285,44 +14382,83 @@ def _handle_opencode_sse_event(stream_id, event_name, data):
         return False
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
-        expected_session_id = str(stream.get('opencode_session_id') or '').strip() if stream else ''
+        if not stream or stream.get('done') or stream.get('saved') or stream.get('cancelled'):
+            return False
+        expected_session_id = str(stream.get('opencode_session_id') or '').strip()
     event_session_id = _extract_opencode_event_session_id(event)
-    if expected_session_id and event_session_id and event_session_id != expected_session_id:
+    # Global notifications and unscoped errors cannot terminate this request.
+    if not expected_session_id or event_session_id != expected_session_id:
         return False
     _append_stream_event(stream_id, {'type': event_name or event.get('type') or 'opencode.event', 'event': event})
     event_type = str(event_name or event.get('type') or '').strip().lower()
     properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
-    # The headless server reports provider/configuration failures through the
-    # TUI notification bus.  Previously Workbench discarded these events and
-    # subsequently reported only a misleading SSE timeout.
+    # Subscription now includes user-message events emitted during submission.
+    info = properties.get('info') or {}
+    part = properties.get('part') or {}
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        roles = stream.setdefault('opencode_message_roles', {}) if stream else {}
+        if isinstance(info, dict) and info.get('id') and info.get('role'):
+            roles[info['id']] = info['role']
+        message_id = part.get('messageID') if isinstance(part, dict) else None
+        role = info.get('role') or roles.get(message_id or properties.get('messageID'))
+    if role == 'user':
+        return False
+    if event_type == 'message.updated' and info.get('error'):
+        return _handle_opencode_sse_event(stream_id, 'session.error', json.dumps({
+            'properties': {'sessionID': expected_session_id, 'error': info['error']},
+        }))
     if event_type == 'tui.toast.show' and str(properties.get('variant') or '').lower() == 'error':
         message = str(properties.get('message') or properties.get('title') or '').strip()
         if message:
             _append_stream_exec_error(stream_id, f'OpenCode: {message}')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream and not stream.get('cancelled'):
+                    stream['exit_code'] = 1
             return True
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream and event_type in ('message.part.updated', 'message.updated', 'message.part.delta'):
+            item = properties.get('part') or properties.get('info') or properties
+            key = (event_type, str(item.get('id') or properties.get('partID') or ''))
+            fingerprint = json.dumps(item, sort_keys=True)
+            seen = stream.setdefault('opencode_progress_items', {})
+            if seen.get(key) != fingerprint:
+                seen[key] = fingerprint
+                stream['opencode_last_progress_at'] = time.monotonic()
+            stream['opencode_execution_seen'] = True
     if event_type in ('session.error', 'session.status'):
         error = str(properties.get('error') or event.get('error') or '').strip()
-        if error:
-            _append_stream_exec_error(stream_id, error)
+        if error or event_type == 'session.error':
+            _LOGGER.warning('OpenCode session error stream=%s session=%s detail=%s',
+                            stream_id, expected_session_id, error or 'session failed')
+            _append_stream_exec_error(stream_id, error or 'OpenCode session failed')
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream and not stream.get('cancelled'):
+                    stream['exit_code'] = 1
+            return True
     part_id, text = _extract_opencode_event_text(event)
     if text:
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             texts = stream.setdefault('opencode_part_text', {}) if stream else {}
             prior = str(texts.get(part_id) or '') if part_id else ''
-            if part_id:
+            stale_text = bool(prior and prior.startswith(text) and prior != text)
+            if part_id and not stale_text:
                 texts[part_id] = text
         # OpenCode publishes the complete current part text on updates.  The
         # generic CLI helper strips a leading space from an incremental chunk
         # while removing ImageGen directives, so append this SSE suffix here.
-        delta = text[len(prior):] if prior and text.startswith(prior) else text
+        delta = '' if stale_text else (text[len(prior):] if prior and text.startswith(prior) else text)
         if delta:
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream and not stream.get('cancelled'):
                     stream['output'] = (stream.get('output') or '') + delta
                     stream['output_length'] = len(stream['output'])
-                    stream['output_last_message'] = text.strip()
+                    stream['output_last_message'] = stream['output'].strip()
                     stream['progress_output_invalidated'] = False
                     stream['final_agent_message_after_work_seen'] = True
                     stream['last_output_at'] = time.time()
@@ -14331,7 +14467,13 @@ def _handle_opencode_sse_event(stream_id, event_name, data):
     status = properties.get('status')
     if isinstance(status, dict):
         status = status.get('type') or status.get('status')
-    return event_type in ('session.idle', 'session.completed') or str(status or '').strip().lower() == 'idle'
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream and str(status or '').lower() in ('busy', 'retry'):
+            stream['opencode_execution_seen'] = True
+        execution_seen = bool(stream and stream.get('opencode_execution_seen'))
+    return execution_seen and (event_type in ('session.idle', 'session.completed')
+                               or str(status or '').strip().lower() == 'idle')
 
 
 def _abort_opencode_stream(stream):
@@ -14339,7 +14481,9 @@ def _abort_opencode_stream(stream):
     if not session_id:
         return
     try:
-        _opencode_request('POST', f'/session/{quote(session_id, safe="")}/abort', payload={})
+        _opencode_request('POST', f'/session/{quote(session_id, safe="")}/abort', payload={},
+                          timeout=CODEX_OPENCODE_CLEANUP_TIMEOUT_SECONDS,
+                          directory=(stream or {}).get('execution_cwd'))
     except Exception:
         _LOGGER.debug('OpenCode session abort failed', exc_info=True)
 
@@ -14349,97 +14493,271 @@ def _delete_opencode_session(stream):
     if not session_id:
         return
     try:
-        _opencode_request('DELETE', f'/session/{quote(session_id, safe="")}')
+        _opencode_request('DELETE', f'/session/{quote(session_id, safe="")}',
+                          timeout=CODEX_OPENCODE_CLEANUP_TIMEOUT_SECONDS,
+                          directory=(stream or {}).get('execution_cwd'))
     except Exception:
         _LOGGER.debug('OpenCode temporary session cleanup failed', exc_info=True)
 
 
-def _run_opencode_stream(stream_id, prompt):
-    """Run one ephemeral OpenCode session and translate its SSE to Workbench state."""
-    started_at = time.time()
-    try:
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if not stream:
-                return
-            execution_cwd = str(stream.get('execution_cwd') or WORKSPACE_DIR)
-            model_name = str(stream.get('response_model') or stream.get('model_override') or '').strip()
-            stream['cli_started_at'] = started_at
-            stream['updated_at'] = started_at
-        session = _opencode_request('POST', '/session', {'directory': execution_cwd})
-        opencode_session_id = str(session.get('id') or '').strip()
-        if not opencode_session_id:
-            raise CodexToolingError('OpenCode Server가 세션 ID를 반환하지 않았습니다.')
-        with state.codex_streams_lock:
-            stream = state.codex_streams.get(stream_id)
-            if not stream:
-                return
-            stream['opencode_session_id'] = opencode_session_id
-            stream['updated_at'] = time.time()
-        payload = {'parts': [{'type': 'text', 'text': prompt}]}
-        model = _opencode_model_payload(model_name)
-        if model:
-            payload['model'] = model
-        _opencode_request('POST', f'/session/{quote(opencode_session_id, safe="")}/prompt_async', payload)
+def _recover_opencode_stream(stream_id, session_id, snapshot):
+    """Recover missed terminal events without submitting the prompt again."""
+    messages, statuses = snapshot
+    completed = False
+    for message in messages if isinstance(messages, list) else []:
+        info = message.get('info') or {}
+        if info.get('role') != 'assistant':
+            continue
+        for part in message.get('parts') or []:
+            _handle_opencode_sse_event(stream_id, 'message.part.updated', json.dumps({
+                'properties': {'sessionID': session_id, 'part': part},
+            }))
+        if info.get('error'):
+            _handle_opencode_sse_event(stream_id, 'session.error', json.dumps({
+                'properties': {'sessionID': session_id, 'error': info['error']},
+            }))
+            return True
+        completed = completed or bool((info.get('time') or {}).get('completed'))
+    status = statuses.get(session_id, {}) if isinstance(statuses, dict) else {}
+    # Missing status is normal for idle sessions, but needs a completed answer.
+    return completed and status.get('type', 'idle') == 'idle'
 
-        request = Request(f'{str(CODEX_OPENCODE_SERVER_URL).rstrip("/")}/event', headers={'Accept': 'text/event-stream'})
-        with urlopen(request, timeout=CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS) as response:
-            event_name = ''
-            data_lines = []
-            for raw_line in response:
+
+def _run_opencode_stream(stream_id, prompt, execution_context=None):
+    """Company OpenCode path: bound waiting independently of SSE socket reads."""
+    started_at = time.time()
+    deadline = time.monotonic() + CODEX_OPENCODE_RUN_TIMEOUT_SECONDS
+    inbox = queue.Queue(maxsize=256)
+    stop_reader = threading.Event()
+    response_holder = []
+    session_id = ''
+    outcome = 'opencode_error'
+
+    def emit(kind, value):
+        while not stop_reader.is_set():
+            try:
+                inbox.put((kind, value), timeout=0.1)
+                return
+            except queue.Full:
+                continue
+
+    def transport(execution_cwd, model_name):
+        try:
+            session = _opencode_request('POST', '/session', {}, directory=execution_cwd)
+            remote_id = str(session.get('id') or '').strip()
+            if not remote_id:
+                raise CodexToolingError('OpenCode Server가 세션 ID를 반환하지 않았습니다.')
+            if stop_reader.is_set():
+                _delete_opencode_session({'opencode_session_id': remote_id, 'execution_cwd': execution_cwd})
+                return
+            with state.codex_streams_lock:
+                current = state.codex_streams.get(stream_id)
+                if not current or current.get('cancelled') or current.get('saved'):
+                    return
+                current['opencode_session_id'] = remote_id
+            emit('session', remote_id)
+            request = Request(f'{str(CODEX_OPENCODE_SERVER_URL).rstrip("/")}/event?directory={quote(execution_cwd, safe="")}',
+                              headers={'Accept': 'text/event-stream'})
+            with urlopen(request, timeout=CODEX_OPENCODE_EVENT_TIMEOUT_SECONDS) as response:
+                response_holder.append(response)
                 with state.codex_streams_lock:
                     current = state.codex_streams.get(stream_id)
-                    cancelled = not current or bool(current.get('cancelled') or current.get('saved'))
-                if cancelled:
-                    break
-                line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
-                if not line:
-                    if data_lines:
-                        if _handle_opencode_sse_event(stream_id, event_name, '\n'.join(data_lines)):
-                            break
-                    event_name, data_lines = '', []
-                elif line.startswith('event:'):
-                    event_name = line[6:].strip()
-                elif line.startswith('data:'):
-                    data_lines.append(line[5:].lstrip())
-    except Exception as exc:
-        _append_stream_exec_error(stream_id, f'OpenCode Server 실행 중 오류가 발생했습니다: {exc}')
+                    cancelled = not current or current.get('cancelled') or current.get('saved')
+                if stop_reader.is_set() or cancelled:
+                    return
+                payload = {
+                    'parts': [{'type': 'text', 'text': prompt}],
+                    'system': execution_context['environment'] + '\n'
+                    'Respect the serialized conversation roles. Prior assistant/error messages '
+                    'are history only. Follow the latest user request and provide a final outcome.',
+                }
+                model = _opencode_model_payload(model_name)
+                if model:
+                    payload['model'] = model
+                # Subscribe before submission. Exactly one prompt is submitted.
+                _opencode_request('POST', f'/session/{quote(remote_id, safe="")}/prompt_async', payload,
+                                  directory=execution_cwd)
+                emit('submitted', remote_id)
+                event_name, data_lines = '', []
+                for raw_line in response:
+                    if stop_reader.is_set():
+                        break
+                    line = raw_line.decode('utf-8', errors='replace').rstrip('\r\n')
+                    if not line:
+                        if data_lines:
+                            emit('event', (event_name, '\n'.join(data_lines)))
+                        event_name, data_lines = '', []
+                    elif line.startswith('event:'):
+                        event_name = line[6:].strip()
+                    elif line.startswith('data:'):
+                        data_lines.append(line[5:].lstrip())
+            emit('disconnected', None)
+        except Exception as exc:
+            emit('transport_error', str(exc))
+
+    def recover(remote_id):
+        try:
+            messages = _opencode_request('GET', f'/session/{quote(remote_id, safe="")}/message',
+                                         timeout=CODEX_OPENCODE_CLEANUP_TIMEOUT_SECONDS,
+                                         directory=execution_context['execution_cwd'])
+            statuses = _opencode_request('GET', '/session/status',
+                                        timeout=CODEX_OPENCODE_CLEANUP_TIMEOUT_SECONDS,
+                                        directory=execution_context['execution_cwd'])
+            emit('recovered', (messages, statuses))
+        except Exception as exc:
+            _LOGGER.warning('OpenCode recovery failed stream=%s session=%s: %s', stream_id, remote_id, exc)
+            emit('recovered', False)
+
+    try:
+        if execution_context is None:
+            with state.codex_streams_lock:
+                snapshot = dict(state.codex_streams.get(stream_id) or {})
+            prompt, execution_context = _prepare_agent_execution(prompt, snapshot)
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
-            if stream and not stream.get('cancelled'):
-                stream['exit_code'] = 1
+            if not stream or stream.get('cancelled') or stream.get('saved'):
+                return
+            execution_cwd = execution_context['execution_cwd']
+            stream['execution_context'] = execution_context
+            stream['execution_cwd'] = execution_cwd
+            model_name = str(stream.get('response_model') or stream.get('model_override') or '').strip()
+            stream['cli_started_at'] = started_at
+            stream['opencode_last_progress_at'] = time.monotonic()
+        threading.Thread(target=transport, args=(execution_cwd, model_name), daemon=True).start()
+        submitted = False
+        recovery_pending = False
+        next_recovery = time.monotonic() + min(30, CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS / 2)
+        while True:
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if not stream or stream.get('cancelled') or stream.get('saved'):
+                    outcome = 'user_cancelled'
+                    break
+                last_progress = stream.get('opencode_last_progress_at', time.monotonic())
+            now = time.monotonic()
+            if now >= deadline or now - last_progress >= CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS:
+                outcome = 'opencode_timeout'
+                raise CodexToolingError('OpenCode 실행 시간 또는 진행 정체 제한을 초과했습니다.')
+            if submitted and now >= next_recovery and not recovery_pending:
+                recovery_pending = True
+                threading.Thread(target=recover, args=(session_id,), daemon=True).start()
+            try:
+                kind, value = inbox.get(timeout=max(0.001, min(0.2, deadline - now,
+                    CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS - (now - last_progress))))
+            except queue.Empty:
+                continue
+            if kind == 'session':
+                session_id = value
+                _LOGGER.info('OpenCode created stream=%s session=%s', stream_id, session_id)
+            elif kind == 'submitted':
+                submitted = True
+                _LOGGER.info('OpenCode submitted stream=%s session=%s', stream_id, session_id)
+            elif kind == 'event':
+                if _handle_opencode_sse_event(stream_id, *value):
+                    outcome = 'opencode_error' if stream.get('codex_error_seen') else 'opencode_completed'
+                    break
+            elif kind == 'recovered':
+                recovery_pending = False
+                next_recovery = time.monotonic() + min(30, CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS / 2)
+                if value and _recover_opencode_stream(stream_id, session_id, snapshot=value):
+                    outcome = 'opencode_error' if stream.get('codex_error_seen') else 'opencode_completed'
+                    break
+            elif kind in ('disconnected', 'transport_error'):
+                if not submitted:
+                    raise CodexToolingError(value or 'OpenCode 이벤트 연결이 종료되었습니다.')
+                next_recovery = time.monotonic()
+                _LOGGER.warning('OpenCode SSE disconnected stream=%s session=%s detail=%s', stream_id, session_id, value)
+    except Exception as exc:
+        _append_stream_exec_error(stream_id, f'OpenCode Server 실행 중 오류가 발생했습니다: {exc}')
     finally:
+        stop_reader.set()
+        if response_holder:
+            threading.Thread(target=response_holder[0].close, daemon=True).start()
         completed_at = time.time()
         should_finalize = False
-        stream_for_cleanup = None
+        cleanup = None
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             if stream:
-                stream_for_cleanup = dict(stream)
-            if stream and not stream.get('saved'):
+                cleanup = dict(stream)
+                if stream.get('cancelled'):
+                    outcome = 'user_cancelled'
+            if stream and not stream.get('saved') and not stream.get('cancelled'):
                 stream['done'] = True
-                stream['exit_code'] = stream.get('exit_code') if stream.get('exit_code') is not None else 0
+                stream['exit_code'] = 0 if outcome == 'opencode_completed' else 1
                 stream['completed_at'] = completed_at
                 stream['process_exited_at'] = completed_at
-                stream['cli_runtime_ms'] = max(0, int((completed_at - (stream.get('cli_started_at') or completed_at)) * 1000))
-                stream['finalize_reason'] = 'opencode_server'
+                stream['cli_runtime_ms'] = max(0, int((completed_at - started_at) * 1000))
+                stream['finalize_reason'] = outcome
                 stream['updated_at'] = completed_at
                 should_finalize = True
-        _delete_opencode_session(stream_for_cleanup)
         if should_finalize:
-            _mark_stream_task_complete(stream_id, stream.get('output_last_message') or stream.get('output') or '')
-            _mark_stream_turn_completed(stream_id)
-        _persist_stream_progress(stream_id, force=True)
-        finalize_codex_stream(stream_id)
+            if outcome == 'opencode_completed':
+                _mark_stream_task_complete(stream_id, stream.get('output_last_message') or stream.get('output') or '')
+                _mark_stream_turn_completed(stream_id)
+            try:
+                finalize_codex_stream(stream_id, trigger_queue=False)
+            except Exception as exc:
+                _LOGGER.exception('OpenCode result persistence failed stream=%s session=%s', stream_id, session_id)
+                with state.codex_streams_lock:
+                    current = state.codex_streams.get(stream_id)
+                    if current:
+                        current['saved'] = True
+                        current['persistence_error'] = str(exc)
+                        current['error'] = (current.get('error') or '') + '\n결과 저장 실패: ' + str(exc)
+                        current['error_length'] = len(current['error'])
+            finally:
+                trigger_next_queued_codex_stream(cleanup.get('session_id'))
+        _LOGGER.info('OpenCode terminal stream=%s session=%s reason=%s', stream_id, session_id, outcome)
+        # Cleanup cannot hold the UI or queue. Retain failed/cancelled sessions
+        # for DB diagnosis, and avoid deleting while aborted writes may finish.
+        if cleanup and outcome == 'opencode_completed':
+            threading.Thread(target=_delete_opencode_session, args=(cleanup,), daemon=True).start()
+        elif cleanup:
+            threading.Thread(target=_abort_opencode_stream, args=(cleanup,), daemon=True).start()
 
 
 def _run_codex_stream(stream_id, prompt):
     with state.codex_streams_lock:
         initial_stream = state.codex_streams.get(stream_id)
-        backend = _normalize_agent_backend_setting(initial_stream.get('agent_backend')) if initial_stream else ''
-    if backend == 'opencode':
-        _run_opencode_stream(stream_id, prompt)
+        if not initial_stream or initial_stream.get('cancelled') or initial_stream.get('saved'):
+            return
+        snapshot = dict(initial_stream)
+    try:
+        prompt, execution_context = _prepare_agent_execution(prompt, snapshot)
+    except (CodexWorktreeError, CodexAttachmentError, OSError) as exc:
+        _append_stream_chunk(stream_id, 'error', f'{exc}\n')
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if stream:
+                stream.update(done=True, exit_code=1, completed_at=time.time(),
+                              finalize_reason=getattr(exc, 'error_code', 'execution_context_error'))
+                stream['updated_at'] = stream['completed_at']
+        try:
+            finalize_codex_stream(stream_id)
+        except Exception as save_error:
+            _LOGGER.exception('Execution preparation result persistence failed stream=%s', stream_id)
+            with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['saved'] = True
+                    stream['persistence_error'] = str(save_error)
+            if snapshot.get('session_id'):
+                trigger_next_queued_codex_stream(snapshot['session_id'])
+        finally:
+            _cleanup_output_last_message(snapshot.get('output_path'))
+            _cleanup_output_schema(snapshot.get('output_schema_path'))
         return
+    backend = execution_context['agent_backend']
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream:
+            stream['execution_context'] = execution_context
+            stream['execution_cwd'] = execution_context['execution_cwd']
+    if backend == 'opencode':
+        _run_opencode_stream(stream_id, prompt, execution_context=execution_context)
+        return
+    prompt += '\n\n## Execution Environment\n' + execution_context['environment']
     poll_interval_seconds = _coerce_positive_seconds(
         CODEX_STREAM_POLL_INTERVAL_SECONDS,
         default_value=0.5,
@@ -14503,8 +14821,6 @@ def _run_codex_stream(stream_id, prompt):
         _cleanup_output_schema(output_schema_path)
         return
 
-    prompt = _append_execution_path_context(prompt, execution_cwd=execution_cwd)
-    prompt = _append_attachment_exec_context(prompt, attachments)
     # The pooled secret is removed from shared stream state before launching
     # the child process. The safe ID/label remain for status and chat metadata.
     internal_api_key = None
@@ -15095,9 +15411,15 @@ def create_codex_stream(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
-    if agent_backend_override == 'codex':
+    if agent_backend_override in ('codex', 'dtgpt'):
         response_model = str(model_override or 'codex-default')
         response_reasoning_effort = reasoning_override
+    elif agent_backend_override == 'claude':
+        response_model = str(model_override or 'claude-default')
+        response_reasoning_effort = reasoning_override
+    elif agent_backend_override == 'opencode':
+        response_model = str(model_override or 'opencode-default')
+        response_reasoning_effort = None
     execution_policy = (
         'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
         else ('worktree_isolated' if worktree_task_payload else 'standard')
@@ -15446,7 +15768,9 @@ def _start_codex_stream_for_session_locked(
         worktree_mode=False,
         account_id=None,
         execution_mode=None,
-        team_settings=None):
+        team_settings=None,
+        agent_backend_override=None,
+        model_settings_snapshot=False):
     if execution_mode == 'team':
         team_settings = team_settings or _team_settings_snapshot()
         error = _validate_team_settings(team_settings, plan_mode, question_only or structured_report_preset)
@@ -15455,7 +15779,7 @@ def _start_codex_stream_for_session_locked(
         model_override = team_settings['main_model']
         reasoning_override = team_settings['main_effort']
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
-    if execution_mode != 'team' and model_override is None and reasoning_override is None:
+    if execution_mode != 'team' and not model_settings_snapshot and model_override is None and reasoning_override is None:
         model_override, reasoning_override = resolve_model_role_settings(model_role)
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
@@ -15468,7 +15792,8 @@ def _start_codex_stream_for_session_locked(
 
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     account_profile = _get_account_profile(resolved_account_id)
-    agent_backend = 'codex' if execution_mode == 'team' else get_selected_agent_backend()
+    agent_backend = 'codex' if execution_mode == 'team' else _normalize_agent_backend_setting(
+        agent_backend_override or get_selected_agent_backend())
     if account_profile is None:
         return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
     if (
@@ -15522,6 +15847,9 @@ def _start_codex_stream_for_session_locked(
     if execution_mode == 'team':
         response_model = str(model_override or 'codex-default')
         response_reasoning_effort = reasoning_override
+    elif agent_backend_override:
+        response_model = str(model_override or f'{agent_backend}-default')
+        response_reasoning_effort = None if agent_backend == 'opencode' else reasoning_override
     execution_policy = (
         'read_only_ephemeral' if bool(question_only or structured_report_preset_id)
         else ('worktree_isolated' if worktree_task else 'standard')
@@ -15565,7 +15893,7 @@ def _start_codex_stream_for_session_locked(
         }
 
     stream_kwargs = {
-        'agent_backend_override': 'codex' if execution_mode == 'team' else None,
+        'agent_backend_override': agent_backend,
         'execution_mode': execution_mode,
         'team_settings': team_settings,
         'model_role': model_role,
@@ -15580,6 +15908,7 @@ def _start_codex_stream_for_session_locked(
         'worktree_task': worktree_task,
         'account_id': resolved_account_id,
         'internal_api_key': internal_api_key,
+        'inherit_model_settings': not model_settings_snapshot,
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -15615,11 +15944,11 @@ def _build_pending_queue_entry(
         account_id=None,
         execution_mode=None,
         team_settings=None):
+    backend = 'codex' if execution_mode == 'team' else get_selected_agent_backend()
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
     model, effort = resolve_model_role_settings(model_role)
     # Display labels such as 'codex-default' are never executable model ids.
     if not model:
-        backend = get_selected_agent_backend()
         if backend == 'claude':
             model = _resolve_claude_model()
         elif backend == 'opencode':
@@ -15638,6 +15967,7 @@ def _build_pending_queue_entry(
         'model_override': model,
         'reasoning_override': effort,
         'model_settings_snapshot': True,
+        'agent_backend': backend,
         'attachments': normalized_attachments,
         'structured_report_preset': normalize_structured_report_preset_id(structured_report_preset),
         'worktree_mode': bool(worktree_mode),
@@ -15759,6 +16089,8 @@ def _start_next_queued_codex_stream_locked(session_id):
             queued_execution=True,
             execution_mode=pending_entry.get('execution_mode'),
             team_settings=pending_entry.get('team_settings'),
+            agent_backend_override=pending_entry.get('agent_backend'),
+            model_settings_snapshot=bool(pending_entry.get('model_settings_snapshot')),
             question_only=bool(structured_report_preset),
             structured_report_preset=structured_report_preset,
             worktree_mode=worktree_mode,
@@ -16480,6 +16812,26 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
 def stop_codex_stream(stream_id):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
+        is_opencode = bool(stream and stream.get('agent_backend') == 'opencode')
+    try:
+        return _stop_codex_stream_impl(stream_id)
+    except Exception as exc:
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not is_opencode or not stream or not stream.get('cancelled'):
+                raise
+            stream['persistence_error'] = str(exc)
+            stream['error'] = (stream.get('error') or '') + '\n중지 결과 저장 실패: ' + str(exc)
+            stream['error_length'] = len(stream['error'])
+            session_id = stream.get('session_id')
+        _LOGGER.exception('OpenCode cancellation persistence failed stream=%s', stream_id)
+        trigger_next_queued_codex_stream(session_id)
+        return {'status': 'stopped', 'saved_message': None}
+
+
+def _stop_codex_stream_impl(stream_id):
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
         if not stream or not _stream_belongs_to_current_user(stream):
             return None
         if stream.get('cancelled'):
@@ -16538,7 +16890,9 @@ def stop_codex_stream(stream_id):
         stop_codex_stream(team_child)
     _terminate_stream_process(process, grace_seconds)
     if opencode_session_id:
-        _abort_opencode_stream({'opencode_session_id': opencode_session_id})
+        threading.Thread(target=_abort_opencode_stream,
+                         args=({'opencode_session_id': opencode_session_id,
+                                'execution_cwd': (stream or {}).get('execution_cwd')},), daemon=True).start()
 
     output_from_file = _read_output_last_message(output_path)
     if output_from_file:

@@ -1,14 +1,14 @@
 [CmdletBinding()]
 param(
     [string]$BaseUrl = 'http://127.0.0.1:5000',
-    [string[]]$Backend = @('codex', 'claude', 'opencode'),
+    [string[]]$Backend = @('claude', 'opencode'),
     [string[]]$Model = @(),
     [string[]]$Reasoning = @(),
     [switch]$All,
     [switch]$ListOnly,
     [ValidateSet('stream', 'sync')][string]$Mode = 'stream',
     [ValidateSet('off', 'failed', 'all')][string]$Direct = 'off',
-    [int]$TimeoutSeconds = 180,
+    [int]$TimeoutSeconds = 90,
     [string]$OutputDirectory = '',
     [string]$Python = '',
     [string]$RestoreSettings = '',

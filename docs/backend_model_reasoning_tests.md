@@ -6,14 +6,14 @@
 # 먼저 모델 카탈로그와 예상 호출 수 확인 (설정 변경/모델 호출 없음)
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000 -ListOnly
 
-# 기본: 백엔드별 대표 모델의 기본 reasoning, 총 최대 3회
+# 기본: Claude/OpenCode 대표 모델의 기본 reasoning, 총 최대 2회
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000
 
 # 해당 백엔드의 모든 모델별 지원 reasoning 조합
-.\scripts\test_backend_model_reasoning.ps1 -Backend codex,claude,opencode -All -TimeoutSeconds 300
+.\scripts\test_backend_model_reasoning.ps1 -Backend claude,opencode -All -TimeoutSeconds 300
 
 # 특정 모델/effort 선택, 실패 시 로컬 직접 실행과 비교
-.\scripts\test_backend_model_reasoning.ps1 -Backend codex -Model '실제-카탈로그-모델-ID' -Reasoning low,high -Direct failed
+.\scripts\test_backend_model_reasoning.ps1 -Backend claude -Model '실제-카탈로그-모델-ID' -Reasoning low,high -Direct failed
 
 # 동기 API 경로
 .\scripts\test_backend_model_reasoning.ps1 -Backend claude -Mode sync
@@ -22,13 +22,17 @@
 .\scripts\test_backend_model_reasoning.ps1 -ContextChecks -ExpectedWorkspace 'C:\작업 폴더\workspace'
 
 # 각각 추가 호출 발생. worktree는 실제 테스트용 worktree를 생성한다.
-.\scripts\test_backend_model_reasoning.ps1 -Backend codex -WorktreeCheck -QueueCheck
+.\scripts\test_backend_model_reasoning.ps1 -Backend claude -WorktreeCheck -QueueCheck
 
 # 강제 종료/서버 연결 장애로 복원이 실패했을 때
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000 -RestoreSettings '결과폴더\restore-settings.json'
 ```
 
 `-BaseUrl`은 실제 서버 주소/포트로 지정한다. 기본 주소는 예시 기본값이다. `-Python 'C:\path\python.exe'`, `-OutputDirectory 'C:\test-results\new-run'`을 사용할 수 있다. 출력 폴더는 새 경로여야 한다. PowerShell 없이도 `python3 scripts/test_backend_model_reasoning.py --help`로 동일 옵션을 사용한다.
+
+기본 테스트 대상은 `claude`, `opencode`이며 `dtgpt`(Codex)는 제외한다. `-All`과 큐 검사 후보에도 같은 기본 대상이 적용된다. Codex를 테스트하려면 `-Backend codex` 또는 `-Backend dtgpt`를 명시해야 한다. Python 직접 실행에도 같은 기본값을 적용한다.
+
+테스트 한 건당 기본 타임아웃은 90초이며 스트림·동기 API 검사와 CLI 직접 비교 실행에 적용한다. `-TimeoutSeconds`(Python: `--timeout`)로 변경할 수 있다. 설정 조회 등 개별 HTTP 요청과 큐 정리 대기는 최대 30초이며, 정리 작업 때문에 전체 소요 시간은 테스트 타임아웃보다 길어질 수 있다.
 
 모델은 `/api/codex/settings`의 `model_catalogs_by_agent_backend`에서 수집한다. `codex`는 내부 ID `dtgpt`로 변환한다. `-All`은 모델별 reasoning 목록을 사용하며, 기본 실행은 백엔드별 현재 모델 또는 첫 모델의 기본 reasoning을 선택한다. OpenCode는 reasoning을 전달하지 않는 현재 구현에 맞춰 기본 실행만 검사한다. 명시한 미지원 모델/reasoning은 `UNSUPPORTED`이며 성공으로 계산하지 않는다. 모델 필터는 선택한 각 백엔드에 적용하므로, 백엔드마다 모델 ID가 다르면 따로 실행한다.
 

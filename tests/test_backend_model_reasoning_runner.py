@@ -42,7 +42,9 @@ def fake_server():
                     state.patches.append(payload)
                     state.settings.update(payload)
                 result = {'settings': dict(state.settings), 'model_catalogs_by_agent_backend': {'dtgpt': [
-                    {'slug': 'model-a', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}]}}
+                    {'slug': 'model-a', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
+                    'claude': [{'slug': 'claude-a', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
+                    'opencode': [{'slug': 'provider/model'}]}}
             elif path == '/streams':
                 result = {'streams': []}
             elif path == '/sessions':
@@ -131,6 +133,26 @@ def test_timeout_stops_only_owned_stream_then_next_case(fake_server, tmp_path):
 def test_list_only_never_mutates(fake_server):
     assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--list-only']) == 0
     assert fake_server.requests == [('GET', '/settings')]
+
+
+@pytest.mark.parametrize('extra_args', [[], ['--all']])
+def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path, monkeypatch, extra_args):
+    before = dict(fake_server.settings)
+    original = runner.run_case
+
+    def check_candidates(client, row, args, scenario):
+        assert {r['backend'] for r in args.queue_candidates} == {'claude', 'opencode'}
+        return original(client, row, args, scenario)
+
+    monkeypatch.setattr(runner, 'run_case', check_candidates)
+    out = tmp_path / 'report'
+    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
+    results = json.loads((out / 'results.json').read_text())
+    assert {r['backend'] for r in results} == {'claude', 'opencode'}
+    assert len(results) == (3 if extra_args else 2)
+    assert all(r['status'] == 'PASS' for r in results)
+    assert all(p['agent_backend'] != 'dtgpt' for p in fake_server.patches[:-1])
+    assert fake_server.settings == before
 
 
 def test_restore_backup_and_redaction(fake_server, tmp_path, monkeypatch):

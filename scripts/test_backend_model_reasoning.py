@@ -318,14 +318,15 @@ def report(directory, results):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', default='http://127.0.0.1:5000')
-    parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'])
+    parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'],
+                        help='Backend to test (repeatable; default: claude, opencode)')
     parser.add_argument('--model', action='append', default=[])
     parser.add_argument('--reasoning', action='append', default=[])
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--list-only', action='store_true')
     parser.add_argument('--mode', choices=['stream', 'sync'], default='stream')
     parser.add_argument('--direct', choices=['off', 'failed', 'all'], default='off')
-    parser.add_argument('--timeout', type=float, default=180)
+    parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--output-directory')
     parser.add_argument('--restore-settings')
     parser.add_argument('--context-checks', action='store_true')
@@ -354,8 +355,9 @@ def main(argv=None):
         print('Settings restored.')
         return 0
     snapshot = client.request('GET', '/settings')
-    rows = matrix(snapshot, args.backend or ['codex', 'claude', 'opencode'], args.model, args.reasoning, args.all)
-    args.queue_candidates = matrix(snapshot, args.backend or ['codex', 'claude', 'opencode'], [], [], True)
+    backends = args.backend or ['claude', 'opencode']
+    rows = matrix(snapshot, backends, args.model, args.reasoning, args.all)
+    args.queue_candidates = matrix(snapshot, backends, [], [], True)
     args.queue_candidates = [r for r in args.queue_candidates if r['status'] == 'PLANNED']
     scenarios = ['echo']
     if args.context_checks:

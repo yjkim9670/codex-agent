@@ -57,10 +57,12 @@ def fake_server():
                 sid = path.split('/')[2]
                 token = re.search(r'WBTEST_[a-f0-9]+', payload['prompt'])[0]
                 meta = {f'response_{k}': v for k, v in state.settings.items()}
-                message = {'id': 'answer', 'role': 'assistant', 'content': 'wrong' if state.failure else token, 'metadata': meta}
+                # append_message stores response fields on the message itself.
+                message = dict(meta, id='answer', role='assistant', content='wrong' if state.failure else token)
                 state.sessions[sid]['messages'].append(message)
                 state.streams[sid] = dict(meta, done=not state.hanging, saved=not state.hanging,
                                           exit_code=0, assistant_message_id='answer')
+                state.streams[sid]['agent_backend'] = state.streams[sid].pop('response_agent_backend')
                 result = dict(meta, stream_id=sid, assistant_message_id='answer', assistant_message=message)
             elif path.startswith('/streams/'):
                 sid = path.split('/')[2]
@@ -99,14 +101,20 @@ def test_matrix_uses_per_model_efforts_and_opencode_default():
 
 
 @pytest.mark.parametrize('mode', ['stream', 'sync'])
-def test_actual_http_matrix_persistence_and_restoration(fake_server, tmp_path, mode):
+@pytest.mark.parametrize('backend,count', [('codex', 2), ('claude', 2), ('opencode', 1)])
+def test_actual_http_matrix_persistence_and_restoration(fake_server, tmp_path, mode, backend, count):
     before = dict(fake_server.settings)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--all', '--mode', mode,
+    assert runner.main(['--base-url', fake_server.url, '--backend', backend, '--all', '--mode', mode,
                         '--output-directory', str(out)]) == 0
     results = json.loads((out / 'results.json').read_text())
-    assert len(results) == 2
+    assert len(results) == count
     assert all(r['status'] == 'PASS' for r in results)
+    assert all(r['metadata_source'] == 'persisted_message' for r in results)
+    trace = [json.loads(line) for line in (out / results[0]['trace_file']).read_text().splitlines()]
+    checks = [entry for entry in trace if entry['event'] == 'metadata_check']
+    assert checks[-1]['source'] == 'persisted_message'
+    assert checks[-1]['actual']['response_model'] == results[0]['model']
     assert fake_server.settings == before
     assert (out / 'results.csv').exists()
     assert json.loads((out / 'summary.json').read_text())['settings_restored']
@@ -187,6 +195,15 @@ def test_metadata_mismatch_is_not_a_pass():
     with pytest.raises(AssertionError, match='response_model mismatch'):
         runner.check_metadata({'response_agent_backend': 'dtgpt', 'response_model': 'wrong'},
                               {'backend': 'dtgpt', 'model': 'a', 'reasoning': ''})
+
+
+def test_nested_message_metadata_compatibility_keeps_top_level_authoritative():
+    row = {'backend': 'claude', 'model': 'selected-model', 'reasoning': 'low'}
+    metadata = {'response_agent_backend': 'claude', 'response_model': 'selected-model',
+                'response_reasoning_effort': 'low'}
+    runner.check_metadata({'metadata': metadata}, row)
+    with pytest.raises(AssertionError, match='response_model mismatch'):
+        runner.check_metadata({'metadata': metadata, 'response_model': 'claude-default'}, row)
 
 
 def test_unconfirmed_stop_aborts_remaining_cases_but_restores(fake_server, tmp_path, monkeypatch):

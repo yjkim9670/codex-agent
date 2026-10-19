@@ -1318,6 +1318,35 @@ def test_create_codex_stream_skips_refresh_when_preflight_snapshot_is_provided(
     assert stream['usage_limits_before']['five_hour']['used_percent'] == 0.0
 
 
+@pytest.mark.parametrize('backend,model,effort', [
+    ('claude', 'Qwen3.8-27B-test', 'low'),
+    ('opencode', 'codemate/CodeLLMFast', None),
+    ('dtgpt', 'gpt-6.1-sol', 'high'),
+])
+def test_stream_start_with_effort_inherits_selected_model(
+        isolated_codex_workspace, monkeypatch, backend, model, effort):
+    settings = {'agent_backend': backend, 'model': model, 'reasoning_effort': effort}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': name} for name in ('dtgpt', 'claude', 'opencode')])
+    monkeypatch.setattr(codex_chat, 'get_codex_model_options_for_backend', lambda name: [model])
+    monkeypatch.setattr(codex_chat, 'resolve_response_reasoning_effort', lambda **kwargs: effort)
+    monkeypatch.setattr(codex_chat, 'CODEX_REQUIRE_ACCOUNT_LOGIN', False)
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **kwargs: {})
+    monkeypatch.setattr(codex_chat, 'refresh_session_context_memory', lambda sid: None)
+    monkeypatch.setattr(codex_chat.threading.Thread, 'start', lambda self: None)
+    session = codex_chat.create_session('model inheritance')
+    result = codex_chat.start_codex_stream_for_session(
+        session['id'], 'request', 'request', reasoning_override=effort)
+    assert result['ok']
+    stream = state.codex_streams[result['stream_id']]
+    assert result['response_model'] == model
+    assert stream['response_model'] == model
+    assert stream['model_override'] == model
+    persisted = codex_chat.get_session(session['id'])['messages'][-1]
+    assert persisted['response_model'] == model
+
+
 def test_usage_history_keeps_retention_window_and_reports_hourly_averages(isolated_codex_workspace, monkeypatch):
     history_path = isolated_codex_workspace['usage_history_path']
     start = datetime(2026, 4, 1, 0, 0, tzinfo=codex_chat.KST)

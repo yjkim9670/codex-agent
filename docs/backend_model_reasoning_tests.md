@@ -54,6 +54,8 @@
 
 각 검사에는 `case-001.jsonl` 형태의 실시간 추적 파일도 생성된다. HTTP 시작/완료와 소요 시간, HTTP 오류 코드 또는 예외 종류, 검사 단계, 스트림 상태를 요청마다 즉시 기록하므로 테스트가 중간에 종료돼도 앞선 기록을 확인할 수 있다. `at`은 서버 타임라인과 대조할 수 있는 Unix 밀리초이며 `elapsed`는 검사 시작 이후 초 단위 시간이다. 요청/응답 본문, 인증 헤더, 환경변수 값은 추적 파일에 기록하지 않는다. `-Direct`의 내부 CLI 실행은 이 HTTP 추적 대상에 포함되지 않는다.
 
+메타데이터 검사는 저장 메시지의 최상위 `response_*` 필드를 읽으며 중첩 `metadata` 표현도 지원한다. 스트림 조회의 백엔드는 `agent_backend`도 허용한다. `metadata_check` 추적 이벤트에는 검증 위치(`source`)와 예상/실제 백엔드·모델·reasoning만 기록한다. `results.json`의 `metadata_source`로 시작 응답, 완료 스트림, 저장 메시지 중 어느 단계에서 불일치가 발생했는지 구분할 수 있다. 서버는 reasoning만 전달된 요청에서도 선택 모델을 별도로 복사해 스트림에 `claude-default`/`codex-default`가 잘못 기록되는 것을 방지한다.
+
 `results.json`에는 `stream_id`, `trace_file`, `failure_phase`, 중단 전 `failure_stream_snapshot`, 정리 후까지 포함한 `last_stream_snapshot`이 추가된다. `done=false`이면 실행 단계와 프로세스·출력 상태를, `done=true`이면 `saved`, `persistence_complete`, `persistence_failed`를 함께 확인한다. 기존 `saved`는 실제 저장 작업이 끝나기 전에도 설정될 수 있으므로 저장 완료 여부는 `persistence_complete`로 구분한다. 서버 업데이트 전에는 새 필드가 없거나 단계가 `unknown`일 수 있다.
 
 서버 로그의 `Agent lifecycle stream=… phase=…` 및 API의 `diagnostic_timeline`에는 환경 준비, 실행 잠금 대기, 프로세스 시작, stdin 전달, 첫 stdout/stderr, 저장 단계가 남는다. OpenCode는 원격 세션 생성, SSE 연결, prompt 제출, 첫 이벤트 수신 단계를 별도로 기록한다. 첫 SSE 이벤트는 응답 본문 수신을 보장하지 않는다. 타임라인은 스트림당 최근 64개를 보존한다. 환경 준비를 포함한 worker의 미처리 예외와 OpenCode 연결 예외는 서버 traceback으로 기록하며, worker 예외는 `worker_exception`으로 종료해 무한 대기를 방지한다. 상세 서버 로그에는 기존 CLI 오류 정보가 포함될 수 있으므로 외부 공유 전 확인한다. 변경 적용을 위한 서버 재시작은 사용자가 직접 수행한다.

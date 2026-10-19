@@ -15852,8 +15852,14 @@ def _start_codex_stream_for_session_locked(
         model_override = team_settings['main_model']
         reasoning_override = team_settings['main_effort']
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
-    if execution_mode != 'team' and not model_settings_snapshot and model_override is None and reasoning_override is None:
-        model_override, reasoning_override = resolve_model_role_settings(model_role)
+    if execution_mode != 'team' and not model_settings_snapshot:
+        # Routes can supply effort alone. Snapshot each missing value so the
+        # worker and its metadata use the same selected model as the response.
+        role_model, role_effort = resolve_model_role_settings(model_role)
+        if model_override is None:
+            model_override = role_model
+        if reasoning_override is None:
+            reasoning_override = role_effort
     with state.codex_streams_lock:
         active_stream_id = _find_active_stream_id_locked(session_id)
     if active_stream_id:

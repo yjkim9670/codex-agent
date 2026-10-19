@@ -112,6 +112,10 @@ def settings_for(row):
 
 
 def check_metadata(data, row):
+    # Persisted Workbench messages flatten metadata onto the message. Accept
+    # nested metadata too, with explicit top-level fields taking precedence.
+    nested = data.get('metadata')
+    data = dict(nested if isinstance(nested, dict) else {}, **data)
     expected = dict(response_agent_backend=row['backend'], response_model=row['model'],
                     response_reasoning_effort=row['reasoning'])
     for key, value in expected.items():
@@ -271,6 +275,15 @@ def run_case(client, row, args, scenario='echo'):
         if progress is not None:
             progress.update(phase, **identifiers)
 
+    def verify_metadata(data, source):
+        result['metadata_source'] = source
+        nested = data.get('metadata')
+        fields = dict(nested if isinstance(nested, dict) else {}, **data)
+        actual = {key: fields.get(key) for key in (
+            'response_agent_backend', 'agent_backend', 'response_model', 'response_reasoning_effort')}
+        trace('metadata_check', source=source, expected=settings_for(row), actual=actual)
+        check_metadata(data, row)
+
     try:
         applied = client.request('PATCH', '/settings', settings_for(row))['settings']
         for key, value in settings_for(row).items():
@@ -301,7 +314,7 @@ def run_case(client, row, args, scenario='echo'):
             result['stream_id'] = stream_id
             settled = False
         update('submitted' if use_stream else 'verifying', **({'stream': stream_id} if stream_id else {}))
-        check_metadata(data, row)
+        verify_metadata(data, 'stream_start' if use_stream else 'sync_response')
         if scenario == 'worktree':
             token = (data.get('worktree_task') or {}).get('path')
             if not token:
@@ -324,7 +337,7 @@ def run_case(client, row, args, scenario='echo'):
             update('waiting-response')
             data = wait_stream(client, stream_id, started + args.timeout)
             settled = True
-            check_metadata(data, row)
+            verify_metadata(data, 'stream_complete')
             if data.get('exit_code') != 0:
                 raise AssertionError('Stream exited unsuccessfully')
         update('verifying')
@@ -333,9 +346,9 @@ def run_case(client, row, args, scenario='echo'):
         message = next((m for m in session['messages'] if m.get('id') == message_id), None)
         if not message or message.get('role') != 'assistant' or token not in (message.get('content') or ''):
             raise AssertionError('Final persisted assistant response missing expected token/path')
-        if (message.get('metadata') or {}).get('error'):
+        if message.get('error') or (message.get('metadata') or {}).get('error'):
             raise AssertionError('Persisted assistant response contains an error')
-        check_metadata(message.get('metadata') or {}, row)
+        verify_metadata(message, 'persisted_message')
         if queued_token:
             update('waiting-queue')
             while time.monotonic() < started + args.timeout:
@@ -343,14 +356,14 @@ def run_case(client, row, args, scenario='echo'):
                     if child.get('session_id') == session_id and child['id'] != stream_id:
                         update('waiting-queue', queued_stream=child['id'])
                         terminal = wait_stream(client, child['id'], started + args.timeout)
-                        check_metadata(terminal, row)
+                        verify_metadata(terminal, 'queued_stream_complete')
                         if terminal.get('exit_code') != 0:
                             raise AssertionError('Queued stream exited unsuccessfully')
                 session = client.request('GET', f'/sessions/{session_id}')['session']
                 queued = [m for m in session['messages'] if m.get('role') == 'assistant'
                           and queued_token in (m.get('content') or '')]
                 if queued:
-                    check_metadata(queued[-1].get('metadata') or {}, row)
+                    verify_metadata(queued[-1], 'queued_persisted_message')
                     break
                 time.sleep(0.3)
             else:

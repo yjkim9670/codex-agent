@@ -2547,7 +2547,9 @@ document.addEventListener('DOMContentLoaded', () => {
         'nanum-square',
         'wanted-sans',
         'line-seed-kr',
-        'goorm-sans'
+        'goorm-sans',
+        'paperlogy',
+        'nexon-lv2-gothic'
     ].includes(value) ? value : DEFAULT_UI_FONT;
     const applyUiFont = (value, { persist = true } = {}) => {
         const font = normalizeUiFont(value);

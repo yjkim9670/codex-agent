@@ -1,4 +1,108 @@
 @font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-1Thin.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 100;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-2ExtraLight.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 200;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-3Light.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-4Regular.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-5Medium.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-6SemiBold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-7Bold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-8ExtraBold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Paperlogy";
+    src: url("/static/fonts/paperlogy/Paperlogy-9Black.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "NEXON Lv2 Gothic";
+    src: url("/static/fonts/nexon-lv2-gothic/NEXONLv2GothicLight.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 300;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "NEXON Lv2 Gothic";
+    src: url("/static/fonts/nexon-lv2-gothic/NEXONLv2GothicRegular.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "NEXON Lv2 Gothic";
+    src: url("/static/fonts/nexon-lv2-gothic/NEXONLv2GothicMedium.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 500 600;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "NEXON Lv2 Gothic";
+    src: url("/static/fonts/nexon-lv2-gothic/NEXONLv2GothicBold.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 700 900;
+    font-display: swap;
+}
+
+@font-face {
     font-family: "IBM Plex Sans KR";
     src: url("/static/fonts/ibm-plex/IBMPlexSansKR-Light.woff2") format("woff2");
     font-style: normal;
@@ -491,6 +595,8 @@
     --font-wanted-sans-ui: "Wanted Sans", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-line-seed-ui: "LINE Seed Sans KR", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-goorm-sans-ui: "Goorm Sans", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-paperlogy-ui: "Paperlogy", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
+    --font-nexon-lv2-gothic-ui: "NEXON Lv2 Gothic", "IBM Plex Sans KR", "IBM Plex Sans JP", sans-serif;
     --font-naver-ui: var(--font-ibm-ui-ko);
     --font-naver-code: "D2Coding", "NanumGothicCoding", "Nanum Gothic Coding", "Noto Sans Mono CJK KR", monospace;
     --font-session-list-title: var(--font-naver-ui);
@@ -556,6 +662,24 @@
 
 [data-ui-font="goorm-sans"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
     font-family: var(--font-goorm-sans-ui);
+}
+
+[data-ui-font="paperlogy"] {
+    --font-naver-ui: var(--font-paperlogy-ui);
+    --font-sans: var(--font-paperlogy-ui);
+}
+
+[data-ui-font="paperlogy"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-paperlogy-ui);
+}
+
+[data-ui-font="nexon-lv2-gothic"] {
+    --font-naver-ui: var(--font-nexon-lv2-gothic-ui);
+    --font-sans: var(--font-nexon-lv2-gothic-ui);
+}
+
+[data-ui-font="nexon-lv2-gothic"] :lang(ja):not(code):not(pre):not(kbd):not(samp) {
+    font-family: var(--font-nexon-lv2-gothic-ui);
 }
 
 [data-theme="dark"] {
@@ -9471,6 +9595,8 @@ body.is-work-mode-resizing * {
 .ui-font-option:has(input:checked[value="wanted-sans"]) .ui-font-option-sample { font-family: var(--font-wanted-sans-ui); }
 .ui-font-option:has(input:checked[value="line-seed-kr"]) .ui-font-option-sample { font-family: var(--font-line-seed-ui); }
 .ui-font-option:has(input:checked[value="goorm-sans"]) .ui-font-option-sample { font-family: var(--font-goorm-sans-ui); }
+.ui-font-option:has(input:checked[value="paperlogy"]) .ui-font-option-sample { font-family: var(--font-paperlogy-ui); }
+.ui-font-option:has(input:checked[value="nexon-lv2-gothic"]) .ui-font-option-sample { font-family: var(--font-nexon-lv2-gothic-ui); }
 
 .ui-settings-usage {
     display: flex;

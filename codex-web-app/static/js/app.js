@@ -2122,6 +2122,7 @@ function primeSettingsOptionsFromDom(
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    initializeFilePreviewToolbar();
     initializeWindowsSmallTextWeight();
 
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
@@ -5694,7 +5695,8 @@ function getFilePanelElementsByPrefix({
         openNewBtn: byId('open-new'),
         addCurrentContextBtn: byId('add-current-context'),
         copyBtn: byId('copy'),
-        diffBtn: byId('diff'),
+        downloadCurrentBtn: byId('download-current'),
+        viewerMore: byId('viewer-more'),
         renameCurrentBtn: byId('rename-current'),
         deleteCurrentBtn: byId('delete-current'),
         editBtn: byId('edit'),
@@ -5816,7 +5818,7 @@ function syncWorkModePanelModeState() {
             path.textContent = displayPath;
             path.dataset.fullPath = displayPath;
             path.classList.remove('is-compact-path');
-            setHoverTooltip(path, activeSession?.cwd || displayPath);
+            bindCopyableFilePreviewPath(path, activeSession?.cwd || displayPath);
         } else {
             setFilePanelPathLabel(path, workModeFileRoot, workModeFilePath, '', {
                 compact: isCompactLayout()
@@ -6643,9 +6645,91 @@ function updateFilePanelActionButtonLabel(button, label) {
     button.setAttribute('title', normalizedLabel);
 }
 
+function bindCopyableFilePreviewPath(element, path) {
+    element.dataset.copyPath = path;
+    element.classList.toggle('file-preview-copyable-path', Boolean(path));
+    element.setAttribute('role', path ? 'button' : 'status');
+    element.tabIndex = path ? 0 : -1;
+    element.setAttribute('aria-label', path ? `경로 복사: ${path}` : element.textContent);
+    setHoverTooltip(element, path ? `${path} · 클릭하여 복사` : '');
+    if (!path) return;
+    if (element.dataset.copyPathBound) return;
+    element.dataset.copyPathBound = 'true';
+    const copy = async () => {
+        if (!element.dataset.copyPath) return;
+        try {
+            await writeTextToClipboard(element.dataset.copyPath);
+            showToast('경로를 복사했습니다.', { tone: 'success', durationMs: 1800 });
+        } catch (error) {
+            showToast(normalizeError(error, '경로를 복사하지 못했습니다.'), { tone: 'error' });
+        }
+    };
+    element.addEventListener('click', copy);
+    element.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            void copy();
+        }
+    });
+}
+
+function initializeFilePreviewToolbar() {
+    for (const variant of [FILE_PANEL_VARIANT_WORK_MODE, FILE_PANEL_VARIANT_OVERLAY]) {
+        const elements = getFilePanelVariantConfig(variant).getElements();
+        if (!elements) continue;
+        elements.downloadCurrentBtn?.addEventListener('click', () => {
+            void downloadCurrentFileFromFilePanel(variant);
+        });
+        elements.viewerMore?.addEventListener('click', event => {
+            if (event.target.closest('button')) elements.viewerMore.open = false;
+        });
+        elements.viewerMore?.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                elements.viewerMore.open = false;
+                elements.viewerMore.querySelector('summary')?.focus();
+            }
+        });
+    }
+    document.addEventListener('click', event => {
+        document.querySelectorAll('.file-browser-viewer-more[open]').forEach(menu => {
+            if (!menu.contains(event.target)) menu.open = false;
+        });
+    });
+}
+
+async function downloadCurrentFileFromFilePanel(variant) {
+    const state = getFilePanelEditState(variant);
+    if (!state.path || state.saving || isFilePanelBulkActionInFlight(variant)) return false;
+    // Snapshot the preview target; list selections must not change this download.
+    const { root, path } = state;
+    setFilePanelBulkActionInFlight(variant, true);
+    syncFilePanelViewerActionState(variant);
+    const progress = showPersistentToast('현재 파일을 다운로드하는 중입니다.', { tone: 'default' });
+    try {
+        const result = await fetchFilePanelDownload(root, [path]);
+        const filename = extractFilenameFromContentDisposition(result?.contentDisposition) || path.split('/').pop();
+        if (!saveBlobAsFile(result?.blob, filename)) throw new Error('브라우저 다운로드를 시작하지 못했습니다.');
+        showToast('파일 다운로드를 시작했습니다.', { tone: 'success' });
+        return true;
+    } catch (error) {
+        showToast(normalizeError(error, '파일을 다운로드하지 못했습니다.'), { tone: 'error' });
+        return false;
+    } finally {
+        progress?.dismiss();
+        setFilePanelBulkActionInFlight(variant, false);
+        syncFilePanelViewerActionState(variant);
+    }
+}
+
 function setFilePanelViewerMetaText(elements, text, { truncated = false, noteText = '' } = {}) {
     if (!elements?.viewerMeta) return;
     elements.viewerMeta.textContent = String(text || '');
+    const state = getFilePanelEditState(getFilePanelVariantFromElements(elements));
+    const rootPath = getFileBrowserAbsoluteRoots().find(root => root.root === state.root)?.path;
+    const copyPath = state.path
+        ? (rootPath ? `${rootPath.replace(/\/$/, '')}/${state.path}` : formatFileBrowserDisplayPath(state.root, state.path))
+        : '';
+    bindCopyableFilePreviewPath(elements.viewerMeta, copyPath);
     if (truncated || noteText) {
         const note = document.createElement('span');
         note.className = 'file-browser-truncated-note';
@@ -6769,7 +6853,6 @@ function syncFilePanelViewerActionState(variant) {
     // the user a way back to the empty viewer state.
     const isPreviewActionBusy = isFilePanelBulkActionInFlight(normalizedVariant) || state.saving;
     const isDiffMode = Boolean(state.diffMode);
-    const canDiff = hasPreview && isFilePanelDiffSupported(state);
     const canEdit = hasPreview && !isDiffMode && Boolean(state.editable);
     const canCopy = hasPreview && !isDiffMode && !state.previewResult?.is_binary;
     if (elements.viewerPanel) {
@@ -6806,19 +6889,10 @@ function syncFilePanelViewerActionState(variant) {
         );
         setIconButtonScreenReaderText(elements.copyBtn, '파일 내용 전체 복사');
     }
-    if (elements.diffBtn) {
-        elements.diffBtn.classList.toggle('is-hidden', !canDiff);
-        elements.diffBtn.classList.toggle('is-active', isDiffMode);
-        elements.diffBtn.classList.toggle('is-loading', Boolean(state.diffLoading));
-        elements.diffBtn.disabled = !canDiff || state.editing || isBusy || state.diffLoading;
-        elements.diffBtn.setAttribute('aria-pressed', isDiffMode ? 'true' : 'false');
-        updateFilePanelActionButtonLabel(
-            elements.diffBtn,
-            isDiffMode ? '현재 내용 미리보기' : 'HEAD 기준 diff 보기'
-        );
-        setIconButtonScreenReaderText(elements.diffBtn, isDiffMode ? 'Preview' : 'Diff');
-        syncHoverTooltipFromLabel(elements.diffBtn);
+    if (elements.downloadCurrentBtn) {
+        elements.downloadCurrentBtn.disabled = !hasPreview || isBusy;
     }
+    if (elements.viewerMore && !hasPreview) elements.viewerMore.open = false;
     if (elements.renameCurrentBtn) {
         elements.renameCurrentBtn.classList.toggle('is-hidden', !hasPreview);
         elements.renameCurrentBtn.disabled = !hasPreview || isBusy;
@@ -17871,18 +17945,17 @@ function setFilePanelPathLabel(pathElement, root, relativePath = '', absoluteRoo
     const normalizedRoot = normalizeFileBrowserRoot(root);
     const normalizedPath = normalizeFileBrowserRelativePath(relativePath);
     const fullDisplay = formatFileBrowserDisplayPath(normalizedRoot, normalizedPath);
-    const display = options?.compact
-        ? formatFileBrowserCompactDisplayPath(normalizedRoot, normalizedPath)
-        : fullDisplay;
+    const display = fullDisplay;
     pathElement.textContent = display;
     pathElement.dataset.fullPath = fullDisplay;
     pathElement.classList.toggle('is-compact-path', display !== fullDisplay);
 
-    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath || '');
+    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath
+        || getFileBrowserAbsoluteRoots().find(root => root.root === normalizedRoot)?.path || '');
     const absolutePath = absoluteRoot
         ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
         : fullDisplay;
-    setHoverTooltip(pathElement, absolutePath);
+    bindCopyableFilePreviewPath(pathElement, absolutePath);
 }
 
 function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {
@@ -18838,6 +18911,7 @@ function setFileBrowserDirectoryLoading(isLoading, message = '디렉터리 목�
 function setFilePanelViewerPlaceholder(elements, message = '파일을 선택하세요.') {
     if (!elements) return;
     setFilePanelViewerMetaText(elements, '파일을 선택하면 미리보기가 표시됩니다.');
+    if (elements.viewerMeta) bindCopyableFilePreviewPath(elements.viewerMeta, '');
     if (elements.viewerContent) {
         elements.viewerContent.innerHTML = '';
         const placeholder = document.createElement('div');

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=253">
+    <link rel="stylesheet" href="/static/css/app.css?v=254">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -203,16 +203,7 @@
             <div class="file-browser-viewer-header" id="{{ id_prefix }}-viewer-header">
                 <div class="file-browser-viewer-meta" id="{{ id_prefix }}-viewer-meta">파일을 선택하면 미리보기가 표시됩니다.</div>
                 <div class="file-browser-viewer-actions" id="{{ id_prefix }}-viewer-actions">
-                    <button
-                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-close is-hidden"
-                        type="button"
-                        id="{{ id_prefix }}-close-preview"
-                        aria-label="파일 미리보기 닫기"
-                        title="파일 미리보기 닫기"
-                        disabled
-                    >
-                        <span class="sr-only">파일 미리보기 닫기</span>
-                    </button>
+
                     <button
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-open-new"
                         type="button"
@@ -223,16 +214,9 @@
                     >
                         <span class="sr-only">선택 파일 새 창에서 열기</span>
                     </button>
-                    <button
-                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-add-context is-hidden"
-                        type="button"
-                        id="{{ id_prefix }}-add-current-context"
-                        aria-label="현재 파일 위치를 채팅에 추가"
-                        title="현재 파일 위치를 채팅에 추가"
-                        disabled
-                    >
-                        <span class="sr-only">현재 파일 위치를 채팅에 추가</span>
-                    </button>
+                    <button class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-download"
+                        type="button" id="{{ id_prefix }}-download-current" disabled
+                        aria-label="현재 파일 다운로드" title="현재 파일 다운로드"><span class="sr-only">다운로드</span></button>
                     <button
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-copy is-hidden"
                         type="button"
@@ -241,38 +225,7 @@
                         title="파일 내용 전체 복사"
                         disabled
                     >
-                        <span class="sr-only">파일 내용 전체 복사</span>
-                    </button>
-                    <button
-                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-diff is-hidden"
-                        type="button"
-                        id="{{ id_prefix }}-diff"
-                        aria-label="HEAD 기준 diff 보기"
-                        title="HEAD 기준 diff 보기"
-                        aria-pressed="false"
-                        disabled
-                    >
-                        <span class="sr-only">Diff</span>
-                    </button>
-                    <button
-                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-rename is-hidden"
-                        type="button"
-                        id="{{ id_prefix }}-rename-current"
-                        aria-label="선택 파일 이름 변경"
-                        title="선택 파일 이름 변경"
-                        disabled
-                    >
-                        <span class="sr-only">선택 파일 이름 변경</span>
-                    </button>
-                    <button
-                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-delete is-hidden"
-                        type="button"
-                        id="{{ id_prefix }}-delete-current"
-                        aria-label="선택 파일 삭제"
-                        title="선택 파일 삭제"
-                        disabled
-                    >
-                        <span class="sr-only">선택 파일 삭제</span>
+                        <span class="sr-only">파일 내용 복사</span>
                     </button>
                     <button
                         class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-edit is-hidden"
@@ -292,6 +245,51 @@
                         title="파일 저장"
                     >
                         <span class="sr-only">저장</span>
+                    </button>
+                    <details class="file-browser-viewer-more" id="{{ id_prefix }}-viewer-more">
+                        <summary class="btn ghost" aria-label="파일 작업 더보기" title="파일 작업 더보기">⋯</summary>
+                        <div class="file-browser-viewer-more-list">
+                    <button
+                        class="btn ghost file-browser-viewer-action file-browser-viewer-add-context is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-add-current-context"
+                        aria-label="현재 파일 위치를 채팅에 추가"
+                        title="현재 파일 위치를 채팅에 추가"
+                        disabled
+                    >
+                        <span>채팅에 파일 추가</span>
+                    </button>
+                    <button
+                        class="btn ghost file-browser-viewer-action file-browser-viewer-rename is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-rename-current"
+                        aria-label="선택 파일 이름 변경"
+                        title="선택 파일 이름 변경"
+                        disabled
+                    >
+                        <span>이름 변경</span>
+                    </button>
+                    <button
+                        class="btn ghost file-browser-viewer-action file-browser-viewer-delete is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-delete-current"
+                        aria-label="선택 파일 삭제"
+                        title="선택 파일 삭제"
+                        disabled
+                    >
+                        <span>파일 삭제</span>
+                    </button>
+                        </div>
+                    </details>
+                    <button
+                        class="btn ghost icon-only file-browser-viewer-action file-browser-viewer-close is-hidden"
+                        type="button"
+                        id="{{ id_prefix }}-close-preview"
+                        aria-label="파일 미리보기 닫기"
+                        title="파일 미리보기 닫기"
+                        disabled
+                    >
+                        <span class="sr-only">파일 미리보기 닫기</span>
                     </button>
                 </div>
             </div>
@@ -1984,6 +1982,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=272"></script>
+    <script src="/static/js/app.js?v=273"></script>
 </body>
 </html>

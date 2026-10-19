@@ -18109,43 +18109,6 @@ function filePanelMarkdownPreviewRuntime() {
         }
         textarea.remove();
     };
-    const hydrateCodeCopyButtons = root => {
-        const codeBlocks = Array.from(root.querySelectorAll(
-            'pre:not(.file-browser-mermaid-source)'
-        ));
-        for (const pre of codeBlocks) {
-            if (!(pre instanceof HTMLElement) || pre.closest('.markdown-code-shell')) continue;
-            const code = pre.querySelector(':scope > code');
-            if (!(code instanceof HTMLElement)) continue;
-            const shell = document.createElement('div');
-            shell.className = 'markdown-code-shell';
-            pre.parentNode?.insertBefore(shell, pre);
-            shell.appendChild(pre);
-            const button = createButton('markdown-code-copy', '코드 복사', '복사');
-            button.addEventListener('click', async event => {
-                event.preventDefault();
-                event.stopPropagation();
-                await copyText(code.textContent || '');
-                const previousTimer = Number(button.dataset.copyFeedbackTimer || 0);
-                if (previousTimer) {
-                    window.clearTimeout(previousTimer);
-                }
-                button.classList.add('is-copied');
-                button.textContent = '복사됨';
-                button.setAttribute('aria-label', '코드 복사됨');
-                button.title = '복사됨';
-                const timer = window.setTimeout(() => {
-                    button.classList.remove('is-copied');
-                    button.textContent = '복사';
-                    button.setAttribute('aria-label', '코드 복사');
-                    button.title = '코드 복사';
-                    delete button.dataset.copyFeedbackTimer;
-                }, 1500);
-                button.dataset.copyFeedbackTimer = String(timer);
-            });
-            shell.appendChild(button);
-        }
-    };
     const getTitle = node => {
         const source = decodeSource(node?.dataset?.mermaidSource || '');
         const firstLine = source.split(/\r?\n/).map(line => line.trim()).find(Boolean) || '';
@@ -18459,7 +18422,7 @@ function filePanelMarkdownPreviewRuntime() {
         }
     };
     const hydrate = async () => {
-        hydrateCodeCopyButtons(document);
+        hydrateMarkdownCodeCopyButtons(document, copyText);
         const diagrams = Array.from(document.querySelectorAll('.file-browser-mermaid[data-mermaid-source]'));
         if (!diagrams.length) return;
         try {
@@ -18471,7 +18434,7 @@ function filePanelMarkdownPreviewRuntime() {
         if (!api || typeof api.initialize !== 'function' || typeof api.render !== 'function') return;
         api.initialize({
             startOnLoad: false,
-            fontFamily: getLocaleAwareUiFontFamily(),
+            fontFamily: getComputedStyle(document.body).fontFamily,
             theme: document.documentElement.dataset.theme === 'dark' ? 'dark' : 'default'
         });
         let serial = 0;
@@ -18504,7 +18467,11 @@ function filePanelMarkdownPreviewRuntime() {
 }
 
 function buildFilePanelMarkdownPreviewRuntimeScript() {
-    return `(${filePanelMarkdownPreviewRuntime.toString()})();`;
+    return [
+        hydrateMarkdownCodeCopyButtons.toString(),
+        showMarkdownCodeCopyFeedback.toString(),
+        `(${filePanelMarkdownPreviewRuntime.toString()})();`
+    ].join('\n');
 }
 
 function getCodexAppStylesheetUrl() {
@@ -18516,7 +18483,7 @@ function getCodexAppStylesheetUrl() {
     if (stylesheet instanceof HTMLLinkElement && stylesheet.href) {
         return stylesheet.href;
     }
-    return new URL('/static/css/app.css?v=250', window.location.href).href;
+    return new URL('/static/css/app.css?v=252', window.location.href).href;
 }
 
 function buildFilePanelMarkdownPreviewDocument(payload) {
@@ -18554,17 +18521,6 @@ function buildFilePanelMarkdownPreviewDocument(payload) {
         '<style>',
         'html{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;overflow-x:hidden;overflow-y:auto;}',
         'body.file-browser-markdown-preview-page{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:auto;}',
-        '.markdown-preview-shell{box-sizing:border-box;width:100%;max-width:980px;min-width:0;margin:0 auto;padding:28px 16px 48px;}',
-        '.markdown-preview-header{display:flex;flex-direction:column;gap:6px;margin:0 0 16px;padding:0 0 14px;border-bottom:1px solid var(--border);}',
-        '.markdown-preview-title{margin:0;color:var(--text-primary);font-size:20px;line-height:1.35;font-weight:800;overflow-wrap:anywhere;}',
-        '.markdown-preview-meta{color:var(--text-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere;}',
-        '.markdown-preview-note{display:inline-block;margin-top:2px;color:var(--danger);font-size:12px;font-weight:700;}',
-        'body.file-browser-markdown-preview-page .file-browser-markdown{box-sizing:border-box;width:100%;max-width:100%;min-width:0;padding:0;font-size:14px;line-height:1.62;overflow-x:hidden;overflow-wrap:break-word;}',
-        'body.file-browser-markdown-preview-page .file-browser-markdown>*{box-sizing:border-box;max-width:100%;min-width:0;}',
-        'body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid,body.file-browser-markdown-preview-page .file-browser-mermaid-source{max-width:100%;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;}',
-        'body.file-browser-markdown-preview-page .markdown-table-scroll{width:100%;overflow-y:hidden;}',
-        'body.file-browser-markdown-preview-page .markdown-table-scroll .markdown-table{width:max-content;min-width:100%;max-width:none;}',
-        '@media(max-width:640px){.markdown-preview-shell{max-width:100%;padding:12px 8px 24px;}.markdown-preview-header{gap:4px;margin-bottom:10px;padding-bottom:10px;}.markdown-preview-title{font-size:16px;line-height:1.25;}.markdown-preview-meta{font-size:12px;line-height:1.35;}body.file-browser-markdown-preview-page .file-browser-markdown{font-size:14px;line-height:1.5;}body.file-browser-markdown-preview-page .file-browser-markdown h1,body.file-browser-markdown-preview-page .file-browser-markdown h2,body.file-browser-markdown-preview-page .file-browser-markdown h3{margin:7px 0 5px;line-height:1.24;}body.file-browser-markdown-preview-page .file-browser-markdown h4,body.file-browser-markdown-preview-page .file-browser-markdown h5,body.file-browser-markdown-preview-page .file-browser-markdown h6{margin:6px 0 4px;line-height:1.26;}body.file-browser-markdown-preview-page .file-browser-markdown p{margin:5px 0 6px;}body.file-browser-markdown-preview-page .file-browser-markdown ul,body.file-browser-markdown-preview-page .file-browser-markdown ol{margin:5px 0 6px;padding-left:18px;}body.file-browser-markdown-preview-page .file-browser-markdown li+li{margin-top:2px;}body.file-browser-markdown-preview-page .file-browser-markdown blockquote{margin:6px 0;padding-left:9px;}body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid{margin:6px 0 8px;}body.file-browser-markdown-preview-page .file-browser-markdown th,body.file-browser-markdown-preview-page .file-browser-markdown td{padding:5px 6px;}}',
         '</style>',
         '</head>',
         `<body class="file-browser-markdown-preview-page" data-mermaid-src="${escapeHtml(mermaidUrl)}">`,
@@ -32643,8 +32599,8 @@ function hydrateRenderedMarkdown(container) {
     }
 }
 
-function hydrateMarkdownCodeCopyButtons(container) {
-    if (!container || !(container instanceof Element)) return;
+function hydrateMarkdownCodeCopyButtons(container, copyText = writeTextToClipboard) {
+    if (!(container instanceof Element) && !(container instanceof Document)) return;
     const codeBlocks = Array.from(container.querySelectorAll(
         'pre:not(.file-browser-mermaid-source)'
     ));
@@ -32658,6 +32614,12 @@ function hydrateMarkdownCodeCopyButtons(container) {
         pre.parentNode?.insertBefore(shell, pre);
         shell.appendChild(pre);
 
+        const language = Array.from(code.classList).find(name => name.startsWith('language-'));
+        const caption = document.createElement('span');
+        caption.className = 'markdown-code-language';
+        caption.textContent = language ? language.slice('language-'.length) : '코드';
+        shell.appendChild(caption);
+
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'markdown-code-copy';
@@ -32667,7 +32629,7 @@ function hydrateMarkdownCodeCopyButtons(container) {
         button.addEventListener('click', async event => {
             event.preventDefault();
             event.stopPropagation();
-            await writeTextToClipboard(code.textContent || '');
+            await copyText(code.textContent || '');
             showMarkdownCodeCopyFeedback(button);
         });
         shell.appendChild(button);

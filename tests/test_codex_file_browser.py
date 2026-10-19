@@ -1986,9 +1986,9 @@ def test_markdown_renderer_uses_local_gfm_parser_and_html_sanitizer():
     purifier_script = '/static/vendor/dompurify-3.4.12.min.js'
     assert (vendor_root / 'marked-18.0.6.umd.js').is_file()
     assert (vendor_root / 'dompurify-3.4.12.min.js').is_file()
-    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=213')
+    assert template.index(marked_script) < template.index(purifier_script) < template.index('/static/js/app.js?v=')
     assert "gfm: true" in app_js
-    assert "breaks: false" in app_js
+    assert "breaks: renderOptions.preserveLineBreaks" in app_js
     assert "purifier.sanitize(html" in app_js
     assert "'a', 'blockquote', 'br', 'code'" in app_js
     assert "ALLOW_DATA_ATTR: false" in app_js
@@ -2002,17 +2002,17 @@ def test_markdown_code_blocks_have_copy_buttons_in_chat_and_file_previews():
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
     template = (CODEX_APP_ROOT / 'templates' / 'index.html').read_text(encoding='utf-8')
 
-    assert 'function hydrateMarkdownCodeCopyButtons(container)' in app_js
+    assert 'function hydrateMarkdownCodeCopyButtons(container,' in app_js
     assert "pre:not(.file-browser-mermaid-source)" in app_js
     assert "const code = pre.querySelector(':scope > code');" in app_js
-    assert "await writeTextToClipboard(code.textContent || '');" in app_js
+    assert "await copyText(code.textContent || '');" in app_js
     assert "button.className = 'markdown-code-copy';" in app_js
     assert "button.textContent = '복사됨';" in app_js
-    assert 'hydrateCodeCopyButtons(document);' in app_js
+    assert 'hydrateMarkdownCodeCopyButtons(document, copyText);' in app_js
     assert '.markdown-code-copy {' in app_css
     assert '.markdown-code-shell > pre.markdown-code-block > code {' in app_css
-    assert '/static/css/app.css?v=205' in template
-    assert '/static/js/app.js?v=213' in template
+    assert '/static/css/app.css?v=' in template
+    assert '/static/js/app.js?v=' in template
 
 
 def test_chat_markdown_uses_html_whitespace_without_expanding_blank_lines():
@@ -2133,9 +2133,8 @@ def test_markdown_new_window_uses_loaded_app_stylesheet():
     assert 'const stylesheetUrl = getCodexAppStylesheetUrl();' in app_js
     assert 'html{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;overflow-x:hidden;overflow-y:auto;}' in app_js
     assert 'body.file-browser-markdown-preview-page{box-sizing:border-box;width:100%;max-width:100%;min-height:100%;height:auto;margin:0;background:var(--bg);color:var(--text-primary);font-family:var(--font-sans);overflow-x:hidden;' in app_js
-    assert '.markdown-preview-shell{box-sizing:border-box;width:100%;max-width:980px;min-width:0;margin:0 auto;padding:28px 16px 48px;}' in app_js
-    assert 'body.file-browser-markdown-preview-page .file-browser-markdown{box-sizing:border-box;width:100%;max-width:100%;min-width:0;padding:0;font-size:14px;line-height:1.62;overflow-x:hidden;' in app_js
-    assert 'body.file-browser-markdown-preview-page .file-browser-markdown{font-size:12.5px;line-height:1.5;}' in app_js
+    # Typography and responsive layout come from the loaded shared stylesheet.
+    assert '.markdown-preview-shell{' not in app_js
     assert "const opened = window.open('', '_blank');" in app_js
     assert 'opened.opener = null;' in app_js
     assert 'opened.location.href = objectUrl;' in app_js
@@ -2147,8 +2146,6 @@ def test_markdown_tables_use_content_based_column_widths():
     app_css = (CODEX_APP_ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
 
     assert '<div class="markdown-table-scroll"><table class="markdown-table">' in app_js
-    assert 'body.file-browser-markdown-preview-page .markdown-table-scroll{width:100%;overflow-y:hidden;}' in app_js
-    assert 'body.file-browser-markdown-preview-page .markdown-table-scroll,body.file-browser-markdown-preview-page pre,body.file-browser-markdown-preview-page .file-browser-mermaid,body.file-browser-markdown-preview-page .file-browser-mermaid-source{max-width:100%;overflow-x:auto;' in app_js
 
     markdown_rule_start = app_css.index('.file-browser-markdown {')
     markdown_rule = app_css[markdown_rule_start:app_css.index('}', markdown_rule_start)]

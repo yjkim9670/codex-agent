@@ -14,6 +14,13 @@ test('browser UI smoke check', async ({ page }) => {
         browserErrors.push(`page: ${error.message}`);
     });
 
+    if (process.env.CODEX_VERIFY_MARKDOWN === '1') {
+        // Document rendering is independent of the local repository's Git status.
+        await page.route('**/api/codex/git/status', route => route.fulfill({
+            json: {branch: 'markdown-fixture', changed_files_count: 0, changed_files: []},
+        }));
+    }
+
     const response = await page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
@@ -44,6 +51,9 @@ test('browser UI smoke check', async ({ page }) => {
     }
     if (process.env.CODEX_VERIFY_CONTROL_GEOMETRY === '1') {
         await require('./control-geometry.cjs').verifyControlGeometry(page, expect);
+    }
+    if (process.env.CODEX_VERIFY_MARKDOWN === '1') {
+        await require('./markdown.cjs').verifyMarkdown(page, expect);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

@@ -4199,7 +4199,7 @@ body.is-mermaid-diagram-viewer-open {
 .file-browser-spreadsheet-tab {
     flex: 0 0 auto;
     border: 1px solid var(--border);
-    border-radius: var(--radius-pill);
+    border-radius: 0;
     background: var(--surface-muted);
     color: var(--text-secondary);
     padding: 7px 12px;
@@ -4248,6 +4248,7 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .file-browser-spreadsheet-grid {
+    max-height: 65vh;
     flex: 1;
     min-height: 0;
     overflow: auto;
@@ -4257,7 +4258,7 @@ body.is-mermaid-diagram-viewer-open {
 }
 
 .file-browser-spreadsheet-table {
-    width: max(100%, var(--spreadsheet-preview-table-width, 100%));
+    width: var(--spreadsheet-preview-table-width, 100%);
     min-width: var(--spreadsheet-preview-table-width, 100%);
     border-collapse: separate;
     border-spacing: 0;
@@ -4276,16 +4277,74 @@ body.is-mermaid-diagram-viewer-open {
 .file-browser-spreadsheet-table th,
 .file-browser-spreadsheet-table td {
     box-sizing: border-box;
-    width: var(--spreadsheet-data-column-width, 144px);
-    min-width: var(--spreadsheet-data-column-width, 144px);
-    max-width: var(--spreadsheet-data-column-width, 144px);
-    padding: 7px 9px;
+    padding: 2px 5px;
     border-right: 1px solid var(--border);
     border-bottom: 1px solid var(--border);
-    vertical-align: top;
-    white-space: pre-wrap;
-    word-break: break-word;
-    overflow-wrap: anywhere;
+    vertical-align: bottom;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    height: 24px;
+}
+
+.file-browser-spreadsheet-table.has-original-format {
+    background: #ffffff;
+    color: #000000;
+}
+
+.file-browser-spreadsheet-table td.is-selected {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.file-browser-spreadsheet-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+    background: var(--surface-muted);
+    border: 1px solid var(--border);
+}
+
+.file-browser-spreadsheet-address {
+    min-width: 64px;
+    font: 12px var(--font-mono, monospace);
+}
+
+.file-browser-spreadsheet-content {
+    flex: 1 1 180px;
+    min-width: 0;
+    padding: 6px 8px;
+    resize: vertical;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+}
+
+.file-browser-spreadsheet-toolbar button {
+    min-height: 32px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 0;
+    background: var(--surface);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.file-browser-spreadsheet-toolbar button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.file-browser-spreadsheet-copy-status {
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .file-browser-spreadsheet-table thead th {
@@ -4318,16 +4377,6 @@ body.is-mermaid-diagram-viewer-open {
 .file-browser-spreadsheet-table tbody th {
     color: var(--text-secondary);
     font-weight: 600;
-}
-
-.file-browser-spreadsheet-table tr:last-child td,
-.file-browser-spreadsheet-table tr:last-child th {
-    border-bottom: 0;
-}
-
-.file-browser-spreadsheet-table tr td:last-child,
-.file-browser-spreadsheet-table tr th:last-child {
-    border-right: 0;
 }
 
 [data-theme="dark"] .file-browser-source-line.is-target {

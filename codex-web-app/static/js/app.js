@@ -18483,7 +18483,7 @@ function getCodexAppStylesheetUrl() {
     if (stylesheet instanceof HTMLLinkElement && stylesheet.href) {
         return stylesheet.href;
     }
-    return new URL('/static/css/app.css?v=252', window.location.href).href;
+    return new URL('/static/css/app.css?v=253', window.location.href).href;
 }
 
 function buildFilePanelMarkdownPreviewDocument(payload) {
@@ -18642,6 +18642,11 @@ function openFilePanelPreviewInNewWindow(variant) {
         : isFileBrowserOverlayOpen();
     if (panelOpen && markdownPayload) {
         return openFilePanelMarkdownPreviewInNewWindow(markdownPayload);
+    }
+    const spreadsheet = getFilePanelVariantConfig(normalizedVariant).getElements()?.viewerContent
+        ?.querySelector('.file-browser-spreadsheet');
+    if (panelOpen && typeof spreadsheet?.openSpreadsheetPreview === 'function') {
+        return spreadsheet.openSpreadsheetPreview();
     }
     const previewUrl = getFilePanelPreviewLaunchUrl(normalizedVariant);
     if (!previewUrl) {
@@ -23239,7 +23244,7 @@ function formatSpreadsheetColumnLabel(index) {
 
 function getSpreadsheetCellDisplayValue(cell) {
     if (!cell || typeof cell !== 'object') return '';
-    if (cell.w != null && cell.w !== '') {
+    if (cell.w != null) {
         return String(cell.w);
     }
     if (cell.v == null) {
@@ -23248,7 +23253,113 @@ function getSpreadsheetCellDisplayValue(cell) {
     return String(cell.v);
 }
 
-function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) {
+// SheetJS CE exposes dimensions and formatted values, but not full XLSX cell styles.
+// Read only presentation metadata from the already unpacked OOXML files.
+function readSpreadsheetPresentation(workbook) {
+    const files = workbook?.files;
+    if (!files || typeof DOMParser === 'undefined') return null;
+    const xml = path => {
+        const content = files[path]?.content;
+        if (!content) return null;
+        const source = typeof content === 'string' ? content : new TextDecoder().decode(content);
+        const doc = new DOMParser().parseFromString(source, 'application/xml');
+        return doc.getElementsByTagName('parsererror').length ? null : doc;
+    };
+    const nodes = (parent, tag) => Array.from(parent?.getElementsByTagNameNS('*', tag) || []);
+    const first = (parent, tag) => nodes(parent, tag)[0];
+    const styles = xml('xl/styles.xml');
+    if (!styles) return null;
+    const theme = first(xml('xl/theme/theme1.xml'), 'clrScheme');
+    const themeNames = ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'];
+    const indexed = [
+        '000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF',
+        '000000', 'FFFFFF', 'FF0000', '00FF00', '0000FF', 'FFFF00', 'FF00FF', '00FFFF',
+        '800000', '008000', '000080', '808000', '800080', '008080', 'C0C0C0', '808080',
+        '9999FF', '993366', 'FFFFCC', 'CCFFFF', '660066', 'FF8080', '0066CC', 'CCCCFF',
+        '000080', 'FF00FF', 'FFFF00', '00FFFF', '800080', '800000', '008080', '0000FF',
+        '00CCFF', 'CCFFFF', 'CCFFCC', 'FFFF99', '99CCFF', 'FF99CC', 'CC99FF', 'FFCC99',
+        '3366FF', '33CCCC', '99CC00', 'FFCC00', 'FF9900', 'FF6600', '666699', '969696',
+        '003366', '339966', '003300', '333300', '993300', '993366', '333399', '333333'
+    ];
+    const color = node => {
+        if (!node) return '';
+        let hex = node.getAttribute('rgb');
+        if (!hex && node.hasAttribute('theme')) {
+            const entry = first(theme, themeNames[Number(node.getAttribute('theme'))]);
+            const value = entry?.firstElementChild;
+            hex = value?.getAttribute('lastClr') || value?.getAttribute('val');
+        }
+        if (!hex && node.hasAttribute('indexed')) {
+            const index = Number(node.getAttribute('indexed'));
+            hex = indexed[index];
+        }
+        if (!/^(?:[0-9a-f]{8}|[0-9a-f]{6})$/i.test(hex || '')) return '';
+        hex = hex.slice(-6);
+        const tint = Math.max(-1, Math.min(1, Number(node.getAttribute('tint')) || 0));
+        return '#' + [0, 2, 4].map(offset => {
+            const channel = parseInt(hex.slice(offset, offset + 2), 16);
+            return Math.round(tint < 0 ? channel * (1 + tint) : channel + (255 - channel) * tint).toString(16).padStart(2, '0');
+        }).join('');
+    };
+    const fonts = nodes(first(styles, 'fonts'), 'font');
+    const fills = nodes(first(styles, 'fills'), 'fill');
+    const borders = nodes(first(styles, 'borders'), 'border');
+    const enabled = (node, tag) => {
+        const entry = first(node, tag);
+        return entry && !['0', 'false'].includes(entry.getAttribute('val'));
+    };
+    const cellStyles = nodes(first(styles, 'cellXfs'), 'xf').map(xf => {
+        const css = {};
+        const font = fonts[Number(xf.getAttribute('fontId')) || 0];
+        const fontColor = color(first(font, 'color'));
+        if (fontColor) css.color = fontColor;
+        const family = first(font, 'name')?.getAttribute('val');
+        if (family) css.fontFamily = '"' + family.replace(/["\\]/g, '') + '", sans-serif';
+        const size = Number(first(font, 'sz')?.getAttribute('val'));
+        if (size > 0) css.fontSize = `${Math.min(96, size)}pt`;
+        if (enabled(font, 'b')) css.fontWeight = '700';
+        if (enabled(font, 'i')) css.fontStyle = 'italic';
+        css.textDecoration = [enabled(font, 'u') ? 'underline' : '', enabled(font, 'strike') ? 'line-through' : ''].filter(Boolean).join(' ');
+        const pattern = first(fills[Number(xf.getAttribute('fillId')) || 0], 'patternFill');
+        if (pattern?.getAttribute('patternType') === 'solid') css.backgroundColor = color(first(pattern, 'fgColor'));
+        const border = borders[Number(xf.getAttribute('borderId')) || 0];
+        for (const side of ['top', 'right', 'bottom', 'left']) {
+            const edge = first(border, side);
+            const style = edge?.getAttribute('style');
+            if (!style || style === 'none') continue;
+            const line = style === 'double' ? 'double' : /dash/i.test(style) ? 'dashed' : style === 'dotted' ? 'dotted' : 'solid';
+            const width = style === 'double' || style === 'thick' ? 3 : /medium/i.test(style) ? 2 : 1;
+            css['border' + side[0].toUpperCase() + side.slice(1)] = `${width}px ${line} ${color(first(edge, 'color')) || '#000000'}`;
+        }
+        const alignment = first(xf, 'alignment');
+        const horizontal = alignment?.getAttribute('horizontal');
+        if (['left', 'center', 'right', 'justify'].includes(horizontal)) css.textAlign = horizontal;
+        const vertical = alignment?.getAttribute('vertical');
+        if (['top', 'center', 'bottom'].includes(vertical)) css.verticalAlign = vertical === 'center' ? 'middle' : vertical;
+        if (alignment?.getAttribute('wrapText') === '1') {
+            css.whiteSpace = 'pre-wrap';
+            css.overflowWrap = 'anywhere';
+        }
+        return css;
+    });
+    const relationships = nodes(xml('xl/_rels/workbook.xml.rels'), 'Relationship');
+    const sheetEntries = nodes(xml('xl/workbook.xml'), 'sheet');
+    return { cellStyles, sheetXml: sheetIndex => {
+        const id = sheetEntries[sheetIndex]?.getAttribute('r:id');
+        const relation = relationships.find(entry => entry.getAttribute('Id') === id);
+        if (!relation || relation.getAttribute('TargetMode') === 'External') return null;
+        const target = relation.getAttribute('Target') || '';
+        const parts = (target.startsWith('/') ? target.slice(1) : 'xl/' + target).split('/');
+        const normalized = [];
+        for (const part of parts) {
+            if (part === '..') normalized.pop();
+            else if (part && part !== '.') normalized.push(part);
+        }
+        return xml(normalized.join('/'));
+    } };
+}
+
+function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi, presentation = null) {
     const sheet = workbook?.Sheets?.[sheetName];
     const panel = document.createElement('section');
     panel.className = 'file-browser-spreadsheet-sheet';
@@ -23290,7 +23401,33 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
 
     const previewEndRow = Math.min(range.e.r, range.s.r + FILE_BROWSER_SPREADSHEET_MAX_ROWS - 1);
     const previewEndCol = Math.min(range.e.c, range.s.c + FILE_BROWSER_SPREADSHEET_MAX_COLS - 1);
-    const visibleColCount = (previewEndCol - range.s.c) + 1;
+    const widths = [];
+    for (let c = range.s.c; c <= previewEndCol; c += 1) {
+        const column = sheet['!cols']?.[c];
+        widths.push(Math.max(24, Math.min(1200, column?.wpx || (column?.wch ? column.wch * 7 + 5 : FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX))));
+    }
+    const sheetXml = presentation?.sheetXml(sheetIndex);
+    const stylesByAddress = new Map();
+    for (const cell of Array.from(sheetXml?.getElementsByTagNameNS('*', 'c') || [])) {
+        const address = cell.getAttribute('r');
+        if (!address) continue;
+        const position = xlsxApi.utils.decode_cell(address);
+        if (position.r >= range.s.r && position.r <= previewEndRow && position.c >= range.s.c && position.c <= previewEndCol) {
+            stylesByAddress.set(address, presentation.cellStyles[Number(cell.getAttribute('s')) || 0]);
+        }
+    }
+    const merged = new Map();
+    for (const merge of sheet['!merges'] || []) {
+        const startRow = Math.max(range.s.r, merge.s.r);
+        const startCol = Math.max(range.s.c, merge.s.c);
+        const endRow = Math.min(previewEndRow, merge.e.r);
+        const endCol = Math.min(previewEndCol, merge.e.c);
+        for (let r = startRow; r <= endRow; r += 1) {
+            for (let c = startCol; c <= endCol; c += 1) {
+                merged.set(`${r}:${c}`, { anchor: r === startRow && c === startCol, source: merge.s, rows: endRow - startRow + 1, cols: endCol - startCol + 1 });
+            }
+        }
+    }
     const isRowTruncated = previewEndRow < range.e.r;
     const isColTruncated = previewEndCol < range.e.c;
 
@@ -23303,12 +23440,42 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
     meta.textContent = metaParts.join(' · ');
     panel.appendChild(meta);
 
+    const toolbar = document.createElement('div');
+    toolbar.className = 'file-browser-spreadsheet-toolbar';
+    const addressDisplay = document.createElement('output');
+    addressDisplay.className = 'file-browser-spreadsheet-address';
+    addressDisplay.setAttribute('aria-label', '선택한 셀 주소');
+    addressDisplay.textContent = '셀 선택';
+    const contentDisplay = document.createElement('textarea');
+    contentDisplay.className = 'file-browser-spreadsheet-content';
+    contentDisplay.readOnly = true;
+    contentDisplay.rows = 2;
+    contentDisplay.setAttribute('aria-label', '선택한 셀 전체 내용');
+    const copyButton = document.createElement('button');
+    copyButton.type = 'button';
+    copyButton.textContent = '셀 복사';
+    copyButton.disabled = true;
+    const status = document.createElement('span');
+    status.className = 'file-browser-spreadsheet-copy-status';
+    status.setAttribute('role', 'status');
+    copyButton.addEventListener('click', async () => {
+        try {
+            await writeTextToClipboard(contentDisplay.value);
+            status.textContent = '복사했습니다.';
+        } catch (error) {
+            status.textContent = '복사하지 못했습니다. 셀 내용을 선택해 복사하세요.';
+        }
+    });
+    toolbar.append(addressDisplay, contentDisplay, copyButton, status);
+    panel.appendChild(toolbar);
     const grid = document.createElement('div');
     grid.className = 'file-browser-spreadsheet-grid';
+    grid.setAttribute('aria-label', `${sheetName} 시트`);
 
     const table = document.createElement('table');
     table.className = 'file-browser-spreadsheet-table';
-    table.style.setProperty('--spreadsheet-preview-table-width', `${FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX + (visibleColCount * FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX)}px`);
+    table.classList.toggle('has-original-format', !!presentation);
+    table.style.setProperty('--spreadsheet-preview-table-width', `${FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX + widths.reduce((sum, width) => sum + width, 0)}px`);
     table.style.setProperty('--spreadsheet-row-header-width', `${FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX}px`);
     table.style.setProperty('--spreadsheet-data-column-width', `${FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX}px`);
 
@@ -23319,6 +23486,7 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
     for (let colIndex = range.s.c; colIndex <= previewEndCol; colIndex += 1) {
         const dataCol = document.createElement('col');
         dataCol.className = 'file-browser-spreadsheet-data-col';
+        dataCol.style.width = `${widths[colIndex - range.s.c]}px`;
         colgroup.appendChild(dataCol);
     }
     table.appendChild(colgroup);
@@ -23337,19 +23505,67 @@ function buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi) 
     thead.appendChild(headerRow);
     table.appendChild(thead);
 
+    let selected = null;
+    const selectCell = element => {
+        selected?.classList.remove('is-selected');
+        if (selected) selected.tabIndex = -1;
+        selected = element;
+        selected.classList.add('is-selected');
+        selected.tabIndex = 0;
+        addressDisplay.textContent = selected.dataset.address;
+        contentDisplay.value = selected.textContent;
+        copyButton.disabled = false;
+        status.textContent = '';
+    };
+    table.addEventListener('copy', event => {
+        if (!selected || !event.clipboardData) return;
+        event.clipboardData.setData('text/plain', selected.textContent);
+        event.preventDefault();
+    });
     const tbody = document.createElement('tbody');
     for (let rowIndex = range.s.r; rowIndex <= previewEndRow; rowIndex += 1) {
         const row = document.createElement('tr');
+        const height = sheet['!rows']?.[rowIndex];
+        if (height?.hpx || height?.hpt) {
+            row.style.height = `${Math.max(12, Math.min(1000, height.hpt ? height.hpt * 4 / 3 : height.hpx))}px`;
+        }
         const rowHeader = document.createElement('th');
         rowHeader.className = 'file-browser-spreadsheet-row-header';
         rowHeader.textContent = String(rowIndex + 1);
         row.appendChild(rowHeader);
 
         for (let colIndex = range.s.c; colIndex <= previewEndCol; colIndex += 1) {
+            const merge = merged.get(`${rowIndex}:${colIndex}`);
+            if (merge && !merge.anchor) continue;
             const cellElement = document.createElement('td');
-            const cellAddress = xlsxApi.utils.encode_cell({ r: rowIndex, c: colIndex });
+            const cellAddress = xlsxApi.utils.encode_cell(merge?.source || { r: rowIndex, c: colIndex });
+            if (merge) {
+                cellElement.rowSpan = merge.rows;
+                cellElement.colSpan = merge.cols;
+            }
+            cellElement.dataset.address = cellAddress;
+            cellElement.tabIndex = rowIndex === range.s.r && colIndex === range.s.c ? 0 : -1;
+            cellElement.addEventListener('focus', () => selectCell(cellElement));
+            cellElement.addEventListener('click', () => { selectCell(cellElement); cellElement.focus({ preventScroll: true }); });
+            cellElement.addEventListener('keydown', event => {
+                const delta = { ArrowRight: [0, 1], ArrowLeft: [0, -1], ArrowDown: [1, 0], ArrowUp: [-1, 0] }[event.key];
+                if (!delta) return;
+                event.preventDefault();
+                let r = rowIndex + (delta[0] > 0 ? cellElement.rowSpan : delta[0]);
+                let c = colIndex + (delta[1] > 0 ? cellElement.colSpan : delta[1]);
+                r = Math.max(range.s.r, Math.min(previewEndRow, r));
+                c = Math.max(range.s.c, Math.min(previewEndCol, c));
+                const targetMerge = merged.get(`${r}:${c}`);
+                const target = xlsxApi.utils.encode_cell(targetMerge?.source || { r, c });
+                const next = Array.from(tbody.querySelectorAll('td')).find(td => td.dataset.address === target);
+                next?.focus();
+            });
+            const cellStyle = stylesByAddress.get(cellAddress);
+            if (cellStyle) Object.assign(cellElement.style, cellStyle);
+            if (!cellElement.style.textAlign && ['n', 'd'].includes(sheet[cellAddress]?.t)) cellElement.style.textAlign = 'right';
             const cellValue = getSpreadsheetCellDisplayValue(sheet[cellAddress]);
             cellElement.textContent = cellValue;
+            cellElement.title = `${cellAddress}: ${cellValue}`;
             row.appendChild(cellElement);
         }
         tbody.appendChild(row);
@@ -23376,9 +23592,32 @@ function activateSpreadsheetSheetPreview(wrapper, targetIndex) {
     });
 }
 
+function openSpreadsheetPreviewInNewWindow(workbook, xlsxApi) {
+    const opened = window.open('', '_blank');
+    if (!opened) {
+        showToast('팝업이 차단되어 스프레드시트 미리보기를 열지 못했습니다.', { tone: 'error', durationMs: 3200 });
+        return false;
+    }
+    opened.opener = null;
+    const doc = opened.document;
+    doc.title = '스프레드시트 미리보기';
+    doc.documentElement.lang = 'ko';
+    doc.documentElement.dataset.theme = document.documentElement.dataset.theme || 'light';
+    const stylesheet = doc.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = getCodexAppStylesheetUrl();
+    doc.head.appendChild(stylesheet);
+    const layout = doc.createElement('style');
+    layout.textContent = 'html,body{height:auto;min-height:100%;overflow:auto}';
+    doc.head.appendChild(layout);
+    doc.body.appendChild(buildSpreadsheetPreview(workbook, xlsxApi));
+    return true;
+}
+
 function buildSpreadsheetPreview(workbook, xlsxApi) {
     const wrapper = document.createElement('section');
     wrapper.className = 'file-browser-spreadsheet';
+    wrapper.openSpreadsheetPreview = () => openSpreadsheetPreviewInNewWindow(workbook, xlsxApi);
 
     const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
     if (sheetNames.length === 0) {
@@ -23389,6 +23628,7 @@ function buildSpreadsheetPreview(workbook, xlsxApi) {
         return wrapper;
     }
 
+    const presentation = readSpreadsheetPresentation(workbook);
     const visibleSheetNames = sheetNames.slice(0, FILE_BROWSER_SPREADSHEET_MAX_SHEETS);
     const summary = document.createElement('div');
     summary.className = 'file-browser-spreadsheet-summary';
@@ -23396,6 +23636,8 @@ function buildSpreadsheetPreview(workbook, xlsxApi) {
     if (sheetNames.length > FILE_BROWSER_SPREADSHEET_MAX_SHEETS) {
         summaryParts.push(`앞 ${FILE_BROWSER_SPREADSHEET_MAX_SHEETS}개만 표시`);
     }
+    summaryParts.push('읽기 전용 · 차트·피벗·조건부 서식·수식 재계산 미지원');
+    if (!presentation) summaryParts.push('일부 원본 서식을 표시하지 못할 수 있습니다');
     summary.textContent = summaryParts.join(' · ');
     wrapper.appendChild(summary);
 
@@ -23422,7 +23664,7 @@ function buildSpreadsheetPreview(workbook, xlsxApi) {
     const body = document.createElement('div');
     body.className = 'file-browser-spreadsheet-body';
     visibleSheetNames.forEach((sheetName, sheetIndex) => {
-        body.appendChild(buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi));
+        body.appendChild(buildSpreadsheetSheetPreview(workbook, sheetName, sheetIndex, xlsxApi, presentation));
     });
     wrapper.appendChild(body);
     activateSpreadsheetSheetPreview(wrapper, 0);
@@ -23465,7 +23707,9 @@ async function renderSpreadsheetPreviewIntoContainer(container, previewUrl, rend
             type: 'array',
             cellFormula: false,
             cellHTML: false,
-            cellStyles: false
+            cellStyles: true,
+            cellNF: true,
+            bookFiles: true
         });
         const spreadsheetView = buildSpreadsheetPreview(workbook, xlsxApi);
         if (container.dataset.renderToken !== currentToken) {
@@ -32416,6 +32660,26 @@ function normalizeMarkdownRenderOptions(options = {}) {
     };
 }
 
+function parseCodexFileCitation(source) {
+    const match = String(source || '').match(/^:codex-file-citation\{((?:\s*[A-Za-z][\w-]*\s*=\s*"(?:\\.|[^"\\\r\n])*"\s*)+)\}/);
+    if (!match) return null;
+    const attributes = new Map();
+    try {
+        for (const attribute of match[1].matchAll(/([A-Za-z][\w-]*)\s*=\s*("(?:\\.|[^"\\])*")/g)) {
+            if (attributes.has(attribute[1])) return null;
+            attributes.set(attribute[1], JSON.parse(attribute[2]));
+        }
+    } catch (error) {
+        return null;
+    }
+    const path = attributes.get('path');
+    if (!path || /[\r\n\u0000]/.test(path)) return null;
+    const target = resolveAbsoluteFilesystemTargetFromMarkdownHref(path);
+    if (!target?.absolutePath) return null;
+    const label = target.absolutePath.replace(/\\/g, '/').split('/').pop() || target.absolutePath;
+    return { type: 'codexFileCitation', raw: match[0], path, label };
+}
+
 function renderMarkdown(text, options = {}) {
     const normalized = String(text || '').replace(/\r\n/g, '\n');
     const renderOptions = normalizeMarkdownRenderOptions(options);
@@ -32452,7 +32716,17 @@ function renderMarkdown(text, options = {}) {
         return defaultImageRenderer({ ...token, href });
     };
 
-    const parsed = markedApi.parse(normalized, {
+    const parser = new markedApi.Marked({ extensions: [{
+        name: 'codexFileCitation',
+        level: 'inline',
+        start: source => source.indexOf(':codex-file-citation{'),
+        tokenizer(source) {
+            if (this.lexer.state.inLink) return undefined;
+            return parseCodexFileCitation(source) || undefined;
+        },
+        renderer: token => renderMarkdownLink(token.label, token.path)
+    }] });
+    const parsed = parser.parse(normalized, {
         async: false,
         breaks: renderOptions.preserveLineBreaks,
         gfm: true,
@@ -33816,6 +34090,15 @@ function renderInlineMarkdownSpans(text) {
         if (codeSpan) {
             buffer += codeSpan.text;
             index = codeSpan.nextIndex;
+            continue;
+        }
+
+        const citation = source.startsWith(':codex-file-citation{', index)
+            ? parseCodexFileCitation(source.slice(index))
+            : null;
+        if (citation) {
+            buffer += reserveMarkdownInlineHtmlToken(inlineTokens, renderMarkdownLink(citation.label, citation.path));
+            index += citation.raw.length;
             continue;
         }
 

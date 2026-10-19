@@ -352,3 +352,83 @@ def test_redirected_progress_only_logs_state_changes(monkeypatch):
         progress.update('submitting', session=1)
     assert output.getvalue().count('\n') == 2
     assert '\r' not in output.getvalue()
+
+
+def test_failed_exit_collects_error_and_persisted_message(fake_server, tmp_path, monkeypatch):
+    original = runner.Client._request
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'private-provider-key')
+
+    def failed_stream(self, method, path, *args, **kwargs):
+        result = original(self, method, path, *args, **kwargs)
+        if path.startswith('/streams/'):
+            result.update(exit_code=1, error='gateway rejected private-provider-key',
+                          output='provider partial answer', events=[{'type': 'error', 'message': 'bad model'}])
+        return result
+
+    monkeypatch.setattr(runner.Client, '_request', failed_stream)
+    out = tmp_path / 'report'
+    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude',
+                        '--output-directory', str(out)]) == 1
+    result = json.loads((out / 'results.json').read_text())[0]
+    assert result['failure_stream_diagnostics']['error'] == 'gateway rejected [REDACTED]'
+    assert result['failure_stream_diagnostics']['exit_code'] == 1
+    assert result['failure_assistant_messages'][0]['id'] == 'answer'
+    assert 'AssertionError: Stream exited unsuccessfully' in result['exception_traceback']
+    trace = [json.loads(line) for line in (out / result['trace_file']).read_text().splitlines()]
+    assert any(e['event'] == 'failure_assistant_messages' for e in trace)
+    assert len([e for e in trace if e['event'] == 'stream_diagnostics']) == 1
+    assert 'private-provider-key' not in ''.join(p.read_text(encoding='utf-8-sig') for p in out.iterdir())
+    assert fake_server.settings['agent_backend'] == 'dtgpt'
+
+
+def test_http_error_body_is_logged_and_redacted(monkeypatch):
+    from urllib.error import HTTPError
+    client = runner.Client('http://localhost')
+    entries = []
+    client.trace = lambda event, **fields: entries.append(dict(event=event, **fields))
+
+    def reject(*args, **kwargs):
+        raise HTTPError('http://localhost', 502, 'Bad Gateway', {},
+                        io.BytesIO(b'{"error":"unsupported model", "api_key":"private-value"}'))
+
+    monkeypatch.setattr(client.opener, 'open', reject)
+    with pytest.raises(RuntimeError, match='HTTP 502'):
+        client.request('GET', '/streams/test')
+    status = next(e for e in entries if e['event'] == 'http_status')
+    assert status['status'] == 502
+    assert 'unsupported model' in status['body']
+    assert 'private-value' not in status['body']
+
+
+def test_diagnostic_redaction_and_tail_limits(monkeypatch):
+    monkeypatch.setenv('WORKBENCH_TEST_AUTHORIZATION', 'Bearer private-auth')
+    text = 'Bearer private-auth\nAuthorization: Bearer other-auth\nCookie: session=private-cookie\n'
+    redacted = runner.diagnostic_text(text)
+    assert 'private-auth' not in redacted
+    assert 'other-auth' not in redacted
+    assert 'private-cookie' not in redacted
+    assert runner.diagnostic_text('x' * 20000 + 'failure tail').endswith('failure tail')
+    assert runner.diagnostic_text('x' * 20000).startswith('[TRUNCATED:')
+    assert runner.response_diagnostics({'prompt': 'private prompt', 'account_id': 'private account',
+                                        'error': 'bad model'}) == {'error': 'bad model'}
+
+
+def test_diagnostic_collection_failure_preserves_original_failure(fake_server, tmp_path, monkeypatch):
+    original = runner.Client._request
+
+    def broken_session(self, method, path, *args, **kwargs):
+        if method == 'GET' and path.startswith('/sessions/'):
+            raise RuntimeError('Session diagnostics unavailable')
+        result = original(self, method, path, *args, **kwargs)
+        if path.startswith('/streams/'):
+            result['exit_code'] = 1
+        return result
+
+    monkeypatch.setattr(runner.Client, '_request', broken_session)
+    out = tmp_path / 'report'
+    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude',
+                        '--output-directory', str(out)]) == 1
+    result = json.loads((out / 'results.json').read_text())[0]
+    assert result['detail'] == 'Stream exited unsuccessfully'
+    assert 'diagnostic_collection_error' in (out / result['trace_file']).read_text()
+    assert json.loads((out / 'summary.json').read_text())['settings_restored']

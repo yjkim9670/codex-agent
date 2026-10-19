@@ -50,9 +50,13 @@
 
 `-Direct off|failed|all`은 추가 모델 호출 옵션이다. 실행한 PC에 저장소의 Python 의존성과 CLI/인증/환경변수가 있어야 한다. Workbench 서버와 다른 PC에서 실행하면 직접 비교는 해당 PC 환경을 검사하므로 동일 환경의 재현이 아니다. Codex/Claude는 기존 `_build_agent_command`를, OpenCode는 `_prepare_agent_execution`과 `_execute_opencode_prompt`를 재사용한다. 직접 실행은 입력 인자/API payload 생성 경로를 재사용했다는 증거이며 원격 모델의 내부 reasoning 사용까지 증명하지 않는다. 직접 실행 성공은 Workbench 실패를 PASS로 바꾸지 않는다. 타임아웃은 로컬 프로세스 트리를 종료하며 OpenCode 원격 세션은 별도 정리가 필요할 수 있다.
 
-결과 폴더에는 `results.json`, UTF-8 BOM `results.csv`, 민감한 응답 본문을 제외한 `diagnostics.jsonl`, `summary.json`, `restore-settings.json`이 생성된다. 결과는 세션 ID와 worktree 정보를 포함한다. 재검토할 수 있도록 테스트 세션·첨부·worktree는 보존한다. 확인 후 Workbench UI/API로 정리한다. 종료 코드: 0 전체 성공, 1 실패/미지원/타임아웃/복원 실패, 2 실행 자체 오류, 130 사용자 중단. `-ListOnly`는 조회가 성공하면 미지원 항목이 있어도 0이다.
+결과 폴더에는 `results.json`, UTF-8 BOM `results.csv`, 상세 진단을 포함한 `diagnostics.jsonl`, `summary.json`, `restore-settings.json`이 생성된다. 결과는 세션 ID와 worktree 정보를 포함한다. 재검토할 수 있도록 테스트 세션·첨부·worktree는 보존한다. 확인 후 Workbench UI/API로 정리한다. 종료 코드: 0 전체 성공, 1 실패/미지원/타임아웃/복원 실패, 2 실행 자체 오류, 130 사용자 중단. `-ListOnly`는 조회가 성공하면 미지원 항목이 있어도 0이다.
 
-각 검사에는 `case-001.jsonl` 형태의 실시간 추적 파일도 생성된다. HTTP 시작/완료와 소요 시간, HTTP 오류 코드 또는 예외 종류, 검사 단계, 스트림 상태를 요청마다 즉시 기록하므로 테스트가 중간에 종료돼도 앞선 기록을 확인할 수 있다. `at`은 서버 타임라인과 대조할 수 있는 Unix 밀리초이며 `elapsed`는 검사 시작 이후 초 단위 시간이다. 요청/응답 본문, 인증 헤더, 환경변수 값은 추적 파일에 기록하지 않는다. `-Direct`의 내부 CLI 실행은 이 HTTP 추적 대상에 포함되지 않는다.
+각 검사에는 `case-001.jsonl` 형태의 실시간 추적 파일도 생성된다. HTTP 시작/완료와 소요 시간, HTTP 오류 코드와 오류 본문, 검사 단계, 스트림 상태를 즉시 기록하므로 테스트가 중간에 종료돼도 앞선 기록을 확인할 수 있다. `at`은 서버 타임라인과 대조할 수 있는 Unix 밀리초이며 `elapsed`는 검사 시작 이후 초 단위 시간이다. `stream_diagnostics`에는 스트림의 stdout(`output`), stderr/서버 오류(`error`), 이벤트와 종료 정보가 변경될 때마다 남는다. `persisted_message`에는 검증한 assistant 메시지가, `exception`에는 실패 예외와 traceback이 남는다. HTTP 오류 본문은 최대 64 KiB를 읽는다.
+
+실패 시 정리 전에 스트림과 테스트 세션을 추가 조회해 `results.json`의 `failure_stream_diagnostics`, `failure_assistant_messages`, `exception_traceback`에 저장한다. 추가 조회가 실패해도 원래 실패와 설정 복원 절차를 유지한다. 정리 후 상태는 `last_stream_diagnostics`로 구분한다. 직접 비교(`-Direct`)도 CLI stdout/stderr와 종료 코드를 결과의 `direct`에 저장하며, worker 오류와 타임아웃에도 수집 가능한 출력을 남긴다.
+
+본문 필드는 각각 마지막 16,384자를 보존하고 생략 표시를 붙인다. 인증 환경변수, 이름에 TOKEN/SECRET/PASSWORD/API_KEY가 포함된 환경변수의 값, 일반적인 Bearer/인증 헤더/키 표현은 저장 전에 마스킹한다. 요청 프롬프트, 전체 세션, user 메시지, 전체 설정/환경변수/헤더는 저장하지 않는다. 다만 모델 출력이나 HTTP 오류 본문에 포함된 임의의 개인정보까지 자동 제거되는 것은 아니므로 공유 전 본문을 확인한다. 원인 분석을 요청할 때는 **`results.json`과 실패 항목의 `trace_file`에 지정된 `case-NNN.jsonl`**을 함께 전달하면 된다. `results.csv`만으로는 상세 원인을 확인할 수 없다. 기존 실행 명령을 그대로 사용하면 추가 진단이 기본 수집되며 테스트 스크립트만 변경했으므로 서버 재시작은 필요 없다.
 
 메타데이터 검사는 저장 메시지의 최상위 `response_*` 필드를 읽으며 중첩 `metadata` 표현도 지원한다. 스트림 조회의 백엔드는 `agent_backend`도 허용한다. `metadata_check` 추적 이벤트에는 검증 위치(`source`)와 예상/실제 백엔드·모델·reasoning만 기록한다. `results.json`의 `metadata_source`로 시작 응답, 완료 스트림, 저장 메시지 중 어느 단계에서 불일치가 발생했는지 구분할 수 있다. 서버는 reasoning만 전달된 요청에서도 선택 모델을 별도로 복사해 스트림에 `claude-default`/`codex-default`가 잘못 기록되는 것을 방지한다.
 

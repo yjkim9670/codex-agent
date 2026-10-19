@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import shutil
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import uuid
 import unicodedata
 from urllib.error import HTTPError
@@ -44,13 +46,15 @@ class Client:
         except Exception as exc:
             if self.trace:
                 self.trace('http_error', method=method, path=path.split('?')[0],
-                           seconds=round(time.monotonic() - started, 3), error_type=type(exc).__name__)
+                           seconds=round(time.monotonic() - started, 3), error_type=type(exc).__name__,
+                           detail=diagnostic_text(str(exc)))
             raise
         if self.trace:
             self.trace('http_complete', method=method, path=path.split('?')[0],
                        seconds=round(time.monotonic() - started, 3))
             if path.startswith('/streams/'):
                 self.trace('stream_snapshot', snapshot=stream_snapshot(result))
+                self.trace('stream_diagnostics', diagnostics=response_diagnostics(result))
         return result
 
     def _request(self, method, path, payload=None, raw=None, content_type=None, timeout=None):
@@ -70,9 +74,10 @@ class Client:
                                           headers=headers, method=method), timeout=timeout or self.timeout) as response:
                 result = json.load(response)
         except HTTPError as exc:
-            # Do not log server bodies: they can contain credentials/prompts.
+            body = exc.read(65536).decode('utf-8', errors='replace')
             if self.trace:
-                self.trace('http_status', status=exc.code)
+                self.trace('http_status', status=exc.code, body=diagnostic_text(body),
+                           body_read_limit_bytes=65536)
             raise RuntimeError(f'{method} {path.split("?")[0]}: HTTP {exc.code}') from None
         if not isinstance(result, dict):
             raise RuntimeError('Expected JSON object (check authentication/base URL)')
@@ -137,6 +142,39 @@ def stream_snapshot(data):
     result['diagnostic_timeline'] = [
         {key: entry[key] for key in ('phase', 'at') if key in entry}
         for entry in (data.get('diagnostic_timeline') or [])[-64:] if isinstance(entry, dict)]
+    return result
+
+
+def diagnostic_text(value, limit=16384):
+    """Redact known secrets before retaining the tail of potentially large output."""
+    value = str(value)
+    for name, secret in os.environ.items():
+        if secret and (name in ('WORKBENCH_TEST_COOKIE', 'WORKBENCH_TEST_AUTHORIZATION')
+                       or any(part in name.upper() for part in ('TOKEN', 'SECRET', 'PASSWORD', 'API_KEY'))):
+            value = value.replace(secret, '[REDACTED]')
+    value = re.sub(r'(?i)(\bBearer\s+)[^\s\"\',;]+', r'\1[REDACTED]', value)
+    value = re.sub(r'''(?ix)(["']?(?:authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|password|secret)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\r\n,}]+)''',
+                   r'\1[REDACTED]', value)
+    if len(value) > limit:
+        return f'[TRUNCATED: {len(value) - limit} characters omitted]\n' + value[-limit:]
+    return value
+
+
+def response_diagnostics(data):
+    """Only export diagnostic fields, never full sessions/settings or user messages."""
+    fields = ('output', 'error', 'content', 'events', 'exit_code', 'finalize_reason',
+              'worker_error_type', 'assistant_message_id', 'id', 'role',
+              'response_agent_backend', 'agent_backend', 'response_model', 'response_reasoning_effort')
+    result = {}
+    for key in fields:
+        if key in data:
+            value = data[key]
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False)
+            result[key] = diagnostic_text(value) if isinstance(value, str) else value
+    nested = data.get('metadata')
+    if isinstance(nested, dict):
+        result['metadata'] = response_diagnostics(nested)
     return result
 
 
@@ -246,8 +284,15 @@ def run_case(client, row, args, scenario='echo'):
     progress = getattr(args, 'progress', None)
     trace_path = getattr(args, 'trace_path', None)
     previous_trace = client.trace
+    last_diagnostics = None
 
     def trace(event, **fields):
+        nonlocal last_diagnostics
+        if event == 'stream_diagnostics':
+            result['last_stream_diagnostics'] = fields['diagnostics']
+            if fields['diagnostics'] == last_diagnostics:
+                return
+            last_diagnostics = fields['diagnostics']
         entry = dict(event=event, at=int(time.time() * 1000),
                      elapsed=round(time.monotonic() - started, 3), **fields)
         if event == 'stream_snapshot':
@@ -309,6 +354,7 @@ def run_case(client, row, args, scenario='echo'):
         except (TimeoutError, OSError):
             result['cleanup_error'] = 'Message start/completion uncertain; inspect test session before continuing'
             raise
+        trace('submission_diagnostics', diagnostics=response_diagnostics(data))
         if use_stream:
             stream_id = data['stream_id']
             result['stream_id'] = stream_id
@@ -344,6 +390,8 @@ def run_case(client, row, args, scenario='echo'):
         session = client.request('GET', f'/sessions/{session_id}')['session']
         message_id = data.get('assistant_message_id') or (data.get('assistant_message') or {}).get('id')
         message = next((m for m in session['messages'] if m.get('id') == message_id), None)
+        if message:
+            trace('persisted_message', diagnostics=response_diagnostics(message))
         if not message or message.get('role') != 'assistant' or token not in (message.get('content') or ''):
             raise AssertionError('Final persisted assistant response missing expected token/path')
         if message.get('error') or (message.get('metadata') or {}).get('error'):
@@ -376,6 +424,25 @@ def run_case(client, row, args, scenario='echo'):
         trace('case_error', error_type=type(exc).__name__, phase=result['failure_phase'])
         result.update(status='TIMEOUT' if isinstance(exc, TimeoutError) else 'FAIL',
                       detail=safe_detail(str(exc)))
+        result['exception_traceback'] = diagnostic_text(traceback.format_exc())
+        trace('exception', detail=diagnostic_text(str(exc)), traceback=result['exception_traceback'])
+        # Preserve evidence before stop/cleanup can change the stream's error/output.
+        if result.get('last_stream_diagnostics') is not None:
+            result['failure_stream_diagnostics'] = dict(result['last_stream_diagnostics'])
+        if stream_id:
+            try:
+                failure = client.request('GET', '/streams/' + quote(stream_id, safe=''))
+                result['failure_stream_diagnostics'] = response_diagnostics(failure)
+            except Exception as diagnostic_exc:
+                trace('diagnostic_collection_error', source='stream', detail=diagnostic_text(str(diagnostic_exc)))
+        if session_id:
+            try:
+                failed_session = client.request('GET', f'/sessions/{session_id}')['session']
+                result['failure_assistant_messages'] = [response_diagnostics(m)
+                    for m in failed_session.get('messages', []) if m.get('role') == 'assistant'][-8:]
+                trace('failure_assistant_messages', messages=result['failure_assistant_messages'])
+            except Exception as diagnostic_exc:
+                trace('diagnostic_collection_error', source='session', detail=diagnostic_text(str(diagnostic_exc)))
     finally:
         if stream_id and not settled:
             update('stopping-stream')
@@ -407,11 +474,7 @@ def run_case(client, row, args, scenario='echo'):
 
 
 def safe_detail(value):
-    for name in ('WORKBENCH_TEST_COOKIE', 'WORKBENCH_TEST_AUTHORIZATION'):
-        secret = os.environ.get(name)
-        if secret:
-            value = value.replace(secret, '[REDACTED]')
-    return value[:700]
+    return diagnostic_text(value, limit=700)
 
 
 def direct_worker(row):
@@ -428,6 +491,7 @@ def direct_worker(row):
         output, error, _, _ = service._execute_opencode_prompt(prompt, context, row['model'])
         ok = not error and token in (output or '')
         evidence = 'production_opencode_payload_builder'
+        diagnostics = {'output': output, 'error': error}
     else:
         _, cmd = service._build_agent_command(prompt, agent_backend=row['backend'],
             model_override=row['model'], reasoning_override=row['reasoning'],
@@ -447,9 +511,10 @@ def direct_worker(row):
                                    errors='replace', capture_output=True, cwd=str(service.WORKSPACE_DIR))
         ok = completed.returncode == 0 and token in completed.stdout
         evidence = 'production_cli_argument_builder'
-    # Only emit a verdict; CLI output may contain private environment context.
+        diagnostics = {'output': completed.stdout, 'error': completed.stderr, 'exit_code': completed.returncode}
     print(json.dumps({'status': 'PASS' if ok else 'FAIL', 'evidence': evidence,
-                      'forwarded_model': forwarded_model, 'forwarded_reasoning': forwarded_reasoning}))
+                      'forwarded_model': forwarded_model, 'forwarded_reasoning': forwarded_reasoning,
+                      'diagnostics': response_diagnostics(diagnostics)}))
 
 
 def run_direct(row, timeout):
@@ -457,19 +522,25 @@ def run_direct(row, timeout):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             start_new_session=os.name != 'nt')
     try:
-        stdout, _ = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(timeout=timeout)
         if proc.returncode:
-            return {'status': 'FAIL', 'detail': 'Direct worker failed; check local Python dependencies/CLI configuration'}
+            return {'status': 'FAIL', 'detail': 'Direct worker failed; check local Python dependencies/CLI configuration',
+                    'exit_code': proc.returncode, 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
+                    'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
         return json.loads(stdout.decode('utf-8').splitlines()[-1])
     except subprocess.TimeoutExpired:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], capture_output=True)
         else:
             os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
-        return {'status': 'TIMEOUT', 'detail': 'Direct process tree terminated; OpenCode remote cleanup may be needed'}
+        stdout, stderr = proc.communicate()
+        return {'status': 'TIMEOUT', 'detail': 'Direct process tree terminated; OpenCode remote cleanup may be needed',
+                'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
+                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
     except (ValueError, IndexError):
-        return {'status': 'FAIL', 'detail': 'Invalid direct worker verdict'}
+        return {'status': 'FAIL', 'detail': 'Invalid direct worker verdict',
+                'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
+                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
 
 
 def write_json(path, data):

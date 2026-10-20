@@ -5,6 +5,8 @@ __pycache__/
 model_agent_env.local.sh
 workspace/
 # runtime agent state snapshots/logs
+.agent_state/
+.agent_state_company/
 workspace/.agent_state/
 workspace/*_chat_sessions.json
 workspace/*_settings.json

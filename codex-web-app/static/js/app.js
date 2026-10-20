@@ -330,6 +330,24 @@ const FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60;
 const FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
 const FILE_BROWSER_HTML_PREVIEW_SANDBOX = 'allow-scripts allow-forms';
 const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;
+const FILE_BROWSER_PREVIEW_SETTINGS_KEY = 'codex-file-preview-settings-v1';
+const FILE_BROWSER_PREVIEW_BYTE_OPTIONS = [64, 256, 512, 1024].map(value => value * 1024);
+const FILE_BROWSER_PREVIEW_LINE_OPTIONS = [750, 2000, 5000];
+let fileBrowserPreviewSettings = { readBytes: FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES, lines: 750 };
+
+function normalizeFileBrowserPreviewSettings(value) {
+    return {
+        readBytes: FILE_BROWSER_PREVIEW_BYTE_OPTIONS.includes(Number(value?.readBytes))
+            ? Number(value.readBytes) : FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES,
+        lines: FILE_BROWSER_PREVIEW_LINE_OPTIONS.includes(Number(value?.lines)) ? Number(value.lines) : 750
+    };
+}
+
+function getFileBrowserPreviewDisplayLimits() {
+    return { maxLines: fileBrowserPreviewSettings.lines,
+        maxChars: Math.ceil(32 * 1024 * fileBrowserPreviewSettings.lines / 750) };
+}
+
 const FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES = 4 * 1024 * 1024;
 // Keep the switch to the lightweight text preview aligned with its display limits.
 // Otherwise medium-sized, line-dense files take the expensive full-DOM path.
@@ -2320,6 +2338,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const uiSettingsFontInputs = Array.from(document.querySelectorAll('input[name="codex-ui-font"]'));
     const uiSettingsViewInputs = Array.from(document.querySelectorAll('input[name="codex-ui-view-mode"]'));
     const uiSettingsViewDetected = document.getElementById('codex-ui-view-detected');
+    const previewBytesInput = document.getElementById('codex-file-preview-bytes');
+    const previewLinesInput = document.getElementById('codex-file-preview-lines');
+    const applyPreviewSettings = value => {
+        fileBrowserPreviewSettings = normalizeFileBrowserPreviewSettings(value);
+        if (previewBytesInput) previewBytesInput.value = String(fileBrowserPreviewSettings.readBytes);
+        if (previewLinesInput) previewLinesInput.value = String(fileBrowserPreviewSettings.lines);
+    };
+    try {
+        applyPreviewSettings(JSON.parse(window.localStorage.getItem(FILE_BROWSER_PREVIEW_SETTINGS_KEY)));
+    } catch (_error) { applyPreviewSettings(null); }
+    for (const input of [previewBytesInput, previewLinesInput]) {
+        input?.addEventListener('change', () => {
+            applyPreviewSettings({ readBytes: previewBytesInput.value, lines: previewLinesInput.value });
+            try { window.localStorage.setItem(FILE_BROWSER_PREVIEW_SETTINGS_KEY, JSON.stringify(fileBrowserPreviewSettings)); } catch (_error) {}
+        });
+    }
     const uiSettingsReset = document.getElementById('codex-ui-settings-reset');
     const uiSettingsDone = document.getElementById('codex-ui-settings-done');
     const accountCreateBtn = document.getElementById('codex-account-create');
@@ -2664,6 +2698,8 @@ document.addEventListener('DOMContentLoaded', () => {
         input.addEventListener('change', () => applyUiViewMode(input.value));
     });
     uiSettingsReset?.addEventListener('click', () => {
+        applyPreviewSettings(null);
+        try { window.localStorage.removeItem(FILE_BROWSER_PREVIEW_SETTINGS_KEY); } catch (_error) {}
         uiScalesByViewMode = {};
         applyUiScale(defaultUiScaleForViewMode(resolveUiViewMode()), { persist: false });
         try {
@@ -21336,7 +21372,7 @@ async function fetchFileBrowserDirectory(root, path = '') {
     });
 }
 
-async function fetchFileBrowserFile(root, path) {
+async function fetchFileBrowserFile(root, path, previewMaxBytes = null) {
     if (CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
         return fetchJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
             method: 'GET',
@@ -21346,9 +21382,9 @@ async function fetchFileBrowserFile(root, path) {
     return fetchEncryptedFileBrowserJson(FILE_BROWSER_READ_FILE_ENDPOINT, {
         root: normalizeFileBrowserRoot(root),
         path: normalizeFileBrowserRelativePath(path),
-        preview_max_bytes: isRenderedDocumentFilePath(path)
+        preview_max_bytes: previewMaxBytes ?? (isRenderedDocumentFilePath(path)
             ? FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES
-            : FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES
+            : fileBrowserPreviewSettings.readBytes)
     }, {
         timeoutMs: FILE_BROWSER_READ_TIMEOUT_MS
     });
@@ -22944,19 +22980,20 @@ function getFileBrowserLineBreakEndIndex(text, index) {
     return index + 1;
 }
 
-function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLineCount = null } = {}) {
+function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLineCount = null, offset = 0, offsetLine = 1 } = {}) {
+    const { maxChars, maxLines } = getFileBrowserPreviewDisplayLimits();
     const source = String(content || '');
     const requestedLine = normalizeSourceLineNumber(highlightLine);
     const knownLineCount = Number(totalLineCount);
     const totalLines = Number.isFinite(knownLineCount) && knownLineCount > 0
         ? Math.max(1, Math.floor(knownLineCount))
         : getFileBrowserPreviewLineCount(source);
-    let startLine = 1;
-    if (requestedLine && requestedLine <= totalLines) {
+    let startLine = offset ? offsetLine : 1;
+    if (!offset && requestedLine && requestedLine <= totalLines) {
         startLine = Math.max(1, requestedLine - FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES);
     }
 
-    let startIndex = findFileBrowserLineStartIndex(source, startLine);
+    let startIndex = offset || findFileBrowserLineStartIndex(source, startLine);
     if (startIndex < 0) {
         startLine = 1;
         startIndex = 0;
@@ -22970,7 +23007,7 @@ function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLi
     let targetEndIndex = -1;
     let clippedByLineLimit = false;
     let clippedByCharLimit = false;
-    const maxEndIndex = Math.min(source.length, startIndex + FILE_BROWSER_LARGE_TEXT_MAX_CHARS);
+    const maxEndIndex = Math.min(source.length, startIndex + maxChars);
 
     while (index < source.length && index < maxEndIndex && visibleLineCount > 0) {
         if (!isFileBrowserLineBreakChar(source[index])) {
@@ -22984,7 +23021,7 @@ function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLi
             targetStartIndex = lineStartIndex;
             targetEndIndex = separatorStartIndex;
         }
-        if (visibleLineCount >= FILE_BROWSER_LARGE_TEXT_MAX_LINES) {
+        if (visibleLineCount >= maxLines) {
             clippedByLineLimit = true;
             index = separatorStartIndex;
             break;
@@ -23034,6 +23071,7 @@ function buildFileBrowserLargeTextSlice(content, { highlightLine = null, totalLi
         endLine,
         requestedLine,
         targetRelativeIndex: hasTarget ? requestedLine - startLine : -1,
+        endIndex,
         prefixOmitted: startIndex > 0,
         suffixOmitted: clippedByLineLimit || clippedByCharLimit || endIndex < source.length,
         lineClipped: clippedByCharLimit
@@ -23064,9 +23102,11 @@ function buildFileBrowserLargeTextViewer(content, {
     language = '',
     highlightLine = null,
     totalLineCount = null,
-    truncated = false
+    truncated = false,
+    offset = 0,
+    offsetLine = 1
 } = {}) {
-    const slice = buildFileBrowserLargeTextSlice(content, { highlightLine, totalLineCount });
+    const slice = buildFileBrowserLargeTextSlice(content, { highlightLine, totalLineCount, offset, offsetLine });
     const wrapper = document.createElement('section');
     wrapper.className = 'file-browser-large-text';
     if (language) {
@@ -25844,6 +25884,28 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     if (isWorkModeViewer) {
         clearWorkModeHtmlPreviewState();
     }
+    const loadedBytes = Number(result?.preview_max_bytes) || getUtf8ByteLength(text);
+    const nextReadBytes = FILE_BROWSER_PREVIEW_BYTE_OPTIONS.find(limit => limit > loadedBytes);
+    if (result?.truncated && nextReadBytes && !isBinary && !CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) {
+        const more = document.createElement('button');
+        more.type = 'button';
+        more.className = 'btn secondary';
+        more.textContent = `더 보기 (${formatFileBrowserSize(nextReadBytes)}까지 읽기)`;
+        more.addEventListener('click', async () => {
+            more.disabled = true;
+            try {
+                const expanded = await fetchFileBrowserFile(previewRoot, normalizedPath, nextReadBytes);
+                if (elements.viewerContent.dataset.renderToken !== renderToken || getFilePanelEditState(variant).editing) return;
+                await renderFileBrowserViewerIntoElements(elements, expanded, options);
+            } catch (error) {
+                if (elements.viewerContent.dataset.renderToken === renderToken) {
+                    showToast(normalizeError(error, '추가 내용을 읽지 못했습니다.'), { tone: 'error' });
+                    more.disabled = false;
+                }
+            }
+        });
+        elements.viewerContent.appendChild(more);
+    }
     if (isSpreadsheet) {
         const previewUrl = buildFileBrowserRawFileUrl(previewRoot, normalizedPath);
         await renderSpreadsheetPreviewIntoContainer(elements.viewerContent, previewUrl, renderToken);
@@ -25928,9 +25990,26 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
             language,
             highlightLine: requestedLine,
             totalLineCount: previewLineCount,
-            truncated: Boolean(result?.truncated)
+            truncated: Boolean(result?.truncated),
+            offset: options.previewOffset || 0,
+            offsetLine: options.previewOffsetLine || 1
         });
         elements.viewerContent.appendChild(largeTextView.element);
+        const slice = largeTextView.slice;
+        const addPageButton = (label, nextOptions) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn secondary';
+            button.textContent = label;
+            button.addEventListener('click', () => {
+                renderFileBrowserViewerIntoElements(elements, result, nextOptions);
+            });
+            largeTextView.element.appendChild(button);
+        };
+        if (slice.prefixOmitted) addPageButton('처음으로', { ...options, line: null, previewOffset: 0, previewOffsetLine: 1 });
+        if (slice.suffixOmitted) addPageButton('더 보기 (다음 구간)', {
+            ...options, line: null, previewOffset: slice.endIndex, previewOffsetLine: slice.endLine
+        });
         if (!requestedLine) return;
         if (!largeTextView.highlightFound) {
             showToast(`요청한 라인 ${requestedLine}을 찾을 수 없습니다. (미리보기 ${largeTextView.lineCount}줄 기준)`, {

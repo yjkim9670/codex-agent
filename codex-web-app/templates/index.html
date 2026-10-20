@@ -1443,6 +1443,23 @@
                     </div>
                     <span class="ui-font-setting-help" id="codex-ui-view-help">폴드 외부 화면·모바일은 한 화면씩 전환하고, 폴드 내부 화면은 채팅과 파일을 나란히 표시합니다. 선택값은 이 브라우저에 저장됩니다.</span>
                 </fieldset>
+                <fieldset class="ui-font-setting" aria-describedby="codex-file-preview-help">
+                    <legend class="ui-font-setting-label">파일 미리보기</legend>
+                    <label for="codex-file-preview-bytes">일반 텍스트 읽기 한도</label>
+                    <select id="codex-file-preview-bytes">
+                        <option value="65536">64 KiB (기본)</option>
+                        <option value="262144">256 KiB</option>
+                        <option value="524288">512 KiB</option>
+                        <option value="1048576">1 MiB</option>
+                    </select>
+                    <label for="codex-file-preview-lines">한 구간 표시량</label>
+                    <select id="codex-file-preview-lines">
+                        <option value="750">750줄 (기본)</option>
+                        <option value="2000">2,000줄</option>
+                        <option value="5000">5,000줄</option>
+                    </select>
+                    <span class="ui-font-setting-help" id="codex-file-preview-help">이 기기의 브라우저에 저장되며, 다음 파일 열기부터 적용됩니다. 표시량에 따라 약 3.3만 / 8.7만 / 21.8만 자 상한도 적용됩니다. 더 보기로 다음 구간이나 추가 내용을 확인할 수 있습니다. Markdown·HTML 읽기 한도는 4 MiB, 편집 한도는 512 KiB입니다.</span>
+                </fieldset>
                 <fieldset class="ui-font-setting" aria-describedby="codex-ui-font-help">
                     <legend class="ui-font-setting-label">인터페이스 글꼴</legend>
                     <div class="ui-font-options">
@@ -1996,6 +2013,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=274"></script>
+    <script src="/static/js/app.js?v=275"></script>
 </body>
 </html>

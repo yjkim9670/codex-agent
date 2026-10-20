@@ -2264,3 +2264,36 @@ def test_large_html_renders_complete_document_without_source_editing(browser_tes
     assert b'Large document ready' in response.data
     assert response.headers['Content-Security-Policy'].startswith('sandbox allow-scripts allow-forms;')
     assert (isolated_browser_roots['server_root'] / 'large.html').read_bytes() == original
+
+
+@pytest.mark.parametrize('limit', [64, 256, 512, 1024, 2048])
+def test_configurable_preview_byte_limit_and_edit_safety(isolated_browser_roots, limit):
+    root = isolated_browser_roots['server_root']
+    content = 'a' * (1200 * 1024)
+    (root / 'configurable.txt').write_text(content, encoding='utf-8')
+    result = file_browser.read_file('server', 'configurable.txt', preview_max_bytes=limit * 1024)
+    expected = min(limit, 1024) * 1024
+    assert len(result['content']) == expected
+    assert result['preview_max_bytes'] == expected
+    assert result['truncated']
+    assert not result['editable']
+
+
+def test_expanded_preview_can_edit_complete_file_within_save_limit(isolated_browser_roots):
+    root = isolated_browser_roots['server_root']
+    content = '한글😀\n' * 20000
+    (root / 'editable.txt').write_text(content, encoding='utf-8')
+    clipped = file_browser.read_file('server', 'editable.txt', preview_max_bytes=64 * 1024)
+    assert clipped['truncated'] and not clipped['editable']
+    complete = file_browser.read_file('server', 'editable.txt', preview_max_bytes=512 * 1024)
+    assert complete['content'] == content
+    assert complete['editable'] and not complete['truncated']
+    saved = file_browser.write_file('server', 'editable.txt', content + 'saved', complete['modified_ns'])
+    assert saved['editable'] and not saved['truncated']
+    assert saved['content'] == content + 'saved'
+    oversized = 'x' * (513 * 1024)
+    (root / 'oversized.txt').write_text(oversized, encoding='utf-8')
+    preview = file_browser.read_file('server', 'oversized.txt', preview_max_bytes=1024 * 1024)
+    assert not preview['truncated'] and not preview['editable']
+    with pytest.raises(file_browser.FileBrowserError):
+        file_browser.write_file('server', 'oversized.txt', 'replacement')

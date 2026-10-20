@@ -26,11 +26,12 @@ BROWSER_ROOT_SHARED = 'shared'
 
 _MAX_LIST_ENTRIES = 2000
 # Text is sent as JSON and may be highlighted or rendered client-side. Keep the
-# general ceiling deliberately small: previews must stay responsive even for
+# default small and allow bounded opt-in increases: previews must stay responsive for
 # dense logs and minified source. Markdown and standalone HTML are rendered as
 # documents rather than syntax-highlighted source, so they can use a more
 # generous limit.
-_MAX_FILE_PREVIEW_BYTES = 64 * 1024
+_DEFAULT_FILE_PREVIEW_BYTES = 64 * 1024
+_MAX_FILE_PREVIEW_BYTES = 1024 * 1024
 _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES = 4 * 1024 * 1024
 _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 # Raw previews feed browser document/media parsers, which can be much more
@@ -965,13 +966,14 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
     preview_byte_limit = (
         _MAX_RENDERED_DOCUMENT_PREVIEW_BYTES
         if language in {'markdown', 'html'}
-        else _MAX_FILE_PREVIEW_BYTES
+        else _DEFAULT_FILE_PREVIEW_BYTES
     )
     requested_preview_byte_limit = _normalize_file_preview_byte_limit(
         preview_max_bytes,
-        maximum=preview_byte_limit,
+        maximum=(_MAX_RENDERED_DOCUMENT_PREVIEW_BYTES if language in {'markdown', 'html'}
+                 else _MAX_FILE_PREVIEW_BYTES),
     )
-    if requested_preview_byte_limit and metadata['size'] > _MAX_FILE_EDIT_BYTES:
+    if requested_preview_byte_limit:
         preview_byte_limit = requested_preview_byte_limit
 
     try:
@@ -1024,6 +1026,7 @@ def read_file(root_key=None, relative_path='', preview_max_bytes=None):
         'modified_at': metadata['modified_at'],
         'modified_ns': metadata['modified_ns'],
         'truncated': truncated,
+        'preview_max_bytes': preview_byte_limit,
         'editable': editable,
         'line_count': line_count,
         'content': content,
@@ -1034,6 +1037,7 @@ def _require_editable_current_state(normalized_root, normalized_path, expected_m
     current_state = read_file(
         root_key=normalized_root,
         relative_path=normalized_path,
+        preview_max_bytes=_MAX_FILE_EDIT_BYTES,
     )
     if not current_state.get('editable'):
         raise FileBrowserError(
@@ -1125,6 +1129,7 @@ def _write_file_content(normalized_root, root_path, normalized_path, content, *,
     saved_state = read_file(
         root_key=normalized_root,
         relative_path=normalized_path,
+        preview_max_bytes=_MAX_FILE_EDIT_BYTES,
     )
     saved_state['saved'] = True
     if not include_content:
@@ -1237,6 +1242,7 @@ def create_file(root_key=None, relative_path='', content=''):
     created_state = read_file(
         root_key=normalized_root,
         relative_path=normalized_path,
+        preview_max_bytes=_MAX_FILE_EDIT_BYTES,
     )
     created_state['created'] = True
     return created_state

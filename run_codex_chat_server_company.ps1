@@ -13,8 +13,10 @@ $ParentDir = Split-Path -Parent $ScriptDir
 $env:CODEX_COMPANY_MODE = "1"
 # This launcher has exactly one company credential source.  Do not allow a
 # previously configured Claude-specific token to affect either backend.
-foreach ($CredentialVariableName in @("CODEX_CLAUDE_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
-    Remove-Item -Path ("Env:" + $CredentialVariableName) -ErrorAction SilentlyContinue
+if ($env:CODEX_CLAUDE_ENV_MODE -ne "native") {
+    foreach ($CredentialVariableName in @("CODEX_CLAUDE_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")) {
+        Remove-Item -Path ("Env:" + $CredentialVariableName) -ErrorAction SilentlyContinue
+    }
 }
 
 if (-not $env:CODEX_CHAT_SECRET_KEY) {

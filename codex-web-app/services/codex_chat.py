@@ -1595,21 +1595,25 @@ def _load_data():
 
 
 def _save_data(data):
+    started = time.monotonic()
     session_count = len(data.get('sessions', [])) if isinstance(data, dict) else 0
     _LOGGER.debug('Saving session store atomically (path=%s, sessions=%s)', CODEX_CHAT_STORE_PATH, session_count)
     try:
-        _write_json_atomic(CODEX_CHAT_STORE_PATH, data)
+        _write_json_atomic(CODEX_CHAT_STORE_PATH, data, compact=True)
     except Exception:
         _LOGGER.exception('Atomic session-store replacement failed (path=%s)', CODEX_CHAT_STORE_PATH)
         raise
     _LOGGER.debug('Saved session store atomically (path=%s, sessions=%s)', CODEX_CHAT_STORE_PATH, session_count)
+    _LOGGER.info('Session store saved sessions=%s elapsed_ms=%s', session_count,
+                 int((time.monotonic() - started) * 1000))
 
 
-def _write_json_atomic(path, payload):
+def _write_json_atomic(path, payload, compact=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
     temp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
+        json.dumps(payload, ensure_ascii=False, indent=None if compact else 2,
+                   separators=(',', ':') if compact else None),
         encoding='utf-8'
     )
     temp_path.replace(path)
@@ -2822,30 +2826,38 @@ def _apply_auth_failure_guard(text):
     return normalized
 
 
-def _lock_file_handle(handle, timeout_seconds=None):
+def _lock_file_handle(handle, timeout_seconds=None, cancelled=None):
+    deadline = None if timeout_seconds is None else time.monotonic() + max(0.0, float(timeout_seconds))
+
+    def check_wait():
+        if cancelled and cancelled():
+            raise RuntimeError('execution gate wait cancelled')
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError('timed out waiting for file lock (execution gate)')
     if fcntl is not None:
-        if timeout_seconds is None:
+        if timeout_seconds is None and cancelled is None:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             return
-        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         while True:
+            if cancelled and cancelled():
+                raise RuntimeError('execution gate wait cancelled')
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return
             except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('timed out waiting for file lock')
+                check_wait()
                 time.sleep(0.05)
         return
     if msvcrt is not None:  # pragma: no cover - Windows only
         while True:
+            if cancelled and cancelled():
+                raise RuntimeError('execution gate wait cancelled')
             try:
                 handle.seek(0)
-                handle.write(' ')
-                handle.flush()
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                 return
             except OSError:
+                check_wait()
                 time.sleep(0.05)
 
 
@@ -2866,14 +2878,16 @@ def _workspace_interactive_exec_lock_path():
 
 
 @contextmanager
-def _acquire_codex_exec_lock(lock_path=None, lock_scope='global', timeout_seconds=None):
+def _acquire_codex_exec_lock(lock_path=None, lock_scope='global', timeout_seconds=None, cancelled=None):
     resolved_lock_path = Path(lock_path or _CODEX_EXEC_LOCK_PATH)
     resolved_lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_handle = resolved_lock_path.open('a+', encoding='utf-8')
     wait_started_at = time.time()
     acquired_at = wait_started_at
+    acquired = False
     try:
-        _lock_file_handle(lock_handle, timeout_seconds=timeout_seconds)
+        _lock_file_handle(lock_handle, timeout_seconds=timeout_seconds, cancelled=cancelled)
+        acquired = True
         acquired_at = time.time()
         try:
             lock_handle.seek(0)
@@ -2893,12 +2907,14 @@ def _acquire_codex_exec_lock(lock_path=None, lock_scope='global', timeout_second
         }
     finally:
         try:
-            lock_handle.seek(0)
-            lock_handle.truncate()
-            lock_handle.flush()
+            if acquired:
+                lock_handle.seek(0)
+                lock_handle.truncate()
+                lock_handle.flush()
         except Exception:
             pass
-        _unlock_file_handle(lock_handle)
+        if acquired:
+            _unlock_file_handle(lock_handle)
         lock_handle.close()
 
 
@@ -2916,13 +2932,14 @@ def _team_execution_gate(timeout_seconds=1800):
 
 
 @contextmanager
-def _codex_exec_gate(question_only=False):
+def _codex_exec_gate(question_only=False, timeout_seconds=1800, cancelled=None):
     if _TEAM_GATE_INHERITED.get():
         yield {'wait_ms': 0, 'acquired_at': time.time(),
                'parallel': False, 'scope': 'team'}
         return
     if CODEX_CLI_EXEC_LOCK:
-        with _acquire_codex_exec_lock(lock_scope='global') as lock_info:
+        with _acquire_codex_exec_lock(lock_scope='global', timeout_seconds=timeout_seconds,
+                                      cancelled=cancelled) as lock_info:
             lock_payload = dict(lock_info or {})
             lock_payload['parallel'] = False
             lock_payload['scope'] = 'global'
@@ -2931,7 +2948,8 @@ def _codex_exec_gate(question_only=False):
     if not question_only:
         with _acquire_codex_exec_lock(
                 lock_path=_workspace_interactive_exec_lock_path(),
-                lock_scope='workspace_interactive') as lock_info:
+                lock_scope='workspace_interactive', timeout_seconds=timeout_seconds,
+                cancelled=cancelled) as lock_info:
             lock_payload = dict(lock_info or {})
             lock_payload['parallel'] = False
             lock_payload['scope'] = 'workspace_interactive'
@@ -10848,6 +10866,8 @@ def _build_codex_exec_env(queued_execution=False, account_id=None, internal_api_
 
 
 def _company_claude_base_url(env):
+    if str(env.get('CODEX_CLAUDE_ENV_MODE') or '').strip().lower() == 'native':
+        return ''
     explicit_base_url = str(env.get('CODEX_CLAUDE_BASE_URL') or '').strip()
     if explicit_base_url:
         return explicit_base_url.rstrip('/')
@@ -10886,6 +10906,29 @@ def _apply_claude_company_exec_env(env, model_override=None):
             'CLAUDE_CODE_SUBAGENT_MODEL',
         ):
             env[key] = selected_model
+    return env
+
+
+def _build_agent_exec_env(agent_backend, queued_execution=False, account_id=None, internal_api_key=None):
+    if agent_backend != 'claude':
+        return _build_codex_exec_env(queued_execution=queued_execution, account_id=account_id,
+                                     internal_api_key=internal_api_key)
+    # Claude uses its own home, credentials and runtime. Avoid Python probing,
+    # Codex extension installation, model caches and queued memory copies.
+    env = os.environ.copy()
+    for key in list(env):
+        if key in _CODEX_CHILD_ENV_STRIP_KEYS or any(
+                key.startswith(prefix) for prefix in _CODEX_CHILD_ENV_STRIP_PREFIXES):
+            env.pop(key, None)
+    if str(env.get('CODEX_CLAUDE_ENV_MODE') or '').strip().lower() != 'native':
+        from .company_credentials import apply_company_api_key
+        apply_company_api_key(env, internal_key=internal_api_key)
+    _apply_spreadsheet_runtime_env(env)
+    env[_IMAGEGEN_WORKBENCH_OUTPUT_ENV] = str(_imagegen_workbench_output_dir())
+    env[_IMAGEGEN_WORKBENCH_TMP_ENV] = str(_imagegen_workbench_tmp_dir())
+    env[_WORKBENCH_WORKSPACE_DIR_ENV] = str(_resolve_execution_workspace_dir())
+    if is_internal_multiuser_mode():
+        env[_WORKBENCH_SHARED_DIR_ENV] = str(Path(CODEX_SHARED_KNOWLEDGE_DIR).expanduser().resolve())
     return env
 
 
@@ -11142,9 +11185,28 @@ def _prepare_agent_execution(prompt, stream):
         'attachments': attachments,
         'environment': _build_execution_environment_overlay(cwd, backend),
     }
+    prompt = _compact_context_manifest(prompt)
     prompt = _append_execution_path_context(prompt, execution_cwd=cwd)
     prompt = _append_attachment_exec_context(prompt, attachments)
     return prompt, context
+
+
+def _compact_context_manifest(prompt):
+    # The complete audit record is already persisted in stream metadata. Send
+    # only its reference, keeping source notes and conversation text intact.
+    marker = '## Context Selection Record\n'
+    if marker not in prompt:
+        return prompt
+    head, tail = prompt.rsplit(marker, 1)
+    try:
+        record, end = json.JSONDecoder().raw_decode(tail)
+    except (ValueError, TypeError):
+        return prompt
+    if not isinstance(record, dict) or record.get('version') != 1 or not record.get('context_sha256'):
+        return prompt
+    reference = {key: record[key] for key in ('version', 'strategy', 'context_sha256',
+                 'omitted_message_count', 'omitted_message_ranges') if key in record}
+    return head + marker + json.dumps(reference, ensure_ascii=False, separators=(',', ':')) + tail[end:]
 
 
 def _looks_like_browser_ui_task(prompt_text, recent_blocks=None):
@@ -11341,6 +11403,8 @@ def _build_claude_command(
     del attachments
     del question_only
     del execution_cwd
+    if os.environ.get('CODEX_CLAUDE_ENV_MODE', '').strip().lower() == 'native':
+        inherit_model_settings = False
 
     cmd = [_claude_cli_command(), '-p']
     claude_model = (_resolve_claude_model(model_override=model_override)
@@ -11370,7 +11434,7 @@ def _build_claude_command(
     if max_turns:
         cmd.extend(['--max-turns', str(max_turns)])
     if stream_json:
-        cmd.extend(['--output-format', 'stream-json', '--verbose'])
+        cmd.extend(['--output-format', 'stream-json', '--verbose', '--include-partial-messages'])
     elif json_output:
         cmd.extend(['--output-format', 'json'])
     else:
@@ -11931,7 +11995,7 @@ def execute_codex_prompt(
     completed_at = None
     exec_details = None
     try:
-        exec_env = _build_codex_exec_env(account_id=account_id)
+        exec_env = _build_agent_exec_env(agent_backend, account_id=account_id)
         exec_env[_WORKBENCH_WORKSPACE_DIR_ENV] = str(_resolve_execution_workspace_dir(WORKSPACE_DIR))
         _apply_agent_backend_exec_env(
             exec_env,
@@ -11947,7 +12011,8 @@ def execute_codex_prompt(
             exec_env=exec_env,
             agent_backend=agent_backend,
         )
-        with _codex_exec_gate(question_only=question_only) as lock_info:
+        with _codex_exec_gate(question_only=question_only,
+                              timeout_seconds=_agent_wait_seconds('CODEX_CLI_GATE_TIMEOUT_SECONDS', 1800)) as lock_info:
             cli_started_at = lock_info.get('acquired_at') or time.time()
             result = subprocess.run(
                 cmd,
@@ -11958,6 +12023,7 @@ def execute_codex_prompt(
                 errors=_CODEX_EXEC_TEXT_ERRORS,
                 input=prompt,
                 env=exec_env,
+                timeout=_agent_wait_seconds('CODEX_CLI_EXEC_TIMEOUT_SECONDS', 3600),
                 check=False
             )
             completed_at = time.time()
@@ -12552,6 +12618,35 @@ def _write_codex_prompt_to_stdin(process, prompt):
             stdin.close()
         except Exception:
             pass
+
+
+def _agent_wait_seconds(name, default):
+    return _coerce_positive_seconds(os.environ.get(name), default_value=default, minimum=0.05)
+
+
+def _stream_cancelled(stream_id):
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        return not stream or bool(stream.get('cancelled') or stream.get('saved'))
+
+
+def _start_stream_io(stream_id, process, prompt):
+    readers = [threading.Thread(target=_stream_reader, args=(stream_id, pipe, key), daemon=True)
+               for pipe, key in ((process.stdout, 'output'), (process.stderr, 'error'))]
+    for reader in readers:
+        reader.start()
+    finished = threading.Event()
+
+    def write_prompt():
+        try:
+            _write_codex_prompt_to_stdin(process, prompt)
+        except Exception as exc:
+            _append_stream_exec_error(stream_id, f'Prompt input failed: {type(exc).__name__}')
+            _terminate_stream_process(process, 1)
+        finally:
+            finished.set()
+    threading.Thread(target=write_prompt, daemon=True).start()
+    return readers, finished
 
 
 def _build_work_details(stdout_text, final_output_text, stderr_text, exec_details=None):
@@ -13666,7 +13761,7 @@ def _append_stream_raw_stderr(stream_id, chunk):
 def _append_stream_chunk(stream_id, key, chunk):
     if not chunk:
         return
-    if key == 'output':
+    if key == 'output' and _IMAGEGEN_WORKBENCH_FILENAME_DECLARATION_RE.search(str(chunk)):
         chunk, filenames = _extract_imagegen_workbench_filename_declarations(chunk)
         _record_stream_imagegen_workbench_filenames(stream_id, filenames)
         if not chunk:
@@ -14151,7 +14246,7 @@ def _set_stream_output_text_delta(stream_id, text, final_after_work=None):
             chunk = normalized[len(previous):]
         elif previous and previous.startswith(normalized):
             chunk = ''
-        stream['output_last_message'] = normalized.strip()
+        stream['output_last_message'] = normalized
         stream['progress_output_invalidated'] = False
         if final_after_work is None:
             final_after_work = bool(stream.get('work_item_seen'))
@@ -14259,6 +14354,21 @@ def _handle_claude_stream_json_output_line(stream_id, line):
         _append_stream_exec_error(stream_id, error_text)
 
     event_type = str(event.get('type') or '').strip().lower()
+    if event_type == 'stream_event':
+        partial = event.get('event') or {}
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id)
+            if not stream:
+                return
+            if partial.get('type') == 'message_start':
+                stream['claude_partial_text'] = ''
+            delta = partial.get('delta') or {}
+            if delta.get('type') != 'text_delta':
+                return
+            text = str(stream.get('claude_partial_text') or '') + str(delta.get('text') or '')
+            stream['claude_partial_text'] = text
+        _set_stream_output_text_delta(stream_id, text, final_after_work=False)
+        return
     text = _extract_text_from_claude_event(event)
     if text:
         _set_stream_output_text_delta(stream_id, text, final_after_work=True)
@@ -14666,6 +14776,7 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             stream['opencode_last_progress_at'] = time.monotonic()
         threading.Thread(target=transport, args=(execution_cwd, model_name), daemon=True).start()
         submitted = False
+        transport_disconnected = False
         recovery_pending = False
         next_recovery = time.monotonic() + min(30, CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS / 2)
         while True:
@@ -14679,7 +14790,9 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             if now >= deadline or now - last_progress >= CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS:
                 outcome = 'opencode_timeout'
                 raise CodexToolingError('OpenCode 실행 시간 또는 진행 정체 제한을 초과했습니다.')
-            if submitted and now >= next_recovery and not recovery_pending:
+            recovery_idle = min(30, CODEX_OPENCODE_PROGRESS_TIMEOUT_SECONDS / 2)
+            if (submitted and now >= next_recovery and not recovery_pending
+                    and (transport_disconnected or now - last_progress >= recovery_idle)):
                 recovery_pending = True
                 threading.Thread(target=recover, args=(session_id,), daemon=True).start()
             try:
@@ -14709,6 +14822,7 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             elif kind in ('disconnected', 'transport_error'):
                 if not submitted:
                     raise CodexToolingError(value or 'OpenCode 이벤트 연결이 종료되었습니다.')
+                transport_disconnected = True
                 next_recovery = time.monotonic()
                 _LOGGER.warning('OpenCode SSE disconnected stream=%s session=%s detail=%s', stream_id, session_id, value)
     except Exception as exc:
@@ -14783,14 +14897,20 @@ def _run_codex_stream(stream_id, prompt):
     except Exception as exc:
         # Preparation and gate acquisition can fail before Popen's error handler.
         _LOGGER.exception('Agent worker failed stream=%s', stream_id)
+        with state.codex_streams_lock:
+            failed_phase = (state.codex_streams.get(stream_id) or {}).get('diagnostic_phase')
         _record_stream_diagnostic(stream_id, 'worker_failed')
         with state.codex_streams_lock:
             stream = state.codex_streams.get(stream_id)
             if not stream:
                 return
             process = stream.get('process')
+            if stream.get('cancelled') or stream.get('saved'):
+                return
             stream.update(done=True, exit_code=1, completed_at=time.time(),
-                          finalize_reason='worker_exception', worker_error_type=type(exc).__name__)
+                          finalize_reason=('execution_gate_timeout' if isinstance(exc, TimeoutError)
+                                           and failed_phase == 'waiting_execution_gate'
+                                           else 'worker_exception'), worker_error_type=type(exc).__name__)
         if process is not None:
             _terminate_stream_process(process, 3)
         _append_stream_chunk(stream_id, 'error', f'Agent worker failed ({type(exc).__name__}); inspect server log.\n')
@@ -14920,7 +15040,8 @@ def _run_codex_stream_impl(stream_id, prompt):
         if stream:
             internal_api_key = stream.pop('internal_api_key', None)
     _record_stream_diagnostic(stream_id, 'building_environment')
-    exec_env = _build_codex_exec_env(
+    exec_env = _build_agent_exec_env(
+        agent_backend,
         queued_execution=queued_execution,
         account_id=account_id,
         internal_api_key=internal_api_key,
@@ -14949,7 +15070,9 @@ def _run_codex_stream_impl(stream_id, prompt):
         execution_cwd.mkdir(parents=True, exist_ok=True)
 
     _record_stream_diagnostic(stream_id, 'waiting_execution_gate')
-    with _codex_exec_gate(question_only=question_only) as lock_info:
+    with _codex_exec_gate(question_only=question_only,
+                          timeout_seconds=_agent_wait_seconds('CODEX_CLI_GATE_TIMEOUT_SECONDS', 1800),
+                          cancelled=lambda: _stream_cancelled(stream_id)) as lock_info:
         _record_stream_diagnostic(stream_id, 'execution_gate_acquired')
         cli_started_at = lock_info.get('acquired_at') or time.time()
         with state.codex_streams_lock:
@@ -14968,6 +15091,7 @@ def _run_codex_stream_impl(stream_id, prompt):
             if stream and stream.get('cancelled'):
                 return
 
+        process = None
         try:
             _prepare_imagegen_workbench_dirs(prompt)
             cmd = _wrap_codex_cli_command(cmd, env=exec_env)
@@ -14996,13 +15120,19 @@ def _run_codex_stream_impl(stream_id, prompt):
                 bufsize=1
             )
             with state.codex_streams_lock:
+                stream = state.codex_streams.get(stream_id)
+                if stream:
+                    stream['process'] = process
+                    stream['output_path'] = output_path
+            with state.codex_streams_lock:
                 cancelled_before_prompt = bool((state.codex_streams.get(stream_id) or {}).get('cancelled'))
             if cancelled_before_prompt:
                 _terminate_stream_process(process, terminate_grace_seconds)
                 return
             _record_stream_diagnostic(stream_id, 'writing_stdin')
-            _write_codex_prompt_to_stdin(process, prompt)
-            _record_stream_diagnostic(stream_id, 'waiting_cli_output')
+            (stdout_thread, stderr_thread), stdin_finished = _start_stream_io(stream_id, process, prompt)
+            io_started = time.monotonic()
+            input_reported = False
         except FileNotFoundError:
             _LOGGER.exception('Agent executable unavailable stream=%s backend=%s', stream_id, agent_backend)
             _record_stream_diagnostic(stream_id, 'process_start_failed')
@@ -15021,6 +15151,8 @@ def _run_codex_stream_impl(stream_id, prompt):
             return
         except Exception as exc:
             _LOGGER.exception('Agent process start failed stream=%s backend=%s', stream_id, agent_backend)
+            if process is not None:
+                _terminate_stream_process(process, terminate_grace_seconds)
             _record_stream_diagnostic(stream_id, 'process_start_failed')
             command_label = 'Claude' if agent_backend == 'claude' else 'Codex'
             _append_stream_chunk(stream_id, 'error', f'{command_label} 실행 중 오류가 발생했습니다: {exc}\n')
@@ -15032,6 +15164,7 @@ def _run_codex_stream_impl(stream_id, prompt):
                     stream['completed_at'] = time.time()
                     stream['updated_at'] = stream['completed_at']
                     stream['finalize_reason'] = 'process_start_failed'
+                    stream['process'] = None
             finalize_codex_stream(stream_id)
             _cleanup_output_schema(output_schema_path)
             return
@@ -15047,19 +15180,6 @@ def _run_codex_stream_impl(stream_id, prompt):
         if cancelled_after_start:
             _terminate_stream_process(process, terminate_grace_seconds)
             return
-
-        stdout_thread = threading.Thread(
-            target=_stream_reader,
-            args=(stream_id, process.stdout, 'output'),
-            daemon=True
-        )
-        stderr_thread = threading.Thread(
-            target=_stream_reader,
-            args=(stream_id, process.stderr, 'error'),
-            daemon=True
-        )
-        stdout_thread.start()
-        stderr_thread.start()
 
         while True:
             now = time.time()
@@ -15079,6 +15199,7 @@ def _run_codex_stream_impl(stream_id, prompt):
                 )
                 process_exited_at = stream.get('process_exited_at')
                 is_cancelled = bool(stream.get('cancelled'))
+                last_activity_at = stream.get('last_activity_at') or last_output_at
                 final_response_timeout_seconds = _final_response_timeout_seconds_for_stream(
                     stream,
                     base_final_response_timeout_seconds,
@@ -15086,6 +15207,29 @@ def _run_codex_stream_impl(stream_id, prompt):
 
             if is_cancelled:
                 _terminate_stream_process(process, terminate_grace_seconds)
+                break
+
+            elapsed = time.monotonic() - io_started
+            if stdin_finished.is_set() and not input_reported:
+                input_reported = True
+                _record_stream_diagnostic(stream_id, 'waiting_cli_output')
+            timeout_reason = None
+            if process.poll() is None:
+                if not stdin_finished.is_set() and elapsed >= _agent_wait_seconds('CODEX_CLI_STDIN_TIMEOUT_SECONDS', 60):
+                    timeout_reason = 'stdin_timeout'
+                elif elapsed >= _agent_wait_seconds('CODEX_CLI_EXEC_TIMEOUT_SECONDS', 3600):
+                    timeout_reason = 'execution_timeout'
+                elif now - max(cli_started_at, last_activity_at) >= _agent_wait_seconds('CODEX_CLI_PROGRESS_TIMEOUT_SECONDS', 600):
+                    timeout_reason = 'progress_timeout'
+            if timeout_reason:
+                _record_stream_diagnostic(stream_id, timeout_reason)
+                _append_stream_exec_error(stream_id, f'Agent wait limit exceeded: {timeout_reason}')
+                _terminate_stream_process(process, terminate_grace_seconds)
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    if stream:
+                        stream.update(done=True, exit_code=124, finalize_reason=timeout_reason,
+                                      completed_at=time.time(), process=None)
                 break
 
             exit_code = process.poll()

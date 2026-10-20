@@ -3,6 +3,10 @@
 이 문서는 Codex Workbench에서 에이전트 백엔드를 `Claude`로 선택했을 때의
 실행 조건을 PowerShell에서 최대한 동일하게 재현하기 위한 절차다.
 
+아래 절차는 기본 company 모드 기준이다. 터미널 로그인·key·endpoint를 유지하는
+`CODEX_CLAUDE_ENV_MODE=native` 모드와 실행 대기 제한은
+[CLI 실행 대기와 Claude 환경](agent-execution-performance.md)을 참고한다.
+
 API Key 값은 문서나 스크립트에 기록하지 않는다. 이 절차에서 사용자가
 설정할 환경변수 이름은 **`DTGPT_API_KEY`** 이다.
 

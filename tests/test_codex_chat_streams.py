@@ -3272,6 +3272,7 @@ def test_build_agent_command_uses_claude_stream_json(isolated_codex_workspace, m
         '--output-format',
         'stream-json',
         '--verbose',
+        '--include-partial-messages',
     ]
     assert '--sandbox' not in cmd
     assert '--config' not in cmd
@@ -7389,6 +7390,31 @@ def test_opencode_disconnect_recovers_answer_without_resubmission(opencode_run_h
     connect([])
     codex_chat._run_opencode_stream(sid, 'prompt')
     assert stream['exit_code'] == 0 and stream['output'] == 'recovered'
+
+
+def test_opencode_active_stream_skips_full_message_recovery(opencode_run_harness, monkeypatch):
+    stream_id, stream, calls, _, _, _ = opencode_run_harness
+    monkeypatch.setattr(codex_chat, 'CODEX_OPENCODE_RUN_TIMEOUT_SECONDS', 1)
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def close(self): pass
+        def __iter__(self):
+            for index in range(6):
+                event = _opencode_test_event('message.part.updated', part={
+                    'id': 'text', 'type': 'text', 'text': 'progress ' * (index + 1),
+                    'messageID': 'assistant-message', 'sessionID': 'remote-session'})
+                yield ('data: ' + json.dumps(event) + '\n').encode()
+                yield b'\n'
+                time.sleep(0.025)
+            yield ('data: ' + json.dumps(_opencode_test_event('session.idle')) + '\n').encode()
+            yield b'\n'
+
+    monkeypatch.setattr(codex_chat, 'urlopen', lambda *a, **kw: Response())
+    codex_chat._run_opencode_stream(stream_id, 'hello')
+    assert stream['exit_code'] == 0
+    assert not any(method == 'GET' and path.endswith('/message') for method, path in calls)
     assert calls.count(('POST', '/session/remote-session/prompt_async')) == 1
 
 

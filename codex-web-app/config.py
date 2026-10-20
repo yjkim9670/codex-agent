@@ -1330,7 +1330,7 @@ def get_claude_model_catalog():
     # Both CLI backends target the same company gateway. Keep the model picker
     # synchronized with the live /health-backed Codex catalog instead of
     # maintaining a separate Claude settings.json model list.
-    if _get_dtgpt_health_url():
+    if os.environ.get('CODEX_CLAUDE_ENV_MODE', '').strip().lower() != 'native' and _get_dtgpt_health_url():
         return get_codex_model_catalog()
     return _read_claude_model_catalog()
 
@@ -1339,7 +1339,7 @@ def resolve_claude_cli_model_name(model_name):
     normalized_model_name = normalize_codex_model_name(model_name)
     if not normalized_model_name:
         return ''
-    if _get_dtgpt_health_url():
+    if os.environ.get('CODEX_CLAUDE_ENV_MODE', '').strip().lower() != 'native' and _get_dtgpt_health_url():
         return normalized_model_name
     for settings_path in _iter_claude_settings_paths():
         payload = _read_claude_settings_payload(settings_path)

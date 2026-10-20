@@ -337,6 +337,17 @@ if (Test-Path $RequirementsPath) {
     }
 }
 
+# Export the interpreter selected by py/python, rather than the launcher command.
+# Agent children must use the same installation that passed the checks above.
+$ExecutableArgs = @("-c", "import sys; print(sys.executable)")
+$ResolvedPython = (Invoke-GlobalPython $GlobalPython @ExecutableArgs | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ResolvedPython -PathType Leaf)) {
+    throw "Could not resolve the Workbench Python executable: $($GlobalPython.Command)"
+}
+$env:CODEX_PYTHON_BIN = $ResolvedPython
+$env:PYTHON_BIN = $ResolvedPython
+$env:PYTHON = $ResolvedPython
+
 Set-Location $ParentDir
 $ServerArgs = @((Join-Path $ScriptDir "run_codex_chat_server.py"), "--host", $BindHost, "--port", "$Port", "--reload") + $RemainingArgs
 Invoke-GlobalPython $GlobalPython @ServerArgs

@@ -3,7 +3,7 @@
 Codex Workbench server for coding-agent chat sessions (Codex, Claude, and OpenCode), workspace files, terminal sessions, Git sync, and usage monitoring.
 
 ## Requirements
-- Python 3.14.x (the Workbench and every coding-agent child are pinned to this minor version)
+- Python 3.14.x for the macOS/Linux launchers and agent children. The Windows company launcher and its agent children support Python 3.10+.
 - The selected agent CLI available on PATH: Codex (`codex` / `codex.cmd`), Claude (`claude`), or OpenCode (`opencode`). Backend-specific setup and command options still apply.
 
 Set `CODEX_CLI_BIN=/absolute/path/to/codex` when the CLI is installed outside
@@ -19,6 +19,8 @@ source ./activate_venv.sh
 ```
 
 `activate_venv.sh` validates Python 3.14.x and exports it as `CODEX_PYTHON_BIN`, `PYTHON_BIN`, and `PYTHON`. The launcher places that executable first on `PATH`, including for `codex exec` children.
+
+On Windows, `run_codex_chat_server_company.ps1` exports the actual Python executable selected by `py`/`python` to these variables. Children reuse that installation. Without an explicit setting, children also check the running server's `sys.executable` before searching other installations. An explicit Python setting must point to a compatible executable (not a command such as `py -3`). Failed runtime checks report the candidate and failure reason; each version probe has a five-second timeout.
 
 ## Run
 ```bash

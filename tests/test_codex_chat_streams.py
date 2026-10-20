@@ -4033,7 +4033,7 @@ def test_build_codex_child_env_pins_python_314(monkeypatch):
     assert env['CODEX_PYTHON_BIN'] == sys.executable
     assert env['PYTHON_BIN'] == sys.executable
     assert env['PYTHON'] == sys.executable
-    assert env['PATH'].split(os.pathsep)[0] == str(Path(sys.executable).resolve().parent)
+    assert env['PATH'].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
 
 
 def test_app_server_blocks_unallowlisted_methods(monkeypatch):

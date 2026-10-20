@@ -10751,35 +10751,63 @@ def _build_codex_child_base_env():
 
 
 def _apply_workbench_python_env(env):
-    """Require and expose one Python 3.14 runtime to every coding-agent child."""
+    """Expose a runtime matching the host launcher's Python requirements."""
+    windows = sys.platform == 'win32'
+    requirement = 'Python 3.10+' if windows else 'Python 3.14.x'
     configured = [str(env.get(key) or '').strip() for key in ('CODEX_PYTHON_BIN', 'PYTHON_BIN', 'PYTHON')]
     candidates = [candidate for candidate in configured if candidate]
     if not candidates:
-        candidates = [_WORKBENCH_PYTHON_DEFAULT, 'python3.14']
+        # Reuse the actual interpreter, including Windows py-launcher and venv
+        # installations that do not expose a python3.14 command on PATH.
+        candidates = [sys.executable]
+        candidates += ['python', 'python3'] if windows else [_WORKBENCH_PYTHON_DEFAULT, 'python3.14']
 
-    for candidate in candidates:
-        python_bin = candidate if os.path.isabs(candidate) else shutil.which(candidate)
+    failures = []
+    for candidate in dict.fromkeys(candidates):
+        python_bin = candidate if os.path.isabs(candidate) else shutil.which(candidate, path=env.get('PATH', ''))
         if not python_bin or not os.path.isfile(python_bin) or not os.access(python_bin, os.X_OK):
             if candidate in configured:
                 raise RuntimeError(f'Configured Python executable is unavailable: {candidate}')
+            failures.append(f'{candidate}: executable unavailable')
             continue
-        probe = subprocess.run(
-            [python_bin, '-c', 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")'],
-            capture_output=True, text=True, check=False,
-        )
-        if probe.returncode == 0 and probe.stdout.strip() == '3.14':
-            python_dir = os.path.dirname(os.path.realpath(python_bin))
+        try:
+            probe = subprocess.run(
+                [python_bin, '-c', 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")'],
+                capture_output=True, text=True, check=False, env=env, timeout=5,
+            )
+            version_text = probe.stdout.strip()
+            version = tuple(int(part) for part in version_text.split('.'))
+            if windows:
+                supported = len(version) == 2 and version[0] == 3 and version >= (3, 10)
+            else:
+                supported = version == _WORKBENCH_PYTHON_VERSION
+            failure = f'version={version_text}, exit={probe.returncode}'
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            supported = False
+            failure = type(exc).__name__
+        if supported and probe.returncode == 0:
+            # Keep venv/Scripts directories intact instead of resolving symlinks
+            # into a different installation's bin directory.
+            python_bin = os.path.abspath(python_bin)
+            python_dir = os.path.dirname(python_bin)
+            normalized_dir = os.path.normcase(python_dir)
             inherited_path = str(env.get('PATH') or '')
             env['PATH'] = os.pathsep.join([python_dir] + [
-                part for part in inherited_path.split(os.pathsep) if part and os.path.realpath(part) != python_dir
+                part for part in inherited_path.split(os.pathsep)
+                if part and os.path.normcase(os.path.abspath(part)) != normalized_dir
             ])
             env['CODEX_PYTHON_BIN'] = python_bin
             env['PYTHON_BIN'] = python_bin
             env['PYTHON'] = python_bin
             return env
         if candidate in configured:
-            raise RuntimeError(f'Configured Python must be Python 3.14.x: {candidate}')
-    raise RuntimeError('Python 3.14.x is required for Codex Workbench children; install python@3.14 or configure CODEX_PYTHON_BIN.')
+            raise RuntimeError(f'Configured Python must be {requirement}: {candidate} ({failure})')
+        failures.append(f'{candidate}: {failure}')
+    raise RuntimeError(
+        f'{requirement} is required for Codex Workbench children on {sys.platform}; '
+        'configure CODEX_PYTHON_BIN to an installed Python executable. '
+        f'Tried: {"; ".join(failures)}'
+    )
 
 
 def _build_codex_exec_env(queued_execution=False, account_id=None, internal_api_key=None):

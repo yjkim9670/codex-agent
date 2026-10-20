@@ -490,7 +490,7 @@ def test_html_preview_uses_an_opaque_origin_sandbox_and_moderate_text_limit():
     assert "const FILE_BROWSER_LARGE_TEXT_READ_MAX_BYTES = 64 * 1024;" in app_js
     assert "const FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES = 4 * 1024 * 1024;" in app_js
     assert "const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 50000;" in app_js
-    assert "const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;" in app_js
+    assert "maxChars: fileBrowserPreviewSettings.readBytes" in app_js
     assert "allow-same-origin allow-scripts allow-forms" not in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(normalizedRoot, normalizedPath)' in app_js
     assert 'buildFileBrowserHtmlPreviewUrl(previewRoot, normalizedPath)' in app_js
@@ -2266,12 +2266,13 @@ def test_large_html_renders_complete_document_without_source_editing(browser_tes
     assert (isolated_browser_roots['server_root'] / 'large.html').read_bytes() == original
 
 
+@pytest.mark.parametrize('suffix', ['.txt', '.sv', '.svh', '.v'])
 @pytest.mark.parametrize('limit', [64, 256, 512, 1024, 2048])
-def test_configurable_preview_byte_limit_and_edit_safety(isolated_browser_roots, limit):
+def test_configurable_preview_byte_limit_and_edit_safety(isolated_browser_roots, limit, suffix):
     root = isolated_browser_roots['server_root']
     content = 'a' * (1200 * 1024)
-    (root / 'configurable.txt').write_text(content, encoding='utf-8')
-    result = file_browser.read_file('server', 'configurable.txt', preview_max_bytes=limit * 1024)
+    (root / f'configurable{suffix}').write_text(content, encoding='utf-8')
+    result = file_browser.read_file('server', f'configurable{suffix}', preview_max_bytes=limit * 1024)
     expected = min(limit, 1024) * 1024
     assert len(result['content']) == expected
     assert result['preview_max_bytes'] == expected

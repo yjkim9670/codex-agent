@@ -14,7 +14,7 @@ test('browser UI smoke check', async ({ page }) => {
         browserErrors.push(`page: ${error.message}`);
     });
 
-    if (process.env.CODEX_VERIFY_MARKDOWN === '1' || process.env.CODEX_VERIFY_FILE_PREVIEW === '1') {
+    if (process.env.CODEX_VERIFY_MARKDOWN === '1' || process.env.CODEX_VERIFY_FILE_PREVIEW === '1' || process.env.CODEX_VERIFY_PREVIEW_SETTINGS === '1') {
         // Preview rendering is independent of the local repository's Git status.
         await page.route('**/api/codex/git/status', route => route.fulfill({
             json: {branch: 'markdown-fixture', changed_files_count: 0, changed_files: []},
@@ -60,6 +60,9 @@ test('browser UI smoke check', async ({ page }) => {
     }
     if (process.env.CODEX_VERIFY_FILE_PREVIEW === '1') {
         await require('./file-preview.cjs').verifyFilePreview(page, expect);
+    }
+    if (process.env.CODEX_VERIFY_PREVIEW_SETTINGS === '1') {
+        await require('../test_file_preview_settings_browser.cjs').verifyPreviewSettings(page.context().browser(), targetUrl);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

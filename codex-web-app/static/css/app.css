@@ -14903,6 +14903,26 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
     font-size: 12px;
     line-height: 1.45;
 }
+/* Give every settings dropdown a readable control height and touch target. */
+.ui-settings-card select {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+    height: 40px;
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-muted);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.ui-settings-card select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 .ui-settings-card :is(.usage-keepalive-status, .codex-cli-version-label, .codex-cli-version-value) {
     font-size: 12px;
     line-height: 1.45;

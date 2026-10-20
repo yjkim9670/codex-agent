@@ -345,22 +345,13 @@ function normalizeFileBrowserPreviewSettings(value) {
 
 function getFileBrowserPreviewDisplayLimits() {
     return { maxLines: fileBrowserPreviewSettings.lines,
-        maxChars: Math.ceil(32 * 1024 * fileBrowserPreviewSettings.lines / 750) };
+        maxChars: fileBrowserPreviewSettings.readBytes };
 }
 
 const FILE_BROWSER_RENDERED_DOCUMENT_READ_MAX_BYTES = 4 * 1024 * 1024;
-// Keep the switch to the lightweight text preview aligned with its display limits.
-// Otherwise medium-sized, line-dense files take the expensive full-DOM path.
-const FILE_BROWSER_TEXT_DETAIL_MAX_CHARS = 32 * 1024;
-const FILE_BROWSER_TEXT_DETAIL_MAX_LINES = 750;
-const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS = 16 * 1024;
-const FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES = 250;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS = 4 * 1024 * 1024;
 const FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES = 50000;
 const FILE_BROWSER_MARKDOWN_PREVIEW_REVOKE_MS = 60000;
-const FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD = 12000;
-const FILE_BROWSER_LARGE_TEXT_MAX_CHARS = 32 * 1024;
-const FILE_BROWSER_LARGE_TEXT_MAX_LINES = 750;
 const FILE_BROWSER_LARGE_TEXT_CONTEXT_BEFORE_LINES = 60;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGES = 24;
 const FILE_BROWSER_PDF_PREVIEW_MAX_PAGE_WIDTH = 1120;
@@ -2352,6 +2343,7 @@ document.addEventListener('DOMContentLoaded', () => {
         input?.addEventListener('change', () => {
             applyPreviewSettings({ readBytes: previewBytesInput.value, lines: previewLinesInput.value });
             try { window.localStorage.setItem(FILE_BROWSER_PREVIEW_SETTINGS_KEY, JSON.stringify(fileBrowserPreviewSettings)); } catch (_error) {}
+            void refreshFileBrowserTextPreviews();
         });
     }
     const uiSettingsReset = document.getElementById('codex-ui-settings-reset');
@@ -2699,6 +2691,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     uiSettingsReset?.addEventListener('click', () => {
         applyPreviewSettings(null);
+        void refreshFileBrowserTextPreviews();
         try { window.localStorage.removeItem(FILE_BROWSER_PREVIEW_SETTINGS_KEY); } catch (_error) {}
         uiScalesByViewMode = {};
         applyUiScale(defaultUiScaleForViewMode(resolveUiViewMode()), { persist: false });
@@ -22900,23 +22893,6 @@ function getFileBrowserPreviewLineCount(content, fallbackLineCount = null) {
     return count;
 }
 
-function hasFileBrowserLongPreviewLine(content, threshold = FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD) {
-    const text = String(content || '');
-    const maxLength = Math.max(1, Number(threshold) || FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD);
-    let currentLength = 0;
-    for (let index = 0; index < text.length; index += 1) {
-        if (text[index] === '\n') {
-            currentLength = 0;
-            continue;
-        }
-        currentLength += 1;
-        if (currentLength > maxLength) {
-            return true;
-        }
-    }
-    return false;
-}
-
 function shouldUseLargeFileBrowserTextPreview(content, {
     lineCount = null,
     isMarkdown = false,
@@ -22931,19 +22907,20 @@ function shouldUseLargeFileBrowserTextPreview(content, {
         return text.length > FILE_BROWSER_MARKDOWN_RENDER_MAX_CHARS
             || normalizedLineCount > FILE_BROWSER_MARKDOWN_RENDER_MAX_LINES;
     }
+    const { maxChars, maxLines } = getFileBrowserPreviewDisplayLimits();
     const fileSize = Number(size);
-    if (Number.isFinite(fileSize) && fileSize > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
-    if (text.length > FILE_BROWSER_TEXT_DETAIL_MAX_CHARS) return true;
-    if (normalizedLineCount > FILE_BROWSER_TEXT_DETAIL_MAX_LINES) return true;
-    if (text.length > FILE_BROWSER_LONG_LINE_WRAP_THRESHOLD && hasFileBrowserLongPreviewLine(text)) return true;
+    if (Number.isFinite(fileSize) && fileSize > fileBrowserPreviewSettings.readBytes) return true;
+    if (text.length > maxChars) return true;
+    if (normalizedLineCount > maxLines) return true;
     return false;
 }
 
 function shouldHighlightFileBrowserSource(content, lineCount, isScript) {
     if (!isScript) return false;
     const text = String(content || '');
-    return text.length <= FILE_BROWSER_TEXT_HIGHLIGHT_MAX_CHARS
-        && getFileBrowserPreviewLineCount(text, lineCount) <= FILE_BROWSER_TEXT_HIGHLIGHT_MAX_LINES;
+    const { maxChars, maxLines } = getFileBrowserPreviewDisplayLimits();
+    return text.length <= maxChars
+        && getFileBrowserPreviewLineCount(text, lineCount) <= maxLines;
 }
 
 function normalizeFileBrowserPreviewSlice(content) {
@@ -25810,6 +25787,33 @@ async function saveFilePanelEdits(variant, options = {}) {
         });
         return false;
     }
+}
+
+async function refreshFileBrowserTextPreviews() {
+    const settings = fileBrowserPreviewSettings;
+    await Promise.all([FILE_PANEL_VARIANT_OVERLAY, FILE_PANEL_VARIANT_WORK_MODE].map(async variant => {
+        const state = getFilePanelEditState(variant);
+        const result = state.previewResult;
+        if (!result || state.editing || state.diffMode || result.is_binary
+            || isRenderedDocumentFilePath(result.path)) return;
+        const elements = getFilePanelVariantConfig(variant).getElements();
+        if (!elements?.viewerContent) return;
+        const root = state.root;
+        await renderFileBrowserViewerIntoElements(elements, result, { root });
+        const token = elements.viewerContent.dataset.renderToken;
+        if (!result.truncated || settings.readBytes <= Number(result.preview_max_bytes)
+            || CODEX_PUBLIC_PREVIEW_CONFIG?.publicPreview) return;
+        try {
+            const expanded = await fetchFileBrowserFile(root, result.path, settings.readBytes);
+            if (settings !== fileBrowserPreviewSettings || state.editing || state.diffMode
+                || state.path !== result.path || elements.viewerContent.dataset.renderToken !== token) return;
+            await renderFileBrowserViewerIntoElements(elements, expanded, { root });
+        } catch (error) {
+            if (settings === fileBrowserPreviewSettings && elements.viewerContent.dataset.renderToken === token) {
+                showToast(normalizeError(error, '미리보기를 갱신하지 못했습니다.'), { tone: 'error' });
+            }
+        }
+    }));
 }
 
 async function renderFileBrowserViewerIntoElements(elements, result, options = {}) {

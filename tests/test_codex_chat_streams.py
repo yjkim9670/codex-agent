@@ -7740,3 +7740,146 @@ def test_claude_frozen_model_settings_do_not_inherit_new_effort(monkeypatch):
         'request', model_override=None, reasoning_override=None, inherit_model_settings=False)
     assert '--model' not in command
     assert '--effort' not in command
+
+
+@pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
+def test_company_timing_report_persisted_and_backend_independent(
+        isolated_codex_workspace, monkeypatch, caplog, backend):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': value} for value in ('dtgpt', 'claude', 'opencode')])
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **kwargs: {})
+    monkeypatch.setattr(codex_chat, '_create_usage_calibration_record', lambda **kwargs: None)
+    session = codex_chat.create_session('company-timing')
+    message = codex_chat.append_message(session['id'], 'assistant', '')
+    stream_id = 'company-timing'
+    stream = _build_stream_state(
+        stream_id, session['id'], time.time() - 1,
+        isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+    stream.update(agent_backend=backend, assistant_message_id=message['id'],
+                  output='answer', output_last_message='answer', done=True,
+                  exit_code=0, completed_at=time.time())
+    state.codex_streams[stream_id] = stream
+    codex_chat._record_stream_diagnostic(stream_id, 'preparing_context')
+    assert codex_chat._persist_stream_progress(stream_id, force=True)
+    with caplog.at_level('INFO'):
+        saved = codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+    assert saved['content'] == 'answer'
+    report = saved['company_timing']
+    assert report['backend'] == backend
+    assert report['pending'] is False
+    assert report['timeline'][-1]['phase'] == 'finalized'
+    assert report['timeline'][0]['since_previous_ms'] >= 900
+    for name in ('session_store_lock_wait', 'session_store_read',
+                 'session_store_write', 'session_store_transaction'):
+        metric = report['operations'][name]
+        assert metric['count'] >= 2
+        assert metric['total_ms'] >= metric['max_ms'] >= 0
+        assert metric['last_at'] >= metric['first_at']
+    restored = codex_chat.get_session(session['id'])['messages'][-1]['company_timing']
+    assert restored['pending'] is False
+    assert restored['timeline'][-1]['phase'] == 'saving_timing_report'
+    assert codex_chat.read_codex_stream(stream_id)['company_timing']['pending'] is False
+    assert 'Company process timing' in caplog.text
+    # The timing context must not leak into subsequent unrelated requests.
+    assert codex_chat._COMPANY_TIMING_STREAM.get() is None
+
+
+@pytest.mark.parametrize('flag', [None, '0', 'false'])
+def test_company_timing_disabled_outside_company(
+        isolated_codex_workspace, monkeypatch, caplog, flag):
+    if flag is None:
+        monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
+    else:
+        monkeypatch.setenv('CODEX_COMPANY_MODE', flag)
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **kwargs: {})
+    session = codex_chat.create_session('external-timing')
+    stream_id = 'external-timing'
+    stream = _build_stream_state(stream_id, session['id'], time.time(),
+                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+    stream.update(done=True, exit_code=0, output='answer')
+    state.codex_streams[stream_id] = stream
+    with caplog.at_level('INFO'):
+        saved = codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+    assert 'company_timing' not in saved
+    assert 'company_timing' not in codex_chat.read_codex_stream(stream_id)
+    assert 'company_timing_operations' not in stream
+    assert 'Company process timing' not in caplog.text
+
+
+def test_company_timing_measures_lock_wait_and_read_write(
+        isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', 'true')
+    session = codex_chat.create_session('measured-lock-wait')
+    state.codex_streams['timed'] = {'id': 'timed'}
+    original_lock = codex_chat._acquire_path_file_lock
+
+    @contextmanager
+    def delayed_lock(*args, **kwargs):
+        time.sleep(0.02)
+        with original_lock(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(codex_chat, '_acquire_path_file_lock', delayed_lock)
+
+    @codex_chat._with_company_timing
+    def operation(stream_id):
+        codex_chat.append_message(session['id'], 'assistant', 'answer')
+
+    operation('timed')
+    metrics = state.codex_streams['timed']['company_timing_operations']
+    assert metrics['session_store_lock_wait']['total_ms'] >= 15
+    assert metrics['session_store_transaction']['total_ms'] >= metrics['session_store_lock_wait']['total_ms']
+    assert metrics['session_store_read']['count'] == 1
+    assert metrics['session_store_write']['count'] == 1
+
+
+def test_company_timing_failure_unblocks_completion(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', 'on')
+    session = codex_chat.create_session('failed-timing')
+    stream_id = 'failed-timing'
+    stream = _build_stream_state(stream_id, session['id'], time.time(),
+                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+    stream.update(done=True, exit_code=0, output='answer')
+    state.codex_streams[stream_id] = stream
+
+    def failed_save(*args, **kwargs):
+        raise OSError('simulated save failure')
+
+    monkeypatch.setattr(codex_chat, 'append_message', failed_save)
+    with pytest.raises(OSError):
+        codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+    result = codex_chat.read_codex_stream(stream_id)
+    assert result['persistence_failed'] is True
+    assert result['company_timing']['pending'] is False
+    assert codex_chat._COMPANY_TIMING_STREAM.get() is None
+
+
+def test_company_timing_first_response_is_recorded_once_without_lock_recursion(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *args, **kwargs: None)
+    state.codex_streams['response'] = {'id': 'response', 'output': '', 'error': ''}
+    worker = threading.Thread(target=lambda: [
+        codex_chat._append_stream_chunk('response', 'output', chunk) for chunk in ('first', 'second')
+    ], daemon=True)
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive(), 'first response must not re-acquire the stream lock'
+    stream = state.codex_streams['response']
+    assert stream['output'] == 'firstsecond'
+    assert [entry['phase'] for entry in stream['diagnostic_timeline']] == ['first_response']
+
+
+def test_company_timing_cancellation_is_complete(isolated_codex_workspace, monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    session = codex_chat.create_session('cancel-timing')
+    stream_id = 'cancel-timing'
+    stream = _build_stream_state(stream_id, session['id'], time.time(),
+                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+    state.codex_streams[stream_id] = stream
+    result = codex_chat.stop_codex_stream(stream_id)
+    assert result['saved_message']['company_timing']['pending'] is False
+    assert result['saved_message']['company_timing']['finalize_reason'] == 'user_cancelled'
+    assert codex_chat.read_codex_stream(stream_id)['company_timing']['pending'] is False
+    restored = codex_chat.get_session(session['id'])['messages'][-1]['company_timing']
+    assert restored['pending'] is False

@@ -4,6 +4,7 @@ import base64
 from contextvars import copy_context, ContextVar
 import hashlib
 from html import escape
+from functools import wraps
 import json
 import logging
 import math
@@ -1542,6 +1543,109 @@ def _merge_session_store_payloads(payloads):
     }
 
 
+_COMPANY_TIMING_STREAM = ContextVar('company_timing_stream', default=None)
+# Storage code already holds _DATA_LOCK. A separate metrics lock avoids
+# reversing the existing stream-lock -> storage-lock acquisition order.
+_COMPANY_TIMING_LOCK = threading.RLock()
+
+
+def _company_timing_enabled():
+    return str(os.environ.get('CODEX_COMPANY_MODE') or '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+def _add_company_timing(stream_id, operation, started, started_at):
+    if not stream_id:
+        return
+    elapsed = max(0.0, (time.monotonic() - started) * 1000)
+    with _COMPANY_TIMING_LOCK:
+        stream = state.codex_streams.get(stream_id)
+        if stream is None:
+            return
+        metrics = stream.setdefault('company_timing_operations', {})
+        entry = metrics.setdefault(operation, {
+            'count': 0, 'total_ms': 0.0, 'max_ms': 0.0,
+            'first_at': started_at, 'last_at': started_at,
+        })
+        entry['count'] += 1
+        entry['total_ms'] = round(entry['total_ms'] + elapsed, 3)
+        entry['max_ms'] = round(max(entry['max_ms'], elapsed), 3)
+        entry['last_at'] = int(time.time() * 1000)
+
+
+def _measure_company_operation(operation):
+    def decorate(function):
+        @wraps(function)
+        def measured(*args, **kwargs):
+            stream_id = _COMPANY_TIMING_STREAM.get()
+            if not stream_id:
+                return function(*args, **kwargs)
+            started, started_at = time.monotonic(), int(time.time() * 1000)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                _add_company_timing(stream_id, operation, started, started_at)
+        return measured
+    return decorate
+
+
+def _with_company_timing(function):
+    @wraps(function)
+    def measured(stream_id, *args, **kwargs):
+        if not _company_timing_enabled():
+            return function(stream_id, *args, **kwargs)
+        token = _COMPANY_TIMING_STREAM.set(stream_id)
+        try:
+            return function(stream_id, *args, **kwargs)
+        except Exception as exc:
+            if function.__name__ in {'finalize_codex_stream', 'stop_codex_stream'}:
+                with state.codex_streams_lock:
+                    stream = state.codex_streams.get(stream_id)
+                    if stream is not None:
+                        stream['persistence_error'] = type(exc).__name__
+                _record_stream_diagnostic(stream_id, 'persistence_failed')
+                with state.codex_streams_lock:
+                    report = _build_company_timing_report(state.codex_streams.get(stream_id) or {})
+                _LOGGER.info('Company process timing %s', json.dumps(report, ensure_ascii=False))
+            raise
+        finally:
+            _COMPANY_TIMING_STREAM.reset(token)
+    return measured
+
+
+def _build_company_timing_report(stream):
+    if not _company_timing_enabled():
+        return None
+    started_at = _epoch_to_millis(stream.get('created_at') or stream.get('started_at')) or 0
+    timeline = deepcopy(stream.get('diagnostic_timeline') or [])
+    previous = started_at
+    previous_elapsed = 0
+    for entry in timeline:
+        elapsed = entry.get('elapsed_ms')
+        entry['since_previous_ms'] = (
+            round(max(0, elapsed - previous_elapsed), 3) if elapsed is not None
+            else max(0, entry['at'] - previous)
+        )
+        previous = entry['at']
+        previous_elapsed = elapsed if elapsed is not None else max(0, previous - started_at)
+    with _COMPANY_TIMING_LOCK:
+        operations = deepcopy(stream.get('company_timing_operations') or {})
+    return {
+        'stream_id': stream.get('id'),
+        'backend': _normalize_agent_backend_setting(stream.get('agent_backend')),
+        'pid': stream.get('company_timing_pid'),
+        'completed_at': _epoch_to_millis(stream.get('completed_at')),
+        'finalize_reason': stream.get('finalize_reason'),
+        'started_at': started_at,
+        'snapshot_at': int(time.time() * 1000),
+        'pending': not bool(stream.get('diagnostic_persistence_complete') or stream.get('persistence_error')),
+        'timeline': timeline,
+        'operations': operations,
+    }
+
+
+@_measure_company_operation('session_store_read')
 def _load_data():
     payloads = []
     read_errors = []
@@ -1594,6 +1698,7 @@ def _load_data():
     return _merge_session_store_payloads(payloads)
 
 
+@_measure_company_operation('session_store_write')
 def _save_data(data):
     started = time.monotonic()
     session_count = len(data.get('sessions', [])) if isinstance(data, dict) else 0
@@ -1657,8 +1762,22 @@ def _acquire_path_file_lock(path, timeout_seconds=5.0):
 @contextmanager
 def _session_store_transaction():
     """Serialize all session-store reads and writes across local processes."""
-    with _DATA_LOCK, _acquire_path_file_lock(CODEX_CHAT_STORE_PATH):
-        yield
+    stream_id = _COMPANY_TIMING_STREAM.get()
+    if not stream_id:
+        with _DATA_LOCK, _acquire_path_file_lock(CODEX_CHAT_STORE_PATH):
+            yield
+        return
+    started, started_at = time.monotonic(), int(time.time() * 1000)
+    acquired = False
+    try:
+        with _DATA_LOCK, _acquire_path_file_lock(CODEX_CHAT_STORE_PATH):
+            acquired = True
+            _add_company_timing(stream_id, 'session_store_lock_wait', started, started_at)
+            yield
+    finally:
+        if not acquired:
+            _add_company_timing(stream_id, 'session_store_lock_wait', started, started_at)
+        _add_company_timing(stream_id, 'session_store_transaction', started, started_at)
 
 
 _TOML_KEY_RE = re.compile(r'^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$')
@@ -13678,6 +13797,7 @@ def _build_partial_stream_message_metadata(stream):
     }
 
 
+@_with_company_timing
 def _persist_stream_progress(stream_id, force=False):
     save_payload = None
     with state.codex_streams_lock:
@@ -13772,6 +13892,10 @@ def _append_stream_chunk(stream_id, key, chunk):
             return
         if stream.get('cancelled'):
             return
+        first_response = (_company_timing_enabled() and key == 'output'
+                          and not stream.get('company_first_response_seen'))
+        if first_response:
+            stream['company_first_response_seen'] = True
         stream[key] += chunk
         now = time.time()
         stream['updated_at'] = now
@@ -13781,6 +13905,8 @@ def _append_stream_chunk(stream_id, key, chunk):
             stream['output_length'] = len(stream.get('output') or '')
         elif key == 'error':
             stream['error_length'] = len(stream.get('error') or '')
+    if first_response:
+        _record_company_phase(stream_id, 'first_response')
     _persist_stream_progress(stream_id, force=False)
 
 
@@ -14850,6 +14976,7 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
                 stream['updated_at'] = completed_at
                 should_finalize = True
         if should_finalize:
+            _record_company_phase(stream_id, 'opencode_finished')
             if outcome == 'opencode_completed':
                 _mark_stream_task_complete(stream_id, stream.get('output_last_message') or stream.get('output') or '')
                 _mark_stream_turn_completed(stream_id)
@@ -14875,6 +15002,11 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             threading.Thread(target=_abort_opencode_stream, args=(cleanup,), daemon=True).start()
 
 
+def _record_company_phase(stream_id, phase):
+    if _company_timing_enabled():
+        _record_stream_diagnostic(stream_id, phase)
+
+
 def _record_stream_diagnostic(stream_id, phase):
     """Bounded lifecycle metadata only: never prompts, argv, or environment values."""
     now = time.time()
@@ -14883,6 +15015,11 @@ def _record_stream_diagnostic(stream_id, phase):
         if stream is None:
             return
         entry = {'phase': phase, 'at': int(now * 1000)}
+        if _company_timing_enabled():
+            origin = stream.setdefault(
+                'company_timing_origin', time.monotonic() - max(
+                    0, now - (stream.get('created_at') or stream.get('started_at') or now)))
+            entry['elapsed_ms'] = round(max(0, (time.monotonic() - origin) * 1000), 3)
         history = stream.setdefault('diagnostic_timeline', [])
         history.append(entry)
         del history[:-64]
@@ -14890,6 +15027,7 @@ def _record_stream_diagnostic(stream_id, phase):
     _LOGGER.info('Agent lifecycle stream=%s phase=%s at=%s', stream_id, phase, entry['at'])
 
 
+@_with_company_timing
 def _run_codex_stream(stream_id, prompt):
     _record_stream_diagnostic(stream_id, 'preparing_context')
     try:
@@ -15123,6 +15261,8 @@ def _run_codex_stream_impl(stream_id, prompt):
                 stream = state.codex_streams.get(stream_id)
                 if stream:
                     stream['process'] = process
+                    if _company_timing_enabled():
+                        stream['company_timing_pid'] = getattr(process, 'pid', None)
                     stream['output_path'] = output_path
             with state.codex_streams_lock:
                 cancelled_before_prompt = bool((state.codex_streams.get(stream_id) or {}).get('cancelled'))
@@ -15589,6 +15729,7 @@ def _run_codex_stream_impl(stream_id, prompt):
                     else:
                         stream['finalize_reason'] = 'process_exit_error'
                 stream['updated_at'] = time.time()
+    _record_company_phase(stream_id, 'cli_completed')
     _persist_stream_progress(stream_id, force=True)
     finalize_codex_stream(stream_id)
 
@@ -16677,9 +16818,12 @@ def read_codex_stream(stream_id, output_offset=0, error_offset=0, event_offset=0
             'runtime_ms': runtime.get('runtime_ms'),
             'idle_ms': runtime.get('idle_ms')
         }
+        if _company_timing_enabled() and stream.get('done'):
+            data['company_timing'] = _build_company_timing_report(stream)
         return data
 
 
+@_with_company_timing
 def finalize_codex_stream(stream_id, trigger_queue=True):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -16912,6 +17056,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         )
         usage_source = 'stream_finalize_error'
 
+    _record_company_phase(stream_id, 'saving_response')
     saved_message = None
     if assistant_message_id:
         saved_message = update_message(
@@ -16931,6 +17076,8 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             created_at=created_at_value,
         )
 
+    _record_company_phase(stream_id, 'response_saved')
+    _record_company_phase(stream_id, 'calibrating_usage')
     calibration_record = None
     try:
         prediction_scales, prediction_sources = _resolve_usage_prediction_scales(
@@ -16964,6 +17111,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
                 session_id, saved_message['id'], metadata=metadata,
             ) or saved_message
 
+    _record_company_phase(stream_id, 'recording_usage')
     record_usage_event(
         event_id=f'stream:{stream_id}',
         **_stream_usage_identity(stream_id, stream),
@@ -17031,6 +17179,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             )
         except Exception:
             _LOGGER.exception('Automatic blog Usage-history completion update skipped (stream_id=%s)', stream_id)
+    _record_company_phase(stream_id, 'refreshing_usage')
     # Store a fresh account-limit observation for every completed Codex task.
     # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.
@@ -17051,7 +17200,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             refreshed_snapshot if isinstance(refreshed_snapshot, dict)
             else get_usage_summary(account_id=account_id)
         )
-        if saved_message:
+        if saved_message and not _company_timing_enabled():
             saved_message = update_message(
                 session_id,
                 saved_message['id'],
@@ -17061,6 +17210,17 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             _schedule_usage_calibration_followup(account_id)
     except Exception:
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
+    if _company_timing_enabled():
+        _record_stream_diagnostic(stream_id, 'saving_timing_report')
+        with state.codex_streams_lock:
+            metadata['company_timing'] = _build_company_timing_report(stream)
+            # Persist a completed snapshot. The report's own write is only
+            # measurable in the live/API and terminal report after it finishes.
+            metadata['company_timing']['pending'] = False
+        if saved_message:
+            saved_message = update_message(
+                session_id, saved_message['id'], metadata=metadata,
+            ) or saved_message
     if trigger_queue:
         trigger_next_queued_codex_stream(session_id)
     with state.codex_streams_lock:
@@ -17068,9 +17228,16 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         if current is not None:
             current['diagnostic_persistence_complete'] = True
     _record_stream_diagnostic(stream_id, 'finalized')
+    if _company_timing_enabled():
+        with state.codex_streams_lock:
+            report = _build_company_timing_report(stream)
+        if saved_message:
+            saved_message['company_timing'] = report
+        _LOGGER.info('Company process timing %s', json.dumps(report, ensure_ascii=False))
     return saved_message
 
 
+@_with_company_timing
 def stop_codex_stream(stream_id):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
@@ -17215,6 +17382,11 @@ def _stop_codex_stream_impl(stream_id):
     if work_details:
         metadata['work_details'] = work_details
     created_at_value = _iso_timestamp_from_epoch(completed_at)
+    _record_company_phase(stream_id, 'saving_response')
+    if _company_timing_enabled():
+        with state.codex_streams_lock:
+            metadata['company_timing'] = _build_company_timing_report(stream)
+            metadata['company_timing']['pending'] = False
     saved_message = None
     if assistant_message_id:
         saved_message = update_message(
@@ -17259,6 +17431,15 @@ def _stop_codex_stream_impl(stream_id):
             stream['updated_at'] = saved_at
             stream['process'] = None
     trigger_next_queued_codex_stream(session_id)
+    if _company_timing_enabled():
+        with state.codex_streams_lock:
+            stream['diagnostic_persistence_complete'] = True
+        _record_stream_diagnostic(stream_id, 'finalized')
+        with state.codex_streams_lock:
+            report = _build_company_timing_report(stream)
+        if saved_message:
+            saved_message['company_timing'] = report
+        _LOGGER.info('Company process timing %s', json.dumps(report, ensure_ascii=False))
     return {'status': 'stopped', 'saved_message': saved_message}
 
 

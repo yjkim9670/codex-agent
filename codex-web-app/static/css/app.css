@@ -15442,3 +15442,17 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
     background-position: 8px center;
     white-space: nowrap;
 }
+
+
+.message-company-timing {
+    width: 100%;
+    min-width: 0;
+    color: var(--text-secondary);
+}
+.message-company-timing summary { cursor: pointer; }
+.message-company-timing pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: inherit;
+    line-height: 1.6;
+}

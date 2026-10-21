@@ -62,7 +62,13 @@
 
 `results.json`에는 `stream_id`, `trace_file`, `failure_phase`, 중단 전 `failure_stream_snapshot`, 정리 후까지 포함한 `last_stream_snapshot`이 추가된다. `done=false`이면 실행 단계와 프로세스·출력 상태를, `done=true`이면 `saved`, `persistence_complete`, `persistence_failed`를 함께 확인한다. 기존 `saved`는 실제 저장 작업이 끝나기 전에도 설정될 수 있으므로 저장 완료 여부는 `persistence_complete`로 구분한다. 서버 업데이트 전에는 새 필드가 없거나 단계가 `unknown`일 수 있다.
 
-서버 로그의 `Agent lifecycle stream=… phase=…` 및 API의 `diagnostic_timeline`에는 환경 준비, 실행 잠금 대기, 프로세스 시작, stdin 전달, 첫 stdout/stderr, 저장 단계가 남는다. OpenCode는 원격 세션 생성, SSE 연결, prompt 제출, 첫 이벤트 수신 단계를 별도로 기록한다. 첫 SSE 이벤트는 응답 본문 수신을 보장하지 않는다. 타임라인은 스트림당 최근 64개를 보존한다. 환경 준비를 포함한 worker의 미처리 예외와 OpenCode 연결 예외는 서버 traceback으로 기록하며, worker 예외는 `worker_exception`으로 종료해 무한 대기를 방지한다. 상세 서버 로그에는 기존 CLI 오류 정보가 포함될 수 있으므로 외부 공유 전 확인한다. 변경 적용을 위한 서버 재시작은 사용자가 직접 수행한다.
+2026-10-22 서버의 `Agent lifecycle` INFO 로그와 `diagnostic_timeline` 수집은
+제거했다. API에는 현재 작업 단계인 `diagnostic_phase`만 남는다. 서버의
+worker/OpenCode 예외 처리, traceback과 저장 완료/실패 상태는 유지한다.
+위 테스트 도구의 추적 파일은 도구를 명시적으로 실행할 때만 수집하며 서버의
+상시 로깅이 아니다. 이전 타임 로그의 조사 결과는
+[진단 로깅 제거 기록](timing-comparison.md)을 참고한다.
+변경 적용을 위한 서버 재시작은 사용자가 직접 수행한다.
 
 모의 서버 검증:
 

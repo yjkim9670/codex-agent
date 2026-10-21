@@ -5188,19 +5188,18 @@ def test_stream_environment_failure_is_terminal_and_diagnosable(monkeypatch, iso
     assert stream['exit_code'] == 1
     assert stream['finalize_reason'] == 'worker_exception'
     assert stream['worker_error_type'] == 'RuntimeError'
-    phases = [entry['phase'] for entry in stream['diagnostic_timeline']]
-    assert phases[:4] == ['preparing_context', 'context_ready', 'building_environment', 'worker_failed']
+    assert stream['diagnostic_phase'] == 'finalized'
+    assert 'diagnostic_timeline' not in stream
     assert 'Agent worker failed stream=environment-failure' in caplog.text
 
 
-def test_stream_diagnostic_timeline_is_bounded():
+def test_stream_phase_updates_without_collecting_logs(caplog):
     state.codex_streams['bounded'] = {}
-    for index in range(80):
-        codex_chat._record_stream_diagnostic('bounded', f'phase_{index}')
-    timeline = state.codex_streams['bounded']['diagnostic_timeline']
-    assert len(timeline) == 64
-    assert timeline[0]['phase'] == 'phase_16'
-    assert state.codex_streams['bounded']['diagnostic_phase'] == 'phase_79'
+    with caplog.at_level('INFO'):
+        for index in range(80):
+            codex_chat._record_stream_diagnostic('bounded', f'phase_{index}')
+    assert state.codex_streams['bounded'] == {'diagnostic_phase': 'phase_79'}
+    assert 'Agent lifecycle' not in caplog.text
 
 
 def test_run_codex_stream_finalizes_on_post_output_idle(monkeypatch, isolated_codex_workspace):
@@ -7743,103 +7742,59 @@ def test_claude_frozen_model_settings_do_not_inherit_new_effort(monkeypatch):
 
 
 @pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
-def test_company_timing_report_persisted_and_backend_independent(
-        isolated_codex_workspace, monkeypatch, caplog, backend):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+@pytest.mark.parametrize('cancel', [False, True])
+def test_completion_without_diagnostic_reports(
+        isolated_codex_workspace, monkeypatch, caplog, backend, cancel):
+    for flag in ('CODEX_COMPANY_MODE', 'CODEX_TIMING_ENABLED', 'CODEX_CLAUDE_STARTUP_DIAGNOSTICS'):
+        monkeypatch.setenv(flag, '1')
     monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
         {'id': value} for value in ('dtgpt', 'claude', 'opencode')])
     monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **kwargs: {})
     monkeypatch.setattr(codex_chat, '_create_usage_calibration_record', lambda **kwargs: None)
-    session = codex_chat.create_session('company-timing')
+    session = codex_chat.create_session('no-diagnostic-report')
     message = codex_chat.append_message(session['id'], 'assistant', '')
-    stream_id = 'company-timing'
+    stream_id = 'no-diagnostic-report'
     stream = _build_stream_state(
         stream_id, session['id'], time.time() - 1,
-        isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+        isolated_codex_workspace['workspace_dir'] / 'output.txt')
     stream.update(agent_backend=backend, assistant_message_id=message['id'],
                   output='answer', output_last_message='answer', done=True,
                   exit_code=0, completed_at=time.time())
     state.codex_streams[stream_id] = stream
-    codex_chat._record_stream_diagnostic(stream_id, 'preparing_context')
-    assert codex_chat._persist_stream_progress(stream_id, force=True)
-    with caplog.at_level('INFO'):
-        saved = codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
-    assert saved['content'] == 'answer'
-    report = saved['company_timing']
-    assert report['backend'] == backend
-    assert report['pending'] is False
-    assert report['timeline'][-1]['phase'] == 'finalized'
-    assert report['timeline'][0]['since_previous_ms'] >= 900
-    for name in ('session_store_lock_wait', 'session_store_read',
-                 'session_store_write', 'session_store_transaction'):
-        metric = report['operations'][name]
-        assert metric['count'] >= 2
-        assert metric['total_ms'] >= metric['max_ms'] >= 0
-        assert metric['last_at'] >= metric['first_at']
-    restored = codex_chat.get_session(session['id'])['messages'][-1]['company_timing']
-    assert restored['pending'] is False
-    assert restored['timeline'][-1]['phase'] == 'saving_timing_report'
-    assert codex_chat.read_codex_stream(stream_id)['company_timing']['pending'] is False
-    assert 'Company process timing' in caplog.text
-    # The timing context must not leak into subsequent unrelated requests.
-    assert codex_chat._COMPANY_TIMING_STREAM.get() is None
+    writes = []
+    update = codex_chat.update_message
 
+    def capture_update(*args, **kwargs):
+        writes.append(kwargs.get('metadata') or {})
+        return update(*args, **kwargs)
 
-@pytest.mark.parametrize('flag', [None, '0', 'false'])
-def test_company_timing_disabled_outside_company(
-        isolated_codex_workspace, monkeypatch, caplog, flag):
-    if flag is None:
-        monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
-    else:
-        monkeypatch.setenv('CODEX_COMPANY_MODE', flag)
-    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **kwargs: {})
-    session = codex_chat.create_session('external-timing')
-    stream_id = 'external-timing'
-    stream = _build_stream_state(stream_id, session['id'], time.time(),
-                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
-    stream.update(done=True, exit_code=0, output='answer')
-    state.codex_streams[stream_id] = stream
+    monkeypatch.setattr(codex_chat, 'update_message', capture_update)
     with caplog.at_level('INFO'):
-        saved = codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
+        saved = (codex_chat.stop_codex_stream(stream_id)['saved_message'] if cancel
+                 else codex_chat.finalize_codex_stream(stream_id, trigger_queue=False))
+    assert 'answer' in saved['content']
     assert 'company_timing' not in saved
-    assert 'company_timing' not in codex_chat.read_codex_stream(stream_id)
-    assert 'company_timing_operations' not in stream
+    assert not any(key.startswith('company_timing') for key in stream)
+    restored = codex_chat.get_session(session['id'])['messages'][-1]
+    assert 'company_timing' not in restored
+    result = codex_chat.read_codex_stream(stream_id)
+    assert result['persistence_complete'] is True
+    assert 'company_timing' not in result
+    assert 'diagnostic_timeline' not in result
+    # Claude/OpenCode save the response once; Codex also persists usage metadata.
+    if backend != 'dtgpt':
+        assert len(writes) == 1
+    assert all('company_timing' not in metadata for metadata in writes)
     assert 'Company process timing' not in caplog.text
+    assert 'Agent lifecycle' not in caplog.text
+    assert 'Session store saved sessions=' not in caplog.text
 
 
-def test_company_timing_measures_lock_wait_and_read_write(
-        isolated_codex_workspace, monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', 'true')
-    session = codex_chat.create_session('measured-lock-wait')
-    state.codex_streams['timed'] = {'id': 'timed'}
-    original_lock = codex_chat._acquire_path_file_lock
-
-    @contextmanager
-    def delayed_lock(*args, **kwargs):
-        time.sleep(0.02)
-        with original_lock(*args, **kwargs):
-            yield
-
-    monkeypatch.setattr(codex_chat, '_acquire_path_file_lock', delayed_lock)
-
-    @codex_chat._with_company_timing
-    def operation(stream_id):
-        codex_chat.append_message(session['id'], 'assistant', 'answer')
-
-    operation('timed')
-    metrics = state.codex_streams['timed']['company_timing_operations']
-    assert metrics['session_store_lock_wait']['total_ms'] >= 15
-    assert metrics['session_store_transaction']['total_ms'] >= metrics['session_store_lock_wait']['total_ms']
-    assert metrics['session_store_read']['count'] == 1
-    assert metrics['session_store_write']['count'] == 1
-
-
-def test_company_timing_failure_unblocks_completion(isolated_codex_workspace, monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', 'on')
-    session = codex_chat.create_session('failed-timing')
-    stream_id = 'failed-timing'
+def test_save_failure_still_reports_persistence_failure(isolated_codex_workspace, monkeypatch):
+    session = codex_chat.create_session('failed-save')
+    stream_id = 'failed-save'
     stream = _build_stream_state(stream_id, session['id'], time.time(),
-                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
+                                isolated_codex_workspace['workspace_dir'] / 'output.txt')
     stream.update(done=True, exit_code=0, output='answer')
     state.codex_streams[stream_id] = stream
 
@@ -7851,204 +7806,15 @@ def test_company_timing_failure_unblocks_completion(isolated_codex_workspace, mo
         codex_chat.finalize_codex_stream(stream_id, trigger_queue=False)
     result = codex_chat.read_codex_stream(stream_id)
     assert result['persistence_failed'] is True
-    assert result['company_timing']['pending'] is False
-    assert codex_chat._COMPANY_TIMING_STREAM.get() is None
+    assert result['diagnostic_phase'] == 'persistence_failed'
 
 
-def test_company_timing_first_response_is_recorded_once_without_lock_recursion(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    monkeypatch.setattr(codex_chat, '_persist_stream_progress', lambda *args, **kwargs: None)
-    state.codex_streams['response'] = {'id': 'response', 'output': '', 'error': ''}
-    worker = threading.Thread(target=lambda: [
-        codex_chat._append_stream_chunk('response', 'output', chunk) for chunk in ('first', 'second')
-    ], daemon=True)
-    worker.start()
-    worker.join(timeout=2)
-    assert not worker.is_alive(), 'first response must not re-acquire the stream lock'
-    stream = state.codex_streams['response']
-    assert stream['output'] == 'firstsecond'
-    assert [entry['phase'] for entry in stream['diagnostic_timeline']] == ['first_response']
-
-
-def test_company_timing_cancellation_is_complete(isolated_codex_workspace, monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    session = codex_chat.create_session('cancel-timing')
-    stream_id = 'cancel-timing'
-    stream = _build_stream_state(stream_id, session['id'], time.time(),
-                                isolated_codex_workspace['workspace_dir'] / 'timing.txt')
-    state.codex_streams[stream_id] = stream
-    result = codex_chat.stop_codex_stream(stream_id)
-    assert result['saved_message']['company_timing']['pending'] is False
-    assert result['saved_message']['company_timing']['finalize_reason'] == 'user_cancelled'
-    assert codex_chat.read_codex_stream(stream_id)['company_timing']['pending'] is False
-    restored = codex_chat.get_session(session['id'])['messages'][-1]['company_timing']
-    assert restored['pending'] is False
-
-
-def test_company_claude_timing_retains_safe_bounded_metadata(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    stream = {'id': 'event-timing', 'created_at': time.time(),
-              'model_override': 'sonnet', 'reasoning_override': 'low'}
-    state.codex_streams['event-timing'] = stream
-    codex_chat._record_company_request('event-timing', '안녕?')
-    for _ in range(100):
-        codex_chat._record_company_claude_event('event-timing', {
-            'type': 'stream_event', 'secret': 'do-not-retain',
-            'event': {'type': 'message_start', 'message': {
-                'model': 'claude-test', 'content': 'do-not-retain',
-                'usage': {'input_tokens': 123}}}})
-    codex_chat._record_company_claude_event('event-timing', {
-        'type': 'result', 'result': 'do-not-retain', 'duration_ms': 1200,
-        'duration_api_ms': 900, 'num_turns': 1,
-        'usage': {'input_tokens': 123, 'output_tokens': 7}})
-    report = codex_chat._build_company_timing_report(stream)
-    assert report['request']['prompt_chars'] == 3
-    assert report['request']['prompt_utf8_bytes'] == 7
-    assert report['cli']['reported_model'] == 'claude-test'
-    assert report['cli']['event_counts'] == {'stream_event.message_start': 100, 'result': 1}
-    assert report['cli']['duration_api_ms'] == 900
-    assert report['cli']['usage']['input_tokens'] == 123
-    assert len(report['timeline']) == 2
-    assert 'do-not-retain' not in json.dumps(report)
-    assert '안녕' not in json.dumps(report, ensure_ascii=False)
-
-
-def test_company_diagnostic_clock_is_sampled_after_lock(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    clock = {'now': 10.0}
-    class DelayedLock:
-        def __enter__(self):
-            clock['now'] += 0.25
-        def __exit__(self, *args):
-            pass
-    monkeypatch.setattr(state, 'codex_streams_lock', DelayedLock())
-    monkeypatch.setattr(codex_chat.time, 'time', lambda: clock['now'])
-    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['now'])
-    stream = {'id': 'clock', 'created_at': 10.0}
-    state.codex_streams['clock'] = stream
-    codex_chat._record_stream_diagnostic('clock', 'first_stdout')
-    entry = stream['diagnostic_timeline'][0]
-    assert entry['at'] == 10250
-    assert entry['elapsed_ms'] == 250
-
-
-@pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
-def test_finalize_only_refreshes_codex_quota_for_dtgpt(
-        isolated_codex_workspace, monkeypatch, backend):
-    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
-        {'id': value} for value in ('dtgpt', 'claude', 'opencode')])
-    calls = []
-    def predict(**kwargs):
-        calls.append('predict')
-        return {}, {}
-    def calibrate(**kwargs):
-        calls.append('calibrate')
-    def refresh(**kwargs):
-        calls.append('refresh')
-        return {}
-    monkeypatch.setattr(codex_chat, '_resolve_usage_prediction_scales', predict)
-    monkeypatch.setattr(codex_chat, '_create_usage_calibration_record', calibrate)
-    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', refresh)
-    session = codex_chat.create_session('backend-quota')
-    stream = _build_stream_state('quota-test', session['id'], time.time() - 1,
-        isolated_codex_workspace['workspace_dir'] / 'result.txt')
-    stream.update(agent_backend=backend, output='answer', output_last_message='answer',
-                  done=True, exit_code=0, completed_at=time.time())
-    state.codex_streams['quota-test'] = stream
-    saved = codex_chat.finalize_codex_stream('quota-test', trigger_queue=False)
-    assert saved['content'] == 'answer'
-    assert calls == (['predict', 'calibrate', 'refresh'] if backend == 'dtgpt' else [])
-    assert codex_chat.get_session(session['id'])['messages'][-1]['content'] == 'answer'
-
-
-def test_claude_cache_tokens_are_included_in_workbench_totals():
-    usage = codex_chat._extract_claude_usage_from_event({'usage': {
-        'input_tokens': 1, 'cache_read_input_tokens': 23781,
-        'cache_creation_input_tokens': 100, 'output_tokens': 242}})
-    assert usage['input_tokens'] == 23882
-    assert usage['cached_input_tokens'] == 23881
-    assert usage['total_tokens'] == 24124
-
-
-def test_company_claude_system_categories_and_raw_usage(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    stream = {'id': 'system-metadata', 'created_at': time.time()}
-    state.codex_streams[stream['id']] = stream
-    for subtype in ('init', 'hook_started', 'api_retry', 'secret-payload'):
-        codex_chat._record_company_claude_event(stream['id'], {
-            'type': 'system', 'subtype': subtype, 'text': 'secret-payload'})
-    codex_chat._record_company_claude_event(stream['id'], {
-        'type': 'result', 'usage': {'input_tokens': 1,
-            'cache_read_input_tokens': 23781, 'output_tokens': 242,
-            'secret': 'secret-payload'}})
-    cli = codex_chat._build_company_timing_report(stream)['cli']
-    assert cli['system_event_counts'] == {
-        'init': 1, 'hook_started': 1, 'api_retry': 1, 'other': 1}
-    assert cli['reported_usage'] == {
-        'input_tokens': 1, 'cache_read_input_tokens': 23781, 'output_tokens': 242}
-    assert cli['usage']['total_tokens'] == 24024
-    report = codex_chat._build_company_timing_report(stream)
-    assert 'claude_system_api_retry' in [entry['phase'] for entry in report['timeline']]
-    assert 'secret-payload' not in json.dumps(report)
-
-
-def test_local_timing_opt_in_records_safe_environment(monkeypatch):
-    monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
-    monkeypatch.setenv('CODEX_TIMING_ENABLED', '1')
-    monkeypatch.setenv('HTTPS_PROXY', 'https://secret-user:secret-password@private-host')
-    stream = {'id': 'local-timing', 'created_at': time.time()}
-    state.codex_streams[stream['id']] = stream
-    codex_chat._record_company_request(stream['id'], 'private prompt')
-    report = codex_chat._build_company_timing_report(stream)
-    assert report['schema_version'] == 2
-    assert report['environment']['company_mode'] is False
-    assert report['environment']['proxy_configured'] is True
-    assert report['environment']['python']
-    assert 'secret-password' not in json.dumps(report)
-    assert 'private-host' not in json.dumps(report)
-    assert 'private prompt' not in json.dumps(report)
-
-
-def test_timing_spans_survive_rolling_timeline_and_use_monotonic_clock(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    clock = {'mono': 100.0, 'wall': 1000.0}
-    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['mono'])
-    monkeypatch.setattr(codex_chat.time, 'time', lambda: clock['wall'])
-    stream = {'id': 'spans', 'created_at': 1000.0}
-    state.codex_streams[stream['id']] = stream
-    codex_chat._record_stream_diagnostic(stream['id'], 'starting_process')
-    clock.update(mono=100.25, wall=990.0)
-    codex_chat._record_stream_diagnostic(stream['id'], 'process_spawned')
-    for _ in range(70):
-        codex_chat._record_stream_diagnostic(stream['id'], 'waiting_cli_output')
-    report = codex_chat._build_company_timing_report(stream)
-    assert len(report['timeline']) == 64
-    assert report['spans'] == [{
-        'name': 'process_spawn', 'start_phase': 'starting_process',
-        'end_phase': 'process_spawned', 'duration_ms': 250.0}]
-    assert len(stream['company_timing_milestones']) == 2
-
-
-def test_timing_event_gaps_are_bounded_metadata(monkeypatch):
-    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
-    clock = {'mono': 100.0}
-    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['mono'])
-    stream = {'id': 'event-gaps', 'created_at': time.time()}
-    state.codex_streams[stream['id']] = stream
-    for elapsed in (0, 2, 7):
-        clock['mono'] = 100.0 + elapsed
-        codex_chat._record_company_claude_event(stream['id'], {
-            'type': 'system', 'subtype': 'hook_progress', 'text': 'secret'})
-    report = codex_chat._build_company_timing_report(stream)
-    assert report['cli']['event_observations']['system'] == {
-        'first_ms': 0, 'last_ms': 7000, 'max_gap_ms': 5000}
-    assert 'secret' not in json.dumps(report)
-
-
-def test_claude_startup_diagnostics_reaches_persisted_report(isolated_codex_workspace, monkeypatch):
+def test_claude_does_not_collect_debug_logs_with_legacy_flags(isolated_codex_workspace, monkeypatch):
     import io
 
     monkeypatch.setenv('CODEX_CLAUDE_STARTUP_DIAGNOSTICS', '1')
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    monkeypatch.setenv('CODEX_TIMING_ENABLED', '1')
     monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': 'claude'}])
     monkeypatch.setattr(codex_chat, '_wrap_codex_cli_command', lambda command, **kwargs: command)
     captured = {}
@@ -8058,9 +7824,6 @@ def test_claude_startup_diagnostics_reaches_persisted_report(isolated_codex_work
 
         def __init__(self, command, **kwargs):
             captured['command'] = command
-            path = Path(command[command.index('--debug-file') + 1])
-            path.write_text('2026-01-01T00:00:00.000Z [DEBUG] mcp private-secret\n'
-                            '2026-01-01T00:00:01.000Z [DEBUG] hook private-secret\n')
             self.stdin = io.StringIO()
             self.stdout = io.TextIOWrapper(io.BytesIO(
                 b'{"type":"system","subtype":"init"}\n'
@@ -8077,11 +7840,9 @@ def test_claude_startup_diagnostics_reaches_persisted_report(isolated_codex_work
     stream['agent_backend'] = 'claude'
     state.codex_streams[stream['id']] = stream
     codex_chat._run_codex_stream(stream['id'], 'reply answer')
-    assert '--debug-file' in captured['command']
+    assert '--debug-file' not in captured['command']
     saved = codex_chat.get_session(session['id'])['messages'][-1]
     assert saved['content'] == 'answer'
-    report = saved['company_timing']
-    assert report['cli']['startup_debug']['status'] == 'collected'
-    assert report['cli']['startup_debug']['longest_gaps'][0]['gap_ms'] == 1000
-    assert 'private-secret' not in json.dumps(report)
-    assert 'first_stdout_byte_wait' in {entry['name'] for entry in report['spans']}
+    assert 'company_timing' not in saved
+    assert 'diagnostic_timeline' not in stream
+    assert not list(isolated_codex_workspace['workspace_dir'].rglob('claude.debug.log'))

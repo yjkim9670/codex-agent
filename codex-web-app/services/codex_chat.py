@@ -36,6 +36,7 @@ except ImportError:
 
 from .. import state
 from .agent_context import build_context, extract_context_notes, read_context_record
+from .claude_diagnostics import observed_lines, summarize_debug_log
 from ..config import (
     CODEX_ACCOUNTS_DIR,
     CODEX_ACCOUNTS_PATH,
@@ -1553,7 +1554,36 @@ _COMPANY_TIMING_LOCK = threading.RLock()
 def _company_timing_enabled():
     return any(str(os.environ.get(name) or '').strip().lower() in {
         '1', 'true', 'yes', 'on',
-    } for name in ('CODEX_COMPANY_MODE', 'CODEX_TIMING_ENABLED'))
+    } for name in ('CODEX_COMPANY_MODE', 'CODEX_TIMING_ENABLED',
+                   'CODEX_CLAUDE_STARTUP_DIAGNOSTICS'))
+
+
+def _claude_startup_diagnostics_enabled():
+    return str(os.environ.get('CODEX_CLAUDE_STARTUP_DIAGNOSTICS') or '').strip().lower() in {
+        '1', 'true', 'yes', 'on',
+    }
+
+
+def _prepare_claude_startup_diagnostics(stream_id, cmd, output_path):
+    """Opt in per process, keep raw CLI logs outside chat/store payloads."""
+    if not _claude_startup_diagnostics_enabled():
+        return None
+    try:
+        directory = Path(output_path).resolve().parent / 'claude-startup' / uuid.uuid4().hex
+        directory.mkdir(parents=True, mode=0o700)
+        path = directory / 'claude.debug.log'
+        path.touch(mode=0o600)
+    except OSError:
+        _LOGGER.warning('Claude startup debug file unavailable stream=%s', stream_id)
+        return None
+    cmd.extend(['--debug-file', str(path)])
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream is not None:
+            stream['claude_startup_diagnostics'] = True
+            stream.setdefault('company_timing_cli', {})['startup_debug'] = {
+                'enabled': True, 'log_id': directory.name}
+    return path
 
 
 def _add_company_timing(stream_id, operation, started, started_at):
@@ -1624,6 +1654,9 @@ _COMPANY_TIMING_SPANS = (
     ('process_spawn', 'starting_process', 'process_spawned'),
     ('stdin', 'writing_stdin', 'stdin_write_finished'),
     ('first_stdout_wait', 'process_spawned', 'first_stdout'),
+    ('first_stdout_byte_wait', 'process_spawned', 'first_stdout_byte'),
+    ('stdout_line_buffer_wait', 'first_stdout_byte', 'first_stdout_line'),
+    ('stdout_reader_start', 'process_spawned', 'stdout_reader_started'),
     ('claude_initialization', 'process_spawned', 'claude_system_init'),
     ('claude_message_wait', 'claude_system_init', 'claude_event_stream_event.message_start'),
     ('first_response_wait', 'process_spawned', 'first_response'),
@@ -14583,7 +14616,16 @@ def _handle_claude_stream_json_output_line(stream_id, line):
 
 def _stream_reader(stream_id, pipe, key):
     try:
-        for line in iter(pipe.readline, ''):
+        with state.codex_streams_lock:
+            stream = state.codex_streams.get(stream_id) or {}
+            diagnose_bytes = bool(stream.get('claude_startup_diagnostics'))
+        label = 'stdout' if key == 'output' else 'stderr'
+        if diagnose_bytes:
+            _record_stream_diagnostic(stream_id, label + '_reader_started')
+        lines = (observed_lines(pipe, lambda: _record_stream_diagnostic(
+            stream_id, 'first_' + label + '_byte')) if diagnose_bytes
+                 else iter(pipe.readline, ''))
+        for line in lines:
             with state.codex_streams_lock:
                 current = state.codex_streams.get(stream_id)
                 first = current is not None and not current.get('diagnostic_' + key + '_seen')
@@ -14595,6 +14637,8 @@ def _stream_reader(stream_id, pipe, key):
                         cli[key + '_utf8_bytes'] = cli.get(key + '_utf8_bytes', 0) + len(line.encode('utf-8'))
             if first:
                 _record_stream_diagnostic(stream_id, 'first_stdout' if key == 'output' else 'first_stderr')
+                if diagnose_bytes:
+                    _record_stream_diagnostic(stream_id, 'first_' + label + '_line')
             _apply_auth_failure_guard(line)
             if key == 'error':
                 _append_stream_raw_stderr(stream_id, line)
@@ -15405,8 +15449,11 @@ def _run_codex_stream_impl(stream_id, prompt):
                 return
 
         process = None
+        claude_debug_path = None
         try:
             _prepare_imagegen_workbench_dirs(prompt)
+            if agent_backend == 'claude':
+                claude_debug_path = _prepare_claude_startup_diagnostics(stream_id, cmd, output_path)
             cmd = _wrap_codex_cli_command(cmd, env=exec_env)
             exec_details = _build_codex_exec_input_details(
                 cmd,
@@ -15577,6 +15624,13 @@ def _run_codex_stream_impl(stream_id, prompt):
                 stdout_thread.join(timeout=terminate_grace_seconds)
                 stderr_thread.join(timeout=terminate_grace_seconds)
                 _record_company_phase(stream_id, 'io_readers_joined')
+                if claude_debug_path is not None:
+                    debug_summary = summarize_debug_log(claude_debug_path)
+                    claude_debug_path = None
+                    with state.codex_streams_lock:
+                        stream = state.codex_streams.get(stream_id)
+                        if stream is not None:
+                            stream.setdefault('company_timing_cli', {})['startup_debug'].update(debug_summary)
 
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)

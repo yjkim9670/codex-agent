@@ -179,3 +179,21 @@ def test_multiple_model_segments_of_identified_turn_are_counted_once():
     rows, diagnostics = usage.merge_events([ledger], [{'db_tokens': 200, 'events': logs}])
     assert sum(row['total_tokens'] for row in rows) == 200
     assert diagnostics['matched_rollout_tokens'] == 200
+
+
+def test_dashboard_api_defaults_to_all_efforts(monkeypatch):
+    from flask import Flask
+    import importlib
+    api = importlib.import_module('codex_agent.blueprints.usage_dashboard')
+    calls = []
+    def fake_dashboard(*args):
+        calls.append(args)
+        return {'effort': args[2]}
+    monkeypatch.setattr(api, 'dashboard', fake_dashboard)
+    app = Flask(__name__)
+    app.register_blueprint(api.bp)
+    response = app.test_client().get('/api/codex/usage/dashboard')
+    assert response.status_code == 200
+    assert response.json['effort'] == 'all'
+    assert calls == [(None, 30, 'all', 'all')]
+    assert app.test_client().get('/api/codex/usage/dashboard?effort=low').json['effort'] == 'low'

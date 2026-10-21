@@ -8043,3 +8043,45 @@ def test_timing_event_gaps_are_bounded_metadata(monkeypatch):
     assert report['cli']['event_observations']['system'] == {
         'first_ms': 0, 'last_ms': 7000, 'max_gap_ms': 5000}
     assert 'secret' not in json.dumps(report)
+
+
+def test_claude_startup_diagnostics_reaches_persisted_report(isolated_codex_workspace, monkeypatch):
+    import io
+
+    monkeypatch.setenv('CODEX_CLAUDE_STARTUP_DIAGNOSTICS', '1')
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': 'claude'}])
+    monkeypatch.setattr(codex_chat, '_wrap_codex_cli_command', lambda command, **kwargs: command)
+    captured = {}
+
+    class ClaudeProcess:
+        pid = 12345
+
+        def __init__(self, command, **kwargs):
+            captured['command'] = command
+            path = Path(command[command.index('--debug-file') + 1])
+            path.write_text('2026-01-01T00:00:00.000Z [DEBUG] mcp private-secret\n'
+                            '2026-01-01T00:00:01.000Z [DEBUG] hook private-secret\n')
+            self.stdin = io.StringIO()
+            self.stdout = io.TextIOWrapper(io.BytesIO(
+                b'{"type":"system","subtype":"init"}\n'
+                b'{"type":"result","subtype":"success","result":"answer"}\n'))
+            self.stderr = io.StringIO('')
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(codex_chat.subprocess, 'Popen', ClaudeProcess)
+    session = codex_chat.create_session('startup-diagnostics')
+    stream = _build_stream_state('startup-integrated', session['id'], time.time(),
+                                isolated_codex_workspace['workspace_dir'] / 'startup.txt')
+    stream['agent_backend'] = 'claude'
+    state.codex_streams[stream['id']] = stream
+    codex_chat._run_codex_stream(stream['id'], 'reply answer')
+    assert '--debug-file' in captured['command']
+    saved = codex_chat.get_session(session['id'])['messages'][-1]
+    assert saved['content'] == 'answer'
+    report = saved['company_timing']
+    assert report['cli']['startup_debug']['status'] == 'collected'
+    assert report['cli']['startup_debug']['longest_gaps'][0]['gap_ms'] == 1000
+    assert 'private-secret' not in json.dumps(report)
+    assert 'first_stdout_byte_wait' in {entry['name'] for entry in report['spans']}

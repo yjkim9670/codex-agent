@@ -318,7 +318,7 @@ def collect(context, *, force=False, now=None):
         return result
 
 
-def dashboard(account_id=None, days=30, effort='medium', environment='all'):
+def dashboard(account_id=None, days=30, effort='all', environment='all'):
     from . import codex_chat as chat
     context = chat._account_storage_context(account_id)
     if not context:

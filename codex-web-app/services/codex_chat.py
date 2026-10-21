@@ -10,6 +10,7 @@ import logging
 import math
 import mimetypes
 import os
+import platform
 import queue
 import re
 import signal
@@ -1550,9 +1551,9 @@ _COMPANY_TIMING_LOCK = threading.RLock()
 
 
 def _company_timing_enabled():
-    return str(os.environ.get('CODEX_COMPANY_MODE') or '').strip().lower() in {
+    return any(str(os.environ.get(name) or '').strip().lower() in {
         '1', 'true', 'yes', 'on',
-    }
+    } for name in ('CODEX_COMPANY_MODE', 'CODEX_TIMING_ENABLED'))
 
 
 def _add_company_timing(stream_id, operation, started, started_at):
@@ -1614,6 +1615,51 @@ def _with_company_timing(function):
     return measured
 
 
+# Fixed boundaries make reports comparable even when the rolling timeline wraps.
+_COMPANY_TIMING_SPANS = (
+    ('context', 'preparing_context', 'context_ready'),
+    ('environment', 'building_environment', 'waiting_execution_gate'),
+    ('execution_gate', 'waiting_execution_gate', 'execution_gate_acquired'),
+    ('launch_preparation', 'execution_gate_acquired', 'starting_process'),
+    ('process_spawn', 'starting_process', 'process_spawned'),
+    ('stdin', 'writing_stdin', 'stdin_write_finished'),
+    ('first_stdout_wait', 'process_spawned', 'first_stdout'),
+    ('claude_initialization', 'process_spawned', 'claude_system_init'),
+    ('claude_message_wait', 'claude_system_init', 'claude_event_stream_event.message_start'),
+    ('first_response_wait', 'process_spawned', 'first_response'),
+    ('claude_result', 'claude_event_stream_event.message_start', 'claude_event_result'),
+    ('claude_exit_wait', 'claude_event_result', 'process_exit_observed'),
+    ('pipe_drain', 'process_exit_observed', 'io_readers_joined'),
+    ('output_processing', 'io_readers_joined', 'cli_completed'),
+    ('finalization_dispatch', 'cli_completed', 'finalizing'),
+    ('response_save', 'saving_response', 'response_saved'),
+    ('post_save', 'response_saved', 'saving_timing_report'),
+    ('opencode_session', 'opencode_creating_session', 'opencode_connecting_events'),
+    ('opencode_connect', 'opencode_connecting_events', 'opencode_submitting'),
+    ('opencode_first_event_wait', 'opencode_submitting', 'opencode_first_event'),
+)
+_COMPANY_TIMING_MILESTONES = frozenset(
+    phase for _, start, end in _COMPANY_TIMING_SPANS for phase in (start, end))
+
+
+def _company_timing_environment():
+    # No host names, paths, URLs, proxy values, credentials or extra subprocesses.
+    try:
+        store_bytes = CODEX_CHAT_STORE_PATH.stat().st_size
+    except OSError:
+        store_bytes = None
+    return {
+        'os': platform.system(), 'os_release': platform.release(),
+        'architecture': platform.machine(), 'python': platform.python_version(),
+        'cpu_count': os.cpu_count(), 'session_store_bytes': store_bytes,
+        'company_mode': str(os.environ.get('CODEX_COMPANY_MODE') or '').lower()
+                        in {'1', 'true', 'yes', 'on'},
+        'proxy_configured': any(bool(os.environ.get(name)) for name in (
+            'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')),
+        'poll_interval_seconds': CODEX_STREAM_POLL_INTERVAL_SECONDS,
+    }
+
+
 def _build_company_timing_report(stream):
     if not _company_timing_enabled():
         return None
@@ -1631,7 +1677,23 @@ def _build_company_timing_report(stream):
         previous_elapsed = elapsed if elapsed is not None else max(0, previous - started_at)
     with _COMPANY_TIMING_LOCK:
         operations = deepcopy(stream.get('company_timing_operations') or {})
+    milestones = stream.get('company_timing_milestones') or {
+        entry['phase']: entry for entry in timeline}
+    spans = []
+    for name, start, end in _COMPANY_TIMING_SPANS:
+        first, last = milestones.get(start), milestones.get(end)
+        if first is None or last is None:
+            continue
+        first_ms, last_ms = first.get('elapsed_ms'), last.get('elapsed_ms')
+        # Concurrent readers can emit output before the stdin writer finishes.
+        if first_ms is None or last_ms is None or last_ms < first_ms:
+            continue
+        spans.append({'name': name, 'start_phase': start, 'end_phase': end,
+                      'duration_ms': round(last_ms - first_ms, 3)})
     return {
+        'schema_version': 2,
+        'environment': deepcopy(stream.get('company_timing_environment') or {}),
+        'spans': spans,
         'stream_id': stream.get('id'),
         'backend': _normalize_agent_backend_setting(stream.get('agent_backend')),
         'pid': stream.get('company_timing_pid'),
@@ -11035,6 +11097,7 @@ def _apply_claude_company_exec_env(env, model_override=None):
     return env
 
 
+@_measure_company_operation('execution_environment_build')
 def _build_agent_exec_env(agent_backend, queued_execution=False, account_id=None, internal_api_key=None):
     if agent_backend != 'claude':
         return _build_codex_exec_env(queued_execution=queued_execution, account_id=account_id,
@@ -11296,6 +11359,7 @@ def _build_execution_environment_overlay(execution_cwd=None, agent_backend='code
     return '\n'.join(lines)
 
 
+@_measure_company_operation('execution_context_prepare')
 def _prepare_agent_execution(prompt, stream):
     """Prepare final paths and attachments before choosing a transport."""
     backend = _normalize_agent_backend_setting(stream.get('agent_backend'))
@@ -11568,6 +11632,7 @@ def _build_claude_command(
     return cmd
 
 
+@_measure_company_operation('agent_command_build')
 def _build_agent_command(
         prompt,
         output_path=None,
@@ -11882,11 +11947,12 @@ def _extract_claude_usage_from_payload(payload):
         cache_creation_tokens = _coerce_non_negative_int(usage.get('cache_creation_input_tokens'))
         cached_input_tokens = (cache_read_tokens or 0) + (cache_creation_tokens or 0)
         normalized = {
-            'input_tokens': input_tokens or 0,
+            # Workbench input includes cache tokens; Claude reports them separately.
+            'input_tokens': (input_tokens or 0) + cached_input_tokens,
             'cached_input_tokens': cached_input_tokens,
             'output_tokens': output_tokens or 0,
             'reasoning_output_tokens': 0,
-            'total_tokens': (input_tokens or 0) + (output_tokens or 0),
+            'total_tokens': (input_tokens or 0) + cached_input_tokens + (output_tokens or 0),
         }
         return _normalize_token_usage(normalized)
     return _normalize_token_usage(payload.get('token_usage'))
@@ -15024,6 +15090,8 @@ def _record_company_request(stream_id, prompt):
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream is not None:
+            if 'company_timing_environment' not in stream:
+                stream['company_timing_environment'] = _company_timing_environment()
             stream['company_timing_request'] = {
                 'prompt_chars': len(prompt),
                 'prompt_utf8_bytes': len(prompt.encode('utf-8')),
@@ -15045,6 +15113,7 @@ def _record_company_claude_event(stream_id, event):
         if subtype in {'message_start', 'message_delta', 'message_stop',
                        'content_block_start', 'content_block_delta', 'content_block_stop'}:
             kind += '.' + subtype
+    system_phase = None
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream is None:
@@ -15053,6 +15122,36 @@ def _record_company_claude_event(stream_id, event):
         counts = cli.setdefault('event_counts', {})
         first = kind not in counts
         counts[kind] = counts.get(kind, 0) + 1
+        now = time.monotonic()
+        origin = stream.setdefault('company_event_origin', now)
+        elapsed = round((now - origin) * 1000, 3)
+        event_times = cli.setdefault('event_observations', {})
+        observation = event_times.setdefault(kind, {
+            'first_ms': elapsed, 'last_ms': elapsed, 'max_gap_ms': 0})
+        observation['max_gap_ms'] = max(observation['max_gap_ms'],
+                                          round(elapsed - observation['last_ms'], 3))
+        observation['last_ms'] = elapsed
+        if kind == 'system':
+            # Fixed categories keep diagnostics bounded and exclude payload text.
+            subtype = event.get('subtype')
+            subtype = subtype if subtype in {
+                'init', 'status', 'hook_started', 'hook_progress', 'hook_response',
+                'api_retry', 'compact_boundary', 'task_started', 'task_progress',
+                'task_notification', 'local_command_output',
+            } else 'other'
+            system_counts = cli.setdefault('system_event_counts', {})
+            if subtype not in system_counts:
+                system_phase = 'claude_system_' + subtype
+            system_counts[subtype] = system_counts.get(subtype, 0) + 1
+        raw_usage = event.get('usage')
+        if isinstance(raw_usage, dict):
+            cli['reported_usage'] = {
+                key: raw_usage[key] for key in (
+                    'input_tokens', 'output_tokens', 'cache_read_input_tokens',
+                    'cache_creation_input_tokens',
+                ) if type(raw_usage.get(key)) in (int, float)
+                and 0 <= raw_usage[key] < 1e15
+            }
         message = event.get('message')
         if not isinstance(message, dict) and isinstance(partial, dict):
             message = partial.get('message')
@@ -15070,6 +15169,8 @@ def _record_company_claude_event(stream_id, event):
                             if type(value) in (int, float) and 0 <= value < 1e15}
     if first:
         _record_stream_diagnostic(stream_id, 'claude_event_' + kind)
+    if system_phase:
+        _record_stream_diagnostic(stream_id, system_phase)
 
 
 def _record_company_phase(stream_id, phase):
@@ -15090,6 +15191,8 @@ def _record_stream_diagnostic(stream_id, phase):
                 'company_timing_origin', monotonic_now - max(
                     0, now - (stream.get('created_at') or stream.get('started_at') or now)))
             entry['elapsed_ms'] = round(max(0, (monotonic_now - origin) * 1000), 3)
+        if _company_timing_enabled() and phase in _COMPANY_TIMING_MILESTONES:
+            stream.setdefault('company_timing_milestones', {}).setdefault(phase, dict(entry))
         history = stream.setdefault('diagnostic_timeline', [])
         history.append(entry)
         del history[:-64]
@@ -15470,8 +15573,10 @@ def _run_codex_stream_impl(stream_id, prompt):
                         stream['process'] = None
                         stream['updated_at'] = now
 
+                _record_company_phase(stream_id, 'process_exit_observed')
                 stdout_thread.join(timeout=terminate_grace_seconds)
                 stderr_thread.join(timeout=terminate_grace_seconds)
+                _record_company_phase(stream_id, 'io_readers_joined')
 
                 with state.codex_streams_lock:
                     stream = state.codex_streams.get(stream_id)
@@ -17155,28 +17260,30 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
         )
 
     _record_company_phase(stream_id, 'response_saved')
-    _record_company_phase(stream_id, 'calibrating_usage')
     calibration_record = None
-    try:
-        prediction_scales, prediction_sources = _resolve_usage_prediction_scales(
-            account_id=account_id, model=response_model,
-            reasoning_effort=response_reasoning_effort, usage=token_usage,
-            service_tier=metadata['service_tier'],
-        )
-        calibration_record = _create_usage_calibration_record(
-            account_id=account_id,
-            event_id=f'stream:{stream_id}',
-            model=response_model,
-            reasoning_effort=response_reasoning_effort,
-            service_tier=metadata['service_tier'],
-            usage=token_usage,
-            limits_before=usage_limits_before,
-            prediction_scales=prediction_scales,
-            prediction_sources=prediction_sources,
-            status='completed' if message_role == 'assistant' else 'failed',
-        )
-    except Exception:
-        _LOGGER.debug('usage calibration record skipped', exc_info=True)
+    # Claude/OpenCode do not consume this Codex account's subscription quota.
+    if agent_backend == 'dtgpt':
+        _record_company_phase(stream_id, 'calibrating_usage')
+        try:
+            prediction_scales, prediction_sources = _resolve_usage_prediction_scales(
+                account_id=account_id, model=response_model,
+                reasoning_effort=response_reasoning_effort, usage=token_usage,
+                service_tier=metadata['service_tier'],
+            )
+            calibration_record = _create_usage_calibration_record(
+                account_id=account_id,
+                event_id=f'stream:{stream_id}',
+                model=response_model,
+                reasoning_effort=response_reasoning_effort,
+                service_tier=metadata['service_tier'],
+                usage=token_usage,
+                limits_before=usage_limits_before,
+                prediction_scales=prediction_scales,
+                prediction_sources=prediction_sources,
+                status='completed' if message_role == 'assistant' else 'failed',
+            )
+        except Exception:
+            _LOGGER.debug('usage calibration record skipped', exc_info=True)
     if calibration_record:
         metadata['usage_prediction'] = {
             'calculation_version': _USAGE_CALIBRATION_ALGORITHM,
@@ -17257,38 +17364,39 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             )
         except Exception:
             _LOGGER.exception('Automatic blog Usage-history completion update skipped (stream_id=%s)', stream_id)
-    _record_company_phase(stream_id, 'refreshing_usage')
     # Store a fresh account-limit observation for every completed Codex task.
     # This intentionally bypasses the four-hour scheduler; the scheduler still
     # owns only its KST on-the-hour automatic samples.
-    try:
-        refresh_result = refresh_account_usage_snapshot_if_due(
-            account_id=account_id,
-            force=True,
-            limit_sample_source=(
-                ('post_keepalive_automatic' if keepalive_mode == 'automatic' else 'post_keepalive')
-                if stream.get('usage_operation') == 'usage_keepalive'
-                else 'post_task'
-            ),
-        )
-        refreshed_snapshot = (
-            refresh_result.get('snapshot') if isinstance(refresh_result, dict) else None
-        )
-        metadata['usage_limits_after'] = _compact_usage_limit_snapshot(
-            refreshed_snapshot if isinstance(refreshed_snapshot, dict)
-            else get_usage_summary(account_id=account_id)
-        )
-        if saved_message and not _company_timing_enabled():
-            saved_message = update_message(
-                session_id,
-                saved_message['id'],
-                metadata=metadata,
-            ) or saved_message
-        if calibration_record:
-            _schedule_usage_calibration_followup(account_id)
-    except Exception:
-        _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
-    _record_company_phase(stream_id, 'usage_refresh_finished')
+    if agent_backend == 'dtgpt':
+        _record_company_phase(stream_id, 'refreshing_usage')
+        try:
+            refresh_result = refresh_account_usage_snapshot_if_due(
+                account_id=account_id,
+                force=True,
+                limit_sample_source=(
+                    ('post_keepalive_automatic' if keepalive_mode == 'automatic' else 'post_keepalive')
+                    if stream.get('usage_operation') == 'usage_keepalive'
+                    else 'post_task'
+                ),
+            )
+            refreshed_snapshot = (
+                refresh_result.get('snapshot') if isinstance(refresh_result, dict) else None
+            )
+            metadata['usage_limits_after'] = _compact_usage_limit_snapshot(
+                refreshed_snapshot if isinstance(refreshed_snapshot, dict)
+                else get_usage_summary(account_id=account_id)
+            )
+            if saved_message and not _company_timing_enabled():
+                saved_message = update_message(
+                    session_id,
+                    saved_message['id'],
+                    metadata=metadata,
+                ) or saved_message
+            if calibration_record:
+                _schedule_usage_calibration_followup(account_id)
+        except Exception:
+            _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
+        _record_company_phase(stream_id, 'usage_refresh_finished')
     if _company_timing_enabled():
         _record_stream_diagnostic(stream_id, 'saving_timing_report')
         with state.codex_streams_lock:

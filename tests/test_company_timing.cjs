@@ -22,6 +22,8 @@ vm.runInContext(source.slice(start, end), context);
 const footer = new Element('footer');
 const message = { company_timing: {
     backend: 'claude', stream_id: 'test-stream', pid: 123, started_at: 1000, completed_at: 3000,
+    environment: { os: 'Darwin' },
+    spans: [{ name: 'process_spawn', duration_ms: 123, start_phase: 'starting_process', end_phase: 'process_spawned' }],
     timeline: [{ phase: 'waiting_cli_output', at: 2000, since_previous_ms: 1000 }],
     operations: { session_store_read: { count: 2, total_ms: 13, max_ms: 9, first_at: 1000, last_at: 2000 } }
 } };
@@ -35,6 +37,9 @@ button.events.click({ preventDefault() {}, stopPropagation() {} });
 assert.equal(overlay[0], '타임 로그');
 assert.equal(overlay[2], '사내 디버깅 · 프로세스 진행 시각');
 assert.match(overlay[1], /CLI 출력 대기/);
+assert.match(overlay[1], /프로세스 생성: 123\.0ms/);
+assert.match(overlay[1], /Darwin/);
+assert.match(overlay[1], /합산 금지/);
 assert.match(overlay[1], /2회 \| 13\.0ms \| 9\.0ms/);
 assert.match(overlay[1], /1970-01-01T00:00:02\.000Z/);
 message.company_timing.pid = 456;
@@ -49,5 +54,5 @@ assert.equal(footer.children.length, 0);
 message.company_timing.pending = false;
 document.body.dataset.companyMode = 'false';
 context.setMessageCompanyTiming(footer, message);
-assert.equal(footer.children.length, 0);
+assert.equal(footer.children.length, 1);
 console.log('Company timing rendering: passed');

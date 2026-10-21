@@ -32324,6 +32324,8 @@ function buildCompanyTimingText(report) {
         opencode_submitting: 'OpenCode 요청 전송', opencode_first_event: 'OpenCode 첫 이벤트'
     };
     const operations = {
+        execution_context_prepare: '실행 문맥 준비',
+        execution_environment_build: '실행 환경 변수 구성', agent_command_build: 'CLI 명령 구성',
         usage_event_write: '사용량 이벤트 기록', usage_prediction_scales: '사용량 예측 계수 계산',
         usage_calibration: '사용량 보정 기록', usage_snapshot_refresh: '사용량 스냅샷 갱신',
         session_store_lock_wait: '세션 저장 잠금 대기',
@@ -32337,6 +32339,28 @@ function buildCompanyTimingText(report) {
         `작업 생성: ${stamp(report.started_at)}`,
         `응답 종료: ${report.completed_at ? stamp(report.completed_at) : '—'} · 종료 사유: ${report.finalize_reason || '—'} · exit: ${report.exit_code ?? '—'}`,
         `로그 스냅샷: ${report.snapshot_at ? stamp(report.snapshot_at) : '—'}`,
+        '', '환경 비교 정보:', JSON.stringify(report.environment || {}, null, 2),
+        '', '환경 비교용 구간 (서로 겹칠 수 있음, 합산 금지):',
+        ...(report.spans || []).map(entry => {
+            const labels = {
+                context: '문맥 준비', environment: '실행 환경·명령 구성',
+                execution_gate: '실행 잠금 대기', launch_preparation: '실행 직전 준비',
+                process_spawn: '프로세스 생성', stdin: '입력 쓰기·닫기',
+                first_stdout_wait: '프로세스 생성 → 첫 표준 출력',
+                claude_initialization: '프로세스 생성 → Claude 초기화 이벤트',
+                claude_message_wait: 'Claude 초기화 → 메시지 시작',
+                first_response_wait: '프로세스 생성 → 첫 응답 텍스트',
+                claude_result: 'Claude 메시지 시작 → 결과 이벤트',
+                claude_exit_wait: 'Claude 결과 이벤트 → 프로세스 종료 관측',
+                pipe_drain: '프로세스 종료 관측 → 출력 스레드 대기 완료',
+                output_processing: '출력 스레드 대기 완료 → CLI 처리 종료',
+                finalization_dispatch: 'CLI 처리 종료 → 결과 정리 시작',
+                response_save: '답변 저장', post_save: '답변 저장 후 사용량 등 후처리',
+                opencode_session: 'OpenCode 세션 생성', opencode_connect: 'OpenCode 이벤트 연결',
+                opencode_first_event_wait: 'OpenCode 전송 → 첫 이벤트'
+            };
+            return `${labels[entry.name] || entry.name}: ${ms(entry.duration_ms)} [${entry.start_phase} → ${entry.end_phase}]`;
+        }),
         '', '요청 정보 (문자·바이트는 토큰 수와 다름):',
         JSON.stringify(report.request || {}, null, 2),
         '', 'CLI 보고 정보 (수신한 값만 표시):',
@@ -32350,14 +32374,16 @@ function buildCompanyTimingText(report) {
             `${operations[name] || name}: ${entry.count}회 | ${ms(entry.total_ms)} | ${ms(entry.max_ms)} | ${stamp(entry.first_at)} → ${stamp(entry.last_at)}`),
         '', '단계 시각은 관측 시점입니다. 구간과 저장 집계는 겹치므로 합산하지 마세요.',
         '저장된 요약은 요약 자체의 저장·후속 큐 시작 전까지 포함합니다.',
-        'CLI duration_api_ms는 CLI가 보고한 값이며 네트워크·서버·모델 시간을 개별 분리하지 않습니다.'
+        'CLI duration_api_ms는 CLI가 보고한 값이며 네트워크·서버·모델 시간을 개별 분리하지 않습니다.',
+        'event_observations는 첫 CLI 이벤트 이후의 단조 시계 기준 ms이며 max_gap_ms는 같은 종류 이벤트 사이 최대 간격입니다.',
+        '같은 backend·model·effort·프롬프트 크기·캐시 조건으로 환경별 구간을 비교하세요. 누락 구간은 미관측이며 0ms가 아닙니다.'
     ];
     return lines.join('\n');
 }
 
 function setMessageCompanyTiming(footer, message) {
     if (!footer) return;
-    const report = document.body?.dataset?.companyMode === 'true' && message?.company_timing;
+    const report = message?.company_timing;
     const text = report && !report.pending ? buildCompanyTimingText(report) : '';
     footer.dataset.companyTimingText = text;
     let button = footer.querySelector('.message-timing-link');

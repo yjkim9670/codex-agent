@@ -3526,10 +3526,10 @@ def test_extract_claude_json_summary_reads_result_and_usage():
     assert summary['last_text'] == 'final ok'
     assert summary['claude_session_id'] == 'claude-session-1'
     assert summary['result_seen'] is True
-    assert summary['usage']['input_tokens'] == 5
+    assert summary['usage']['input_tokens'] == 7
     assert summary['usage']['cached_input_tokens'] == 2
     assert summary['usage']['output_tokens'] == 3
-    assert summary['usage']['total_tokens'] == 8
+    assert summary['usage']['total_tokens'] == 10
 
 
 def test_structured_report_preset_formats_valid_payload():
@@ -7930,3 +7930,116 @@ def test_company_diagnostic_clock_is_sampled_after_lock(monkeypatch):
     entry = stream['diagnostic_timeline'][0]
     assert entry['at'] == 10250
     assert entry['elapsed_ms'] == 250
+
+
+@pytest.mark.parametrize('backend', ['dtgpt', 'claude', 'opencode'])
+def test_finalize_only_refreshes_codex_quota_for_dtgpt(
+        isolated_codex_workspace, monkeypatch, backend):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [
+        {'id': value} for value in ('dtgpt', 'claude', 'opencode')])
+    calls = []
+    def predict(**kwargs):
+        calls.append('predict')
+        return {}, {}
+    def calibrate(**kwargs):
+        calls.append('calibrate')
+    def refresh(**kwargs):
+        calls.append('refresh')
+        return {}
+    monkeypatch.setattr(codex_chat, '_resolve_usage_prediction_scales', predict)
+    monkeypatch.setattr(codex_chat, '_create_usage_calibration_record', calibrate)
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', refresh)
+    session = codex_chat.create_session('backend-quota')
+    stream = _build_stream_state('quota-test', session['id'], time.time() - 1,
+        isolated_codex_workspace['workspace_dir'] / 'result.txt')
+    stream.update(agent_backend=backend, output='answer', output_last_message='answer',
+                  done=True, exit_code=0, completed_at=time.time())
+    state.codex_streams['quota-test'] = stream
+    saved = codex_chat.finalize_codex_stream('quota-test', trigger_queue=False)
+    assert saved['content'] == 'answer'
+    assert calls == (['predict', 'calibrate', 'refresh'] if backend == 'dtgpt' else [])
+    assert codex_chat.get_session(session['id'])['messages'][-1]['content'] == 'answer'
+
+
+def test_claude_cache_tokens_are_included_in_workbench_totals():
+    usage = codex_chat._extract_claude_usage_from_event({'usage': {
+        'input_tokens': 1, 'cache_read_input_tokens': 23781,
+        'cache_creation_input_tokens': 100, 'output_tokens': 242}})
+    assert usage['input_tokens'] == 23882
+    assert usage['cached_input_tokens'] == 23881
+    assert usage['total_tokens'] == 24124
+
+
+def test_company_claude_system_categories_and_raw_usage(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    stream = {'id': 'system-metadata', 'created_at': time.time()}
+    state.codex_streams[stream['id']] = stream
+    for subtype in ('init', 'hook_started', 'api_retry', 'secret-payload'):
+        codex_chat._record_company_claude_event(stream['id'], {
+            'type': 'system', 'subtype': subtype, 'text': 'secret-payload'})
+    codex_chat._record_company_claude_event(stream['id'], {
+        'type': 'result', 'usage': {'input_tokens': 1,
+            'cache_read_input_tokens': 23781, 'output_tokens': 242,
+            'secret': 'secret-payload'}})
+    cli = codex_chat._build_company_timing_report(stream)['cli']
+    assert cli['system_event_counts'] == {
+        'init': 1, 'hook_started': 1, 'api_retry': 1, 'other': 1}
+    assert cli['reported_usage'] == {
+        'input_tokens': 1, 'cache_read_input_tokens': 23781, 'output_tokens': 242}
+    assert cli['usage']['total_tokens'] == 24024
+    report = codex_chat._build_company_timing_report(stream)
+    assert 'claude_system_api_retry' in [entry['phase'] for entry in report['timeline']]
+    assert 'secret-payload' not in json.dumps(report)
+
+
+def test_local_timing_opt_in_records_safe_environment(monkeypatch):
+    monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
+    monkeypatch.setenv('CODEX_TIMING_ENABLED', '1')
+    monkeypatch.setenv('HTTPS_PROXY', 'https://secret-user:secret-password@private-host')
+    stream = {'id': 'local-timing', 'created_at': time.time()}
+    state.codex_streams[stream['id']] = stream
+    codex_chat._record_company_request(stream['id'], 'private prompt')
+    report = codex_chat._build_company_timing_report(stream)
+    assert report['schema_version'] == 2
+    assert report['environment']['company_mode'] is False
+    assert report['environment']['proxy_configured'] is True
+    assert report['environment']['python']
+    assert 'secret-password' not in json.dumps(report)
+    assert 'private-host' not in json.dumps(report)
+    assert 'private prompt' not in json.dumps(report)
+
+
+def test_timing_spans_survive_rolling_timeline_and_use_monotonic_clock(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    clock = {'mono': 100.0, 'wall': 1000.0}
+    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['mono'])
+    monkeypatch.setattr(codex_chat.time, 'time', lambda: clock['wall'])
+    stream = {'id': 'spans', 'created_at': 1000.0}
+    state.codex_streams[stream['id']] = stream
+    codex_chat._record_stream_diagnostic(stream['id'], 'starting_process')
+    clock.update(mono=100.25, wall=990.0)
+    codex_chat._record_stream_diagnostic(stream['id'], 'process_spawned')
+    for _ in range(70):
+        codex_chat._record_stream_diagnostic(stream['id'], 'waiting_cli_output')
+    report = codex_chat._build_company_timing_report(stream)
+    assert len(report['timeline']) == 64
+    assert report['spans'] == [{
+        'name': 'process_spawn', 'start_phase': 'starting_process',
+        'end_phase': 'process_spawned', 'duration_ms': 250.0}]
+    assert len(stream['company_timing_milestones']) == 2
+
+
+def test_timing_event_gaps_are_bounded_metadata(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    clock = {'mono': 100.0}
+    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['mono'])
+    stream = {'id': 'event-gaps', 'created_at': time.time()}
+    state.codex_streams[stream['id']] = stream
+    for elapsed in (0, 2, 7):
+        clock['mono'] = 100.0 + elapsed
+        codex_chat._record_company_claude_event(stream['id'], {
+            'type': 'system', 'subtype': 'hook_progress', 'text': 'secret'})
+    report = codex_chat._build_company_timing_report(stream)
+    assert report['cli']['event_observations']['system'] == {
+        'first_ms': 0, 'last_ms': 7000, 'max_gap_ms': 5000}
+    assert 'secret' not in json.dumps(report)

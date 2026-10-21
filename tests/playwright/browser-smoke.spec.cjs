@@ -64,5 +64,8 @@ test('browser UI smoke check', async ({ page }) => {
     if (process.env.CODEX_VERIFY_PREVIEW_SETTINGS === '1') {
         await require('../test_file_preview_settings_browser.cjs').verifyPreviewSettings(page.context().browser(), targetUrl);
     }
+    if (process.env.CODEX_VERIFY_COMPANY_TIMING === '1') {
+        await require('./company-timing.cjs').verifyCompanyTiming(page, expect);
+    }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

@@ -1642,6 +1642,9 @@ def _build_company_timing_report(stream):
         'pending': not bool(stream.get('diagnostic_persistence_complete') or stream.get('persistence_error')),
         'timeline': timeline,
         'operations': operations,
+        'request': deepcopy(stream.get('company_timing_request') or {}),
+        'cli': deepcopy(stream.get('company_timing_cli') or {}),
+        'exit_code': stream.get('exit_code'),
     }
 
 
@@ -5850,6 +5853,7 @@ def _record_token_usage_to_path(
         return False
 
 
+@_measure_company_operation('usage_event_write')
 def record_usage_event(
         event_id, session_id, usage, source='stream', account_id=None,
         operation='chat', message_id=None, model='', reasoning_effort='',
@@ -7661,6 +7665,7 @@ def _build_usage_calibration_summary(account_id=None):
     }
 
 
+@_measure_company_operation('usage_prediction_scales')
 def _resolve_usage_prediction_scales(account_id=None, model='', reasoning_effort='', usage=None, service_tier='standard'):
     history = get_usage_history_summary(account_id=account_id, scope='account')
     calibration = history.get('calibration') if isinstance(history, dict) else {}
@@ -7703,6 +7708,7 @@ def _resolve_usage_prediction_scales(account_id=None, model='', reasoning_effort
     return scales, sources
 
 
+@_measure_company_operation('usage_calibration')
 def _create_usage_calibration_record(
         account_id, event_id, model, reasoning_effort, service_tier, usage,
         limits_before, prediction_scales=None, prediction_sources=None,
@@ -9241,6 +9247,7 @@ def _schedule_usage_calibration_followup(account_id):
         timer.start()
 
 
+@_measure_company_operation('usage_snapshot_refresh')
 def refresh_account_usage_snapshot_if_due(
         account_id=None, force=False, limit_sample_source=None):
     context = _account_storage_context(account_id)
@@ -12728,15 +12735,17 @@ def _format_codex_exec_input_details(exec_details):
 def _write_codex_prompt_to_stdin(process, prompt):
     stdin = getattr(process, 'stdin', None)
     if stdin is None:
-        return
+        return False
     try:
         stdin.write(str(prompt or ''))
         stdin.close()
+        return True
     except (BrokenPipeError, OSError):
         try:
             stdin.close()
         except Exception:
             pass
+        return False
 
 
 def _agent_wait_seconds(name, default):
@@ -12758,8 +12767,10 @@ def _start_stream_io(stream_id, process, prompt):
 
     def write_prompt():
         try:
-            _write_codex_prompt_to_stdin(process, prompt)
+            written = _write_codex_prompt_to_stdin(process, prompt)
+            _record_company_phase(stream_id, 'stdin_write_failed' if written is False else 'stdin_write_finished')
         except Exception as exc:
+            _record_company_phase(stream_id, 'stdin_write_failed')
             _append_stream_exec_error(stream_id, f'Prompt input failed: {type(exc).__name__}')
             _terminate_stream_process(process, 1)
         finally:
@@ -14462,6 +14473,7 @@ def _handle_claude_stream_json_output_line(stream_id, line):
         _append_stream_chunk(stream_id, 'output', line)
         return
 
+    _record_company_claude_event(stream_id, event)
     _append_stream_event(stream_id, event)
     usage = _extract_claude_usage_from_event(event)
     if usage:
@@ -14511,6 +14523,10 @@ def _stream_reader(stream_id, pipe, key):
                 first = current is not None and not current.get('diagnostic_' + key + '_seen')
                 if current is not None:
                     current['diagnostic_' + key + '_seen'] = True
+                    if _company_timing_enabled():
+                        cli = current.setdefault('company_timing_cli', {})
+                        cli[key + '_lines'] = cli.get(key + '_lines', 0) + 1
+                        cli[key + '_utf8_bytes'] = cli.get(key + '_utf8_bytes', 0) + len(line.encode('utf-8'))
             if first:
                 _record_stream_diagnostic(stream_id, 'first_stdout' if key == 'output' else 'first_stderr')
             _apply_auth_failure_guard(line)
@@ -15002,6 +15018,60 @@ def _run_opencode_stream(stream_id, prompt, execution_context=None):
             threading.Thread(target=_abort_opencode_stream, args=(cleanup,), daemon=True).start()
 
 
+def _record_company_request(stream_id, prompt):
+    if not _company_timing_enabled():
+        return
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream is not None:
+            stream['company_timing_request'] = {
+                'prompt_chars': len(prompt),
+                'prompt_utf8_bytes': len(prompt.encode('utf-8')),
+                'model_override': stream.get('model_override'),
+                'reasoning_override': stream.get('reasoning_override'),
+                'inherit_model_settings': stream.get('inherit_model_settings', True),
+            }
+
+
+def _record_company_claude_event(stream_id, event):
+    """Bounded metadata only; never retain event text, tools, credentials or URLs."""
+    if not _company_timing_enabled():
+        return
+    kind = event.get('type')
+    kind = kind if kind in {'system', 'assistant', 'user', 'result', 'stream_event'} else 'other'
+    partial = event.get('event')
+    if kind == 'stream_event' and isinstance(partial, dict):
+        subtype = partial.get('type')
+        if subtype in {'message_start', 'message_delta', 'message_stop',
+                       'content_block_start', 'content_block_delta', 'content_block_stop'}:
+            kind += '.' + subtype
+    with state.codex_streams_lock:
+        stream = state.codex_streams.get(stream_id)
+        if stream is None:
+            return
+        cli = stream.setdefault('company_timing_cli', {})
+        counts = cli.setdefault('event_counts', {})
+        first = kind not in counts
+        counts[kind] = counts.get(kind, 0) + 1
+        message = event.get('message')
+        if not isinstance(message, dict) and isinstance(partial, dict):
+            message = partial.get('message')
+        model = event.get('model') or (message.get('model') if isinstance(message, dict) else None)
+        if isinstance(model, str):
+            cli['reported_model'] = model[:160]
+        for name in ('duration_ms', 'duration_api_ms', 'num_turns', 'total_cost_usd'):
+            value = event.get(name)
+            if type(value) in (int, float) and 0 <= value < 1e15:
+                cli[name] = value
+        usage = _extract_claude_usage_from_event(event) or (
+            _extract_claude_usage_from_event(partial) if isinstance(partial, dict) else None)
+        if usage:
+            cli['usage'] = {key: value for key, value in usage.items()
+                            if type(value) in (int, float) and 0 <= value < 1e15}
+    if first:
+        _record_stream_diagnostic(stream_id, 'claude_event_' + kind)
+
+
 def _record_company_phase(stream_id, phase):
     if _company_timing_enabled():
         _record_stream_diagnostic(stream_id, phase)
@@ -15009,17 +15079,17 @@ def _record_company_phase(stream_id, phase):
 
 def _record_stream_diagnostic(stream_id, phase):
     """Bounded lifecycle metadata only: never prompts, argv, or environment values."""
-    now = time.time()
     with state.codex_streams_lock:
         stream = state.codex_streams.get(stream_id)
         if stream is None:
             return
+        now, monotonic_now = time.time(), time.monotonic()
         entry = {'phase': phase, 'at': int(now * 1000)}
         if _company_timing_enabled():
             origin = stream.setdefault(
-                'company_timing_origin', time.monotonic() - max(
+                'company_timing_origin', monotonic_now - max(
                     0, now - (stream.get('created_at') or stream.get('started_at') or now)))
-            entry['elapsed_ms'] = round(max(0, (time.monotonic() - origin) * 1000), 3)
+            entry['elapsed_ms'] = round(max(0, (monotonic_now - origin) * 1000), 3)
         history = stream.setdefault('diagnostic_timeline', [])
         history.append(entry)
         del history[:-64]
@@ -15103,10 +15173,12 @@ def _run_codex_stream_impl(stream_id, prompt):
         if stream:
             stream['execution_context'] = execution_context
             stream['execution_cwd'] = execution_context['execution_cwd']
+    _record_company_request(stream_id, prompt)
     if backend == 'opencode':
         _run_opencode_stream(stream_id, prompt, execution_context=execution_context)
         return
     prompt += '\n\n## Execution Environment\n' + execution_context['environment']
+    _record_company_request(stream_id, prompt)
     poll_interval_seconds = _coerce_positive_seconds(
         CODEX_STREAM_POLL_INTERVAL_SECONDS,
         default_value=0.5,
@@ -15244,6 +15316,11 @@ def _run_codex_stream_impl(stream_id, prompt):
                 stream = state.codex_streams.get(stream_id)
                 if stream:
                     stream['exec_details'] = exec_details
+                    if _company_timing_enabled():
+                        request = stream.setdefault('company_timing_request', {})
+                        for option in ('--model', '--effort'):
+                            if option in cmd and cmd.index(option) + 1 < len(cmd):
+                                request[option[2:] + '_cli'] = cmd[cmd.index(option) + 1]
             _record_stream_diagnostic(stream_id, 'starting_process')
             process = subprocess.Popen(
                 cmd,
@@ -15257,6 +15334,7 @@ def _run_codex_stream_impl(stream_id, prompt):
                 errors=_CODEX_EXEC_TEXT_ERRORS,
                 bufsize=1
             )
+            _record_company_phase(stream_id, 'process_spawned')
             with state.codex_streams_lock:
                 stream = state.codex_streams.get(stream_id)
                 if stream:
@@ -17210,6 +17288,7 @@ def finalize_codex_stream(stream_id, trigger_queue=True):
             _schedule_usage_calibration_followup(account_id)
     except Exception:
         _LOGGER.debug('post-task account usage refresh skipped', exc_info=True)
+    _record_company_phase(stream_id, 'usage_refresh_finished')
     if _company_timing_enabled():
         _record_stream_diagnostic(stream_id, 'saving_timing_report')
         with state.codex_streams_lock:

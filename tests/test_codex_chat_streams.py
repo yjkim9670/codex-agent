@@ -7883,3 +7883,50 @@ def test_company_timing_cancellation_is_complete(isolated_codex_workspace, monke
     assert codex_chat.read_codex_stream(stream_id)['company_timing']['pending'] is False
     restored = codex_chat.get_session(session['id'])['messages'][-1]['company_timing']
     assert restored['pending'] is False
+
+
+def test_company_claude_timing_retains_safe_bounded_metadata(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    stream = {'id': 'event-timing', 'created_at': time.time(),
+              'model_override': 'sonnet', 'reasoning_override': 'low'}
+    state.codex_streams['event-timing'] = stream
+    codex_chat._record_company_request('event-timing', '안녕?')
+    for _ in range(100):
+        codex_chat._record_company_claude_event('event-timing', {
+            'type': 'stream_event', 'secret': 'do-not-retain',
+            'event': {'type': 'message_start', 'message': {
+                'model': 'claude-test', 'content': 'do-not-retain',
+                'usage': {'input_tokens': 123}}}})
+    codex_chat._record_company_claude_event('event-timing', {
+        'type': 'result', 'result': 'do-not-retain', 'duration_ms': 1200,
+        'duration_api_ms': 900, 'num_turns': 1,
+        'usage': {'input_tokens': 123, 'output_tokens': 7}})
+    report = codex_chat._build_company_timing_report(stream)
+    assert report['request']['prompt_chars'] == 3
+    assert report['request']['prompt_utf8_bytes'] == 7
+    assert report['cli']['reported_model'] == 'claude-test'
+    assert report['cli']['event_counts'] == {'stream_event.message_start': 100, 'result': 1}
+    assert report['cli']['duration_api_ms'] == 900
+    assert report['cli']['usage']['input_tokens'] == 123
+    assert len(report['timeline']) == 2
+    assert 'do-not-retain' not in json.dumps(report)
+    assert '안녕' not in json.dumps(report, ensure_ascii=False)
+
+
+def test_company_diagnostic_clock_is_sampled_after_lock(monkeypatch):
+    monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
+    clock = {'now': 10.0}
+    class DelayedLock:
+        def __enter__(self):
+            clock['now'] += 0.25
+        def __exit__(self, *args):
+            pass
+    monkeypatch.setattr(state, 'codex_streams_lock', DelayedLock())
+    monkeypatch.setattr(codex_chat.time, 'time', lambda: clock['now'])
+    monkeypatch.setattr(codex_chat.time, 'monotonic', lambda: clock['now'])
+    stream = {'id': 'clock', 'created_at': 10.0}
+    state.codex_streams['clock'] = stream
+    codex_chat._record_stream_diagnostic('clock', 'first_stdout')
+    entry = stream['diagnostic_timeline'][0]
+    assert entry['at'] == 10250
+    assert entry['elapsed_ms'] == 250

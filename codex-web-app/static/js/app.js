@@ -32286,9 +32286,9 @@ function syncMessageFooter(footer) {
     }
     const linkGroup = footer.querySelector('.message-footer-links');
     if (linkGroup) {
-        linkGroup.classList.toggle('is-hidden', !previewText && !detailText);
+        linkGroup.classList.toggle('is-hidden', !previewText && !detailText && !footer.dataset.companyTimingText);
     }
-    footer.classList.toggle('is-visible', parts.length > 0 || Boolean(previewText) || Boolean(detailText));
+    footer.classList.toggle('is-visible', parts.length > 0 || Boolean(previewText) || Boolean(detailText) || Boolean(footer.dataset.companyTimingText));
 }
 
 function setMessageDuration(footer, durationMs) {
@@ -32308,19 +32308,24 @@ function buildCompanyTimingText(report) {
         preparing_context: '문맥 준비 시작', context_ready: '문맥 준비 완료',
         building_environment: '실행 환경 구성', waiting_execution_gate: '실행 잠금 대기',
         execution_gate_acquired: '실행 잠금 획득', starting_process: 'CLI 프로세스 시작',
-        writing_stdin: '프롬프트 입력 전송', waiting_cli_output: 'CLI 출력 대기',
+        writing_stdin: '프롬프트 입력 전송', stdin_write_finished: '입력 쓰기·닫기 완료',
+        stdin_write_failed: '입력 전송 실패', process_spawned: 'CLI 프로세스 생성 완료',
+        waiting_cli_output: 'CLI 출력 대기 (폴링 관측)',
         first_stdout: '첫 표준 출력', first_stderr: '첫 표준 오류 출력',
         first_response: '첫 응답 텍스트', cli_completed: 'CLI 처리 종료',
         opencode_finished: 'OpenCode 처리 종료',
         finalizing: '결과 정리 시작', saving_response: '답변 저장 시작',
         response_saved: '답변 저장 완료', calibrating_usage: '사용량 보정',
         recording_usage: '사용량 기록', refreshing_usage: '사용량 갱신',
+        usage_refresh_finished: '사용량 갱신 처리 종료',
         saving_timing_report: '진행 시각 요약 저장 시작', finalized: '후처리 완료',
         opencode_creating_session: 'OpenCode 세션 생성',
         opencode_connecting_events: 'OpenCode 이벤트 연결',
         opencode_submitting: 'OpenCode 요청 전송', opencode_first_event: 'OpenCode 첫 이벤트'
     };
     const operations = {
+        usage_event_write: '사용량 이벤트 기록', usage_prediction_scales: '사용량 예측 계수 계산',
+        usage_calibration: '사용량 보정 기록', usage_snapshot_refresh: '사용량 스냅샷 갱신',
         session_store_lock_wait: '세션 저장 잠금 대기',
         session_store_read: '전체 세션 읽기·정규화',
         session_store_write: '전체 세션 쓰기·교체',
@@ -32330,38 +32335,55 @@ function buildCompanyTimingText(report) {
     const lines = [
         `backend: ${report.backend || ''} · PID: ${report.pid || '—'} · stream: ${report.stream_id || ''}`,
         `작업 생성: ${stamp(report.started_at)}`,
-        `응답 종료: ${report.completed_at ? stamp(report.completed_at) : '—'} · 종료 사유: ${report.finalize_reason || '—'}`,
-        '시각 (UTC, 최근 최대 64개) | 직전 기록 이후 | 진행 단계',
+        `응답 종료: ${report.completed_at ? stamp(report.completed_at) : '—'} · 종료 사유: ${report.finalize_reason || '—'} · exit: ${report.exit_code ?? '—'}`,
+        `로그 스냅샷: ${report.snapshot_at ? stamp(report.snapshot_at) : '—'}`,
+        '', '요청 정보 (문자·바이트는 토큰 수와 다름):',
+        JSON.stringify(report.request || {}, null, 2),
+        '', 'CLI 보고 정보 (수신한 값만 표시):',
+        JSON.stringify(report.cli || {}, null, 2),
+        '',
+        '시각 (UTC, 최근 최대 64개) | 작업 생성 이후 | 직전 기록 이후 | 진행 단계',
         ...(report.timeline || []).map(entry =>
-            `${stamp(entry.at)} | +${ms(entry.since_previous_ms)} | ${phases[entry.phase] || entry.phase}`),
-        '', '세션 저장 집계: 횟수 | 누적 | 최대 | 최초 시작 → 마지막 완료',
+            `${stamp(entry.at)} | ${entry.elapsed_ms == null ? '—' : ms(entry.elapsed_ms)} | +${ms(entry.since_previous_ms)} | ${phases[entry.phase] || entry.phase}`),
+        '', '작업별 집계: 횟수 | 누적 | 최대 | 최초 시작 → 마지막 완료',
         ...Object.entries(report.operations || {}).map(([name, entry]) =>
             `${operations[name] || name}: ${entry.count}회 | ${ms(entry.total_ms)} | ${ms(entry.max_ms)} | ${stamp(entry.first_at)} → ${stamp(entry.last_at)}`),
         '', '단계 시각은 관측 시점입니다. 구간과 저장 집계는 겹치므로 합산하지 마세요.',
-        '재조회한 저장 요약은 요약 자체의 저장·후속 큐 시작 전까지 포함합니다.'
+        '저장된 요약은 요약 자체의 저장·후속 큐 시작 전까지 포함합니다.',
+        'CLI duration_api_ms는 CLI가 보고한 값이며 네트워크·서버·모델 시간을 개별 분리하지 않습니다.'
     ];
     return lines.join('\n');
 }
 
 function setMessageCompanyTiming(footer, message) {
     if (!footer) return;
-    let panel = footer.querySelector('.message-company-timing');
     const report = document.body?.dataset?.companyMode === 'true' && message?.company_timing;
-    if (!report || report.pending) {
-        panel?.remove();
+    const text = report && !report.pending ? buildCompanyTimingText(report) : '';
+    footer.dataset.companyTimingText = text;
+    let button = footer.querySelector('.message-timing-link');
+    if (!text) {
+        button?.remove();
         return;
     }
-    if (!panel) {
-        panel = document.createElement('details');
-        panel.className = 'message-company-timing';
-        panel.open = true;
-        const summary = document.createElement('summary');
-        summary.textContent = '사내 디버깅 · 프로세스 진행 시각';
-        panel.appendChild(summary);
-        panel.appendChild(document.createElement('pre'));
-        footer.appendChild(panel);
+    if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'message-detail-link message-timing-link';
+        button.textContent = '타임 로그 보기';
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!footer.dataset.companyTimingText) return;
+            openMessageLogOverlay(
+                '타임 로그',
+                // Indent as a Markdown code block to preserve columns and line breaks.
+                footer.dataset.companyTimingText.split('\n').map(line => '    ' + line).join('\n'),
+                '사내 디버깅 · 프로세스 진행 시각',
+                { mode: MESSAGE_LOG_OVERLAY_MODE_DETAIL }
+            );
+        });
+        (footer.querySelector('.message-footer-links') || footer).appendChild(button);
     }
-    panel.querySelector('pre').textContent = buildCompanyTimingText(report);
 }
 
 function setMessageTimingBreakdown(footer, message) {

@@ -27,9 +27,11 @@
 
 ## Claude 초기화 전 지연 진단
 
-서버 시작 환경에 `CODEX_CLAUDE_STARTUP_DIAGNOSTICS=1`을 추가하면 새 Claude
-스트리밍 작업마다 `--debug-file`을 지정합니다. 이 옵션은 사내·사외 모두 기본
-비활성화이며, 켜면 타임 로그도 활성화됩니다. 서버는 사용자가 직접 재시작합니다.
+`CODEX_COMPANY_MODE=1`이면 Claude 초기화 진단이 기본 활성화되어 새 Claude
+스트리밍 작업마다 `--debug-file`을 지정합니다. 사외에서는 기본 비활성화입니다.
+`CODEX_CLAUDE_STARTUP_DIAGNOSTICS`가 미설정이거나 빈 값이면 사내 모드 설정을
+따르고, 명시적으로 `1`을 지정하면 활성화, `0`을 지정하면 사내에서도 비활성화합니다.
+진단을 켜면 타임 로그도 활성화됩니다. 서버는 사용자가 직접 재시작합니다.
 Codex/OpenCode 명령이나 프로젝트 설정 파일은 변경하지 않습니다.
 
 원본은 기존 CLI 출력 디렉터리 아래
@@ -130,8 +132,8 @@ python .\scripts\compare_claude_startup.py `
 | 모드 | 작업마다 추가되는 비용 |
 | --- | --- |
 | 사외 기본 | 상세 계측 없음. 기존 lifecycle 시각·INFO 로그와 stdout/stderr 상세 보관 비용은 있음 |
-| 사내 기본 / 사외 `CODEX_TIMING_ENABLED=1` | 줄별 UTF-8 바이트 계산·잠금, Claude 이벤트별 카운터·시각·usage 집계, 함수별 시간 집계, 보고서 복사·직렬화·로그 출력, 완료 보고서용 세션 갱신 |
-| `CODEX_CLAUDE_STARTUP_DIAGNOSTICS=1` | 위 상세 계측 + CLI 디버그 파일 쓰기, 청크 디코딩·추가 경계 시각, 종료 후 최대 4 MiB 디버그 스캔 |
+| 사내 진단 해제(`CODEX_CLAUDE_STARTUP_DIAGNOSTICS=0`) / 사외 `CODEX_TIMING_ENABLED=1` | 줄별 UTF-8 바이트 계산·잠금, Claude 이벤트별 카운터·시각·usage 집계, 함수별 시간 집계, 보고서 복사·직렬화·로그 출력, 완료 보고서용 세션 갱신 |
+| 사내 기본 / `CODEX_CLAUDE_STARTUP_DIAGNOSTICS=1` | 위 상세 계측 + CLI 디버그 파일 쓰기, 청크 디코딩·추가 경계 시각, 종료 후 최대 4 MiB 디버그 스캔 |
 
 이벤트/집계 종류와 시각 목록은 제한하지만 기존 stdout/stderr 문자열과
 세션 파일의 크기는 별개입니다. 긴 stderr는 원본과 표시용 문자열에 보관되어

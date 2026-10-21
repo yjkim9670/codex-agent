@@ -1559,13 +1559,16 @@ def _company_timing_enabled():
 
 
 def _claude_startup_diagnostics_enabled():
-    return str(os.environ.get('CODEX_CLAUDE_STARTUP_DIAGNOSTICS') or '').strip().lower() in {
+    setting = str(os.environ.get('CODEX_CLAUDE_STARTUP_DIAGNOSTICS') or '').strip()
+    if not setting:
+        setting = str(os.environ.get('CODEX_COMPANY_MODE') or '').strip()
+    return setting.lower() in {
         '1', 'true', 'yes', 'on',
     }
 
 
 def _prepare_claude_startup_diagnostics(stream_id, cmd, output_path):
-    """Opt in per process, keep raw CLI logs outside chat/store payloads."""
+    """Default on in company mode; keep raw CLI logs outside chat/store payloads."""
     if not _claude_startup_diagnostics_enabled():
         return None
     try:

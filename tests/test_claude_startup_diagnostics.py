@@ -69,16 +69,37 @@ def test_reader_observes_byte_before_line(monkeypatch):
     assert [entry['phase'] for entry in stream['diagnostic_timeline']].count('first_stdout_byte') == 1
 
 
-def test_debug_file_is_opt_in_and_isolated(tmp_path, monkeypatch):
+@pytest.mark.parametrize(('company_mode', 'diagnostics', 'expected'), [
+    (None, None, False),
+    ('0', None, False),
+    ('1', None, True),
+    (' true ', '', True),
+    ('1', '0', False),
+    ('1', 'false', False),
+    ('0', '1', True),
+    (None, ' ON ', True),
+])
+def test_startup_diagnostics_defaults_to_company_mode(monkeypatch, company_mode, diagnostics, expected):
+    for name, value in [('CODEX_COMPANY_MODE', company_mode),
+                        ('CODEX_CLAUDE_STARTUP_DIAGNOSTICS', diagnostics)]:
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert codex_chat._claude_startup_diagnostics_enabled() is expected
+
+
+def test_debug_file_defaults_to_company_mode_and_is_isolated(tmp_path, monkeypatch):
     stream_id = 'startup-debug-test'
     state.codex_streams[stream_id] = {}
     try:
         monkeypatch.delenv('CODEX_CLAUDE_STARTUP_DIAGNOSTICS', raising=False)
+        monkeypatch.delenv('CODEX_COMPANY_MODE', raising=False)
         command = ['claude', '-p']
         assert codex_chat._prepare_claude_startup_diagnostics(stream_id, command, tmp_path / 'output') is None
         assert command == ['claude', '-p']
         assert not list(tmp_path.iterdir())
-        monkeypatch.setenv('CODEX_CLAUDE_STARTUP_DIAGNOSTICS', '1')
+        monkeypatch.setenv('CODEX_COMPANY_MODE', '1')
         path = codex_chat._prepare_claude_startup_diagnostics(stream_id, command, tmp_path / 'output')
         assert path.is_file()
         assert command[-2:] == ['--debug-file', str(path)]

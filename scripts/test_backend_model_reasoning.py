@@ -591,12 +591,14 @@ def run_direct(row, timeout):
                     'exit_code': proc.returncode, 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
                     'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
         return json.loads(stdout.decode('utf-8').splitlines()[-1])
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], capture_output=True)
         else:
             os.killpg(proc.pid, signal.SIGKILL)
         stdout, stderr = proc.communicate()
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         return {'status': 'TIMEOUT', 'detail': 'Direct process tree terminated; OpenCode remote cleanup may be needed',
                 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
                 'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
@@ -604,6 +606,48 @@ def run_direct(row, timeout):
         return {'status': 'FAIL', 'detail': 'Invalid direct worker verdict',
                 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
                 'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
+
+
+def run_standalone(cases, args, directory):
+    """Read-only with respect to the Workbench HTTP server and chat store."""
+    results = []
+    interrupted = False
+    try:
+        for index, (row, _) in enumerate(cases, 1):
+            started = time.monotonic()
+            result = dict(row, scenario='direct')
+            trace_path = directory / f'case-{index:03d}.jsonl'
+            result['trace_file'] = trace_path.name
+
+            def trace(event, **fields):
+                with trace_path.open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(dict(event=event, at=int(time.time() * 1000),
+                        elapsed=round(time.monotonic() - started, 3), **fields), ensure_ascii=False) + '\n')
+
+            trace('case_started', backend=row['backend'], model=row['model'],
+                  reasoning=row['reasoning'], mode='direct', timeout=args.timeout)
+            if row['status'] == 'PLANNED':
+                with Progress(row, 'direct', index, len(cases), args.timeout) as progress:
+                    progress.update('running-direct')
+                    try:
+                        result.update(run_direct(row, args.timeout))
+                    except Exception as exc:
+                        result.update(status='FAIL', detail=diagnostic_text(str(exc)),
+                                      exception_traceback=diagnostic_text(traceback.format_exc()))
+                    progress.update('finished-direct', status=result['status'])
+            result['seconds'] = round(time.monotonic() - started, 3)
+            trace('case_finished', result=result)
+            results.append(result)
+            report(directory, results)
+    except KeyboardInterrupt:
+        interrupted = True
+        raise
+    finally:
+        report(directory, results)
+        write_json(directory / 'summary.json', dict(mode='direct', cases=len(results),
+            interrupted=interrupted, workbench_settings_changed=False, workbench_sessions_created=0))
+        print(f'Reports: {directory}')
+    return int(any(r['status'] != 'PASS' for r in results))
 
 
 def write_json(path, data):
@@ -632,7 +676,8 @@ def main(argv=None):
     parser.add_argument('--reasoning', action='append', default=[])
     parser.add_argument('--all', action='store_true')
     parser.add_argument('--list-only', action='store_true')
-    parser.add_argument('--mode', choices=['stream', 'sync'], default='stream')
+    parser.add_argument('--mode', choices=['direct', 'stream', 'sync'], default='direct',
+                        help='direct (default): no Workbench sessions/settings writes; stream/sync: live HTTP integration tests')
     parser.add_argument('--direct', choices=['off', 'failed', 'all'], default='off')
     parser.add_argument('--timeout', type=float, default=90)
     parser.add_argument('--output-directory')
@@ -648,6 +693,10 @@ def main(argv=None):
         return 0
     if args.timeout <= 0:
         parser.error('--timeout must be positive')
+    if args.mode == 'direct' and (args.context_checks or args.worktree_check or args.queue_check):
+        parser.error('Context/worktree/queue checks require --mode stream or --mode sync (creates Workbench sessions)')
+    if args.mode == 'direct' and args.direct != 'off':
+        parser.error('--direct is an additional comparison for --mode stream/sync; default mode already runs directly')
     if args.context_checks and not args.expected_workspace:
         parser.error('--context-checks requires --expected-workspace (server absolute path)')
     if urlsplit(args.base_url).scheme not in ('http', 'https'):
@@ -684,13 +733,19 @@ def main(argv=None):
             seen.add(row['backend'])
     count = sum(r['status'] == 'PLANNED' for r, _ in cases)
     queue_count = sum(s == 'queue' for _, s in cases)
-    print(f'Workbench model calls: {count + queue_count}; direct comparison: up to {count if args.direct != "off" else 0}')
+    if args.mode == 'direct':
+        print(f'Direct model calls: {count}; Workbench sessions: 0; settings: read-only. Runs on this PC using local credentials.')
+    else:
+        print('HTTP integration mode creates Workbench sessions and requires an idle server.')
+        print(f'Workbench model calls: {count + queue_count}; direct comparison: up to {count if args.direct != "off" else 0}')
     for row, scenario in cases:
         print(f"{row['backend']:8} {row['model']:32} {row['reasoning'] or '(default)':10} {scenario:12} {row['status']}")
     if args.list_only:
         return 0
     directory = Path(args.output_directory or ROOT / 'tmp' / ('backend-tests-' + uuid.uuid4().hex[:12])).resolve()
     directory.mkdir(parents=True, exist_ok=False)
+    if args.mode == 'direct':
+        return run_standalone(cases, args, directory)
     backup_settings = {k: snapshot['settings'].get(k) or '' for k in KEYS}
     backup = directory / 'restore-settings.json'
     write_json(backup, {'base_url': client.url, 'settings': backup_settings})

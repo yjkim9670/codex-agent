@@ -1,8 +1,48 @@
 # 백엔드 모델/reasoning 실행 검사
 
-## API 키 순환과 사내 실행 경로 (2026-10-22)
+## 기본 실행: 작업 상태와 무관한 세션 없는 검사 (2026-10-22)
 
-기본 HTTP 검사(`stream`/`sync`)는 실제 Workbench API를 사용한다. 사내 Windows/Linux의
+기본 모드는 이제 `direct`다. 서버의 `/api/codex/settings`를 한 번 조회해 모델
+카탈로그를 얻고, 이 PC에서 CLI/provider를 직접 실행한다. 활성 스트림 조회나
+중단, 공용 설정 변경·복원, Workbench 채팅 세션 생성은 하지 않는다. 따라서
+Workbench에서 다른 작업이 실행 중이어도 테스트할 수 있고 채팅 목록에 테스트
+세션이 쌓이지 않는다. 모델 호출 비용과 로컬 CLI/provider 자원 사용은 발생한다.
+
+```powershell
+# 기존 기본 명령 그대로: OpenCode → Claude, Workbench 세션 생성 없음
+.\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000
+# 모든 모델/reasoning 조합
+.\scripts\test_backend_model_reasoning.ps1 -All
+```
+
+```bash
+python3 scripts/test_backend_model_reasoning.py --base-url http://127.0.0.1:5000 --all
+```
+
+서버는 카탈로그 조회용으로 접속 가능해야 한다. 모델 실행에는 **테스트를 실행하는
+PC의** CLI·Python 의존성·인증·게이트웨이 환경이 쓰인다. 원격 서버의 저장 키가
+클라이언트로 전달되지는 않는다. 사내 환경에서는 아래의 직접 실행용 키 설정을
+따른다. 기본 모드에서는 서버 Key Pool을 HTTP 실행 요청으로 예약하지 않는다.
+원격 서버와 다른 PC에서 실행하면 해당 PC의 실행 환경을 검사한다.
+
+진행 표시, 실행별 타임아웃, 키 순환, stdout/stderr 진단, `case-NNN.jsonl`과
+JSON/CSV 보고서는 유지한다. 기본 모드에는 세션 ID와 설정 복구 파일이 없다.
+`summary.json`에 `mode=direct`, `workbench_settings_changed=false`,
+`workbench_sessions_created=0`을 기록한다. Ctrl+C 시 로컬 자식 프로세스 트리를
+종료한다. OpenCode provider 자체 세션은 Workbench 채팅 세션과 별개다.
+
+기존 HTTP 통합 검사가 필요하면 `-Mode stream` 또는 `-Mode sync`를 명시한다
+(Python: `--mode stream|sync`). 이 모드는 여전히 실제 Workbench 세션을 생성하고
+공용 설정을 변경하므로 서버가 유휴 상태여야 한다. 아래의 기존 HTTP 예제에는
+`-Mode stream`을 추가해야 한다. Context/Worktree/Queue 검사와 추가 비교용
+`-Direct failed|all`도 HTTP 모드에서만 허용한다. 기본 모드는 CLI 인자와 응답을
+검증하며 HTTP 큐·첨부·저장 경로를 검증하지 않는다. 기존 테스트 세션은 삭제하지
+않는다. 스크립트 변경이므로 Workbench 서버 재시작은 필요 없다.
+
+
+## 키 설정과 명시적 HTTP 통합 모드 상세 (2026-10-22)
+
+명시적 HTTP 검사(`stream`/`sync`)는 실제 Workbench API를 사용한다. 사내 Windows/Linux의
 서버 설정 화면에 등록된 Key Pool을 실행 요청마다 예약·순환하며, 큐 작업도 등록 시
 예약한 키를 유지한다. 클라이언트 셸의 환경변수는 이미 실행 중인 서버에 전달되지 않는다.
 OpenCode는 Workbench와 동일하게 자체 provider 인증을 사용한다.
@@ -56,16 +96,16 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 .\scripts\test_backend_model_reasoning.ps1 -Backend opencode,claude -All -TimeoutSeconds 300
 
 # 특정 모델/effort 선택, 실패 시 로컬 직접 실행과 비교
-.\scripts\test_backend_model_reasoning.ps1 -Backend claude -Model '실제-카탈로그-모델-ID' -Reasoning low,high -Direct failed
+.\scripts\test_backend_model_reasoning.ps1 -Backend claude -Model '실제-카탈로그-모델-ID' -Reasoning low,high -Mode stream -Direct failed
 
 # 동기 API 경로
 .\scripts\test_backend_model_reasoning.ps1 -Backend claude -Mode sync
 
 # 작업 경로 확인 + 한글/공백 파일명 첨부 읽기 (백엔드별 대표 조합)
-.\scripts\test_backend_model_reasoning.ps1 -ContextChecks -ExpectedWorkspace 'C:\작업 폴더\workspace'
+.\scripts\test_backend_model_reasoning.ps1 -Mode stream -ContextChecks -ExpectedWorkspace 'C:\작업 폴더\workspace'
 
 # 각각 추가 호출 발생. worktree는 실제 테스트용 worktree를 생성한다.
-.\scripts\test_backend_model_reasoning.ps1 -Backend claude -WorktreeCheck -QueueCheck
+.\scripts\test_backend_model_reasoning.ps1 -Backend claude -Mode stream -WorktreeCheck -QueueCheck
 
 # 강제 종료/서버 연결 장애로 복원이 실패했을 때
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://127.0.0.1:5000 -RestoreSettings '결과폴더\restore-settings.json'
@@ -85,7 +125,7 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 
 모델은 `/api/codex/settings`의 `model_catalogs_by_agent_backend`에서 수집한다. `codex`는 내부 ID `dtgpt`로 변환한다. `-All`은 모델별 reasoning 목록을 사용하며, 기본 실행은 백엔드별 현재 모델 또는 첫 모델의 기본 reasoning을 선택한다. OpenCode는 reasoning을 전달하지 않는 현재 구현에 맞춰 기본 실행만 검사한다. 명시한 미지원 모델/reasoning은 `UNSUPPORTED`이며 성공으로 계산하지 않는다. 모델 필터는 선택한 각 백엔드에 적용하므로, 백엔드마다 모델 ID가 다르면 따로 실행한다.
 
-검사는 순차 실행한다. 기존 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 설정을 사용하는 UI/다른 클라이언트에서 새 작업이나 설정 변경을 하지 않는다. 일반 모드에서는 설정 세 항목(`agent_backend`, `model`, `reasoning_effort`)만 변경하고 `finally`에서 복원 및 재조회 검증한다. API의 빈 설정 표현에 맞춰 백업의 null은 빈 문자열로 복원한다. 프로세스 강제 종료나 서버 장애 시 복구 파일로 다시 복원한다. 다중 사용자 모드에서 설정 변경은 관리자 권한이 필요하다. 인증이 필요하면 현재 셸의 `WORKBENCH_TEST_COOKIE` 또는 `WORKBENCH_TEST_AUTHORIZATION` 환경변수로 전달한다. 인증값은 인자/결과에 저장하지 않는다. 암호화만 허용하는 서버 구성은 이 클라이언트의 지원 범위 밖이다.
+HTTP 통합 검사는 순차 실행한다. 이 모드에서는 기존 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 설정을 사용하는 UI/다른 클라이언트에서 새 작업이나 설정 변경을 하지 않는다. 일반 모드에서는 설정 세 항목(`agent_backend`, `model`, `reasoning_effort`)만 변경하고 `finally`에서 복원 및 재조회 검증한다. API의 빈 설정 표현에 맞춰 백업의 null은 빈 문자열로 복원한다. 프로세스 강제 종료나 서버 장애 시 복구 파일로 다시 복원한다. 다중 사용자 모드에서 설정 변경은 관리자 권한이 필요하다. 인증이 필요하면 현재 셸의 `WORKBENCH_TEST_COOKIE` 또는 `WORKBENCH_TEST_AUTHORIZATION` 환경변수로 전달한다. 인증값은 인자/결과에 저장하지 않는다. 암호화만 허용하는 서버 구성은 이 클라이언트의 지원 범위 밖이다.
 
 스트림 모드는 UI처럼 POST로 실행을 시작한 뒤 GET으로 `done`/`saved`를 폴링한다. 고유 문자열이 최종 저장된 assistant 메시지에 있는지, 시작/종료/저장 메타데이터가 요청과 일치하는지 확인한다. assistant 메시지는 ID로 찾아 user 프롬프트의 문자열을 성공으로 오인하지 않는다. 모델이 반환한 자기소개를 모델 식별 증거로 사용하지 않는다. 일반 실패 후 다음 조합을 계속 실행한다. 타임아웃 시 해당 테스트 스트림만 중단하고 종료/저장을 확인한다. 중단을 확인하지 못하거나 동기 요청의 완료 여부가 불분명하면 다음 조합을 실행하지 않는다. 동기 HTTP 연결을 끊어도 서버 작업은 자동 취소되지 않으므로 결과의 session ID로 상태를 확인한다.
 
@@ -93,7 +133,7 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 
 `-Direct off|failed|all`은 추가 모델 호출 옵션이다. 실행한 PC에 저장소의 Python 의존성과 CLI/인증/환경변수가 있어야 한다. Workbench 서버와 다른 PC에서 실행하면 직접 비교는 해당 PC 환경을 검사하므로 동일 환경의 재현이 아니다. Codex/Claude는 기존 `_build_agent_command`를, OpenCode는 `_prepare_agent_execution`과 `_execute_opencode_prompt`를 재사용한다. 직접 실행은 입력 인자/API payload 생성 경로를 재사용했다는 증거이며 원격 모델의 내부 reasoning 사용까지 증명하지 않는다. 직접 실행 성공은 Workbench 실패를 PASS로 바꾸지 않는다. 타임아웃은 로컬 프로세스 트리를 종료하며 OpenCode 원격 세션은 별도 정리가 필요할 수 있다.
 
-결과 폴더에는 `results.json`, UTF-8 BOM `results.csv`, 상세 진단을 포함한 `diagnostics.jsonl`, `summary.json`, `restore-settings.json`이 생성된다. 결과는 세션 ID와 worktree 정보를 포함한다. 재검토할 수 있도록 테스트 세션·첨부·worktree는 보존한다. 확인 후 Workbench UI/API로 정리한다. 종료 코드: 0 전체 성공, 1 실패/미지원/타임아웃/복원 실패, 2 실행 자체 오류, 130 사용자 중단. `-ListOnly`는 조회가 성공하면 미지원 항목이 있어도 0이다.
+결과 폴더에는 `results.json`, UTF-8 BOM `results.csv`, 상세 진단을 포함한 `diagnostics.jsonl`, `summary.json`, `restore-settings.json`이 생성된다. HTTP 통합 결과는 세션 ID와 worktree 정보를 포함한다. 재검토할 수 있도록 테스트 세션·첨부·worktree는 보존한다. 확인 후 Workbench UI/API로 정리한다. 종료 코드: 0 전체 성공, 1 실패/미지원/타임아웃/복원 실패, 2 실행 자체 오류, 130 사용자 중단. `-ListOnly`는 조회가 성공하면 미지원 항목이 있어도 0이다.
 
 각 검사에는 `case-001.jsonl` 형태의 실시간 추적 파일도 생성된다. HTTP 시작/완료와 소요 시간, HTTP 오류 코드와 오류 본문, 검사 단계, 스트림 상태를 즉시 기록하므로 테스트가 중간에 종료돼도 앞선 기록을 확인할 수 있다. `at`은 서버 타임라인과 대조할 수 있는 Unix 밀리초이며 `elapsed`는 검사 시작 이후 초 단위 시간이다. `stream_diagnostics`에는 스트림의 stdout(`output`), stderr/서버 오류(`error`), 이벤트와 종료 정보가 변경될 때마다 남는다. `persisted_message`에는 검증한 assistant 메시지가, `exception`에는 실패 예외와 traceback이 남는다. HTTP 오류 본문은 최대 64 KiB를 읽는다.
 

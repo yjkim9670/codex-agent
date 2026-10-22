@@ -197,7 +197,7 @@ def test_actual_http_matrix_persistence_and_restoration(fake_server, tmp_path, m
 
 def test_failure_does_not_abort_next_case_and_restores(fake_server, tmp_path):
     fake_server.failure = True
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--all',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'codex', '--all',
                         '--output-directory', str(tmp_path / 'report')]) == 1
     results = json.loads((tmp_path / 'report' / 'results.json').read_text())
     assert [r['status'] for r in results] == ['FAIL', 'FAIL']
@@ -206,7 +206,7 @@ def test_failure_does_not_abort_next_case_and_restores(fake_server, tmp_path):
 
 def test_timeout_stops_only_owned_stream_then_next_case(fake_server, tmp_path):
     fake_server.hanging = True
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--all', '--timeout', '0.08',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'codex', '--all', '--timeout', '0.08',
                         '--output-directory', str(tmp_path / 'report')]) == 1
     results = json.loads((tmp_path / 'report' / 'results.json').read_text())
     assert [r['status'] for r in results] == ['TIMEOUT', 'TIMEOUT']
@@ -230,7 +230,7 @@ def test_stream_diagnostics_exclude_response_bodies_and_credentials():
 
 
 def test_list_only_never_mutates(fake_server):
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--list-only']) == 0
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'codex', '--list-only']) == 0
     assert fake_server.requests == [('GET', '/settings')]
 
 
@@ -246,7 +246,7 @@ def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path,
 
     monkeypatch.setattr(runner, 'run_case', check_candidates)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
     results = json.loads((out / 'results.json').read_text())
     assert {r['backend'] for r in results} == {'claude', 'opencode'}
     assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (2 if extra_args else 1)
@@ -260,7 +260,7 @@ def test_restore_backup_and_redaction(fake_server, tmp_path, monkeypatch):
     backup = tmp_path / 'backup.json'
     backup.write_text(json.dumps({'base_url': fake_server.url, 'settings': dict(fake_server.settings)}))
     fake_server.settings['reasoning_effort'] = 'high'
-    assert runner.main(['--base-url', fake_server.url, '--restore-settings', str(backup)]) == 0
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--restore-settings', str(backup)]) == 0
     assert fake_server.settings['reasoning_effort'] == 'low'
     monkeypatch.setenv('WORKBENCH_TEST_COOKIE', 'private-cookie')
     assert runner.safe_detail('error private-cookie') == 'error [REDACTED]'
@@ -289,7 +289,7 @@ def test_unconfirmed_stop_aborts_remaining_cases_but_restores(fake_server, tmp_p
 
     monkeypatch.setattr(runner, 'stop_owned', failed_stop)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--all', '--timeout', '0.08',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'codex', '--all', '--timeout', '0.08',
                         '--output-directory', str(out)]) == 1
     results = json.loads((out / 'results.json').read_text())
     assert len(results) == 1
@@ -307,7 +307,7 @@ def test_failed_restore_produces_recovery_summary(fake_server, tmp_path, monkeyp
 
     monkeypatch.setattr(runner.Client, 'request', fail_restore)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'codex', '--all',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'codex', '--all',
                         '--output-directory', str(out)]) == 1
     assert not json.loads((out / 'summary.json').read_text())['settings_restored']
     assert json.loads((out / 'restore-settings.json').read_text())['settings']['reasoning_effort'] == 'low'
@@ -378,7 +378,7 @@ def test_direct_progress_and_monitor_cleanup(fake_server, tmp_path, monkeypatch,
 
     monkeypatch.setattr(runner, 'Progress', FastProgress)
     monkeypatch.setattr(runner, 'run_direct', blocking_direct)
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude', '--direct', 'all',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'claude', '--direct', 'all',
                         '--output-directory', str(tmp_path / 'report')]) == 0
     output = capsys.readouterr().out
     assert 'scenario=echo/direct phase=running-direct elapsed=' in output
@@ -442,7 +442,7 @@ def test_failed_exit_collects_error_and_persisted_message(fake_server, tmp_path,
 
     monkeypatch.setattr(runner.Client, '_request', failed_stream)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'claude',
                         '--output-directory', str(out)]) == 1
     result = json.loads((out / 'results.json').read_text())[0]
     assert result['failure_stream_diagnostics']['error'] == 'gateway rejected [REDACTED]'
@@ -501,9 +501,61 @@ def test_diagnostic_collection_failure_preserves_original_failure(fake_server, t
 
     monkeypatch.setattr(runner.Client, '_request', broken_session)
     out = tmp_path / 'report'
-    assert runner.main(['--base-url', fake_server.url, '--backend', 'claude',
+    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--backend', 'claude',
                         '--output-directory', str(out)]) == 1
     result = json.loads((out / 'results.json').read_text())[0]
     assert result['detail'] == 'Stream exited unsuccessfully'
     assert 'diagnostic_collection_error' in (out / result['trace_file']).read_text()
     assert json.loads((out / 'summary.json').read_text())['settings_restored']
+
+
+@pytest.mark.parametrize('verdict,exit_code', [('PASS', 0), ('FAIL', 1), ('TIMEOUT', 1)])
+def test_default_direct_is_read_only_even_with_active_work(fake_server, tmp_path, monkeypatch, verdict, exit_code):
+    original = runner.Client._request
+
+    def only_catalog(self, method, path, *a, **kw):
+        # An active production task must never be inspected, cancelled, or changed.
+        assert (method, path) == ('GET', '/settings')
+        return original(self, method, path, *a, **kw)
+
+    monkeypatch.setattr(runner.Client, '_request', only_catalog)
+    calls = []
+    monkeypatch.setattr(runner, 'run_direct', lambda row, timeout:
+        calls.append(row['backend']) or dict(status=verdict, diagnostics={'output': 'test output'}))
+    before = dict(fake_server.settings)
+    out = tmp_path / 'standalone'
+    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out)]) == exit_code
+    assert calls == ['opencode', 'claude']
+    assert fake_server.requests == [('GET', '/settings')]
+    assert fake_server.settings == before
+    assert not fake_server.sessions and not fake_server.patches
+    assert not (out / 'restore-settings.json').exists()
+    summary = json.loads((out / 'summary.json').read_text())
+    assert summary['workbench_sessions_created'] == 0
+    results = json.loads((out / 'results.json').read_text())
+    assert all('session_id' not in r for r in results)
+    trace = [json.loads(line) for line in (out / results[0]['trace_file']).read_text().splitlines()]
+    assert trace[-1]['result']['diagnostics']['output'] == 'test output'
+
+
+@pytest.mark.parametrize('flag', ['--queue-check', '--worktree-check', '--context-checks'])
+def test_direct_rejects_http_only_checks_without_requests(monkeypatch, flag):
+    monkeypatch.setattr(runner.Client, 'request', lambda *a, **kw: pytest.fail('unexpected HTTP request'))
+    with pytest.raises(SystemExit) as exc:
+        runner.main([flag])
+    assert exc.value.code == 2
+
+
+def test_standalone_worker_error_is_reported_and_next_case_runs(fake_server, tmp_path, monkeypatch):
+    calls = []
+
+    def execute(row, timeout):
+        calls.append(row['backend'])
+        raise RuntimeError('worker unavailable')
+
+    monkeypatch.setattr(runner, 'run_direct', execute)
+    out = tmp_path / 'errors'
+    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out)]) == 1
+    assert calls == ['opencode', 'claude']
+    results = json.loads((out / 'results.json').read_text())
+    assert all(r['status'] == 'FAIL' and 'worker unavailable' in r['exception_traceback'] for r in results)

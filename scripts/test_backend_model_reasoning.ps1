@@ -6,7 +6,7 @@ param(
     [string[]]$Reasoning = @(),
     [switch]$All,
     [switch]$ListOnly,
-    [ValidateSet('stream', 'sync')][string]$Mode = 'stream',
+    [ValidateSet('direct', 'stream', 'sync')][string]$Mode = 'direct',
     [ValidateSet('off', 'failed', 'all')][string]$Direct = 'off',
     [int]$TimeoutSeconds = 90,
     [string]$OutputDirectory = '',

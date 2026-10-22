@@ -554,12 +554,31 @@ def direct_worker(row):
         if row['backend'] == 'claude':
             forwarded_reasoning = cmd[cmd.index('--effort') + 1] if '--effort' in cmd else ''
             expected_model = service.resolve_claude_cli_model_name(row['model'])
+            expected_reasoning = service.resolve_claude_reasoning_effort(
+                model_name=row['model'], reasoning_effort=row['reasoning']) or ''
         else:
             forwarded_reasoning = next((json.loads(arg.split('=', 1)[1]) for arg in cmd
                                         if arg.startswith('model_reasoning_effort=')), '')
             expected_model = row['model']
-        if forwarded_model != expected_model or forwarded_reasoning != row['reasoning']:
-            raise ValueError('Production CLI arguments differ from requested model/reasoning')
+            expected_reasoning = service.resolve_codex_reasoning_effort(
+                model_name=row['model'], reasoning_effort=row['reasoning']) or ''
+        matches = forwarded_model == (expected_model or None) and forwarded_reasoning == expected_reasoning
+        # Allowlist model/effort values only; full argv can contain private paths/config.
+        validation = {name: {key: diagnostic_text(value) if isinstance(value, str) else value
+                            for key, value in values.items()}
+                      for name, values in {
+                          'requested': {'model': row['model'], 'reasoning': row['reasoning']},
+                          'expected': {'model': expected_model or None, 'reasoning': expected_reasoning},
+                          'actual': {'model': forwarded_model, 'reasoning': forwarded_reasoning},
+                      }.items()}
+        validation['matches'] = matches
+        # Flush before spawning so timeouts and spawn errors retain preflight evidence.
+        print(json.dumps({'event': 'cli_validation', 'cli_validation': validation}), flush=True)
+        if not matches:
+            print(json.dumps({'status': 'FAIL', 'failure_phase': 'cli_argument_validation',
+                              'detail': 'Production CLI arguments differ from normalized model/reasoning',
+                              'cli_validation': validation}))
+            return
         cmd = service._wrap_codex_cli_command(cmd) if row['backend'] == 'dtgpt' else cmd
         completed = subprocess.run(cmd, input=prompt, text=True, encoding='utf-8',
                                    errors='replace', capture_output=True, cwd=str(service.WORKSPACE_DIR), env=exec_env)
@@ -584,13 +603,24 @@ def run_direct(row, timeout):
     cmd = [sys.executable, str(Path(__file__).resolve()), '--direct-case', json.dumps(row)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             start_new_session=os.name != 'nt', env=env)
+
+    def with_validation(result):
+        for line in stdout.decode('utf-8', errors='replace').splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict) and entry.get('event') == 'cli_validation':
+                result['cli_validation'] = entry['cli_validation']
+        return result
+
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
         if proc.returncode:
-            return {'status': 'FAIL', 'detail': 'Direct worker failed; check local Python dependencies/CLI configuration',
+            return with_validation({'status': 'FAIL', 'detail': 'Direct worker failed; check local Python dependencies/CLI configuration',
                     'exit_code': proc.returncode, 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
-                    'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
-        return json.loads(stdout.decode('utf-8').splitlines()[-1])
+                    'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))})
+        return with_validation(json.loads(stdout.decode('utf-8').splitlines()[-1]))
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], capture_output=True)
@@ -599,13 +629,13 @@ def run_direct(row, timeout):
         stdout, stderr = proc.communicate()
         if isinstance(exc, KeyboardInterrupt):
             raise
-        return {'status': 'TIMEOUT', 'detail': 'Direct process tree terminated; OpenCode remote cleanup may be needed',
+        return with_validation({'status': 'TIMEOUT', 'detail': 'Direct process tree terminated; OpenCode remote cleanup may be needed',
                 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
-                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
+                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))})
     except (ValueError, IndexError):
-        return {'status': 'FAIL', 'detail': 'Invalid direct worker verdict',
+        return with_validation({'status': 'FAIL', 'detail': 'Invalid direct worker verdict',
                 'output': diagnostic_text(stdout.decode('utf-8', errors='replace')),
-                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))}
+                'error': diagnostic_text(stderr.decode('utf-8', errors='replace'))})
 
 
 def run_standalone(cases, args, directory):

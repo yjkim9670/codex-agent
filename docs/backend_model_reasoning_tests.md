@@ -40,6 +40,15 @@ JSON/CSV 보고서는 유지한다. 기본 모드에는 세션 ID와 설정 복�
 않는다. 스크립트 변경이므로 Workbench 서버 재시작은 필요 없다.
 
 
+직접 실행의 Claude/Codex reasoning 검증은 실제 CLI 생성기가 사용하는 모델별
+보정 함수를 적용한 예상값과 비교한다. 지원하지 않는 값의 기본값 대체나
+`--effort` 생략은 보정 결과와 일치하면 통과한다. 실제 인자가 보정 결과와
+다르면 CLI를 실행하지 않고 `failure_phase=cli_argument_validation`으로 실패한다.
+`results.json`과 `case-NNN.jsonl`의 완료 기록에는 `cli_validation`의
+`requested`(요청값), `expected`(보정 후 예상값), `actual`(실제 인자값),
+`matches`를 저장한다. 이 기록은 CLI 실행 전에 flush하므로 시간 초과나
+프로세스 실행 오류에도 수집되며, 전체 명령줄이나 환경변수는 포함하지 않는다.
+
 ## 키 설정과 명시적 HTTP 통합 모드 상세 (2026-10-22)
 
 명시적 HTTP 검사(`stream`/`sync`)는 실제 Workbench API를 사용한다. 사내 Windows/Linux의

@@ -75,7 +75,8 @@ def test_direct_worker_uses_production_environment(monkeypatch, capsys, tmp_path
             'runtime': 'ready', 'WORKBENCH_TEST_SELECTED_API_KEY': selected, 'WORKBENCH_TEST_API_KEYS': 'private'},
         _apply_agent_backend_exec_env=lambda env, backend, **kw: env.update(gateway='production', **kw),
         _build_agent_command=lambda *a, **kw: ('claude', ['claude', '--model', 'mapped', '--effort', 'low']),
-        resolve_claude_cli_model_name=lambda model: 'mapped')
+        resolve_claude_cli_model_name=lambda model: 'mapped',
+        resolve_claude_reasoning_effort=lambda **kw: 'low')
     package = types.ModuleType('codex_agent.services')
     package.codex_chat = service
     monkeypatch.setitem(sys.modules, 'codex_agent.services', package)
@@ -88,7 +89,92 @@ def test_direct_worker_uses_production_environment(monkeypatch, capsys, tmp_path
     monkeypatch.setattr(runner.subprocess, 'run', execute)
     runner.direct_worker(dict(backend='claude', model='catalog-model', reasoning='low'))
     assert calls == [('build', 'claude', {'internal_api_key': {'secret': selected} if selected else None})]
-    assert json.loads(capsys.readouterr().out)['status'] == 'PASS'
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])['status'] == 'PASS'
+
+
+@pytest.mark.parametrize('backend,requested,expected,actual,model,matches', [
+    ('claude', 'high', 'low', 'low', 'mapped', True),
+    ('claude', 'high', '', '', 'mapped', True),
+    ('claude', '', 'medium', 'medium', 'mapped', True),
+    ('dtgpt', 'high', 'low', 'low', 'catalog-model', True),
+    ('dtgpt', '', 'medium', 'medium', 'catalog-model', True),
+    ('claude', 'high', 'low', 'high', 'mapped', False),
+    ('dtgpt', 'high', 'low', 'high', 'catalog-model', False),
+    ('claude', 'high', 'low', 'low', 'wrong-model', False),
+])
+def test_direct_worker_validates_normalized_arguments(
+        monkeypatch, capsys, tmp_path, backend, requested, expected, actual, model, matches):
+    import sys
+    import types
+
+    monkeypatch.delenv('WORKBENCH_TEST_SELECTED_API_KEY', raising=False)
+    cmd = [backend, '--model', model]
+    if actual:
+        cmd += ['--effort', actual] if backend == 'claude' else [
+            '--config', 'model_reasoning_effort=' + json.dumps(actual)]
+    resolver_calls = []
+    executions = []
+
+    def resolve(**kw):
+        resolver_calls.append(kw)
+        return expected or None
+
+    service = SimpleNamespace(
+        WORKSPACE_DIR=tmp_path,
+        _build_agent_exec_env=lambda *a, **kw: {},
+        _apply_agent_backend_exec_env=lambda *a, **kw: None,
+        _build_agent_command=lambda *a, **kw: (backend, cmd),
+        _wrap_codex_cli_command=lambda cmd: cmd,
+        resolve_claude_cli_model_name=lambda model: 'mapped',
+        resolve_claude_reasoning_effort=resolve,
+        resolve_codex_reasoning_effort=resolve)
+    package = types.ModuleType('codex_agent.services')
+    package.codex_chat = service
+    monkeypatch.setitem(sys.modules, 'codex_agent.services', package)
+
+    def execute(cmd, **kw):
+        executions.append(cmd)
+        return SimpleNamespace(returncode=0, stdout=kw['input'], stderr='')
+
+    monkeypatch.setattr(runner.subprocess, 'run', execute)
+    runner.direct_worker(dict(backend=backend, model='catalog-model', reasoning=requested))
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    validation = records[0]['cli_validation']
+    assert validation == {
+        'requested': {'model': 'catalog-model', 'reasoning': requested},
+        'expected': {'model': 'mapped' if backend == 'claude' else 'catalog-model', 'reasoning': expected},
+        'actual': {'model': model, 'reasoning': actual},
+        'matches': matches}
+    assert resolver_calls == [{'model_name': 'catalog-model', 'reasoning_effort': requested}]
+    assert records[-1]['status'] == ('PASS' if matches else 'FAIL')
+    assert bool(executions) == matches
+    if not matches:
+        assert records[-1]['failure_phase'] == 'cli_argument_validation'
+
+
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'timeout', 'invalid'])
+def test_run_direct_preserves_preflight_validation(monkeypatch, outcome):
+    validation = {'requested': {'reasoning': 'high'}, 'expected': {'reasoning': ''},
+                  'actual': {'reasoning': ''}, 'matches': True}
+    output = json.dumps({'event': 'cli_validation', 'cli_validation': validation}) + '\n'
+    output += '{"status":"PASS"}\n' if outcome == 'success' else 'not-json\n'
+    calls = []
+
+    def communicate(**kw):
+        calls.append(kw)
+        if outcome == 'timeout' and len(calls) == 1:
+            raise runner.subprocess.TimeoutExpired('worker', 1)
+        return output.encode(), b'worker stderr'
+
+    monkeypatch.delenv('WORKBENCH_TEST_API_KEYS', raising=False)
+    monkeypatch.setattr(runner.subprocess, 'Popen', lambda *a, **kw: SimpleNamespace(
+        returncode=1 if outcome == 'failure' else 0, pid=123, communicate=communicate))
+    monkeypatch.setattr(runner.os, 'killpg', lambda *a: None, raising=False)
+    monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **kw: None)
+    result = runner.run_direct(dict(backend='claude', model='a', reasoning='high'), 1)
+    assert result['cli_validation'] == validation
+    assert result['status'] == {'success': 'PASS', 'failure': 'FAIL',
+                                'timeout': 'TIMEOUT', 'invalid': 'FAIL'}[outcome]
 
 
 @pytest.fixture

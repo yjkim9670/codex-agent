@@ -29,6 +29,7 @@ from .services.codex_chat import (
     ensure_pending_queue_background_worker,
     ensure_usage_snapshot_background_worker,
 )
+from .services.company_credentials import company_key_pool_supported
 from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
 from .services.git_branch_switch import list_remote_branches, switch_remote_branch
@@ -212,6 +213,7 @@ def create_codex_app():
             ),
             current_branch_name=runtime_context['current_branch_name'],
             company_mode_enabled=_is_company_mode_enabled(),
+            company_key_pool_supported=company_key_pool_supported(),
         )
         return _inject_git_ui_enhancement_assets(html)
 

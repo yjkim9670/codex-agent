@@ -7846,3 +7846,32 @@ def test_claude_does_not_collect_debug_logs_with_legacy_flags(isolated_codex_wor
     assert 'company_timing' not in saved
     assert 'diagnostic_timeline' not in stream
     assert not list(isolated_codex_workspace['workspace_dir'].rglob('claude.debug.log'))
+
+
+def test_opencode_reasoning_retained_in_logs_but_excluded_from_answer(opencode_run_harness):
+    sid, stream, _, _, _, connect = opencode_run_harness
+    connect([
+        _opencode_test_event('message.part.updated',
+            part={'id': 'r', 'type': 'reasoning', 'text': 'private analysis'}),
+        _opencode_test_event('message.part.updated',
+            part={'id': 'a', 'type': 'text', 'text': 'final answer'}),
+        _opencode_test_event('session.idle'),
+    ])
+    codex_chat._run_opencode_stream(sid, 'prompt')
+    assert stream['output'] == stream['output_last_message'] == 'final answer'
+    assert 'private analysis' in stream['raw_stderr']
+    assert any(event['item_type'] == 'reasoning' and event['detail'] == 'private analysis'
+               for event in stream['codex_events'])
+
+
+def test_opencode_recovery_filters_reasoning_and_retains_log(opencode_run_harness):
+    sid, stream, *_ = opencode_run_harness
+    stream['opencode_session_id'] = 'remote-session'
+    completed = codex_chat._recover_opencode_stream(sid, 'remote-session', ([{
+        'info': {'role': 'assistant', 'time': {'completed': 1}},
+        'parts': [{'id': 'r', 'type': 'reasoning', 'text': 'recovered analysis'},
+                  {'id': 'a', 'type': 'text', 'text': 'recovered answer'}],
+    }], {}))
+    assert completed
+    assert stream['output'] == 'recovered answer'
+    assert 'recovered analysis' in stream['raw_stderr']

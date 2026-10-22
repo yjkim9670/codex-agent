@@ -14509,7 +14509,7 @@ def _extract_opencode_event_text(event):
     if not isinstance(part, dict):
         return '', ''
     part_type = str(part.get('type') or '').strip().lower()
-    if part_type not in ('text', 'reasoning'):
+    if part_type != 'text':
         return '', ''
     return str(part.get('id') or '').strip(), str(part.get('text') or '').strip()
 
@@ -14527,7 +14527,17 @@ def _handle_opencode_sse_event(stream_id, event_name, data):
     # Global notifications and unscoped errors cannot terminate this request.
     if not expected_session_id or event_session_id != expected_session_id:
         return False
-    _append_stream_event(stream_id, {'type': event_name or event.get('type') or 'opencode.event', 'event': event})
+    event_properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
+    event_part = event_properties.get('part') or event.get('part')
+    _append_stream_event(stream_id, {
+        'type': event_name or event.get('type') or 'opencode.event',
+        'item': event_part if isinstance(event_part, dict) else None,
+        'event': event,
+    })
+    if isinstance(event_part, dict) and event_part.get('type') == 'reasoning':
+        reasoning = str(event_part.get('text') or '')
+        if reasoning:
+            _append_stream_raw_stderr(stream_id, '[OpenCode reasoning] ' + reasoning + '\n')
     event_type = str(event_name or event.get('type') or '').strip().lower()
     properties = event.get('properties') if isinstance(event.get('properties'), dict) else {}
     # Subscription now includes user-message events emitted during submission.
@@ -15678,8 +15688,8 @@ def create_codex_stream(
         before_snapshot if isinstance(before_snapshot, dict)
         else get_usage_summary(account_id=resolved_account_id)
     )
-    if is_internal_multiuser_mode() and not isinstance(internal_api_key, dict):
-        from .company_credentials import reserve_internal_api_key
+    from .company_credentials import company_key_pool_supported, reserve_internal_api_key
+    if (is_internal_multiuser_mode() or (company_key_pool_supported() and agent_backend != 'opencode')) and not isinstance(internal_api_key, dict):
         internal_api_key = reserve_internal_api_key()
     stream = {
         'inherit_model_settings': bool(inherit_model_settings),
@@ -16091,8 +16101,8 @@ def _start_codex_stream_for_session_locked(
         else ('worktree_isolated' if worktree_task else 'standard')
     )
     internal_api_key = None
-    if is_internal_multiuser_mode():
-        from .company_credentials import reserve_internal_api_key
+    from .company_credentials import company_key_pool_supported, reserve_internal_api_key
+    if is_internal_multiuser_mode() or (company_key_pool_supported() and agent_backend != 'opencode'):
         internal_api_key = reserve_internal_api_key()
     assistant_metadata = {
         'context_selection': read_context_record(prompt_with_context),

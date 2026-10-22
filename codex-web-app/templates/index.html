@@ -1398,6 +1398,10 @@
                                 <button class="btn secondary" type="button" id="codex-company-admin-login-button">관리자 로그인</button>
                             </div>
                             <div class="company-credential-editor is-hidden" id="codex-company-credential-editor">
+                                {% if company_key_pool_supported %}
+                                <div class="company-credential-summary">여러 Key를 등록하면 등록 순서대로 요청마다 순환합니다. Key Pool이 비어 있으면 기존 단일 키 설정을 사용합니다.</div>
+                                <button class="btn secondary" type="button" id="codex-internal-api-key-pool-open">Key Pool 열기</button>
+                                {% endif %}
                                 <div class="company-credential-input-row">
                                     <label class="sr-only" for="codex-company-api-key">Company API Key</label>
                                     <input class="model-input" id="codex-company-api-key" type="password" autocomplete="new-password" placeholder="새 API Key 입력">
@@ -1744,14 +1748,14 @@
         </div>
     </div>
 
-    {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
-    <div class="internal-key-pool-overlay" id="codex-internal-api-key-pool-overlay" aria-hidden="true" data-internal-admin-only>
+    {% if (company_key_pool_supported and not internal_multiuser_mode) or (internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin') %}
+    <div class="internal-key-pool-overlay" id="codex-internal-api-key-pool-overlay" aria-hidden="true" {% if internal_multiuser_mode %}data-internal-admin-only{% endif %}>
         <div class="internal-key-pool-overlay-backdrop" data-action="close"></div>
         <section class="internal-key-pool-card" role="dialog" aria-modal="true" aria-labelledby="codex-internal-api-key-pool-overlay-title">
             <div class="internal-key-pool-header">
                 <div>
-                    <div class="internal-key-pool-title" id="codex-internal-api-key-pool-overlay-title">Internal API Key Pool</div>
-                    <div class="company-credential-summary">각 Key는 한 행으로 관리합니다. Key 일부와 오늘·누적 사용 횟수 및 토큰을 표시하며, 오늘 기준은 KST입니다.</div>
+                    <div class="internal-key-pool-title" id="codex-internal-api-key-pool-overlay-title">Company API Key Pool</div>
+                    <div class="company-credential-summary">등록 순서대로 요청마다 순환합니다. Windows는 DPAPI, Linux는 서비스 계정 전용 암호화 파일에 저장합니다. 사용량은 KST 기준입니다.</div>
                 </div>
                 <button class="btn ghost icon-only" type="button" id="codex-internal-api-key-pool-close" aria-label="닫기"><span class="sr-only">닫기</span></button>
             </div>

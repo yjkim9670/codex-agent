@@ -9172,6 +9172,7 @@ function formatCompanyCredentialSource(source) {
     if (source === 'session') return '이번 실행 메모리';
     if (source === 'windows_dpapi') return 'Windows DPAPI';
     if (source === 'environment') return '서버 환경변수';
+    if (source === 'internal_pool' || source === 'internal_round_robin') return 'Key Pool · 요청마다 순환';
     return '설정되지 않음';
 }
 
@@ -9202,6 +9203,13 @@ function renderCompanyCredentialState(payload) {
         } else {
             summary.textContent = `미설정 · ${formatCompanyCredentialSource(credential?.source)}`;
         }
+    }
+    if (!authenticated) {
+        internalApiKeyAllocation = null;
+        document.getElementById('codex-internal-api-key-allocation-list')?.replaceChildren();
+        const poolOverlay = document.getElementById('codex-internal-api-key-pool-overlay');
+        poolOverlay?.classList.remove('is-visible');
+        poolOverlay?.setAttribute('aria-hidden', 'true');
     }
     login?.classList.toggle('is-hidden', authenticated);
     editor?.classList.toggle('is-hidden', !authenticated);
@@ -9444,6 +9452,12 @@ function initializeCompanyCredentialPanel() {
 
 let internalApiKeyAllocation = null;
 
+function companyKeyPoolEndpoint() {
+    return document.body.dataset.internalMultiuser === 'true'
+        ? '/api/codex/internal/api-key-allocation'
+        : '/api/codex/company-credentials/key-pool';
+}
+
 function setInternalApiKeyAllocationStatus(message, isError = false) {
     const element = document.getElementById('codex-internal-api-key-allocation-status');
     if (!element) return;
@@ -9512,21 +9526,23 @@ function renderInternalApiKeyAllocation() {
 
 async function loadInternalApiKeyAllocation() {
     try {
-        internalApiKeyAllocation = await fetchJson('/api/codex/internal/api-key-allocation');
+        internalApiKeyAllocation = await fetchJson(companyKeyPoolEndpoint());
         renderInternalApiKeyAllocation();
+        return true;
     } catch (error) {
         setInternalApiKeyAllocationStatus(normalizeError(error, 'API Key 배정 정보를 불러오지 못했습니다.'), true);
+        return false;
     }
 }
 
 function initializeInternalApiKeyAllocationPanel() {
-    if (!document.getElementById('codex-internal-api-key-allocation-card')) return;
+    if (!document.getElementById('codex-internal-api-key-pool-overlay')) return;
     const overlay = document.getElementById('codex-internal-api-key-pool-overlay');
-    const openOverlay = () => {
+    const openOverlay = async () => {
         if (!overlay || document.body.classList.contains('is-internal-member-view')) return;
+        if (!await loadInternalApiKeyAllocation()) return;
         overlay.classList.add('is-visible');
         overlay.setAttribute('aria-hidden', 'false');
-        void loadInternalApiKeyAllocation();
         window.setTimeout(() => document.getElementById('codex-internal-api-key-label')?.focus(), 0);
     };
     const closeOverlay = () => {
@@ -9565,8 +9581,8 @@ function initializeInternalApiKeyAllocationPanel() {
             const encrypted = await encryptCompanyCredentialPayload({
                 keys: internalApiKeyAllocation.keys.map(key => ({ id: key.id, label: key.label, api_key: key.api_key || '' }))
             });
-            internalApiKeyAllocation = await fetchJson('/api/codex/internal/api-key-allocation', {
-                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(encrypted)
+            internalApiKeyAllocation = await fetchJson(companyKeyPoolEndpoint(), {
+                method: 'PUT', headers: companyCredentialCsrfHeaders(true), body: JSON.stringify(encrypted)
             });
             renderInternalApiKeyAllocation();
             setInternalApiKeyAllocationStatus('Key Pool을 저장했습니다. 다음 Codex/Claude 요청부터 자동 순환 적용됩니다.');
@@ -9574,7 +9590,7 @@ function initializeInternalApiKeyAllocationPanel() {
             setInternalApiKeyAllocationStatus(normalizeError(error, 'API Key 배정을 저장하지 못했습니다.'), true);
         }
     });
-    void loadInternalApiKeyAllocation();
+    if (document.body.dataset.internalMultiuser === 'true') void loadInternalApiKeyAllocation();
 }
 
 function syncInternalSettingsEditability() {

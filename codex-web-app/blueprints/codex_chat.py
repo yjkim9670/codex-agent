@@ -184,6 +184,7 @@ from ..services.company_credentials import (
     delete_company_api_key,
     get_company_credential_status,
     get_internal_api_key_allocation,
+    company_key_pool_supported,
     is_admin_auth_configured,
     store_company_api_key,
     test_company_api_key,
@@ -937,7 +938,7 @@ def _require_company_admin(*, csrf=True):
         }), 503
     if not _company_admin_authenticated():
         return jsonify({'error': '관리자 로그인이 필요합니다.', 'error_code': 'company_admin_auth_required'}), 401
-    if not _company_request_is_same_origin():
+    if (request.method != 'GET' or request.headers.get('Origin')) and not _company_request_is_same_origin():
         return jsonify({'error': '동일 출처 요청만 허용됩니다.', 'error_code': 'company_origin_rejected'}), 403
     if csrf:
         provided = str(request.headers.get('X-Codex-CSRF-Token') or '').strip()
@@ -1010,9 +1011,13 @@ def company_credentials_status():
     })
 
 
+@bp.route('/api/codex/company-credentials/key-pool', methods=['GET', 'PUT'])
 @bp.route('/api/codex/internal/api-key-allocation', methods=['GET', 'PUT'])
 def codex_internal_api_key_allocation():
-    denied = _require_internal_role('admin')
+    if not is_internal_multiuser_mode() and not company_key_pool_supported():
+        return jsonify({'error': 'Key Pool은 사내 Windows/Linux에서만 지원됩니다.'}), 404
+    denied = (_require_internal_role('admin') if is_internal_multiuser_mode()
+              else _require_company_admin(csrf=request.method != 'GET'))
     if denied:
         return denied
     try:

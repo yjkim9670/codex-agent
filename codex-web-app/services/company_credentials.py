@@ -15,6 +15,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from cryptography.fernet import Fernet, InvalidToken
+
 from ..config import CODEX_INTERNAL_DATA_DIR, CODEX_INTERNAL_USER_MAP_PATH, CODEX_STORAGE_DIR, is_internal_multiuser_mode
 from .multiuser import get_active_user, load_ip_user_map, storage_key_for_ip
 
@@ -43,9 +45,40 @@ _INTERNAL_USAGE_EVENT_LIMIT = 4096
 _INTERNAL_USAGE_DAY_LIMIT = 366
 
 
+def company_key_pool_supported() -> bool:
+    """Enable the pool only in Windows/Linux company deployments."""
+    company_mode = str(os.environ.get('CODEX_COMPANY_MODE') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    return (sys.platform == 'win32' or sys.platform.startswith('linux')) and (company_mode or is_internal_multiuser_mode())
+
+
 def _internal_pool_path() -> Path:
-    """The administrator-owned, DPAPI-protected internal key pool."""
-    return Path(CODEX_INTERNAL_DATA_DIR) / 'organization' / 'credentials' / 'api_key_pool.dpapi'
+    if is_internal_multiuser_mode():
+        root = Path(CODEX_INTERNAL_DATA_DIR) / 'organization' / 'credentials'
+    else:
+        root = Path(CODEX_STORAGE_DIR) / 'credentials'
+    return root / ('api_key_pool.dpapi' if sys.platform == 'win32' else 'api_key_pool.fernet')
+
+
+def _linux_pool_cipher(*, create=False):
+    # Headless Linux has no guaranteed desktop keyring. Protect the local
+    # encryption key with the service account's filesystem permissions.
+    path = _internal_pool_path().with_suffix('.key')
+    if create:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(Fernet.generate_key())
+    try:
+        if path.stat().st_mode & 0o077:
+            raise ValueError('unsafe key permissions')
+        return Fernet(path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise CompanyCredentialError('Linux 키 풀 암호화 키를 읽지 못했습니다. 서비스 계정 소유 및 권한 600을 확인하세요.',
+                                     error_code='pool_encryption_key_unavailable', status_code=500) from exc
 
 
 def _internal_selection_audit_path() -> Path:
@@ -57,11 +90,13 @@ def _read_internal_pool() -> dict:
     if not path.is_file():
         return {'version': 2, 'keys': [], 'next_key_index': 0, 'stats': {}}
     try:
-        decoded = _unprotect_windows(path.read_bytes()).decode('utf-8')
+        protected = path.read_bytes()
+        decoded = (_unprotect_windows(protected) if sys.platform == 'win32'
+                   else _linux_pool_cipher().decrypt(protected)).decode('utf-8')
         payload = __import__('json').loads(decoded)
     except CompanyCredentialError:
         raise
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, UnicodeError, ValueError, InvalidToken) as exc:
         raise CompanyCredentialError('내부 API Key 풀을 읽지 못했습니다.', error_code='internal_credential_read_failed', status_code=500) from exc
     if not isinstance(payload, dict) or not isinstance(payload.get('keys'), list):
         raise CompanyCredentialError('내부 API Key 풀 형식이 올바르지 않습니다.', error_code='internal_credential_invalid', status_code=500)
@@ -80,15 +115,17 @@ def _read_internal_pool() -> dict:
 
 
 def _write_internal_pool(payload: dict) -> None:
-    if sys.platform != 'win32':
-        raise CompanyCredentialError('내부 API Key 풀은 Windows DPAPI 환경에서만 저장할 수 있습니다.', error_code='dpapi_unavailable')
+    if not (sys.platform == 'win32' or sys.platform.startswith('linux')):
+        raise CompanyCredentialError('API Key 풀은 Windows/Linux에서만 지원됩니다.', error_code='key_pool_unavailable')
     try:
         serialized = __import__('json').dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        protected = _protect_windows(serialized)
+        protected = (_protect_windows(serialized) if sys.platform == 'win32'
+                     else _linux_pool_cipher(create=True).encrypt(serialized))
         path = _internal_pool_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + '.tmp')
-        temporary.write_bytes(protected)
+        with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'wb') as handle:
+            handle.write(protected)
         try:
             temporary.chmod(0o600)
         except OSError:
@@ -221,7 +258,7 @@ def get_internal_api_key_allocation() -> dict:
         return {
             'keys': keys,
             'allocation_mode': 'round_robin_per_request',
-            'persistent_supported': sys.platform == 'win32',
+            'persistent_supported': sys.platform == 'win32' or sys.platform.startswith('linux'),
         }
 
 
@@ -405,14 +442,15 @@ def resolve_company_api_key() -> tuple[str, str]:
         # In the internal deployment no user-supplied or server environment
         # key can bypass the administrator-managed pool.  Merely checking the
         # status must not consume a round-robin slot.
-        if is_internal_multiuser_mode() and get_active_user() is not None:
+        if (is_internal_multiuser_mode() and get_active_user() is not None) or company_key_pool_supported():
             pool = _read_internal_pool()
             for item in pool['keys']:
                 if isinstance(item, dict):
                     secret = str(item.get('secret') or '').strip()
                     if secret:
                         return secret, 'internal_pool'
-            return '', 'internal_pool_empty'
+            if is_internal_multiuser_mode():
+                return '', 'internal_pool_empty'
         session_key = _credential_session_key()
         if session_key == 'standalone' and _session_api_key:
             return _session_api_key, 'session'
@@ -435,9 +473,10 @@ def get_company_credential_status() -> dict:
     return {
         'configured': bool(value),
         'source': source,
-        'persistent': source == 'windows_dpapi',
+        'persistent': source in {'windows_dpapi', 'internal_pool'},
         'persistent_supported': sys.platform == 'win32',
         'error': error,
+        'key_pool_supported': company_key_pool_supported(),
     }
 
 
@@ -516,9 +555,11 @@ def apply_company_api_key(env: dict, *, internal_key: dict | None = None) -> boo
     for name in ('DTGPT_API_KEY', 'CODEX_CLAUDE_AUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'):
         env.pop(name, None)
     try:
-        if is_internal_multiuser_mode():
+        if is_internal_multiuser_mode() or company_key_pool_supported():
             selected = internal_key if isinstance(internal_key, dict) else reserve_internal_api_key()
             value = str(selected.get('secret') or '').strip()
+            if not value and not is_internal_multiuser_mode():
+                value, _source = resolve_company_api_key()
             key_id = str(selected.get('id') or '').strip()
             key_label = str(selected.get('label') or '').strip()
             if key_id:

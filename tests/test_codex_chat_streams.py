@@ -160,6 +160,29 @@ def chat_route_client(isolated_codex_workspace, monkeypatch):
         yield client
 
 
+@pytest.mark.parametrize('internal', [None, False, True, 'false', 'true', 1])
+def test_internal_test_session_hidden_but_persisted(chat_route_client, monkeypatch, internal):
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_REQUIRE_ENCRYPTED_CHAT_PROMPTS', False)
+    payload = {'title': 'Backend test hidden-session'}
+    if internal is not None:
+        payload['internal'] = internal
+    response = chat_route_client.post('/api/codex/sessions', json=payload)
+    assert response.status_code == 200
+    session_id = response.get_json()['session']['id']
+    codex_chat.append_message(session_id, 'assistant', 'diagnostic response')
+
+    # Exercise disk persistence rather than only the create response.
+    detail = chat_route_client.get(f'/api/codex/sessions/{session_id}')
+    assert detail.status_code == 200
+    stored = detail.get_json()['session']
+    assert stored['messages'][0]['content'] == 'diagnostic response'
+    assert bool(stored.get('internal')) is (internal is True)
+    listing = chat_route_client.get('/api/codex/sessions')
+    assert listing.status_code == 200
+    listed_ids = {item['id'] for item in listing.get_json()['sessions']}
+    assert (session_id in listed_ids) is (internal is not True)
+
+
 def _b64encode(raw: bytes) -> str:
     return base64.b64encode(raw).decode('ascii')
 

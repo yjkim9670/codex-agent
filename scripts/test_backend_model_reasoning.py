@@ -23,6 +23,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 ROOT = Path(__file__).resolve().parents[1]
 API = '/api/codex'
 KEYS = ('agent_backend', 'model', 'reasoning_effort')
+DEFAULT_CLAUDE_TEST_MODEL = 'Qwen3.8-27B'
 _direct_key_cursor = 0
 
 
@@ -123,14 +124,15 @@ def matrix(snapshot, backends, models, efforts, exhaustive):
     catalogs = snapshot.get('model_catalogs_by_agent_backend', {})
     for backend in dict.fromkeys('dtgpt' if b == 'codex' else b for b in backends):
         catalog = catalogs.get(backend, [])
-        selected = [e for e in catalog if not models or e['slug'] in models]
-        if not exhaustive and not models:
+        model_filter = models or ([DEFAULT_CLAUDE_TEST_MODEL] if backend == 'claude' else [])
+        selected = [e for e in catalog if not model_filter or e['slug'] in model_filter]
+        if not exhaustive and not model_filter and backend != 'opencode':
             current = snapshot['settings'].get('model')
             selected = [next((e for e in selected if e['slug'] == current), selected[0])] if selected else []
-        for missing in models:
+        for missing in model_filter:
             if not any(e['slug'] == missing for e in catalog):
                 rows.append(dict(backend=backend, model=missing, reasoning='', status='UNSUPPORTED'))
-        if not selected and not models:
+        if not selected and not model_filter:
             rows.append(dict(backend=backend, model='', reasoning='', status='UNSUPPORTED'))
         for entry in selected:
             supported = entry.get('reasoning_options') or []
@@ -382,7 +384,10 @@ def run_case(client, row, args, scenario='echo'):
         if scenario == 'worktree':
             payload['worktree_mode'] = True
             payload['prompt'] = 'Inspect the actual current working directory. Reply with its absolute path only. Do not modify files.'
-        session_id = client.request('POST', '/sessions', {'title': 'Backend test ' + uuid.uuid4().hex[:10]})['session']['id']
+        session_id = client.request('POST', '/sessions', {
+            'title': 'Backend test ' + uuid.uuid4().hex[:10],
+            'internal': True,
+        })['session']['id']
         result['session_id'] = session_id
         use_stream = args.mode == 'stream' or scenario in ('queue', 'worktree')
         update('submitting', session=session_id)
@@ -730,17 +735,22 @@ def main(argv=None):
     global _direct_key_cursor
     _direct_key_cursor = 0
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base-url', default='http://127.0.0.1:5000')
+    parser.add_argument('--base-url', default='http://localhost:3000')
     parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'],
                         help='Backend to test (repeatable; default: opencode, claude)')
-    parser.add_argument('--model', action='append', default=[])
+    parser.add_argument('--model', action='append', default=[],
+                        help='Explicit model override (repeatable; default: all OpenCode models, Claude Qwen3.8-27B only)')
     parser.add_argument('--reasoning', action='append', default=[])
-    parser.add_argument('--all', action='store_true')
+    efforts = parser.add_mutually_exclusive_group()
+    efforts.add_argument('--all', action='store_true', default=True,
+                         help='Test all supported reasoning efforts (default); Claude stays limited to Qwen3.8-27B unless --model is supplied')
+    efforts.add_argument('--no-all', action='store_false', dest='all',
+                         help='Use only the default reasoning effort unless --reasoning is supplied')
     parser.add_argument('--list-only', action='store_true')
-    parser.add_argument('--mode', choices=['direct', 'stream', 'sync'], default='direct',
-                        help='direct (default): no Workbench sessions/settings writes; stream/sync: live HTTP integration tests')
+    parser.add_argument('--mode', choices=['direct', 'stream', 'sync'], default='stream',
+                        help='stream (default)/sync: live HTTP integration tests; direct: no Workbench sessions/settings writes')
     parser.add_argument('--direct', choices=['off', 'failed', 'all'], default='off')
-    parser.add_argument('--timeout', type=float, default=90)
+    parser.add_argument('--timeout', type=float, default=300)
     parser.add_argument('--output-directory')
     parser.add_argument('--restore-settings')
     parser.add_argument('--context-checks', action='store_true')
@@ -757,7 +767,7 @@ def main(argv=None):
     if args.mode == 'direct' and (args.context_checks or args.worktree_check or args.queue_check):
         parser.error('Context/worktree/queue checks require --mode stream or --mode sync (creates Workbench sessions)')
     if args.mode == 'direct' and args.direct != 'off':
-        parser.error('--direct is an additional comparison for --mode stream/sync; default mode already runs directly')
+        parser.error('--direct is an additional comparison for --mode stream/sync; --mode direct already runs directly')
     if args.context_checks and not args.expected_workspace:
         parser.error('--context-checks requires --expected-workspace (server absolute path)')
     if urlsplit(args.base_url).scheme not in ('http', 'https'):
@@ -797,7 +807,7 @@ def main(argv=None):
     if args.mode == 'direct':
         print(f'Direct model calls: {count}; Workbench sessions: 0; settings: read-only. Runs on this PC using local credentials.')
     else:
-        print('HTTP integration mode creates Workbench sessions and requires an idle server.')
+        print('HTTP integration mode preserves internal test sessions (hidden from the Web UI list) and requires an idle server.')
         print(f'Workbench model calls: {count + queue_count}; direct comparison: up to {count if args.direct != "off" else 0}')
     for row, scenario in cases:
         print(f"{row['backend']:8} {row['model']:32} {row['reasoning'] or '(default)':10} {scenario:12} {row['status']}")

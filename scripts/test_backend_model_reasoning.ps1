@@ -1,14 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = 'http://127.0.0.1:5000',
+    [string]$BaseUrl = 'http://localhost:3000',
     [string[]]$Backend = @('opencode', 'claude'),
     [string[]]$Model = @(),
     [string[]]$Reasoning = @(),
-    [switch]$All,
+    [switch]$All = $true,
     [switch]$ListOnly,
-    [ValidateSet('direct', 'stream', 'sync')][string]$Mode = 'direct',
+    [ValidateSet('direct', 'stream', 'sync')][string]$Mode = 'stream',
     [ValidateSet('off', 'failed', 'all')][string]$Direct = 'off',
-    [int]$TimeoutSeconds = 90,
+    [int]$TimeoutSeconds = 300,
     [string]$OutputDirectory = '',
     [string]$Python = '',
     [string]$RestoreSettings = '',
@@ -19,7 +19,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Python) {
-    foreach ($candidate in @('python3', 'python', 'py')) {
+    foreach ($candidate in @('py', 'python3', 'python')) {
         $found = Get-Command $candidate -ErrorAction SilentlyContinue
         if ($found) { $Python = $found.Source; break }
     }
@@ -30,7 +30,7 @@ $cliArgs = @('-u', (Join-Path $PSScriptRoot 'test_backend_model_reasoning.py'), 
 foreach ($value in $Backend) { $cliArgs += @('--backend', $value) }
 foreach ($value in $Model) { $cliArgs += @('--model', $value) }
 foreach ($value in $Reasoning) { $cliArgs += @('--reasoning', $value) }
-if ($All) { $cliArgs += '--all' }
+if ($All) { $cliArgs += '--all' } else { $cliArgs += '--no-all' }
 if ($ListOnly) { $cliArgs += '--list-only' }
 if ($ContextChecks) { $cliArgs += '--context-checks' }
 if ($WorktreeCheck) { $cliArgs += '--worktree-check' }

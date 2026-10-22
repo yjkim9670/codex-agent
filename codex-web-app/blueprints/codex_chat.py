@@ -1892,7 +1892,10 @@ def codex_sessions_create():
         return _file_crypto_error_response(exc)
     payload = request.get_json(silent=True) or {}
     title = (payload.get('title') or '').strip()
-    session = create_session(title=title or None)
+    # Internal sessions remain addressable for diagnostics but are omitted from
+    # list_sessions(). Only an explicit JSON boolean opts into this behavior.
+    metadata = {'internal': True} if payload.get('internal') is True else None
+    session = create_session(title=title or None, metadata=metadata)
     return _jsonify_chat_payload_or_crypto_error({
         'session': session,
         'session_storage': get_session_storage_summary(),

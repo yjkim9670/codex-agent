@@ -251,11 +251,12 @@ def fake_server():
                     state.settings.update(payload)
                 result = {'settings': dict(state.settings), 'model_catalogs_by_agent_backend': {'dtgpt': [
                     {'slug': 'model-a', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
-                    'claude': [{'slug': 'claude-a', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
+                    'claude': [{'slug': 'Qwen3.8-27B', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
                     'opencode': [{'slug': 'provider/model'}]}}
             elif path == '/streams':
                 result = {'streams': []}
             elif path == '/sessions':
+                assert payload.get('internal') is True
                 sid = str(len(state.sessions) + 1)
                 state.sessions[sid] = {'id': sid, 'messages': []}
                 result = {'session': state.sessions[sid]}
@@ -294,6 +295,26 @@ def fake_server():
     server.shutdown()
     server.server_close()
     thread.join()
+
+
+@pytest.mark.parametrize('exhaustive', [False, True])
+def test_simplified_model_selection_and_explicit_override(exhaustive):
+    snapshot = {'settings': {'model': 'other-claude'}, 'model_catalogs_by_agent_backend': {
+        'claude': [
+            {'slug': 'other-claude', 'reasoning_options': ['high']},
+            {'slug': 'Qwen3.8-27B', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
+        'opencode': [{'slug': 'provider/one'}, {'slug': 'provider/two'}]}}
+    rows = runner.matrix(snapshot, ['opencode', 'claude'], [], [], exhaustive)
+    assert [(r['backend'], r['model'], r['reasoning']) for r in rows] == [
+        ('opencode', 'provider/one', ''), ('opencode', 'provider/two', ''),
+        ('claude', 'Qwen3.8-27B', 'low')
+    ] + ([('claude', 'Qwen3.8-27B', 'high')] if exhaustive else [])
+    assert all(r['status'] == 'PLANNED' for r in rows)
+    override = runner.matrix(snapshot, ['claude'], ['other-claude'], [], exhaustive)
+    assert [r['model'] for r in override] == ['other-claude']
+    snapshot['model_catalogs_by_agent_backend']['claude'].pop()
+    assert runner.matrix(snapshot, ['claude'], [], [], exhaustive) == [dict(
+        backend='claude', model='Qwen3.8-27B', reasoning='', status='UNSUPPORTED')]
 
 
 def test_matrix_uses_per_model_efforts_and_opencode_default():
@@ -365,7 +386,33 @@ def test_list_only_never_mutates(fake_server):
     assert fake_server.requests == [('GET', '/settings')]
 
 
-@pytest.mark.parametrize('extra_args', [[], ['--all']])
+def test_default_execution_uses_server_streams_and_retains_sessions(fake_server, tmp_path, monkeypatch):
+    original_init = runner.Client.__init__
+    original_case = runner.run_case
+    before = dict(fake_server.settings)
+
+    def connect(self, url, timeout):
+        assert url == 'http://localhost:3000'
+        original_init(self, fake_server.url, timeout)
+
+    def check_case(client, row, args, scenario):
+        assert (args.mode, args.direct, args.timeout, args.all) == ('stream', 'off', 300, True)
+        return original_case(client, row, args, scenario)
+
+    monkeypatch.setattr(runner.Client, '__init__', connect)
+    monkeypatch.setattr(runner, 'run_case', check_case)
+    monkeypatch.setattr(runner, 'run_direct', lambda *a, **kw: pytest.fail('unexpected local provider call'))
+    out = tmp_path / 'defaults'
+    assert runner.main(['--output-directory', str(out)]) == 0
+    results = json.loads((out / 'results.json').read_text())
+    assert len(results) == len(fake_server.sessions) == 3
+    assert all(r['session_id'] in fake_server.sessions for r in results)
+    assert sum(method == 'POST' and path.endswith('/message/stream')
+               for method, path in fake_server.requests) == 3
+    assert fake_server.settings == before
+
+
+@pytest.mark.parametrize('extra_args', [[], ['--all'], ['--no-all']])
 def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path, monkeypatch, extra_args):
     before = dict(fake_server.settings)
     original = runner.run_case
@@ -377,11 +424,11 @@ def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path,
 
     monkeypatch.setattr(runner, 'run_case', check_candidates)
     out = tmp_path / 'report'
-    assert runner.main(['--mode', 'stream', '--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
+    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
     results = json.loads((out / 'results.json').read_text())
     assert {r['backend'] for r in results} == {'claude', 'opencode'}
-    assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (2 if extra_args else 1)
-    assert len(results) == (3 if extra_args else 2)
+    assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (1 if '--no-all' in extra_args else 2)
+    assert len(results) == (2 if '--no-all' in extra_args else 3)
     assert all(r['status'] == 'PASS' for r in results)
     assert all(p['agent_backend'] != 'dtgpt' for p in fake_server.patches[:-1])
     assert fake_server.settings == before
@@ -475,10 +522,10 @@ def test_live_progress_during_blocking_submit(fake_server, tmp_path, monkeypatch
     assert runner.main(['--base-url', fake_server.url, '--backend', 'claude', '--mode', mode,
                         '--output-directory', str(tmp_path / 'report')]) == 0
     output = capsys.readouterr().out
-    assert '[1/1] backend=claude model=claude-a reasoning=low scenario=echo' in output
+    assert '[1/2] backend=claude model=Qwen3.8-27B reasoning=low scenario=echo' in output
     assert 'phase=submitting session=1 elapsed=' in output
     assert 'phase=verifying' in output
-    assert 'timeout=90s' in output
+    assert 'timeout=300s' in output
     assert 'PASS elapsed=' in output
     if mode == 'stream':
         assert 'phase=waiting-response session=1 stream=1' in output
@@ -641,7 +688,7 @@ def test_diagnostic_collection_failure_preserves_original_failure(fake_server, t
 
 
 @pytest.mark.parametrize('verdict,exit_code', [('PASS', 0), ('FAIL', 1), ('TIMEOUT', 1)])
-def test_default_direct_is_read_only_even_with_active_work(fake_server, tmp_path, monkeypatch, verdict, exit_code):
+def test_explicit_direct_is_read_only_even_with_active_work(fake_server, tmp_path, monkeypatch, verdict, exit_code):
     original = runner.Client._request
 
     def only_catalog(self, method, path, *a, **kw):
@@ -655,7 +702,7 @@ def test_default_direct_is_read_only_even_with_active_work(fake_server, tmp_path
         calls.append(row['backend']) or dict(status=verdict, diagnostics={'output': 'test output'}))
     before = dict(fake_server.settings)
     out = tmp_path / 'standalone'
-    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out)]) == exit_code
+    assert runner.main(['--mode', 'direct', '--no-all', '--base-url', fake_server.url, '--output-directory', str(out)]) == exit_code
     assert calls == ['opencode', 'claude']
     assert fake_server.requests == [('GET', '/settings')]
     assert fake_server.settings == before
@@ -673,7 +720,7 @@ def test_default_direct_is_read_only_even_with_active_work(fake_server, tmp_path
 def test_direct_rejects_http_only_checks_without_requests(monkeypatch, flag):
     monkeypatch.setattr(runner.Client, 'request', lambda *a, **kw: pytest.fail('unexpected HTTP request'))
     with pytest.raises(SystemExit) as exc:
-        runner.main([flag])
+        runner.main(['--mode', 'direct', flag])
     assert exc.value.code == 2
 
 
@@ -686,7 +733,7 @@ def test_standalone_worker_error_is_reported_and_next_case_runs(fake_server, tmp
 
     monkeypatch.setattr(runner, 'run_direct', execute)
     out = tmp_path / 'errors'
-    assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out)]) == 1
+    assert runner.main(['--mode', 'direct', '--no-all', '--base-url', fake_server.url, '--output-directory', str(out)]) == 1
     assert calls == ['opencode', 'claude']
     results = json.loads((out / 'results.json').read_text())
     assert all(r['status'] == 'FAIL' and 'worker unavailable' in r['exception_traceback'] for r in results)

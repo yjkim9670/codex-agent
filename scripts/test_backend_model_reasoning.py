@@ -23,6 +23,38 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 ROOT = Path(__file__).resolve().parents[1]
 API = '/api/codex'
 KEYS = ('agent_backend', 'model', 'reasoning_effort')
+_direct_key_cursor = 0
+
+
+def environment_api_keys():
+    """Explicit JSON avoids ambiguous delimiters and never includes secrets in errors."""
+    raw = os.environ.get('WORKBENCH_TEST_API_KEYS', '').strip()
+    if raw:
+        try:
+            keys = json.loads(raw)
+        except ValueError:
+            raise ValueError('WORKBENCH_TEST_API_KEYS must be a JSON array of non-empty strings') from None
+        if not isinstance(keys, list) or not keys or any(not isinstance(k, str) or not k.strip() for k in keys):
+            raise ValueError('WORKBENCH_TEST_API_KEYS must be a JSON array of non-empty strings')
+        return [k.strip() for k in keys]
+    key = os.environ.get('DTGPT_API_KEY', '').strip()
+    return [key] if key else []
+
+
+def print_key_guidance():
+    print('HTTP tests use the server Key Pool: one reserved key per execution, including queued jobs. '
+          'Client API key variables do not change the running server.')
+    if not environment_api_keys():
+        print('API key environment variables are absent. HTTP tests can use keys registered in Workbench. '
+              'Direct tests use the local production credential resolver unless an explicit test pool is set.\n'
+              'PowerShell (current shell):\n'
+              '  $env:WORKBENCH_TEST_API_KEYS = \'["key-1","key-2"]\'\n'
+              '  $env:DTGPT_API_KEY = "single-key"  # single-key fallback\n'
+              'Linux bash / macOS zsh (current shell):\n'
+              '  export WORKBENCH_TEST_API_KEYS=\'["key-1","key-2"]\'\n'
+              '  export DTGPT_API_KEY="single-key"  # single-key fallback\n'
+              'Direct company execution also requires CODEX_COMPANY_MODE=1 and the same gateway/CLI/model '
+              'environment as the server company launcher. OpenCode uses its own provider credentials.')
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -152,6 +184,12 @@ def diagnostic_text(value, limit=16384):
         if secret and (name in ('WORKBENCH_TEST_COOKIE', 'WORKBENCH_TEST_AUTHORIZATION')
                        or any(part in name.upper() for part in ('TOKEN', 'SECRET', 'PASSWORD', 'API_KEY'))):
             value = value.replace(secret, '[REDACTED]')
+    # A JSON pool's individual members can appear independently in CLI errors.
+    try:
+        for secret in environment_api_keys():
+            value = value.replace(secret, '[REDACTED]')
+    except ValueError:
+        pass
     value = re.sub(r'(?i)(\bBearer\s+)[^\s\"\',;]+', r'\1[REDACTED]', value)
     value = re.sub(r'''(?ix)(["']?(?:authorization|cookie|set-cookie|api[_-]?key|access[_-]?token|password|secret)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\r\n,}]+)''',
                    r'\1[REDACTED]', value)
@@ -493,6 +531,22 @@ def direct_worker(row):
         evidence = 'production_opencode_payload_builder'
         diagnostics = {'output': output, 'error': error}
     else:
+        # Match _run_codex_stream: build credentials/runtime, then apply the
+        # selected backend's gateway and model environment before spawning.
+        selected = os.environ.get('WORKBENCH_TEST_SELECTED_API_KEY', '').strip()
+        internal_key = {'secret': selected} if selected else None
+        if selected:
+            from codex_agent.services.company_credentials import company_key_pool_supported
+            if not company_key_pool_supported():
+                raise ValueError('Explicit direct key rotation requires a Windows/Linux company environment '
+                                 '(CODEX_COMPANY_MODE=1); HTTP tests use the server pool on any client OS')
+            if row['backend'] == 'claude' and os.environ.get('CODEX_CLAUDE_ENV_MODE', '').lower() == 'native':
+                raise ValueError('Explicit company test keys cannot be used with CODEX_CLAUDE_ENV_MODE=native')
+        exec_env = service._build_agent_exec_env(row['backend'], internal_api_key=internal_key)
+        service._apply_agent_backend_exec_env(exec_env, row['backend'], model_override=row['model'])
+        # Test-only pool values must not leak into CLI descendants.
+        exec_env.pop('WORKBENCH_TEST_API_KEYS', None)
+        exec_env.pop('WORKBENCH_TEST_SELECTED_API_KEY', None)
         _, cmd = service._build_agent_command(prompt, agent_backend=row['backend'],
             model_override=row['model'], reasoning_override=row['reasoning'],
             inherit_model_settings=False, question_only=True)
@@ -508,7 +562,7 @@ def direct_worker(row):
             raise ValueError('Production CLI arguments differ from requested model/reasoning')
         cmd = service._wrap_codex_cli_command(cmd) if row['backend'] == 'dtgpt' else cmd
         completed = subprocess.run(cmd, input=prompt, text=True, encoding='utf-8',
-                                   errors='replace', capture_output=True, cwd=str(service.WORKSPACE_DIR))
+                                   errors='replace', capture_output=True, cwd=str(service.WORKSPACE_DIR), env=exec_env)
         ok = completed.returncode == 0 and token in completed.stdout
         evidence = 'production_cli_argument_builder'
         diagnostics = {'output': completed.stdout, 'error': completed.stderr, 'exit_code': completed.returncode}
@@ -518,9 +572,18 @@ def direct_worker(row):
 
 
 def run_direct(row, timeout):
+    global _direct_key_cursor
+    env = os.environ.copy()
+    env.pop('WORKBENCH_TEST_SELECTED_API_KEY', None)
+    # Only the explicit test pool overrides persisted production credentials.
+    # DTGPT_API_KEY retains the production resolver's normal fallback priority.
+    if row['backend'] != 'opencode' and os.environ.get('WORKBENCH_TEST_API_KEYS', '').strip():
+        keys = environment_api_keys()
+        env['WORKBENCH_TEST_SELECTED_API_KEY'] = keys[_direct_key_cursor % len(keys)]
+        _direct_key_cursor += 1
     cmd = [sys.executable, str(Path(__file__).resolve()), '--direct-case', json.dumps(row)]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=os.name != 'nt')
+                            start_new_session=os.name != 'nt', env=env)
     try:
         stdout, stderr = proc.communicate(timeout=timeout)
         if proc.returncode:
@@ -559,6 +622,8 @@ def report(directory, results):
 
 
 def main(argv=None):
+    global _direct_key_cursor
+    _direct_key_cursor = 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-url', default='http://127.0.0.1:5000')
     parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'],
@@ -597,6 +662,7 @@ def main(argv=None):
             raise RuntimeError('Restored settings differ from backup')
         print('Settings restored.')
         return 0
+    print_key_guidance()
     snapshot = client.request('GET', '/settings')
     backends = args.backend or ['opencode', 'claude']
     rows = matrix(snapshot, backends, args.model, args.reasoning, args.all)

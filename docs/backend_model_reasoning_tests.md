@@ -1,5 +1,48 @@
 # 백엔드 모델/reasoning 실행 검사
 
+## API 키 순환과 사내 실행 경로 (2026-10-22)
+
+기본 HTTP 검사(`stream`/`sync`)는 실제 Workbench API를 사용한다. 사내 Windows/Linux의
+서버 설정 화면에 등록된 Key Pool을 실행 요청마다 예약·순환하며, 큐 작업도 등록 시
+예약한 키를 유지한다. 클라이언트 셸의 환경변수는 이미 실행 중인 서버에 전달되지 않는다.
+OpenCode는 Workbench와 동일하게 자체 provider 인증을 사용한다.
+
+`-Direct` / `--direct`의 로컬 CLI 비교에 별도 키 풀을 쓰려면 현재 테스트 셸에 JSON
+배열을 설정한다. Claude/Codex 직접 실행마다 등록 순서로 순환하고 새 스크립트 실행에서
+첫 키로 돌아온다. OpenCode 실행은 이 순서를 소비하지 않는다. 실패 시 자동 재시도는 없다.
+
+```powershell
+$env:WORKBENCH_TEST_API_KEYS = '["key-1","key-2"]'
+# 단일 키 대안 (명시적 테스트 풀이 없을 때 기존 자격 증명 우선순위의 fallback)
+$env:DTGPT_API_KEY = "single-key"
+```
+
+```bash
+export WORKBENCH_TEST_API_KEYS='["key-1","key-2"]'
+export DTGPT_API_KEY="single-key"
+```
+
+둘 다 없으면 위 설정 예시를 터미널에 출력한다. HTTP 검사는 서버 저장 키만으로도
+실행할 수 있으므로 환경변수가 없다는 이유로 중단하지 않는다. 잘못된 JSON 풀은
+키 내용을 출력하지 않고 실행 오류로 처리한다. 값은 인자나 보고서에 기록하지 않으며
+진단 본문에 나타난 개별 풀 키도 마스킹한다.
+
+직접 비교는 현재 PC의 실행 환경이므로 **서버와 같은 Windows/Linux 사내 환경**에서
+실행해야 한다. 명시적 테스트 풀은 `CODEX_COMPANY_MODE=1`인 Windows/Linux에서만
+적용하며 Claude `native` 모드와 함께 사용하면 오류를 반환한다. 명시적 풀이 없으면
+실제 서비스의 저장 Key Pool → 기존 자격 증명 resolver를 그대로 사용한다.
+서버와 같은 저장 경로·게이트웨이·CLI·모델 환경변수를 준비해야 하며, 테스트 도구가
+사내 서버 실행 스크립트를 호출하거나 그 기본값을 자동으로 주입하지는 않는다.
+Windows 실행기는 기본 HTTPS cloud 게이트웨이, Linux 실행기는 기본 HTTP 사내
+게이트웨이를 지정하므로 서로 같은 주소라고 가정하면 안 된다.
+
+코드 대조에서 기존 직접 비교가 CLI 인자만 재사용하고 자식 프로세스 환경 구성을
+누락한 것을 확인했다. 이제 `_build_agent_exec_env`와 `_apply_agent_backend_exec_env`도
+재사용하여 예약 키를 Codex에 전달하고 Claude의 `ANTHROPIC_AUTH_TOKEN`, 게이트웨이 및
+선택 모델 환경을 실제 스트림 실행과 같은 순서로 구성한다. 직접 비교는 여전히 간단한
+echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현하는 검사는 아니다.
+실제 사내망 연결과 Windows/Linux CLI 실행 검증은 해당 환경에서 수행해야 한다.
+
 `scripts/test_backend_model_reasoning.ps1`이 PowerShell 진입점이며 같은 디렉터리의 Python 파일이 검사를 수행한다. PowerShell 5.1/7 및 Python 3.9 이상을 대상으로 작성했다. HTTP 검사는 Python 표준 라이브러리만 사용한다. 서버를 시작하거나 재시작하지 않는다.
 
 ```powershell

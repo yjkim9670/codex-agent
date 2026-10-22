@@ -16,6 +16,81 @@ runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
 
 
+def test_environment_key_pool_validation_and_redaction(monkeypatch):
+    monkeypatch.setenv('WORKBENCH_TEST_API_KEYS', '[" pool-secret-one ","pool-secret-two"]')
+    assert runner.environment_api_keys() == ['pool-secret-one', 'pool-secret-two']
+    assert runner.diagnostic_text('failed pool-secret-one / pool-secret-two') == 'failed [REDACTED] / [REDACTED]'
+    for invalid in ('{"secret":"bad"}', '[]', '[""]', '[1]', 'private-malformed-key'):
+        monkeypatch.setenv('WORKBENCH_TEST_API_KEYS', invalid)
+        with pytest.raises(ValueError, match='must be a JSON array') as exc:
+            runner.environment_api_keys()
+        assert invalid not in str(exc.value)
+    monkeypatch.delenv('WORKBENCH_TEST_API_KEYS')
+    monkeypatch.setenv('DTGPT_API_KEY', 'legacy-secret')
+    assert runner.environment_api_keys() == ['legacy-secret']
+
+
+def test_missing_key_guidance_explains_both_shells(monkeypatch, capsys):
+    monkeypatch.delenv('WORKBENCH_TEST_API_KEYS', raising=False)
+    monkeypatch.delenv('DTGPT_API_KEY', raising=False)
+    runner.print_key_guidance()
+    output = capsys.readouterr().out
+    assert '$env:WORKBENCH_TEST_API_KEYS = ' in output
+    assert 'export WORKBENCH_TEST_API_KEYS=' in output
+    assert 'Client API key variables do not change the running server' in output
+
+
+def test_direct_rotates_per_execution_without_consuming_for_opencode(monkeypatch):
+    monkeypatch.setenv('WORKBENCH_TEST_API_KEYS', '["first-secret","second-secret"]')
+    monkeypatch.setattr(runner, '_direct_key_cursor', 0)
+    calls = []
+
+    def spawn(cmd, **kwargs):
+        calls.append((cmd, kwargs['env']))
+        return SimpleNamespace(returncode=0, communicate=lambda **_: (b'{"status":"PASS"}\n', b''))
+
+    monkeypatch.setattr(runner.subprocess, 'Popen', spawn)
+    for backend in ('claude', 'opencode', 'dtgpt', 'claude'):
+        assert runner.run_direct(dict(backend=backend, model='model', reasoning=''), 1)['status'] == 'PASS'
+    assert [env.get('WORKBENCH_TEST_SELECTED_API_KEY') for _, env in calls] == [
+        'first-secret', None, 'second-secret', 'first-secret']
+    assert all('secret' not in ' '.join(cmd) for cmd, _ in calls)
+    assert 'WORKBENCH_TEST_SELECTED_API_KEY' not in os.environ
+
+
+@pytest.mark.parametrize('selected', ['', 'reserved-secret'])
+def test_direct_worker_uses_production_environment(monkeypatch, capsys, tmp_path, selected):
+    import sys
+    import types
+
+    monkeypatch.setenv('WORKBENCH_TEST_SELECTED_API_KEY', selected)
+    monkeypatch.delenv('CODEX_CLAUDE_ENV_MODE', raising=False)
+    calls = []
+    credentials = types.ModuleType('codex_agent.services.company_credentials')
+    credentials.company_key_pool_supported = lambda: True
+    monkeypatch.setitem(sys.modules, 'codex_agent.services.company_credentials', credentials)
+    service = SimpleNamespace(
+        WORKSPACE_DIR=tmp_path,
+        _build_agent_exec_env=lambda backend, **kw: calls.append(('build', backend, kw)) or {
+            'runtime': 'ready', 'WORKBENCH_TEST_SELECTED_API_KEY': selected, 'WORKBENCH_TEST_API_KEYS': 'private'},
+        _apply_agent_backend_exec_env=lambda env, backend, **kw: env.update(gateway='production', **kw),
+        _build_agent_command=lambda *a, **kw: ('claude', ['claude', '--model', 'mapped', '--effort', 'low']),
+        resolve_claude_cli_model_name=lambda model: 'mapped')
+    package = types.ModuleType('codex_agent.services')
+    package.codex_chat = service
+    monkeypatch.setitem(sys.modules, 'codex_agent.services', package)
+
+    def execute(cmd, **kwargs):
+        assert kwargs['env'] == {'runtime': 'ready', 'gateway': 'production', 'model_override': 'catalog-model'}
+        assert kwargs['cwd'] == str(tmp_path)
+        return SimpleNamespace(returncode=0, stdout=kwargs['input'], stderr='')
+
+    monkeypatch.setattr(runner.subprocess, 'run', execute)
+    runner.direct_worker(dict(backend='claude', model='catalog-model', reasoning='low'))
+    assert calls == [('build', 'claude', {'internal_api_key': {'secret': selected} if selected else None})]
+    assert json.loads(capsys.readouterr().out)['status'] == 'PASS'
+
+
 @pytest.fixture
 def fake_server():
     state = SimpleNamespace(settings={'agent_backend': 'dtgpt', 'model': 'model-a', 'reasoning_effort': 'low'},

@@ -21,6 +21,10 @@ from urllib.parse import quote, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from model_reasoning_policy import company_reasoning_options
+from model_reasoning_benchmark import benchmark_prompt, grade_response
+
 API = '/api/codex'
 KEYS = ('agent_backend', 'model', 'reasoning_effort')
 _direct_key_cursor = 0
@@ -134,8 +138,12 @@ def matrix(snapshot, backends, models, efforts, exhaustive):
         if not selected and not model_filter:
             rows.append(dict(backend=backend, model='', reasoning='', status='UNSUPPORTED'))
         for entry in selected:
-            supported = entry.get('reasoning_options') or []
-            chosen = efforts or (supported if exhaustive else [entry.get('default_reasoning_effort') or ''])
+            policy = company_reasoning_options(entry['slug']) if backend == 'claude' else None
+            supported = policy or entry.get('reasoning_options') or []
+            default = entry.get('default_reasoning_effort') or ''
+            if policy and default not in policy:
+                default = policy[0]
+            chosen = efforts or (supported if exhaustive else [default])
             if backend == 'opencode':
                 chosen = efforts or ['']
             for effort in chosen or ['']:
@@ -143,6 +151,11 @@ def matrix(snapshot, backends, models, efforts, exhaustive):
                 rows.append(dict(backend=backend, model=entry['slug'], reasoning=effort,
                                  status='PLANNED' if valid else 'UNSUPPORTED'))
     return rows
+
+
+def case_timeout(row, default=300):
+    name = row['model'].lower().rsplit('/', 1)[-1]
+    return 600 if name == 'qwen3.6-27b-h' else default
 
 
 def settings_for(row):
@@ -313,12 +326,13 @@ class Progress:
 
 
 def run_case(client, row, args, scenario='echo'):
-    result = dict(row, scenario=scenario, evidence='workbench_metadata_and_persisted_response')
+    timeout = case_timeout(row, args.timeout)
+    result = dict(row, scenario=scenario, timeout=timeout, evidence='workbench_metadata_and_persisted_response')
     started = time.monotonic()
     session_id = stream_id = None
     settled = True
     token = 'WBTEST_' + uuid.uuid4().hex
-    payload = {'prompt': f'Reply with exactly {token}. Do not modify any files.'}
+    payload = {'prompt': benchmark_prompt(token)}
     queued_token = None
     progress = getattr(args, 'progress', None)
     trace_path = getattr(args, 'trace_path', None)
@@ -351,7 +365,7 @@ def run_case(client, row, args, scenario='echo'):
     if trace_path:
         result['trace_file'] = Path(trace_path).name
     trace('case_started', backend=row['backend'], model=row['model'], reasoning=row['reasoning'],
-          scenario=scenario, mode=args.mode, timeout=args.timeout)
+          scenario=scenario, mode=args.mode, timeout=timeout)
 
     def update(phase, **identifiers):
         result['last_phase'] = phase
@@ -392,7 +406,7 @@ def run_case(client, row, args, scenario='echo'):
         update('submitting', session=session_id)
         try:
             data = client.request('POST', f'/sessions/{session_id}/message' + ('/stream' if use_stream else ''),
-                                  payload, timeout=args.timeout if not use_stream else None)
+                                  payload, timeout=timeout if not use_stream else None)
         except (TimeoutError, OSError):
             result['cleanup_error'] = 'Message start/completion uncertain; inspect test session before continuing'
             raise
@@ -423,7 +437,7 @@ def run_case(client, row, args, scenario='echo'):
             client.request('PATCH', '/settings', settings_for(alternate))
         if use_stream:
             update('waiting-response')
-            data = wait_stream(client, stream_id, started + args.timeout)
+            data = wait_stream(client, stream_id, started + timeout)
             settled = True
             verify_metadata(data, 'stream_complete')
             if data.get('exit_code') != 0:
@@ -439,13 +453,16 @@ def run_case(client, row, args, scenario='echo'):
         if message.get('error') or (message.get('metadata') or {}).get('error'):
             raise AssertionError('Persisted assistant response contains an error')
         verify_metadata(message, 'persisted_message')
+        if scenario in ('echo', 'queue'):
+            result['benchmark'] = grade_response(message.get('content') or '', token)
+            trace('benchmark_scored', benchmark=result['benchmark'])
         if queued_token:
             update('waiting-queue')
-            while time.monotonic() < started + args.timeout:
+            while time.monotonic() < started + timeout:
                 for child in client.request('GET', '/streams?include_done=1')['streams']:
                     if child.get('session_id') == session_id and child['id'] != stream_id:
                         update('waiting-queue', queued_stream=child['id'])
-                        terminal = wait_stream(client, child['id'], started + args.timeout)
+                        terminal = wait_stream(client, child['id'], started + timeout)
                         verify_metadata(terminal, 'queued_stream_complete')
                         if terminal.get('exit_code') != 0:
                             raise AssertionError('Queued stream exited unsuccessfully')
@@ -543,7 +560,7 @@ def direct_worker(row):
         reject_backend('Requested backend is not enabled in the local direct worker')
         return
     token = 'WBDIRECT_' + uuid.uuid4().hex
-    prompt = f'Reply with exactly {token}. Do not modify files or run tools.'
+    prompt = benchmark_prompt(token)
     if row['backend'] == 'opencode':
         execution['actual_backend'] = 'opencode'
         record_execution()
@@ -581,6 +598,12 @@ def direct_worker(row):
         forwarded_model = cmd[cmd.index('--model') + 1] if '--model' in cmd else None
         if row['backend'] == 'claude':
             forwarded_reasoning = cmd[cmd.index('--effort') + 1] if '--effort' in cmd else ''
+            if '--settings' in cmd:
+                thinking = json.loads(cmd[cmd.index('--settings') + 1]).get('alwaysThinkingEnabled')
+                thinking_settings = json.loads(cmd[cmd.index('--settings') + 1])
+                if isinstance(thinking, bool):
+                    budget = (thinking_settings.get('env') or {}).get('MAX_THINKING_TOKENS')
+                    forwarded_reasoning = ('on' if thinking else 'off') if budget == ('31999' if thinking else '0') else ''
             expected_model = service.resolve_claude_cli_model_name(row['model'])
             expected_reasoning = service.resolve_claude_reasoning_effort(
                 model_name=row['model'], reasoning_effort=row['reasoning']) or ''
@@ -620,7 +643,8 @@ def direct_worker(row):
         diagnostics = {'output': completed.stdout, 'error': completed.stderr, 'exit_code': completed.returncode}
     print(json.dumps({'status': 'PASS' if ok else 'FAIL', 'evidence': evidence,
                       'forwarded_model': forwarded_model, 'forwarded_reasoning': forwarded_reasoning,
-                      'diagnostics': response_diagnostics(diagnostics), 'execution': execution}))
+                      'diagnostics': response_diagnostics(diagnostics), 'execution': execution,
+                      'benchmark': grade_response(diagnostics.get('output') or '', token)}))
 
 
 def run_direct(row, timeout):
@@ -680,7 +704,8 @@ def run_standalone(cases, args, directory):
     try:
         for index, (row, _) in enumerate(cases, 1):
             started = time.monotonic()
-            result = dict(row, scenario='direct')
+            timeout = case_timeout(row, args.timeout)
+            result = dict(row, scenario='direct', timeout=timeout)
             trace_path = directory / f'case-{index:03d}.jsonl'
             result['trace_file'] = trace_path.name
 
@@ -690,18 +715,21 @@ def run_standalone(cases, args, directory):
                         elapsed=round(time.monotonic() - started, 3), **fields), ensure_ascii=False) + '\n')
 
             trace('case_started', backend=row['backend'], model=row['model'],
-                  reasoning=row['reasoning'], mode='direct', timeout=args.timeout)
+                  reasoning=row['reasoning'], mode='direct', timeout=timeout)
             if row['status'] == 'PLANNED':
-                with Progress(row, 'direct', index, len(cases), args.timeout) as progress:
+                with Progress(row, 'direct', index, len(cases), timeout) as progress:
                     progress.update('running-direct')
                     try:
-                        result.update(run_direct(row, args.timeout))
+                        result.update(run_direct(row, timeout))
                     except Exception as exc:
                         result.update(status='FAIL', detail=diagnostic_text(str(exc)),
                                       exception_traceback=diagnostic_text(traceback.format_exc()))
                     progress.update('finished-direct', status=result['status'])
             result['seconds'] = round(time.monotonic() - started, 3)
             trace('case_finished', result=result)
+            if result.get('benchmark'):
+                score = result['benchmark']
+                print(f"Reasoning score: {score['score']}/{score['max_score']} correct={score['correct']}", flush=True)
             results.append(result)
             report(directory, results)
     except KeyboardInterrupt:
@@ -722,7 +750,7 @@ def write_json(path, data):
 def report(directory, results):
     write_json(directory / 'results.json', results)
     (directory / 'diagnostics.jsonl').write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in results), encoding='utf-8')
-    fields = ['backend', 'model', 'reasoning', 'scenario', 'status', 'seconds', 'session_id', 'evidence', 'detail', 'cleanup_error', 'direct']
+    fields = ['backend', 'model', 'reasoning', 'scenario', 'status', 'seconds', 'timeout', 'benchmark', 'session_id', 'evidence', 'detail', 'cleanup_error', 'direct']
     with (directory / 'results.csv').open('w', encoding='utf-8-sig', newline='') as handle:
         writer = csv.DictWriter(handle, fields, extrasaction='ignore')
         writer.writeheader()
@@ -809,7 +837,7 @@ def main(argv=None):
         print('HTTP integration mode preserves internal test sessions (hidden from the Web UI list) and requires an idle server.')
         print(f'Workbench model calls: {count + queue_count}; direct comparison: up to {count if args.direct != "off" else 0}')
     for row, scenario in cases:
-        print(f"{row['backend']:8} {row['model']:32} {row['reasoning'] or '(default)':10} {scenario:12} {row['status']}")
+        print(f"{row['backend']:8} {row['model']:32} {row['reasoning'] or '(default)':10} {scenario:12} {row['status']} timeout={case_timeout(row, args.timeout):g}s")
     if args.list_only:
         return 0
     directory = Path(args.output_directory or ROOT / 'tmp' / ('backend-tests-' + uuid.uuid4().hex[:12])).resolve()
@@ -827,8 +855,9 @@ def main(argv=None):
         if any(not s.get('done') for s in active):
             raise RuntimeError('Active streams found; run tests when Workbench is idle')
         for index, (row, scenario) in enumerate(cases, 1):
+            timeout = case_timeout(row, args.timeout)
             if row['status'] == 'PLANNED':
-                with Progress(row, scenario, index, len(cases), args.timeout) as progress:
+                with Progress(row, scenario, index, len(cases), timeout) as progress:
                     args.progress = progress
                     args.trace_path = directory / f'case-{index:03d}.jsonl'
                     try:
@@ -838,10 +867,13 @@ def main(argv=None):
             else:
                 result = dict(row, scenario=scenario)
             if not result.get('cleanup_error') and row['status'] == 'PLANNED' and (args.direct == 'all' or (args.direct == 'failed' and result['status'] != 'PASS')):
-                with Progress(row, scenario + '/direct', index, len(cases), args.timeout) as progress:
+                with Progress(row, scenario + '/direct', index, len(cases), timeout) as progress:
                     progress.update('running-direct')
-                    result['direct'] = run_direct(row, args.timeout)
+                    result['direct'] = run_direct(row, timeout)
                     progress.update('finished-direct', status=result['direct']['status'])
+            if result.get('benchmark'):
+                score = result['benchmark']
+                print(f"Reasoning score: {score['score']}/{score['max_score']} correct={score['correct']}", flush=True)
             results.append(result)
             report(directory, results)
             print(f"{row['backend']} {row['model']} reasoning={row['reasoning'] or '(default)'} "

@@ -94,6 +94,9 @@ def test_direct_worker_uses_production_environment(monkeypatch, capsys, tmp_path
 
 
 @pytest.mark.parametrize('backend,requested,expected,actual,model,matches', [
+    ('claude', 'on', 'on', 'on', 'mapped', True),
+    ('claude', 'off', 'off', 'off', 'mapped', True),
+    ('claude', 'on', 'on', 'off', 'mapped', False),
     ('claude', 'high', 'low', 'low', 'mapped', True),
     ('claude', 'high', '', '', 'mapped', True),
     ('claude', '', 'medium', 'medium', 'mapped', True),
@@ -110,7 +113,10 @@ def test_direct_worker_validates_normalized_arguments(
 
     monkeypatch.delenv('WORKBENCH_TEST_SELECTED_API_KEY', raising=False)
     cmd = [backend, '--model', model]
-    if actual:
+    if actual in ('on', 'off'):
+        cmd += ['--settings', json.dumps({'alwaysThinkingEnabled': actual == 'on',
+                                         'env': {'MAX_THINKING_TOKENS': '31999' if actual == 'on' else '0'}})]
+    elif actual:
         cmd += ['--effort', actual] if backend == 'claude' else [
             '--config', 'model_reasoning_effort=' + json.dumps(actual)]
     resolver_calls = []
@@ -308,7 +314,7 @@ def test_all_catalog_models_and_explicit_override(exhaustive):
     assert [(r['backend'], r['model'], r['reasoning']) for r in rows] == [
         ('opencode', 'provider/one', ''), ('opencode', 'provider/two', ''),
     ] + ([('claude', 'other-claude', 'high'), ('claude', 'Qwen3.8-27B', 'low'),
-          ('claude', 'Qwen3.8-27B', 'high')] if exhaustive else [('claude', 'other-claude', 'high')])
+          ('claude', 'Qwen3.8-27B', 'medium'), ('claude', 'Qwen3.8-27B', 'xhigh')] if exhaustive else [('claude', 'other-claude', 'high')])
     assert all(r['status'] == 'PLANNED' for r in rows)
     override = runner.matrix(snapshot, ['claude'], ['other-claude'], [], exhaustive)
     assert [r['model'] for r in override] == ['other-claude']
@@ -330,7 +336,7 @@ def test_matrix_uses_per_model_efforts_and_opencode_default():
 
 
 @pytest.mark.parametrize('mode', ['stream', 'sync'])
-@pytest.mark.parametrize('backend,count', [('codex', 2), ('claude', 2), ('opencode', 1)])
+@pytest.mark.parametrize('backend,count', [('codex', 2), ('claude', 3), ('opencode', 1)])
 def test_actual_http_matrix_persistence_and_restoration(fake_server, tmp_path, mode, backend, count):
     before = dict(fake_server.settings)
     out = tmp_path / 'report'
@@ -407,10 +413,10 @@ def test_default_execution_uses_server_streams_and_retains_sessions(fake_server,
     out = tmp_path / 'defaults'
     assert runner.main(['--output-directory', str(out)]) == 0
     results = json.loads((out / 'results.json').read_text())
-    assert len(results) == len(fake_server.sessions) == 3
+    assert len(results) == len(fake_server.sessions) == 4
     assert all(r['session_id'] in fake_server.sessions for r in results)
     assert sum(method == 'POST' and path.endswith('/message/stream')
-               for method, path in fake_server.requests) == 3
+               for method, path in fake_server.requests) == 4
     assert fake_server.settings == before
 
 
@@ -429,8 +435,8 @@ def test_default_backends_exclude_codex_even_when_current(fake_server, tmp_path,
     assert runner.main(['--base-url', fake_server.url, '--output-directory', str(out), *extra_args]) == 0
     results = json.loads((out / 'results.json').read_text())
     assert {r['backend'] for r in results} == {'claude', 'opencode'}
-    assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (1 if '--no-all' in extra_args else 2)
-    assert len(results) == (2 if '--no-all' in extra_args else 3)
+    assert [r['backend'] for r in results] == ['opencode'] + ['claude'] * (1 if '--no-all' in extra_args else 3)
+    assert len(results) == (2 if '--no-all' in extra_args else 4)
     assert all(r['status'] == 'PASS' for r in results)
     assert all(p['agent_backend'] != 'dtgpt' for p in fake_server.patches[:-1])
     assert fake_server.settings == before
@@ -524,7 +530,7 @@ def test_live_progress_during_blocking_submit(fake_server, tmp_path, monkeypatch
     assert runner.main(['--base-url', fake_server.url, '--backend', 'claude', '--mode', mode,
                         '--output-directory', str(tmp_path / 'report')]) == 0
     output = capsys.readouterr().out
-    assert '[1/2] backend=claude model=Qwen3.8-27B reasoning=low scenario=echo' in output
+    assert '[1/3] backend=claude model=Qwen3.8-27B reasoning=low scenario=echo' in output
     assert 'phase=submitting session=1 elapsed=' in output
     assert 'phase=verifying' in output
     assert 'timeout=300s' in output
@@ -739,3 +745,83 @@ def test_standalone_worker_error_is_reported_and_next_case_runs(fake_server, tmp
     assert calls == ['opencode', 'claude']
     results = json.loads((out / 'results.json').read_text())
     assert all(r['status'] == 'FAIL' and 'worker unavailable' in r['exception_traceback'] for r in results)
+
+
+@pytest.mark.parametrize('model,expected', [
+    ('openai/gpt-oss-120b', ['low', 'medium', 'high']),
+    ('Qwen3.8-27B', ['low', 'medium', 'xhigh']),
+    ('Qwen3.8-27B-test', ['low', 'medium', 'xhigh']),
+    ('Qwen3.8B-27B', ['low', 'medium', 'xhigh']),
+    ('Gemma4-260430', ['on', 'off']),
+    ('GaussO4.1-260330', ['on', 'off']),
+    ('GaussO3.7-260914', ['on', 'off']),
+    ('Qwen3.6-27B-H', ['low', 'medium', 'high', 'xhigh']),
+])
+def test_company_matrix_overrides_stale_catalog(model, expected):
+    snapshot = {'settings': {}, 'model_catalogs_by_agent_backend': {'claude': [
+        {'slug': model, 'reasoning_options': ['low', 'medium', 'high', 'xhigh'],
+         'default_reasoning_effort': 'high'}]}}
+    rows = runner.matrix(snapshot, ['claude'], [], [], True)
+    assert [r['reasoning'] for r in rows] == expected
+    assert all(r['status'] == 'PLANNED' for r in rows)
+    unsupported = runner.matrix(snapshot, ['claude'], [], ['invalid'], True)
+    assert unsupported[0]['status'] == 'UNSUPPORTED'
+
+
+def test_reasoning_benchmark_scores_actual_answers_not_echo():
+    from model_reasoning_benchmark import expected_answers
+    token = 'WBTEST_marker'
+    expected = dict(selection=['B', 'E', 'F', 'J'], value=56,
+                    order=['Q', 'P', 'S', 'T', 'R', 'U'], cost=243, checksum=27)
+    assert expected_answers() == expected
+    prompt = runner.benchmark_prompt(token)
+    assert len(prompt) > 2500
+    assert runner.grade_response(prompt, token)['score'] == 0
+    answer = dict(expected, token=token)
+    assert runner.grade_response(json.dumps(answer), token)['correct'] is True
+    answer['cost'] = 244
+    assert runner.grade_response(json.dumps(answer), token)['score'] == 4
+    assert runner.grade_response(json.dumps(answer), 'another-token')['score'] == 0
+    answer['cost'] = True
+    assert runner.grade_response(json.dumps(answer), token)['score'] == 4
+
+
+@pytest.mark.parametrize('mode', ['stream', 'sync'])
+def test_qwen_special_timeout_reaches_http_and_report(fake_server, tmp_path, monkeypatch, mode):
+    original_matrix = runner.matrix
+    def matrix(*args):
+        rows = original_matrix(*args)
+        return [dict(rows[0], model='Qwen3.6-27B-H')]
+    monkeypatch.setattr(runner, 'matrix', matrix)
+    requests = []
+    original_request = runner.Client.request
+    def request(self, method, path, *args, **kw):
+        if method == 'POST' and '/message' in path:
+            requests.append(kw.get('timeout'))
+        return original_request(self, method, path, *args, **kw)
+    monkeypatch.setattr(runner.Client, 'request', request)
+    out = tmp_path / 'report'
+    assert runner.main(['--base-url', fake_server.url, '--mode', mode,
+                        '--output-directory', str(out)]) == 0
+    result = json.loads((out / 'results.json').read_text())[0]
+    assert result['timeout'] == 600
+    assert requests == [600 if mode == 'sync' else None]
+    assert runner.case_timeout({'model': 'Qwen3.8-27B'}) == 300
+    assert runner.case_timeout({'model': 'Qwen3.6-27B-H'}, 1) == 600
+    assert result['benchmark']['score'] == 0  # fake server only echoes marker
+
+
+@pytest.mark.parametrize('mode', ['direct', 'stream'])
+def test_special_timeout_reaches_direct_workers(fake_server, tmp_path, monkeypatch, mode):
+    original_matrix = runner.matrix
+    monkeypatch.setattr(runner, 'matrix', lambda *args: [
+        dict(original_matrix(*args)[0], model='Qwen3.6-27B-H')])
+    timeouts = []
+    def direct(row, timeout):
+        timeouts.append(timeout)
+        return {'status': 'PASS'}
+    monkeypatch.setattr(runner, 'run_direct', direct)
+    options = ['--direct', 'all'] if mode == 'stream' else []
+    assert runner.main(['--base-url', fake_server.url, '--mode', mode,
+                        '--output-directory', str(tmp_path / 'report'), *options]) == 0
+    assert timeouts == [600]

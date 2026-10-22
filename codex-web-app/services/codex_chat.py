@@ -11418,7 +11418,13 @@ def _build_claude_command(
         model_name=claude_model,
         reasoning_effort=reasoning_effort,
     )
-    if reasoning_effort:
+    if reasoning_effort in ('on', 'off'):
+        enabled = reasoning_effort == 'on'
+        cmd.extend(['--settings', json.dumps({
+            'alwaysThinkingEnabled': enabled,
+            'env': {'MAX_THINKING_TOKENS': '31999' if enabled else '0'},
+        })])
+    elif reasoning_effort:
         cmd.extend(['--effort', reasoning_effort])
     dangerously_skip_permissions = _resolve_claude_dangerously_skip_permissions()
     if dangerously_skip_permissions:

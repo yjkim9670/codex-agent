@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .services.multiuser import ScopedPath
+from model_reasoning_policy import company_reasoning_options
 
 try:
     import pwd
@@ -1552,6 +1553,10 @@ def resolve_codex_reasoning_effort(model_name=None, reasoning_effort=None):
 
 
 def resolve_claude_reasoning_effort(model_name=None, reasoning_effort=None):
+    policy = company_reasoning_options(model_name)
+    if policy and os.environ.get('CODEX_CLAUDE_ENV_MODE', '').strip().lower() != 'native':
+        requested = str(reasoning_effort or '').strip().lower()
+        return requested if requested in policy else policy[0]
     normalized_reasoning = normalize_claude_effort_level(reasoning_effort)
     supported_reasoning = get_claude_reasoning_options(model_name=model_name)
     if normalized_reasoning:

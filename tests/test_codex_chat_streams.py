@@ -7898,3 +7898,29 @@ def test_opencode_recovery_filters_reasoning_and_retains_log(opencode_run_harnes
     assert completed
     assert stream['output'] == 'recovered answer'
     assert 'recovered analysis' in stream['raw_stderr']
+
+
+@pytest.mark.parametrize('model,mode', [
+    ('GaussO4.1-260330', 'on'), ('GaussO3.7-260914', 'off'),
+    ('Gemma4-260430', 'on'), ('Gemma4-260430', 'off'),
+])
+def test_company_claude_thinking_switch_is_not_effort(monkeypatch, model, mode):
+    monkeypatch.delenv('CODEX_CLAUDE_ENV_MODE', raising=False)
+    assert codex_config.resolve_claude_reasoning_effort(model, mode) == mode
+    cmd = codex_chat._build_claude_command(
+        'probe', model_override=model, reasoning_override=mode, inherit_model_settings=False)
+    assert '--effort' not in cmd
+    settings = json.loads(cmd[cmd.index('--settings') + 1])
+    assert settings['alwaysThinkingEnabled'] is (mode == 'on')
+    assert settings['env']['MAX_THINKING_TOKENS'] == ('31999' if mode == 'on' else '0')
+
+
+@pytest.mark.parametrize('model,effort', [
+    ('openai/gpt-oss-120b', 'high'), ('Qwen3.8-27B', 'xhigh'),
+    ('Qwen3.8-27B-test', 'medium'),
+])
+def test_company_claude_preserves_supported_efforts(monkeypatch, model, effort):
+    monkeypatch.delenv('CODEX_CLAUDE_ENV_MODE', raising=False)
+    cmd = codex_chat._build_claude_command(
+        'probe', model_override=model, reasoning_override=effort, inherit_model_settings=False)
+    assert cmd[cmd.index('--effort') + 1] == effort

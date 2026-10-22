@@ -1,5 +1,40 @@
 # 백엔드 모델/reasoning 실행 검사
 
+## 추론 비교 과제와 모델별 정책 (2026-10-23)
+
+기본 `echo` 시나리오 이름은 호환성을 위해 유지하지만, 실제 프롬프트는 약 3,000자
+분량의 고정 추론 과제(`constraints-v1`)이다. 제약이 있는 프로젝트 선택, 선행 조건이
+있는 가중 완료 시간 최소화, 40단계 순차 체크섬을 풀고 짧은 JSON 답변을 반환한다.
+HTTP와 직접 실행 모두 동일한 문제를 사용하며 파일 변경·도구 실행은 요청하지 않는다.
+
+| 모델 계열 (Claude 백엔드) | 검사 설정 |
+| --- | --- |
+| `openai/*`, `gpt-oss*` | `low`, `medium`, `high` |
+| `Qwen3.8*` (test 및 `Qwen3.8B` 표기 포함) | `low`, `medium`, `xhigh` |
+| `Gemma*`, `Gauss*` | `on`, `off` |
+| 그 외 | 서버 카탈로그의 지원 목록 |
+| OpenCode | 기본 설정 한 건 |
+
+Qwen3.8은 마지막에 지정된 강도 목록을 우선한다. 알려진 Claude 모델 계열은 오래된
+카탈로그 목록 대신 위 정책을 사용하며, 명시적으로 지정한 미지원 강도는 `UNSUPPORTED`다.
+Gemma/Gauss는 `--effort on/off` 대신 Claude의 호출별 `--settings`로
+`alwaysThinkingEnabled`와 `MAX_THINKING_TOKENS`(on: 31999, off: 0)를 전달한다.
+이 경로는 서버 코드도 변경되므로 **반영 후 사용자가 Workbench 서버를 재시작해야 한다.**
+개인 Claude 설정 파일은 수정하지 않는다. 설정 방식은 [Claude CLI 문서](https://code.claude.com/docs/en/cli-reference)와
+[설정 참조](https://code.claude.com/docs/en/settings-reference#alwaysthinkingenabled)를 따른다.
+사내 게이트웨이가 이를 실제 thinking으로 변환하는지는 응답/서버 로그로 별도 확인해야 한다.
+
+기본 제한 시간은 조합당 300초이며 `Qwen3.6-27B-H`는 600초다. HTTP stream/sync,
+직접 실행 및 `-Direct` 비교에 모두 적용하고 목록·진행 로그·JSON/CSV에 유효 제한 시간을
+기록한다. `-TimeoutSeconds`/`--timeout`은 일반 모델만 변경하며 Qwen3.6 예외는 600초다.
+설정 조회·스트림 정리용 HTTP 요청은 기존 최대 30초를 유지한다.
+
+`status=PASS`는 통신·응답 저장·설정 메타데이터 검사 통과를 뜻한다. 추론 정답 여부는
+`benchmark.correct`, `benchmark.score`(0~5), 항목별 `checks`로 따로 기록한다.
+`benchmark`에는 버전, 정답, 모델 답변과 응답 길이도 포함한다. 한 번의 고정 과제로
+강도 적용 여부를 확정할 수는 없으며, 설정별 정답률·소요 시간·본문을 비교하는 용도다.
+추론 토큰 수가 제공되지 않으면 추정해서 만들지 않는다.
+
 ## 기본 실행: 사내 Workbench 서버의 스트림 검사 (2026-10-22)
 
 인자 없이 실행하면 `-BaseUrl http://localhost:3000 -All -Mode stream -Direct off
@@ -35,7 +70,7 @@ HTTP 검사에서 만드는 세션은 `internal: true`로 보존되어 웹 UI �
 
 HTTP 검사는 공용 모델 설정을 일시 변경하고 마지막에 복원하므로 서버가 유휴 상태일 때
 실행한다. 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 서버에서 새 작업이나
-설정 변경을 하지 않는다. 스크립트 변경이므로 서버 재시작은 필요 없다.
+설정 변경을 하지 않는다. 추론 on/off 전달 경로 변경은 서버 재시작 후 적용된다.
 
 세션 없이 테스트 PC의 로컬 환경을 검사하려면 `-Mode direct`(Python: `--mode direct`)를
 명시한다. 이 모드는 서버에서 모델 카탈로그만 조회하고 로컬 CLI/provider를 실행한다.
@@ -94,8 +129,7 @@ Windows 실행기는 기본 HTTPS cloud 게이트웨이, Linux 실행기는 기�
 코드 대조에서 기존 직접 비교가 CLI 인자만 재사용하고 자식 프로세스 환경 구성을
 누락한 것을 확인했다. 이제 `_build_agent_exec_env`와 `_apply_agent_backend_exec_env`도
 재사용하여 예약 키를 Codex에 전달하고 Claude의 `ANTHROPIC_AUTH_TOKEN`, 게이트웨이 및
-선택 모델 환경을 실제 스트림 실행과 같은 순서로 구성한다. 직접 비교는 여전히 간단한
-echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현하는 검사는 아니다.
+선택 모델 환경을 실제 스트림 실행과 같은 순서로 구성한다. 직접 비교는 같은 추론 과제를 CLI로 호출하며 HTTP 큐·스트림 저장·관리자 인증까지 재현하는 검사는 아니다.
 실제 사내망 연결과 Windows/Linux CLI 실행 검증은 해당 환경에서 수행해야 한다.
 
 `scripts/test_backend_model_reasoning.ps1`이 PowerShell 진입점이며 같은 디렉터리의 Python 파일이 검사를 수행한다. PowerShell 5.1/7 및 Python 3.9 이상을 대상으로 작성했다. HTTP 검사는 Python 표준 라이브러리만 사용한다. 서버를 시작하거나 재시작하지 않는다.

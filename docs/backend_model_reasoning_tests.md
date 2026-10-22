@@ -12,7 +12,7 @@
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://localhost:3000 -Python py -All
 # 호출 없이 검사 목록만 확인
 .\scripts\test_backend_model_reasoning.ps1 -ListOnly
-# 모델별 기본 reasoning만 검사
+# 현재 또는 첫 모델의 기본 reasoning만 검사 (OpenCode는 전체 모델)
 .\scripts\test_backend_model_reasoning.ps1 -All:$false
 ```
 
@@ -27,12 +27,11 @@ HTTP 검사에서 만드는 세션은 `internal: true`로 보존되어 웹 UI �
 이전에 생성한 일반 테스트 세션은 자동으로 숨기거나 삭제하지 않는다.
 
 기본 모드는 실행 중인 서버의 CLI·인증·게이트웨이 환경을 사용한다. OpenCode 전체
-모델 → Claude `Qwen3.8-27B`의 지원 reasoning 조합 순서로 검사한다. `-All`은
-모델 선택 제한을 바꾸지 않는다. 추가 로컬 CLI 비교는 기본적으로 실행하지 않는다.
+모델 → Claude 전체 모델의 지원 reasoning 조합 순서로 검사한다. `-All`은
+기본 활성화되어 전체 모델과 지원 reasoning 조합을 검사한다. 추가 로컬 CLI 비교는 기본적으로 실행하지 않는다.
 
-**각 검사 조합마다 `Backend test …` 세션이 생성되어 웹 UI의 세션 목록에 추가된다.**
-완료 후에도 테스트 세션과 메시지는 남으며 자동 삭제하지 않는다. 목록이 바로
-갱신되지 않으면 새로고침한다. `-ListOnly`는 세션 생성·설정 변경·모델 호출을 하지 않는다.
+각 검사 조합마다 웹 UI 목록에 숨겨진 `Backend test …` 세션이 생성된다.
+완료 후에도 테스트 세션과 메시지는 남으며 자동 삭제하지 않는다. `-ListOnly`는 세션 생성·설정 변경·모델 호출을 하지 않는다.
 
 HTTP 검사는 공용 모델 설정을 일시 변경하고 마지막에 복원하므로 서버가 유휴 상태일 때
 실행한다. 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 서버에서 새 작업이나
@@ -105,10 +104,10 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 # 먼저 모델 카탈로그와 예상 호출 수 확인 (설정 변경/모델 호출 없음)
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://localhost:3000 -ListOnly
 
-# 기본: OpenCode 전체 모델 → Claude Qwen3.8-27B의 지원 reasoning 조합
+# 기본: OpenCode 전체 모델 → Claude 전체 모델의 지원 reasoning 조합
 .\scripts\test_backend_model_reasoning.ps1 -BaseUrl http://localhost:3000
 
-# OpenCode 전체 모델 + Claude Qwen3.8-27B의 지원 reasoning 조합
+# OpenCode 전체 모델 + Claude 전체 모델의 지원 reasoning 조합
 .\scripts\test_backend_model_reasoning.ps1 -Backend opencode,claude -All -TimeoutSeconds 300
 
 # 특정 모델/effort 선택, 실패 시 로컬 직접 실행과 비교
@@ -129,7 +128,7 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 
 `-BaseUrl`은 실제 서버 주소/포트로 지정한다. 기본 주소는 `http://localhost:3000`이다. `-Python 'C:\path\python.exe'`, `-OutputDirectory 'C:\test-results\new-run'`을 사용할 수 있다. 출력 폴더는 새 경로여야 한다. PowerShell 없이도 `python3 scripts/test_backend_model_reasoning.py --help`로 동일 옵션을 사용한다.
 
-기본 테스트는 `opencode` → `claude` 순서로 실행하며 `dtgpt`(Codex)는 제외한다. OpenCode는 카탈로그의 모든 모델을 검사하고, Claude는 `Qwen3.8-27B`만 검사한다. `-All`과 큐 검사 후보에도 같은 모델 제한과 기본 순서가 적용된다. Claude 카탈로그에 해당 모델이 없으면 다른 모델로 대체하지 않고 `UNSUPPORTED`로 기록한다. Codex를 테스트하려면 `-Backend codex` 또는 `-Backend dtgpt`를 명시해야 한다. Python 직접 실행에도 같은 기본값을 적용한다. `-Backend`를 명시하면 지정한 순서대로 실행한다.
+기본 테스트는 `opencode` → `claude` 순서로 실행하며 `dtgpt`(Codex)는 제외한다. OpenCode와 Claude 모두 카탈로그의 모든 모델을 검사한다. 큐 검사 후보에도 전체 모델과 같은 기본 순서가 적용된다. 카탈로그가 비어 있으면 `UNSUPPORTED`로 기록한다. Codex를 테스트하려면 `-Backend codex` 또는 `-Backend dtgpt`를 명시해야 한다. Python 직접 실행에도 같은 기본값을 적용한다. `-Backend`를 명시하면 지정한 순서대로 실행한다.
 
 테스트 한 건당 기본 타임아웃은 300초이며 스트림·동기 API 검사와 CLI 직접 비교 실행에 적용한다. `-TimeoutSeconds`(Python: `--timeout`)로 변경할 수 있다. 설정 조회 등 개별 HTTP 요청과 큐 정리 대기는 최대 30초이며, 정리 작업 때문에 전체 소요 시간은 테스트 타임아웃보다 길어질 수 있다.
 
@@ -139,7 +138,7 @@ echo CLI 호출이며 HTTP 큐·스트림 저장·관리자 인증까지 재현�
 [1/2] backend=claude model=claude-a reasoning=low scenario=echo phase=waiting-response session=123 stream=456 elapsed=12.0s timeout=300s
 ```
 
-모델은 `/api/codex/settings`의 `model_catalogs_by_agent_backend`에서 수집한다. `codex`는 내부 ID `dtgpt`로 변환한다. `-All`은 기본 활성화되어 선택된 모델별 reasoning 목록을 사용한다. `-All:$false`(Python: `--no-all`)로 끄면 Claude는 기본 reasoning 한 건만 실행하고, 명시적으로 선택한 Codex는 현재 모델 또는 첫 모델을 사용한다. OpenCode는 reasoning을 전달하지 않는 현재 구현에 맞춰 기본 실행만 검사한다. `-Model` / `--model`을 지정하면 기본 모델 제한을 덮어쓴다. 명시한 미지원 모델/reasoning은 `UNSUPPORTED`이며 성공으로 계산하지 않는다. 모델 필터는 선택한 각 백엔드에 적용하므로, 백엔드마다 모델 ID가 다르면 따로 실행한다.
+모델은 `/api/codex/settings`의 `model_catalogs_by_agent_backend`에서 수집한다. `codex`는 내부 ID `dtgpt`로 변환한다. `-All`은 기본 활성화되어 선택된 모델별 reasoning 목록을 사용한다. `-All:$false`(Python: `--no-all`)로 끄면 Claude와 명시적으로 선택한 Codex는 현재 모델 또는 첫 모델의 기본 reasoning 한 건만 실행한다. OpenCode는 reasoning을 전달하지 않는 현재 구현에 맞춰 기본 실행만 검사한다. `-Model` / `--model`을 지정하면 지정한 모델만 검사한다. 명시한 미지원 모델/reasoning은 `UNSUPPORTED`이며 성공으로 계산하지 않는다. 모델 필터는 선택한 각 백엔드에 적용하므로, 백엔드마다 모델 ID가 다르면 따로 실행한다.
 
 HTTP 통합 검사는 순차 실행한다. 이 모드에서는 기존 활성 스트림이 있으면 실행을 중단한다. 테스트 중 같은 설정을 사용하는 UI/다른 클라이언트에서 새 작업이나 설정 변경을 하지 않는다. 일반 모드에서는 설정 세 항목(`agent_backend`, `model`, `reasoning_effort`)만 변경하고 `finally`에서 복원 및 재조회 검증한다. API의 빈 설정 표현에 맞춰 백업의 null은 빈 문자열로 복원한다. 프로세스 강제 종료나 서버 장애 시 복구 파일로 다시 복원한다. 다중 사용자 모드에서 설정 변경은 관리자 권한이 필요하다. 인증이 필요하면 현재 셸의 `WORKBENCH_TEST_COOKIE` 또는 `WORKBENCH_TEST_AUTHORIZATION` 환경변수로 전달한다. 인증값은 인자/결과에 저장하지 않는다. 암호화만 허용하는 서버 구성은 이 클라이언트의 지원 범위 밖이다.
 

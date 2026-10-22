@@ -298,23 +298,25 @@ def fake_server():
 
 
 @pytest.mark.parametrize('exhaustive', [False, True])
-def test_simplified_model_selection_and_explicit_override(exhaustive):
+def test_all_catalog_models_and_explicit_override(exhaustive):
     snapshot = {'settings': {'model': 'other-claude'}, 'model_catalogs_by_agent_backend': {
         'claude': [
-            {'slug': 'other-claude', 'reasoning_options': ['high']},
+            {'slug': 'other-claude', 'default_reasoning_effort': 'high', 'reasoning_options': ['high']},
             {'slug': 'Qwen3.8-27B', 'default_reasoning_effort': 'low', 'reasoning_options': ['low', 'high']}],
         'opencode': [{'slug': 'provider/one'}, {'slug': 'provider/two'}]}}
     rows = runner.matrix(snapshot, ['opencode', 'claude'], [], [], exhaustive)
     assert [(r['backend'], r['model'], r['reasoning']) for r in rows] == [
         ('opencode', 'provider/one', ''), ('opencode', 'provider/two', ''),
-        ('claude', 'Qwen3.8-27B', 'low')
-    ] + ([('claude', 'Qwen3.8-27B', 'high')] if exhaustive else [])
+    ] + ([('claude', 'other-claude', 'high'), ('claude', 'Qwen3.8-27B', 'low'),
+          ('claude', 'Qwen3.8-27B', 'high')] if exhaustive else [('claude', 'other-claude', 'high')])
     assert all(r['status'] == 'PLANNED' for r in rows)
     override = runner.matrix(snapshot, ['claude'], ['other-claude'], [], exhaustive)
     assert [r['model'] for r in override] == ['other-claude']
-    snapshot['model_catalogs_by_agent_backend']['claude'].pop()
+    assert runner.matrix(snapshot, ['claude'], ['missing'], [], exhaustive) == [dict(
+        backend='claude', model='missing', reasoning='', status='UNSUPPORTED')]
+    snapshot['model_catalogs_by_agent_backend']['claude'] = []
     assert runner.matrix(snapshot, ['claude'], [], [], exhaustive) == [dict(
-        backend='claude', model='Qwen3.8-27B', reasoning='', status='UNSUPPORTED')]
+        backend='claude', model='', reasoning='', status='UNSUPPORTED')]
 
 
 def test_matrix_uses_per_model_efforts_and_opencode_default():

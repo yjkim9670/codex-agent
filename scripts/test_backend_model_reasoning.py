@@ -23,7 +23,6 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 ROOT = Path(__file__).resolve().parents[1]
 API = '/api/codex'
 KEYS = ('agent_backend', 'model', 'reasoning_effort')
-DEFAULT_CLAUDE_TEST_MODEL = 'Qwen3.8-27B'
 _direct_key_cursor = 0
 
 
@@ -124,7 +123,7 @@ def matrix(snapshot, backends, models, efforts, exhaustive):
     catalogs = snapshot.get('model_catalogs_by_agent_backend', {})
     for backend in dict.fromkeys('dtgpt' if b == 'codex' else b for b in backends):
         catalog = catalogs.get(backend, [])
-        model_filter = models or ([DEFAULT_CLAUDE_TEST_MODEL] if backend == 'claude' else [])
+        model_filter = models
         selected = [e for e in catalog if not model_filter or e['slug'] in model_filter]
         if not exhaustive and not model_filter and backend != 'opencode':
             current = snapshot['settings'].get('model')
@@ -739,13 +738,13 @@ def main(argv=None):
     parser.add_argument('--backend', action='append', choices=['codex', 'dtgpt', 'claude', 'opencode'],
                         help='Backend to test (repeatable; default: opencode, claude)')
     parser.add_argument('--model', action='append', default=[],
-                        help='Explicit model override (repeatable; default: all OpenCode models, Claude Qwen3.8-27B only)')
+                        help='Explicit model filter (repeatable; default: all models in selected backends)')
     parser.add_argument('--reasoning', action='append', default=[])
     efforts = parser.add_mutually_exclusive_group()
     efforts.add_argument('--all', action='store_true', default=True,
-                         help='Test all supported reasoning efforts (default); Claude stays limited to Qwen3.8-27B unless --model is supplied')
+                         help='Test all models and their supported reasoning efforts (default)')
     efforts.add_argument('--no-all', action='store_false', dest='all',
-                         help='Use only the default reasoning effort unless --reasoning is supplied')
+                         help='Use the current or first model (all OpenCode models) and default reasoning unless explicitly selected')
     parser.add_argument('--list-only', action='store_true')
     parser.add_argument('--mode', choices=['direct', 'stream', 'sync'], default='stream',
                         help='stream (default)/sync: live HTTP integration tests; direct: no Workbench sessions/settings writes')

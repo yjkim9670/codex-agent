@@ -518,9 +518,31 @@ def safe_detail(value):
 def direct_worker(row):
     sys.path.insert(0, str(ROOT))
     from codex_agent.services import codex_chat as service
+    execution = {
+        'requested_backend': row['backend'],
+        'actual_backend': None,
+        'enabled_backends': sorted(item['id'] for item in service.get_agent_backend_options()),
+        'executable': None,
+        'resolved_executable': None,
+        'transport': 'server_api' if row['backend'] == 'opencode' else 'cli',
+    }
+
+    def record_execution():
+        print(json.dumps({'event': 'execution_preflight', 'execution': execution}), flush=True)
+
+    def reject_backend(detail):
+        print(json.dumps({'status': 'FAIL', 'failure_phase': 'backend_validation',
+                          'detail': detail, 'execution': execution}), flush=True)
+
+    if row['backend'] not in execution['enabled_backends']:
+        record_execution()
+        reject_backend('Requested backend is not enabled in the local direct worker')
+        return
     token = 'WBDIRECT_' + uuid.uuid4().hex
     prompt = f'Reply with exactly {token}. Do not modify files or run tools.'
     if row['backend'] == 'opencode':
+        execution['actual_backend'] = 'opencode'
+        record_execution()
         forwarded_model = service._opencode_model_payload(row['model'])
         if not forwarded_model:
             raise ValueError('OpenCode model must include provider/model')
@@ -542,14 +564,16 @@ def direct_worker(row):
                                  '(CODEX_COMPANY_MODE=1); HTTP tests use the server pool on any client OS')
             if row['backend'] == 'claude' and os.environ.get('CODEX_CLAUDE_ENV_MODE', '').lower() == 'native':
                 raise ValueError('Explicit company test keys cannot be used with CODEX_CLAUDE_ENV_MODE=native')
-        exec_env = service._build_agent_exec_env(row['backend'], internal_api_key=internal_key)
-        service._apply_agent_backend_exec_env(exec_env, row['backend'], model_override=row['model'])
-        # Test-only pool values must not leak into CLI descendants.
-        exec_env.pop('WORKBENCH_TEST_API_KEYS', None)
-        exec_env.pop('WORKBENCH_TEST_SELECTED_API_KEY', None)
-        _, cmd = service._build_agent_command(prompt, agent_backend=row['backend'],
+        actual_backend, cmd = service._build_agent_command(prompt, agent_backend=row['backend'],
             model_override=row['model'], reasoning_override=row['reasoning'],
             inherit_model_settings=False, question_only=True)
+        execution.update(actual_backend=actual_backend,
+                         executable=diagnostic_text(cmd[0]),
+                         resolved_executable=diagnostic_text(shutil.which(cmd[0])) if shutil.which(cmd[0]) else None)
+        record_execution()
+        if actual_backend != row['backend']:
+            reject_backend('Production command builder selected a different backend')
+            return
         forwarded_model = cmd[cmd.index('--model') + 1] if '--model' in cmd else None
         if row['backend'] == 'claude':
             forwarded_reasoning = cmd[cmd.index('--effort') + 1] if '--effort' in cmd else ''
@@ -577,9 +601,14 @@ def direct_worker(row):
         if not matches:
             print(json.dumps({'status': 'FAIL', 'failure_phase': 'cli_argument_validation',
                               'detail': 'Production CLI arguments differ from normalized model/reasoning',
-                              'cli_validation': validation}))
+                              'cli_validation': validation, 'execution': execution}))
             return
-        cmd = service._wrap_codex_cli_command(cmd) if row['backend'] == 'dtgpt' else cmd
+        exec_env = service._build_agent_exec_env(row['backend'], internal_api_key=internal_key)
+        service._apply_agent_backend_exec_env(exec_env, row['backend'], model_override=row['model'])
+        # Test-only pool values must not leak into CLI descendants.
+        exec_env.pop('WORKBENCH_TEST_API_KEYS', None)
+        exec_env.pop('WORKBENCH_TEST_SELECTED_API_KEY', None)
+        cmd = service._wrap_codex_cli_command(cmd) if actual_backend == 'dtgpt' else cmd
         completed = subprocess.run(cmd, input=prompt, text=True, encoding='utf-8',
                                    errors='replace', capture_output=True, cwd=str(service.WORKSPACE_DIR), env=exec_env)
         ok = completed.returncode == 0 and token in completed.stdout
@@ -587,7 +616,7 @@ def direct_worker(row):
         diagnostics = {'output': completed.stdout, 'error': completed.stderr, 'exit_code': completed.returncode}
     print(json.dumps({'status': 'PASS' if ok else 'FAIL', 'evidence': evidence,
                       'forwarded_model': forwarded_model, 'forwarded_reasoning': forwarded_reasoning,
-                      'diagnostics': response_diagnostics(diagnostics)}))
+                      'diagnostics': response_diagnostics(diagnostics), 'execution': execution}))
 
 
 def run_direct(row, timeout):
@@ -612,6 +641,8 @@ def run_direct(row, timeout):
                 continue
             if isinstance(entry, dict) and entry.get('event') == 'cli_validation':
                 result['cli_validation'] = entry['cli_validation']
+            if isinstance(entry, dict) and entry.get('event') == 'execution_preflight':
+                result['execution'] = entry['execution']
         return result
 
     try:

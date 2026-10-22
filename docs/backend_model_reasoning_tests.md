@@ -176,3 +176,13 @@ $parseErrors = $null
 [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\scripts\test_backend_model_reasoning.ps1), [ref]$tokens, [ref]$parseErrors) | Out-Null
 if ($parseErrors.Count) { $parseErrors; exit 1 }
 ```
+
+직접 실행은 로컬 worker의 활성 백엔드 목록을 먼저 검사하고, 운영 명령 생성기가
+반환한 실제 백엔드가 요청과 다르면 CLI 실행 전에 `backend_validation` 실패로 처리한다.
+`results.json`의 `execution`에는 `requested_backend`, `actual_backend`,
+`enabled_backends`, `executable`, `resolved_executable`, `transport`가 남는다.
+`execution_preflight` 기록은 worker 오류·타임아웃에도 가능한 범위에서 보존한다.
+비활성 백엔드는 명령을 만들지 않으므로 실제 백엔드와 실행 경로가 null이다.
+OpenCode는 서버 API 경로이므로 CLI 실행 경로가 null이다. 이 목록과 경로는
+HTTP 서버가 아닌 테스트를 실행한 PC의 설정이다. 운영 Codex의 `service_tier`
+설정은 이 테스트 변경으로 수정하지 않는다.

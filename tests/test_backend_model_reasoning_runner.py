@@ -70,6 +70,7 @@ def test_direct_worker_uses_production_environment(monkeypatch, capsys, tmp_path
     credentials.company_key_pool_supported = lambda: True
     monkeypatch.setitem(sys.modules, 'codex_agent.services.company_credentials', credentials)
     service = SimpleNamespace(
+        get_agent_backend_options=lambda: [{'id': b} for b in ('dtgpt', 'claude', 'opencode')],
         WORKSPACE_DIR=tmp_path,
         _build_agent_exec_env=lambda backend, **kw: calls.append(('build', backend, kw)) or {
             'runtime': 'ready', 'WORKBENCH_TEST_SELECTED_API_KEY': selected, 'WORKBENCH_TEST_API_KEYS': 'private'},
@@ -120,6 +121,7 @@ def test_direct_worker_validates_normalized_arguments(
         return expected or None
 
     service = SimpleNamespace(
+        get_agent_backend_options=lambda: [{'id': b} for b in ('dtgpt', 'claude', 'opencode')],
         WORKSPACE_DIR=tmp_path,
         _build_agent_exec_env=lambda *a, **kw: {},
         _apply_agent_backend_exec_env=lambda *a, **kw: None,
@@ -139,7 +141,7 @@ def test_direct_worker_validates_normalized_arguments(
     monkeypatch.setattr(runner.subprocess, 'run', execute)
     runner.direct_worker(dict(backend=backend, model='catalog-model', reasoning=requested))
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    validation = records[0]['cli_validation']
+    validation = next(r['cli_validation'] for r in records if r.get('event') == 'cli_validation')
     assert validation == {
         'requested': {'model': 'catalog-model', 'reasoning': requested},
         'expected': {'model': 'mapped' if backend == 'claude' else 'catalog-model', 'reasoning': expected},
@@ -152,11 +154,53 @@ def test_direct_worker_validates_normalized_arguments(
         assert records[-1]['failure_phase'] == 'cli_argument_validation'
 
 
+@pytest.mark.parametrize('enabled,actual', [
+    (['dtgpt'], 'dtgpt'),
+    (['dtgpt', 'claude'], 'dtgpt'),
+])
+def test_direct_worker_rejects_disabled_or_substituted_backend(monkeypatch, capsys, enabled, actual):
+    import sys
+    import types
+
+    monkeypatch.delenv('WORKBENCH_TEST_SELECTED_API_KEY', raising=False)
+    built = []
+
+    def build(*args, **kwargs):
+        built.append(True)
+        return actual, ['codex', '--model', 'mapped', '--effort', 'low']
+
+    service = SimpleNamespace(
+        get_agent_backend_options=lambda: [{'id': b} for b in enabled],
+        _build_agent_command=build)
+    package = types.ModuleType('codex_agent.services')
+    package.codex_chat = service
+    monkeypatch.setitem(sys.modules, 'codex_agent.services', package)
+    monkeypatch.setattr(runner.shutil, 'which', lambda cmd: '/resolved/codex')
+    monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **kw: pytest.fail('CLI must not execute'))
+    runner.direct_worker(dict(backend='claude', model='mapped', reasoning='low'))
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    result = records[-1]
+    assert result['status'] == 'FAIL'
+    assert result['failure_phase'] == 'backend_validation'
+    execution = result['execution']
+    assert execution['requested_backend'] == 'claude'
+    assert execution['enabled_backends'] == sorted(enabled)
+    assert execution['actual_backend'] == (actual if built else None)
+    assert bool(built) == ('claude' in enabled)
+    assert records[0]['execution'] == execution
+    if built:
+        assert execution['executable'] == 'codex'
+        assert execution['resolved_executable'] == '/resolved/codex'
+
+
 @pytest.mark.parametrize('outcome', ['success', 'failure', 'timeout', 'invalid'])
 def test_run_direct_preserves_preflight_validation(monkeypatch, outcome):
     validation = {'requested': {'reasoning': 'high'}, 'expected': {'reasoning': ''},
                   'actual': {'reasoning': ''}, 'matches': True}
-    output = json.dumps({'event': 'cli_validation', 'cli_validation': validation}) + '\n'
+    execution = {'requested_backend': 'claude', 'actual_backend': 'dtgpt',
+                 'enabled_backends': ['dtgpt'], 'resolved_executable': '/bin/codex'}
+    output = json.dumps({'event': 'execution_preflight', 'execution': execution}) + '\n'
+    output += json.dumps({'event': 'cli_validation', 'cli_validation': validation}) + '\n'
     output += '{"status":"PASS"}\n' if outcome == 'success' else 'not-json\n'
     calls = []
 
@@ -173,6 +217,7 @@ def test_run_direct_preserves_preflight_validation(monkeypatch, outcome):
     monkeypatch.setattr(runner.subprocess, 'run', lambda *a, **kw: None)
     result = runner.run_direct(dict(backend='claude', model='a', reasoning='high'), 1)
     assert result['cli_validation'] == validation
+    assert result['execution'] == execution
     assert result['status'] == {'success': 'PASS', 'failure': 'FAIL',
                                 'timeout': 'TIMEOUT', 'invalid': 'FAIL'}[outcome]
 

@@ -22,7 +22,24 @@ const report = {
     quota_samples:[{limits_observed_at:'2026-09-01T01:00:00+09:00',five_hour_used_percent:20,five_hour_resets_at:'a'}, {limits_observed_at:'2026-09-02T01:00:00+09:00',five_hour_used_percent:10,five_hour_resets_at:'b'}],
     collection_diagnostics:{},sources:[],collection_errors:[],reconciliation:{daily:[],comparable_days:0,comparable_difference_tokens:0,account_missing_days:0}
 };
-(async()=>{
+if(process.argv.includes('--serve')) {
+    const http=require('node:http');
+    const staticRoot=path.join(root,'codex-web-app/static');
+    const html=read('templates/usage_dashboard.html')
+        .replace(/\{\{ url_for\('static', filename='([^']+)', v=\d+\) \}\}/g, '/static/$1');
+    const server=http.createServer((req,res)=>{
+        const pathname=new URL(req.url,'http://localhost').pathname;
+        if(pathname==='/api/codex/usage/dashboard') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(report));return;}
+        if(pathname.startsWith('/static/')) {
+            const file=path.resolve(staticRoot,pathname.slice(8));
+            if(!file.startsWith(staticRoot+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}
+            res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'font/woff2');
+            res.end(fs.readFileSync(file));return;
+        }
+        res.setHeader('Content-Type','text/html; charset=utf-8');res.end(html);
+    });
+    server.listen(0,'127.0.0.1',()=>console.log(`Fixture server http://127.0.0.1:${server.address().port}/usage`));
+} else (async()=>{
     const browser = await chromium.launch({headless:true});
     try {
         const page = await browser.newPage({viewport:{width:1440,height:1000},timezoneId:'America/Los_Angeles'});
@@ -61,15 +78,46 @@ const report = {
         const geometry = () => page.locator('.chart svg').evaluateAll(nodes=>nodes.map(el=>({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})));
         await expect(page.locator('#token-chart svg')).not.toContainText('0.0M');
         const baseline=await geometry();
-        await page.locator('#zoom-in').click();
+        const zoomButton=(id,action)=>page.locator(`[data-chart="${id}"][data-zoom="${action}"]`);
+        await zoomButton('token-chart','in').click();
         let enlarged=await geometry();
-        enlarged.forEach((item,i)=>{assert(item.width>baseline[i].width);assert.equal(item.height,baseline[i].height);});
-        await page.locator('#zoom-in').click(); await page.locator('#zoom-in').click();
-        await expect(page.locator('#zoom-in')).toBeDisabled();
-        await expect(page.locator('#zoom-level')).toHaveText('8×');
+        enlarged.forEach((item,i)=>{assert.equal(item.height,baseline[i].height);if(i===2) assert(item.width>baseline[i].width);else assert.equal(item.width,baseline[i].width);});
+        await zoomButton('token-chart','in').click(); await zoomButton('token-chart','in').click();
+        await expect(zoomButton('token-chart','in')).toBeDisabled();
+        await expect(page.locator('#token-chart-zoom-level')).toHaveText('8×');
+        await zoomButton('quota-chart','in').click();
+        await expect(page.locator('#quota-chart-zoom-level')).toHaveText('2×');
+        await expect(page.locator('#token-chart-zoom-level')).toHaveText('8×');
         await page.locator('#refresh').click();
         await expect(page.locator('#status')).toContainText('수집');
-        await expect(page.locator('#zoom-level')).toHaveText('8×');
+        await expect(page.locator('#token-chart-zoom-level')).toHaveText('8×');
+        // Chart totals and order match the calendar tables (charts run oldest to newest).
+        assert.deepEqual(await page.locator('#monthly-chart .period-bar').evaluateAll(nodes=>nodes.map(n=>Number(n.dataset.tokens))),[300,300,400]);
+        assert.deepEqual(await page.locator('#weekly-chart .period-bar').evaluateAll(nodes=>nodes.map(n=>Number(n.dataset.tokens))),[100,500,0,0,0,0,400]);
+        for(const id of ['token-chart','quota-chart','monthly-chart','weekly-chart']) {
+            await zoomButton(id,'reset').click();
+            const plot=page.locator(`#${id} svg`);
+            await plot.hover({position:{x:100,y:75}});
+            const tip=page.locator(`#${id} .chart-tooltip`);
+            await expect(tip).toBeVisible();
+            await expect(page.locator(`#${id} .chart-crosshair`)).toHaveAttribute('visibility','visible');
+            assert(Math.abs(Number(await page.locator(`#${id} .chart-crosshair`).getAttribute('x1'))-100)<1);
+            await expect(tip).toContainText(id==='quota-chart' ? '10%' : '토큰');
+            const tipBox=await tip.boundingBox(), hostBox=await page.locator(`#${id}`).boundingBox();
+            assert(tipBox.x>=hostBox.x && tipBox.x+tipBox.width<=hostBox.x+hostBox.width+1);
+            await page.locator('h1').hover();
+            await expect(tip).toBeHidden();
+            await page.locator(`#${id} .chart-scroll`).focus();
+            await page.keyboard.press('ArrowRight');
+            await expect(tip).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(tip).toBeHidden();
+            await zoomButton(id,'in').click();
+            await expect(page.locator(`#${id}-zoom-level`)).toHaveText('2×');
+            await zoomButton(id,'out').click();
+            await expect(page.locator(`#${id}-zoom-level`)).toHaveText('1×');
+        }
+        await zoomButton('token-chart','in').click();
         // At every viewport only the chart/table regions may overflow horizontally.
         for(const width of [320,390,768,1440]) {
             await page.setViewportSize({width,height:900});
@@ -78,19 +126,16 @@ const report = {
             assert.equal(await page.locator('.model-details .table-wrap').evaluate(el=>getComputedStyle(el).maxHeight),'none');
             const scroller=page.locator('#token-chart .chart-scroll');
             await scroller.focus();
-            await page.keyboard.press('ArrowRight');
+            await page.keyboard.press('ArrowLeft');
+            for(let i=0;i<37;i++) await page.keyboard.press('ArrowRight');
             await page.waitForTimeout(100);
             assert(await scroller.evaluate(el=>el.scrollLeft>0));
         }
-        await page.setViewportSize({width:390,height:900});
-        await page.waitForTimeout(80);
-        await page.screenshot({path:path.join(root,'.agent_state/usage-dashboard-mobile-review.png'),fullPage:true});
         await page.setViewportSize({width:1440,height:1000});
         await page.waitForTimeout(80);
-        await page.locator('#zoom-reset').click();
-        await expect(page.locator('#zoom-out')).toBeDisabled();
+        await zoomButton('token-chart','reset').click();
+        await expect(zoomButton('token-chart','out')).toBeDisabled();
         assert.deepEqual(await geometry(),baseline);
-        await page.screenshot({path:path.join(root,'.agent_state/usage-dashboard-review.png'),fullPage:true});
         // A failed refresh must recover without a stale warning style.
         fail=true; await page.locator('#refresh').click();
         await expect(page.locator('#status')).toHaveClass('warning');
@@ -99,7 +144,9 @@ const report = {
         await expect(page.locator('#model-rows tr')).toHaveCount(0);
         await expect(page.locator('#comparison .empty')).toBeVisible();
         await expect(page.locator('#monthly-rows tr td:nth-child(2)').first()).toHaveText('0');
+        await page.locator('#quota-chart svg').hover({position:{x:100,y:75}});
+        await expect(page.locator('#quota-chart .chart-tooltip')).toBeHidden();
         assert.deepEqual(errors,[]);
-        console.log('Usage dashboard: calendar totals, reliability, full list, horizontal zoom, responsive layout and recovery passed.');
+        console.log('Usage dashboard: calendar totals, reliability, full list, independent scope, hover overlays, period charts, responsive layout and recovery passed.');
     } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

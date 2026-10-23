@@ -8,7 +8,8 @@
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const name = model => model.replace(/^gpt-/, 'GPT-').replace(/-(sol|terra|astra|luna)$/, ' $1');
   const palette = ['#0071e3','#8856d9','#32a49b','#e79932','#df677e','#6e6e73'];
-  let report, windowName = 'five_hour', sequence = 0, abort, zoom = 1;
+  let report, windowName = 'five_hour', sequence = 0, abort;
+  const chartStates = new Map();
   const dateLabel = value => value ? new Date(value).toLocaleString('ko-KR', {timeZone:'Asia/Seoul'}) : '미확인';
   function options(target, values, label) {
     const value = target.value;
@@ -39,7 +40,7 @@
   const dayMs = 86400000;
   const dayDate = day => new Date(`${day}T00:00:00Z`);
   const isoDay = date => date.toISOString().slice(0,10);
-  function periodRows(kind) {
+  function periodBuckets(kind) {
     const first = dayDate(report.start.slice(0,10)), last = dayDate(report.end.slice(0,10));
     const buckets = new Map();
     for (let time = +first; time <= +last; time += dayMs) {
@@ -58,37 +59,97 @@
       bucket.tokens += Object.values(values || {}).reduce((total,value) => total+value,0);
       if (values) bucket.days++;
     }
-    return [...buckets.values()].reverse().map(bucket => {
-      const partial = bucket.from !== bucket.key || bucket.to !== bucket.finish || bucket.to === report.end.slice(0,10);
-      return `<tr><td>${esc(kind === 'month' ? bucket.key.slice(0,7) : `${bucket.key} 주`)}${partial ? ' <small>일부 기간</small>' : ''}<br><small>${esc(bucket.from)} ~ ${esc(bucket.to)}</small></td><td>${num(bucket.tokens)}</td><td>${num(bucket.days)}일</td></tr>`;
-    }).join('');
+    return [...buckets.values()].map(bucket => ({...bucket,
+      partial: bucket.from !== bucket.key || bucket.to !== bucket.finish || bucket.to === report.end.slice(0,10)
+    }));
   }
-  function chart(container, series, max, format) {
-    const oldScroll = $(container).querySelector('.chart-scroll')?.scrollLeft || 0;
-    const left=58, top=18, width=Math.max(420, $(container).clientWidth-85)*zoom, height=150;
-    const start=new Date(report.start).getTime(), end=new Date(report.end).getTime();
+  function periodRows(buckets, kind) {
+    return [...buckets].reverse().map(bucket => `<tr><td>${esc(kind === 'month' ? bucket.key.slice(0,7) : `${bucket.key} 주`)}${bucket.partial ? ' <small>일부 기간</small>' : ''}<br><small>${esc(bucket.from)} ~ ${esc(bucket.to)}</small></td><td>${num(bucket.tokens)}</td><td>${num(bucket.days)}일</td></tr>`).join('');
+  }
+  function chart(container, series, max, format, settings = {}) {
+    const host = $(container), state = chartStates.get(container) || {zoom:1};
+    Object.assign(state, {series,max,format,settings});
+    chartStates.set(container, state);
+    const oldScroll = host.querySelector('.chart-scroll')?.scrollLeft || 0;
+    const left=58, top=18, width=Math.max(180, host.clientWidth-85)*state.zoom, height=150;
+    const bars = settings.buckets;
+    const start=+new Date(report.start), end=+new Date(report.end);
     const x=t => left+(new Date(t).getTime()-start)/Math.max(1,end-start)*width;
     const y=v => top+height-(v/Math.max(1,max))*height;
-    let svg = `<svg width="${width+85}" height="220" viewBox="0 0 ${width+85} 220" role="img" aria-label="${esc(container === 'token-chart' ? '날짜별 모델 토큰 추이' : '계정 5시간 주간 한도 사용률 추이')}">`;
+    const timestamps=[...new Set(series.flatMap(s=>s.points.map(p=>p.at)))].sort((a,b)=>new Date(a)-new Date(b));
+    const positions=timestamps.map((at,i)=>bars ? left+(i+.5)*width/bars.length : x(at));
+    const label = settings.label;
+    let svg = `<svg width="${width+85}" height="220" viewBox="0 0 ${width+85} 220" role="img" aria-label="${esc(label)}">`;
     [0,.5,1].forEach(v => { svg += `<line x1="${left}" x2="${left+width}" y1="${y(max*v)}" y2="${y(max*v)}" stroke="#ededf0"/><text x="${left-7}" y="${y(max*v)+4}" text-anchor="end">${esc(format(max*v))}</text>`; });
     series.forEach((s,i) => {
       let d='', previous;
-      s.points.forEach(p => {
-        d += `${previous && previous.reset && previous.reset === p.reset ? 'L' : 'M'}${x(p.at).toFixed(1)},${y(p.value).toFixed(1)} `;
-        svg += `<circle cx="${x(p.at).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="2.3" fill="${palette[i%palette.length]}"><title>${esc(s.label)} · ${esc(dateLabel(p.at))}: ${esc(num(p.value))}</title></circle>`;
+      s.points.forEach((p,j) => {
+        const px=bars ? positions[j] : x(p.at), py=y(p.value), color=palette[i%palette.length];
+        if (bars) {
+          const barWidth=Math.min(64,width/bars.length*.65);
+          svg += `<rect class="period-bar" data-tokens="${p.value}" x="${px-barWidth/2}" y="${py}" width="${barWidth}" height="${top+height-py}" fill="${color}" fill-opacity="${bars[j].partial ? '.55' : '.9'}"/>`;
+        } else {
+          d += `${previous && previous.reset && previous.reset === p.reset ? 'L' : 'M'}${px.toFixed(1)},${py.toFixed(1)} `;
+          svg += `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="2.3" fill="${color}"/>`;
+        }
         previous=p;
       });
-      svg += `<path d="${d}" fill="none" stroke="${palette[i%palette.length]}" stroke-width="2"/>`;
+      if (!bars) svg += `<path d="${d}" fill="none" stroke="${palette[i%palette.length]}" stroke-width="2"/>`;
     });
-    const step = Math.max(1, Math.ceil((end-start)/dayMs / Math.max(1,Math.floor(width/85))));
-    for (let time=start; time <= end; time += step*dayMs) {
-      const day = new Date(time+9*3600000).toISOString().slice(5,10);
-      svg += `<text x="${x(time)}" y="198" text-anchor="middle">${day}</text>`;
+    if (bars) {
+      const step=Math.max(1,Math.ceil(bars.length/Math.max(1,Math.floor(width/85))));
+      bars.forEach((b,i)=>{if(i%step===0) svg+=`<text x="${positions[i]}" y="198" text-anchor="middle">${esc(settings.kind==='month' ? b.key.slice(0,7) : b.key.slice(5))}${b.partial ? '*' : ''}</text>`;});
+    } else {
+      const step = Math.max(1, Math.ceil((end-start)/dayMs / Math.max(1,Math.floor(width/85))));
+      for (let time=start; time <= end; time += step*dayMs) {
+        svg += `<text x="${x(time)}" y="198" text-anchor="middle">${new Date(time+9*3600000).toISOString().slice(5,10)}</text>`;
+      }
     }
-    svg += '</svg>';
+    svg += `<line class="chart-crosshair" x1="0" x2="0" y1="${top}" y2="${top+height}" visibility="hidden"/></svg>`;
     const allPoints=series.flatMap(s=>s.points.map(p=>({label:s.label,...p})));
-    $(container).innerHTML = `<div class="chart-scroll" tabindex="0" role="region" aria-label="${container === 'token-chart' ? '토큰' : '한도'} 그래프 가로 스크롤">${svg}</div>` + `<div class="legend">${series.map((s,i)=>`<span><i class="dot" style="background:${palette[i%palette.length]}"></i>${esc(s.label)}</span>`).join('')}</div>` + (allPoints.length ? `<details><summary>그래프 데이터 표 보기</summary><div class="table-wrap"><table><thead><tr><th>시각</th><th>항목</th><th>값</th></tr></thead><tbody>${allPoints.map(p=>`<tr><td>${esc(dateLabel(p.at))}</td><td>${esc(p.label)}</td><td>${esc(num(p.value))}</td></tr>`).join('')}</tbody></table></div></details>` : '<p class="empty">관측 기록이 없습니다.</p>');
-    $(container).querySelector('.chart-scroll').scrollLeft = oldScroll;
+    host.innerHTML = `<div class="chart-viewport"><div class="chart-scroll" tabindex="0" role="region" aria-label="${esc(label)} 가로 스크롤; 좌우 방향키로 값 탐색">${svg}</div><div class="chart-tooltip" role="status" aria-live="polite" hidden></div></div>` + `<div class="legend">${series.map((s,i)=>`<span><i class="dot" style="background:${palette[i%palette.length]}"></i>${esc(s.label)}</span>`).join('')}${bars ? '<span>* 일부 기간 · 옅은 막대로 표시</span>' : ''}</div>` + (allPoints.length ? (bars ? '' : `<details><summary>그래프 데이터 표 보기</summary><div class="table-wrap"><table><thead><tr><th>시각</th><th>항목</th><th>값</th></tr></thead><tbody>${allPoints.map(p=>`<tr><td>${esc(dateLabel(p.at))}</td><td>${esc(p.label)}</td><td>${esc(num(p.value))}</td></tr>`).join('')}</tbody></table></div></details>`) : '<p class="empty">관측 기록이 없습니다.</p>');
+    const scroller=host.querySelector('.chart-scroll'), plot=host.querySelector('svg');
+    const tooltip=host.querySelector('.chart-tooltip'), crosshair=host.querySelector('.chart-crosshair');
+    scroller.scrollLeft=oldScroll;
+    let active=-1;
+    const hide=()=>{tooltip.hidden=true;crosshair.setAttribute('visibility','hidden');};
+    function show(index, pointerX) {
+      active=index;
+      const at=timestamps[index], px=positions[index], bucket=bars?.[index];
+      crosshair.setAttribute('x1',px);crosshair.setAttribute('x2',px);crosshair.setAttribute('visibility','visible');
+      tooltip.innerHTML=`<strong>${esc(bucket ? (settings.kind==='month' ? bucket.key.slice(0,7) : `${bucket.key} 주`) : dateLabel(at))}</strong>` + (bucket ? `<div>${esc(bucket.from)} ~ ${esc(bucket.to)}${bucket.partial ? ' · 일부 기간' : ''}</div>` : '') + series.map((s,i)=>{
+        const p=s.points.find(p=>p.at===at);
+        return p ? `<div class="tooltip-row"><span><i class="dot" style="background:${palette[i%palette.length]}"></i>${esc(s.label)}</span><b>${esc(num(p.value))}${container==='quota-chart' ? '%' : ' 토큰'}</b></div>` : '';
+      }).join('') + (bucket ? `<div>기록 있는 날 ${bucket.days}일</div>` : '');
+      tooltip.hidden=false;
+      const available=host.querySelector('.chart-viewport').clientWidth;
+      const localX=pointerX ?? px-scroller.scrollLeft;
+      tooltip.style.left=`${Math.max(0,Math.min(localX+12,available-tooltip.offsetWidth))}px`;
+    }
+    plot.addEventListener('pointermove',e=>{
+      const bounds=plot.getBoundingClientRect(), px=e.clientX-bounds.left, py=e.clientY-bounds.top;
+      if (!timestamps.length || px<left || px>left+width || py<top || py>top+height) {hide();return;}
+      let index=0;
+      positions.forEach((value,i)=>{if(Math.abs(value-px)<Math.abs(positions[index]-px)) index=i;});
+      show(index,e.clientX-scroller.getBoundingClientRect().left);
+      // Track the cursor itself, while the panel identifies the nearest observed timestamp.
+      crosshair.setAttribute('x1',px);crosshair.setAttribute('x2',px);
+    });
+    scroller.addEventListener('pointerleave',hide);
+    scroller.addEventListener('scroll',hide);
+    scroller.addEventListener('blur',hide);
+    scroller.addEventListener('keydown',e=>{
+      if(e.key==='Escape') hide();
+      if(!timestamps.length || !['ArrowLeft','ArrowRight'].includes(e.key)) return;
+      e.preventDefault();
+      const next=active<0 ? 0 : Math.max(0,Math.min(timestamps.length-1,active+(e.key==='ArrowRight'?1:-1)));
+      const px=positions[next];
+      if(px<scroller.scrollLeft+left || px>scroller.scrollLeft+scroller.clientWidth-25) scroller.scrollLeft=Math.max(0,px-scroller.clientWidth/2);
+      show(next);
+    });
+    $(`${container}-zoom-level`).textContent=`${state.zoom}×`;
+    document.querySelector(`[data-chart="${container}"][data-zoom="out"]`).disabled=state.zoom===1;
+    document.querySelector(`[data-chart="${container}"][data-zoom="in"]`).disabled=state.zoom===8;
   }
   function tokenTick(value) {
     if (value >= 1e6) return `${(value/1e6).toFixed(1)}M`;
@@ -99,12 +160,15 @@
     const days=[];
     for(let time=+dayDate(report.start.slice(0,10));time<=+dayDate(report.end.slice(0,10));time+=dayMs) days.push(isoDay(new Date(time)));
     const tokenSeries=Object.keys(report.models).map(m=>({label:name(m),points:days.map(day=>({at:`${day}T00:00:00+09:00`,value:report.daily[day]?.[m] || 0,reset:'daily'}))}));
-    chart('token-chart',tokenSeries,Math.max(1,...tokenSeries.flatMap(s=>s.points.map(p=>p.value))),tokenTick);
-    chart('quota-chart',['five_hour','weekly'].map((w,i)=>({label:i?'주간':'5시간',points:report.quota_samples.filter(s=>s[`${w}_used_percent`] != null).map(s=>({at:s.limits_observed_at,value:s[`${w}_used_percent`],reset:s[`${w}_resets_at`]})).sort((a,b)=>new Date(a.at)-new Date(b.at))})),100,v=>`${v}%`);
-    $('zoom-level').textContent=`${zoom}×`;
-    $('zoom-out').disabled=zoom===1;
-    $('zoom-in').disabled=zoom===8;
+    chart('token-chart',tokenSeries,Math.max(1,...tokenSeries.flatMap(s=>s.points.map(p=>p.value))),tokenTick,{label:'날짜별 모델 토큰'});
+    chart('quota-chart',['five_hour','weekly'].map((w,i)=>({label:i?'주간':'5시간',points:report.quota_samples.filter(s=>s[`${w}_used_percent`] != null).map(s=>({at:s.limits_observed_at,value:s[`${w}_used_percent`],reset:s[`${w}_resets_at`]})).sort((a,b)=>new Date(a.at)-new Date(b.at))})),100,v=>`${v}%`,{label:'계정 한도 사용률'});
+    for (const [kind,id,label] of [['month','monthly-chart','월간 사용량'],['week','weekly-chart','주간 사용량']]) {
+      const buckets=periodBuckets(kind);
+      $(`${kind==='month' ? 'monthly' : 'weekly'}-rows`).innerHTML=periodRows(buckets,kind);
+      chart(id,[{label:'수집 토큰',points:buckets.map(b=>({at:`${b.key}T00:00:00+09:00`,value:b.tokens}))}],Math.max(1,...buckets.map(b=>b.tokens)),tokenTick,{label,buckets,kind});
+    }
   }
+
   function render() {
     options($('accounts'), report.accounts.accounts.map(a => [a.id,a.label]), '활성 계정');
     options($('environments'), report.environments.map(v => [v,v]), '전체 환경');
@@ -115,8 +179,6 @@
     effort.value=selected;
     $('status').textContent = `수집 ${dateLabel(report.collected_at)} · 한도 조회 ${dateLabel(report.limits_observed_at)} · 한국시간 ${report.start.slice(0,10)} ~ ${report.end.slice(0,10)} · 1분마다 화면 갱신`;
     $('summary').innerHTML=[['수집 토큰',num(report.total_tokens)],['현재 5시간 사용률',report.current_limits.five_hour?.used_percent == null ? '미확인' : `${report.current_limits.five_hour.used_percent}%`],['현재 주간 사용률',report.current_limits.weekly?.used_percent == null ? '미확인' : `${report.current_limits.weekly.used_percent}%`],['수집 환경',num(report.environments.length)]].map(([label,value])=>`<div class="metric"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('');
-    $('monthly-rows').innerHTML=periodRows('month');
-    $('weekly-rows').innerHTML=periodRows('week');
     compare();
     $('model-rows').innerHTML=rows().sort((a,b)=>b.tokens-a.tokens).map(row=>{
       const f=quota('five_hour',row.key),w=quota('weekly',row.key);
@@ -152,13 +214,13 @@
       $('status').classList.add('warning');
     }
   }
-  $('zoom-in').addEventListener('click',()=>{zoom=Math.min(8,zoom*2);if(report) renderCharts();});
-  $('zoom-out').addEventListener('click',()=>{zoom=Math.max(1,zoom/2);if(report) renderCharts();});
-  $('zoom-reset').addEventListener('click',()=>{
-    zoom=1;
-    if(report) renderCharts();
-    document.querySelectorAll('.chart-scroll').forEach(el=>{el.scrollLeft=0;});
-  });
+  document.querySelectorAll('[data-zoom]').forEach(button=>button.addEventListener('click',()=>{
+    const id=button.dataset.chart, state=chartStates.get(id);
+    if(!report || !state) return;
+    state.zoom=button.dataset.zoom==='reset' ? 1 : Math.max(1,Math.min(8,state.zoom*(button.dataset.zoom==='in' ? 2 : .5)));
+    chart(id,state.series,state.max,state.format,state.settings);
+    if(button.dataset.zoom==='reset') $(id).querySelector('.chart-scroll').scrollLeft=0;
+  }));
   let resizeFrame;
   window.addEventListener('resize',()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{if(report) renderCharts();});});
   form.addEventListener('submit',e=>e.preventDefault());

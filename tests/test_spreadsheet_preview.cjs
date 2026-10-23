@@ -32,7 +32,7 @@ const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
             await page.addScriptTag({ path: path.join(root, 'codex-web-app/static/vendor/xlsx-0.18.5.full.min.js') });
             await page.addScriptTag({ content: `
                 const FILE_BROWSER_SPREADSHEET_MAX_ROWS = 200, FILE_BROWSER_SPREADSHEET_MAX_COLS = 50,
-                    FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 20, FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60,
+                    FILE_BROWSER_SPREADSHEET_MAX_SHEETS = 25, FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX = 60,
                     FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX = 144;
                 async function writeTextToClipboard(text) { window.copied = text; }
                 function getCodexAppStylesheetUrl() { return 'data:text/css,'; }
@@ -109,7 +109,7 @@ const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
         // Non-A1 range, merges clipped by the preview limit, empty and legacy workbooks.
         const page = await browser.newPage();
         await page.addScriptTag({ content: `const FILE_BROWSER_SPREADSHEET_MAX_ROWS=2, FILE_BROWSER_SPREADSHEET_MAX_COLS=2,
-            FILE_BROWSER_SPREADSHEET_MAX_SHEETS=20, FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX=60,
+            FILE_BROWSER_SPREADSHEET_MAX_SHEETS=25, FILE_BROWSER_SPREADSHEET_ROW_HEADER_WIDTH_PX=60,
             FILE_BROWSER_SPREADSHEET_COLUMN_WIDTH_PX=144; ${helpers}` });
         await page.addScriptTag({ path: path.join(root, 'codex-web-app/static/vendor/xlsx-0.18.5.full.min.js') });
         const edge = await page.evaluate(() => {

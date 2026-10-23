@@ -7924,3 +7924,157 @@ def test_company_claude_preserves_supported_efforts(monkeypatch, model, effort):
     cmd = codex_chat._build_claude_command(
         'probe', model_override=model, reasoning_override=effort, inherit_model_settings=False)
     assert cmd[cmd.index('--effort') + 1] == effort
+
+
+@pytest.mark.parametrize('model,options', [
+    ('Qwen3.8-27B', ['low', 'medium', 'xhigh']),
+    ('Qwen3.8-27B-test', ['low', 'medium', 'xhigh']),
+    ('openai/gpt-oss-120b', ['low', 'medium', 'high']),
+    ('standard', ['low', 'medium', 'high', 'xhigh']),
+    ('GaussO4.1-260330', ['on', 'off']),
+    ('GaussO3.5-260831', ['on', 'off']),
+    ('GaussO3.7-260914', ['on', 'off']),
+    ('Gemma4-260430', ['on', 'off']),
+])
+def test_company_picker_policy_overrides_stale_gateway_metadata(monkeypatch, model, options):
+    monkeypatch.delenv('CODEX_CLAUDE_ENV_MODE', raising=False)
+    original = {'slug': model, 'reasoning_options': ['high', 'max'], 'default_reasoning_effort': 'max'}
+    monkeypatch.setattr(codex_config, 'get_claude_model_catalog', lambda: [original])
+    entry = codex_config.get_codex_model_catalog_for_backend('claude')[0]
+    assert entry['reasoning_options'] == options
+    assert entry['default_reasoning_effort'] in options
+    assert entry.get('selectable', True)
+    assert original['reasoning_options'] == ['high', 'max']
+
+
+def test_company_picker_unavailable_model_and_transient_failures(monkeypatch):
+    monkeypatch.delenv('CODEX_CLAUDE_ENV_MODE', raising=False)
+    models = ['Qwen3.6-27B-H', 'standard', 'GaussO4.1-260330']
+    catalog = [{'slug': model, 'reasoning_options': ['high']} for model in models]
+    monkeypatch.setattr(codex_config, 'get_claude_model_catalog', lambda: catalog)
+    entries = codex_config.get_codex_model_catalog_for_backend('claude')
+    assert entries[0]['selectable'] is False
+    assert all(entry.get('selectable', True) for entry in entries[1:])
+    monkeypatch.setenv('CODEX_CLAUDE_ENV_MODE', 'native')
+    assert codex_config.get_codex_model_catalog_for_backend('claude') == catalog
+    fast = [{'slug': 'codemate/CodeLLMFast', 'reasoning_options': []}]
+    monkeypatch.setattr(codex_config, 'get_opencode_model_catalog', lambda: fast)
+    assert codex_config.get_codex_model_catalog_for_backend('opencode') == fast
+
+
+def test_secondary_backend_persists_and_can_return_to_inheritance(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': name} for name in ('dtgpt', 'claude', 'opencode')])
+    path = tmp_path / 'settings.json'
+    monkeypatch.setattr(codex_chat, 'CODEX_SETTINGS_PATH', path)
+    monkeypatch.setattr(codex_chat, 'LEGACY_CODEX_SETTINGS_PATH', tmp_path / 'legacy.json')
+    codex_chat.update_settings(agent_backend='dtgpt', secondary_agent_backend='opencode',
+                              secondary_model='codemate/CodeLLMFast')
+    codex_chat.update_settings(verification_mode='off')
+    assert codex_chat.resolve_model_role_backend('secondary') == 'opencode'
+    assert json.loads(path.read_text())['secondary_agent_backend'] == 'opencode'
+    codex_chat.update_settings(secondary_agent_backend='')
+    assert codex_chat.resolve_model_role_backend('secondary') == 'dtgpt'
+
+
+@pytest.mark.parametrize('backend,model,effort', [
+    ('claude', 'Qwen3.8-27B', 'xhigh'),
+    ('opencode', 'codemate/CodeLLMFast', None),
+])
+def test_secondary_backend_dispatch_and_queue_snapshot(monkeypatch, isolated_codex_workspace, backend, model, effort):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': name} for name in ('dtgpt', 'claude', 'opencode')])
+    settings = {'agent_backend': 'dtgpt', 'model': 'main-only', 'reasoning_effort': 'high',
+                'secondary_agent_backend': backend, 'secondary_model': model,
+                'secondary_reasoning_effort': effort}
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    monkeypatch.setattr(codex_chat, 'CODEX_REQUIRE_ACCOUNT_LOGIN', False)
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda **k: {})
+    monkeypatch.setattr(codex_chat, 'get_usage_summary', lambda **k: {})
+    session = codex_chat.create_session('different backend')
+    captured = {}
+    real_create = codex_chat.create_codex_stream
+    def deferred_create(*args, **kwargs):
+        captured.update(kwargs)
+        return real_create(*args, deferred_start=True, preflight_usage_snapshot={}, **kwargs)
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', deferred_create)
+    entry = codex_chat._build_pending_queue_entry('queued', model_role='secondary')
+    result = codex_chat._start_codex_stream_for_session_locked(session['id'], 'task', 'task', model_role='secondary')
+    assert result['ok'] is True
+    stream = state.codex_streams[result['stream_id']]
+    assert stream['agent_backend'] == backend
+    assert captured['agent_backend_override'] == backend
+    assert stream['model_override'] == model
+    assert stream['reasoning_override'] == effort
+    assert stream['inherit_model_settings'] is False
+    settings.update(secondary_agent_backend='dtgpt', secondary_model='different')
+    saved = codex_chat._normalize_pending_queue_entry(entry)
+    assert saved['agent_backend'] == backend
+    assert saved['model_override'] == model
+    assert saved['reasoning_override'] == effort
+
+
+def test_secondary_backend_empty_values_use_own_catalog_defaults(monkeypatch):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': name} for name in ('dtgpt', 'claude', 'opencode')])
+    settings = {'agent_backend': 'dtgpt', 'model': 'main-only', 'reasoning_effort': 'high',
+                'secondary_agent_backend': 'claude'}
+    monkeypatch.setattr(codex_chat, 'get_codex_model_catalog_for_backend', lambda backend: [
+        {'slug': 'disabled', 'selectable': False},
+        {'slug': 'GaussO4.1-260330', 'reasoning_options': ['on', 'off'], 'default_reasoning_effort': 'on'}])
+    assert codex_chat.resolve_model_role_settings('secondary', settings) == ('GaussO4.1-260330', 'on')
+    monkeypatch.setattr(codex_chat_blueprint, 'get_settings', lambda: settings)
+    assert codex_chat_blueprint._resolve_model_override(model_role='secondary') == 'GaussO4.1-260330'
+    assert codex_chat_blueprint._resolve_reasoning_override(model_role='secondary') == 'on'
+
+
+@pytest.mark.parametrize('payload', [
+    {'secondary_agent_backend': 'unknown'}, {'secondary_agent_backend': []},
+    {'agent_backend': 'claude', 'model': 'Qwen3.6-27B-H'},
+    {'agent_backend': 'claude', 'model': 'Qwen3.8-27B', 'reasoning_effort': 'high'},
+])
+def test_company_settings_reject_invalid_selection(chat_route_client, monkeypatch, payload):
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': name} for name in ('dtgpt', 'claude', 'opencode')])
+    monkeypatch.setattr(codex_chat_blueprint, 'get_settings', lambda: {'agent_backend': 'dtgpt'})
+    monkeypatch.setattr(codex_chat_blueprint, 'get_codex_model_catalog_for_backend', lambda backend: [
+        {'slug': 'Qwen3.6-27B-H', 'selectable': False},
+        {'slug': 'Qwen3.8-27B', 'company_policy': True, 'reasoning_options': ['low', 'medium', 'xhigh']}])
+    assert chat_route_client.patch('/api/codex/settings', json=payload).status_code == 400
+
+
+def test_secondary_backend_settings_api_round_trip(chat_route_client, monkeypatch):
+    options = [{'id': name} for name in ('dtgpt', 'claude', 'opencode')]
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', options)
+    monkeypatch.setattr(codex_chat_blueprint, 'get_agent_backend_options', lambda: options)
+    monkeypatch.setattr(codex_chat_blueprint, 'get_settings', lambda: {'agent_backend': 'dtgpt', 'model': 'main'})
+    captured = {}
+    monkeypatch.setattr(codex_chat_blueprint, 'update_settings', lambda **kwargs: captured.update(kwargs) or kwargs)
+    response = chat_route_client.patch('/api/codex/settings', json={
+        'secondary_agent_backend': 'opencode', 'secondary_model': 'codemate/CodeLLMFast',
+        'secondary_reasoning_effort': '',
+    })
+    assert response.status_code == 200
+    assert response.get_json()['settings']['secondary_agent_backend'] == 'opencode'
+    assert captured['secondary_model'] == 'codemate/CodeLLMFast'
+
+
+def test_secondary_commit_generation_uses_selected_backend(monkeypatch):
+    from codex_agent.services import git_ops
+    settings = {'agent_backend': 'dtgpt', 'model': 'main', 'reasoning_effort': 'high',
+                'secondary_agent_backend': 'claude', 'secondary_model': 'GaussO4.1-260330',
+                'secondary_reasoning_effort': 'off'}
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': name} for name in ('dtgpt', 'claude')])
+    monkeypatch.setattr(codex_chat, 'get_settings', lambda: settings)
+    captured = {}
+    monkeypatch.setattr(codex_chat, 'execute_codex_prompt', lambda prompt, **kwargs: captured.update(kwargs) or ('ok', None, {}, {}))
+    git_ops._execute_commit_message_prompt('commit')
+    assert captured['agent_backend'] == 'claude'
+    assert captured['model_override'] == 'GaussO4.1-260330'
+    assert captured['reasoning_override'] == 'off'
+
+
+def test_plan_and_secondary_inherited_effort_respects_selected_model(monkeypatch):
+    settings = {'agent_backend': 'claude', 'model': 'standard', 'reasoning_effort': 'high',
+                'secondary_model': 'GaussO4.1-260330', 'plan_mode_model': 'GaussO4.1-260330'}
+    monkeypatch.setattr(codex_chat, 'CODEX_AGENT_BACKEND_OPTIONS', [{'id': 'claude'}])
+    monkeypatch.setattr(codex_chat, 'get_codex_model_catalog_for_backend', lambda backend: [
+        {'slug': 'GaussO4.1-260330', 'reasoning_options': ['on', 'off'], 'default_reasoning_effort': 'on'}])
+    assert codex_chat.resolve_model_role_settings('secondary', settings) == ('GaussO4.1-260330', 'on')
+    assert codex_chat.resolve_model_role_settings('plan', settings) == ('GaussO4.1-260330', 'on')

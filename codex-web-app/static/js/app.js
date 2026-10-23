@@ -1808,6 +1808,8 @@ function hasReasoningControlsForBackend(agentBackend = getActiveAgentBackend()) 
 function getCompatibleModelForBackend(model, agentBackend = getActiveAgentBackend()) {
     const selectedModel = typeof model === 'string' ? model.trim() : '';
     if (!selectedModel) return '';
+    const entry = getModelCatalogForBackend(agentBackend).find(item => item.slug === selectedModel);
+    if (entry?.selectable === false) return '';
     const options = getModelOptionsForBackend(agentBackend);
     if (options.length > 0 && !options.includes(selectedModel)) return '';
     if (isClaudeBackend(agentBackend) && options.length === 0) return '';
@@ -1818,7 +1820,7 @@ function syncModelCardForBackend(agentBackend = getActiveAgentBackend()) {
     const modelCard = document.querySelector('.model-card');
     const modelLabel = document.getElementById('codex-model-label');
     const planModeModelLabel = document.getElementById('codex-plan-mode-model-label');
-    const noReasoning = !hasReasoningControlsForBackend(agentBackend);
+    const noReasoning = !hasReasoningControlsForBackend(agentBackend) && !hasReasoningControlsForBackend(getSecondaryBackend());
     if (modelCard) modelCard.classList.toggle('is-no-reasoning', noReasoning);
     if (modelLabel) modelLabel.textContent = '메인';
     if (planModeModelLabel) planModeModelLabel.textContent = 'Plan';
@@ -1835,10 +1837,6 @@ function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) 
     const nextPlanModeModel = clearIncompatibleModel
         ? getCompatibleModelForBackend(state.settings.planModeModel, backend)
         : (state.settings.planModeModel || '');
-    state.settings.secondaryModel = getCompatibleModelForBackend(state.settings.secondaryModel, backend) || null;
-    state.settings.secondaryReasoningEffort = getCompatibleReasoningForModel(state.settings.secondaryReasoningEffort, state.settings.secondaryModel || nextModel, reasoningOptions) || null;
-    updatePlanModeModelControls(state.settings.secondaryModel, modelOptions, 'secondary');
-    updatePlanModeReasoningControls(state.settings.secondaryReasoningEffort, reasoningOptions, state.settings.secondaryModel || nextModel, 'secondary');
     state.settings.modelCatalog = catalog;
     state.settings.modelOptions = modelOptions;
     state.settings.reasoningOptions = reasoningOptions;
@@ -1854,6 +1852,7 @@ function applyBackendScopedModelOptions({ clearIncompatibleModel = true } = {}) 
         state.settings.planModeModel || state.settings.model,
         reasoningOptions
     ) || null;
+    syncSecondaryModelControls();
     syncModelCardForBackend(backend);
     updateModelControls(state.settings.model, state.settings.modelOptions);
     updatePlanModeModelControls(state.settings.planModeModel, state.settings.modelOptions);
@@ -1933,6 +1932,8 @@ function normalizeModelCatalog(catalog) {
         }
         normalized.push({
             slug,
+            selectable: entry.selectable !== false,
+            unavailableReason: entry.unavailable_reason || '',
             defaultReasoningEffort: defaultReasoningEffort || null,
             reasoningOptions
         });
@@ -1990,16 +1991,14 @@ function collectCatalogReasoningOptions(catalog) {
     );
 }
 
-function getModelCatalogEntry(model) {
+function getModelCatalogEntry(model, backend = getActiveAgentBackend()) {
     const normalizedModel = typeof model === 'string' ? model.trim() : '';
     if (!normalizedModel) return null;
-    return Array.isArray(state.settings.modelCatalog)
-        ? state.settings.modelCatalog.find(entry => entry.slug === normalizedModel) || null
-        : null;
+    return getModelCatalogForBackend(backend).find(entry => entry.slug === normalizedModel) || null;
 }
 
-function getReasoningProfile(model, reasoning, fallbackOptions = null) {
-    const entry = getModelCatalogEntry(model);
+function getReasoningProfile(model, reasoning, fallbackOptions = null, backend = getActiveAgentBackend()) {
+    const entry = getModelCatalogEntry(model, backend);
     const reasoningOptions = entry
         ? normalizeOptionList(entry.reasoningOptions)
         : normalizeOptionList(fallbackOptions || state.settings.reasoningOptions);
@@ -9649,6 +9648,7 @@ async function loadSettings({ silent = true } = {}) {
             executionPolicyPresets,
             appServerPilotEnabled: Boolean(result?.settings?.app_server_pilot_enabled),
             modelProvider: result?.settings?.model_provider || null,
+            secondaryAgentBackend: result?.settings?.secondary_agent_backend || null,
             secondaryModel: result?.settings?.secondary_model || null,
             secondaryReasoningEffort: result?.settings?.secondary_reasoning_effort || null,
             planModeModel: result?.settings?.plan_mode_model || null,
@@ -10003,7 +10003,9 @@ function updateModelControls(model, options) {
                 const optionText = item === selectedModel && !catalogOptions.includes(item)
                     ? `${item} (saved)`
                     : item;
-                setCompactOptionText(option, optionText, 34);
+                const entry = getModelCatalogEntry(item);
+                option.disabled = entry?.selectable === false;
+                setCompactOptionText(option, option.disabled ? `${optionText} · 사용 불가` : optionText, 46);
                 select.appendChild(option);
             });
             if (selectedModel) {
@@ -10038,14 +10040,14 @@ function updatePlanModeModelControls(planModeModel, options, role = 'plan-mode')
     const selectedModel = typeof planModeModel === 'string' ? planModeModel.trim() : '';
     const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
     const hasOptions = normalizedOptions.length > 0;
-    const defaultPlaceholder = role === 'secondary' ? '메인 모델 상속' : (isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model');
+    const defaultPlaceholder = role === 'secondary' ? (getSecondaryBackend() === getActiveAgentBackend() ? '메인 모델 상속' : 'Backend 기본 모델') : (isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
             select.classList.remove('is-hidden');
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = role === 'secondary' ? '메인 모델 상속' : 'Use default';
+            placeholder.textContent = role === 'secondary' ? defaultPlaceholder : 'Use default';
             select.appendChild(placeholder);
             normalizedOptions.forEach(item => {
                 const option = document.createElement('option');
@@ -10053,7 +10055,9 @@ function updatePlanModeModelControls(planModeModel, options, role = 'plan-mode')
                 const optionText = item === selectedModel && !catalogOptions.includes(item)
                     ? `${item} (saved)`
                     : item;
-                setCompactOptionText(option, optionText, 34);
+                const entry = getModelCatalogEntry(item, role === 'secondary' ? getSecondaryBackend() : getActiveAgentBackend());
+                option.disabled = entry?.selectable === false;
+                setCompactOptionText(option, option.disabled ? `${optionText} · 사용 불가` : optionText, 46);
                 select.appendChild(option);
             });
             if (selectedModel) {
@@ -10115,10 +10119,10 @@ function updateReasoningControls(reasoning, options, model = state.settings.mode
         }
     }
     if (input) {
-        input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : placeholderText;
+        input.value = hasOptions ? (profile.isExplicit ? reasoning : '') : '';
+        input.placeholder = hasOptions ? placeholderText : '추론 레벨 없음';
         input.title = reasoning || placeholderText;
-        input.disabled = hasOptions;
+        input.disabled = true;
         input.classList.toggle('is-hidden', hasOptions);
     }
     if (field) {
@@ -10135,9 +10139,9 @@ function updatePlanModeReasoningControls(
     const select = document.getElementById(`codex-${role}-reasoning-select`);
     const input = document.getElementById(`codex-${role}-reasoning-input`);
     const field = select ? select.closest('.model-field') : null;
-    const profile = getReasoningProfile(model, reasoning, options);
+    const profile = getReasoningProfile(model, reasoning, options, role === 'secondary' ? getSecondaryBackend() : getActiveAgentBackend());
     const hasOptions = profile.reasoningOptions.length > 0;
-    const placeholderText = role === 'secondary' ? '메인 effort 상속' : buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
+    const placeholderText = role === 'secondary' ? (getSecondaryBackend() === getActiveAgentBackend() ? '메인 effort 상속' : buildReasoningPlaceholder(profile.defaultReasoning, 'Backend 기본 effort')) : buildReasoningPlaceholder(profile.defaultReasoning, 'Use model default');
     if (select) {
         select.innerHTML = '';
         if (hasOptions) {
@@ -10166,10 +10170,10 @@ function updatePlanModeReasoningControls(
         }
     }
     if (input) {
-        input.value = reasoning || '';
-        input.placeholder = reasoning ? reasoning : placeholderText;
+        input.value = hasOptions ? (profile.isExplicit ? reasoning : '') : '';
+        input.placeholder = hasOptions ? placeholderText : '추론 레벨 없음';
         input.title = reasoning || placeholderText;
-        input.disabled = hasOptions;
+        input.disabled = true;
         input.classList.toggle('is-hidden', hasOptions);
     }
     if (field) {
@@ -10349,11 +10353,13 @@ function updateControlsModelSummary() {
     const mode = getPlanModeState();
     const isPlan = shouldUsePlanModeForRequest(mode);
     const isSecondary = getComposeModelRole(mode) === 'secondary';
-    const model = (isPlan ? state.settings.planModeModel : isSecondary ? state.settings.secondaryModel : null) || state.settings.model;
-    const effort = (isPlan ? state.settings.planModeReasoningEffort : isSecondary ? state.settings.secondaryReasoningEffort : null) || state.settings.reasoningEffort;
+    const backend = isSecondary ? getSecondaryBackend() : getActiveAgentBackend();
+    const inheritsMain = !isSecondary || backend === getActiveAgentBackend();
+    const model = (isPlan ? state.settings.planModeModel : isSecondary ? state.settings.secondaryModel : null) || (inheritsMain ? state.settings.model : null);
+    const effort = (isPlan ? state.settings.planModeReasoningEffort : isSecondary ? state.settings.secondaryReasoningEffort : null) || (inheritsMain ? state.settings.reasoningEffort : null);
     const role = isPlan ? 'Plan' : isSecondary ? 'Sec' : '메인';
-    const reasoning = hasReasoningControlsForBackend(getActiveAgentBackend()) ? formatReasoningStatus(model, effort) : '';
-    const text = [role, model || 'default', reasoning].filter(Boolean).join(' · ');
+    const reasoning = hasReasoningControlsForBackend(backend) ? getReasoningProfile(model, effort, getReasoningOptionsForBackend(backend), backend).effectiveReasoning : '';
+    const text = [role, isSecondary ? backend : '', model || 'default', reasoning].filter(Boolean).join(' · ');
     const parts = [text];
     if (!isPlan) {
         const planModel = state.settings.planModeModel || state.settings.model;
@@ -10436,6 +10442,7 @@ async function updateSettings() {
     const plan_mode_reasoning_effort = planModeReasoningSelect && !planModeReasoningSelect.classList.contains('is-hidden')
         ? planModeReasoningSelect.value.trim()
         : (planModeReasoningInput ? planModeReasoningInput.value.trim() : '');
+    const secondary_agent_backend = document.getElementById('codex-secondary-agent-backend-select')?.value || '';
     const secondary_model = getRoleControlValue('secondary', 'model');
     const secondary_reasoning_effort = getRoleControlValue('secondary', 'reasoning');
     const service_tier = '';
@@ -10451,7 +10458,7 @@ async function updateSettings() {
         const result = await fetchJson('/api/codex/settings', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_backend, model, plan_mode_model, secondary_model, secondary_reasoning_effort, reasoning_effort, plan_mode_reasoning_effort, service_tier, verification_mode })
+            body: JSON.stringify({ agent_backend, secondary_agent_backend, model, plan_mode_model, secondary_model, secondary_reasoning_effort, reasoning_effort, plan_mode_reasoning_effort, service_tier, verification_mode })
         });
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
@@ -10475,6 +10482,7 @@ async function updateSettings() {
         state.settings.cliProfile = result?.settings?.cli_profile || null;
         state.settings.appServerPilotEnabled = Boolean(result?.settings?.app_server_pilot_enabled);
         state.settings.modelProvider = result?.settings?.model_provider || null;
+        state.settings.secondaryAgentBackend = result?.settings?.secondary_agent_backend || null;
         state.settings.secondaryModel = result?.settings?.secondary_model || null;
         state.settings.secondaryReasoningEffort = result?.settings?.secondary_reasoning_effort || null;
         state.settings.planModeModel = result?.settings?.plan_mode_model || null;
@@ -34980,9 +34988,40 @@ function getComposeModelRole(planModeState = getPlanModeState()) {
 }
 
 document.getElementById('codex-execution-settings-save')?.addEventListener('click', () => void updateSettings());
+function getSecondaryBackend() {
+    return normalizeAgentBackendValue(state.settings.secondaryAgentBackend) || getActiveAgentBackend();
+}
+
+function syncSecondaryModelControls() {
+    const backend = getSecondaryBackend();
+    const sameBackend = backend === getActiveAgentBackend();
+    const select = document.getElementById('codex-secondary-agent-backend-select');
+    if (select) {
+        select.replaceChildren(new Option('메인 backend 상속', ''));
+        normalizeAgentBackendOptions(state.settings.agentBackendOptions).forEach(item => select.add(new Option(item.name, item.id)));
+        select.value = state.settings.secondaryAgentBackend || '';
+    }
+    const model = getCompatibleModelForBackend(state.settings.secondaryModel, backend);
+    state.settings.secondaryModel = model || null;
+    const options = getReasoningOptionsForBackend(backend);
+    const effectiveModel = model || (sameBackend ? state.settings.model : getModelCatalogForBackend(backend).find(entry => entry.selectable !== false)?.slug);
+    const profile = getReasoningProfile(effectiveModel, state.settings.secondaryReasoningEffort, options, backend);
+    state.settings.secondaryReasoningEffort = profile.isExplicit ? profile.explicitReasoning : null;
+    updatePlanModeModelControls(model, getModelOptionsForBackend(backend), 'secondary');
+    updatePlanModeReasoningControls(state.settings.secondaryReasoningEffort, options, effectiveModel, 'secondary');
+}
+
+document.getElementById('codex-secondary-agent-backend-select')?.addEventListener('change', event => {
+    state.settings.secondaryAgentBackend = event.target.value || null;
+    state.settings.secondaryModel = null;
+    state.settings.secondaryReasoningEffort = null;
+    syncSecondaryModelControls();
+    syncModelCardForBackend();
+});
 document.getElementById('codex-secondary-model-select')?.addEventListener('change', event => {
+    const backend = getSecondaryBackend();
     const effort = getRoleControlValue('secondary', 'reasoning');
-    updatePlanModeReasoningControls(effort, state.settings.reasoningOptions, event.target.value || state.settings.model, 'secondary');
+    updatePlanModeReasoningControls(effort, getReasoningOptionsForBackend(backend), event.target.value || (backend === getActiveAgentBackend() ? state.settings.model : getModelCatalogForBackend(backend).find(entry => entry.selectable !== false)?.slug), 'secondary');
 });
 for (const field of ['model', 'reasoning']) {
     document.getElementById(`codex-secondary-${field}-input`)?.addEventListener('keydown', event => {

@@ -300,6 +300,7 @@ def settings_snapshot(chat):
         'agent_backend': chat.get_selected_agent_backend(),
         'main_model': main_model,
         'main_effort': main_effort or chat.resolve_response_reasoning_effort(model_override=main_model),
+        'worker_backend': chat.resolve_model_role_backend('secondary', settings),
         'worker_model': str(settings.get('secondary_model') or '').strip() or None,
         'worker_effort': settings.get('secondary_reasoning_effort') or main_effort or chat.resolve_response_reasoning_effort(model_override=main_model),
     }
@@ -309,6 +310,8 @@ def validate_settings(chat, settings, plan_mode=False, read_only=False):
     # Codex's canonical backend ID is dtgpt; codex is a legacy alias.
     if chat.normalize_codex_agent_backend(settings.get('agent_backend')) != 'dtgpt':
         return 'Team 모드는 Codex 실행 백엔드에서만 지원합니다.'
+    if settings.get('worker_backend') and chat.normalize_codex_agent_backend(settings['worker_backend']) != 'dtgpt':
+        return 'Team 모드는 Sec backend도 Codex로 설정해야 합니다.'
     if not settings.get('worker_model'):
         return 'Team 실행 전에 세컨더리 모델을 지정해 주세요.'
     if plan_mode or read_only:

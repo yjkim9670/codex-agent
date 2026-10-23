@@ -89,6 +89,7 @@ from ..config import (
     WORKSPACE_DIR,
     is_internal_multiuser_mode,
     get_codex_model_options_for_backend,
+    get_codex_model_catalog_for_backend,
     normalize_codex_agent_backend,
     normalize_codex_model_name,
     normalize_codex_service_tier,
@@ -2576,6 +2577,7 @@ def _read_workspace_settings():
     return {
         'model': model or None,
         'reasoning_effort': reasoning or None,
+        'secondary_agent_backend': str(data.get('secondary_agent_backend') or '').strip() or None,
         'secondary_model': secondary_model or None,
         'secondary_reasoning_effort': secondary_reasoning_effort or None,
         'plan_mode_model': plan_mode_model or None,
@@ -2593,6 +2595,7 @@ def _write_workspace_settings(settings):
     payload = {
         'model': _normalize_model_setting(settings.get('model')),
         'reasoning_effort': settings.get('reasoning_effort') or None,
+        'secondary_agent_backend': settings.get('secondary_agent_backend') or None,
         'secondary_model': _normalize_model_setting(settings.get('secondary_model')),
         'secondary_reasoning_effort': settings.get('secondary_reasoning_effort') or None,
         'plan_mode_model': _normalize_model_setting(settings.get('plan_mode_model')),
@@ -3041,6 +3044,7 @@ def _get_effective_cli_model_provider():
 def _merge_runtime_cli_settings(settings):
     payload = dict(settings or {})
     payload['service_tier'] = None
+    payload.setdefault('secondary_agent_backend', None)
     payload.setdefault('secondary_model', None)
     payload.setdefault('secondary_reasoning_effort', None)
     payload['git_commit_message_inherits_secondary'] = not bool(payload.get('git_commit_message_model'))
@@ -3140,6 +3144,7 @@ def get_settings():
 def update_settings(
         model=None,
         reasoning_effort=None,
+        secondary_agent_backend=None,
         secondary_model=None,
         secondary_reasoning_effort=None,
         plan_mode_model=None,
@@ -3166,6 +3171,7 @@ def update_settings(
         next_settings = {
             'model': current.get('model'),
             'reasoning_effort': current.get('reasoning_effort'),
+            'secondary_agent_backend': current.get('secondary_agent_backend'),
             'secondary_model': current.get('secondary_model'),
             'secondary_reasoning_effort': current.get('secondary_reasoning_effort'),
             'plan_mode_model': current.get('plan_mode_model'),
@@ -3189,6 +3195,8 @@ def update_settings(
         if reasoning_effort is not None:
             reasoning_effort = str(reasoning_effort).strip()
             next_settings['reasoning_effort'] = reasoning_effort or None
+        if secondary_agent_backend is not None:
+            next_settings['secondary_agent_backend'] = _normalize_agent_backend_setting(secondary_agent_backend) if secondary_agent_backend else None
         if secondary_model is not None:
             next_settings['secondary_model'] = _normalize_model_setting(secondary_model)
         if secondary_reasoning_effort is not None:
@@ -15634,6 +15642,13 @@ def create_codex_stream(
         execution_mode=None,
         team_settings=None):
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
+    if model_role == 'secondary' and inherit_model_settings:
+        role_model, role_effort = resolve_model_role_settings('secondary')
+        if model_override is None:
+            model_override = role_model
+        if reasoning_override is None:
+            reasoning_override = role_effort
+        inherit_model_settings = False
     stream_id = uuid.uuid4().hex
     created_at = time.time()
     output_path = _new_codex_output_path(stream_id)
@@ -15651,7 +15666,9 @@ def create_codex_stream(
         plan_mode=plan_mode,
         structured_report_preset=structured_report_preset_id,
     )
-    agent_backend = agent_backend_override or get_selected_agent_backend()
+    agent_backend = agent_backend_override or resolve_model_role_backend(model_role)
+    if model_role == 'secondary':
+        agent_backend_override = agent_backend
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
@@ -15973,11 +15990,35 @@ def _append_subjob_guardrails(prompt_text):
     return f'{normalized}\n\n{_SUBJOB_PROMPT_SUFFIX}'
 
 
+def resolve_model_role_backend(model_role='main', settings=None):
+    if settings is None:
+        if model_role != 'secondary':
+            return get_selected_agent_backend()
+        settings = get_settings()
+        if not settings.get('secondary_agent_backend'):
+            return get_selected_agent_backend()
+    if model_role == 'secondary' and settings.get('secondary_agent_backend'):
+        return _normalize_agent_backend_setting(settings['secondary_agent_backend'])
+    return _normalize_agent_backend_setting(settings.get('agent_backend'))
+
+
 def resolve_model_role_settings(model_role='main', settings=None):
     settings = get_settings() if settings is None else settings
     prefix = {'main': '', 'plan': 'plan_mode_', 'secondary': 'secondary_'}.get(model_role, '')
-    model = settings.get(f'{prefix}model') or settings.get('model')
-    effort = settings.get(f'{prefix}reasoning_effort') or settings.get('reasoning_effort')
+    cross_backend = model_role == 'secondary' and resolve_model_role_backend(model_role, settings) != resolve_model_role_backend('main', settings)
+    model = settings.get(f'{prefix}model') or (None if cross_backend else settings.get('model'))
+    effort = settings.get(f'{prefix}reasoning_effort') or (None if cross_backend else settings.get('reasoning_effort'))
+    if model_role in ('secondary', 'plan'):
+        backend = resolve_model_role_backend(model_role, settings)
+        catalog = get_codex_model_catalog_for_backend(backend)
+        if cross_backend and not model:
+            model = next((item['slug'] for item in catalog if item.get('selectable') is not False), None)
+        entry = next((item for item in catalog if item['slug'] == model), None)
+        if backend == 'opencode':
+            effort = None
+        elif entry and not settings.get(f'{prefix}reasoning_effort'):
+            if effort not in entry.get('reasoning_options', []):
+                effort = entry.get('default_reasoning_effort')
     return str(model or '').strip() or None, str(effort or '').strip() or None
 
 
@@ -16045,7 +16086,7 @@ def _start_codex_stream_for_session_locked(
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     account_profile = _get_account_profile(resolved_account_id)
     agent_backend = 'codex' if execution_mode == 'team' else _normalize_agent_backend_setting(
-        agent_backend_override or get_selected_agent_backend())
+        agent_backend_override or resolve_model_role_backend(model_role))
     if account_profile is None:
         return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
     if (
@@ -16099,7 +16140,7 @@ def _start_codex_stream_for_session_locked(
     if execution_mode == 'team':
         response_model = str(model_override or 'codex-default')
         response_reasoning_effort = reasoning_override
-    elif agent_backend_override:
+    elif agent_backend_override or model_role == 'secondary':
         response_model = str(model_override or f'{agent_backend}-default')
         response_reasoning_effort = None if agent_backend == 'opencode' else reasoning_override
     execution_policy = (
@@ -16160,7 +16201,7 @@ def _start_codex_stream_for_session_locked(
         'worktree_task': worktree_task,
         'account_id': resolved_account_id,
         'internal_api_key': internal_api_key,
-        'inherit_model_settings': not model_settings_snapshot,
+        'inherit_model_settings': not model_settings_snapshot and model_role != 'secondary',
     }
     if normalized_attachments:
         stream_kwargs['attachments'] = normalized_attachments
@@ -16196,8 +16237,8 @@ def _build_pending_queue_entry(
         account_id=None,
         execution_mode=None,
         team_settings=None):
-    backend = 'codex' if execution_mode == 'team' else get_selected_agent_backend()
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
+    backend = 'codex' if execution_mode == 'team' else resolve_model_role_backend(model_role)
     model, effort = resolve_model_role_settings(model_role)
     # Display labels such as 'codex-default' are never executable model ids.
     if not model:
@@ -16207,7 +16248,10 @@ def _build_pending_queue_entry(
             model = _resolve_opencode_model()
         else:
             model = _parse_top_level_config(_read_codex_config_text()).get('model')
-    effort = effort or resolve_response_reasoning_effort(model_override=model)
+    if backend == 'opencode':
+        effort = None
+    elif not effort:
+        effort = resolve_claude_reasoning_effort(model) if backend == 'claude' else resolve_response_reasoning_effort(model_override=model)
     normalized_attachments = normalize_codex_attachments(attachments or [])
     return {
         'id': uuid.uuid4().hex,

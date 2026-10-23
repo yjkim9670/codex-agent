@@ -9,3 +9,10 @@ Usage & Model에는 사용량, 실행 계정, 메인·플랜·세컨더리 모�
 설정의 ‘알림 이력’은 표시된 일시·종류·문구를 브라우저 IndexedDB에 자동 기록합니다. 영구 토스트도 포함하며, 자동 건수 제한은 없습니다. 최신 50건부터 표시하고 검색, 종류 필터, 이전 알림 더 보기, 전체 JSON 내보내기, 명시적 전체 삭제를 지원합니다. 기록은 새로고침 후에도 유지됩니다. 브라우저·접속 origin별로 분리되며, 다른 기기와 자동 공유하지 않습니다. 브라우저 저장 공간 삭제·시크릿 모드 종료 시 사라질 수 있습니다. 저장 오류는 이력 영역에 표시합니다. 적용 이전에 사라진 토스트는 복원하지 않습니다.
 
 검증: 역할 설정 저장·상속, 서버 큐 선택 보존, 커밋 모델 우선순위, Standard 고정의 Python 테스트와 `CODEX_VERIFY_WORKBENCH_CONTROLS=1 CODEX_VERIFY_DIALOG_LAYOUT=1 python3.14 scripts/verify_browser_ui.py --url <URL> --selector '#codex-ui-settings-open'`로 알림 보존·검색·필터·페이지 조회·내보내기 및 낮은 화면 레이아웃을 검사할 수 있습니다.
+
+
+Sec backend는 메인 backend 상속(기본값) 또는 별도의 Codex·Claude·OpenCode를 선택할 수 있습니다. backend가 같으면 빈 모델·effort는 메인을 상속하고, 다르면 해당 backend의 사용 가능한 첫 모델과 모델 기본 effort를 사용합니다. Sec 직접 실행, Sub job, 대기열, 세컨더리를 상속하는 커밋 메시지 생성에 반영됩니다. Team은 기존대로 메인과 Sec 모두 Codex여야 합니다.
+
+사내 모델 선택은 Qwen3.6-27B-H를 ‘사용 불가’로 표시합니다. Qwen3.8 계열은 low/medium/xhigh, openai/gpt-oss-120b는 low/medium/high, standard는 low/medium/high/xhigh, Gauss·Gemma 계열은 on/off를 제공합니다. OpenCode는 별도 추론 레벨 없이 기본값을 사용합니다. Fast·Gauss의 일시적 실패나 타임아웃은 선택 제한에 반영하지 않습니다. 이 정책은 진단 테스트의 전체 모델 순회 목록을 줄이지 않습니다.
+
+선택 동작 검증: `CODEX_VERIFY_COMPANY_MODELS=1 python3.14 scripts/verify_browser_ui.py --url <URL> --selector '#codex-controls-toggle'`.

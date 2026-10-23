@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .services.multiuser import ScopedPath
-from model_reasoning_policy import company_reasoning_options
+from model_reasoning_policy import company_reasoning_options, company_model_unavailable
 
 try:
     import pwd
@@ -1483,13 +1483,34 @@ def get_opencode_model_catalog():
     return _select_model_catalog_entries(configured, []) if configured else []
 
 
+def _apply_company_catalog_policy(catalog, backend):
+    company = (backend == 'claude' and os.environ.get('CODEX_CLAUDE_ENV_MODE', '').strip().lower() != 'native') or (backend == 'dtgpt' and bool(_get_dtgpt_health_url()))
+    if not company:
+        return catalog
+    result = []
+    for original in catalog:
+        entry = dict(original)
+        options = company_reasoning_options(entry['slug'])
+        if options is not None:
+            entry['company_policy'] = True
+            entry['reasoning_options'] = options
+            if entry.get('default_reasoning_effort') not in options:
+                entry['default_reasoning_effort'] = options[0]
+        if company_model_unavailable(entry['slug']):
+            entry.update(selectable=False, unavailable_reason='사내환경에서 사용 불가')
+        result.append(entry)
+    return result
+
+
 def get_codex_model_catalog_for_backend(agent_backend=None):
     backend = normalize_codex_agent_backend(agent_backend) or 'dtgpt'
     if backend == 'claude':
-        return get_claude_model_catalog()
-    if backend == 'opencode':
+        catalog = get_claude_model_catalog()
+    elif backend == 'opencode':
         return get_opencode_model_catalog()
-    return get_codex_model_catalog()
+    else:
+        catalog = get_codex_model_catalog()
+    return _apply_company_catalog_policy(catalog, backend)
 
 
 def get_codex_model_options_for_backend(agent_backend=None):
@@ -1509,14 +1530,14 @@ def get_codex_reasoning_options_for_backend(agent_backend=None, model_name=None)
 
 
 def get_codex_model_catalogs_by_agent_backend():
-    catalogs = {'dtgpt': get_codex_model_catalog()}
+    catalogs = {'dtgpt': get_codex_model_catalog_for_backend('dtgpt')}
     option_ids = {
         str(item.get('id') or '').strip()
         for item in get_codex_agent_backend_options()
         if isinstance(item, dict)
     }
     if 'claude' in option_ids:
-        catalogs['claude'] = get_claude_model_catalog()
+        catalogs['claude'] = get_codex_model_catalog_for_backend('claude')
     if 'opencode' in option_ids:
         catalogs['opencode'] = get_opencode_model_catalog()
     return catalogs

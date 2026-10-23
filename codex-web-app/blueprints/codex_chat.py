@@ -80,6 +80,8 @@ from ..services.codex_chat import (
     get_codex_project_safety_preview,
     get_session_storage_summary,
     get_selected_agent_backend,
+    resolve_model_role_backend,
+    resolve_model_role_settings,
     create_session,
     cleanup_codex_streams,
     delete_session,
@@ -662,8 +664,7 @@ def _read_codex_restart_policy():
 
 def _resolve_model_override(plan_mode=False, model_role=None):
     if not plan_mode and model_role == 'secondary':
-        settings = get_settings()
-        return settings.get('secondary_model') or settings.get('model')
+        return resolve_model_role_settings('secondary', get_settings())[0]
     if not plan_mode:
         return None
     settings = get_settings()
@@ -676,8 +677,7 @@ def _resolve_model_override(plan_mode=False, model_role=None):
 
 def _resolve_reasoning_override(plan_mode=False, model_role=None):
     if not plan_mode and model_role == 'secondary':
-        settings = get_settings()
-        return settings.get('secondary_reasoning_effort') or settings.get('reasoning_effort')
+        return resolve_model_role_settings('secondary', get_settings())[1]
     settings = get_settings()
     if plan_mode:
         plan_mode_reasoning = str(settings.get('plan_mode_reasoning_effort') or '').strip()
@@ -1419,6 +1419,11 @@ def codex_settings_update():
     payload = request.get_json(silent=True) or {}
     model = payload.get('model')
     reasoning = payload.get('reasoning_effort')
+    secondary_agent_backend = payload.get('secondary_agent_backend')
+    if secondary_agent_backend is not None:
+        supported = {item['id'] for item in get_agent_backend_options()}
+        if not isinstance(secondary_agent_backend, str) or (secondary_agent_backend and secondary_agent_backend not in supported):
+            return jsonify({'error': 'secondary_agent_backend 값이 올바르지 않습니다.'}), 400
     secondary_model = payload.get('secondary_model')
     secondary_reasoning = payload.get('secondary_reasoning_effort')
     for key, value, limit in [('secondary_model', secondary_model, CODEX_MAX_MODEL_CHARS), ('secondary_reasoning_effort', secondary_reasoning, CODEX_MAX_REASONING_CHARS)]:
@@ -1502,9 +1507,27 @@ def codex_settings_update():
         git_commit_message_reasoning_effort = (
             git_commit_message_reasoning_effort
         )
+    prospective = dict(get_settings())
+    for key, value in [('agent_backend', agent_backend), ('secondary_agent_backend', secondary_agent_backend),
+                       ('model', model), ('reasoning_effort', reasoning),
+                       ('plan_mode_model', plan_mode_model), ('plan_mode_reasoning_effort', plan_mode_reasoning),
+                       ('secondary_model', secondary_model), ('secondary_reasoning_effort', secondary_reasoning)]:
+        if value is not None:
+            prospective[key] = value
+    for role in ('main', 'plan', 'secondary'):
+        backend = resolve_model_role_backend(role, prospective)
+        selected_model, selected_effort = resolve_model_role_settings(role, prospective)
+        catalog = get_codex_model_catalog_for_backend(backend)
+        entry = next((item for item in catalog if item['slug'] == selected_model), None)
+        if entry and entry.get('selectable') is False:
+            return jsonify({'error': f'{selected_model}: 사내환경에서 사용 불가'}), 400
+        # Only enforce the company policy; unrelated/custom catalogs retain their existing behavior.
+        if entry and backend != 'opencode' and entry.get('company_policy') and selected_effort and selected_effort not in entry['reasoning_options']:
+            return jsonify({'error': f'{selected_model}: 지원하지 않는 추론 레벨 {selected_effort}'}), 400
     settings = update_settings(
         model=model,
         reasoning_effort=reasoning,
+        secondary_agent_backend=secondary_agent_backend,
         secondary_model=secondary_model,
         secondary_reasoning_effort=secondary_reasoning,
         plan_mode_model=plan_mode_model,
@@ -2056,12 +2079,15 @@ def codex_session_message(session_id):
     model_override = _resolve_model_override(plan_mode=plan_mode, model_role=model_role)
     reasoning_override = _resolve_reasoning_override(plan_mode=plan_mode, model_role=model_role)
     response_mode = resolve_response_mode_label(plan_mode=plan_mode)
-    response_agent_backend = get_selected_agent_backend()
+    response_agent_backend = resolve_model_role_backend(model_role)
     response_model = resolve_response_model_name(model_override=model_override)
     response_reasoning_effort = resolve_response_reasoning_effort(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
+    if model_role == 'secondary':
+        response_model = model_override or f'{response_agent_backend}-default'
+        response_reasoning_effort = None if response_agent_backend == 'opencode' else reasoning_override
     response_service_tier = normalize_codex_service_tier(
         get_settings().get('service_tier')
     ) or 'standard'
@@ -2085,6 +2111,7 @@ def codex_session_message(session_id):
         imagegen_prompt=prompt,
         account_id=account_id,
         agent_backend=response_agent_backend,
+        inherit_model_settings=model_role != 'secondary',
     )
     saved_at = time.time()
     duration_ms = max(0, int((saved_at - started_at) * 1000))

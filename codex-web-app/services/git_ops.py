@@ -2065,6 +2065,15 @@ def _parse_commit_message_generation_output(output_text):
     return subject, body
 
 
+def _commit_message_secondary_settings(settings):
+    from .codex_chat import resolve_model_role_backend, resolve_model_role_settings
+
+    if settings.get('secondary_agent_backend') and not settings.get('git_commit_message_model'):
+        model, effort = resolve_model_role_settings('secondary', settings)
+        return resolve_model_role_backend('secondary', settings), model, effort
+    return 'dtgpt', settings.get('secondary_model'), settings.get('secondary_reasoning_effort')
+
+
 def _execute_commit_message_prompt(
         prompt,
         model_override=None,
@@ -2072,20 +2081,21 @@ def _execute_commit_message_prompt(
     from .codex_chat import execute_codex_prompt, get_settings
 
     settings = get_settings()
+    backend, secondary_model, secondary_effort = _commit_message_secondary_settings(settings)
     resolved_model = str(model_override or '').strip()
     if not resolved_model:
         resolved_model = str(
             settings.get('git_commit_message_model')
-            or settings.get('secondary_model')
-            or settings.get('model')
+            or secondary_model
+            or (settings.get('model') if backend == 'dtgpt' else None)
             or resolve_codex_git_commit_message_model()
         ).strip()
     resolved_reasoning = str(reasoning_override or '').strip()
     if not resolved_reasoning:
         resolved_reasoning = str(
             settings.get('git_commit_message_reasoning_effort')
-            or settings.get('secondary_reasoning_effort')
-            or settings.get('reasoning_effort')
+            or secondary_effort
+            or (settings.get('reasoning_effort') if backend == 'dtgpt' else None)
             or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
         ).strip()
 
@@ -2094,7 +2104,7 @@ def _execute_commit_message_prompt(
         model_override=resolved_model,
         reasoning_override=resolved_reasoning,
         question_only=True,
-        agent_backend='dtgpt',
+        agent_backend=backend,
         inherit_model_settings=False,
     )
 
@@ -2107,25 +2117,26 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
             'error': '커밋 메시지를 생성할 변경 파일이 없습니다.',
             'error_code': 'git_commit_message_no_files'
         }
+    from .codex_chat import get_settings
+
+    settings = get_settings()
+    backend, secondary_model, secondary_effort = _commit_message_secondary_settings(settings)
     prompt = _build_commit_message_generation_prompt(diff_context)
     model_override = str(payload.get('model') or '').strip()
     reasoning_override = str(payload.get('reasoning_effort') or '').strip()
     if not model_override or not reasoning_override:
-        from .codex_chat import get_settings
-
-        settings = get_settings()
         if not model_override:
             model_override = str(
                 settings.get('git_commit_message_model')
-                or settings.get('secondary_model')
-                or settings.get('model')
+                or secondary_model
+                or (settings.get('model') if backend == 'dtgpt' else None)
                 or resolve_codex_git_commit_message_model()
             ).strip()
         if not reasoning_override:
             reasoning_override = str(
                 settings.get('git_commit_message_reasoning_effort')
-                or settings.get('secondary_reasoning_effort')
-                or settings.get('reasoning_effort')
+                or secondary_effort
+                or (settings.get('reasoning_effort') if backend == 'dtgpt' else None)
                 or CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT
             ).strip()
     output_text, error_text, token_usage, timing = _execute_commit_message_prompt(
@@ -2146,7 +2157,7 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
             model=model_override,
             reasoning_effort=reasoning_override,
             service_tier='standard',
-            backend='dtgpt',
+            backend=backend,
             status='failed' if error_text else 'completed',
             duration_ms=(timing or {}).get('cli_runtime_ms') if isinstance(timing, dict) else None,
             metadata={
@@ -2182,7 +2193,7 @@ def _build_generated_commit_message_payload(repo_root, env, payload):
         'commit_analysis_lines': diff_context.get('analysis_lines') or [],
         'ai_generated_message': True,
         'auto_generated_message': False,
-        'generator_agent_backend': 'dtgpt',
+        'generator_agent_backend': backend,
         'generator_execution_policy': 'read_only_ephemeral',
         'generator_model': model_override or '',
         'generator_reasoning_effort': reasoning_override or '',

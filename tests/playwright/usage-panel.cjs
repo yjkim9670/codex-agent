@@ -47,6 +47,9 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
         const state = {settings: {loaded:true, usageLimitsEnabled:false, model:'very-long-main-model-name-for-layout', reasoningEffort:'high', planModeModel:'plan-model', planModeReasoningEffort:'medium', secondaryModel:'secondary-model', secondaryReasoningEffort:'low'}, accounts:{label:'Test account'}};
         const getActiveCodexAccount = () => state.accounts;
         const getActiveAgentBackend = () => 'dtgpt';
+        const getSecondaryBackend = () => 'dtgpt';
+        const getReasoningOptionsForBackend = () => ['low', 'medium', 'high'];
+        const getReasoningProfile = (model, effort) => ({effectiveReasoning: effort || 'default'});
         const hasReasoningControlsForBackend = () => !document.querySelector('.model-card').classList.contains('is-no-reasoning');
         const formatReasoningStatus = (model, effort) => effort || 'default';
         const getPlanModeState = () => state.settings.planModeState || 'off';

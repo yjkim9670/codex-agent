@@ -211,3 +211,39 @@ medium, 활성 계정, 전체 환경입니다. Apple 스타일과 로컬 IBM Ple
 코드 동기화 후 각 서버를 사용자가 재시작해야 자동 수집과 새 화면이 적용됩니다.
 이 PC의 코드 수정 기준 경로는 `/Users/dinya/works/dev_workspace/codex_workbench/`이며,
 다른 Workbench의 Git 동기화는 사용자가 진행합니다.
+
+## TG Platform 문서 동기화
+
+설정창의 **TG Platform 문서 동기화** 링크로 `/metadata-sync` 페이지를 엽니다.
+대시보드는 로컬 Paperlogy 글꼴을 사용합니다. 현재 수정 후보 영역에서는
+마지막 성공 일일 배치의 HEAD 이후 커밋과 현재 작업 트리 변경, 오래된 번역을
+기존 분석기로 조회합니다. feature별·과제별 후보 문서·선정 사유와 기타 범위 문서를 표시하며,
+범위 선택 버튼으로 `feature:<이름>` 또는 `project:<과제명>` 수동 실행 입력을 채울 수 있습니다. 후보 조회는 모델·동기화 실행,
+이력·상태 갱신 없이 수행하며 카탈로그 검증은 생략합니다. 실제 수정 여부는 실행 시 결정됩니다.
+일일 launchd 배치와 Workbench 수동 실행의 최근 200건, 실행 결과, 수정 파일,
+추가·삭제 줄 수, diff, 검증 로그, 작업 요약과 미반영 항목을 확인할 수 있습니다.
+기존 로그에 diff가 없으면 상세 변경 기록이 없는 실행으로 표시합니다.
+내부 다중 사용자 모드에서는 관리자만 공유 CommonTG 프로젝트에 접근합니다.
+
+수동 실행은 `feature:vcd`, `design_tool:tg_sim_manager`, `project:HPA`처럼
+좁은 범위를 지정합니다. Workbench는 기존 CommonTG
+`git_actions/scripts/run_metadata_doc_sync.py --mode manual --scope <범위>`를
+호출합니다. 일정 등록과 블로그 파이프라인 설정은 이 페이지에서 변경하지 않습니다.
+기존 KST 자정 일일 배치는 동일한 실행기의 강화된 검증과 기록을 사용합니다.
+
+CommonTG 실행기는 임시 Git worktree에 현재 로컬 변경을 복사해 작업합니다.
+후보 문서 디렉터리의 메타데이터 Markdown만 반영하며, 버전 참조 변경,
+레지스트리·코드 수정, 문서 삭제, 빈 문서, 카탈로그 검증 실패 또는 실행 중
+원본 문서 충돌을 발견하면 반영을 차단합니다. 버전 검사는 보수적으로 동작하므로
+새 버전 번호를 문서에 추가하는 작업도 별도 릴리스 작업으로 처리해야 합니다.
+실행 기록은 CommonTG의 `.sync_runtime/codex_daily_doc_sync/runs/<실행 ID>/`에
+저장됩니다. `run_metadata.json`에는 실제 diff와 검증 결과가 포함됩니다.
+
+기본 CommonTG 경로는 `/Users/dinya/works/Sensor_Projects/CommonTG-Verification-Platform`입니다.
+다른 서버에서는 `CODEX_COMMONTG_ROOT`로 저장소 경로를 지정하고 강화된 CommonTG
+실행기도 함께 배포해야 합니다. 실행 권한과 Codex CLI 인증은 서버 계정을 사용합니다.
+실행이 비정상 종료되어 `run.lock`이 남으면 기존 실행 종료 여부를 확인한 뒤 관리자가
+잠금을 정리해야 합니다. 실행 중인 Workbench 서버는 자동 재시작하지 않습니다.
+대시보드 API 요청은 캐시를 사용하지 않으며, HTML 오류·로그인 페이지를 받으면
+JSON 파싱 오류 대신 HTTP 상태와 서버·접속 주소·권한 확인 안내를 표시합니다.
+업데이트 후에는 해당 Workbench 서버를 재시작하고 대시보드를 새로고침해야 합니다.

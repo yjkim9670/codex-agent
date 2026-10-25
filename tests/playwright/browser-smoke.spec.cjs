@@ -73,5 +73,8 @@ test('browser UI smoke check', async ({ page }) => {
     if (process.env.CODEX_VERIFY_COMPANY_KEY_POOL === '1') {
         await require('./company-key-pool.cjs').verifyCompanyKeyPool(page, expect);
     }
+    if (process.env.CODEX_VERIFY_METADATA_SYNC === '1') {
+        await require('./metadata-sync.cjs').verifyMetadataSync(page, expect);
+    }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TG Platform 문서 동기화 | Codex Workbench</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/metadata_sync.css') }}">
+    <script src="{{ url_for('static', filename='js/metadata_sync.js') }}" defer></script>
+</head>
+<body>
+<header><a href="/">Codex Workbench</a><span>TG Platform / 문서 동기화</span></header>
+<main id="metadata-sync-dashboard" data-api-url="{{ url_for('metadata_sync.history') }}">
+    <h1>TG Platform 문서 동기화</h1>
+    <p>코드 변경에 맞춰 문서를 정리하고, 실행마다 실제 수정 내용을 확인합니다.</p>
+    <div class="policy"><strong>버전 유지</strong> 릴리스·스키마 버전과 도구 버전 레지스트리는 변경하지 않습니다. 검증된 Markdown만 반영합니다.</div>
+    <section aria-labelledby="execution-title">
+        <h2 id="execution-title">실행 관리</h2>
+        <p id="project-path">연결 확인 중…</p>
+        <p>일일 배치: 기존 launchd · KST 00:00 (이 페이지는 일정을 등록하지 않습니다.)</p>
+        <form id="sync-form">
+            <div><label for="sync-scope">수동 실행 범위</label><input id="sync-scope" name="scope" placeholder="feature:vcd" required pattern="(feature|design_tool|tool|project):[A-Za-z0-9_\-]+" aria-describedby="scope-help"><small id="scope-help">예: feature:vcd · design_tool:tg_sim_manager · project:HPA</small></div>
+            <button id="sync-start" type="submit">문서 동기화 실행</button>
+        </form>
+        <p id="sync-feedback" role="status" aria-live="polite"></p>
+    </section>
+    <section aria-labelledby="preview-title">
+        <div class="section-heading"><h2 id="preview-title">현재 수정 후보</h2><button id="preview-refresh" type="button" class="secondary">후보 조회</button></div>
+        <p>마지막 성공 배치 이후 커밋과 현재 작업 트리 변경, 번역 갱신 필요 문서를 기준으로 조회합니다. 실제 수정 여부는 실행 시 결정됩니다. 모델 실행·문서 수정 없이 분석하며, 카탈로그 검증은 생략합니다.</p>
+        <p id="preview-status" role="status" aria-live="polite">수정 후보를 확인하는 중…</p>
+        <h3>Feature별 <span id="feature-count"></span></h3>
+        <div class="table-scroll"><table><thead><tr><th scope="col">Feature</th><th scope="col">후보 문서</th><th scope="col">선정 사유</th><th scope="col">수동 범위</th></tr></thead><tbody id="preview-features"></tbody></table></div>
+        <h3>과제별 <span id="project-count"></span></h3>
+        <div class="table-scroll"><table><thead><tr><th scope="col">과제</th><th scope="col">후보 문서</th><th scope="col">선정 사유</th><th scope="col">수동 범위</th></tr></thead><tbody id="preview-projects"></tbody></table></div>
+        <details id="preview-other" hidden><summary>기타 수정 후보 문서 <span id="other-count"></span></summary><pre id="other-documents"></pre></details>
+        <p id="preview-warnings" class="error"></p>
+    </section>
+    <section aria-labelledby="history-title">
+        <div class="section-heading"><h2 id="history-title">실행 이력 <span id="run-count"></span></h2><button id="sync-refresh" type="button" class="secondary">새로고침</button></div>
+        <p>최근 200건 · 일일 배치와 수동 실행을 함께 표시합니다. 실행 중에는 10초마다 갱신합니다.</p>
+        <div class="table-scroll"><table><thead><tr><th scope="col">시작 (KST)</th><th scope="col">방식 / 범위</th><th scope="col">결과</th><th scope="col">수정 파일</th><th scope="col">기록</th></tr></thead><tbody id="sync-runs"><tr><td colspan="5">불러오는 중…</td></tr></tbody></table></div>
+    </section>
+    <section id="sync-detail" aria-labelledby="detail-title" hidden>
+        <h2 id="detail-title" tabindex="-1">실행 상세</h2>
+        <p id="detail-status"></p>
+        <div id="changed-files"></div>
+        <h3>작업 요약 · 미반영 항목</h3><pre id="detail-summary"></pre>
+        <details><summary>검증 로그</summary><pre id="detail-validation"></pre></details>
+        <details><summary>실행 오류 로그</summary><pre id="detail-error"></pre></details>
+    </section>
+</main>
+</body>
+</html>

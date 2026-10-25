@@ -6,7 +6,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-from .blueprints import codex_chat, usage_dashboard
+from .blueprints import codex_chat, usage_dashboard, metadata_sync
 from .config import (
     CODEX_ALLOWED_ORIGINS,
     CODEX_API_ONLY_MODE,
@@ -150,6 +150,7 @@ def create_codex_app():
 
     app.register_blueprint(codex_chat.bp)
     app.register_blueprint(usage_dashboard.bp)
+    app.register_blueprint(metadata_sync.bp)
     from .services.usage_dashboard import ensure_collection_worker
     ensure_collection_worker()
     # In internal mode this starts the user-scoped scheduler, which activates

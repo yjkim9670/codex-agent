@@ -17316,7 +17316,7 @@ function closeBlogDashboardOverlay() {
 }
 
 function blogDashboardStageLabel(stage) {
-    return ({ topic: '주제 생성', brief: '기획', research: '조사', outline: '구성', draft: '초고', review: '검수' })[stage] || '새 주제 준비';
+    return ({ plan: '기획·근거', topic: '주제 생성', brief: '기획', research: '조사', outline: '구성', draft: '초고', review: '검수' })[stage] || '새 주제 준비';
 }
 
 function renderBlogDashboard(status) {
@@ -17367,7 +17367,7 @@ function renderBlogDashboard(status) {
 
     const stages = document.createElement('div');
     stages.className = 'blog-dashboard-stages';
-    ['brief', 'research', 'outline', 'draft', 'review'].forEach((item, index) => {
+    (status.stages || ['topic', 'brief', 'research', 'outline', 'draft', 'review']).forEach((item, index) => {
         const cell = document.createElement('div');
         cell.className = 'blog-dashboard-stage';
         if (index < completed) cell.classList.add('is-complete');

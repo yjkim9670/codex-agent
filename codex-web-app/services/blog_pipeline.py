@@ -30,7 +30,7 @@ _CONTINUITY_FILENAME = 'continuity.json'
 _MEMORY_FILENAME = 'editorial_memory.md'
 _RUNS_FILENAME = 'runs.jsonl'
 _POSTS_DIR_NAME = 'posts'
-_STAGES = ('brief', 'research', 'outline', 'draft', 'review')
+_STAGES = ('brief', 'research', 'outline', 'draft', 'review', 'plan')
 _TOPIC_STAGE = 'topic'
 _TOPIC_PROPOSAL_FILENAME = 'topic_proposal.json'
 _DEFAULT_CADENCE_MINUTES = 360
@@ -47,12 +47,10 @@ _DEFAULT_TOPIC_ROTATION_SEEDS = (
     '가족·동료와 오해 없이 부탁하고 답하는 대화법',
     '새로운 습관을 오래 유지하기 위한 환경 만들기',
 )
-# This pipeline is for a general-interest practical blog.  The model is asked
-# to avoid AI-first subjects, but a completion must also be checked: otherwise
-# an old continuity note or a too-broad inspiration can silently reintroduce a
-# specialist AI series into the next run.
+# Topic exclusions are optional and follow the project direction. Bound Latin
+# abbreviations to Latin letters so 'daily' is allowed and 'ChatGPT로' is caught.
 _AI_TOPIC_PATTERN = re.compile(
-    r'(?:ai|artificial intelligence|chatgpt|gpt|llm|'
+    r'(?:(?<![a-z])(?:ai|artificial intelligence|chatgpt|gpt|llm)(?![a-z])|'
     r'인공지능|생성형\s*ai|생성형\s*인공지능|대규모\s*언어\s*모델|'
     r'프롬프트\s*(?:작성|엔지니어링)|코덱스)',
     re.IGNORECASE,
@@ -141,12 +139,25 @@ def _append_jsonl(path, payload):
         handle.write(json.dumps(payload, ensure_ascii=False) + '\n')
 
 
+def _positive_int(value, default):
+    try:
+        return max(1, int(value))
+    except (ValueError, TypeError):
+        return default
+
+
 def _project_defaults():
     return {
         'version': 1,
         'project_id': 'main-blog',
         'name': 'Main blog',
         'enabled': False,
+        'automatic_paused': False,
+        'pipeline_mode': 'compact',
+        'topic_direction': '일상과 업무에 도움이 되는 실용적인 주제',
+        'exclude_ai_topics': False,
+        'daily_run_budget': 6,
+        'daily_token_budget': 300000,
         'language': '한국어',
         'audience': '',
         'style_guide': '',
@@ -197,6 +208,8 @@ def _normalize_project(raw, existing=None):
             base['topic_rotation_seeds'] = raw['daily_topic_seeds']
         elif 'topic_rotation_seeds' not in existing and 'daily_topic_seeds' in existing:
             base['topic_rotation_seeds'] = existing['daily_topic_seeds']
+    if 'topic_direction' not in raw and 'topic_direction' not in existing and base.get('audience'):
+        base['topic_direction'] = base['audience']
     raw_seeds = base.get('topic_rotation_seeds')
     if not isinstance(raw_seeds, list):
         raw_seeds = []
@@ -212,6 +225,12 @@ def _normalize_project(raw, existing=None):
         'project_id': project_id,
         'name': str(base.get('name') or project_id).strip()[:120],
         'enabled': bool(base.get('enabled')),
+        'automatic_paused': bool(base.get('automatic_paused')),
+        'pipeline_mode': 'legacy' if base.get('pipeline_mode') == 'legacy' else 'compact',
+        'topic_direction': str(base.get('topic_direction') or base.get('audience') or '').strip()[:2000],
+        'exclude_ai_topics': bool(base.get('exclude_ai_topics')),
+        'daily_run_budget': _positive_int(base.get('daily_run_budget'), 6),
+        'daily_token_budget': _positive_int(base.get('daily_token_budget'), 300000),
         'language': str(base.get('language') or '한국어').strip()[:40],
         'audience': str(base.get('audience') or '').strip()[:2000],
         'style_guide': str(base.get('style_guide') or '').strip()[:_MAX_PROJECT_TEXT],
@@ -344,7 +363,7 @@ def _migrate_backlog_to_inspirations(root):
 
 def _queue_generated_topic(root, proposal, now):
     title = str(proposal.get('title') or '').strip()[:300]
-    if not title or _AI_TOPIC_PATTERN.search(title):
+    if not title or ((_load_project(root) or {}).get('exclude_ai_topics') and _AI_TOPIC_PATTERN.search(title)):
         return False
     items = _load_backlog(root)
     # A completion callback may be retried; title de-duplication makes the
@@ -418,13 +437,16 @@ def _post_dir(root, post_id):
 def _stage_files(root, state):
     post_dir = _post_dir(root, state.get('active_post_id'))
     post_prefix = f'blog/posts/{state.get("active_post_id")}'
-    if post_dir is None:
+    if post_dir is None and state.get('stage') != _TOPIC_STAGE:
         return []
     files = {
         _TOPIC_STAGE: [
             'blog/project.json', 'blog/continuity.json', 'blog/backlog.json',
             'blog/editorial_memory.md', 'blog/topic_proposal.json',
         ],
+        'plan': ['blog/project.json', 'blog/backlog.json', 'blog/continuity.json',
+                 'blog/editorial_memory.md', f'{post_prefix}/plan.json', f'{post_prefix}/brief.md',
+                 f'{post_prefix}/research.md', f'{post_prefix}/sources.json', f'{post_prefix}/outline.md'],
         'brief': [
             'blog/project.json', 'blog/continuity.json', 'blog/backlog.json',
             f'{post_prefix}/brief.md',
@@ -439,11 +461,13 @@ def _stage_files(root, state):
         ],
         'draft': [
             'blog/project.json', 'blog/continuity.json', 'blog/editorial_memory.md',
-            f'{post_prefix}/brief.md', f'{post_prefix}/outline.md', f'{post_prefix}/draft.md',
+            f'{post_prefix}/brief.md', f'{post_prefix}/research.md', f'{post_prefix}/sources.json',
+            f'{post_prefix}/outline.md', f'{post_prefix}/draft.md',
         ],
         'review': [
             'blog/project.json', 'blog/continuity.json', 'blog/editorial_memory.md',
             f'{post_prefix}/research.md', f'{post_prefix}/outline.md', f'{post_prefix}/draft.md',
+            f'{post_prefix}/sources.json', f'{post_prefix}/review.json',
             f'{post_prefix}/review.md', f'{post_prefix}/final.md',
         ],
     }
@@ -464,6 +488,8 @@ def _build_prompt(project, state):
         'result concise and practical. Do not install packages, run builds, or make '
         'external changes.\n\n'
         f'Project language: {project.get("language")}.\n'
+        f'Topic direction: {project.get("topic_direction")}.\n'
+        f'Audience: {project.get("audience")}. Follow the project style guide.\n'
         f'Active post: {post_id}.\n'
         f'Current topic: {state.get("active_topic")}.\n\n'
         'Allowed files for this stage:\n'
@@ -472,18 +498,26 @@ def _build_prompt(project, state):
     if stage == _TOPIC_STAGE:
         task = (
             'Read project.json, continuity.json, editorial_memory.md, and backlog.json. '
-            'Generate one timely, specific next article topic for this general-interest '
-            'practical blog. This instruction takes priority over any stale or conflicting '
-            'notes in the files you read. Favor broadly useful everyday themes such as '
-            'work habits, communication, healthful routines, personal-finance basics, '
-            'learning, home life, and relationships. Rotate across these areas over time. '
-            'Do not propose an AI, ChatGPT, prompt, LLM, coding, software, or technology '
-            'article. Do not repeat completed or in-progress articles. Existing queued entries '
+            f'Generate one specific next article topic matching this direction: {project.get("topic_direction")}. '
+            + ('Avoid AI and technology topics. ' if project.get('exclude_ai_topics') else '') +
+            'Do not repeat completed or in-progress articles. Existing queued entries '
             'are inspirations, not fixed titles: improve, combine, or replace them as '
             'appropriate. Create or replace blog/topic_proposal.json as valid JSON only, '
             'with exactly these useful fields: "title" (a concrete Korean article title, '
             'max 120 characters) and "rationale" (one short Korean paragraph). Do not '
             'write an article, brief, or markdown file in this stage.'
+        )
+    elif stage == 'plan':
+        task = (
+            f'Choose a topic matching the configured direction: {project.get("topic_direction")}. '
+            f'Inspiration seeds: {project.get("topic_rotation_seeds")}. '
+            'Use backlog inspirations and avoid repeating recent posts in continuity.json. '
+            + ('Avoid AI topics. ' if project.get('exclude_ai_topics') else '') +
+            f'Create {post_prefix}/plan.json with title (string) and needs_research (boolean). '
+            f'Create {post_prefix}/brief.md with reader problem, key claims and evidence; '
+            f'create {post_prefix}/outline.md with a concise structure. Target 300-500 words. '
+            'Set needs_research=true only when external evidence is necessary. '
+            'Do not invent sources. Do not write the article yet.'
         )
     elif stage == 'brief':
         task = (
@@ -495,7 +529,8 @@ def _build_prompt(project, state):
     elif stage == 'research':
         research_mode = (
             'Web research is allowed only because project.json enables it; use a small '
-            'number of authoritative sources and record URLs in sources.json.'
+            'number of authoritative sources and record sources.json as a nonempty JSON list '
+            'of objects with title and url (http/https). Read the sources and record supporting evidence.'
             if project.get('allow_web_research') else
             'Web research is disabled. Use only the supplied project context and clearly '
             'mark claims that need later verification; do not invent citations.'
@@ -515,7 +550,7 @@ def _build_prompt(project, state):
         )
     elif stage == 'draft':
         task = (
-            f'Read {post_prefix}/brief.md, {post_prefix}/outline.md, project.json, '
+            f'Read {post_prefix}/brief.md, {post_prefix}/outline.md, {post_prefix}/research.md and {post_prefix}/sources.json if present, project.json, '
             'continuity.json, and editorial_memory.md. Create or replace '
             f'{post_prefix}/draft.md as a complete blog draft. Follow the '
             'style guide, avoid unsupported claims, and keep headings and paragraphs '
@@ -529,6 +564,9 @@ def _build_prompt(project, state):
             f'and style findings. Then create or replace {post_prefix}/final.md '
             'with the corrected publishable article. Update continuity.json only with '
             'durable facts, terms, or open loops, keeping it compact (under 2,000 words). '
+            'Check repeated phrases and structures against recent posts in continuity.json. '
+            f'Create {post_prefix}/review.json as {{"verified": true, "pending_claims": []}} only '
+            'if all material factual claims are supported; otherwise set verified=false and list pending_claims. '
             'Do not claim publication or external verification.'
         )
     return common + task
@@ -624,8 +662,90 @@ def _normalize_tokens(token_usage):
         'cached_input_tokens': int(usage.get('cached_input_tokens') or 0),
         'output_tokens': int(usage.get('output_tokens') or 0),
         'reasoning_output_tokens': int(usage.get('reasoning_output_tokens') or 0),
-        'total_tokens': int(usage.get('total_tokens') or 0),
+        'total_tokens': int(usage.get('total_tokens') or (int(usage.get('input_tokens') or 0) + int(usage.get('output_tokens') or 0))),
     }
+
+
+def _stage_sequence(state):
+    if state.get('compact'):
+        return ['plan', *(['research'] if state.get('needs_research') else []), 'draft', 'review']
+    return ['topic', 'brief', 'research', 'outline', 'draft', 'review']
+
+
+def _required_outputs(stage, post_id):
+    names = {'topic': ['topic_proposal.json'], 'plan': ['brief.md', 'outline.md', 'plan.json'],
+             'brief': ['brief.md'], 'research': ['research.md', 'sources.json'],
+             'outline': ['outline.md'], 'draft': ['draft.md'],
+             'review': ['review.md', 'review.json', 'final.md']}.get(stage, [])
+    return names if stage == 'topic' else [f'posts/{post_id}/{name}' for name in names]
+
+
+def _output_stamp(path):
+    try:
+        stat = path.stat()
+        if path.is_symlink() or not path.is_file() or stat.st_size > 4 * 1024 * 1024:
+            return None
+        content = path.read_bytes()
+        return [stat.st_mtime_ns, hashlib.sha256(content).hexdigest()] if content.strip() else None
+    except OSError:
+        return None
+
+
+def _validate_outputs(root, stage, post_id, in_flight):
+    for name in _required_outputs(stage, post_id):
+        path = root / name
+        if not path.resolve().is_relative_to(root.resolve()):
+            return 'artifact_outside_blog'
+        stamp = _output_stamp(path)
+        started = parse_timestamp(in_flight.get('started_at'))
+        stale_legacy = 'output_stamps' not in in_flight and started and stamp and stamp[0] < int(started.timestamp() * 1e9)
+        if not stamp or stale_legacy or stamp == (in_flight.get('output_stamps') or {}).get(name):
+            return f'artifact_missing_empty_or_unchanged: {name}'
+    if stage == 'research' and not isinstance(_read_json(root / f'posts/{post_id}/sources.json'), (list, dict)):
+        return 'sources_json_invalid'
+    if stage == 'research':
+        sources = _read_json(root / f'posts/{post_id}/sources.json')
+        if not isinstance(sources, list) or not sources or any(
+                not isinstance(item, dict) or not re.match(r'^https?://[^/\s]+', str(item.get('url') or ''))
+                for item in sources):
+            return 'verification_pending: sources_required'
+    if stage == 'review':
+        review = _read_json(root / f'posts/{post_id}/review.json', {})
+        if not isinstance(review, dict) or review.get('verified') is not True or review.get('pending_claims') != []:
+            return 'verification_pending'
+    return ''
+
+
+def get_blog_artifact(post_id, filename):
+    root = _blog_root().resolve()
+    directory = _post_dir(root, post_id)
+    if directory is None or filename not in {'brief.md', 'research.md', 'sources.json', 'outline.md', 'draft.md', 'review.md', 'final.md', 'review.json', 'plan.json'}:
+        raise ValueError('허용되지 않은 작업물입니다.')
+    path = directory / filename
+    if not path.resolve().is_relative_to(root) or path.is_symlink():
+        raise ValueError('허용되지 않은 경로입니다.')
+    if path.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError('작업물은 4 MiB까지 읽을 수 있습니다.')
+    return path.read_text(encoding='utf-8')
+
+
+def _post_summaries(root, state):
+    runs = _read_jsonl_tail(_runs_path(root), 100000)
+    items = []
+    for directory in sorted(_posts_path(root).glob('*'), reverse=True):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        post_runs = [r for r in runs if r.get('post_id') == directory.name and r.get('status') in {'completed', 'failed'}]
+        files = [p.name for p in directory.iterdir() if p.is_file() and not p.is_symlink() and p.suffix in {'.md', '.json'}]
+        plan = _read_json(directory / 'plan.json', {})
+        last = post_runs[-1] if post_runs else {}
+        active = state.get('active_post_id') == directory.name
+        items.append({'id': directory.name, 'title': (plan.get('title') if isinstance(plan, dict) else '') or directory.name,
+                      'status': ('검증 대기' if last.get('status') == 'failed' else '집필 중') if active else ('완성본 있음' if 'final.md' in files else '보관'),
+                      'files': files, 'error': last.get('error', ''),
+                      'token_usage': {k: sum(_normalize_tokens(r.get('token_usage'))[k] for r in post_runs) for k in _normalize_tokens({})},
+                      'duration_seconds': sum(r.get('duration_seconds', 0) for r in post_runs)})
+    return items
 
 
 def _status_payload(root=None):
@@ -643,7 +763,8 @@ def _status_payload(root=None):
     project = _normalize_project(project_payload)
     state = _load_state(root, project['project_id'])
     stage = str(state.get('stage') or 'select')
-    stage_number = _STAGES.index(stage) + 1 if stage in _STAGES else 0
+    sequence = _stage_sequence(state)
+    stage_number = sequence.index(stage) + 1 if stage in sequence else 0
     completed_stage_count = max(0, stage_number - 1)
     in_flight = state.get('in_flight') if isinstance(state.get('in_flight'), dict) else None
     last_result = state.get('last_result') if isinstance(state.get('last_result'), dict) else {}
@@ -660,8 +781,8 @@ def _status_payload(root=None):
         'current_stage': stage,
         'current_stage_number': stage_number,
         'completed_stage_count': completed_stage_count,
-        'total_stage_count': len(_STAGES),
-        'progress_percent': int((completed_stage_count / len(_STAGES)) * 100),
+        'total_stage_count': len(sequence),
+        'progress_percent': int((completed_stage_count / len(sequence)) * 100),
         'is_running': bool(in_flight and in_flight.get('run_id')),
         'running_stage': str((in_flight or {}).get('stage') or ''),
         'completed_post_count': max(0, int(state.get('completed_post_count') or 0)),
@@ -681,6 +802,9 @@ def _status_payload(root=None):
         },
         'project': project,
         'state': state,
+        'stages': sequence,
+        'posts': _post_summaries(root, state),
+        'backlog': _load_backlog(root),
         'backlog_count': dashboard['backlog_count'],
         'dashboard': dashboard,
         'recent_runs': _read_jsonl_tail(_runs_path(root)),
@@ -786,6 +910,8 @@ def _start_pipeline_run(force=False, account_id=None):
     if not _project_path(root).exists():
         return {'started': False, 'reason': 'not_configured'}
     project = _load_project(root)
+    if not force and project and project.get('automatic_paused'):
+        return {'started': False, 'reason': 'automatic_paused'}
     if not project or not project.get('enabled'):
         return {'started': False, 'reason': 'disabled'}
     account_id = account_id or codex_chat.get_active_account_id()
@@ -833,9 +959,26 @@ def _start_pipeline_run(force=False, account_id=None):
         next_run_at = parse_timestamp(state.get('next_run_at'))
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
+        if not force:
+            today = now.date().isoformat()
+            history = [r for r in _read_jsonl_tail(_runs_path(root), 100000) if str(r.get('at', '')).startswith(today)]
+            if (sum(r.get('status') == 'started' for r in history) >= project['daily_run_budget'] or
+                    sum(_normalize_tokens(r.get('token_usage'))['total_tokens'] for r in history) >= project['daily_token_budget']):
+                return {'started': False, 'reason': 'daily_budget_exceeded'}
+        if state.get('stage') == 'research' and not project.get('allow_web_research'):
+            return {'started': False, 'reason': 'verification_pending'}
+        if state.get('stage') in {'select', 'topic'} and not project.get('topic_rotation_enabled') and state.get('completed_post_count'):
+            return {'started': False, 'reason': 'topic_rotation_disabled'}
         claimed, reason, claim_path = _claim_global(context, project, run_id, now, force=force)
         if not claimed:
             return {'started': False, 'reason': reason, 'claim_path': str(claim_path)}
+        if state.get('stage') == 'select' and project.get('pipeline_mode') == 'compact':
+            if not project.get('topic_rotation_enabled') and state.get('completed_post_count'):
+                _finish_claim(claim_path, project, run_id, False, now)
+                return {'started': False, 'reason': 'topic_rotation_disabled'}
+            state.update(stage='plan', compact=True, needs_research=False,
+                         active_post_id=f'{now.strftime("%Y%m%d")}-{run_id[:12]}', active_topic='기획 중')
+            _post_dir(root, state['active_post_id']).mkdir(parents=True, exist_ok=True)
         if state.get('stage') == 'select':
             # A validated proposal is consumed on the next run.  If none is
             # ready, topic generation runs first and has no post directory.
@@ -857,12 +1000,18 @@ def _start_pipeline_run(force=False, account_id=None):
             _save_state(root, state)
             return {'started': False, 'reason': 'backlog_empty'}
         stage = state['stage']
+        prompt = _build_prompt(project, state)
         post_id = state.get('active_post_id') or ''
         state['in_flight'] = {
             'run_id': run_id,
             'stage': stage,
             'post_id': post_id,
             'started_at': normalize_timestamp(now),
+            'prompt_chars': len(prompt),
+            'context_bytes': sum((Path(codex_chat.WORKSPACE_DIR) / name).stat().st_size
+                                 for name in _stage_files(root, state)
+                                 if (Path(codex_chat.WORKSPACE_DIR) / name).is_file()),
+            'output_stamps': {name: _output_stamp(root / name) for name in _required_outputs(stage, post_id)},
             'stream_id': '',
             'claim_path': str(claim_path),
             'owner_pid': os.getpid(),
@@ -890,7 +1039,7 @@ def _start_pipeline_run(force=False, account_id=None):
                 _save_state(root, current)
         stream = codex_chat.create_codex_stream(
             session['id'],
-            _build_prompt(project, state),
+            prompt,
             model_override=project.get('model') or None,
             reasoning_override=project.get('reasoning_effort') or None,
             account_id=context['account']['id'],
@@ -998,6 +1147,26 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
         if in_flight.get('run_id') != run_id:
             return state.get('last_result', {}).get('run_id') == run_id if isinstance(state.get('last_result'), dict) else False
         stage = str(operation.get('stage') or in_flight.get('stage') or state.get('stage') or '').strip()
+        if stage != in_flight.get('stage'):
+            return False
+        if succeeded:
+            error = _validate_outputs(root, stage, in_flight.get('post_id', ''), in_flight)
+            if stage == 'topic' and error:
+                error = 'topic_proposal_invalid'
+            succeeded = not error
+        if succeeded and stage == 'plan':
+            plan = _read_json(root / f'posts/{in_flight["post_id"]}/plan.json', {})
+            if not isinstance(plan, dict) or not str(plan.get('title') or '').strip() or not isinstance(plan.get('needs_research'), bool):
+                succeeded, error = False, 'plan_json_invalid'
+            else:
+                if project.get('exclude_ai_topics') and _AI_TOPIC_PATTERN.search(str(plan['title'])):
+                    succeeded, error = False, 'excluded_topic'
+                state['active_topic'] = str(plan['title'])[:300]
+                state['needs_research'] = plan['needs_research']
+                if state['needs_research'] and not project.get('allow_web_research'):
+                    state['stage'] = 'research'
+                    succeeded, error = False, 'verification_pending: web_research_disabled'
+        duration = max(0, (now - (parse_timestamp(in_flight.get('started_at')) or now)).total_seconds())
         state['in_flight'] = None
         state['last_run_at'] = normalize_timestamp(now)
         state['last_error'] = '' if succeeded else str(error or '')[:1000]
@@ -1007,6 +1176,9 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'post_id': str(operation.get('post_id') or in_flight.get('post_id') or ''),
             'status': 'completed' if succeeded else 'failed',
             'completed_at': normalize_timestamp(now),
+            'prompt_chars': in_flight.get('prompt_chars', 0),
+            'context_bytes': in_flight.get('context_bytes', 0),
+            'duration_seconds': duration,
             'token_usage': _normalize_tokens(token_usage),
             'error': '' if succeeded else str(error or '')[:1000],
         }
@@ -1014,6 +1186,7 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             proposal = _read_json(_topic_proposal_path(root), {})
             if not isinstance(proposal, dict) or not _queue_generated_topic(root, proposal, now):
                 succeeded = False
+                error = 'topic_proposal_invalid'
                 state['last_error'] = 'topic_proposal_invalid'
                 state['last_result']['status'] = 'failed'
                 state['last_result']['error'] = 'topic_proposal_invalid'
@@ -1024,13 +1197,21 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
         elif succeeded and stage in _STAGES:
             if stage == 'review':
                 _mark_backlog_done(root, state, now)
+                continuity = _read_json(_continuity_path(root), {})
+                if isinstance(continuity, dict):
+                    recent = continuity.get('recent_posts')
+                    recent = recent if isinstance(recent, list) else []
+                    continuity['recent_posts'] = [*recent[-19:], {'post_id': state.get('active_post_id'),
+                        'title': state.get('active_topic'), 'completed_at': normalize_timestamp(now)}]
+                    _write_json_atomic(_continuity_path(root), continuity)
                 state['completed_post_count'] = int(state.get('completed_post_count') or 0) + 1
                 state['stage'] = 'select'
                 state['active_post_id'] = ''
                 state['active_topic'] = ''
                 state.pop('active_backlog_id', None)
             else:
-                state['stage'] = _STAGES[_STAGES.index(stage) + 1]
+                sequence = _stage_sequence(state)
+                state['stage'] = sequence[sequence.index(stage) + 1]
             state['revision'] = int(state.get('revision') or 0) + 1
         else:
             state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=_RETRY_DELAY_MINUTES))
@@ -1045,9 +1226,12 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'stream_id': in_flight.get('stream_id') or '',
             'session_id': in_flight.get('session_id') or '',
             'at': normalize_timestamp(now),
+            'prompt_chars': in_flight.get('prompt_chars', 0),
+            'context_bytes': in_flight.get('context_bytes', 0),
+            'duration_seconds': duration,
             'token_usage': _normalize_tokens(token_usage),
             'error': '' if succeeded else str(error or '')[:1000],
         })
-    claim_path = operation.get('claim_path')
+    claim_path = in_flight.get('claim_path') or operation.get('claim_path')
     _finish_claim(Path(claim_path) if claim_path else None, project, run_id, bool(succeeded), now)
     return True

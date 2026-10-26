@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>블로그 집필 | Codex Workbench</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/metadata_sync.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/blog.css') }}">
+<script src="{{ url_for('static', filename='js/blog.js') }}" defer></script></head>
+<body><header><a href="/">Codex Workbench</a><span>자동 경량작업 / 블로그</span></header>
+<main id="blog-dashboard"><h1>블로그 집필 대시보드</h1>
+<p>집필 목록과 작업물을 읽고 자동 실행 정책을 관리합니다. 완성본은 로컬 파일로 보관합니다.</p>
+<p id="feedback" role="status" aria-live="polite">불러오는 중…</p>
+<section><div class="section-heading"><h2>현재 집필</h2><button id="refresh" type="button">새로고침</button></div>
+<p id="progress"></p><button id="run" type="button">다음 단계 즉시 실행</button>
+<p>일반 글: 기획·근거 → 초고 → 검수. 근거가 필요한 글은 조사 단계를 추가합니다. 기존 집필은 6단계 흐름을 이어갑니다.</p></section>
+<details><summary>블로그 설정 · 자동 실행 정책</summary><section><form id="settings">
+<label><input id="enabled" type="checkbox"> 블로그 작업 활성화</label>
+<label><input id="automatic_paused" type="checkbox"> 블로그 자동 실행 일시정지 (문서 동기화는 계속)</label>
+<label>블로그 주제 방향<textarea id="topic_direction" rows="2"></textarea></label>
+<label>독자<textarea id="audience" rows="2"></textarea></label>
+<label>문체 지침<textarea id="style_guide" rows="3"></textarea></label>
+<label><input id="exclude_ai_topics" type="checkbox"> AI 관련 주제 제외</label>
+<label><input id="allow_web_research" type="checkbox"> 필요한 글에 웹 조사 허용</label>
+<label><input id="topic_rotation_enabled" type="checkbox"> 완성 후 다음 글 기획 허용</label>
+<div class="blog-fields"><label>자동 실행 간격 (분)<input id="cadence_minutes" type="number" min="60" max="10080" required></label>
+<label>일일 최대 실행 횟수<input id="daily_run_budget" type="number" min="1" required></label>
+<label>일일 토큰 예산<input id="daily_token_budget" type="number" min="1" required></label></div>
+<p>예산은 KST 날짜 기준이며 캐시를 포함한 기록 토큰으로 계산합니다. 한 단계가 예산을 넘길 수 있으며 다음 자동 실행을 제한합니다. 수동 실행은 간격·예산을 우회합니다.</p>
+<button type="submit">설정 저장</button></form></section></details>
+<section><h2>집필 리스트 · 작업물</h2><label>글 검색<input id="search" type="search" placeholder="제목 또는 상태"></label>
+<div class="table-scroll"><table><thead><tr><th>글 / 상태</th><th>입력 / 캐시 / 출력 / 전체 토큰</th><th>실행 시간</th><th>작업물</th></tr></thead><tbody id="posts"></tbody></table></div>
+<details><summary>대기 주제와 참고 목록</summary><ul id="backlog"></ul></details></section>
+<section id="reader" hidden><h2 id="reader-title"></h2><pre id="article" tabindex="0"></pre></section>
+<section><h2>최근 단계 실행 기록</h2><div class="table-scroll"><table><thead><tr><th>단계 / 상태</th><th>시각 / 시간</th><th>입력 / 캐시 / 출력 / 전체 토큰</th><th>프롬프트 / 허용 파일 크기</th><th>검증·오류</th></tr></thead><tbody id="runs"></tbody></table></div></section>
+</main></body></html>

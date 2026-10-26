@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.parse import urlsplit
 
-from flask import Blueprint, Response, jsonify, request, session, stream_with_context
+from flask import Blueprint, Response, jsonify, render_template, request, session, stream_with_context
 
 from ..config import (
     CODEX_ALLOW_TRUSTED_HTTP_CRYPTO_FALLBACK,
@@ -1288,6 +1288,23 @@ def codex_usage_keepalive():
     return jsonify(response), 202
 
 
+@bp.get('/blog')
+def codex_blog_page():
+    if CODEX_API_ONLY_MODE:
+        return jsonify({'error': 'UI disabled'}), 404
+    return render_template('blog.html')
+
+
+@bp.get('/api/codex/blog/posts/<post_id>/<filename>')
+def codex_blog_artifact(post_id, filename):
+    try:
+        return jsonify({'content': blog_pipeline.get_blog_artifact(post_id, filename)})
+    except (ValueError, UnicodeError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    except OSError:
+        return jsonify({'error': '작업물을 읽을 수 없습니다.'}), 404
+
+
 @bp.route('/api/codex/blog', methods=['GET'])
 def codex_blog_status():
     """Return the durable blog project state without loading article contents."""
@@ -1321,6 +1338,10 @@ def codex_blog_run():
         'project_busy': '다른 워크벤치에서 같은 블로그 프로젝트가 실행 중입니다.',
         'run_in_flight': '현재 블로그 단계가 이미 실행 중입니다.',
         'not_due': '아직 다음 집필 단계 실행 시간이 아닙니다.',
+        'automatic_paused': '블로그 자동 실행이 일시정지되어 있습니다.',
+        'daily_budget_exceeded': '블로그 일일 실행·토큰 예산에 도달했습니다.',
+        'verification_pending': '자료 검증 대기 중입니다. 웹 조사 설정을 확인하세요.',
+        'topic_rotation_disabled': '다음 글 자동 기획이 꺼져 있습니다.',
         'backlog_empty': '대기 중인 블로그 주제가 없습니다.',
     }
     status_code = 409 if result.get('reason') in {

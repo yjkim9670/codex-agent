@@ -1341,19 +1341,7 @@
                 <div class="workbench-settings-group workbench-settings-management">
                 <fieldset class="workbench-execution-settings">
                     <legend class="ui-font-setting-label">실행 설정 · 도구</legend>
-                    <div class="workbench-settings-actions"><a class="btn ghost" id="codex-metadata-sync-open" href="/metadata-sync" target="_blank" rel="noopener">TG Platform 문서 동기화</a><button
-                                        class="btn ghost blog-dashboard-open"
-                                        type="button"
-                                        id="codex-blog-dashboard-open"
-                                        aria-label="블로그 자동 작성 상황판 열기"
-                                        title="블로그 자동 작성 상황판 열기"
-                                    >블로그 상황판</button><button
-                                        class="btn ghost usage-keepalive-history-open"
-                                        type="button"
-                                        id="codex-usage-keepalive-history-open"
-                                        aria-label="경량 작업 이력 열기"
-                                        title="경량 작업 이력 열기"
-                                    >경량 작업 이력</button><button
+<div class="workbench-settings-actions"><button
                                         class="btn ghost usage-history-open"
                                         type="button"
                                         id="codex-usage-history-open"
@@ -1374,10 +1362,27 @@
                             </div>
 
                     <button type="button" class="btn secondary" id="codex-execution-settings-save">실행 설정 저장</button>
-                    <div class="usage-keepalive-status" id="codex-usage-keepalive-status"></div><div class="codex-cli-version-card" id="codex-cli-version-card" aria-live="polite">
+                    <div class="codex-cli-version-card" id="codex-cli-version-card" aria-live="polite">
                                 <span class="codex-cli-version-label">Codex CLI</span>
                                 <span class="codex-cli-version-value" id="codex-cli-version-value">확인 중...</span>
                             </div>
+                </fieldset>
+                <fieldset id="lightweight-settings"><legend class="ui-font-setting-label">자동 경량작업</legend><div class="usage-keepalive-status" id="codex-usage-keepalive-status"></div>
+                    <p>사용량 5시간 구간이 0%일 때 문서 동기화를 검토하고, 수정이 없으면 블로그 한 단계를 진행합니다.</p>
+                    <div class="workbench-settings-actions"><a class="btn ghost" id="codex-metadata-sync-open" href="/metadata-sync" target="_blank" rel="noopener">TG Platform 문서 동기화</a><button
+                                        class="btn ghost blog-dashboard-open"
+                                        type="button"
+                                        id="codex-blog-dashboard-open"
+                                        aria-label="블로그 자동 작성 상황판 열기"
+                                        title="블로그 자동 작성 상황판 열기"
+                                    >블로그 상황판</button><button
+                                        class="btn ghost usage-keepalive-history-open"
+                                        type="button"
+                                        id="codex-usage-keepalive-history-open"
+                                        aria-label="경량 작업 이력 열기"
+                                        title="경량 작업 이력 열기"
+                                    >경량 작업 이력</button><a class="btn ghost" href="/blog" target="_blank" rel="noopener">블로그 집필 목록 · 작업물 대시보드</a></div>
+                    <p>블로그 방향, 자동 실행 일시정지, 실행 간격과 일일 예산은 블로그 대시보드에서 설정합니다.</p>
                 </fieldset>
                 {% if company_mode_enabled or (internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin') %}<fieldset><legend class="ui-font-setting-label">인증 관리</legend>                        {% if internal_multiuser_mode and current_internal_user and current_internal_user.role == 'admin' %}
                         <section class="company-credential-card" id="codex-internal-api-key-allocation-card" data-internal-admin-only aria-labelledby="codex-internal-api-key-allocation-title">

@@ -8078,3 +8078,26 @@ def test_plan_and_secondary_inherited_effort_respects_selected_model(monkeypatch
         {'slug': 'GaussO4.1-260330', 'reasoning_options': ['on', 'off'], 'default_reasoning_effort': 'on'}])
     assert codex_chat.resolve_model_role_settings('secondary', settings) == ('GaussO4.1-260330', 'on')
     assert codex_chat.resolve_model_role_settings('plan', settings) == ('GaussO4.1-260330', 'on')
+
+
+def test_blog_finalization_reports_artifact_validation_failure(monkeypatch, isolated_codex_workspace):
+    from codex_agent.services import blog_pipeline
+    session = codex_chat.create_session('blog-validation')
+    stream_id = 'blog-validation-stream'
+    stream = _build_stream_state(
+        stream_id, session['id'], started_at=100.0,
+        output_path=isolated_codex_workspace['workspace_dir'] / 'blog-validation.txt',
+    )
+    stream.update(done=True, exit_code=0, output_last_message='작업 완료',
+                  usage_operation='blog_pipeline', operation_metadata={'run_id':'validated-run'})
+    with state.codex_streams_lock:
+        state.codex_streams[stream_id] = stream
+    monkeypatch.setattr(blog_pipeline, 'record_blog_pipeline_completion', lambda *_, **__: True)
+    monkeypatch.setattr(blog_pipeline, 'get_blog_pipeline_status', lambda: {'state': {'last_result': {
+        'run_id':'validated-run', 'status':'failed', 'error':'artifact_missing_empty_or_unchanged: final.md',
+    }}})
+    completions = []
+    monkeypatch.setattr(codex_chat, '_record_automatic_usage_blog_completion', lambda *_, **kwargs: completions.append(kwargs))
+    codex_chat.finalize_codex_stream(stream_id)
+    assert completions[0]['succeeded'] is False
+    assert 'final.md' in completions[0]['error']

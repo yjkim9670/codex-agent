@@ -40,6 +40,7 @@ def test_blog_pipeline_is_disabled_until_configured(blog_environment):
 
 def test_usage_panel_advances_the_same_blog_pipeline(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'usage-series',
         'enabled': True,
         'backlog': ['Usage 패널에서 시작하는 글'],
@@ -59,6 +60,50 @@ def test_usage_panel_advances_the_same_blog_pipeline(blog_environment, monkeypat
     assert state['in_flight']['stage'] == 'topic'
 
 
+@pytest.mark.parametrize('status, reason, calls_blog', [
+    ('no_changes', 'skipped_no_candidates', True),
+    ('unavailable', '', True),
+    ('completed', '', False),
+    ('failed', 'metadata_sync_failed', False),
+    ('deferred', 'metadata_sync_busy', False),
+])
+def test_automatic_blog_fallback_only_after_no_changes(blog_environment, monkeypatch, status, reason, calls_blog):
+    from codex_agent.services import metadata_sync
+    calls = []
+    monkeypatch.setattr(metadata_sync, 'run_lightweight_sync', lambda _: {'status': status, 'reason': reason})
+    def blog(**kwargs):
+        calls.append(kwargs)
+        return {'started': True, 'stream_id': 'fallback-stream'}
+    monkeypatch.setattr(blog_pipeline, 'run_blog_pipeline', blog)
+    result = codex_chat._run_usage_blog_pipeline('default', automatic=True)
+    assert bool(calls) == calls_blog
+    assert result['metadata_sync']['status'] == status
+    if calls_blog:
+        assert result['stream']['id'] == 'fallback-stream'
+        assert calls == [{'force': False, 'account_id': 'default'}]
+    else:
+        assert result['submitted'] == (status == 'completed')
+
+
+def test_document_completion_preserves_automatic_window_claim(blog_environment, monkeypatch):
+    snapshot_path = blog_environment / 'usage.json'
+    snapshot = {'usage_keepalive': {'last_mode': 'automatic', 'last_status': 'queued',
+                                  'automatic_cycle_targets': {'five_hour': 'reserved-window'}}}
+    context = {'account': {'id': 'default'}, 'account_usage_snapshot_path': snapshot_path}
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda _: context)
+    monkeypatch.setattr(codex_chat, '_load_account_usage_snapshot', lambda _: snapshot)
+    monkeypatch.setattr(codex_chat, '_record_automatic_usage_refresh_history', lambda *a: None)
+    monkeypatch.setattr(codex_chat, '_run_usage_blog_pipeline', lambda *a, **kw: {
+        'submitted': True, 'completed': True, 'stream': {},
+        'metadata_sync': {'status': 'completed', 'run_id': 'docs-run'},
+    })
+    codex_chat._start_reserved_automatic_usage_blog('default')
+    saved = json.loads(snapshot_path.read_text())['usage_keepalive']
+    assert saved['last_status'] == 'completed'
+    assert saved['automatic_cycle_targets'] == {'five_hour': 'reserved-window'}
+    assert saved['last_metadata_sync']['run_id'] == 'docs-run'
+
+
 def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, monkeypatch):
     context = {'account': {'id': 'default'}, 'codex_home': blog_environment.parent / 'codex-home'}
     snapshot = {'five_hour': {'used_percent': 0, 'resets_at': '2026-09-19T17:00:00+09:00'}}
@@ -67,6 +112,7 @@ def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, 
     assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot)['reason'] == 'not_configured'
 
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'automatic-series', 'enabled': True, 'backlog': ['자동 글'],
     })
     monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *_args: (True, ''))
@@ -78,6 +124,7 @@ def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, 
 
 def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'series-a',
         'enabled': True,
         'cadence_minutes': 60,
@@ -145,6 +192,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     ) is True
     started = blog_pipeline.run_blog_pipeline(force=True)
     assert started['stage'] == 'brief'
+    (blog_environment / 'blog' / 'posts' / started['post_id'] / 'brief.md').write_text('A focused brief')
     assert blog_pipeline.record_blog_pipeline_completion({
         'project_id': 'series-a', 'run_id': started['run_id'], 'stage': 'brief',
         'post_id': started['post_id'], 'blog_root': str(blog_environment / 'blog'),
@@ -159,10 +207,10 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
     assert status['dashboard'] == {
         'current_topic': '퇴근 후 15분으로 다음 날을 준비하는 방법',
         'current_stage': 'research',
-        'current_stage_number': 2,
-        'completed_stage_count': 1,
-        'total_stage_count': 5,
-        'progress_percent': 20,
+        'current_stage_number': 3,
+        'completed_stage_count': 2,
+        'total_stage_count': 6,
+        'progress_percent': 33,
         'is_running': False,
         'running_stage': '',
         'completed_post_count': 0,
@@ -182,6 +230,7 @@ def test_blog_pipeline_advances_one_stage_and_records_tokens(blog_environment, m
 
 def test_topic_run_discards_stale_proposal_before_manual_submission(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'fresh-topic', 'enabled': True, 'backlog': ['이전 참고 주제'],
     })
     proposal_path = blog_environment / 'blog' / 'topic_proposal.json'
@@ -200,6 +249,7 @@ def test_topic_run_discards_stale_proposal_before_manual_submission(blog_environ
 
 def test_pipeline_uses_ai_topic_before_and_after_each_article(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'rotation-series',
         'enabled': True,
         'topic_rotation_seeds': ['업무 기록을 남기는 방법'],
@@ -231,6 +281,8 @@ def test_pipeline_uses_ai_topic_before_and_after_each_article(blog_environment, 
     }, True)
     started = blog_pipeline.run_blog_pipeline(force=True)
     for stage in ('brief', 'research', 'outline', 'draft', 'review'):
+        for name in blog_pipeline._required_outputs(stage, started['post_id']):
+            (blog_environment / 'blog' / name).write_text('{"verified":true,"pending_claims":[]}' if name.endswith('review.json') else '[{"title":"source","url":"https://example.com/evidence"}]' if name.endswith('sources.json') else '{}' if name.endswith('.json') else 'stage output')
         assert blog_pipeline.record_blog_pipeline_completion({
             'project_id': 'rotation-series',
             'run_id': started['run_id'],
@@ -271,6 +323,7 @@ def test_blog_claim_is_shared_across_workbenches(blog_environment):
 
 def test_blog_prompt_limits_stage_context(blog_environment):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'prompt-series',
         'enabled': True,
         'backlog': ['짧은 주제'],
@@ -289,6 +342,7 @@ def test_blog_prompt_limits_stage_context(blog_environment):
 
 def test_topic_stage_generates_article_from_legacy_backlog(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,
         'project_id': 'ai-topic-series', 'enabled': True, 'backlog': ['기존에 정한 방향'],
     })
     monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})
@@ -312,15 +366,16 @@ def test_topic_stage_generates_article_from_legacy_backlog(blog_environment, mon
 
 
 def test_topic_prompt_prefers_broad_everyday_subjects(blog_environment):
-    blog_pipeline.configure_blog_project({'project_id': 'broad-topics', 'enabled': True})
+    blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,'project_id': 'broad-topics', 'enabled': True})
     root = blog_environment / 'blog'
     state = blog_pipeline._load_state(root, 'broad-topics')
     state['stage'] = 'topic'
 
     prompt = blog_pipeline._build_prompt(blog_pipeline._load_project(root), state)
 
-    assert 'Favor broadly useful everyday themes' in prompt
-    assert 'Do not propose an AI, ChatGPT, prompt, LLM, coding, software, or technology' in prompt
+    assert 'matching this direction' in prompt
+    assert 'Do not propose an AI' not in prompt
 
 
 @pytest.mark.parametrize('title', [
@@ -331,13 +386,15 @@ def test_topic_prompt_prefers_broad_everyday_subjects(blog_environment):
 def test_topic_completion_rejects_ai_specialist_titles(blog_environment, title):
     root = blog_environment / 'blog'
 
+    blog_pipeline.configure_blog_project({'exclude_ai_topics': True})
     assert blog_pipeline._queue_generated_topic(
         root, {'title': title, 'rationale': '범용 주제여야 합니다.'}, blog_pipeline._now()) is False
     assert blog_pipeline._load_backlog(root) == []
 
 
 def test_completion_rejects_a_different_workspace_owner(blog_environment, monkeypatch):
-    blog_pipeline.configure_blog_project({'project_id': 'scoped-series', 'enabled': True})
+    blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,'project_id': 'scoped-series', 'enabled': True})
     monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'blog-session'})
     monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'blog-stream'})
     started = blog_pipeline.run_blog_pipeline(force=True)
@@ -352,7 +409,8 @@ def test_completion_rejects_a_different_workspace_owner(blog_environment, monkey
 
 def _interrupted_blog_run(workspace, monkeypatch, *, stream=None):
     from datetime import timedelta
-    blog_pipeline.configure_blog_project({'project_id': 'recovery-series', 'enabled': True})
+    blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,'project_id': 'recovery-series', 'enabled': True})
     monkeypatch.setattr(codex_chat, 'create_session', lambda **_kwargs: {'id': 'recovery-session'})
     monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_args, **_kwargs: {'id': 'recovery-stream'})
     monkeypatch.setattr(codex_chat, 'get_session', lambda _id: None)
@@ -498,7 +556,8 @@ def test_newer_global_reservation_survives_old_worker(blog_environment, monkeypa
 
 def test_retry_wait_does_not_consume_global_claim(blog_environment, monkeypatch):
     from datetime import timedelta
-    blog_pipeline.configure_blog_project({'project_id': 'retry-series', 'enabled': True})
+    blog_pipeline.configure_blog_project({
+        "pipeline_mode": "legacy", "allow_web_research": True,'project_id': 'retry-series', 'enabled': True})
     snapshot = {'usage_keepalive': {'next_retry_at': blog_pipeline.normalize_timestamp(
         blog_pipeline._now() + timedelta(minutes=30))}}
     monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *_args: pytest.fail('Claim consumed during retry delay'))
@@ -525,3 +584,148 @@ def test_completion_before_submission_record_is_restored_once(blog_environment, 
     events = snapshot['usage_keepalive']['history']
     assert [event['event'] for event in events] == ['submitted', 'completed']
     assert events[-1]['token_usage']['total_tokens'] == 17
+
+
+def _compact_start(workspace, monkeypatch, **settings):
+    blog_pipeline.configure_blog_project({'enabled': True, 'pipeline_mode': 'compact', **settings})
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **_: {'id': 'compact-session'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *_, **__: {'id': 'compact-stream'})
+    return blog_pipeline.run_blog_pipeline(force=True)
+
+
+def _complete_stage(workspace, run, outputs=None, **kwargs):
+    root = workspace / 'blog'
+    for name, content in (outputs or {}).items():
+        path = root / 'posts' / run['post_id'] / name
+        path.write_text(content, encoding='utf-8')
+    blog_pipeline.record_blog_pipeline_completion({**run, 'blog_root': str(root)}, True, **kwargs)
+    return blog_pipeline.get_blog_pipeline_status()
+
+
+def test_compact_three_stage_cycle_and_reader(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch, topic_direction='AI와 개발 생산성')
+    assert run['stage'] == 'plan'
+    status = _complete_stage(blog_environment, run, {'plan.json': '{"title":"AI 개발 기록", "needs_research":false}', 'brief.md':'독자 문제와 근거', 'outline.md':'구성'})
+    assert status['state']['stage'] == 'draft'
+    assert status['stages'] == ['plan', 'draft', 'review']
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    status = _complete_stage(blog_environment, run, {'draft.md':'초고'}, token_usage={'input_tokens':100, 'cached_input_tokens':70, 'output_tokens':25, 'total_tokens':125})
+    assert status['state']['stage'] == 'review'
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    status = _complete_stage(blog_environment, run, {'review.md':'검수 완료', 'review.json':'{"verified":true,"pending_claims":[]}', 'final.md':'완성된 글'})
+    assert status['state']['completed_post_count'] == 1
+    assert status['posts'][0]['token_usage']['cached_input_tokens'] == 70
+    assert blog_pipeline.get_blog_artifact(run['post_id'], 'final.md') == '완성된 글'
+
+
+@pytest.mark.parametrize('outputs', [{}, {'plan.json':'{}','brief.md':'','outline.md':'구성'}])
+def test_compact_missing_outputs_do_not_advance(blog_environment, monkeypatch, outputs):
+    run = _compact_start(blog_environment, monkeypatch)
+    status = _complete_stage(blog_environment, run, outputs)
+    assert status['state']['stage'] == 'plan'
+    assert status['state']['last_result']['status'] == 'failed'
+    assert 'artifact_missing' in status['state']['last_error']
+
+
+def test_unchanged_outputs_fail_on_retry(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch)
+    outputs = {'plan.json':'{}','brief.md':'기획','outline.md':'구성'}
+    _complete_stage(blog_environment, run, outputs)
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    status = _complete_stage(blog_environment, run)
+    assert 'unchanged' in status['state']['last_error']
+
+
+def test_research_needed_without_web_stays_pending(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch)
+    status = _complete_stage(blog_environment, run, {'plan.json':'{"title":"자료 조사 글","needs_research":true}','brief.md':'기획','outline.md':'구성'})
+    assert status['state']['stage'] == 'research'
+    assert status['state']['last_error'] == 'verification_pending: web_research_disabled'
+    assert blog_pipeline.run_blog_pipeline(force=True)['reason'] == 'verification_pending'
+    blog_pipeline.configure_blog_project({'allow_web_research':True})
+    assert blog_pipeline.run_blog_pipeline(force=True)['stage'] == 'research'
+
+
+def test_review_pending_never_counts_as_completed(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch)
+    _complete_stage(blog_environment, run, {'plan.json':'{"title":"실용 글","needs_research":false}','brief.md':'기획','outline.md':'구성'})
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    _complete_stage(blog_environment, run, {'draft.md':'초고'})
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    status = _complete_stage(blog_environment, run, {'review.md':'출처 부족','review.json':'{"verified":false,"pending_claims":["수치"]}','final.md':'검증 전 원고'})
+    assert status['state']['stage'] == 'review'
+    assert status['state']['completed_post_count'] == 0
+    assert status['posts'][0]['status'] == '검증 대기'
+
+
+def test_automatic_budget_and_manual_override(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch, daily_run_budget=1)
+    _complete_stage(blog_environment, run)
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    state['next_run_at'] = None
+    blog_pipeline._save_state(blog_environment / 'blog', state)
+    assert blog_pipeline.run_blog_pipeline(force=False)['reason'] == 'daily_budget_exceeded'
+    assert blog_pipeline.run_blog_pipeline(force=True)['started']
+
+
+def test_pause_only_blocks_automatic_blog(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch)
+    _complete_stage(blog_environment, run)
+    blog_pipeline.configure_blog_project({'automatic_paused':True})
+    assert blog_pipeline.run_blog_pipeline()['reason'] == 'automatic_paused'
+    assert blog_pipeline.run_blog_pipeline(force=True)['started']
+
+
+@pytest.mark.parametrize('post_id, filename', [('..','final.md'), ('post','../../project.json'), ('post','secrets.txt')])
+def test_blog_reader_rejects_paths(blog_environment, post_id, filename):
+    with pytest.raises(ValueError):
+        blog_pipeline.get_blog_artifact(post_id, filename)
+
+
+def test_blog_reader_rejects_symlink(blog_environment):
+    directory = blog_environment / 'blog' / 'posts' / 'post'
+    directory.mkdir(parents=True)
+    target = blog_environment / 'private.md'
+    target.write_text('private')
+    (directory / 'final.md').symlink_to(target)
+    with pytest.raises(ValueError):
+        blog_pipeline.get_blog_artifact('post', 'final.md')
+
+
+def test_topic_allowed_files_without_post_and_ai_boundary(blog_environment):
+    assert 'blog/topic_proposal.json' in blog_pipeline._stage_files(blog_environment / 'blog', {'stage':'topic'})
+    assert not blog_pipeline._AI_TOPIC_PATTERN.search('daily email habits')
+    assert blog_pipeline._AI_TOPIC_PATTERN.search('ChatGPT로 글 쓰기')
+
+
+def test_automatic_interval_is_observed(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch)
+    _complete_stage(blog_environment, run)
+    assert blog_pipeline.run_blog_pipeline()['reason'] == 'not_due'
+
+
+def test_research_requires_sources(blog_environment, monkeypatch):
+    run = _compact_start(blog_environment, monkeypatch, allow_web_research=True)
+    _complete_stage(blog_environment, run, {'plan.json':'{"title":"조사 글","needs_research":true}', 'brief.md':'기획', 'outline.md':'구성'})
+    run = blog_pipeline.run_blog_pipeline(force=True)
+    assert run['stage'] == 'research'
+    status = _complete_stage(blog_environment, run, {'research.md':'근거 부족', 'sources.json':'[]'})
+    assert status['state']['stage'] == 'research'
+    assert status['state']['last_error'] == 'verification_pending: sources_required'
+
+
+def test_blog_page_and_artifact_endpoint(blog_environment):
+    from flask import Flask
+    from codex_agent.blueprints.codex_chat import bp
+    app = Flask('blog-test', template_folder=str(Path(blog_pipeline.__file__).parents[1] / 'templates'))
+    app.register_blueprint(bp)
+    client = app.test_client()
+    assert client.get('/blog').status_code == 200
+    assert b'blog-dashboard' in client.get('/blog').data
+    directory = blog_environment / 'blog' / 'posts' / 'post'
+    directory.mkdir(parents=True)
+    (directory / 'final.md').write_text('<script>unsafe()</script>')
+    response = client.get('/api/codex/blog/posts/post/final.md')
+    assert response.json['content'] == '<script>unsafe()</script>'
+    assert client.get('/api/codex/blog/posts/post/private.txt').status_code == 400
+    assert client.get('/api/codex/blog/posts/missing/final.md').status_code == 404

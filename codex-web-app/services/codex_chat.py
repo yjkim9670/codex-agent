@@ -8750,13 +8750,25 @@ def _run_usage_blog_pipeline(account_id, automatic):
     """Start one blog stage and retain the legacy Usage-panel response shape."""
     from .blog_pipeline import run_blog_pipeline
 
-    result = run_blog_pipeline(force=True, account_id=account_id)
+    sync_result = None
+    if automatic:
+        from .metadata_sync import run_lightweight_sync
+        sync_result = run_lightweight_sync(account_id)
+        if sync_result['status'] not in {'unavailable', 'no_changes'}:
+            completed = sync_result['status'] == 'completed'
+            return {
+                'submitted': completed, 'completed': completed, 'stream': {},
+                'reason': '' if completed else sync_result['reason'],
+                'metadata_sync': sync_result, 'mode': 'automatic',
+            }
+    result = run_blog_pipeline(force=not automatic, account_id=account_id)
     started = bool(result.get('started'))
     return {
         'submitted': started,
         'stream': {'id': result.get('stream_id') or ''} if started else {},
         'reason': '' if started else str(result.get('reason') or 'start_failed'),
         'blog_pipeline': result,
+        'metadata_sync': sync_result,
         'mode': 'automatic' if automatic else 'manual',
     }
 
@@ -8839,8 +8851,12 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
         deferred = not result.get('submitted') and reason in {
             'account_busy', 'run_in_flight', 'project_busy', 'not_due',
             'disabled', 'not_configured', 'stale_run_recovered',
+            'metadata_sync_busy', 'automatic_paused', 'daily_budget_exceeded',
+            'verification_pending', 'topic_rotation_disabled',
         }
-        if result.get('submitted'):
+        if result.get('completed'):
+            outcome = 'completed'
+        elif result.get('submitted'):
             outcome = 'submitted'
         elif reason == 'stale_run_recovered':
             outcome = 'recovered'
@@ -8861,10 +8877,12 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
             '' if result.get('submitted') or deferred else str(result.get('error') or reason)[:1000])
         keepalive.update({
             'last_submission_at': now if result.get('submitted') else keepalive.get('last_submission_at'),
-            'last_stream_id': result.get('stream', {}).get('id') or keepalive.get('last_stream_id'),
+            'last_stream_id': ('' if result.get('completed') else
+                               result.get('stream', {}).get('id') or keepalive.get('last_stream_id')),
             'last_status': final_status,
             'last_error': final_error,
             'last_reason': reason,
+            'last_metadata_sync': result.get('metadata_sync'),
             'history': history,
         })
         if not result.get('submitted'):
@@ -8904,7 +8922,7 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
             'stream_id': result.get('stream', {}).get('id') or '',
         },
     })
-    if result.get('submitted'):
+    if result.get('submitted') and not result.get('completed'):
         # A very short run can complete before last_stream_id is persisted.
         # Replay its durable result now that the Usage entry is bound to it.
         from .blog_pipeline import get_blog_pipeline_status
@@ -17071,7 +17089,7 @@ def _finalize_codex_stream_impl(stream_id, trigger_queue=True):
         )
     if stream.get('usage_operation') == 'blog_pipeline':
         try:
-            from .blog_pipeline import record_blog_pipeline_completion
+            from .blog_pipeline import record_blog_pipeline_completion, get_blog_pipeline_status
             record_blog_pipeline_completion(
                 stream.get('operation_metadata') or {},
                 succeeded=message_role == 'assistant',
@@ -17081,10 +17099,12 @@ def _finalize_codex_stream_impl(stream_id, trigger_queue=True):
         except Exception:
             _LOGGER.exception('Blog pipeline completion update skipped (stream_id=%s)', stream_id)
         try:
+            last_blog_result = ((get_blog_pipeline_status().get('state') or {}).get('last_result') or {})
+            validated = last_blog_result.get('run_id') == (stream.get('operation_metadata') or {}).get('run_id')
             _record_automatic_usage_blog_completion(
                 account_id, stream_id,
-                succeeded=message_role == 'assistant',
-                error=error if message_role != 'assistant' else '',
+                succeeded=(last_blog_result.get('status') == 'completed') if validated else message_role == 'assistant',
+                error=last_blog_result.get('error', '') if validated else (error if message_role != 'assistant' else ''),
                 token_usage=token_usage,
             )
         except Exception:

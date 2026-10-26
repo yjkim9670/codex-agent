@@ -1198,7 +1198,7 @@ function syncActiveSessionStatus() {
     syncResponseTimerForActiveSession();
 }
 
-function syncActiveSessionControls() {
+function syncActiveSessionControls({ refreshJobs = true } = {}) {
     const input = document.getElementById('codex-chat-input');
     const sendBtn = document.getElementById('codex-chat-send');
     const sessionId = state.activeSessionId;
@@ -1234,7 +1234,7 @@ function syncActiveSessionControls() {
         sendBtn.setAttribute('aria-label', label);
         sendBtn.setAttribute('title', label);
         const srLabel = sendBtn.querySelector('.sr-only');
-        if (srLabel) {
+        if (srLabel && srLabel.textContent !== label) {
             srLabel.textContent = label;
         }
     }
@@ -1246,7 +1246,7 @@ function syncActiveSessionControls() {
     if (worktreeToggle) {
         worktreeToggle.disabled = remoteBusy && !localBusy;
     }
-    renderRunningJobsMonitor();
+    if (refreshJobs) renderRunningJobsMonitor();
 }
 
 function appendTextToChatInput(text) {
@@ -2737,7 +2737,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         input.addEventListener('input', () => {
-            syncActiveSessionControls();
+            // Typing only changes Send/Queue/Stop. Job collection walks all sessions
+            // and rebuilds DOM (also triggering Windows font inspection). Keep it
+            // on job state changes and the existing one-second monitor ticker.
+            syncActiveSessionControls({ refreshJobs: false });
         });
     }
 
@@ -8143,9 +8146,8 @@ function setupMobileViewportBehavior(mobileMedia, input) {
         }, 720);
     });
     input.addEventListener('input', () => {
-        if (isMobileViewportBehaviorActive(mobileMedia.matches)) {
-            markMobilePromptKeyboardExpected();
-        }
+        if (!isMobileViewportBehaviorActive(mobileMedia.matches)) return;
+        markMobilePromptKeyboardExpected();
         handleViewportChange();
     });
 }

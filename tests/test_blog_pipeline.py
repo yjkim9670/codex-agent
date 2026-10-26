@@ -60,32 +60,27 @@ def test_usage_panel_advances_the_same_blog_pipeline(blog_environment, monkeypat
     assert state['in_flight']['stage'] == 'topic'
 
 
-@pytest.mark.parametrize('status, reason, calls_blog', [
-    ('no_changes', 'skipped_no_candidates', True),
-    ('unavailable', '', True),
-    ('completed', '', False),
-    ('failed', 'metadata_sync_failed', False),
-    ('deferred', 'metadata_sync_busy', False),
-])
-def test_automatic_blog_fallback_only_after_no_changes(blog_environment, monkeypatch, status, reason, calls_blog):
+@pytest.mark.parametrize('automatic', [True, False])
+def test_lightweight_tasks_only_run_blog(blog_environment, monkeypatch, automatic):
     from codex_agent.services import metadata_sync
+
+    monkeypatch.setattr(metadata_sync, 'preview', lambda: pytest.fail('Unexpected document inspection'))
+    monkeypatch.setattr(metadata_sync.subprocess, 'run', lambda *a, **kw: pytest.fail('Unexpected sync invocation'))
     calls = []
-    monkeypatch.setattr(metadata_sync, 'run_lightweight_sync', lambda _: {'status': status, 'reason': reason})
+
     def blog(**kwargs):
         calls.append(kwargs)
-        return {'started': True, 'stream_id': 'fallback-stream'}
+        return {'started': True, 'stream_id': 'blog-stream'}
+
     monkeypatch.setattr(blog_pipeline, 'run_blog_pipeline', blog)
-    result = codex_chat._run_usage_blog_pipeline('default', automatic=True)
-    assert bool(calls) == calls_blog
-    assert result['metadata_sync']['status'] == status
-    if calls_blog:
-        assert result['stream']['id'] == 'fallback-stream'
-        assert calls == [{'force': False, 'account_id': 'default'}]
-    else:
-        assert result['submitted'] == (status == 'completed')
+    result = codex_chat._run_usage_blog_pipeline('default', automatic=automatic)
+    assert calls == [{'force': not automatic, 'account_id': 'default'}]
+    assert result['submitted'] is True
+    assert result['stream']['id'] == 'blog-stream'
+    assert 'metadata_sync' not in result
 
 
-def test_document_completion_preserves_automatic_window_claim(blog_environment, monkeypatch):
+def test_blog_submission_preserves_automatic_window_claim(blog_environment, monkeypatch):
     snapshot_path = blog_environment / 'usage.json'
     snapshot = {'usage_keepalive': {'last_mode': 'automatic', 'last_status': 'queued',
                                   'automatic_cycle_targets': {'five_hour': 'reserved-window'}}}
@@ -94,14 +89,14 @@ def test_document_completion_preserves_automatic_window_claim(blog_environment, 
     monkeypatch.setattr(codex_chat, '_load_account_usage_snapshot', lambda _: snapshot)
     monkeypatch.setattr(codex_chat, '_record_automatic_usage_refresh_history', lambda *a: None)
     monkeypatch.setattr(codex_chat, '_run_usage_blog_pipeline', lambda *a, **kw: {
-        'submitted': True, 'completed': True, 'stream': {},
-        'metadata_sync': {'status': 'completed', 'run_id': 'docs-run'},
+        'submitted': True, 'stream': {'id': 'blog-stream'},
     })
     codex_chat._start_reserved_automatic_usage_blog('default')
     saved = json.loads(snapshot_path.read_text())['usage_keepalive']
-    assert saved['last_status'] == 'completed'
+    assert saved['last_status'] == 'submitted'
     assert saved['automatic_cycle_targets'] == {'five_hour': 'reserved-window'}
-    assert saved['last_metadata_sync']['run_id'] == 'docs-run'
+    assert saved['last_stream_id'] == 'blog-stream'
+    assert 'last_metadata_sync' not in saved
 
 
 def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, monkeypatch):

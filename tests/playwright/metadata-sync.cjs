@@ -7,8 +7,9 @@ exports.verifyMetadataSync = async (page, expect) => {
     await page.evaluate(() => document.fonts.ready);
     expect(await page.evaluate(() => document.fonts.check('400 14px Paperlogy'))).toBe(true);
     const main = await page.request.get(new URL('/', page.url()).toString());
-    expect(await main.text()).toContain('id="codex-metadata-sync-open" href="/metadata-sync"');
-    expect(await main.text()).toContain('TG Platform 문서 동기화');
+    const mainHtml = await main.text();
+    expect(mainHtml).not.toContain('id="codex-metadata-sync-open"');
+    expect(mainHtml).toContain('사용량 5시간 구간이 0%일 때 블로그 한 단계를 진행합니다.');
     await page.route('**/api/codex/metadata-sync/preview', route => route.fulfill({json: {
         generated_at_kst: '2026-10-26 12:00 KST', since_ref: 'abc123', changed_paths_count: 2,
         features: [{name: 'vcd', documents: ['metadata/vcd.md', '<script>window.unsafe = true</script>'], reasons: ['affected_scope', 'stale_translation']}],

@@ -73,7 +73,7 @@ including manual runs, by KST date. Token totals include cached input, so this
 is a processing budget rather than a monetary cost estimate. A running stage
 can exceed the remaining budget; later automatic runs are blocked.
 Manual immediate runs bypass the cadence and budgets but retain all locks.
-Pausing the blog does not pause TG Platform document synchronization.
+Pausing the blog pauses automatic lightweight tasks.
 
 Stage history includes prompt character count and the size of allowed files at
 submission. These help compare context size with actual input/cache/output
@@ -108,18 +108,11 @@ zero-window claim prevents another Workbench from submitting a second stage.
 Weekly usage is not an automatic trigger. A missing or disabled blog project
 does not reserve the window or make a model request.
 
-On a single-user Workbench with the TG Platform runner available, an automatic
-lightweight task checks documentation candidates first. With no candidates or
-immediate update reasons it advances one blog stage directly. Otherwise it runs
-the existing guarded daily documentation batch using the selected account's
-Codex home. A successful batch with an explicit empty `changes` list falls back
-to one blog stage; a batch that changes documents completes the task itself.
-Sync failures, unreadable results, and an active sync defer or fail the task
-without starting a blog stage. The account usage-window claim and existing
-cross-Workbench blog project claims remain in effect across this decision.
-The Usage panel's manual button and explicit blog API still run a blog stage.
-Internal multiuser deployments and installations without the TG runner retain
-the blog-only behavior. No scheduler is installed or changed by this routing.
+Automatic and manual lightweight tasks run only the blog pipeline, regardless
+of TG Platform runner availability or documentation candidates. They do not
+inspect or synchronize TG Platform documents. The standalone `/metadata-sync`
+page remains available for explicit manual documentation work. No external
+documentation scheduler is installed or changed by Workbench lightweight tasks.
 
 The pipeline never starts while the selected account already has an active
 Codex stream in the same process. A failed stage records a 30-minute retry time. Automatic submission continues

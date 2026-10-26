@@ -8750,17 +8750,6 @@ def _run_usage_blog_pipeline(account_id, automatic):
     """Start one blog stage and retain the legacy Usage-panel response shape."""
     from .blog_pipeline import run_blog_pipeline
 
-    sync_result = None
-    if automatic:
-        from .metadata_sync import run_lightweight_sync
-        sync_result = run_lightweight_sync(account_id)
-        if sync_result['status'] not in {'unavailable', 'no_changes'}:
-            completed = sync_result['status'] == 'completed'
-            return {
-                'submitted': completed, 'completed': completed, 'stream': {},
-                'reason': '' if completed else sync_result['reason'],
-                'metadata_sync': sync_result, 'mode': 'automatic',
-            }
     result = run_blog_pipeline(force=not automatic, account_id=account_id)
     started = bool(result.get('started'))
     return {
@@ -8768,7 +8757,6 @@ def _run_usage_blog_pipeline(account_id, automatic):
         'stream': {'id': result.get('stream_id') or ''} if started else {},
         'reason': '' if started else str(result.get('reason') or 'start_failed'),
         'blog_pipeline': result,
-        'metadata_sync': sync_result,
         'mode': 'automatic' if automatic else 'manual',
     }
 
@@ -8851,7 +8839,7 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
         deferred = not result.get('submitted') and reason in {
             'account_busy', 'run_in_flight', 'project_busy', 'not_due',
             'disabled', 'not_configured', 'stale_run_recovered',
-            'metadata_sync_busy', 'automatic_paused', 'daily_budget_exceeded',
+            'automatic_paused', 'daily_budget_exceeded',
             'verification_pending', 'topic_rotation_disabled',
         }
         if result.get('completed'):
@@ -8882,7 +8870,6 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
             'last_status': final_status,
             'last_error': final_error,
             'last_reason': reason,
-            'last_metadata_sync': result.get('metadata_sync'),
             'history': history,
         })
         if not result.get('submitted'):

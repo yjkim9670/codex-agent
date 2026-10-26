@@ -2525,6 +2525,13 @@ def run_git_action(action, payload=None):
 
         started_at = time.time()
         repo_root, error = _resolve_repo_root(repo_target)
+        # Header polling may run above the Workbench checkout in a directory
+        # that is not itself a repository. Resolve its read-only target here
+        # instead of making clients issue a failing request on every poll.
+        # Explicit targets and mutations must never silently switch repos.
+        if action == 'status' and str(payload.get('repo_target') or '').strip().lower() == 'auto' and error:
+            repo_target = _GIT_REPO_TARGET_CODEX_AGENT
+            repo_root, error = _resolve_repo_root(repo_target)
         if error:
             if action == 'history':
                 requested_remote, requested_branch, limit = _parse_history_request(payload)

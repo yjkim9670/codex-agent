@@ -7,7 +7,7 @@ function load(context, start, end) {
     assert.ok(offset >= 0 && source.indexOf(end, offset) > offset);
     vm.runInContext(source.slice(offset, source.indexOf(end, offset)), context);
 }
-function setup(parentMissing = true, bothMissing = false) {
+function setup(parentMissing = true, bothMissing = false, serverAuto = false) {
     const requests = [], notices = [], confirmations = [];
     let release;
     const pending = new Promise(resolve => { release = resolve; });
@@ -19,7 +19,7 @@ function setup(parentMissing = true, bothMissing = false) {
         GIT_PUSH_REQUEST_TIMEOUT_MS: 1000,
         gitMutationInFlight: false, gitBranchRepoTarget: 'workspace',
         gitBranchStatusInFlight: null, gitBranchStatusCache: { fetchedAt: 0 },
-        normalizeGitSyncRepoTarget: target => target,
+        normalizeGitSyncRepoTarget: target => target || 'workspace',
         normalizeGitChangedFilesCount: count => count,
         normalizeGitWindowsInvalidFiles: files => files || [],
         normalizeGitWindowsInvalidCount: (count = 0) => count,
@@ -41,6 +41,10 @@ function setup(parentMissing = true, bothMissing = false) {
             requests.push({ url, target });
             if (url.endsWith('/status')) {
                 await pending;
+                if (serverAuto && target === 'auto') {
+                    return { repo_target: parentMissing ? 'codex_agent' : 'workspace',
+                        branch: 'main', changed_files: ['tracked.txt'], changed_files_count: 1 };
+                }
                 if (parentMissing) throw new Error('not a git repository');
                 return { branch: 'main', changed_files: [{path: 'workspace.txt'}], changed_files_count: 1 };
             }
@@ -57,6 +61,20 @@ function setup(parentMissing = true, bothMissing = false) {
     return { context, requests, notices, confirmations, release };
 }
 (async () => {
+    for (const missing of [false, true]) {
+        const test = setup(missing, false, true);
+        test.release();
+        for (let poll = 0; poll < 3; poll++) {
+            const status = await test.context.fetchGitStatus(true);
+            assert.equal(status.repoTarget, missing ? 'codex_agent' : 'workspace');
+            assert.equal(status.isStale, false);
+        }
+        assert.equal(test.requests.length, 3);
+        assert.ok(test.requests.every(({url, target}) => url.endsWith('/status') && target === 'auto'));
+        await test.context.handleGitPush({});
+        assert.equal(test.requests.find(({url}) => url.endsWith('/push')).target,
+            missing ? 'codex_agent' : 'workspace');
+    }
     for (const action of ['handleGitQuickCommit', 'handleGitPush']) {
         for (const missing of [false, true]) {
             const test = setup(missing);

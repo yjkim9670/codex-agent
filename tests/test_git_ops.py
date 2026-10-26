@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -172,6 +174,43 @@ def test_header_branch_prefers_parent_workspace_repository(tmp_path, monkeypatch
     monkeypatch.setattr(git_ops, 'REPO_ROOT', workbench_repo)
 
     assert git_ops.get_current_branch_name() == workspace_branch
+
+
+@pytest.mark.parametrize('workspace_is_repo', [False, True])
+def test_git_status_api_auto_resolves_header_target(tmp_path, monkeypatch, workspace_is_repo):
+    # Test temp roots may live inside the real checkout. Do not let Git walk
+    # up to that repository when exercising an unversioned workspace.
+    monkeypatch.setenv('GIT_CEILING_DIRECTORIES', str(tmp_path))
+    workspace = tmp_path / 'workspace'
+    workbench = workspace / 'codex_workbench'
+    workspace.mkdir()
+    if workspace_is_repo:
+        _init_repo(workspace)
+        _commit_file(workspace, 'workspace.txt')
+    _init_repo(workbench)
+    _commit_file(workbench, 'workbench.txt')
+    monkeypatch.setattr(git_ops, 'WORKSPACE_DIR', workspace)
+    monkeypatch.setattr(git_ops, 'REPO_ROOT', workbench)
+    monkeypatch.setattr(codex_app, 'ensure_usage_snapshot_background_worker', lambda: None)
+    monkeypatch.setattr(codex_app, 'ensure_pending_queue_background_worker', lambda: None)
+    monkeypatch.setattr(codex_chat_blueprint, 'CODEX_ENABLE_GIT_API', True)
+    app = codex_app.create_codex_app()
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        # Each forced poll should succeed directly, without a failed probe.
+        for _ in range(3):
+            response = client.post('/api/codex/git/status', json={'repo_target': 'auto'})
+            assert response.status_code == 200
+            payload = response.get_json()
+            assert payload['repo_target'] == ('workspace' if workspace_is_repo else 'codex_agent')
+            assert Path(payload['repo_root']) == (workspace if workspace_is_repo else workbench)
+            assert payload['ok'] is True
+        if not workspace_is_repo:
+            # Explicit workspace reads and mutations must not switch targets.
+            for action, target in [('status', 'workspace'), ('stage', 'workspace'), ('stage', 'auto')]:
+                response = client.post(f'/api/codex/git/{action}', json={'repo_target': target})
+                assert response.status_code == 400
+                assert response.get_json()['error_code'] == 'repo_not_found'
 
 
 def test_git_status_decodes_korean_untracked_excel_filename(tmp_path, monkeypatch):

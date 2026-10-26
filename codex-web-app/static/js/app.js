@@ -26532,8 +26532,11 @@ async function fetchGitStatusOnce(force = false) {
     try {
         const result = await fetchJson('/api/codex/git/status', {
             method: 'POST',
-            timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS
+            headers: { 'Content-Type': 'application/json' },
+            timeoutMs: GIT_STATUS_REQUEST_TIMEOUT_MS,
+            body: JSON.stringify({ repo_target: 'auto' })
         });
+        const repoTarget = normalizeGitSyncRepoTarget(result?.repo_target);
         const count = normalizeGitChangedFilesCount(result?.changed_files_count);
         const branch = typeof result?.branch === 'string' ? result.branch : '';
         const remoteName = typeof result?.remote_name === 'string' ? result.remote_name : '';
@@ -26564,11 +26567,11 @@ async function fetchGitStatusOnce(force = false) {
             windowsInvalidCount,
             hasWindowsPathIssues,
             changedFiles,
-            repoTarget: GIT_SYNC_TARGET_WORKSPACE,
+            repoTarget,
             isStale: false,
             fetchedAt: Date.now()
         };
-        gitBranchRepoTarget = GIT_SYNC_TARGET_WORKSPACE;
+        gitBranchRepoTarget = repoTarget;
         return gitBranchStatusCache;
     } catch (error) {
         // A branch pill can legitimately be shown for the Workbench checkout
@@ -26622,8 +26625,8 @@ async function refreshGitBranchStatus({ force = false, updateOverlay = false } =
     }
     updateGitCommitButtonState(status);
     updateGitPushButtonState(status);
-    if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === GIT_SYNC_TARGET_WORKSPACE) {
-        const mergedWorkspaceSync = setGitSyncHistoryCache(GIT_SYNC_TARGET_WORKSPACE, {
+    if (isGitSyncOverlayOpen() && normalizeGitSyncRepoTarget(gitSyncOverlayRepoTarget) === status?.repoTarget) {
+        const mergedWorkspaceSync = setGitSyncHistoryCache(status.repoTarget, {
             remoteName: typeof status?.remoteName === 'string' ? status.remoteName : '',
             remoteMainRef: typeof status?.remoteRef === 'string' ? status.remoteRef : '',
             changedCount: getGitChangedFilesCountFromStatus(status),

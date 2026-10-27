@@ -11646,7 +11646,8 @@ body.is-work-mode-resizing * {
 
 .message-stream-indicator-bar {
     position: relative;
-    width: 30px;
+    --stream-indicator-travel: 30px;
+    width: var(--stream-indicator-travel);
     height: 4px;
     border-radius: var(--radius-pill);
     background: rgba(120, 141, 165, 0.24);
@@ -11666,14 +11667,18 @@ body.is-work-mode-resizing * {
 }
 
 @keyframes message-stream-indicator-move {
-    0% {
-        left: 0;
+    0%, 100% {
+        transform: translate(-4px, -50%);
     }
     50% {
-        left: 100%;
+        transform: translate(calc(var(--stream-indicator-travel) - 4px), -50%);
     }
-    100% {
-        left: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .message-stream-indicator-dot {
+        animation: none;
+        transform: translate(11px, -50%);
     }
 }
 

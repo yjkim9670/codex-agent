@@ -1129,6 +1129,32 @@ def company_credentials_test():
     return jsonify(result)
 
 
+def _usage_response_payload(usage, history=None):
+    """Keep legacy API detail by default; the UI opts into small polling payloads."""
+    if request.args.get('compact') != '1':
+        return {'usage': usage, **({'usage_history': history} if history is not None else {})}
+    compact_usage = dict(usage or {})
+    for key, omitted in (
+        ('usage_reconciliation', {'trend'}),
+        ('usage_events', {'recent'}),
+    ):
+        value = compact_usage.get(key)
+        if isinstance(value, dict):
+            compact_usage[key] = {k: v for k, v in value.items() if k not in omitted}
+    result = {'usage': compact_usage}
+    if history is not None:
+        result['usage_history'] = {
+            k: v for k, v in history.items() if k not in {'items', 'chart_items'}
+        }
+        calibration = history.get('calibration')
+        if isinstance(calibration, dict):
+            result['usage_history']['calibration'] = {
+                k: v for k, v in calibration.items() if k != 'recent'
+            }
+        result['usage_history']['is_summary'] = True
+    return result
+
+
 @bp.route('/api/codex/settings')
 def codex_settings():
     ensure_usage_snapshot_background_worker()
@@ -1151,7 +1177,7 @@ def codex_settings():
         'execution_policy_presets': get_execution_policy_presets(),
         'structured_report_presets': list_structured_report_presets(),
         'app_server_status': get_codex_app_server_status(),
-        'usage': usage,
+        **_usage_response_payload(usage),
         'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'security_policy': get_codex_security_policy(),
@@ -1169,8 +1195,10 @@ def codex_usage():
     if not isinstance(usage, dict):
         usage = get_usage_summary()
     return jsonify({
-        'usage': usage,
-        'usage_history': get_usage_history_summary(),
+        **_usage_response_payload(usage, get_usage_history_summary(
+            hours=request.args.get('hours'),
+            scope=request.args.get('scope'),
+        )),
         'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'feature_flags': {
@@ -1193,12 +1221,11 @@ def codex_usage_refresh():
     hours = payload.get('hours')
     scope = payload.get('scope')
     response = {
-        'usage': usage,
-        'usage_history': get_usage_history_summary(
+        **_usage_response_payload(usage, get_usage_history_summary(
             hours=hours,
             scope=scope,
             account_id=account_id,
-        ),
+        )),
         'accounts': get_codex_accounts_summary(),
         'session_storage': get_session_storage_summary(),
         'feature_flags': {

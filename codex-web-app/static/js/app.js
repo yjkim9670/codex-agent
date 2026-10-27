@@ -9620,7 +9620,7 @@ async function loadSettings({ silent = true } = {}) {
     const refreshBtn = document.getElementById('codex-controls-refresh');
     if (refreshBtn) refreshBtn.classList.add('is-loading');
     try {
-        const result = await fetchJson('/api/codex/settings');
+        const result = await fetchJson('/api/codex/settings?compact=1');
         const modelCatalog = normalizeModelCatalog(result?.model_catalog);
         const modelCatalogsByBackend = normalizeModelCatalogsByBackend(result?.model_catalogs_by_agent_backend);
         if (!modelCatalogsByBackend.dtgpt && modelCatalog.length > 0) {
@@ -9722,9 +9722,13 @@ async function refreshUsageSummary({
     forceAccountRefresh = false
 } = {}) {
     try {
-        const requestUrl = forceAccountRefresh
-            ? '/api/codex/usage/refresh'
-            : '/api/codex/usage';
+        const includeHistory = isUsageHistoryOverlayOpen();
+        const query = new URLSearchParams({
+            compact: includeHistory ? '0' : '1',
+            hours: String(usageHistoryLastRequestedHours),
+            scope: usageHistoryLastRequestedScope
+        });
+        const requestUrl = `${forceAccountRefresh ? '/api/codex/usage/refresh' : '/api/codex/usage'}?${query}`;
         const requestOptions = forceAccountRefresh
             ? {
                 method: 'POST',
@@ -9745,7 +9749,11 @@ async function refreshUsageSummary({
             state.settings.usageLimitsEnabled !== false
         );
         state.settings.usage = usage;
-        state.settings.usageHistory = usageHistory;
+        // A compact poll started before the chart opened must not replace
+        // the detailed history loaded by the overlay in the meantime.
+        if (!usageHistory?.is_summary || !isUsageHistoryOverlayOpen()) {
+            state.settings.usageHistory = usageHistory;
+        }
         if (result?.accounts) {
             applyCodexAccountsSummary(result.accounts);
         }
@@ -9755,7 +9763,7 @@ async function refreshUsageSummary({
         }
         updateUsageSummary(usage);
         updateRenderedLimitUsageEstimates();
-        if (forceAccountRefresh && isUsageHistoryOverlayOpen()) {
+        if (includeHistory && isUsageHistoryOverlayOpen() && !usageHistory?.is_summary) {
             renderUsageHistoryOverlay(
                 usageHistory,
                 normalizeUsageHistoryRangeHours(usageHistoryLastRequestedHours)
@@ -9777,7 +9785,10 @@ async function refreshUsageSummary({
         const fallback = error?.payload;
         if (fallback?.usage) {
             state.settings.usage = fallback.usage;
-            state.settings.usageHistory = fallback.usage_history || state.settings.usageHistory;
+            if (fallback.usage_history
+                && (!fallback.usage_history.is_summary || !isUsageHistoryOverlayOpen())) {
+                state.settings.usageHistory = fallback.usage_history;
+            }
             if (fallback?.accounts) applyCodexAccountsSummary(fallback.accounts);
             updateUsageSummary(fallback.usage);
             updateRenderedLimitUsageEstimates();
@@ -9894,8 +9905,9 @@ function updateUsageSummary(usage) {
     const keepaliveHistoryButton = document.getElementById('codex-usage-keepalive-history-open');
     const keepaliveStatus = document.getElementById('codex-usage-keepalive-status');
     if (historyButton) {
-        const hasHistory = Array.isArray(state.settings?.usageHistory?.items)
-            && state.settings.usageHistory.items.length > 1;
+        const hasHistory = Number(state.settings?.usageHistory?.count) > 1
+            || (Array.isArray(state.settings?.usageHistory?.items)
+                && state.settings.usageHistory.items.length > 1);
         historyButton.classList.toggle('is-hidden', !showUsageLimits);
         historyButton.classList.toggle('is-ready', hasHistory);
     }
@@ -27567,7 +27579,7 @@ function renderSessions() {
     if (primaryList) {
         targets.push({ list: primaryList, closeOverlayOnSelect: false });
     }
-    if (mobileOverlayList) {
+    if (mobileOverlayList && isMobileSessionOverlayOpen()) {
         targets.push({ list: mobileOverlayList, closeOverlayOnSelect: true });
     }
     if (targets.length === 0) return;
@@ -27645,9 +27657,9 @@ function openMobileSessionOverlay() {
     if (isUsageHistoryOverlayOpen()) {
         closeUsageHistoryOverlay();
     }
-    renderSessions();
     elements.overlay.classList.add('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'false');
+    renderSessions();
     const trigger = document.getElementById('codex-chat-title');
     if (trigger) {
         trigger.setAttribute('aria-expanded', 'true');
@@ -27660,6 +27672,7 @@ function closeMobileSessionOverlay() {
     if (!elements) return;
     elements.overlay.classList.remove('is-visible');
     elements.overlay.setAttribute('aria-hidden', 'true');
+    elements.list?.replaceChildren();
     const trigger = document.getElementById('codex-chat-title');
     if (trigger) {
         trigger.setAttribute('aria-expanded', 'false');

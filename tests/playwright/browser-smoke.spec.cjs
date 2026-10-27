@@ -29,6 +29,9 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_RESOURCE_USAGE === '1') {
+        await require('./resource-usage.cjs').verifyResourceUsage(page, expect);
+    }
     if (process.env.CODEX_VERIFY_FONT_SETTINGS === '1') {
         await require('./font-settings.cjs').verifyFontSettings(page, expect);
     }

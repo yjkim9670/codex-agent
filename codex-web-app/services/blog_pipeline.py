@@ -41,11 +41,28 @@ _RETRY_DELAY_MINUTES = 30
 _MAX_RUN_HISTORY = 512
 _MAX_PROJECT_TEXT = 12000
 _DEFAULT_TOPIC_ROTATION_SEEDS = (
-    '바쁜 일상에서도 무너지지 않는 한 주 계획 세우기',
-    '집중이 자주 끊길 때 다시 업무에 몰입하는 방법',
-    '작은 지출을 부담 없이 점검하는 월간 습관',
-    '가족·동료와 오해 없이 부탁하고 답하는 대화법',
-    '새로운 습관을 오래 유지하기 위한 환경 만들기',
+    '이상하지만 쓸모 있는 발견: 뜻밖의 발명·연구·도구와 일상의 연결',
+    '사라진 미래 박물관: 한때 미래라고 믿었던 발명과 생활 방식',
+    '인터넷의 숨은 문 하나: 직접 둘러볼 수 있는 디지털 박물관·자료실·프로젝트',
+    '세상은 이 문제를 어떻게 풀까: 다른 도시와 사람들이 찾은 색다른 해결책',
+)
+_DEFAULT_TOPIC_DIRECTION = (
+    '오늘의 뜻밖 — 매일 하나, 알고 나면 세상이 조금 다르게 보이는 발견. '
+    '이상한 발명·숨은 웹사이트·잊힌 미래·색다른 해결책을 고루 소개한다. '
+    '단순한 신기한 사실을 넘어 내 생활과의 연결을 설명한다. '
+    '최신 소식과 오래된 자료 속 발견을 함께 다루되, 오래된 자료를 새 소식처럼 소개하지 않는다. '
+    '검색으로 확인할 수 있는 구체적인 사례와 독자가 직접 열어볼 원문 링크를 고른다.'
+)
+_DEFAULT_STYLE_GUIDE = (
+    '친근하게 새로운 것을 알려주는 자연스러운 해요체를 쓴다. '
+    '“이런 곳이 있다는 거, 알고 계셨나요?”, “직접 둘러보면 더 재미있어요”처럼 '
+    '독자에게 말을 건네되 같은 도입과 끝맺음을 매번 반복하지 않는다. '
+    '딱딱한 보고서체, 훈계, 과장, 낚시성 제목, 과도한 감탄사와 이모지는 피한다. '
+    '짧은 문단과 쉬운 낱말을 쓰고 낯선 개념은 일상의 예로 풀어준다. '
+    '글은 “오늘의 발견 → 뜻밖의 포인트 → 우리와의 연결 → 직접 보기” 순서로 구성한다. '
+    '관찰과 해석을 구분하고, 확인되지 않은 수치·인용·체험담·출처를 만들지 않는다. '
+    '검색으로 공식 기관·원문 자료를 읽고 사실을 확인한다. 자료의 발표·제작 시점을 밝히고 '
+    '주요 주장 가까이에 근거 링크를, “직접 보기”에는 설명이 붙은 원문 링크를 제공한다.'
 )
 # Topic exclusions are optional and follow the project direction. Bound Latin
 # abbreviations to Latin letters so 'daily' is allowed and 'ChatGPT로' is caught.
@@ -150,18 +167,18 @@ def _project_defaults():
     return {
         'version': 1,
         'project_id': 'main-blog',
-        'name': 'Main blog',
+        'name': '오늘의 뜻밖',
         'enabled': False,
         'automatic_paused': False,
         'pipeline_mode': 'compact',
-        'topic_direction': '일상과 업무에 도움이 되는 실용적인 주제',
+        'topic_direction': _DEFAULT_TOPIC_DIRECTION,
         'exclude_ai_topics': False,
         'daily_run_budget': 6,
         'daily_token_budget': 300000,
         'language': '한국어',
-        'audience': '',
-        'style_guide': '',
-        'allow_web_research': False,
+        'audience': '특별한 전문 지식 없이도 매일 새로운 발견을 만나고 싶은 한국어 독자',
+        'style_guide': _DEFAULT_STYLE_GUIDE,
+        'allow_web_research': True,
         'cadence_minutes': _DEFAULT_CADENCE_MINUTES,
         'model': '',
         'reasoning_effort': 'low',
@@ -490,6 +507,7 @@ def _build_prompt(project, state):
         f'Project language: {project.get("language")}.\n'
         f'Topic direction: {project.get("topic_direction")}.\n'
         f'Audience: {project.get("audience")}. Follow the project style guide.\n'
+        f'Style guide: {project.get("style_guide")}.\n'
         f'Active post: {post_id}.\n'
         f'Current topic: {state.get("active_topic")}.\n\n'
         'Allowed files for this stage:\n'
@@ -516,7 +534,10 @@ def _build_prompt(project, state):
             f'Create {post_prefix}/plan.json with title (string) and needs_research (boolean). '
             f'Create {post_prefix}/brief.md with reader problem, key claims and evidence; '
             f'create {post_prefix}/outline.md with a concise structure. Target 300-500 words. '
-            'Set needs_research=true only when external evidence is necessary. '
+            'Set needs_research=true when external evidence is necessary, including '
+            'articles introducing real discoveries, inventions, studies, websites, historical '
+            'artifacts or solutions. These require source research before drafting even '
+            'when the material is old or familiar. '
             'Do not invent sources. Do not write the article yet.'
         )
     elif stage == 'brief':

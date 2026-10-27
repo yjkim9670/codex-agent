@@ -632,7 +632,7 @@ def test_unchanged_outputs_fail_on_retry(blog_environment, monkeypatch):
 
 
 def test_research_needed_without_web_stays_pending(blog_environment, monkeypatch):
-    run = _compact_start(blog_environment, monkeypatch)
+    run = _compact_start(blog_environment, monkeypatch, allow_web_research=False)
     status = _complete_stage(blog_environment, run, {'plan.json':'{"title":"자료 조사 글","needs_research":true}','brief.md':'기획','outline.md':'구성'})
     assert status['state']['stage'] == 'research'
     assert status['state']['last_error'] == 'verification_pending: web_research_disabled'

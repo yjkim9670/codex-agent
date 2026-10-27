@@ -11,16 +11,18 @@ curl -X PUT http://127.0.0.1:5000/api/codex/blog \
   -H 'Content-Type: application/json' \
   -d '{
     "project_id": "main-blog",
-    "name": "My technical blog",
+    "name": "오늘의 뜻밖",
+    "topic_direction": "이상한 발명·숨은 웹사이트·잊힌 미래·색다른 해결책과 일상의 연결",
+    "allow_web_research": true,
     "enabled": true,
     "language": "한국어",
-    "audience": "개발자가 아닌 실무자도 이해할 수 있는 설명",
-    "style_guide": "짧은 문단, 과장 없는 제목, 예시는 실제로 검증 가능한 것만 사용",
+    "audience": "매일 새로운 발견을 만나고 싶은 한국어 독자",
+    "style_guide": "친근한 해요체. 오늘의 발견 → 뜻밖의 포인트 → 우리와의 연결 → 직접 보기. 사실 확인과 설명이 붙은 원문 링크.",
     "cadence_minutes": 360,
     "reasoning_effort": "low",
     "backlog": [
-      "첫 번째 글의 주제",
-      "두 번째 글의 주제"
+      "우주 기술이 일상의 도구가 된 사례",
+      "직접 둘러볼 수 있는 디지털 자료실"
     ]
   }'
 ```
@@ -57,6 +59,15 @@ Review requires `review.md`, `final.md`, and `review.json` with
 `{"verified": true, "pending_claims": []}`. Unsupported claims leave the article
 waiting for verification. Recent titles are retained in `continuity.json` to
 help avoid repeated topics; review prompts also check structure and phrasing.
+
+New project defaults follow **오늘의 뜻밖**: unusual inventions, hidden websites,
+forgotten futures and creative solutions, each connected to everyday life.
+The voice uses friendly Korean 해요체, short paragraphs and simple explanations.
+Articles follow 오늘의 발견 → 뜻밖의 포인트 → 우리와의 연결 → 직접 보기,
+with evidence links and dates that distinguish old material from recent news.
+Web research is enabled by default. Discovery articles need research before drafting;
+allowing web access does not itself verify facts or guarantee a daily publication.
+Existing projects retain their saved settings until explicitly updated.
 
 `topic_direction`, `audience` and `style_guide` control editorial direction.
 Existing projects without `topic_direction` use their audience as the initial

@@ -21,6 +21,10 @@ test('browser UI smoke check', async ({ page }) => {
         }));
     }
 
+    if (process.env.CODEX_VERIFY_BLOG === '1') {
+        await require('./blog.cjs').setupBlog(page);
+    }
+
     const response = await page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
@@ -78,6 +82,9 @@ test('browser UI smoke check', async ({ page }) => {
     }
     if (process.env.CODEX_VERIFY_METADATA_SYNC === '1') {
         await require('./metadata-sync.cjs').verifyMetadataSync(page, expect);
+    }
+    if (process.env.CODEX_VERIFY_BLOG === '1') {
+        await require('./blog.cjs').verifyBlog(page, expect);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

@@ -14,10 +14,16 @@ sys.path.insert(0, str(ROOT))
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Workbench Chat (personal Codex, loopback only)')
-    parser.add_argument('--host', choices=['127.0.0.1', 'localhost'], default='127.0.0.1')
+    parser = argparse.ArgumentParser(description='Workbench Chat (personal Codex)')
+    parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=3101)
+    parser.add_argument('--allowed-host', action='append', default=[], help='Additional exact hostname allowed in Host')
+    parser.add_argument('--allowed-network', action='append', default=[], help='Additional client CIDR allowed to connect')
     args = parser.parse_args()
+    if args.allowed_host:
+        os.environ['CHAT_ALLOWED_HOSTS'] = ','.join(args.allowed_host)
+    if args.allowed_network:
+        os.environ['CHAT_ALLOWED_NETWORKS'] = ','.join(args.allowed_network)
     def terminate(signum, frame):
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, terminate)

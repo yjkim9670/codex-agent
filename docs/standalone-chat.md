@@ -5,12 +5,12 @@
 ## 실행과 등록
 
 - Proc Manager job: `Workbench Chat - conversation server`
-- 주소: `http://127.0.0.1:3101`
+- 로컬 주소: `http://127.0.0.1:3101`; Tailscale 외부 주소: `http://dinya.wind-mintaka.ts.net:3101`
 - 등록 payload: `ops/workbench-chat.job.json`; 실제 확인 기록: `ops/workbench-chat.registration.json`
 - 등록 결과: **idx 16 / STOPPED / PID 없음**, 기존 16개 job의 설정·상태·PID는 최초 snapshot과 동일하다.
-- 등록 명령에는 `--host`를 두지 않고 launcher의 `127.0.0.1` 기본값을 사용한다. Proc Manager의 Chat 전용 분류는 loopback Open URL을 유지한다. 대시보드에서는 **Codex Workbench 그룹의 마지막 항목**에 보라색으로 표시한다. 이 Proc Manager 변경은 사용자가 Proc Manager Web을 재시작한 뒤 적용된다.
+- 외부 접속용 등록 payload는 `--host 0.0.0.0 --allowed-host dinya.wind-mintaka.ts.net --allowed-network 100.64.0.0/10`을 지정한다. `open_url`은 로컬 기준으로 두고 Proc Manager의 공통 링크 정책을 사용한다. HTTP 대시보드는 현재 접속 호스트의 3101 포트로, HTTPS 대시보드는 기존 Funnel 링크가 있으면 그 링크로 연다. 대시보드의 **Codex Workbench 그룹 마지막·보라색 표시**는 유지한다.
 - **최초 시작·재시작은 사용자 수행.** 등록은 start/restart API를 호출하지 않는다. `auto_start: true`는 다음 Proc Manager 자동 시작 때 함께 실행하려는 설정이다. `restart_on_exit: false`다.
-- 같은 PC의 브라우저 또는 사용자가 구성한 SSH 포트 전달로 접근한다. 이번 버전은 loopback 전용이며 LAN·tailnet 직접 bind를 제공하지 않는다.
+- 옵션 없이 실행하면 기존대로 loopback 전용이다. 외부 접속은 명시한 호스트와 클라이언트 CIDR을 모두 만족해야 한다. 허용 CIDR에 속하는 IP 리터럴 주소도 Host로 허용한다. 현재 payload는 Tailscale 클라이언트만 추가 허용하며 LAN·공인 인터넷 직접 요청은 차단한다. `X-Forwarded-For`로 접속 권한을 부여하지 않는다. 기존 same-origin·CSRF 검사를 유지한다. 공용 Funnel을 새로 등록하거나 인증 설정을 변경하지 않는다.
 - 명령: `bash run_conversation_server.sh --host 127.0.0.1 --port 3101`
 - Python 3.11 이상, 설치된 Flask가 필요하다. 등록 job은 검증한 `/opt/homebrew/bin/python3.14`를 지정한다.
 - Proc Manager가 `HOME=/Users/dinya/works`로 실행해도 launcher는 OS 로그인 홈의 Python 사용자 패키지를 찾는다. macOS framework Python은 `~/Library/Python/<version>`을 `PYTHONUSERBASE`로 설정하며, 명시적으로 지정한 `PYTHONUSERBASE`는 유지한다. `PYTHONPATH`를 Workbench에서 상속받지 않아도 동작한다.
@@ -73,3 +73,13 @@ Chat은 자신의 SQLite outbox만 갱신한다. 기존 Workbench 수집기가 �
 - Chromium 360/768/1440px: 글꼴 8종 실제 로딩, IME, 전송, Markdown/XSS, 초안·설정 복원, drawer·접근성 초점, 가로 넘침 없음.
 - 기존 `test_codex_chat_streams.py`: 337 통과, 24 실패. 변경 전 HEAD를 별도 디렉터리에서 검증해 동일한 실패 24개를 확인했다. 오래된 날짜 fixture 및 subprocess Python 버전 probe mock 관련 기존 문제이며 이번 변경에서 새로 발생한 실패는 없다.
 - 운영 Chat 서버·기존 서버·Proc Manager의 시작/종료/재시작 API는 호출하지 않았다. 모델 검증용 Codex 자식 프로세스와 로컬 요청 캡처용 임시 서버는 테스트 종료 시 정리했다.
+
+## 외부 링크 수정 적용
+
+- Workbench 소스 변경과 외부 접속용 payload는 이 체크아웃에만 작성한다.
+- 사용자 승인 후 `/Users/dinya/works/proc_manager_web.py`의 Chat 전용 로컬 주소 고정 예외 두 곳과 `/Users/dinya/works/test_proc_manager_chat.py`의 기대값을 수정했다. `ops/proc-manager-chat-external.patch`와 `ops/proc-manager-chat-external-tests.patch`는 적용 내역 참고용이며 재적용하지 않는다.
+- 패치 적용과 Chat job 명령 갱신 후 사용자가 **Proc Manager Web**, **Workbench Chat - conversation server**를 재시작해야 반영된다. `ops/workbench-chat.registration.json`은 이전 등록 시점의 기록이며 현재 프로세스 상태로 해석하지 않는다.
+
+- 이전 검증: 서버·launcher·패치 회귀 테스트 11개 통과. 임시 Flask 서버(33109)의 실제 채팅 화면과 패치에서 추출한 링크 함수를 지정 Chromium runner로 검증했다.
+- 승인 후 적용 검증: Proc Manager 분류·인증 테스트 39개와 설치된 소스를 읽는 외부 링크 회귀 테스트 2개 통과. 임시 서버에서 실제 링크 함수로 생성한 링크를 지정 Chromium runner로 한 번 검증해 로컬·외부 도메인·Tailscale IP·HTTPS 기본 링크·HTTPS Funnel 링크 선택을 확인했다. 임시 서버는 정리했으며 운영 프로세스는 재시작하지 않았다.
+- Chat job 16의 명령은 지원 API(`PUT /api/tasks/16`)로 외부 접속용 payload와 일치하도록 갱신했다. 갱신 전후 RUNNING/PID 25915가 유지됐으며 다른 job의 명령·URL·플래그·상태·PID도 동일했다. 시작·정지·재시작 API는 호출하지 않았다.

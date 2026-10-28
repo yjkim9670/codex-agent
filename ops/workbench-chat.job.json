@@ -2,7 +2,7 @@
   "name": "Workbench Chat - conversation server",
   "workdir": "/Users/dinya/works/dev_workspace/codex_workbench",
   "commands": [
-    "CHAT_PYTHON_BIN=/opt/homebrew/bin/python3.14 CHAT_CODEX_BIN=/opt/homebrew/bin/codex /bin/bash run_conversation_server.sh --port 3101"
+    "CHAT_PYTHON_BIN=/opt/homebrew/bin/python3.14 CHAT_CODEX_BIN=/opt/homebrew/bin/codex /bin/bash run_conversation_server.sh --port 3101 --host 0.0.0.0 --allowed-host dinya.wind-mintaka.ts.net --allowed-network 100.64.0.0/10"
   ],
   "auto_start": true,
   "sequential": true,

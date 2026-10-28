@@ -1,6 +1,7 @@
-"""Standalone loopback-only personal conversation service."""
+"""Standalone personal conversation service with explicit network access rules."""
 import atexit
 import json
+import ipaddress
 import os
 from pathlib import Path
 import secrets
@@ -29,6 +30,10 @@ def create_app(data_dir=None, provider=None):
             pass
     app.config.update(SECRET_KEY=secret_file.read_text(), SESSION_COOKIE_NAME='workbench_chat_session',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict', MAX_CONTENT_LENGTH=1024 * 1024)
+    allowed_hosts = {'localhost', '127.0.0.1', '::1'} | {
+        host.strip().lower() for host in os.environ.get('CHAT_ALLOWED_HOSTS', '').split(',') if host.strip()}
+    allowed_networks = [ipaddress.ip_network(cidr.strip()) for cidr in
+                        ('127.0.0.0/8,::1/128,' + os.environ.get('CHAT_ALLOWED_NETWORKS', '')).split(',') if cidr.strip()]
     engine = provider or Provider(root)
     jobs, lock = {}, threading.Lock()
     slots = threading.BoundedSemaphore(2)
@@ -36,8 +41,20 @@ def create_app(data_dir=None, provider=None):
 
     @app.before_request
     def protect():
-        # Loopback plus strict Host guards against DNS rebinding and LAN access.
-        if request.remote_addr not in ('127.0.0.1', '::1') or request.host.split(':')[0] not in ('localhost', '127.0.0.1'):
+        # Check the socket peer and exact Host; forwarded headers grant no access.
+        try:
+            peer = ipaddress.ip_address(request.remote_addr)
+            host = urlsplit(request.host_url).hostname.lower()
+        except (ValueError, AttributeError):
+            abort(403)
+        host_allowed = host in allowed_hosts
+        if not host_allowed:
+            try:
+                address = ipaddress.ip_address(host)
+                host_allowed = any(address in network for network in allowed_networks)
+            except ValueError:
+                pass
+        if not host_allowed or not any(peer in network for network in allowed_networks):
             abort(403)
         if request.method in ('POST', 'PATCH', 'DELETE'):
             origin = request.headers.get('Origin')

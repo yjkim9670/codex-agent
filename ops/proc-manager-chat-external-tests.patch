@@ -1,0 +1,21 @@
+--- test_proc_manager_chat.py
++++ test_proc_manager_chat.py
+@@ -1,5 +1,6 @@
+ """Chat classification must not enable Workbench source sync or bind rewrites."""
+ import unittest
++from unittest import mock
+ import proc_manager_web as pm
+ 
+ 
+@@ -22,8 +23,9 @@
+         self.assertEqual(pm.ProcManager._sequence_priority(self.task),
+                          pm.TASK_GROUP_SEQUENCE_PRIORITY['codex_agent'])
+ 
+-    def test_local_chat_link_is_not_replaced_with_tailnet(self):
+-        self.assertEqual(pm.ProcManager._task_open_url(self.task), 'http://127.0.0.1:3101')
++    def test_chat_link_uses_common_tailnet_resolution(self):
++        with mock.patch.object(pm, 'TAILSCALE_HOSTNAME', 'chat.example.ts.net'):
++            self.assertEqual(pm.ProcManager._task_open_url(self.task), 'http://chat.example.ts.net:3101')
+ 
+     def test_regular_workbench_keeps_its_kind(self):
+         self.task.commands = ['bash run_codex_chat_server.sh --port 3000']

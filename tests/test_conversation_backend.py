@@ -179,3 +179,50 @@ def test_entrypoint_uses_loopback_without_host_flag(tmp_path, monkeypatch):
     assert called[0]['host'] == '127.0.0.1'
     assert called[0]['port'] == 3101
     assert not called[0]['debug'] and not called[0]['use_reloader']
+
+
+def test_explicit_tailnet_access_preserves_host_origin_and_csrf(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHAT_ALLOWED_HOSTS', 'chat.example.ts.net')
+    monkeypatch.setenv('CHAT_ALLOWED_NETWORKS', '100.64.0.0/10')
+    app = server.create_app(tmp_path, FakeProvider())
+    client = app.test_client()
+    base = 'http://chat.example.ts.net:3101'
+    peer = {'REMOTE_ADDR': '100.80.1.2'}
+    assert client.get('/', base_url=base, environ_overrides=peer).status_code == 200
+    with client.session_transaction(base_url=base) as session:
+        csrf = session['csrf']
+    headers = {'X-Chat-CSRF': csrf, 'Origin': base}
+    assert client.post('/api/conversations', base_url=base, environ_overrides=peer,
+                       json={}, headers=headers).status_code == 200
+    assert client.get('/health', base_url='http://100.80.1.1:3101', environ_overrides=peer).status_code == 200
+    assert client.get('/health', base_url='http://192.168.1.1:3101', environ_overrides=peer).status_code == 403
+    for bad_peer in ('192.168.1.2', '203.0.113.2'):
+        assert client.get('/health', base_url=base,
+                          environ_overrides={'REMOTE_ADDR': bad_peer}).status_code == 403
+    assert client.get('/health', base_url='http://evil.test:3101', environ_overrides=peer).status_code == 403
+    assert client.get('/health', base_url=base, environ_overrides={'REMOTE_ADDR': '203.0.113.2'},
+                      headers={'X-Forwarded-For': '100.80.1.2'}).status_code == 403
+    assert client.post('/api/conversations', base_url=base, environ_overrides=peer,
+                       json={}, headers={**headers, 'Origin': 'http://evil.test'}).status_code == 403
+    assert client.post('/api/conversations', base_url=base, environ_overrides=peer,
+                       json={}, headers={'Origin': base}).status_code == 403
+    assert client.get('/health').status_code == 200
+
+
+def test_entrypoint_accepts_explicit_external_access(tmp_path, monkeypatch):
+    from flask import Flask
+    spec = importlib.util.spec_from_file_location('chat_external_entrypoint', ROOT / 'run_conversation_server.py')
+    entry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entry)
+    called = []
+    monkeypatch.setenv('CHAT_DATA_DIR', str(tmp_path))
+    monkeypatch.delenv('CHAT_ALLOWED_HOSTS', raising=False)
+    monkeypatch.delenv('CHAT_ALLOWED_NETWORKS', raising=False)
+    monkeypatch.setattr(sys, 'argv', ['run_conversation_server.py', '--host', '0.0.0.0',
+                                    '--allowed-host', 'chat.example.ts.net',
+                                    '--allowed-network', '100.64.0.0/10'])
+    monkeypatch.setattr(Flask, 'run', lambda self, **kwargs: called.append(kwargs))
+    entry.main()
+    assert called[0]['host'] == '0.0.0.0'
+    assert entry.os.environ['CHAT_ALLOWED_HOSTS'] == 'chat.example.ts.net'
+    assert entry.os.environ['CHAT_ALLOWED_NETWORKS'] == '100.64.0.0/10'

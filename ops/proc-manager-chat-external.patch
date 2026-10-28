@@ -1,0 +1,21 @@
+--- proc_manager_web.py
++++ proc_manager_web.py
+@@ -18962,8 +18962,6 @@
+ 
+     @staticmethod
+     def _task_open_url(task: Task) -> str:
+-        if _is_workbench_chat_job(task.name, task.workdir, task.commands):
+-            return task.open_url or "http://127.0.0.1:3101"
+         if _is_code_server_job(task.name, task.workdir, task.commands):
+             return _normalize_code_server_open_url(task.open_url or CODE_SERVER_HTTPS_URL)
+         if _is_nba_scoreboard_job(task.name, task.workdir, task.commands):
+@@ -26517,9 +26515,6 @@
+     }
+ 
+     function shouldUseCurrentHostUrl(task, configuredUrl) {
+-      if (task?.kind === "codex_chat") {
+-        return false;
+-      }
+       if (window.location.protocol !== "http:") {
+         return false;
+       }

@@ -9,6 +9,7 @@ import threading
 from urllib.parse import urlsplit
 
 from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory, session, stream_with_context
+from werkzeug.exceptions import HTTPException
 from shared.chat_accounts import accounts, get_account
 from services.conversations import Store, TERMINAL
 from services.codex_provider import Provider
@@ -54,14 +55,47 @@ def create_app(data_dir=None, provider=None):
                 host_allowed = any(address in network for network in allowed_networks)
             except ValueError:
                 pass
-        if not host_allowed or not any(peer in network for network in allowed_networks):
-            abort(403)
+        if not host_allowed:
+            abort(403, description='host_not_allowed')
+        if not any(peer in network for network in allowed_networks):
+            abort(403, description='network_not_allowed')
         if request.method in ('POST', 'PATCH', 'DELETE'):
             origin = request.headers.get('Origin')
-            if origin and origin != request.host_url.rstrip('/'):
-                abort(403)
+            valid_origins = {request.host_url.rstrip('/')}
+            # The local gateway terminates TLS and rewrites Host to loopback.
+            # Forwarding metadata only adjusts the Origin check, never access
+            # control; remote peers cannot use it to impersonate the gateway.
+            if peer.is_loopback:
+                forwarded_host = request.headers.get('X-Forwarded-Host', '')
+                forwarded_proto = request.headers.get('X-Forwarded-Proto', '')
+                if forwarded_proto in ('http', 'https') and forwarded_host:
+                    forwarded_origin = f'{forwarded_proto}://{forwarded_host}'
+                    try:
+                        parsed = urlsplit(forwarded_origin)
+                        parsed.port
+                        if (parsed.hostname and parsed.netloc == forwarded_host
+                                and not parsed.username and not parsed.password
+                                and not parsed.path and not parsed.query and not parsed.fragment
+                                and not any(c.isspace() or c == ',' for c in forwarded_host)):
+                            valid_origins.add(forwarded_origin)
+                    except ValueError:
+                        pass
+                # A tunnel can replace Host without forwarding the public name.
+                # Browser-generated Fetch Metadata confirms same-origin fetch;
+                # the session-bound CSRF token below is still mandatory.
+                if request.headers.get('Sec-Fetch-Site') == 'same-origin' and origin:
+                    try:
+                        parsed = urlsplit(origin)
+                        if (parsed.scheme in ('http', 'https') and parsed.hostname
+                                and not parsed.username and not parsed.password
+                                and origin == f'{parsed.scheme}://{parsed.netloc}'):
+                            valid_origins.add(origin)
+                    except ValueError:
+                        pass
+            if origin and origin not in valid_origins:
+                abort(403, description='origin_mismatch')
             if not secrets.compare_digest(request.headers.get('X-Chat-CSRF', ''), session.get('csrf') or secrets.token_hex(32)):
-                abort(403)
+                abort(403, description='csrf_mismatch')
 
     @app.after_request
     def headers(response):
@@ -78,6 +112,24 @@ def create_app(data_dir=None, provider=None):
     @app.errorhandler(KeyError)
     def missing(exc):
         return jsonify(error='대상을 찾을 수 없습니다.'), 404
+
+    @app.errorhandler(HTTPException)
+    def http_error(exc):
+        if request.path.startswith('/api/'):
+            errors = {
+                'host_not_allowed': '접속 호스트가 허용되지 않았습니다. 인증 게이트웨이의 Chat 링크를 사용하거나 서버의 --allowed-host 설정을 확인해 주세요.',
+                'network_not_allowed': '접속 네트워크가 허용되지 않았습니다. 서버의 허용 네트워크 설정을 확인해 주세요.',
+                'origin_mismatch': '외부 접속 주소(Origin)를 확인할 수 없습니다. 게이트웨이의 전달 헤더 설정을 확인해 주세요.',
+                'csrf_mismatch': '전송 보안 토큰이 만료되었거나 세션 쿠키가 없습니다. 페이지를 새로고침한 뒤 다시 전송해 주세요.',
+            }
+            return jsonify(error=errors.get(exc.description, exc.description), code=exc.description if exc.description in errors else 'http_error'), exc.code
+        return exc
+
+    @app.errorhandler(500)
+    def api_internal_error(exc):
+        if request.path.startswith('/api/'):
+            return jsonify(error='서버 내부 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.'), 500
+        return exc
 
     @app.get('/')
     def index():
@@ -148,6 +200,7 @@ def create_app(data_dir=None, provider=None):
         if opts['search'] not in ('auto', 'on', 'off'):
             raise ValueError('검색 설정이 올바르지 않습니다.')
         opts['provider_account_id'] = account['provider_account_id']
+        opts['artifact_scope'] = cid  # Server-owned scope; never accept a client path.
         attempt, created = store.enqueue(cid, content, rid, opts, retry)
         if created:
             cancel = threading.Event()

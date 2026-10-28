@@ -42,7 +42,7 @@ macOS 실제 로그인 홈의 `.codex-workbench/codex_accounts.json`을 읽어 �
 
 이벤트는 SQLite에 저장하고 SSE event ID로 재연결한다. 화면 이동 시 이전 스트림은 닫으며 응답은 서버에서 보존한다. 재실행 시 미완료 attempt를 interrupted로 복구한다. SIGTERM 시 앱이 생성한 Codex 자식만 정리한다. 실행 중인 다른 Workbench/Proc Manager는 건드리지 않는다.
 
-영어 번역·교정·검색 중심의 채팅 전용 지침과 수정한 모델 메타데이터를 사용한다. shell·apply_patch·파일 보기·MCP·앱·플러그인·skills·코드 실행·에이전트 위임을 제거했다. ultra 추론은 자동 위임을 동반하므로 노출하지 않는다. 실제 CLI 전송 요청 검증 결과 검색 끄기에는 도구 0개, 켜기에는 `web.run`만 있다. read-only sandbox를 도구 격리의 대체물로 사용하지 않는다.
+영어 번역·교정·검색 중심의 채팅 전용 지침과 수정한 모델 메타데이터를 사용한다. shell·apply_patch·파일 보기·MCP·앱·플러그인·skills·코드 실행·에이전트 위임을 제거했다. ultra 추론은 자동 위임을 동반하므로 노출하지 않는다. 현재 실제 CLI 전송 요청에는 `chat_artifact`만 제공하고, 검색을 켜면 `web.run`을 추가한다. 모델의 셸·패치·임의 파일 도구는 제공하지 않는다. read-only sandbox를 도구 격리의 대체물로 사용하지 않는다.
 
 ## UI·접속 보호
 
@@ -83,3 +83,26 @@ Chat은 자신의 SQLite outbox만 갱신한다. 기존 Workbench 수집기가 �
 - 이전 검증: 서버·launcher·패치 회귀 테스트 11개 통과. 임시 Flask 서버(33109)의 실제 채팅 화면과 패치에서 추출한 링크 함수를 지정 Chromium runner로 검증했다.
 - 승인 후 적용 검증: Proc Manager 분류·인증 테스트 39개와 설치된 소스를 읽는 외부 링크 회귀 테스트 2개 통과. 임시 서버에서 실제 링크 함수로 생성한 링크를 지정 Chromium runner로 한 번 검증해 로컬·외부 도메인·Tailscale IP·HTTPS 기본 링크·HTTPS Funnel 링크 선택을 확인했다. 임시 서버는 정리했으며 운영 프로세스는 재시작하지 않았다.
 - Chat job 16의 명령은 지원 API(`PUT /api/tasks/16`)로 외부 접속용 payload와 일치하도록 갱신했다. 갱신 전후 RUNNING/PID 25915가 유지됐으며 다른 job의 명령·URL·플래그·상태·PID도 동일했다. 시작·정지·재시작 API는 호출하지 않았다.
+
+## 경로형 Funnel / Cloudflare 게이트웨이
+
+- `/apps/<slug>/` 또는 `/chat/` 등 하위 경로에서 열어도 API와 SSE URL은 실제 로드된 `static/js/chat.js`의 앱 루트를 기준으로 생성한다. HTML의 정적 리소스와 CSS의 글꼴도 상대 경로를 사용한다. 루트 `/api/...`로 빠져 게이트웨이 포털 HTML(HTTP 200)을 받던 문제를 수정했다. CSP에 차단되는 게이트웨이 인라인 스크립트에 의존하지 않는다.
+- 로컬 프록시가 TLS를 종료하고 Host를 루프백으로 변경하면, 루프백 소켓 요청에 한해 `X-Forwarded-Host`와 `X-Forwarded-Proto`로 외부 Origin을 확인한다. 실제 소켓·Host 허용 규칙과 세션 CSRF 검사는 유지하며, 원격 소켓의 전달 헤더는 Origin 허용에 사용하지 않는다.
+- 이 동작은 기존 Proc Manager 인증 게이트웨이를 경유하는 구성을 위한 것이다. Chat 3101 포트로 터널을 직접 연결하는 경우에는 별도로 접근 인증을 제공하고 `--allowed-host`에 실제 공개 호스트를 지정해야 한다. 이 수정은 공개 호스트나 네트워크를 자동 허용하지 않는다.
+- 검증: Python 회귀 16개 통과, 실제 CLI opt-in 테스트 1개 제외. 임시 경로형 게이트웨이와 가짜 Codex provider에서 지정 Chromium runner 1회로 계정·모델·추론·글꼴·설정 저장·메시지 전송·SSE 표시를 확인했다. 운영 로컬 API는 계정 3개(인증 1개), 해당 계정의 모델 8개를 반환했다. 실제 외부 인증 세션에서는 검증하지 않았다.
+- 반영하려면 사용자가 **Workbench Chat - conversation server**를 재시작하고 외부 페이지를 새로고침한다. Proc Manager 변경이나 재시작은 필요하지 않다.
+
+
+## Cloudflare 전송·UUID·산출물 제한 보완 (2026-10-28)
+
+- 현재 `cloudflared`는 `127.0.0.1:19443`의 인증 게이트웨이를 사용한다. 게이트웨이가 내부 Host로 요청을 전달하므로 공개 Origin과 다를 수 있다. 게이트웨이 소스는 자체 전달 헤더를 추가하면서 기존 헤더도 통과시켜 중복 값이 발생할 수 있다. 운영 로그인 세션의 실제 실패 요청은 관측하지 못했으며, 이 조건을 회귀 테스트로 재현했다.
+- loopback 프록시 요청은 브라우저가 설정한 `Sec-Fetch-Site: same-origin`과 **세션에 결합된 CSRF 토큰**을 함께 확인해 공개 Origin을 허용한다. 정확한 Host·실제 소켓 네트워크 검사는 계속 적용한다. 단일 정상 전달 헤더를 사용하는 기존 게이트웨이도 지원한다. 원격 소켓·cross-site 요청·토큰 누락은 허용하지 않는다. 게이트웨이 외부 소스는 수정하지 않았다.
+- API의 403 응답은 `host_not_allowed`, `network_not_allowed`, `origin_mismatch`, `csrf_mismatch` 코드와 각 원인에 맞는 안내를 반환한다. 인증 게이트웨이를 우회하여 Chat 포트에 직접 연결하는 터널은 여전히 실제 공개 호스트를 `--allowed-host`에 명시해야 한다. 와일드카드 공개 호스트는 허용하지 않는다.
+- HTTP LAN/Tailscale에서 `crypto.randomUUID`가 없으면 `crypto.getRandomValues`로 UUID v4를 생성한다. Web Crypto 전체가 없을 때에는 시간과 난수로 재전송 식별자를 만든다. 이 값은 인증·CSRF 비밀로 사용하지 않는다. JS 버전은 4로 갱신했다.
+- 모델의 파일 작업은 서버가 처리하는 `chat_artifact` 도구로만 제공한다. 사용자 요청에 따른 UTF-8 텍스트 산출물의 생성·전체 내용 교체·읽기·삭제를 지원한다. 도구 하나당 파일 크기는 1 MiB까지다. 임의 코드 실행·셸·Git·저장소 수정·임의 로컬 파일 읽기는 허용하지 않는다.
+- 산출물은 `/tmp/workbench-chat-*`의 권한 0700 전용 폴더, 파일은 0600으로 생성한다. 같은 계정·대화는 서버가 실행 중인 동안 동일 폴더를 사용한다. 대화 ID는 서버가 지정하고 클라이언트가 파일 경로/범위를 지정할 수 없다. 서버 재시작 후에는 새 폴더를 배정하며 기존 산출물은 지우지 않는다. `/tmp`이므로 OS의 임시 파일 정리 대상이다.
+- 절대 경로, `..`, 심볼릭 링크, 하드링크, 특수 파일을 거부한다. 디렉터리 descriptor와 `O_NOFOLLOW`, 원자적 교체로 경로 확인 후 링크를 바꾸는 우회도 방어한다. `/tmp` 전체나 다른 대화의 폴더를 파일 도구에 개방하지 않는다. 대화 DB·인증 snapshot·사용량 등 앱 내부 상태는 기존 데이터 경로에서 서버가 관리하며 모델 도구로 접근할 수 없다.
+- 도구 연결은 [OpenAI Docs의 App Server dynamic tools 프로토콜](https://learn.chatgpt.com/docs/app-server#dynamic-tool-calls-experimental)을 따르며 고정된 CLI 0.160.0으로 검증한다. 가짜 로컬 모델 응답으로 실제 도구 전송 목록과 JSON-RPC 파일 생성을 확인하므로 실제 계정 토큰·유료 모델 요청은 보내지 않는다.
+- 반영: 사용자가 **Workbench Chat - conversation server**를 재시작한 다음 페이지를 새로고침한다. 이번 작업에서는 운영 서버·Proc Manager·터널을 재시작하지 않았다. 실제 Cloudflare 인증 브라우저 세션 검증은 별도로 남아 있다.
+
+- 이번 검증: native CLI 도구 전송·실제 산출물 호출을 포함한 관련 Python 테스트 **36개 통과**, Chromium **360/768/1440px**에서 `randomUUID` 없는 상태의 전송·폰트·설정·XSS 회귀 통과. `git diff --check` 통과.

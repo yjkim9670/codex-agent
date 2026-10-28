@@ -226,3 +226,74 @@ def test_entrypoint_accepts_explicit_external_access(tmp_path, monkeypatch):
     assert called[0]['host'] == '0.0.0.0'
     assert entry.os.environ['CHAT_ALLOWED_HOSTS'] == 'chat.example.ts.net'
     assert entry.os.environ['CHAT_ALLOWED_NETWORKS'] == '100.64.0.0/10'
+
+
+@pytest.mark.parametrize('external_origin', ['https://chat.example.ts.net:8443',
+                                           'https://chat.trycloudflare.com'])
+def test_local_https_gateway_origin_requires_csrf(setup, external_origin):
+    app, client, headers, provider = setup
+    forwarded = {**headers, 'Origin': external_origin,
+                 'X-Forwarded-Host': external_origin.split('://', 1)[1],
+                 'X-Forwarded-Proto': 'https', 'X-Forwarded-Prefix': '/apps/chat'}
+    assert client.get('/api/accounts', headers=forwarded).json['accounts'][0]['id'] == 'personal'
+    assert client.get('/api/models?account_id=personal', headers=forwarded).json['models'][0]['model'] == 'test'
+    assert client.patch('/api/settings', headers=forwarded,
+                        json={'model': 'test'}).status_code == 200
+    assert client.post('/api/conversations', headers=forwarded, json={}).status_code == 200
+    assert client.post('/api/conversations', headers={**forwarded, 'X-Chat-CSRF': ''},
+                       json={}).status_code == 403
+    assert client.post('/api/conversations', headers={**forwarded, 'Origin': 'https://evil.test'},
+                       json={}).status_code == 403
+
+
+def test_remote_peer_cannot_forward_origin_or_bypass_access(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHAT_ALLOWED_NETWORKS', '100.64.0.0/10')
+    app = server.create_app(tmp_path, FakeProvider())
+    client = app.test_client()
+    client.get('/')
+    with client.session_transaction() as sess:
+        csrf = sess['csrf']
+    headers = {'X-Chat-CSRF': csrf, 'Origin': 'https://evil.test',
+               'X-Forwarded-Host': 'evil.test', 'X-Forwarded-Proto': 'https'}
+    for peer in ('100.80.1.2', '203.0.113.2'):
+        assert client.post('/api/conversations', headers=headers, json={},
+                           environ_overrides={'REMOTE_ADDR': peer}).status_code == 403
+    for host in ('evil.test,other.test', 'evil.test/path', 'user@evil.test', 'evil.test?x=1'):
+        assert client.post('/api/conversations', headers={**headers, 'X-Forwarded-Host': host},
+                           json={}).status_code == 403
+
+
+def test_cloudflare_duplicate_forwarding_headers(setup):
+    _, client, headers, _ = setup
+    external = 'https://painted-slideshow-hampshire-main.trycloudflare.com'
+    forwarded = {**headers, 'Origin': external, 'Sec-Fetch-Site': 'same-origin',
+                 'X-Forwarded-Host': 'localhost:19443, painted-slideshow-hampshire-main.trycloudflare.com',
+                 'X-Forwarded-Proto': 'https, http'}
+    assert client.post('/api/conversations', json={}, headers=forwarded).status_code == 200
+    assert client.post('/api/conversations', json={}, headers={**forwarded, 'Origin': 'https://evil.test', 'Sec-Fetch-Site': 'cross-site'}).json['code'] == 'origin_mismatch'
+    assert client.post('/api/conversations', json={}, headers={**forwarded, 'X-Chat-CSRF': ''}).json['code'] == 'csrf_mismatch'
+
+
+def test_local_proxy_same_origin_fetch_with_replaced_host(setup):
+    _, client, headers, _ = setup
+    browser = {**headers, 'Origin': 'https://public.example.com', 'Sec-Fetch-Site': 'same-origin'}
+    assert client.post('/api/conversations', json={}, headers=browser).status_code == 200
+    assert client.post('/api/conversations', json={}, headers={**browser, 'X-Chat-CSRF': ''}).json['code'] == 'csrf_mismatch'
+    assert client.post('/api/conversations', json={}, headers={**browser, 'Sec-Fetch-Site': 'cross-site'}).json['code'] == 'origin_mismatch'
+    assert client.post('/api/conversations', json={}, headers={**browser, 'Host': 'public.example.com'}).json['code'] == 'host_not_allowed'
+    assert client.post('/api/conversations', json={}, headers=browser, environ_overrides={'REMOTE_ADDR': '203.0.113.1'}).json['code'] == 'network_not_allowed'
+
+
+def test_cloudflare_browser_can_send_prompt_without_repository_scope(setup):
+    _, client, headers, provider = setup
+    browser = {**headers, 'Origin': 'https://public.trycloudflare.com',
+               'Sec-Fetch-Site': 'same-origin', 'X-Forwarded-Proto': 'https, http'}
+    cid = client.post('/api/conversations', headers=browser, json={}).json['id']
+    response = client.post(f'/api/conversations/{cid}/messages', headers=browser, json={
+        'content': 'hello', 'request_id': 'cloudflare-request-123',
+        'settings': {'account_id': 'personal', 'model': 'test', 'effort': 'low', 'search': 'off',
+                     'artifact_scope': '/Users/dinya/works/dev_workspace'}})
+    assert response.status_code == 202
+    assert response.json['attempt']['settings']['artifact_scope'] == cid
+    assert provider.enter.wait(2)
+    assert provider.calls == 1

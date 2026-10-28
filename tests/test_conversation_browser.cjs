@@ -8,11 +8,16 @@ const root=path.resolve(__dirname,'..');
  const browser=await chromium.launch({headless:true,args:['--use-mock-keychain']});
  try{
  for(const width of [360,768,1440]){
+  const prefix=width===360?'':width===768?'/apps/workbench-chat':'/chat';
   const context=await browser.newContext({viewport:{width,height:900}});
+  await context.addInitScript(()=>{Object.defineProperty(Crypto.prototype,'randomUUID',{value:undefined,configurable:true});});
   const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
   let conversations=[],messages={},sent=[];
   await page.route('http://127.0.0.1:3101/**',async route=>{
-   const req=route.request(),url=new URL(req.url()),p=url.pathname,method=req.method();
+   const req=route.request(),url=new URL(req.url()),method=req.method();
+   // An escaped root API request gets the gateway HTML, reproducing the failure.
+   if(prefix&&!url.pathname.startsWith(prefix+'/'))return route.fulfill({contentType:'text/html',body:'<!doctype html><title>Gateway</title>'});
+   const p=url.pathname.slice(prefix.length);
    const json=data=>route.fulfill({json:data});
    if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'conversation-app/templates/index.html'),'utf8').replace('{{ csrf }}','test-csrf')});
    if(p.startsWith('/static/')){
@@ -37,14 +42,14 @@ const root=path.resolve(__dirname,'..');
    }
    return route.fulfill({status:404,json:{error:'test route missing '+p}});
   });
-  await page.goto('http://127.0.0.1:3101/');
+  await page.goto('http://127.0.0.1:3101'+prefix+'/');
   await expect(page.locator('#model')).toHaveValue('test-model');
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`overflow ${width}`);
   await page.locator('[data-mode=translate]').click();await expect(page.locator('#search')).toHaveValue('off');await expect(page.locator('#translation-options')).toBeVisible();
   await page.locator('#message').fill('내일 회의할까요?');
   await page.locator('#message').dispatchEvent('keydown',{key:'Enter',keyCode:229,isComposing:true});assert.equal(sent.length,0);
   await page.locator('#send').click();await expect(page.locator('.answer-body strong')).toHaveText('Hello');
-  assert.equal(sent.length,1);assert.equal(sent[0].settings.search,'off');assert.ok(sent[0].content.includes('내일 회의할까요?'));
+  assert.equal(sent.length,1);assert.match(sent[0].request_id,/^[0-9a-f-]{36}$/);assert.equal(sent[0].settings.search,'off');assert.ok(sent[0].content.includes('내일 회의할까요?'));
   assert.equal(await page.evaluate(()=>window.xss),undefined);await expect(page.locator('.answer-body a[href^="javascript:"]')).toHaveCount(0);
   await page.locator('#preferences').click();
   for(const font of ['ibm-plex','suit','nanum-square','wanted-sans','line-seed-kr','goorm-sans','paperlogy','nexon-lv2-gothic']){

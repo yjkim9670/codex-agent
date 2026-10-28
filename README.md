@@ -148,6 +148,16 @@ Keep `8080` reserved for `code-server`. A successful remote check typically retu
 - Aggregated counters are stored at `<repo>/workspace/.agent_state/codex_token_usage.json` (default parent-workspace mode).
 - `GET /api/codex/usage` returns both rate-limit info and `token_usage` summary (`today`, `all_time`, `recent_days`).
 
+## Workbench layout
+
+Workbench always opens in the work layout, with chat and the file/terminal panel.
+The normal/work layout toggle and its saved preference have been removed.
+Mobile chat/file navigation, panel sizing, and the Work/Plan/Review/Team compose
+options remain available.
+
+The separate conversational service is currently a plan only:
+[독립 채팅 서비스 계획](docs/standalone-chat-plan.md).
+
 ## Browser Verification
 
 The model settings card exposes `Auto`, `Browser`, and `Off` verification modes.
@@ -248,3 +258,9 @@ CommonTG 실행기는 임시 Git worktree에 현재 로컬 변경을 복사해 �
 대시보드 API 요청은 캐시를 사용하지 않으며, HTML 오류·로그인 페이지를 받으면
 JSON 파싱 오류 대신 HTTP 상태와 서버·접속 주소·권한 확인 안내를 표시합니다.
 업데이트 후에는 해당 Workbench 서버를 재시작하고 대시보드를 새로고침해야 합니다.
+
+### Workbench Chat (독립 채팅)
+
+영어 번역·교정·웹 검색용 개인 Codex 채팅 앱은 `conversation-app/`에 있습니다. Proc Manager의 **Workbench Chat - conversation server** job을 사용자가 시작하면 `http://127.0.0.1:3101`에서 열립니다. 별도 DB·글꼴 8종·모델/추론 선택·중단/재시도와 기존 사용량 수집 연동을 제공합니다. 운영 서버는 자동으로 시작하거나 재시작하지 않았습니다.
+
+실행·접속 범위·계정 갱신·사용량 집계와 검증 결과는 [Workbench Chat 운영 안내](docs/standalone-chat.md)를 참고하세요. 등록 설정은 [ops/workbench-chat.job.json](ops/workbench-chat.job.json)입니다.

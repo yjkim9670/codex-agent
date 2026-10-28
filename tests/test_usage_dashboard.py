@@ -76,7 +76,12 @@ def test_collection_recovers_common_environment_and_is_idempotent(tmp_path, monk
     now=datetime(2026,10,1,12,tzinfo=usage.KST)
     first=usage.collect(context,force=True,now=now)
     second=usage.collect(context,force=True,now=now)
+    assert first['version'] == 4
     assert first['events']==second['events']
+    legacy = dict(first, version=3, events=[{'event_id': 'stale-old-cache'}])
+    (root/'codex_usage_collection.json').write_text(json.dumps(legacy))
+    migrated=usage.collect(context,force=True,now=now)
+    assert migrated['version'] == 4 and migrated['events'] == first['events']
     assert first['diagnostics']['supplemental_tokens']==100
     assert first['events'][0]['workspace_path']=='/CommonTG'
     assert db_path.exists() and rollout.exists()
@@ -195,5 +200,5 @@ def test_dashboard_api_defaults_to_all_efforts(monkeypatch):
     response = app.test_client().get('/api/codex/usage/dashboard')
     assert response.status_code == 200
     assert response.json['effort'] == 'all'
-    assert calls == [(None, 30, 'all', 'all')]
+    assert calls == [(None, 30, 'all', 'all', 'all')]
     assert app.test_client().get('/api/codex/usage/dashboard?effort=low').json['effort'] == 'low'

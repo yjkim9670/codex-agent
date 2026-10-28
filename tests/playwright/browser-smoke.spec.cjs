@@ -25,6 +25,14 @@ test('browser UI smoke check', async ({ page }) => {
         await require('./blog.cjs').setupBlog(page);
     }
 
+    // Watch before navigation: a startup exception can leave the HTML shell
+    // visible while preventing every data request from being sent.
+    const startupResponses = process.env.CODEX_VERIFY_STARTUP === '1'
+        ? Promise.all(['/api/codex/files/list', '/api/codex/settings', '/api/codex/sessions'].map(path =>
+            page.waitForResponse(response => new URL(response.url()).pathname === path,
+                { timeout: timeoutMs })))
+        : null;
+
     const response = await page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
@@ -33,6 +41,20 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (startupResponses) {
+        const responses = await startupResponses;
+        for (const response of responses) expect(response.status()).toBe(200);
+        // Chat responses may be encrypted on the wire. Check the application's
+        // decoded state and rendered list after initialization completes.
+        await expect(page.locator('#codex-session-storage')).not.toContainText('확인 중');
+        await expect(page.locator('#codex-work-mode-file-meta')).not.toContainText('불러오는 중');
+        await expect.poll(() => page.locator('#codex-model-select option[value]:not([value=""])').count())
+            .toBeGreaterThan(0);
+        await expect(page.locator('#codex-chat-status')).toHaveText('Idle');
+        expect(await page.evaluate(() => state.settings.loaded)).toBe(true);
+        const sessionCount = await page.evaluate(() => state.sessions.length);
+        await expect(page.locator('#codex-session-list .session-item')).toHaveCount(sessionCount);
+    }
     if (process.env.CODEX_VERIFY_RESOURCE_USAGE === '1') {
         await require('./resource-usage.cjs').verifyResourceUsage(page, expect);
     }

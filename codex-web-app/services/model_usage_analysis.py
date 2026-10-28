@@ -9,7 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
-def analyze(root, days=30, effort="all", environment="all", *, data=None, now=None):
+def analyze(root, days=30, effort="all", environment="all", *, data=None, now=None, application="all"):
     def read(name):
         if data is not None:
             return data.get(name, {})
@@ -27,7 +27,8 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
         hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days - 1)
     def matches(e):
         return (effort == 'all' or (e.get('reasoning_effort') or 'unknown') == effort) and (
-            environment == 'all' or e.get('workspace_path') == environment)
+            environment == 'all' or e.get('workspace_path') == environment) and (
+            application == 'all' or e.get('application', 'unknown') == application)
 
     selected = [e for e in events if start <= datetime.fromisoformat(e['recorded_at']) <= end and matches(e)]
     if len({e['event_id'] for e in selected}) != len(selected):
@@ -162,7 +163,7 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
         row['share_percent'] = row['total_tokens'] * 100 / total if total else 0
         row['input_cache_percent'] = (row['cached_input_tokens'] * 100 / row['input_tokens']
                                       if row['input_tokens'] else None)
-    return {'model_efforts': dict(model_efforts), 'daily': dict(sorted(daily.items())), 'effort': effort, 'environment': environment, 'start': start.isoformat(), 'end': end.isoformat(), 'total_tokens': total,
+    return {'application': application, 'model_efforts': dict(model_efforts), 'daily': dict(sorted(daily.items())), 'effort': effort, 'environment': environment, 'start': start.isoformat(), 'end': end.isoformat(), 'total_tokens': total,
             'events': len(selected), 'calibration_first_at': min(
                 (r['created_at'] for r in calibration.get('records', [])), default=None),
             'models': dict(models), 'windows': windows,

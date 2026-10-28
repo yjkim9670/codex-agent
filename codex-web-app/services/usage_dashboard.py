@@ -14,6 +14,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 from .model_usage_analysis import analyze
+from .conversation_usage import chat_root, read_chat_outbox, application_of
 from .usage_reconciliation import build_usage_reconciliation
 
 KST = ZoneInfo('Asia/Seoul')
@@ -64,6 +65,8 @@ def discover_homes(context, events):
         configured = os.environ.get('CODEX_USAGE_DISCOVERY_ROOTS')
         roots = ([Path(p).expanduser() for p in configured.split(os.pathsep) if p] if configured else
                  ([login.parent / 'works'] if login else [Path(WORKSPACE_DIR)]))
+        # Add Chat without replacing configured or default discovery roots.
+        roots.append(chat_root() / 'codex_home')
         roots += [Path(e['workspace_path']) for e in events if e.get('workspace_path')]
     for root in set(roots):
         for base, files in _walk(root):
@@ -178,6 +181,16 @@ def merge_events(ledger, threads):
                     candidates.append(entry)
             if not candidates:
                 continue
+            if any(entry.get('application') == 'workbench-chat' for entry in candidates):
+                # Rollout is authoritative, including corrections smaller than the
+                # provisional observation and per-model component changes.
+                for entry in candidates:
+                    result.pop(entry['event_id'], None)
+                for row in rows:
+                    result[row['event_id']] = {**row, 'application': 'workbench-chat'}
+                handled.update(row['event_id'] for row in rows)
+                diagnostics['matched_rollout_tokens'] += sum(row['total_tokens'] for row in rows)
+                continue
             handled.update(row['event_id'] for row in rows)
             log_total = sum(row['total_tokens'] for row in rows)
             ledger_total = sum(entry['total_tokens'] for entry in candidates)
@@ -225,7 +238,7 @@ def collect(context, *, force=False, now=None):
     path = Path(context['root']) / 'codex_usage_collection.json'
     with chat._acquire_path_file_lock(path):
         old = _read(path)
-        if old.get('version') == 3 and old.get('collected_at') and (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300):
+        if old.get('version') == 4 and old.get('collected_at') and (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300):
             return old
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=89)
         ledger = []
@@ -243,7 +256,13 @@ def collect(context, *, force=False, now=None):
         except FileNotFoundError:
             pass
         identity = chat._read_auth_identity(context['codex_home']).get('provider_account_id')
-        cached = old.get('files', {}) if old.get('version') == 3 else {}
+        from ..config import is_internal_multiuser_mode
+        if not is_internal_multiuser_mode():
+            try:
+                ledger.extend(read_chat_outbox(identity))
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                errors.append('Chat outbox: ' + str(exc))
+        cached = old.get('files', {}) if old.get('version') == 4 else {}
         files = {}
         threads = {}
         for home in discover_homes(context, ledger):
@@ -310,15 +329,16 @@ def collect(context, *, force=False, now=None):
                 state['error'] = str(exc)
             sources.append(state)
         events, diagnostics = merge_events(ledger, threads.values())
-        events = [e for e in events if cutoff <= _stamp(e['recorded_at']) <= now]
-        result = {'version': 3, 'collected_at': now.isoformat(), 'retention_days': 90,
+        events = [{**e, 'application': application_of(e)} for e in events if cutoff <= _stamp(e['recorded_at']) <= now]
+        diagnostics['chat_pending_attempts'] = sum(bool(e.get('usage_pending')) for e in events)
+        result = {'version': 4, 'collected_at': now.isoformat(), 'retention_days': 90,
                   'account_id': context['account']['id'], 'events': events, 'sources': sources,
                   'diagnostics': diagnostics, 'errors': errors, 'files': files}
         chat._write_json_atomic(path, result)
         return result
 
 
-def dashboard(account_id=None, days=30, effort='all', environment='all'):
+def dashboard(account_id=None, days=30, effort='all', environment='all', application='all'):
     from . import codex_chat as chat
     context = chat._account_storage_context(account_id)
     if not context:
@@ -332,7 +352,7 @@ def dashboard(account_id=None, days=30, effort='all', environment='all'):
         except (ValueError, OSError) as exc:
             errors.append(f'{name}: {exc}')
             data[name] = {}
-    report = analyze(Path(context['root']), days, effort, environment, data=data)
+    report = analyze(Path(context['root']), days, effort, environment, data=data, application=application)
     all_days = {}
     for event in collected['events']:
         day = _stamp(event['recorded_at']).date().isoformat()

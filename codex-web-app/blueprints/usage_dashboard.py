@@ -22,7 +22,10 @@ def usage_data():
         effort = request.args.get('effort', 'all')
         if effort not in {'all', 'unknown', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'}:
             raise ValueError('알 수 없는 effort입니다.')
-        result = dashboard(request.args.get('account_id'), days, effort, request.args.get('environment', 'all'))
+        application = request.args.get('application', 'all')
+        if application not in {'all', 'workbench', 'workbench-chat', 'unknown'}:
+            raise ValueError('알 수 없는 앱입니다.')
+        result = dashboard(request.args.get('account_id'), days, effort, request.args.get('environment', 'all'), application)
         return jsonify(result)
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400

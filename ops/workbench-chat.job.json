@@ -1,0 +1,11 @@
+{
+  "name": "Workbench Chat - conversation server",
+  "workdir": "/Users/dinya/works/dev_workspace/codex_workbench",
+  "commands": [
+    "CHAT_PYTHON_BIN=/opt/homebrew/bin/python3.14 CHAT_CODEX_BIN=/opt/homebrew/bin/codex /bin/bash run_conversation_server.sh --port 3101"
+  ],
+  "auto_start": true,
+  "sequential": true,
+  "restart_on_exit": false,
+  "open_url": "http://127.0.0.1:3101"
+}

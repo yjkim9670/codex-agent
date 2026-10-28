@@ -197,7 +197,6 @@ const MERMAID_DIAGRAM_VIEWER_FIT_PADDING = 48;
 const CHAT_FULLSCREEN_CLASS = 'is-chat-fullscreen';
 const WORK_MODE_CLASS = 'is-work-mode';
 const WORK_MODE_PREVIEW_FULLSCREEN_CLASS = 'is-work-mode-fold-preview-fullscreen';
-const WORK_MODE_KEY = 'codexWorkModeEnabled';
 const WORK_MODE_SPLIT_KEY = 'codexWorkModeSplit';
 const WORK_MODE_DEFAULT_SPLIT = 0.58;
 const WORK_MODE_MIN_CHAT_WIDTH_PX = 420;
@@ -2354,7 +2353,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const gitPushBtn = document.getElementById('codex-git-push');
     const gitSyncBtn = document.getElementById('codex-git-sync');
     const fileBrowserBtn = document.getElementById('codex-file-browser-open');
-    const workModeToggleBtn = document.getElementById('codex-work-mode-toggle');
     const workModeDivider = document.getElementById('codex-work-mode-divider');
     const workModeFileRefreshBtn = document.getElementById('codex-work-mode-file-refresh');
     const workModeFileUpBtn = document.getElementById('codex-work-mode-file-up');
@@ -2508,7 +2506,6 @@ document.addEventListener('DOMContentLoaded', () => {
         gitPushBtn,
         gitSyncBtn,
         fileBrowserBtn,
-        workModeToggleBtn,
         refreshBtn,
         uiSettingsOpen
     });
@@ -3030,13 +3027,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             openFileBrowserOverlay();
-        });
-    }
-    if (workModeToggleBtn) {
-        workModeToggleBtn.addEventListener('click', event => {
-            event.preventDefault();
-            const enabled = isWorkModeEnabled();
-            setWorkModeEnabled(!enabled, { persist: true, notifyOnMobile: true });
         });
     }
     if (workModeDivider) {
@@ -5087,12 +5077,11 @@ function initializeHeaderActionTooltips({
     gitPushBtn,
     gitSyncBtn,
     fileBrowserBtn,
-    workModeToggleBtn,
     refreshBtn,
     uiSettingsOpen
 } = {}) {
     syncHoverTooltipFromLabel(gitBranch);
-    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, workModeToggleBtn, refreshBtn, uiSettingsOpen].forEach(button => {
+    [gitCommitBtn, gitPushBtn, gitSyncBtn, fileBrowserBtn, refreshBtn, uiSettingsOpen].forEach(button => {
         syncHoverTooltipFromLabel(button);
     });
     updateThemeSwitchTooltip(themeToggle);
@@ -5667,7 +5656,6 @@ function getWorkModeElements() {
     return {
         app: document.querySelector('.app'),
         layout: document.querySelector('.layout'),
-        toggle: document.getElementById('codex-work-mode-toggle'),
         divider: document.getElementById('codex-work-mode-divider'),
         mobileBrowserBtn: document.getElementById('codex-work-mode-mobile-browser'),
         preview: document.getElementById('codex-work-mode-preview')
@@ -7172,43 +7160,10 @@ function isWorkModeEnabled() {
     return Boolean(app?.classList.contains(WORK_MODE_CLASS));
 }
 
-function isInternalMultiuserMode() {
-    return document.body?.dataset.internalMultiuser === 'true';
-}
-
 function normalizeWorkModeSplitRatio(value) {
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return WORK_MODE_DEFAULT_SPLIT;
     return Math.min(0.82, Math.max(0.3, numeric));
-}
-
-function updateWorkModeToggleButton(button, enabled, { disabled = false } = {}) {
-    if (!button) return;
-    const isEnabled = Boolean(enabled);
-    const isDisabled = Boolean(disabled);
-    button.classList.toggle('is-active', isEnabled);
-    button.setAttribute('aria-pressed', String(isEnabled));
-    button.disabled = isDisabled;
-    const label = isEnabled ? 'Disable work mode' : 'Enable work mode';
-    button.setAttribute('aria-label', label);
-    button.setAttribute('title', label);
-    syncHoverTooltipFromLabel(button, label);
-}
-
-function readWorkModePreference() {
-    try {
-        return localStorage.getItem(WORK_MODE_KEY) === '1';
-    } catch (error) {
-        return false;
-    }
-}
-
-function persistWorkModePreference(enabled) {
-    try {
-        localStorage.setItem(WORK_MODE_KEY, enabled ? '1' : '0');
-    } catch (error) {
-        void error;
-    }
 }
 
 function readWorkModeSplitPreference() {
@@ -7252,89 +7207,41 @@ function applyWorkModeSplitRatio(ratio = workModeSplitRatio, { persist = false }
     }
 }
 
-function setWorkModeEnabled(enabled, { persist = true, notifyOnMobile = true } = {}) {
+function activateWorkModeLayout() {
     const elements = getWorkModeElements();
-    if (!elements.app) return false;
-    void notifyOnMobile;
-    const wantsEnabled = Boolean(enabled);
-    const mobile = isMobileLayout();
-    const wasEnabled = elements.app.classList.contains(WORK_MODE_CLASS);
-
-    if (wantsEnabled) {
-        if (elements.app.classList.contains(CHAT_FULLSCREEN_CLASS)) {
-            setChatFullscreen(false);
-        }
-        if (isFileBrowserOverlayOpen()) {
-            closeFileBrowserOverlay();
-        }
-    } else {
-        if (workModeResizePointerId !== null) {
-            stopWorkModeResize();
-        }
-        stopWorkModeFileResize();
-        stopWorkModeFileColumnResize();
-        if (isWorkModeTerminalPanelActive()) {
-            suspendTerminalUiConnection();
-        }
+    if (!elements.app) return;
+    if (elements.app.classList.contains(CHAT_FULLSCREEN_CLASS)) {
+        setChatFullscreen(false);
     }
-
-    elements.app.classList.toggle(WORK_MODE_CLASS, wantsEnabled);
-    const fileBrowserButton = document.getElementById('codex-file-browser-open');
-    if (fileBrowserButton) {
-        // Keep the control inaccessible while the inline work-mode browser is active.
-        // CSS mirrors this for the first paint before this handler runs.
-        fileBrowserButton.hidden = wantsEnabled;
-        fileBrowserButton.setAttribute('aria-hidden', wantsEnabled ? 'true' : 'false');
+    if (isFileBrowserOverlayOpen()) {
+        closeFileBrowserOverlay();
     }
-    if (!wantsEnabled && !isPhoneLayout() && isMobileSessionOverlayOpen()) {
-        closeMobileSessionOverlay();
-    }
-    if (elements.preview) {
-        elements.preview.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
-    }
-    if (elements.divider) {
-        elements.divider.setAttribute('aria-hidden', wantsEnabled ? 'false' : 'true');
-    }
-    updateWorkModeToggleButton(elements.toggle, wantsEnabled, { disabled: false });
-
-    if (wantsEnabled) {
-        applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
-        applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
-        applyWorkModeFileColumnWidths({ persist: false });
-        setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
-        if (mobile && !wasEnabled) {
-            workModeMobileView = WORK_MODE_MOBILE_VIEW_CHAT;
-        }
-        setWorkModeMobileView(
-            isFoldInnerLayout()
-                ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
-                : workModeMobileView
-        );
-        setWorkModePreviewFullscreen(workModePreviewFullscreen);
-        syncWorkModePanelModeState();
-        requestAnimationFrame(() => {
-            syncWorkModeFileHorizontalScrollMetrics();
-        });
-        void ensureWorkModeFilePanelContent();
-        if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
-            void openWorkModeTerminalPanelFromContext(getTerminalLaunchContext()).catch(error => {
-                showToast(normalizeError(error, 'Terminal을 열지 못했습니다.'), {
-                    tone: 'error',
-                    durationMs: 4200
-                });
+    elements.app.classList.add(WORK_MODE_CLASS);
+    elements.preview?.setAttribute('aria-hidden', 'false');
+    elements.divider?.setAttribute('aria-hidden', 'false');
+    applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
+    applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
+    applyWorkModeFileColumnWidths({ persist: false });
+    setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
+    setWorkModeMobileView(
+        isFoldInnerLayout()
+            ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
+            : workModeMobileView
+    );
+    setWorkModePreviewFullscreen(workModePreviewFullscreen);
+    syncWorkModePanelModeState();
+    requestAnimationFrame(() => {
+        syncWorkModeFileHorizontalScrollMetrics();
+    });
+    void ensureWorkModeFilePanelContent();
+    if (workModePanelMode === WORK_MODE_PANEL_MODE_TERMINAL) {
+        void openWorkModeTerminalPanelFromContext(getTerminalLaunchContext()).catch(error => {
+            showToast(normalizeError(error, 'Terminal을 열지 못했습니다.'), {
+                tone: 'error',
+                durationMs: 4200
             });
-        }
-    } else {
-        setWorkModeFileViewerFullscreen(false);
-        setWorkModePreviewFullscreen(false);
-        setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
-        syncWorkModePanelModeState();
+        });
     }
-
-    if (persist) {
-        persistWorkModePreference(wantsEnabled);
-    }
-    return wantsEnabled;
 }
 
 function initializeWorkMode(isMobile) {
@@ -7344,11 +7251,7 @@ function initializeWorkMode(isMobile) {
     workModePanelMode = readWorkModePanelModePreference();
     initializeWorkModeFileViewState(isMobile);
     setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
-    // Internal users always arrive in the work layout. Their standalone
-    // preference remains unchanged, and they can still leave work mode during
-    // the current visit if desired.
-    const preferred = isInternalMultiuserMode() || readWorkModePreference();
-    setWorkModeEnabled(preferred, { persist: false, notifyOnMobile: false });
+    activateWorkModeLayout();
     const initialMobileView = (isMobile || isFoldLayout())
         ? WORK_MODE_MOBILE_VIEW_CHAT
         : isFoldInnerLayout()
@@ -7367,16 +7270,11 @@ function initializeWorkMode(isMobile) {
 }
 
 function handleWorkModeMediaChange(isMobile) {
-    const elements = getWorkModeElements();
     if (!isMobile && isMobileSessionOverlayOpen()) {
         closeMobileSessionOverlay();
     }
     if ((isMobile || usesWorkModeSingleFilePane()) && isWorkModeEnabled()) {
         setWorkModeFileViewerFullscreen(false);
-    }
-    updateWorkModeToggleButton(elements.toggle, isWorkModeEnabled(), { disabled: false });
-    if (readWorkModePreference() && !isWorkModeEnabled()) {
-        setWorkModeEnabled(true, { persist: false, notifyOnMobile: false });
     }
     setWorkModeMobileView(
         isFoldInnerLayout()
@@ -19023,9 +18921,6 @@ async function openMessageInWorkModePreview(title, text, subtitle = '') {
         subtitle: String(subtitle || '채팅 응답 전체 보기').trim()
     };
 
-    if (!isWorkModeEnabled()) {
-        setWorkModeEnabled(true, { persist: true, notifyOnMobile: false });
-    }
     setWorkModePanelMode(WORK_MODE_PANEL_MODE_FILE, { persist: true });
     if (isMobileLayout()) {
         setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_VIEWER);

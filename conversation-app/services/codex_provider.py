@@ -10,6 +10,9 @@ import hashlib
 import os
 from pathlib import Path
 import queue
+import re
+import math
+from datetime import datetime, timezone
 import shutil
 import subprocess
 import threading
@@ -168,12 +171,61 @@ def sanitize_catalog(models):
     return result
 
 
+class TitleStream:
+    """Strip a short first-line title without exposing fragmented metadata."""
+    def __init__(self, emit):
+        self.emit = emit
+        self.buffer = ''
+        self.ready = False
+
+    @staticmethod
+    def split(text):
+        match = re.match(r'^<chat_title>([^\r\n<>]{1,80})</chat_title>\s*', text)
+        return (match.group(1).strip(), text[match.end():]) if match else (None, text)
+
+    def delta(self, text, final=False):
+        if self.ready:
+            if text:
+                self.emit('delta', {'text': text})
+            return
+        self.buffer += text
+        if not final and '\n' not in self.buffer and len(self.buffer) < 256:
+            return
+        title, body = self.split(self.buffer)
+        if title:
+            self.emit('title', {'title': title})
+        if body:
+            self.emit('delta', {'text': body})
+        self.ready = True
+        self.buffer = ''
+
+
+def normalize_limits(result):
+    # A weekly-only primary bucket must never be mislabeled as a 5h bucket.
+    buckets = result.get('rateLimitsByLimitId') or {}
+    raw = buckets.get('codex') or result.get('rateLimits') or {}
+    windows = {'five_hour': None, 'weekly': None}
+    for entry in (raw.get('primary'), raw.get('secondary')):
+        if not isinstance(entry, dict):
+            continue
+        key = {300: 'five_hour', 10080: 'weekly'}.get(entry.get('windowDurationMins'))
+        used = entry.get('usedPercent')
+        if key and isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used):
+            used = min(100, max(0, used))
+            windows[key] = {'used_percent': used, 'remaining_percent': 100 - used,
+                            'resets_at': entry.get('resetsAt')}
+    return {**windows, 'plan_type': raw.get('planType'),
+            'observed_at': datetime.now(timezone.utc).isoformat()}
+
+
 class Provider:
     def __init__(self, data_dir):
         self.root = Path(data_dir).resolve()
         self.lock = threading.RLock()
         self.cache = {}
         self.artifact_roots = {}
+        self.limit_cache = {}
+        self.limit_lock = threading.Lock()
 
     def home(self, account):
         identity = hashlib.sha256(account['provider_account_id'].encode()).hexdigest()[:16]
@@ -230,6 +282,22 @@ class Provider:
             self.cache[account['id']] = (account['provider_account_id'], time.monotonic(), visible)
             return visible
 
+    def limits(self, account, force=False):
+        # Serialize refreshes so multiple tabs share one bounded account read.
+        key = (account['id'], account['provider_account_id'])
+        with self.limit_lock:
+            cached = self.limit_cache.get(key)
+            if cached and time.monotonic() - cached[0] < (10 if force else 60):
+                return cached[1]
+            home, workspace = self.prepare(account)
+            rpc = RPC(home, workspace)
+            try:
+                value = normalize_limits(rpc.call('account/rateLimits/read', {}, timeout=15))
+            finally:
+                rpc.close()
+            self.limit_cache[key] = (time.monotonic(), value)
+            return value
+
     def run(self, account, settings, history, emit, cancel):
         models = self.models(account)
         model = next((m for m in models if m['model'] == settings['model']), None)
@@ -252,6 +320,10 @@ class Provider:
                 return
             search = settings['search']
             instructions = INSTRUCTIONS + '\nArtifact directory for this request: ' + str(artifacts.root) + '\n'
+            if settings.get('generate_title'):
+                instructions += ('\nFor this first reply only, write a concise conversation title in the user language '
+                                 'as the very first line: <chat_title>title</chat_title> (80 characters max). '
+                                 'Then a newline and the actual answer in Markdown. This metadata is not part of the answer.')
             if search == 'on':
                 instructions += '\nYou MUST search the live web before answering. Report search failure explicitly.'
             result = rpc.call('thread/start', {'model': model['model'], 'modelProvider': 'openai',
@@ -277,6 +349,7 @@ class Provider:
             emit('provider', {'thread_id': thread, 'turn_id': turn, 'model': result['model'],
                               'reasoning_effort': effort, 'workspace_path': str(workspace.resolve())})
             interrupted = False
+            title_stream = TitleStream(emit) if settings.get('generate_title') else None
             deadline = time.monotonic() + 600
             while time.monotonic() < deadline:
                 if cancel.is_set() and not interrupted:
@@ -292,7 +365,10 @@ class Provider:
                 if params.get('threadId') not in (None, thread):
                     continue
                 if method == 'item/agentMessage/delta':
-                    emit('delta', {'text': params.get('delta', '')})
+                    if title_stream:
+                        title_stream.delta(params.get('delta', ''))
+                    else:
+                        emit('delta', {'text': params.get('delta', '')})
                 elif method == 'thread/tokenUsage/updated':
                     emit('usage', params.get('tokenUsage', {}))
                 elif method in ('item/started', 'item/completed'):
@@ -307,8 +383,17 @@ class Provider:
                     elif kind in ('commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall'):
                         raise ValueError('채팅에서 허용하지 않는 도구가 감지되어 중단했습니다.')
                     elif kind == 'agentMessage' and method.endswith('completed'):
-                        emit('answer', {'text': item.get('text', '')})
+                        text = item.get('text', '')
+                        if title_stream:
+                            title, text = TitleStream.split(text)
+                            if title:
+                                emit('title', {'title': title})
+                            # The completed message is authoritative, including when no deltas arrived.
+                            title_stream.ready = True
+                        emit('answer', {'text': text})
                 elif method == 'turn/completed':
+                    if title_stream:
+                        title_stream.delta('', final=True)
                     state = params.get('turn', {})
                     if state.get('status') == 'failed':
                         raise ValueError('모델 요청이 실패했습니다. 계정 만료·사용 한도·검색 지원을 확인해 주세요.')

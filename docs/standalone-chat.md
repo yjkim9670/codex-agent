@@ -5,14 +5,14 @@
 ## 실행과 등록
 
 - Proc Manager job: `Workbench Chat - conversation server`
-- 로컬 주소: `http://127.0.0.1:3101`; Tailscale 외부 주소: `http://dinya.wind-mintaka.ts.net:3101`
+- 로컬 주소: `http://127.0.0.1:3101`. 외부 브라우저는 기존 인증 게이트웨이의 **HTTPS Chat 링크**를 사용한다. 기존 `http://dinya.wind-mintaka.ts.net:3101` 직접 접속은 암호화 API를 사용할 수 없어 전송이 차단된다.
 - 등록 payload: `ops/workbench-chat.job.json`; 실제 확인 기록: `ops/workbench-chat.registration.json`
 - 등록 결과: **idx 16 / STOPPED / PID 없음**, 기존 16개 job의 설정·상태·PID는 최초 snapshot과 동일하다.
 - 외부 접속용 등록 payload는 `--host 0.0.0.0 --allowed-host dinya.wind-mintaka.ts.net --allowed-network 100.64.0.0/10`을 지정한다. `open_url`은 로컬 기준으로 두고 Proc Manager의 공통 링크 정책을 사용한다. HTTP 대시보드는 현재 접속 호스트의 3101 포트로, HTTPS 대시보드는 기존 Funnel 링크가 있으면 그 링크로 연다. 대시보드의 **Codex Workbench 그룹 마지막·보라색 표시**는 유지한다.
 - **최초 시작·재시작은 사용자 수행.** 등록은 start/restart API를 호출하지 않는다. `auto_start: true`는 다음 Proc Manager 자동 시작 때 함께 실행하려는 설정이다. `restart_on_exit: false`다.
 - 옵션 없이 실행하면 기존대로 loopback 전용이다. 외부 접속은 명시한 호스트와 클라이언트 CIDR을 모두 만족해야 한다. 허용 CIDR에 속하는 IP 리터럴 주소도 Host로 허용한다. 현재 payload는 Tailscale 클라이언트만 추가 허용하며 LAN·공인 인터넷 직접 요청은 차단한다. `X-Forwarded-For`로 접속 권한을 부여하지 않는다. 기존 same-origin·CSRF 검사를 유지한다. 공용 Funnel을 새로 등록하거나 인증 설정을 변경하지 않는다.
 - 명령: `bash run_conversation_server.sh --host 127.0.0.1 --port 3101`
-- Python 3.11 이상, 설치된 Flask가 필요하다. 등록 job은 검증한 `/opt/homebrew/bin/python3.14`를 지정한다.
+- Python 3.11 이상, Flask와 cryptography가 필요하다 (`requirements.txt`). 등록 job은 검증한 `/opt/homebrew/bin/python3.14`를 지정한다.
 - Proc Manager가 `HOME=/Users/dinya/works`로 실행해도 launcher는 OS 로그인 홈의 Python 사용자 패키지를 찾는다. macOS framework Python은 `~/Library/Python/<version>`을 `PYTHONUSERBASE`로 설정하며, 명시적으로 지정한 `PYTHONUSERBASE`는 유지한다. `PYTHONPATH`를 Workbench에서 상속받지 않아도 동작한다.
 - Codex CLI **0.160.0**의 실제 전송 도구를 검증했다. 다른 버전에서는 모델 실행을 차단한다. CLI 업그레이드 시 `RUN_CODEX_CHAT_NATIVE_TESTS=1 ... -m pytest tests/test_conversation_provider.py -q`로 도구 격리를 재검증하고 버전 제한을 갱신한다. App Server는 버전별 동작 차이가 있으므로 알 수 없는 버전에 자동으로 권한을 열지 않는다.
 - 기존 Workbench의 **Dev Codex Workbench job**도 사용자가 재시작하면 새 사용량 앱 필터·명시적 Chat outbox 수집 코드가 적용된다. 다른 체크아웃에는 소스를 동기화하지 않았다.
@@ -106,3 +106,72 @@ Chat은 자신의 SQLite outbox만 갱신한다. 기존 Workbench 수집기가 �
 - 반영: 사용자가 **Workbench Chat - conversation server**를 재시작한 다음 페이지를 새로고침한다. 이번 작업에서는 운영 서버·Proc Manager·터널을 재시작하지 않았다. 실제 Cloudflare 인증 브라우저 세션 검증은 별도로 남아 있다.
 
 - 이번 검증: native CLI 도구 전송·실제 산출물 호출을 포함한 관련 Python 테스트 **36개 통과**, Chromium **360/768/1440px**에서 `randomUUID` 없는 상태의 전송·폰트·설정·XSS 회귀 통과. `git diff --check` 통과.
+
+
+## Chat 사용량·화면 설정·자동 제목
+
+- 계정 영역과 사용량 창에서 선택 계정의 5시간·주간 사용 비율, 남은 비율, 초기화 시각을 표시한다. `/api/usage/limits?account_id=…`는 격리된 App Server의 `account/rateLimits/read`를 사용하며, 토큰 누적 집계와 구분한다. 공식 프로토콜: https://learn.chatgpt.com/docs/app-server
+- 창이 보이는 동안 60초마다 갱신하며 계정 전환, 답변 완료, 수동 새로고침에서도 갱신한다. 서버 캐시는 계정 및 provider identity별 60초이며, 강제 조회에도 10초 중복 요청 방지를 적용한다. 제공되지 않은 기간은 미제공, 실패한 조회는 오류로 표시한다. 서버 시각은 관측 시각이며 초기화 시각은 접속 기기의 현지 시간으로 표시한다.
+- 화면 설정에서 시스템/라이트/다크를 선택하며 기존 글꼴·배율 설정과 함께 브라우저에 저장한다. 답변과 입력 영역은 데스크톱에서 최대 1440 CSS px까지 확장된다. 코드에는 로컬 D2Coding을 사용하고 코드 복사 버튼을 제공한다. 인용문은 선택한 UI 글꼴을 사용한다.
+- 새 대화 첫 요청의 동일 모델 응답에 짧은 제목 메타데이터를 요청한다. 서버는 스트리밍 메타데이터를 답변에서 분리하여 제목으로 저장하므로 별도 제목 생성 호출이 없다. 제목이 누락되면 첫 프롬프트 일부를 임시 제목으로 유지한다. 직접 변경한 제목과 기존 대화 제목은 덮어쓰지 않는다. 빈 대화를 만드는 시점에는 제목을 추론할 내용이 없으므로 첫 전송 후 제목이 정해진다.
+- 변경 없는 메시지의 DOM을 유지하며, 정제된 Markdown은 최대 24개·250,000자 입력 범위에서 캐시한다. 생성 중에는 텍스트를 표시하고 완료·취소 시 Markdown을 적용한다. HTML 정제와 HTTP(S) 링크 제한, 저장소 도구 차단 및 전용 `/tmp/workbench-chat-*` 산출물 제한은 유지된다.
+- 적용은 **Workbench Chat - conversation server** 재시작과 브라우저 새로고침이 필요하다. 실행 중인 운영 작업은 자동 재시작하지 않는다.
+
+## 브라우저 전송 암호화와 성능 개선 (2026-10-29)
+
+기존 작업모드는 `codex-web-app/services/file_crypto.py`를 통한 ECDH/AES-GCM 경로를 제공했지만 독립 Chat의 JSON·SSE에는 적용되지 않았다. Chat은 독립 모듈 `conversation-app/services/transport.py`와 브라우저 `static/js/transport.js`로 다음 전송 보호를 강제한다. 기존 작업 서버를 import하지 않는다.
+
+- 브라우저와 Chat 서버가 ECDH P-256으로 임시 키를 합의하고, HKDF-SHA256으로 요청·응답용 256비트 AES-GCM 키를 따로 만든다. 인증 태그는 128비트, IV는 암호학적 난수 96비트다. Web Crypto의 비동기 네이티브 연산을 사용하며 암호화 라이브러리/WASM을 브라우저에 추가하지 않는다.
+- `/api/crypto-session`에는 공개키·salt·만료 시각만 오간다. 나머지 API 요청은 경로·검색어·본문을 모두 `/api/secure`의 암호문에 넣는다. 프롬프트·답변·제목·이력·계정·모델·설정·사용량·출처와 API 오류 응답도 암호화한다. 기존 평문 API 직접 호출은 428로 거부한다.
+- 키는 서버의 프로세스 메모리와 브라우저 페이지 메모리에만 보관하며 쿠키/localStorage에 기록하지 않는다. 채널은 CSRF 세션에 결합하고 15분 만료, 요청 IV 재사용 차단, 요청·응답 키 분리, 응답의 요청 IV 결합 및 스트림 순서 검증을 적용한다. 서버는 채널 256개·브라우저 세션당 16개·채널당 요청 8,192개로 메모리를 제한한다. 만료는 디스패치 전에 거부하고 브라우저가 키를 갱신해 한 번 재시도한다.
+- 암호화 SSE는 fetch 스트림으로 순차 복호화한다. 요청을 처리한 시점의 이력 스냅샷에 event cursor를 함께 반환해 이미 표시한 delta가 중복되지 않게 한다. 스트림이 끊기면 마지막 적용 cursor 이후부터 다시 연결한다. 정상 수신 중에는 전체 이력을 재조회하지 않고 현재 답변만 100ms 간격으로 갱신한다. 최종 상태·출처는 완료 시 한 번 다시 조회한다.
+- 생성 중에는 단일 텍스트 노드에 추가하고 완료 시 Markdown을 처리한다. 완료된 DOM·코드 복사 버튼·펼친 출처는 유지하며 화면 밖 메시지는 `content-visibility`로 레이아웃·페인트 비용을 줄인다. 백그라운드 탭의 중간 렌더링을 생략하고 복귀 시 누적 내용을 반영한다. 초안 localStorage 저장은 400ms로 병합하고 페이지 이탈 시 flush한다.
+- 이력 조회는 메시지별 별도 DB 연결 대신 한 연결에서 메시지와 attempt를 조회한다. 관련 색인을 추가하고 SSE는 최대 128개 이벤트씩 묶어 암호화한다. 정적 JS/CSS/글꼴은 private 1일 캐시, HTML·API·이벤트는 `no-store`다.
+
+### 보호 범위와 접속 조건
+
+외부 접속에는 HTTPS가 필요하다. Web Crypto를 사용할 수 없는 원격 HTTP 환경에서는 **평문 전송으로 우회하지 않고** 안내와 함께 전송을 막는다. `http://localhost`/`127.0.0.1`은 브라우저가 신뢰하는 로컬 개발 예외다. Tailscale HTTP 주소는 네트워크가 암호화되어도 브라우저의 secure context 조건을 충족하지 않는다. 기존 HTTPS 게이트웨이를 사용하며 이 변경은 게이트웨이·터널을 새로 등록하거나 수정하지 않는다.
+
+이 보호는 **신뢰한 페이지 코드와 키 교환을 전제로**, 네트워크 패킷·TLS 종료 프록시 로그에 대화 본문이 평문으로 남지 않도록 하는 브라우저↔Chat 서버 구간의 추가 암호화다. 접속 호스트·트래픽 크기·시각·공개키 등의 메타데이터는 숨기지 않는다. HTTPS는 페이지와 키 교환의 상대를 인증하는 역할도 하므로 계속 필요하다.
+
+사내 보안 장비가 신뢰 인증서를 사용해 페이지/스크립트나 ECDH 공개키를 능동적으로 바꾸거나, 관리 브라우저·확장 프로그램·단말 DLP·화면/키보드를 감시하면 이 구현으로 열람을 방지한다고 보장할 수 없다. 비밀 키의 사전 배포/독립 검증이 없는 웹 앱이므로 이런 환경에 대한 종단간 기밀성을 주장하지 않는다. Chat 서버와 모델 제공자는 처리할 평문을 보며, 기존 SQLite/rollout·산출물·브라우저 초안의 저장 암호화는 이번 변경 범위가 아니다. 기존 파일 권한은 유지한다.
+
+공식 규격: [W3C Web Cryptography](https://www.w3.org/TR/webcrypto/), [W3C Secure Contexts](https://www.w3.org/TR/secure-contexts/).
+
+재현 가능한 검증은 `python3.14 -m pytest tests/test_conversation_*.py -q`와 임시 fixture 서버 `python3.14 tests/serve_conversation_fixture.py --port 0`을 사용한다. 출력된 loopback URL에 대해 `CODEX_VERIFY_CONVERSATION=1 python3.14 scripts/verify_browser_ui.py --url <URL> --selector '#composer' --timeout-ms 120000`를 실행한다. fixture는 실제 계정·모델을 호출하지 않고 임시 DB를 사용한다. 종료 시 해당 임시 서버만 정리한다.
+
+검증 결과: 관련 Python 테스트 **55개 통과·실제 모델 opt-in 1개 제외**. 지정 runner의 Chromium **360/768/1440/1920px**에서 실제 Web Crypto↔Python 암호화 왕복, SSE 끊김 복구·취소·중복 방지, 완료 DOM 유지, Markdown/XSS·코드 복사·8개 글꼴·다크모드·사용 한도 오류 복구와 Web Crypto 미제공 시 전송 차단을 통과했다. 브라우저 콘솔 오류는 없었다. 합성 부하(메시지 151개·약 60,000자 생성 중 답변)의 100회 갱신은 이 머신에서 91.7ms, 중간 Markdown 파싱 0회였다. 이는 특정 fixture의 동기 갱신 측정치이며 실제 회사 네트워크·모바일 기기의 지연이나 메모리 사용량을 보장하지 않는다. 실제 사내 인증 브라우저·TLS 검사 장비에서는 검증하지 않았다. 운영 서버·Proc Manager·터널은 재시작하지 않았다.
+
+### 외부 HTTPS·프록시 재검증 (2026-10-29)
+
+**모든 외부 접속 경로의 정상 동작을 확인한 것은 아니다.** HTTPS에서의 암호화 호환성과 터널의 SSE 전달 지원은 별도 조건이다.
+
+- 읽기 전용으로 확인한 현재 구성: Tailscale Funnel의 443 포트와 `cloudflared tunnel --url http://127.0.0.1:19443`가 기존 인증 게이트웨이를 사용한다. 실제 두 HTTPS 주소에 GET을 보내 인증서 검증 성공과 HTTP 303 로그인 리다이렉트를 확인했다. 로그인 세션을 사용한 Chat API·모델 요청은 보내지 않았다. 이 머신에서의 접속이므로 사내망/별도 외부 단말에서의 도달성을 입증하지 않는다.
+- 현재 Cloudflare는 `trycloudflare.com` Quick Tunnel이다. [공식 Quick Tunnel 제한](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)에 **SSE 미지원**이 명시되어 있다. 현재 Chat은 암호화한 `POST /api/secure` 응답에도 `text/event-stream`을 사용하므로 AES 적용으로 이 제한이 없어지지 않는다. 스트림 버퍼링 시 실시간 표시·완료·취소 상태 반영이 지연되거나 끊길 수 있다. 현재 클라이언트에는 스트림 무응답 감지 후 JSON 폴링으로 전환하는 기능이 없다. Cloudflare 사용을 확정하려면 named tunnel에서 인증 후 스트리밍을 검증하거나, 암호화 JSON 이벤트 폴링 경로를 추가해야 한다. 이번 검증에서는 터널 변경이나 폴링 기능을 구현하지 않았다.
+- [Funnel은 HTTPS로 로컬 서비스를 프록시한다](https://tailscale.com/docs/features/tailscale-funnel). 로컬 게이트웨이 소스에서도 응답 MIME에 따른 스트림 전달을 확인했지만, 실제 인증 후 Funnel 전체 경로의 스트리밍 성공으로 간주하지 않는다.
+- 임시 loopback HTTPS fixture에서 TLS 종료 후 HTTP upstream의 Host 변경, 정상 전달 헤더와 Cloudflare식 중복 전달 헤더를 재현했다. `/`, `/chat/`, `/apps/workbench-chat/` 경로에서 지정 Chromium runner **1회**로 **360/768/1440/1920px** 검증을 통과했다. 실제 Web Crypto 키 교환·암호문 API/SSE·재연결·취소·Markdown·폰트·콘솔 검사를 포함한다. fixture의 임시 자체 서명 인증서에만 테스트용 인증서 오류 허용 옵션을 사용했다. 공개 인증서 체인 검증은 앞의 실제 HTTPS GET 결과와 구분한다. 실제 프록시 소켓/Cloudflare edge 자체를 fixture에 포함하지 않는다.
+- 추가한 4개 프록시 조건 테스트는 암호화 키 교환과 실제 `/api/secure` 요청의 생성·복호화·CSRF 누락 차단·cross-site 차단을 확인한다. provider 완료 전에 첫 암호화 SSE 프레임을 읽어 앱의 스트림이 전체 응답을 버퍼링하지 않는지도 확인한다. 전체 관련 Python 테스트 **59개 통과·실제 모델 opt-in 1개 제외**.
+
+재현 명령:
+
+```sh
+python3.14 -m pytest tests/test_conversation_*.py -q
+python3.14 tests/serve_conversation_fixture.py --https-proxy --port 0
+# 별도 터미널: 위 서버가 출력한 포트 사용
+CODEX_VERIFY_CONVERSATION=1 CODEX_VERIFY_LOCAL_TLS=1 python3.14 scripts/verify_browser_ui.py \
+  --url https://127.0.0.1:<PORT> --selector '#composer' --timeout-ms 120000
+```
+
+`CODEX_VERIFY_LOCAL_TLS=1`은 자체 서명 로컬 fixture 검증 전용이며 실제 외부 인증서 검증에 사용하지 않는다. 검증 후 임시 서버만 종료했다. 운영 서버·Proc Manager·Funnel·Cloudflare 설정과 프로세스는 변경하거나 재시작하지 않았다. 이번 추가 변경은 테스트·검증 설정·문서뿐이므로 이 검증 자체를 적용하기 위한 운영 재시작은 필요 없다.
+
+### 임시 Cloudflare 주소용 암호화 JSON 폴링 (2026-10-29)
+
+앞 절에서 남아 있던 JSON 폴링을 구현했다. `*.trycloudflare.com` 접속은 SSE를 시도하지 않고 처음부터 암호화 JSON 폴링을 사용한다. 특정 임시 호스트명은 저장하거나 고정하지 않는다. API 주소는 기존과 같이 현재 로드한 스크립트를 기준으로 계산하므로 주소 변경과 `/chat/`, `/apps/workbench-chat/` 같은 하위 경로를 지원한다. 새 주소에서는 게이트웨이에 다시 로그인해야 할 수 있고, 브라우저의 초안·선택 대화·화면 설정은 origin별 localStorage이므로 다른 주소로 자동 이전되지 않는다. 서버 DB의 대화 이력은 유지된다.
+
+- 내부 조회 API는 `GET /api/attempts/<aid>/poll?after=<event_id>`다. 브라우저에서는 이 경로·cursor도 암호화해 `POST /api/secure`로 전송한다. 응답은 SSE가 아닌 유한한 JSON 암호문이며 대기 없이 저장된 이벤트 최대 128개와 `cursor`, `has_more`를 반환한다. 평문 직접 호출은 428로 차단하며 기존 세션·CSRF·호스트·네트워크 검사를 유지한다.
+- 답변 생성 중 약 1초마다 마지막 적용 이벤트 이후만 조회한다. 밀린 이벤트가 더 있으면 즉시 다음 배치를 받는다. SSE와 같은 이벤트 적용 함수를 사용하고 이미 적용한 ID는 무시한다. `done` 이벤트로 완료·실패·취소·프로세스 복구 종료를 반영한 뒤 조회를 중단하고 최종 이력을 한 번 갱신한다.
+- 다른 호스트에서는 SSE를 우선 사용한다. 연결 실패, 완료 이벤트 없는 연결 종료, 또는 연결/유효한 암호화 프레임 수신이 15초 동안 없으면 마지막 cursor부터 JSON 폴링으로 전환한다. 해당 구독이 끝날 때까지 폴링을 유지한다. 정상 SSE heartbeat는 기존 10초 간격이며 수신 타이머를 갱신한다.
+- 폴링 요청도 15초 제한을 적용한다. 연속 오류는 재시도 대기를 1초에서 최대 10초까지 늘리고 성공하면 초기화한다. 대화 전환·페이지 이탈 시 진행 중 조회와 예약 대기를 취소한다. 암호화 세션은 기존 만료 갱신 절차를 사용하며 평문 fallback은 없다. 키 교환 요청에도 15초 제한을 적용했다.
+- JS 캐시 버전을 갱신했다. 반영하려면 사용자가 **Workbench Chat - conversation server**를 재시작하고 브라우저를 새로고침한다. 폴링을 위해 새 job 등록이나 임시 도메인 고정 설정은 필요하지 않다. 운영 서버·Proc Manager·터널은 이번 작업에서 재시작하거나 변경하지 않았다.
+
+검증: 관련 Python 테스트 **61개 통과·실제 모델 opt-in 1개 제외**. 새 테스트는 유휴 provider의 즉시 JSON 반환, 128개 배치 경계, 암호문 보호, cursor 재개, 중복 방지, 완료·취소·복구 이벤트, 잘못된 cursor·없는 attempt·평문 차단을 확인한다. 지정 Chromium runner를 임시 HTTPS fixture에 **1회** 실행해 **360/768/1440/1920px**에서 각각 SSE 중간 끊김, Quick Tunnel 폴링 선택, SSE 응답 헤더 무응답, 첫 프레임 이후 수신 중단을 검증했다. 폴링 전환 후 답변 완성과 취소, 기존 Markdown/글꼴/레이아웃 회귀 및 콘솔 검사를 통과했다. 두 개의 서로 다른 임시 호스트명에 대한 자동 폴링 선택과 비대상 호스트 구분도 확인했다. 실제 Cloudflare edge·게이트웨이 로그인 이후 경로는 이번 검증에 포함하지 않았다. 임시 테스트 서버는 검증 후 종료했다.

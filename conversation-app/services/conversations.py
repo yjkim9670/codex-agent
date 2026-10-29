@@ -41,7 +41,10 @@ class Store:
             CREATE UNIQUE INDEX IF NOT EXISTS one_active_per_conversation ON attempts(conversation_id) WHERE status IN ('queued','streaming');
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT REFERENCES attempts(id) ON DELETE CASCADE,type TEXT,data TEXT);
             CREATE INDEX IF NOT EXISTS attempt_events ON events(attempt_id,id);
+            CREATE INDEX IF NOT EXISTS conversation_messages ON messages(conversation_id,created_at,id);
+            CREATE INDEX IF NOT EXISTS conversation_attempts ON attempts(conversation_id,created_at,id);
             CREATE TABLE IF NOT EXISTS usage_outbox(attempt_id TEXT PRIMARY KEY,event TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conversation_titles(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,source TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY,value TEXT);
             ''')
             # Recovery is persisted as an event so reconnecting browsers terminate.
@@ -75,7 +78,8 @@ class Store:
     def create(self):
         row = {'id': uid(), 'title': '새 대화', 'created_at': now(), 'updated_at': now()}
         with self.db() as db:
-            db.execute('INSERT INTO conversations VALUES(:id,:title,:created_at,:updated_at)', row)
+            db.execute('INSERT INTO conversations(id,title,created_at,updated_at) VALUES(:id,:title,:created_at,:updated_at)', row)
+            db.execute("INSERT INTO conversation_titles VALUES(?,'pending')", (row['id'],))
         return row
 
     def change(self, cid, title=None, delete=False):
@@ -88,6 +92,7 @@ class Store:
                 db.execute('DELETE FROM conversations WHERE id=?', (cid,))
             else:
                 db.execute('UPDATE conversations SET title=?,updated_at=? WHERE id=?', (title[:160], now(), cid))
+                db.execute("INSERT OR REPLACE INTO conversation_titles VALUES(?,'manual')", (cid,))
 
     def attempt(self, aid):
         with self.db() as db:
@@ -104,8 +109,14 @@ class Store:
             if not db.execute('SELECT id FROM conversations WHERE id=?', (cid,)).fetchone():
                 raise KeyError(cid)
             rows = [dict(r) for r in db.execute('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id', (cid,))]
+            grouped = {}
+            for attempt in db.execute('SELECT a.*, (SELECT COALESCE(MAX(id),0) FROM events WHERE attempt_id=a.id) AS event_cursor FROM attempts a WHERE conversation_id=? ORDER BY created_at,id', (cid,)):
+                attempt = dict(attempt)
+                for key in ('settings', 'provider', 'usage', 'citations'):
+                    attempt[key] = json.loads(attempt[key]) if attempt[key] else None
+                grouped.setdefault(attempt['message_id'], []).append(attempt)
             for row in rows:
-                row['attempts'] = [self.attempt(r['id']) for r in db.execute('SELECT id FROM attempts WHERE message_id=? ORDER BY created_at,id', (row['id'],))]
+                row['attempts'] = grouped.get(row['id'], [])
         return rows
 
     def enqueue(self, cid, content, request_id, settings, retry=None):
@@ -131,7 +142,13 @@ class Store:
             else:
                 mid = uid()
                 db.execute('INSERT INTO messages VALUES(?,?,?,?)', (mid, cid, content, now()))
-                db.execute("UPDATE conversations SET title=CASE WHEN title='새 대화' THEN ? ELSE title END WHERE id=?", (content[:60], cid))
+                db.execute("UPDATE conversations SET title=CASE WHEN title='새 대화' AND NOT EXISTS (SELECT 1 FROM conversation_titles WHERE conversation_id=conversations.id AND source='manual') THEN ? ELSE title END WHERE id=?", (content[:60], cid))
+            first = db.execute('SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at,id LIMIT 1', (cid,)).fetchone()
+            source = db.execute('SELECT source FROM conversation_titles WHERE conversation_id=?', (cid,)).fetchone()
+            settings = dict(settings)
+            settings['generate_title'] = bool(first['id'] == mid and source and source['source'] == 'pending')
+            if settings['generate_title']:
+                db.execute("INSERT OR REPLACE INTO conversation_titles VALUES(?,'pending')", (cid,))
             aid, at = uid(), now()
             db.execute('INSERT INTO attempts(id,conversation_id,message_id,request_id,settings,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                        (aid, cid, mid, request_id, json.dumps(settings), 'queued', at, at))
@@ -157,7 +174,12 @@ class Store:
             if not row:
                 return
             updates = {'updated_at': now()}
-            if kind == 'delta':
+            if kind == 'title':
+                title = ' '.join(str(data.get('title', '')).split())[:80]
+                if title and json.loads(row['settings']).get('generate_title'):
+                    db.execute("UPDATE conversations SET title=? WHERE id=? AND EXISTS (SELECT 1 FROM conversation_titles WHERE conversation_id=? AND source='pending')", (title, row['conversation_id'], row['conversation_id']))
+                    db.execute("UPDATE conversation_titles SET source='llm' WHERE conversation_id=? AND source='pending'", (row['conversation_id'],))
+            elif kind == 'delta':
                 updates.update(text=row['text'] + data['text'], status='streaming')
             elif kind == 'answer' and data.get('text'):
                 updates['text'] = data['text']
@@ -207,9 +229,9 @@ class Store:
         with self.wake:
             self.wake.notify_all()
 
-    def events(self, aid, after):
+    def events(self, aid, after, limit=128):
         with self.db() as db:
-            return [dict(r) for r in db.execute('SELECT id,type,data FROM events WHERE attempt_id=? AND id>? ORDER BY id', (aid, after))]
+            return [dict(r) for r in db.execute('SELECT id,type,data FROM events WHERE attempt_id=? AND id>? ORDER BY id LIMIT ?', (aid, after, limit))]
 
     def settings(self, value=None):
         with self.db() as db:

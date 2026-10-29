@@ -11,6 +11,8 @@ module.exports = {
     use: {
         browserName: 'chromium',
         headless: true,
+        // Only for the loopback fixture's ephemeral self-signed certificate.
+        ignoreHTTPSErrors: process.env.CODEX_VERIFY_LOCAL_TLS === '1',
         screenshot: 'only-on-failure',
         trace: 'off',
         video: 'off',

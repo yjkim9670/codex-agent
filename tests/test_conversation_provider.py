@@ -147,3 +147,94 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path):
     finally:
         http.shutdown()
         http.server_close()
+
+
+def test_title_stream_hides_fragmented_metadata_and_preserves_markdown():
+    from services.codex_provider import TitleStream
+    events = []
+    stream = TitleStream(lambda kind, data: events.append((kind, data)))
+    for part in ['<chat_', 'title>번역 요청</chat_title>', '\n\n**Hello**', '\nworld']:
+        stream.delta(part)
+    assert [data['title'] for kind, data in events if kind == 'title'] == ['번역 요청']
+    assert ''.join(data['text'] for kind, data in events if kind == 'delta') == '**Hello**\nworld'
+    events.clear()
+    stream = TitleStream(lambda kind, data: events.append((kind, data)))
+    stream.delta('Title omitted')
+    stream.delta('', final=True)
+    assert events == [('delta', {'text': 'Title omitted'})]
+
+
+def test_limits_normalization_uses_duration_and_codex_bucket():
+    from services.codex_provider import normalize_limits
+    result = normalize_limits({'rateLimits': {'primary': {'windowDurationMins': 10080, 'usedPercent': 25, 'resetsAt': 2000000000}}})
+    assert result['five_hour'] is None
+    assert result['weekly']['remaining_percent'] == 75
+    result = normalize_limits({'rateLimitsByLimitId': {'codex': {'primary': {'windowDurationMins': 300, 'usedPercent': 120}, 'secondary': {'windowDurationMins': 10080, 'usedPercent': float('nan')}}}})
+    assert result['five_hour']['remaining_percent'] == 0
+    assert result['weekly'] is None
+    assert normalize_limits({})['five_hour'] is None
+
+
+def test_limits_cache_isolates_accounts_and_closes_rpc(tmp_path, monkeypatch):
+    import services.codex_provider as module
+    opened = []
+    class FakeRPC:
+        def __init__(self, *args):
+            self.closed = False
+            opened.append(self)
+        def call(self, method, params, timeout):
+            assert method == 'account/rateLimits/read'
+            return {'rateLimits': {'primary': {'windowDurationMins': 300, 'usedPercent': 20}}}
+        def close(self):
+            self.closed = True
+    monkeypatch.setattr(module, 'RPC', FakeRPC)
+    provider = Provider(tmp_path)
+    monkeypatch.setattr(provider, 'prepare', lambda account: (tmp_path, tmp_path))
+    account = {'id': 'one', 'provider_account_id': 'identity'}
+    assert provider.limits(account)['five_hour']['remaining_percent'] == 80
+    provider.limits(account)
+    provider.limits(account, force=True)
+    assert len(opened) == 1 and opened[0].closed
+    provider.limits({**account, 'provider_account_id': 'other'})
+    assert len(opened) == 2 and opened[1].closed
+
+
+def test_first_reply_provider_separates_title_and_keeps_sandbox(tmp_path, monkeypatch):
+    import services.codex_provider as module
+    calls, output = [], []
+    artifact_paths = []
+    class FakeRPC:
+        def __init__(self, home, workspace, catalog, artifact_handler):
+            artifact_paths.append(artifact_handler.__self__.root)
+            self.events = queue.Queue()
+            for event in [
+                {'method': 'item/agentMessage/delta', 'params': {'delta': '<chat_title>요청 제목</chat_title>\n\nHello'}},
+                {'method': 'item/completed', 'params': {'item': {'type': 'agentMessage', 'text': '<chat_title>요청 제목</chat_title>\n\nHello'}}},
+                {'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}},
+            ]:
+                self.events.put(event)
+        def call(self, method, params):
+            calls.append((method, params))
+            if method == 'thread/start':
+                return {'model': 'test', 'thread': {'id': 'thread'}}
+            return {'turn': {'id': 'turn'}}
+        def close(self):
+            pass
+    monkeypatch.setattr(module, 'RPC', FakeRPC)
+    provider = Provider(tmp_path)
+    monkeypatch.setattr(provider, 'models', lambda account: [{'model': 'test', 'defaultReasoningEffort': 'low', 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}])
+    monkeypatch.setattr(provider, 'prepare', lambda account: (tmp_path, tmp_path))
+    try:
+        provider.run({'provider_account_id': 'account'}, {'model': 'test', 'effort': 'low', 'search': 'off', 'generate_title': True},
+                     [{'role': 'user', 'content': 'Hello'}], lambda kind, data: output.append((kind, data)), threading.Event())
+        start = calls[0][1]
+        assert '<chat_title>' in start['baseInstructions']
+        assert start['sandbox'] == 'read-only' and start['approvalPolicy'] == 'never'
+        assert start['dynamicTools'] == [TOOL]
+        assert ('title', {'title': '요청 제목'}) in output
+        assert ('answer', {'text': 'Hello'}) in output
+        assert output[-1] == ('done', {'status': 'completed'})
+        assert all('<chat_title>' not in data['text'] for kind, data in output if kind in ('answer', 'delta'))
+    finally:
+        for artifact_path in artifact_paths:
+            shutil.rmtree(artifact_path)

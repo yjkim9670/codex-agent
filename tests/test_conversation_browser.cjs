@@ -1,70 +1,107 @@
-// Serve the actual app to an isolated browser via route interception. No server/job starts.
-const {chromium,expect}=require('@playwright/test');
+// Real browser -> Web Crypto -> Python AESGCM -> SQLite/SSE -> browser rendering.
+const {expect}=require('@playwright/test');
 const assert=require('node:assert/strict');
-const fs=require('node:fs');
-const path=require('node:path');
-const root=path.resolve(__dirname,'..');
-(async()=>{
- const browser=await chromium.launch({headless:true,args:['--use-mock-keychain']});
- try{
- for(const width of [360,768,1440]){
+
+async function verifyConversation(browser,targetUrl){
+ for(const width of [360,768,1440,1920]){
   const prefix=width===360?'':width===768?'/apps/workbench-chat':'/chat';
-  const context=await browser.newContext({viewport:{width,height:900}});
+  const context=await browser.newContext({viewport:{width,height:900},ignoreHTTPSErrors:process.env.CODEX_VERIFY_LOCAL_TLS==='1'});
+  try{
   await context.addInitScript(()=>{Object.defineProperty(Crypto.prototype,'randomUUID',{value:undefined,configurable:true});});
-  const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-  let conversations=[],messages={},sent=[];
-  await page.route('http://127.0.0.1:3101/**',async route=>{
-   const req=route.request(),url=new URL(req.url()),method=req.method();
-   // An escaped root API request gets the gateway HTML, reproducing the failure.
-   if(prefix&&!url.pathname.startsWith(prefix+'/'))return route.fulfill({contentType:'text/html',body:'<!doctype html><title>Gateway</title>'});
-   const p=url.pathname.slice(prefix.length);
-   const json=data=>route.fulfill({json:data});
-   if(p==='/')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'conversation-app/templates/index.html'),'utf8').replace('{{ csrf }}','test-csrf')});
-   if(p.startsWith('/static/')){
-    const folder=p.startsWith('/static/vendor/')||p.startsWith('/static/fonts/')?'codex-web-app':'conversation-app';
-    const file=path.join(root,folder,p);
-    if(!fs.existsSync(file))return route.fulfill({status:404});
-    return route.fulfill({path:file,contentType:p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':p.endsWith('.woff2')?'font/woff2':undefined});
-   }
-   if(p==='/api/accounts')return json({accounts:[{id:'personal',label:'Personal Codex',authenticated:true}]});
-   if(p==='/api/models')return json({models:[{model:'test-model',displayName:'Test Model',defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}]}]});
-   if(p==='/api/settings')return json({});
-   if(p==='/api/usage/summary')return json({total_tokens:123,attempts:1,status:'잠정 관측치'});
-   if(p==='/api/conversations'){
-    if(method==='POST'){const c={id:'c'+(conversations.length+1),title:'새 대화'};conversations.push(c);messages[c.id]=[];return json(c);}
-    return json(conversations);
-   }
-   const match=p.match(/^\/api\/conversations\/([^/]+)\/messages$/);
-   if(match){const cid=match[1];if(method==='GET')return json({messages:messages[cid]});
-    const value=req.postDataJSON();sent.push(value);assert.equal(req.headers()['x-chat-csrf'],'test-csrf');
-    const attempt={id:'a'+sent.length,status:'completed',text:'**Hello**\n\n[Source](https://example.com)\n<script>window.xss=true</script>\n[Bad](javascript:alert(1))',settings:value.settings,provider:{model:'test-model'},citations:[{url:'https://example.com',title:'Example',searched_at:new Date().toISOString()}],search_count:0};
-    messages[cid].push({id:'m'+sent.length,content:value.content,attempts:[attempt]});conversations.find(c=>c.id===cid).title='영어 번역';return json({attempt});
-   }
-   return route.fulfill({status:404,json:{error:'test route missing '+p}});
+  const page=await context.newPage(),errors=[],wire=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+  page.on('request',request=>{if(new URL(request.url()).pathname.includes('/api/'))wire.push({url:request.url(),body:request.postData()||''});});
+  await page.goto(targetUrl+prefix+'/');
+  await page.evaluate(()=>chatReady);await expect(page.locator('#model')).toHaveValue('test-model');
+  await expect(page.locator('#transport-status')).toContainText('AES-256-GCM');
+  await page.evaluate(()=>{
+   window.__paths=[];window.__markdownCalls=0;
+   const open=transport.open.bind(transport);transport.open=(path,...args)=>{window.__paths.push(path);return open(path,...args);};
+   marked.use({hooks:{preprocess(text){window.__markdownCalls++;return text;}}});
   });
-  await page.goto('http://127.0.0.1:3101'+prefix+'/');
-  await expect(page.locator('#model')).toHaveValue('test-model');
+  if(width===360)await page.evaluate(()=>{
+   const stream=transport.stream.bind(transport);let broken=false;
+   transport.stream=async function*(...args){for await(const chunk of stream(...args)){yield chunk;if(!broken){broken=true;throw Error('fixture: interrupted stream');}}};
+  });
+  assert.deepEqual(await page.evaluate(()=>['old.trycloudflare.com','new.trycloudflare.com','chat.example.ts.net','trycloudflare.com.evil.test'].map(prefersPolling)),[true,true,false,false]);
+  if(width===768)await page.evaluate(()=>{prefersPolling=()=>true;});
+  if(width>=1440)await page.evaluate(width=>{
+   // Simulate a proxy that never sends headers, or stalls after its first body chunk.
+   const fetchOriginal=window.fetch,stream=transport.stream.bind(transport);let stallNext=false;
+   transport.stream=async function*(...args){stallNext=true;yield* stream(...args,200);};
+   window.fetch=async(url,options)=>{
+    if(!stallNext||!String(url).endsWith('/api/secure'))return fetchOriginal(url,options);
+    stallNext=false;
+    if(width===1440)return new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});
+    const response=await fetchOriginal(url,options),reader=response.body.getReader();
+    return new Response(new ReadableStream({async start(controller){
+     options.signal.addEventListener('abort',()=>{controller.error(options.signal.reason);reader.cancel().catch(()=>{});},{once:true});
+     const {value,done}=await reader.read();if(!done)controller.enqueue(value);
+    },cancel(){return reader.cancel().catch(()=>{});}}),{headers:response.headers});
+   };
+  },width);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`overflow ${width}`);
   await page.locator('[data-mode=translate]').click();await expect(page.locator('#search')).toHaveValue('off');await expect(page.locator('#translation-options')).toBeVisible();
   await page.locator('#message').fill('내일 회의할까요?');
-  await page.locator('#message').dispatchEvent('keydown',{key:'Enter',keyCode:229,isComposing:true});assert.equal(sent.length,0);
-  await page.locator('#send').click();await expect(page.locator('.answer-body strong')).toHaveText('Hello');
-  assert.equal(sent.length,1);assert.match(sent[0].request_id,/^[0-9a-f-]{36}$/);assert.equal(sent[0].settings.search,'off');assert.ok(sent[0].content.includes('내일 회의할까요?'));
+  await page.locator('#message').dispatchEvent('keydown',{key:'Enter',keyCode:229,isComposing:true});
+  assert.equal(await page.evaluate(()=>window.__paths.some(x=>x.endsWith('/messages'))),false);
+  await page.locator('#send').click();await expect(page.locator('.answer-body.streaming')).toContainText('Hello');
+  assert.equal(await page.evaluate(()=>window.__markdownCalls),0,'no Markdown parsing per delta');
+  await expect(page.locator('.answer-body strong')).toHaveText('Hello');await expect(page.locator('#stop')).toBeHidden();
+  assert.equal(await page.locator('.answer-body').evaluate(el=>(el.textContent.match(/Hello/g)||[]).length),1,'resume must not duplicate deltas');
+  assert.equal(await page.evaluate(()=>window.__markdownCalls),1,'one Markdown parse on completion');
+  assert.ok(await page.evaluate(()=>window.__paths.some(x=>x.includes('/poll?after='))),'JSON polling used after proxy failure or Quick Tunnel selection');
+  assert.ok(await page.evaluate(()=>window.__paths.filter(x=>/\/messages$/.test(x)).length)<=3,'POST plus initial/final snapshots only');
   assert.equal(await page.evaluate(()=>window.xss),undefined);await expect(page.locator('.answer-body a[href^="javascript:"]')).toHaveCount(0);
-  await page.locator('#preferences').click();
+  await expect(page.locator('.code-block')).toHaveCount(1);await expect(page.locator('.code-toolbar button')).toHaveText('코드 복사');
+  await expect(page.locator('.answer-body blockquote')).toContainText('읽기 쉬운');await expect(page.locator('.answer-body th')).toHaveCount(2);
+  assert.ok((await page.locator('.answer-body pre code').evaluate(el=>getComputedStyle(el).fontFamily)).includes('Chat Code'));
+  assert.equal(await page.locator('.answer-body a[href="https://example.com/"]').getAttribute('rel'),'noopener noreferrer');
+  if(width>=1440){const composer=await page.locator('.composer-inner').boundingBox();assert.ok(composer.width>1000,`desktop composer width ${composer.width}`);const answer=await page.locator('.answer').boundingBox();assert.ok(answer.width>1000,`desktop answer width ${answer.width}`);}
+  await page.evaluate(()=>{window.__firstAnswer=document.querySelector('.answer-body');window.__mutations=0;window.__observer=new MutationObserver(rows=>window.__mutations+=rows.length);window.__observer.observe(window.__firstAnswer,{subtree:true,childList:true,characterData:true});});
+  await page.locator('#message').fill('cancel me');await page.locator('#send').click();await expect(page.locator('.answer-body.streaming')).toBeVisible();
+  await page.locator('#stop').click();await expect(page.locator('#stop')).toBeHidden();await expect(page.locator('.answer .meta').last()).toContainText('중단된 부분');
+  assert.ok(await page.evaluate(()=>window.__firstAnswer===document.querySelector('.answer-body')),'preserve completed DOM');
+  assert.equal(await page.evaluate(()=>window.__mutations),0,'do not mutate completed Markdown');
+  await page.locator('#preferences').click();await page.locator('#theme').selectOption('dark');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(22, 22, 22)');
   for(const font of ['ibm-plex','suit','nanum-square','wanted-sans','line-seed-kr','goorm-sans','paperlogy','nexon-lv2-gothic']){
-   await page.locator('#font').selectOption(font);
-   await expect(page.locator('html')).toHaveAttribute('data-ui-font',font);
+   await page.locator('#font').selectOption(font);await expect(page.locator('html')).toHaveAttribute('data-ui-font',font);
    const family=await page.evaluate(()=>getComputedStyle(document.body).fontFamily.split(',')[0]);
-   assert.ok(await page.evaluate(async family=>{const faces=await document.fonts.load('16px '+family,'안녕');return faces.length>0;},family),`font failed ${font}: ${family}`);
+   assert.ok(await page.evaluate(async family=>(await document.fonts.load('16px '+family,'안녕')).length>0,family),`font failed ${font}: ${family}`);
   }
-  await page.locator('#settings-dialog button').click();
-  await page.locator('#message').fill('보존할 초안');await page.reload();await expect(page.locator('#message')).toHaveValue('보존할 초안');await expect(page.locator('html')).toHaveAttribute('data-ui-font','nexon-lv2-gothic');
+  await page.locator('#settings-dialog button').click();await page.locator('#message').fill('보존할 초안');await page.reload();
+  await expect(page.locator('#message')).toHaveValue('보존할 초안');await expect(page.locator('html')).toHaveAttribute('data-ui-font','nexon-lv2-gothic');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
   if(width<1024){await page.locator('#show-history').click();await expect(page.locator('#sidebar')).toBeVisible();await page.keyboard.press('Escape');await expect(page.locator('#sidebar')).not.toBeVisible();await expect(page.locator('#show-history')).toBeFocused();}
-  await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('123');await page.locator('#usage-dialog button').click();
-  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`final overflow ${width}`);
-  assert.deepEqual(errors,[]);await page.screenshot({path:path.join(root,`tmp/chat-${width}.png`),fullPage:true});
-  await context.close();console.log(`PASS ${width}px · fonts 8 · IME · send · Markdown/XSS · draft · settings`);
+  await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await expect(page.locator('#dialog-limits')).toContainText('40% 남음');
+  await expect(page.locator('#dialog-limits progress').first()).toHaveAttribute('value','24');
+  await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/fail'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
+  await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits-status')).toContainText('조회 실패');await expect(page.locator('#dialog-limits')).toContainText('미제공');
+  await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/ok'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
+  await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await page.locator('#usage-dialog .primary').click();
+  // An expired session is renewed before retry; a plaintext response is never accepted.
+  await page.evaluate(()=>{transport.channel.expires=0;});
+  await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await page.locator('#usage-dialog .primary').click();
+  if(width===1920){
+   await context.grantPermissions(['clipboard-read','clipboard-write']);await page.locator('.code-toolbar button').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'print("hello")\n');
+   // Deterministic load fixture: a 60k-character in-flight answer and 150 history rows.
+   const metrics=await page.evaluate(()=>{
+    const original=state.messages;const history=Array.from({length:150},(_,i)=>({id:'perf-'+i,content:'지난 질문 '+i,attempts:[{...original[0].attempts[0],id:'perf-a-'+i,text:'완료된 답변',citations:[]}]}));
+    const live={...original[0].attempts[0],id:'perf-active',status:'streaming',text:'장문 응답 '.repeat(10000),citations:[]};history.push({id:'perf-last',content:'계속',attempts:[live]});
+    render(history);window.__markdownCalls=0;const start=performance.now();for(let i=0;i<100;i++){live.text+='추가';render(history);}const elapsed=performance.now()-start;
+    const result={elapsed,parses:window.__markdownCalls,rows:document.querySelectorAll('.message').length};render(original);return result;
+   });
+   assert.equal(metrics.parses,0);assert.equal(metrics.rows,151);console.log(`Streaming load fixture: 151 rows / 60k chars / 100 updates: ${metrics.elapsed.toFixed(1)} ms, 0 Markdown parses`);
+  }
+  assert.ok(wire.length>0);for(const request of wire){assert.ok(['/api/crypto-session','/api/secure'].some(s=>new URL(request.url).pathname===prefix+s),'only encrypted API endpoints');assert.ok(!request.url.includes('?'),'no plaintext query strings');assert.ok(!request.body.includes('내일 회의할까요?')&&!request.body.includes('cancel me'),'no plaintext prompts');if(request.url.endsWith('/api/secure'))assert.equal(JSON.parse(request.body).encrypted,true);}
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`final overflow ${width}`);assert.deepEqual(errors,[]);
+  console.log(`PASS ${width}px · encrypted requests/SSE/poll · timeout/resume/cancel · stable DOM · Markdown/XSS · fonts · dark · limits`);
+  }finally{await context.close();}
  }
- }finally{await browser.close();}
-})().catch(e=>{console.error(e);process.exitCode=1;});
+ // Web Crypto unavailable: fail closed before any API request or plaintext fallback.
+ const context=await browser.newContext({ignoreHTTPSErrors:process.env.CODEX_VERIFY_LOCAL_TLS==='1'});try{
+  await context.addInitScript(()=>Object.defineProperty(Crypto.prototype,'subtle',{value:undefined,configurable:true}));const page=await context.newPage();let apiRequests=0;page.on('request',r=>{if(r.url().includes('/api/'))apiRequests++;});
+  await page.goto(targetUrl+'/');await expect(page.locator('#status')).toContainText('HTTPS');await expect(page.locator('#send')).toBeDisabled();assert.equal(apiRequests,0);
+ }finally{await context.close();}
+}
+module.exports={verifyConversation};

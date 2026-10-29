@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import pytest
+from _conversation_transport import EncryptedClient
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -13,6 +14,11 @@ sys.path.insert(0, str(ROOT / 'conversation-app'))
 spec = importlib.util.spec_from_file_location('conversation_server_test', ROOT / 'conversation-app/server.py')
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
+_create_app = server.create_app
+def create_test_app(*args, **kwargs):
+    app = _create_app(*args, **kwargs)
+    app.test_client_class = EncryptedClient
+    return app
 from services.conversations import Store
 
 
@@ -46,7 +52,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'accounts', lambda: [account])
     monkeypatch.setattr(server, 'get_account', lambda _: account)
     provider = FakeProvider()
-    app = server.create_app(tmp_path, provider)
+    app = create_test_app(tmp_path, provider)
     app.testing = True
     client = app.test_client()
     client.get('/')
@@ -184,7 +190,7 @@ def test_entrypoint_uses_loopback_without_host_flag(tmp_path, monkeypatch):
 def test_explicit_tailnet_access_preserves_host_origin_and_csrf(tmp_path, monkeypatch):
     monkeypatch.setenv('CHAT_ALLOWED_HOSTS', 'chat.example.ts.net')
     monkeypatch.setenv('CHAT_ALLOWED_NETWORKS', '100.64.0.0/10')
-    app = server.create_app(tmp_path, FakeProvider())
+    app = create_test_app(tmp_path, FakeProvider())
     client = app.test_client()
     base = 'http://chat.example.ts.net:3101'
     peer = {'REMOTE_ADDR': '100.80.1.2'}
@@ -248,7 +254,7 @@ def test_local_https_gateway_origin_requires_csrf(setup, external_origin):
 
 def test_remote_peer_cannot_forward_origin_or_bypass_access(tmp_path, monkeypatch):
     monkeypatch.setenv('CHAT_ALLOWED_NETWORKS', '100.64.0.0/10')
-    app = server.create_app(tmp_path, FakeProvider())
+    app = create_test_app(tmp_path, FakeProvider())
     client = app.test_client()
     client.get('/')
     with client.session_transaction() as sess:
@@ -297,3 +303,53 @@ def test_cloudflare_browser_can_send_prompt_without_repository_scope(setup):
     assert response.json['attempt']['settings']['artifact_scope'] == cid
     assert provider.enter.wait(2)
     assert provider.calls == 1
+
+
+def test_auto_title_is_first_turn_only_and_respects_manual_rename(tmp_path):
+    store = Store(tmp_path)
+    settings = {'account_id': 'a', 'provider_account_id': 'p', 'model': 'test', 'search': 'off'}
+    cid = store.create()['id']
+    attempt, _ = store.enqueue(cid, 'first prompt', 'title-request-one', settings)
+    assert attempt['settings']['generate_title'] is True
+    store.emit(attempt['id'], 'title', {'title': 'LLM title'})
+    assert store.conversations()[0]['title'] == 'LLM title'
+    store.emit(attempt['id'], 'delta', {'text': 'answer'})
+    store.emit(attempt['id'], 'done', {'status': 'completed'})
+    assert store.attempt(attempt['id'])['text'] == 'answer'
+    second, _ = store.enqueue(cid, 'second prompt', 'title-request-two', settings)
+    assert second['settings']['generate_title'] is False
+    store.emit(second['id'], 'title', {'title': 'wrong title'})
+    assert store.conversations()[0]['title'] == 'LLM title'
+    other = store.create()['id']
+    pending, _ = store.enqueue(other, 'prompt', 'title-request-three', settings)
+    store.change(other, 'My chosen title')
+    store.emit(pending['id'], 'title', {'title': 'Late LLM title'})
+    assert next(row for row in store.conversations() if row['id'] == other)['title'] == 'My chosen title'
+
+
+def test_limit_endpoint_uses_selected_account(setup, monkeypatch):
+    _, client, _, provider = setup
+    calls = []
+    def limits(account, force=False):
+        calls.append((account['id'], force))
+        return {'five_hour': {'used_percent': 12, 'remaining_percent': 88}, 'weekly': None}
+    monkeypatch.setattr(provider, 'limits', limits, raising=False)
+    response = client.get('/api/usage/limits?account_id=personal&refresh=1')
+    assert response.status_code == 200
+    assert response.json['five_hour']['remaining_percent'] == 88
+    assert calls == [('personal', True)]
+
+
+def test_legacy_title_is_preserved_when_retrying_first_message(tmp_path):
+    store = Store(tmp_path)
+    settings = {'account_id': 'a', 'provider_account_id': 'p', 'model': 'test', 'search': 'off'}
+    cid = store.create()['id']
+    attempt, _ = store.enqueue(cid, 'original prompt', 'legacy-first-request', settings)
+    store.emit(attempt['id'], 'done', {'status': 'completed'})
+    with store.db() as db:
+        db.execute('DELETE FROM conversation_titles WHERE conversation_id=?', (cid,))
+        db.execute('UPDATE conversations SET title=? WHERE id=?', ('기존 대화 제목', cid))
+    retried, _ = store.enqueue(cid, '', 'legacy-retry-request', settings, retry=attempt['id'])
+    assert retried['settings']['generate_title'] is False
+    store.emit(retried['id'], 'title', {'title': '덮어쓰면 안 되는 제목'})
+    assert store.conversations()[0]['title'] == '기존 대화 제목'

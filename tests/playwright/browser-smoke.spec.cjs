@@ -105,6 +105,10 @@ test('browser UI smoke check', async ({ page }) => {
     if (process.env.CODEX_VERIFY_METADATA_SYNC === '1') {
         await require('./metadata-sync.cjs').verifyMetadataSync(page, expect);
     }
+    if (process.env.CODEX_VERIFY_CONVERSATION === '1') {
+        test.setTimeout(120_000);
+        await require('../test_conversation_browser.cjs').verifyConversation(page.context().browser(), targetUrl);
+    }
     if (process.env.CODEX_VERIFY_BLOG === '1') {
         await require('./blog.cjs').verifyBlog(page, expect);
     }

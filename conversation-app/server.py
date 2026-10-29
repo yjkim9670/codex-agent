@@ -8,11 +8,12 @@ import secrets
 import threading
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory, session, stream_with_context
+from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory, session
 from werkzeug.exceptions import HTTPException
 from shared.chat_accounts import accounts, get_account
 from services.conversations import Store, TERMINAL
 from services.codex_provider import Provider
+from services.transport import install_transport
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,12 +98,15 @@ def create_app(data_dir=None, provider=None):
             if not secrets.compare_digest(request.headers.get('X-Chat-CSRF', ''), session.get('csrf') or secrets.token_hex(32)):
                 abort(403, description='csrf_mismatch')
 
+    install_transport(app)
+
     @app.after_request
     def headers(response):
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Cache-Control'] = ('private, max-age=86400' if request.path.startswith('/static/')
+                                             and response.status_code < 400 else 'no-store')
         return response
 
     @app.errorhandler(ValueError)
@@ -216,7 +220,7 @@ def create_app(data_dir=None, provider=None):
                     if cancel.is_set():
                         store.emit(attempt['id'], 'done', {'status': 'cancelled'})
                         return
-                    engine.run(account, opts, store.history(attempt['id']),
+                    engine.run(account, attempt['settings'], store.history(attempt['id']),
                                lambda kind, data: store.emit(attempt['id'], kind, data), cancel)
                 except Exception as exc:
                     error = str(exc) if isinstance(exc, ValueError) else '요청 처리 중 오류가 발생했습니다. 다시 시도해 주세요.'
@@ -236,23 +240,47 @@ def create_app(data_dir=None, provider=None):
             after = max(0, int(request.headers.get('Last-Event-ID') or request.args.get('after', '0')))
         except ValueError:
             raise ValueError('이벤트 위치가 올바르지 않습니다.') from None
-        @stream_with_context
         def stream():
             cursor = after
             while True:
-                rows = store.events(aid, cursor)
+                # Coalesce persisted deltas in a bounded frame. The browser
+                # applies them locally instead of fetching the whole history.
+                with store.wake:
+                    rows = store.events(aid, cursor, limit=128)
+                    finished = store.attempt(aid)['status'] in TERMINAL
+                    if finished and not rows:
+                        # A terminal event can commit between the two reads.
+                        rows = store.events(aid, cursor, limit=128)
+                    if not rows and not finished:
+                        store.wake.wait(timeout=10)
+                chunks = []
                 for row in rows:
                     cursor = row['id']
-                    yield f"id: {cursor}\nevent: {row['type']}\ndata: {row['data']}\n\n"
-                if store.attempt(aid)['status'] in TERMINAL:
-                    # Drain events committed between the query and terminal read.
-                    for row in store.events(aid, cursor):
-                        yield f"id: {row['id']}\nevent: {row['type']}\ndata: {row['data']}\n\n"
+                    chunks.append(f"id: {cursor}\nevent: {row['type']}\ndata: {row['data']}\n\n")
+                if chunks:
+                    yield ''.join(chunks)
+                    continue  # Drain the next bounded batch before termination.
+                if finished:
                     return
                 yield ': keepalive\n\n'
-                with store.wake:
-                    store.wake.wait(timeout=10)
         return Response(stream(), mimetype='text/event-stream', headers={'X-Accel-Buffering': 'no'})
+
+    @app.get('/api/attempts/<aid>/poll')
+    def poll(aid):
+        # The encryption dispatcher applies the same session/CSRF boundary as SSE.
+        store.attempt(aid)
+        try:
+            after = max(0, int(request.args.get('after', '0')))
+            if after > 9223372036854775807:
+                raise ValueError
+        except ValueError:
+            raise ValueError('이벤트 위치가 올바르지 않습니다.') from None
+        # Never wait for a provider event: each response is a finite JSON body.
+        rows = store.events(aid, after, limit=129)
+        batch = rows[:128]
+        return jsonify(events=[dict(id=row['id'], type=row['type'], data=json.loads(row['data']))
+                               for row in batch],
+                       cursor=batch[-1]['id'] if batch else after, has_more=len(rows) > 128)
 
     @app.post('/api/attempts/<aid>/cancel')
     def cancel(aid):
@@ -262,6 +290,11 @@ def create_app(data_dir=None, provider=None):
             if event:
                 event.set()
         return jsonify(ok=True)
+
+    @app.get('/api/usage/limits')
+    def limits():
+        account = get_account(request.args.get('account_id'))
+        return jsonify(engine.limits(account, force=request.args.get('refresh') == '1'))
 
     @app.get('/api/usage/summary')
     def usage():

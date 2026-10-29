@@ -37,3 +37,46 @@ dialog{border-radius:8px}
 /* Skip layout/paint for history outside the viewport; retain its DOM and state. */
 .message{content-visibility:auto;contain-intrinsic-size:auto 320px}
 .answer-body.streaming{white-space:pre-wrap;overflow-wrap:anywhere}
+
+/* Keep conversation controls available without reserving reading space. */
+.compose-footer{justify-content:flex-end}
+#header-actions{display:flex;gap:8px}
+#more-actions,#request-summary{display:none}
+#status:empty{display:none}
+header,#composer,#status{flex-shrink:0}
+.answer-details summary{cursor:pointer;min-height:32px;display:list-item;list-style-position:inside}
+.answer-details>div{padding:4px 0 8px;overflow-wrap:anywhere}
+#actions-dialog h2{margin-bottom:16px}
+#mobile-actions{display:grid;gap:8px;margin-bottom:16px}
+.sheet-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+#request-dialog{width:500px}
+@media(max-width:599px){
+ body{overflow:hidden}
+ .shell{height:calc(var(--viewport-height,100dvh) / var(--scale))}
+ header{flex-wrap:nowrap;padding:3px 8px;gap:4px;min-height:50px}
+ header h1{flex:1;min-width:0;font-size:15px}
+ header button{min-height:44px;min-width:44px;border:0;font-size:22px;padding:4px 8px}
+ #more-actions{display:block}
+ #header-actions{display:none}
+ #thread{padding:16px 12px;overscroll-behavior:contain}
+ #composer{padding:4px 12px max(12px,env(safe-area-inset-bottom))}
+ #request-summary{display:block;max-width:100%;min-height:44px;padding:4px 0;border:0;background:transparent;color:var(--muted);font-size:13px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:left}
+ .input-row{display:flex;align-items:flex-end;gap:8px}
+ #message{flex:1;min-width:0;min-height:44px;max-height:min(120px,25dvh);resize:none;padding:9px 12px;line-height:26px;overflow-y:auto;font-size:16px}
+ .compose-footer{flex-shrink:0;margin:0;gap:0}
+ #send,#stop{min-height:44px;padding:8px 12px}
+ #send{font-size:0;width:44px}
+ #send::after{content:'↑';font-size:20px;line-height:1}
+ #status{padding:4px 12px;font-size:12px;max-height:64px;overflow:auto}
+ #new-content{bottom:calc(var(--composer-height,104px) + 12px);right:12px;z-index:1}
+ .user{padding:12px;line-height:1.6}
+ .answer-body{font-size:16px;line-height:1.7}
+ .answer-body h2{font-size:20px}
+ #empty{padding-top:0}
+ dialog{max-height:calc(var(--viewport-height,100dvh) - 24px);overflow-y:auto;overscroll-behavior:contain}
+ #request-dialog{position:fixed;inset:auto 0 0;margin:0;width:100%;max-width:100%;border-radius:12px 12px 0 0;padding:16px 16px max(16px,env(safe-area-inset-bottom))}
+ #request-dialog .toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px}
+ #request-dialog .toolbar label{min-width:0}
+ #request-dialog #model{max-width:100%}
+ aside{overflow-y:auto;max-height:calc(var(--viewport-height,100dvh) / var(--scale))}
+}

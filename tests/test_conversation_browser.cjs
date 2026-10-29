@@ -3,6 +3,7 @@ const {expect}=require('@playwright/test');
 const assert=require('node:assert/strict');
 
 async function verifyConversation(browser,targetUrl){
+ await require('./test_conversation_mobile_browser.cjs').verifyMobileConversation(browser,targetUrl);
  for(const width of [360,768,1440,1920]){
   const prefix=width===360?'':width===768?'/apps/workbench-chat':'/chat';
   const context=await browser.newContext({viewport:{width,height:900},ignoreHTTPSErrors:process.env.CODEX_VERIFY_LOCAL_TLS==='1'});
@@ -41,7 +42,8 @@ async function verifyConversation(browser,targetUrl){
    };
   },width);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`overflow ${width}`);
-  await page.locator('[data-mode=translate]').click();await expect(page.locator('#search')).toHaveValue('off');await expect(page.locator('#translation-options')).toBeVisible();
+  await page.locator('[data-mode=translate]').click();await expect(page.locator('#search')).toHaveValue('off');if(width===360){await expect(page.locator('#request-summary')).toContainText('영어 번역');await expect(page.locator('#translation-options')).not.toBeVisible();await page.locator('#request-summary').click();}
+  await expect(page.locator('#translation-options')).toBeVisible();if(width===360)await page.locator('#request-dialog [data-close-dialog]').click();
   await page.locator('#message').fill('내일 회의할까요?');
   await page.locator('#message').dispatchEvent('keydown',{key:'Enter',keyCode:229,isComposing:true});
   assert.equal(await page.evaluate(()=>window.__paths.some(x=>x.endsWith('/messages'))),false);
@@ -63,7 +65,7 @@ async function verifyConversation(browser,targetUrl){
   await page.locator('#stop').click();await expect(page.locator('#stop')).toBeHidden();await expect(page.locator('.answer .meta').last()).toContainText('중단된 부분');
   assert.ok(await page.evaluate(()=>window.__firstAnswer===document.querySelector('.answer-body')),'preserve completed DOM');
   assert.equal(await page.evaluate(()=>window.__mutations),0,'do not mutate completed Markdown');
-  await page.locator('#preferences').click();await page.locator('#theme').selectOption('dark');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  if(width===360)await page.locator('#more-actions').click();await page.locator('#preferences').click();await page.locator('#theme').selectOption('dark');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
   assert.equal(await page.locator('body').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(22, 22, 22)');
   for(const font of ['ibm-plex','suit','nanum-square','wanted-sans','line-seed-kr','goorm-sans','paperlogy','nexon-lv2-gothic']){
    await page.locator('#font').selectOption(font);await expect(page.locator('html')).toHaveAttribute('data-ui-font',font);
@@ -73,7 +75,7 @@ async function verifyConversation(browser,targetUrl){
   await page.locator('#settings-dialog button').click();await page.locator('#message').fill('보존할 초안');await page.reload();
   await expect(page.locator('#message')).toHaveValue('보존할 초안');await expect(page.locator('html')).toHaveAttribute('data-ui-font','nexon-lv2-gothic');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
   if(width<1024){await page.locator('#show-history').click();await expect(page.locator('#sidebar')).toBeVisible();await page.keyboard.press('Escape');await expect(page.locator('#sidebar')).not.toBeVisible();await expect(page.locator('#show-history')).toBeFocused();}
-  await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await expect(page.locator('#dialog-limits')).toContainText('40% 남음');
+  if(width===360)await page.locator('#more-actions').click();await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await expect(page.locator('#dialog-limits')).toContainText('40% 남음');
   await expect(page.locator('#dialog-limits progress').first()).toHaveAttribute('value','24');
   await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/fail'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
   await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits-status')).toContainText('조회 실패');await expect(page.locator('#dialog-limits')).toContainText('미제공');
@@ -81,7 +83,7 @@ async function verifyConversation(browser,targetUrl){
   await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await page.locator('#usage-dialog .primary').click();
   // An expired session is renewed before retry; a plaintext response is never accepted.
   await page.evaluate(()=>{transport.channel.expires=0;});
-  await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await page.locator('#usage-dialog .primary').click();
+  if(width===360)await page.locator('#more-actions').click();await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await page.locator('#usage-dialog .primary').click();
   if(width===1920){
    await context.grantPermissions(['clipboard-read','clipboard-write']);await page.locator('.code-toolbar button').click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'print("hello")\n');
    // Deterministic load fixture: a 60k-character in-flight answer and 150 history rows.

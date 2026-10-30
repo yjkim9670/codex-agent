@@ -164,9 +164,8 @@ const CONTROLS_COLLAPSE_KEY = 'codexControlsCollapsed';
 const PHONE_MEDIA_QUERY = '(max-width: 599px)';
 const FOLD_MEDIA_QUERY = '(min-width: 600px) and (max-width: 840px)';
 const MOBILE_MEDIA_QUERY = '(max-width: 840px)';
-// The unfolded Fold viewport is landscape-shaped.  It is wider than the
-// compact breakpoint, so it needs its own fallback when the browser does not
-// expose a foldable UA or Window Segments (for example, device emulation).
+// Fallback bounds for landscape Fold viewports without device signals.
+// Portrait touch viewports are handled separately by hasFoldInnerViewportProfile.
 const FOLD_INNER_VIEWPORT_MIN_WIDTH = 840;
 const FOLD_INNER_VIEWPORT_MAX_WIDTH = 980;
 const FOLD_INNER_VIEWPORT_MAX_HEIGHT = 680;
@@ -2515,7 +2514,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const UI_SCALE_BY_VIEW_MODE_STORAGE_KEY = 'codex-ui-scale-by-view-mode';
     const UI_FONT_STORAGE_KEY = 'codex-ui-font';
     const DEFAULT_UI_SCALE = 90;
-    const FOLD_INNER_DEFAULT_UI_SCALE = 85;
+    const FOLD_INNER_DEFAULT_UI_SCALE = 100;
     const DEFAULT_UI_FONT = 'ibm-plex';
     let uiScalesByViewMode = {};
     let uiSettingsTrigger = null;
@@ -2660,7 +2659,7 @@ document.addEventListener('DOMContentLoaded', () => {
         );
         // The former key held one value for every layout.  Its origin surface
         // cannot be recovered, so discard it and use the documented per-mode
-        // defaults instead (inner 85%, all other modes 90%).
+        // defaults instead (inner 100%, all other modes 90%).
         window.localStorage.removeItem(UI_SCALE_STORAGE_KEY);
         applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
         applyUiViewMode(window.localStorage.getItem(UI_VIEW_MODE_STORAGE_KEY), { persist: false, refresh: false });
@@ -2670,6 +2669,22 @@ document.addEventListener('DOMContentLoaded', () => {
         applyUiFont(DEFAULT_UI_FONT, { persist: false });
         applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
     }
+    try {
+        workModeArrangement = normalizeWorkModeArrangement(localStorage.getItem('codex-work-arrangement'));
+    } catch (_error) { /* Retain the automatic layout without storage. */ }
+    document.getElementById('codex-work-arrangement')?.addEventListener('change', event => {
+        workModeArrangement = normalizeWorkModeArrangement(event.target.value);
+        try { localStorage.setItem('codex-work-arrangement', workModeArrangement); } catch (_error) {}
+        setWorkModeMobileView(workModeMobileView);
+        applyWorkModeSplitRatio(workModeSplitRatio);
+    });
+    document.querySelectorAll('[data-work-view]').forEach(button => {
+        button.addEventListener('click', () => {
+            const view = button.dataset.workView;
+            if (view !== WORK_MODE_MOBILE_VIEW_CHAT) workModeMobileBrowseView = view;
+            setWorkModeMobileView(view);
+        });
+    });
     uiSettingsOpen?.addEventListener('click', openUiSettingsOverlay);
     uiSettingsClose?.addEventListener('click', closeUiSettingsOverlay);
     uiSettingsDone?.addEventListener('click', closeUiSettingsOverlay);
@@ -6334,10 +6349,39 @@ function syncWorkModeFileFullscreenButtonState() {
     syncHoverTooltipFromLabel(button, nextLabel);
 }
 
+let workModeArrangement = 'auto';
+function normalizeWorkModeArrangement(value) {
+    return ['auto', 'single', 'horizontal', 'vertical'].includes(value) ? value : 'auto';
+}
+
+function resolveWorkModeArrangement() {
+    if (!isFoldInnerLayout()) return '';
+    const width = getWorkModeElements().layout?.getBoundingClientRect().width || window.innerWidth;
+    // Both panes must remain at least 400 CSS pixels wide at the actual UI scale.
+    const keyboard = document.querySelector('.app')?.classList.contains(MOBILE_KEYBOARD_OPEN_CLASS);
+    if (workModeArrangement === 'auto') {
+        return !keyboard && window.innerWidth > window.innerHeight && width >= 810 ? 'horizontal' : 'single';
+    }
+    return workModeArrangement;
+}
+
+function syncWorkModeArrangement() {
+    const arrangement = resolveWorkModeArrangement();
+    document.documentElement.dataset.workArrangement = arrangement;
+    const select = document.getElementById('codex-work-arrangement');
+    if (select) select.value = workModeArrangement;
+    document.querySelectorAll('[data-work-view]').forEach(button => {
+        const selected = button.dataset.workView === workModeMobileView;
+        button.setAttribute('aria-pressed', String(selected));
+    });
+    getWorkModeElements().divider?.setAttribute('aria-orientation', arrangement === 'vertical' ? 'horizontal' : 'vertical');
+}
+
 function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
     const previousView = normalizeWorkModeMobileView(workModeMobileView);
     const nextView = normalizeWorkModeMobileView(view);
     workModeMobileView = nextView;
+    syncWorkModeArrangement();
     const elements = getWorkModeElements();
     const fileElements = getWorkModeFileElements();
     const mobile = isMobileLayout();
@@ -6386,7 +6430,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         elements.app.classList.toggle(
             'is-work-mode-fold-list',
             applyFoldBrowseView
-                && nextView !== WORK_MODE_MOBILE_VIEW_CHAT
+                && (nextView !== WORK_MODE_MOBILE_VIEW_CHAT || isFoldInnerLayout())
                 && foldBrowseView === WORK_MODE_MOBILE_VIEW_LIST
         );
         elements.app.classList.toggle(
@@ -6396,7 +6440,7 @@ function setWorkModeMobileView(view = WORK_MODE_MOBILE_VIEW_CHAT) {
         elements.app.classList.toggle(
             'is-work-mode-fold-viewer',
             applyFoldBrowseView
-                && nextView !== WORK_MODE_MOBILE_VIEW_CHAT
+                && (nextView !== WORK_MODE_MOBILE_VIEW_CHAT || isFoldInnerLayout())
                 && foldBrowseView === WORK_MODE_MOBILE_VIEW_VIEWER
         );
     }
@@ -7185,6 +7229,9 @@ function persistWorkModeSplitPreference(ratio) {
 function clampWorkModeChatWidth(chatWidthPx, contentWidthPx) {
     const total = Number(contentWidthPx);
     if (!Number.isFinite(total) || total <= 0) return WORK_MODE_MIN_CHAT_WIDTH_PX;
+    if (isFoldInnerLayout() && total >= 800) {
+        return Math.min(total - 400, Math.max(400, Number(chatWidthPx)));
+    }
     const min = Math.min(WORK_MODE_MIN_CHAT_WIDTH_PX, Math.max(240, total - WORK_MODE_MIN_PREVIEW_WIDTH_PX));
     const max = Math.max(min, total - WORK_MODE_MIN_PREVIEW_WIDTH_PX);
     return Math.min(max, Math.max(min, Number(chatWidthPx)));
@@ -7193,6 +7240,12 @@ function clampWorkModeChatWidth(chatWidthPx, contentWidthPx) {
 function applyWorkModeSplitRatio(ratio = workModeSplitRatio, { persist = false } = {}) {
     const elements = getWorkModeElements();
     if (!elements.app || !elements.layout) return;
+    syncWorkModeArrangement();
+    if (resolveWorkModeArrangement() === 'single') return;
+    if (resolveWorkModeArrangement() === 'vertical') {
+        elements.app.style.setProperty('--work-mode-chat-height', `${normalizeWorkModeSplitRatio(ratio) * 100}%`);
+        return;
+    }
     const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
     const totalWidth = Math.max(0, elements.layout.clientWidth - dividerWidth);
     if (totalWidth <= 0) return;
@@ -7223,11 +7276,7 @@ function activateWorkModeLayout() {
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
-    setWorkModeMobileView(
-        isFoldInnerLayout()
-            ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
-            : workModeMobileView
-    );
+    setWorkModeMobileView(workModeMobileView);
     setWorkModePreviewFullscreen(workModePreviewFullscreen);
     syncWorkModePanelModeState();
     requestAnimationFrame(() => {
@@ -7252,7 +7301,7 @@ function initializeWorkMode(isMobile) {
     initializeWorkModeFileViewState(isMobile);
     setWorkModeFilePathLabel(workModeFileRoot, workModeFilePath);
     activateWorkModeLayout();
-    const initialMobileView = (isMobile || isFoldLayout())
+    const initialMobileView = (isMobile || isFoldLayout() || (isFoldInnerLayout() && resolveWorkModeArrangement() === 'single'))
         ? WORK_MODE_MOBILE_VIEW_CHAT
         : isFoldInnerLayout()
             ? WORK_MODE_MOBILE_VIEW_LIST
@@ -7276,11 +7325,7 @@ function handleWorkModeMediaChange(isMobile) {
     if ((isMobile || usesWorkModeSingleFilePane()) && isWorkModeEnabled()) {
         setWorkModeFileViewerFullscreen(false);
     }
-    setWorkModeMobileView(
-        isFoldInnerLayout()
-            ? normalizeWorkModeMobileBrowseView(workModeMobileBrowseView)
-            : workModeMobileView
-    );
+    setWorkModeMobileView(workModeMobileView);
     applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
     applyWorkModeFileColumnWidths({ persist: false });
     setWorkModeFileViewerFullscreen(workModeFileViewerFullscreen);
@@ -7295,10 +7340,16 @@ function handleWorkModeMediaChange(isMobile) {
     });
 }
 
-function updateWorkModeSplitFromPointer(clientX, { persist = false } = {}) {
+function updateWorkModeSplitFromPointer(clientX, { persist = false, clientY = 0 } = {}) {
     const elements = getWorkModeElements();
     if (!elements.layout) return;
     const layoutRect = elements.layout.getBoundingClientRect();
+    if (resolveWorkModeArrangement() === 'vertical') {
+        workModeSplitRatio = normalizeWorkModeSplitRatio((layoutRect.bottom - clientY) / layoutRect.height);
+        applyWorkModeSplitRatio(workModeSplitRatio);
+        if (persist) persistWorkModeSplitPreference(workModeSplitRatio);
+        return;
+    }
     const dividerWidth = Math.max(1, Math.round(elements.divider?.getBoundingClientRect().width || 10));
     const totalWidth = Math.max(0, layoutRect.width - dividerWidth);
     if (totalWidth <= 0) return;
@@ -7333,13 +7384,13 @@ function handleWorkModeResizePointerMove(event) {
     if (workModeResizePointerId === null || event.pointerId !== workModeResizePointerId) return;
     if (!isWorkModeEnabled()) return;
     event.preventDefault();
-    updateWorkModeSplitFromPointer(event.clientX, { persist: false });
+    updateWorkModeSplitFromPointer(event.clientX, { persist: false, clientY: event.clientY });
 }
 
 function handleWorkModeResizePointerUp(event) {
     if (workModeResizePointerId === null || event.pointerId !== workModeResizePointerId) return;
     event.preventDefault();
-    updateWorkModeSplitFromPointer(event.clientX, { persist: true });
+    updateWorkModeSplitFromPointer(event.clientX, { persist: true, clientY: event.clientY });
     stopWorkModeResize();
 }
 
@@ -7472,8 +7523,7 @@ function isFoldInnerLayout() {
     return resolveUiViewMode() === 'fold-inner';
 }
 
-// Both Fold surfaces need a single, readable file pane. The cover also
-// switches between chat and files, while the inner screen keeps chat visible.
+// Both Fold surfaces keep the file list and viewer in one readable pane.
 function usesWorkModeSingleFilePane() {
     return isFoldLayout() || isFoldInnerLayout();
 }
@@ -7508,11 +7558,14 @@ function hasFoldableWindowSignal() {
 function hasFoldInnerViewportProfile() {
     const width = Math.round(Number(window.innerWidth) || 0);
     const height = Math.round(Number(window.innerHeight) || 0);
-    return width >= FOLD_INNER_VIEWPORT_MIN_WIDTH
+    const landscape = width >= FOLD_INNER_VIEWPORT_MIN_WIDTH
         && width <= FOLD_INNER_VIEWPORT_MAX_WIDTH
-        && height > 0
-        && height <= FOLD_INNER_VIEWPORT_MAX_HEIGHT
-        && width > height;
+        && height > 0 && height <= FOLD_INNER_VIEWPORT_MAX_HEIGHT && width > height;
+    // Restrict the portrait fallback to touch devices so desktop windows keep
+    // their chosen layout. Foldable UA/segment signals take precedence above.
+    const portrait = navigator.maxTouchPoints > 0
+        && width >= 600 && width <= 900 && height >= width && height <= 1200;
+    return landscape || portrait;
 }
 
 function detectUiViewMode() {
@@ -7522,9 +7575,8 @@ function detectUiViewMode() {
         // Segments is unavailable on Android WebView.
         return window.innerWidth >= 600 ? 'fold-inner' : 'fold-cover';
     }
-    // Some embedded browsers and desktop device emulators do not provide a
-    // foldable signal.  Recognize the compact, horizontal inner canvas (such
-    // as 932 × 568px) before falling back to the general desktop layout.
+    // Embedded browsers may omit foldable signals. Recognize compact landscape
+    // and portrait touch canvases before falling back to desktop.
     if (hasFoldInnerViewportProfile()) return 'fold-inner';
     return window.matchMedia(PHONE_MEDIA_QUERY).matches ? 'mobile' : 'desktop';
 }
@@ -7771,6 +7823,11 @@ function setMobileKeyboardOpen(open) {
     if (body) {
         body.classList.toggle(MOBILE_KEYBOARD_OPEN_CLASS, isOpen);
     }
+    if (shouldCompressAppLayout && isFoldInnerLayout() && workModeArrangement === 'auto'
+        && workModeMobileView !== WORK_MODE_MOBILE_VIEW_CHAT) {
+        setWorkModeMobileView(WORK_MODE_MOBILE_VIEW_CHAT);
+    }
+
 }
 
 function syncMobileKeyboardState(isMobile = isMobileViewportBehaviorActive()) {
@@ -7780,6 +7837,7 @@ function syncMobileKeyboardState(isMobile = isMobileViewportBehaviorActive()) {
         rememberStableMobileViewportHeight(metrics);
     }
     setMobileKeyboardOpen(isKeyboardOpen);
+    syncWorkModeArrangement();
     applyMobilePromptLift({ isMobile, keyboardOpen: isKeyboardOpen, metrics });
     if (isTerminalUiOpen()) {
         syncTerminalExtraKeysState();

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=257">
+    <link rel="stylesheet" href="/static/css/app.css?v=258">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-company-mode="{{ 'true' if company_mode_enabled else 'false' }}" data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -369,6 +369,11 @@
             </div>
         </header>
 
+        <nav class="work-surface-tabs" aria-label="작업 화면 전환">
+            <button type="button" class="btn ghost" data-work-view="chat" aria-pressed="true">대화</button>
+            <button type="button" class="btn ghost" data-work-view="list" aria-pressed="false">파일</button>
+            <button type="button" class="btn ghost" data-work-view="viewer" aria-pressed="false">미리보기</button>
+        </nav>
         <main class="layout">
             <aside class="sidebar-stack">
                 <section class="live-weather-panel is-compact" id="codex-live-weather-panel">
@@ -1452,7 +1457,18 @@
                         <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="fold-inner"><span>폴드 내부 화면</span></label>
                         <label class="ui-view-option"><input type="radio" name="codex-ui-view-mode" value="mobile"><span>모바일</span></label>
                     </div>
-                    <span class="ui-font-setting-help" id="codex-ui-view-help">폴드 외부 화면·모바일은 한 화면씩 전환하고, 폴드 내부 화면은 채팅과 파일을 나란히 표시합니다. 선택값은 이 브라우저에 저장됩니다.</span>
+                    <span class="ui-font-setting-help" id="codex-ui-view-help">폴드 내부 세로 화면은 전체 폭 탭으로, 가로 화면은 폭이 충분할 때 좌우로 표시합니다. 선택값은 이 브라우저에 저장됩니다.</span>
+                </fieldset>
+                <fieldset class="ui-font-setting">
+                    <legend class="ui-font-setting-label">폴드 내부 화면 배치</legend>
+                    <label for="codex-work-arrangement">배치 선택</label>
+                    <select id="codex-work-arrangement">
+                        <option value="auto">자동 (패널 폭에 맞춤)</option>
+                        <option value="single">한 화면</option>
+                        <option value="horizontal">좌우 분할</option>
+                        <option value="vertical">상하 분할</option>
+                    </select>
+                    <span class="ui-font-setting-help">자동 배치는 각 패널 폭 400px을 확보하며, 키보드가 열리면 한 화면으로 전환합니다. 상하 분할은 위에 파일, 아래에 대화를 표시하고 경계선을 끌어 비율을 조절합니다. 글자 배율은 별도로 유지됩니다.</span>
                 </fieldset>
                 <fieldset class="ui-font-setting" aria-describedby="codex-file-preview-help">
                     <legend class="ui-font-setting-label">파일 미리보기</legend>
@@ -2024,6 +2040,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=279"></script>
+    <script src="/static/js/app.js?v=280"></script>
 </body>
 </html>

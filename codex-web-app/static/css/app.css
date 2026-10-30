@@ -14570,8 +14570,7 @@ html.is-windows-desktop .windows-small-text {
     display: block !important;
 }
 
-/* The unfolded Fold canvas is a true work surface: retain the parallel
-   chat/file panes instead of inheriting the cover screen's single-pane flow. */
+/* Base Fold split; the selected arrangement overrides this below. */
 :root[data-view-mode="fold-inner"] .app.is-work-mode .layout {
     display: flex;
     flex-direction: row;
@@ -14594,8 +14593,7 @@ html.is-windows-desktop .windows-small-text {
     display: block !important;
 }
 
-/* The inner Fold keeps the useful outer split (chat | File Preview), but its
-   narrower file pane shows either the browser or the viewer—not both. */
+/* Fold file panes show either the browser or the viewer at full pane width. */
 :root[data-view-mode="fold-inner"] .app.is-work-mode .work-mode-file-layout {
     grid-template-columns: minmax(0, 1fr);
 }
@@ -15426,4 +15424,81 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
     padding-left: 32px;
     background-position: 8px center;
     white-space: nowrap;
+}
+
+/* Fold arrangements use the same mounted panes, retaining selection and scroll. */
+.work-surface-tabs { display: none; }
+:root[data-view-mode="fold-inner"] .work-surface-tabs {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+}
+.work-surface-tabs .btn { flex: 1; border-radius: 0; }
+.work-surface-tabs [aria-pressed="true"] {
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--accent-fill);
+    background: var(--surface-muted);
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode .chat,
+:root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode .work-mode-preview {
+    width: 100%;
+    flex: 1 1 0;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode .work-mode-divider {
+    display: none !important;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode.is-work-mode-fold-chat .work-mode-preview,
+:root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode:not(.is-work-mode-fold-chat) .chat {
+    display: none;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="vertical"] .app.is-work-mode .layout {
+    flex-direction: column;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="vertical"] .app.is-work-mode .chat {
+    order: 2;
+    width: 100%;
+    flex: 0 0 var(--work-mode-chat-height, 52%);
+    min-height: 0;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="vertical"] .app.is-work-mode .work-mode-preview {
+    order: 0;
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 0;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="vertical"] .app.is-work-mode .work-mode-divider {
+    order: 1;
+    width: 100%;
+    cursor: row-resize;
+    touch-action: none;
+}
+:root[data-view-mode="fold-inner"][data-work-arrangement="vertical"] .work-mode-divider::before {
+    left: 6px;
+    right: 6px;
+    top: 50%;
+    bottom: auto;
+    height: 2px;
+    width: auto;
+    transform: translateY(-50%);
+}
+/* Compact controls follow their pane width, including explicit narrow splits. */
+:root[data-view-mode="fold-inner"] .chat,
+:root[data-view-mode="fold-inner"] .work-mode-preview { container-type: inline-size; }
+@container (max-width: 500px) {
+    .chat-header, .work-mode-preview-header { flex-wrap: wrap; }
+    .chat-header-actions, .work-mode-preview-actions { flex-wrap: wrap; min-width: 0; }
+    .chat-meta { overflow-wrap: anywhere; }
+}
+/* Leave the smallest keyboard viewports entirely to the focused composer. */
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .work-surface-tabs {
+    display: none;
+}
+:root[data-view-mode="fold-inner"] .app.is-mobile-keyboard-open .chat-header {
+    display: none;
+}
+
+:root[data-work-arrangement="vertical"] body.is-work-mode-resizing,
+:root[data-work-arrangement="vertical"] body.is-work-mode-resizing * {
+    cursor: row-resize !important;
 }

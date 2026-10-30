@@ -80,3 +80,19 @@ header,#composer,#status{flex-shrink:0}
  #request-dialog #model{max-width:100%}
  aside{overflow-y:auto;max-height:calc(var(--viewport-height,100dvh) / var(--scale))}
 }
+
+
+/* Keep history visible; secondary account controls expand only when needed. */
+.account-content{display:grid;gap:8px}
+.account>details>summary{cursor:pointer;min-height:44px;padding:8px 0;font-size:13px;list-style-position:inside}
+@media(min-width:1024px){.account>details>summary{display:none}}
+@media(max-width:1023px){
+ aside{gap:12px;padding:16px 16px max(16px,env(safe-area-inset-bottom));overflow:hidden}
+ aside>.brand,aside>#new-chat{flex-shrink:0}
+ aside>label[for=history-query],#history-query{display:none}
+ #history{flex:1 1 0;min-height:96px;overscroll-behavior:contain}
+ .account{flex:0 1 auto;min-height:0;max-height:45%;overflow-y:auto;overscroll-behavior:contain;padding-top:8px;gap:0}
+ .account>details+details{border-top:1px solid var(--border)}
+ .account-content{padding:4px 0 12px}
+ #account-limits{border-top:0;padding-top:0}
+}

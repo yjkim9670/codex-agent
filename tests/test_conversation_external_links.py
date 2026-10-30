@@ -31,6 +31,14 @@ def test_chat_backend_uses_common_tailnet_resolution(manager_source, monkeypatch
                        sequential=True, restart_on_exit=False)
     assert module.ProcManager._task_kind(task) == 'codex_chat'
     assert module.ProcManager._task_open_url(task) == 'http://chat.example.ts.net:3101'
+    assert module.ProcManager._task_tailnet_https_url(task) == 'https://chat.example.ts.net:3102'
+    task.open_url = 'http://127.0.0.1:3101/path?q=1#part'
+    assert module.ProcManager._task_tailnet_https_url(task) == 'https://chat.example.ts.net:3102/path?q=1#part'
+    task.commands = ['bash run_codex_chat_server.sh --port 3000']
+    assert module.ProcManager._task_tailnet_https_url(task) == ''
+    task.commands = ['bash run_conversation_server.sh --port 3101']
+    monkeypatch.setattr(module, 'TAILSCALE_HOSTNAME', '')
+    assert module.ProcManager._task_tailnet_https_url(task) == ''
     assert not module.ProcManager._can_sync_codex_workbench_task(task)
 
 
@@ -54,6 +62,25 @@ window.location.protocol = 'http:';
 assert.equal(taskUrl(task), 'http://100.80.1.1:3101');
 task.open_url = 'http://127.0.0.1:3101/path?q=1#part';
 assert.equal(taskUrl(task), 'http://100.80.1.1:3101/path?q=1#part');
+task.tailnet_https_url = 'https://chat.example.ts.net:3102/path?q=1#part';
+for (const hostname of ['chat.example.ts.net', 'chat.example.ts.net.', '100.80.1.1', '100.64.0.1', '100.127.255.255', '[fd7a:115c:a1e0::1]']) {
+  window.location.hostname = hostname;
+  for (const protocol of ['http:', 'https:']) {
+    window.location.protocol = protocol;
+    assert.equal(taskUrl(task), task.tailnet_https_url);
+  }
+}
+window.location.protocol = 'http:';
+for (const hostname of ['localhost', '127.0.0.1', '192.168.1.2', '100.63.255.255', '100.128.0.1']) {
+  window.location.hostname = hostname;
+  assert.equal(taskUrl(task), `http://${hostname}:3101/path?q=1#part`);
+}
+window.location.hostname = 'manager.example.com';
+window.location.protocol = 'https:';
+assert.equal(taskUrl(task), 'https://chat.example.ts.net:8443');
+window.location.protocol = 'http:';
+window.location.hostname = '100.80.1.1';
+task.tailnet_https_url = '';
 task.kind = 'codex_agent';
 assert.equal(taskUrl(task), 'http://100.80.1.1:3101/path?q=1#part');
 '''

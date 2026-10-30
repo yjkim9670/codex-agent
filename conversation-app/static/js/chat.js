@@ -17,6 +17,13 @@ function requestId(){
 let statusTimer;
 function status(text){clearTimeout(statusTimer);$('status').textContent=text;if(['응답 완료','복사했습니다.','응답을 중단했습니다.'].includes(text))statusTimer=setTimeout(()=>{$('status').textContent='';},3000);}
 const compactLayout=matchMedia('(max-width:599px)');
+const drawerLayout=matchMedia('(max-width:1023px)');
+function responsiveSidebar(){
+ // A running server may still render its cached template during an update.
+ for(const id of ['account-settings','usage-settings']){const section=$(id);if(section)section.open=!drawerLayout.matches;}
+ if(drawerLayout.matches&&$('history-query').value){$('history-query').value='';list().catch(e=>status(e.message));}
+}
+drawerLayout.addEventListener('change',responsiveSidebar);responsiveSidebar();
 function resizeMessage(){const input=$('message');input.style.height='auto';if(compactLayout.matches)input.style.height=Math.min(input.scrollHeight,Math.min(120,(visualViewport?.height||innerHeight)*.25))+'px';}
 function requestSummary(){const mode=$('mode').selectedOptions[0]?.textContent||'일반 대화';const model=$('model').selectedOptions[0]?.textContent||'모델 조회 중';const extra=$('mode').value==='translate'?`${$('language').value} · ${$('tone').value}`:model;$('request-summary').textContent=`${mode} · ${extra} ⌄`;$('request-summary').title=[mode,model,$('effort').value,$('search').selectedOptions[0]?.textContent].join(' · ');}
 function responsiveControls(){
@@ -58,7 +65,7 @@ applyTheme();$('theme').onchange=applyTheme;systemTheme.addEventListener('change
 $('preferences').onclick=()=>$('settings-dialog').showModal();
 $('show-history').onclick=()=>{$('sidebar').classList.add('open');$('new-chat').focus();};
 $('close-history').onclick=()=>{$('sidebar').classList.remove('open');$('show-history').focus();};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open')){$('sidebar').classList.remove('open');$('show-history').focus();}if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open')){$('sidebar').classList.remove('open');$('show-history').focus();}if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select,summary')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
 let limitGeneration=0;
 function paintLimits(data, message){
  for(const id of ['limit-windows','dialog-limits']){

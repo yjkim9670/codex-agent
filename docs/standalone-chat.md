@@ -6,6 +6,8 @@
 
 - Proc Manager job: `Workbench Chat - conversation server`
 - 로컬 주소: `http://127.0.0.1:3101`. 외부 브라우저는 기존 인증 게이트웨이의 **HTTPS Chat 링크**를 사용한다. 기존 `http://dinya.wind-mintaka.ts.net:3101` 직접 접속은 암호화 API를 사용할 수 없어 전송이 차단된다.
+- Tailscale 내부 Chat 주소: `https://dinya.wind-mintaka.ts.net:3102/`. 2026-10-30 `tailscale serve --bg --https=3102 http://127.0.0.1:3101`로 등록했다. 3101의 기존 서버와 다른 포트의 Serve/Funnel 설정은 유지하며, 3102는 Funnel로 공개하지 않는다. 해제 명령은 `tailscale serve --https=3102 off`다. Proc Manager는 Tailscale 도메인·IP로 접속하면 Chat 열기 링크를 이 HTTPS 주소로 연결한다. 로컬 HTTP 접속과 외부 HTTPS 대시보드의 Funnel 링크는 기존 동작을 유지한다. Proc Manager 코드 변경 후에는 사용자가 Proc Manager를 재시작해야 반영된다.
+- 같은 날 Chromium으로 HTTP의 `isSecureContext=false`·Web Crypto 미제공과 HTTPS의 암호화 연결·모델 8개·대화 3개 로딩을 확인했다. 캐시된 이전 HTML에 계정/사용량 접기 요소가 없어도 `responsiveSidebar()`가 초기화를 중단하지 않도록 호환 처리했다. 실제 모델 생성 요청과 운영 서버 재시작은 수행하지 않았다.
 - 등록 payload: `ops/workbench-chat.job.json`; 실제 확인 기록: `ops/workbench-chat.registration.json`
 - 등록 결과: **idx 16 / STOPPED / PID 없음**, 기존 16개 job의 설정·상태·PID는 최초 snapshot과 동일하다.
 - 외부 접속용 등록 payload는 `--host 0.0.0.0 --allowed-host dinya.wind-mintaka.ts.net --allowed-network 100.64.0.0/10`을 지정한다. `open_url`은 로컬 기준으로 두고 Proc Manager의 공통 링크 정책을 사용한다. HTTP 대시보드는 현재 접속 호스트의 3101 포트로, HTTPS 대시보드는 기존 Funnel 링크가 있으면 그 링크로 연다. 대시보드의 **Codex Workbench 그룹 마지막·보라색 표시**는 유지한다.

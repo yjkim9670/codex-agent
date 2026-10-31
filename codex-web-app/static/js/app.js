@@ -2514,7 +2514,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const UI_SCALE_BY_VIEW_MODE_STORAGE_KEY = 'codex-ui-scale-by-view-mode';
     const UI_FONT_STORAGE_KEY = 'codex-ui-font';
     const DEFAULT_UI_SCALE = 90;
-    const FOLD_INNER_DEFAULT_UI_SCALE = 100;
+    const FOLD_INNER_UI_SCALES = { landscape: 90, portrait: 95 };
+    const uiScaleOrientation = () => {
+        // Android's physical orientation is stable when the keyboard reduces
+        // the viewport height, including WebViews using resize mode.
+        const orientation = isAndroidPlatform() ? window.screen?.orientation?.type : '';
+        if (orientation?.startsWith('portrait')) return 'portrait';
+        if (orientation?.startsWith('landscape')) return 'landscape';
+        return window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
+    };
+    const uiScalePreferenceKey = mode => mode === 'fold-inner'
+        ? `${mode}-${uiScaleOrientation()}` : mode;
     const DEFAULT_UI_FONT = 'ibm-plex';
     let uiScalesByViewMode = {};
     let uiSettingsTrigger = null;
@@ -2525,12 +2535,14 @@ document.addEventListener('DOMContentLoaded', () => {
         return Math.min(110, Math.max(80, Math.round(numeric / 5) * 5));
     };
     const defaultUiScaleForViewMode = mode => (
-        mode === 'fold-inner' ? FOLD_INNER_DEFAULT_UI_SCALE : DEFAULT_UI_SCALE
+        mode === 'fold-inner' ? FOLD_INNER_UI_SCALES[uiScaleOrientation()] : DEFAULT_UI_SCALE
     );
     const normalizeUiScalesByViewMode = value => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-        return UI_VIEW_MODES.reduce((scales, mode) => {
-            if (mode === UI_VIEW_MODE_AUTO) return scales;
+        // The old shared fold-inner value has no orientation. Use the new
+        // defaults until the user saves each direction independently.
+        const modes = UI_VIEW_MODES.filter(mode => mode !== UI_VIEW_MODE_AUTO && mode !== 'fold-inner');
+        return [...modes, 'fold-inner-landscape', 'fold-inner-portrait'].reduce((scales, mode) => {
             const scale = value[mode];
             if (scale !== null && scale !== undefined && String(scale).trim() !== '') {
                 scales[mode] = normalizeUiScale(scale);
@@ -2539,20 +2551,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }, {});
     };
     const uiScaleForViewMode = mode => (
-        uiScalesByViewMode[mode] ?? defaultUiScaleForViewMode(mode)
+        uiScalesByViewMode[uiScalePreferenceKey(mode)] ?? defaultUiScaleForViewMode(mode)
     );
     const applyUiScale = (value, { persist = true, viewMode = resolveUiViewMode() } = {}) => {
         const scale = normalizeUiScale(value);
         document.documentElement.style.setProperty('--ui-scale', String(scale / 100));
         if (uiSettingsScaleInput) uiSettingsScaleInput.value = String(scale);
         if (uiSettingsScaleValue) uiSettingsScaleValue.textContent = `${scale}%`;
+        const scaleLabel = document.getElementById('codex-ui-scale-label');
+        if (scaleLabel) {
+            const direction = uiScaleOrientation() === 'landscape' ? '가로' : '세로';
+            scaleLabel.textContent = viewMode === 'fold-inner'
+                ? `글자 및 UI 크기 · 폴드 내부 ${direction}` : '글자 및 UI 크기';
+        }
         if (persist) {
             try {
-                // Each physical surface gets its own preference.  A Fold's
-                // cover-screen setting must not replace its inner-screen one.
+                // Surfaces and Fold inner-screen orientations are independent.
                 uiScalesByViewMode = {
                     ...uiScalesByViewMode,
-                    [viewMode]: scale
+                    [uiScalePreferenceKey(viewMode)]: scale
                 };
                 window.localStorage.setItem(
                     UI_SCALE_BY_VIEW_MODE_STORAGE_KEY,
@@ -2659,7 +2676,7 @@ document.addEventListener('DOMContentLoaded', () => {
         );
         // The former key held one value for every layout.  Its origin surface
         // cannot be recovered, so discard it and use the documented per-mode
-        // defaults instead (inner 100%, all other modes 90%).
+        // defaults instead (inner portrait 95%, all other modes 90%).
         window.localStorage.removeItem(UI_SCALE_STORAGE_KEY);
         applyUiFont(window.localStorage.getItem(UI_FONT_STORAGE_KEY), { persist: false });
         applyUiViewMode(window.localStorage.getItem(UI_VIEW_MODE_STORAGE_KEY), { persist: false, refresh: false });
@@ -4241,11 +4258,7 @@ document.addEventListener('DOMContentLoaded', () => {
         phoneMedia.addListener(handlePhoneLayoutChange);
     }
     const handleWindowLayoutResize = createRafThrottledHandler(() => {
-        if (uiViewMode === UI_VIEW_MODE_AUTO) {
-            applyUiViewMode(UI_VIEW_MODE_AUTO, { persist: false, refresh: false });
-        } else {
-            updateUiViewModeControls();
-        }
+        applyUiViewMode(uiViewMode, { persist: false, refresh: false });
         if (isWorkModeEnabled()) {
             applyWorkModeSplitRatio(workModeSplitRatio, { persist: false });
             applyWorkModeFileSplitRatio(workModeFileSplitRatio, { persist: false });
@@ -4266,6 +4279,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     window.addEventListener('resize', handleWindowLayoutResize);
+    window.screen?.orientation?.addEventListener('change', handleWindowLayoutResize);
     window.addEventListener('pagehide', flushPersistWorkModeFileViewState);
     window.addEventListener('beforeunload', flushPersistWorkModeFileViewState);
 

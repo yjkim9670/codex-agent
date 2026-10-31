@@ -15428,8 +15428,12 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 
 /* Fold arrangements use the same mounted panes, retaining selection and scroll. */
 .work-surface-tabs { display: none; }
-:root[data-view-mode="fold-inner"] .work-surface-tabs {
-    display: flex;
+@media (orientation: portrait) {
+    :root[data-view-mode="fold-inner"][data-work-arrangement="single"] .app.is-work-mode .work-surface-tabs {
+        display: flex;
+    }
+}
+.work-surface-tabs {
     flex: 0 0 auto;
     gap: 0;
     border-bottom: 1px solid var(--border);

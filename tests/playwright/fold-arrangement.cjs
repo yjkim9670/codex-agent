@@ -10,6 +10,7 @@ const { chromium, expect } = require('@playwright/test');
         await page.goto(process.env.CODEX_VERIFY_URL || 'http://127.0.0.1:3197');
         await expect(page.locator('html')).toHaveAttribute('data-view-mode', 'fold-inner');
         await expect(page.locator('html')).toHaveAttribute('data-work-arrangement', 'single');
+        await expect(page.locator('.work-surface-tabs')).toBeVisible();
         await expect(page.locator('.chat')).toBeVisible();
         await expect(page.locator('#codex-work-mode-preview')).toBeHidden();
         const draft = 'Fold draft retained';
@@ -23,6 +24,7 @@ const { chromium, expect } = require('@playwright/test');
         await expect(page.locator('#codex-chat-input')).toHaveValue(draft);
         await page.setViewportSize({ width: 932, height: 568 });
         await expect(page.locator('html')).toHaveAttribute('data-work-arrangement', 'horizontal');
+        await expect(page.locator('.work-surface-tabs')).toBeHidden();
         await expect(page.locator('.chat')).toBeVisible();
         await expect(page.locator('#codex-work-mode-preview')).toBeVisible();
         const panes = await page.evaluate(() => ['.chat', '#codex-work-mode-preview'].map(s => document.querySelector(s).getBoundingClientRect().width));
@@ -32,6 +34,7 @@ const { chromium, expect } = require('@playwright/test');
         // Select through the real settings handler without needing to open the overlay.
         await page.locator('#codex-work-arrangement').selectOption('vertical', { force: true });
         await expect(page.locator('html')).toHaveAttribute('data-work-arrangement', 'vertical');
+        await expect(page.locator('.work-surface-tabs')).toBeHidden();
         const geometry = await page.evaluate(() => {
             const chat = document.querySelector('.chat').getBoundingClientRect();
             const files = document.querySelector('#codex-work-mode-preview').getBoundingClientRect();

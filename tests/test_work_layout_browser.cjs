@@ -28,6 +28,28 @@ function fn(name, next) {
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         let cases = 0;
+        // Surface navigation is needed only for the unsplit portrait fold view.
+        const foldHtml = render(false).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '')
+            .replace(/<link\b[^>]*>/g, '');
+        await page.setContent(`<style>${css}</style>${foldHtml}`);
+        for (const viewport of [{ width: 768, height: 1000 }, { width: 932, height: 568 }]) {
+            await page.setViewportSize(viewport);
+            for (const mode of ['fold-inner', 'desktop', 'fold-cover']) {
+                for (const arrangement of ['single', 'horizontal', 'vertical']) {
+                    await page.evaluate(({ mode, arrangement }) => {
+                        document.documentElement.dataset.viewMode = mode;
+                        document.documentElement.dataset.workArrangement = arrangement;
+                    }, { mode, arrangement });
+                    const tabs = page.locator('.work-surface-tabs');
+                    if (mode === 'fold-inner' && arrangement === 'single' && viewport.height > viewport.width) {
+                        await expect(tabs).toBeVisible();
+                    } else {
+                        await expect(tabs).toBeHidden();
+                    }
+                    cases++;
+                }
+            }
+        }
         for (const internal of [false, true]) {
             const html = render(internal).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '')
                 .replace(/<link\b[^>]*>/g, '');

@@ -2757,10 +2757,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (cyclePlanModeFromKeyboardEvent(event)) {
                 return;
             }
-            // Device/layout detection cannot tell whether an external keyboard is attached.
-            // Preserve mobile Enter for newlines; explicit hardware shortcuts send everywhere.
-            if (event.key === 'Enter' && !event.shiftKey && !event.altKey
-                && (event.ctrlKey || event.metaKey || !isMobileViewportBehaviorActive())) {
+            // Use the same Enter/Shift+Enter behavior on tablets and desktops.
+            if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
                 event.preventDefault();
                 handleSubmit();
             }
@@ -16017,7 +16015,7 @@ function renderUsageHistoryLegend(history) {
     if (automaticSampleCount > 0) {
         legendItems.push({
             key: 'automatic-sample',
-            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 2시간 정시 · 최대 30분 보정)`
+            text: `자동 조회 ${formatNumber(automaticSampleCount)}회 (KST 매시 00·10·20·30·40·50분)`
         });
     }
     if (postTaskSampleCount > 0) {
@@ -16172,7 +16170,7 @@ function buildUsageHistoryPointTooltip(item, metricLabel = 'Usage point', relati
         `Token Δ (${scopeLabel}) ${Number.isFinite(tokenDelta) ? formatCompactTokenCount(tokenDelta) : '--'}`
     ];
     if (item?.limit_sample_source === 'automatic') {
-        parts.push('자동 조회 (KST 2시간 정시 · 최대 30분 보정)');
+        parts.push('자동 조회 (KST 매시 00·10·20·30·40·50분)');
     } else if (item?.limit_sample_source === 'manual') {
         parts.push('수동 조회');
     } else if (item?.limit_sample_source === 'post_task') {

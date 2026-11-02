@@ -51,11 +51,12 @@ function slice(start, end) {
                 const input = page.locator('textarea');
                 await input.fill('first');
                 await input.press('Enter');
-                assert.equal(await page.evaluate(() => submissions), device.mobile ? 0 : 1, device.name);
-                assert.equal(await input.inputValue(), device.mobile ? 'first\n' : 'first', device.name);
+                assert.equal(await page.evaluate(() => submissions), 1, device.name);
+                assert.equal(await input.inputValue(), 'first', device.name);
                 await input.fill('first');
                 await input.press('Shift+Enter');
                 assert.equal(await input.inputValue(), 'first\n', device.name);
+                assert.equal(await page.evaluate(() => submissions), 1, `${device.name}: Shift+Enter must not submit`);
                 const baseline = await page.evaluate(() => submissions);
                 for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
                     await input.dispatchEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...ime });

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 
@@ -1026,34 +1026,32 @@ def test_six_hour_account_api_refresh_persists_exact_limits_without_model_reques
     assert summary['account_usage']['total_tokens'] == 12_317_920_501
 
 
-def test_account_usage_auto_refresh_runs_on_30_minute_kst_slots():
-    no_snapshot = {}
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 12, 0, tzinfo=codex_chat.KST)
-    ) is True
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 12, 1, tzinfo=codex_chat.KST)
-    ) is True
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 12, 30, tzinfo=codex_chat.KST)
-    ) is True
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 12, 30, 1, tzinfo=codex_chat.KST)
-    ) is True
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 12, 40, 1, tzinfo=codex_chat.KST)
-    ) is False
-    assert codex_chat._account_usage_refresh_is_due(
-        no_snapshot, datetime(2026, 8, 4, 14, 0, tzinfo=codex_chat.KST)
-    ) is True
+@pytest.mark.parametrize('minute', range(60))
+def test_account_usage_auto_refresh_runs_on_10_minute_kst_slots(minute):
+    now = datetime(2026, 8, 4, 12, minute, 45, tzinfo=codex_chat.KST)
+    slot = now.replace(minute=(minute // 10) * 10, second=0)
+    assert codex_chat._USAGE_ACCOUNT_REFRESH_SECONDS == 600
+    assert codex_chat._account_usage_refresh_slot(now) == slot
+    assert codex_chat._account_usage_refresh_slot(now.astimezone(timezone.utc)) == slot
+    assert codex_chat._account_usage_refresh_is_due({}, now) is True
 
-    snapshot = {'last_automatic_attempt_slot_at': '2026-08-04T12:00:00+09:00'}
-    assert codex_chat._account_usage_refresh_is_due(
-        snapshot, datetime(2026, 8, 4, 12, 0, 45, tzinfo=codex_chat.KST)
-    ) is False
-    assert codex_chat._account_usage_refresh_is_due(
-        snapshot, datetime(2026, 8, 4, 14, 0, tzinfo=codex_chat.KST)
-    ) is True
+    snapshot = {'last_automatic_attempt_slot_at': slot.isoformat()}
+    assert codex_chat._account_usage_refresh_is_due(snapshot, now) is False
+    # The next aligned slot becomes due, including across the hour boundary.
+    assert codex_chat._account_usage_refresh_is_due(snapshot, slot + timedelta(minutes=10)) is True
+
+
+def test_account_usage_auto_refresh_retries_are_bounded_per_10_minute_slot():
+    now = datetime(2026, 8, 4, 12, 20, 1, tzinfo=codex_chat.KST)
+    snapshot = {
+        'last_automatic_attempt_slot_at': '2026-08-04T12:20:00+09:00',
+        'automatic_refresh_failure_slot_at': '2026-08-04T12:20:00+09:00',
+        'automatic_refresh_failure_count': 2,
+    }
+    assert codex_chat._account_usage_refresh_is_due(snapshot, now) is True
+    snapshot['automatic_refresh_failure_count'] = codex_chat._USAGE_ACCOUNT_REFRESH_MAX_RETRIES_PER_SLOT
+    assert codex_chat._account_usage_refresh_is_due(snapshot, now) is False
+    assert codex_chat._account_usage_refresh_is_due(snapshot, now.replace(minute=30)) is True
 
 
 def test_account_usage_uses_fresh_shared_snapshot_for_project_evaluation(

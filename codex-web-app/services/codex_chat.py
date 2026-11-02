@@ -226,7 +226,7 @@ _TOKEN_LEDGER_VERSION = 1
 _TOKEN_LEDGER_EVENT_LIMIT = 4096
 _USAGE_EVENT_VERSION = 2
 _USAGE_EVENT_DEFAULT_ANALYSIS_HOURS = 24 * 30
-_USAGE_ACCOUNT_REFRESH_SECONDS = 30 * 60
+_USAGE_ACCOUNT_REFRESH_SECONDS = 10 * 60
 _USAGE_HISTORY_VERSION = 3
 _USAGE_CALIBRATION_VERSION = 2
 _USAGE_CALIBRATION_ALGORITHM = 'observed_token_mix_v2'
@@ -8425,17 +8425,18 @@ def _normalize_account_usage_api_result(value):
 
 
 def _account_usage_refresh_slot(now=None):
-    """Return the current KST 30-minute slot during its 10-minute grace window."""
+    """Return the current KST 10-minute slot during its 10-minute grace window."""
     current = now if isinstance(now, datetime) else datetime.now(KST)
     current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
-    slot = current.replace(minute=(current.minute // 30) * 30, second=0, microsecond=0)
+    slot_minutes = _USAGE_ACCOUNT_REFRESH_SECONDS // 60
+    slot = current.replace(minute=(current.minute // slot_minutes) * slot_minutes, second=0, microsecond=0)
     if current - slot > timedelta(seconds=_USAGE_ACCOUNT_REFRESH_GRACE_SECONDS):
         return None
     return slot
 
 
 def _account_usage_refresh_is_due(snapshot, now=None):
-    """Run once per 30-minute KST slot, with immediate keepalive follow-ups."""
+    """Run once per 10-minute KST slot, with immediate keepalive follow-ups."""
     if _usage_keepalive_followup_is_due(snapshot, now):
         return True
     slot = _account_usage_refresh_slot(now)
@@ -8964,7 +8965,7 @@ def _automatic_usage_snapshot_is_fresh(snapshot, now=None):
     """Whether a shared snapshot is recent enough to make an auto decision.
 
     This deliberately does not require the current process to have consumed
-    the 30-minute refresh slot.  Another Workbench may have performed that
+    the 10-minute refresh slot.  Another Workbench may have performed that
     API call for the same account just before this process gets a turn.
     """
     refreshed_at = parse_timestamp((snapshot or {}).get('last_success_at'))
@@ -9220,7 +9221,7 @@ def refresh_account_usage_snapshot_if_due(
                 'last_success_at': attempted_at,
                 'source': 'codex_app_server',
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
+                'refresh_schedule': 'every_10_minutes_kst_with_10_minute_grace',
                 'last_automatic_refresh_slot_at': (
                     normalize_timestamp(automatic_slot) if automatic_slot
                     else latest.get('last_automatic_refresh_slot_at')
@@ -9287,7 +9288,7 @@ def refresh_account_usage_snapshot_if_due(
                 'account_id': context['account']['id'],
                 'last_attempt_at': attempted_at,
                 'refresh_interval_seconds': _USAGE_ACCOUNT_REFRESH_SECONDS,
-                'refresh_schedule': 'every_30_minutes_kst_with_10_minute_grace',
+                'refresh_schedule': 'every_10_minutes_kst_with_10_minute_grace',
                 'last_automatic_attempt_slot_at': (
                     failure_slot_key or latest.get('last_automatic_attempt_slot_at')
                 ),

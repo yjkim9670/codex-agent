@@ -122,10 +122,16 @@ submissions from separate Workbenches yield `project_busy` rather than starting
 a second stage. Give independent blogs different `project_id` values.
 
 There is no separate blog polling worker. Automatic execution is driven only
-by the existing usage refresh: when the five-hour usage is observed at exactly
+by the existing usage refresh, aligned to KST minute 00, 10, 20, 30, 40 and 50
+(each server checks about once a minute, with at most one successful refresh per
+account/slot across Workbenches): when the five-hour usage is observed at exactly
 0%, one enabled blog stage is queued for that usage window. The account-wide
 zero-window claim prevents another Workbench from submitting a second stage.
-Weekly usage is not an automatic trigger. A missing or disabled blog project
+The check interval does not override the blog cadence, budgets or account-wide
+five-hour cooldown. Weekly usage is not an automatic trigger.
+There is no canonical-checkout-only execution restriction: any Workbench whose
+workspace contains an enabled `blog/project.json` can submit, subject to the
+shared account/project claims. A missing or disabled blog project
 does not reserve the window or make a model request.
 
 Automatic and manual lightweight tasks run only the blog pipeline, regardless

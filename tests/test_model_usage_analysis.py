@@ -71,3 +71,29 @@ def test_reset_invalidates_only_affected_window(tmp_path):
     assert not report['windows']['five_hour']['models']
     assert report['windows']['five_hour']['last_valid_observed_at'] is None
     assert report['windows']['weekly']['models']['model']['deduction_pp'] == 2
+
+
+def test_rejected_groups_explain_missing_model_without_inventing_rate(tmp_path):
+    fixture(tmp_path, mixed=True)
+    data = json.loads((tmp_path / 'codex_usage_calibration.json').read_text())
+    for record in data['records']:
+        record['reasoning_effort'] = 'medium'
+    (tmp_path / 'codex_usage_calibration.json').write_text(json.dumps(data))
+    report = module.analyze(tmp_path, now=datetime.fromisoformat('2026-10-05T12:00:00+09:00'))
+    window = report['windows']['five_hour']
+    assert window['excluded']['mixed_model_group'] == 1
+    assert window['excluded_models']['model']['mixed_model_group'] == 1
+    assert window['excluded_models']['other']['mixed_model_group'] == 1
+    assert window['excluded_model_efforts']['model/medium']['mixed_model_group'] == 1
+    assert not window['models']
+
+
+def test_pending_and_expired_records_have_separate_diagnostics(tmp_path):
+    fixture(tmp_path)
+    data = json.loads((tmp_path / 'codex_usage_calibration.json').read_text())
+    data['records'][0]['outcomes']['five_hour'] = {'status': 'pending'}
+    data['records'][1]['outcomes']['five_hour'] = {'status': 'excluded', 'reason': 'observation_timeout'}
+    (tmp_path / 'codex_usage_calibration.json').write_text(json.dumps(data))
+    report = module.analyze(tmp_path, now=datetime.fromisoformat('2026-10-05T12:00:00+09:00'))
+    reasons = report['windows']['five_hour']['excluded_models']['model']
+    assert reasons == {'record_pending': 1, 'record_excluded:observation_timeout': 1}

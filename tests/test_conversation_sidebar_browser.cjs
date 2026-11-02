@@ -33,6 +33,17 @@ async function verifyConversationSidebar(browser,url){
   await page.setViewportSize({width:1440,height:900});
   await expect(page.locator('#account')).toBeVisible();await expect(page.locator('#account-limits')).toBeVisible();
   await expect(page.locator('#account-settings summary')).not.toBeVisible();await expect(page.locator('#history-query')).toBeVisible();
+  // Polling must not resize the footer or the history above it on desktop.
+  const stableLimits=await page.evaluate(()=>{
+   const snapshot=()=>['#history','.account','#account-limits','#limit-windows','#limits-status'].map(selector=>{
+    const {x,y,width,height}=document.querySelector(selector).getBoundingClientRect();return {x,y,width,height};
+   });
+   const populated={five_hour:{remaining_percent:100,used_percent:0,resets_at:2000000000},weekly:{remaining_percent:0.1,used_percent:99.9,resets_at:2000500000},observed_at:new Date().toISOString()};
+   paintLimits(populated);const before=snapshot();
+   const states=[[null,'사용 한도 확인 중'],[null,'조회 실패 · '+ '오류 상세 '.repeat(30)],[{five_hour:populated.five_hour},'미제공'],[null,'계정을 선택해 주세요.'],[populated]];
+   return states.map(args=>{paintLimits(...args);return {before,after:snapshot()};});
+  });
+  for(const {before,after} of stableLimits)expect(after).toEqual(before);
   await page.locator('#history-query').fill('no-matching-conversation');await expect(page.locator('#history button')).toHaveCount(0);
   await page.setViewportSize({width:768,height:900});await page.locator('#show-history').click();
   await expect(page.locator('#history-query')).not.toBeVisible();await expect(page.locator('#account-settings')).not.toHaveAttribute('open','');

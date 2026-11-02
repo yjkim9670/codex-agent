@@ -67,68 +67,81 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
     for window in ('five_hour', 'weekly'):
         groups = defaultdict(list)
         exclusions = Counter()
+        excluded_models = defaultdict(Counter)
+        excluded_efforts = defaultdict(Counter)
+
+        def exclude(reason, records):
+            exclusions[reason] += 1
+            # Count each rejected group once per model/effort it contains.
+            for model in {r.get('model') or 'unknown' for r in records}:
+                excluded_models[model][reason] += 1
+            for model, level in {(r.get('model') or 'unknown', r.get('reasoning_effort') or 'unknown') for r in records}:
+                excluded_efforts[f'{model}/{level}'][reason] += 1
         for record in calibration.get('records', []):
             if not start <= datetime.fromisoformat(record['created_at']) <= end:
                 continue
             outcome = record.get('outcomes', {}).get(window, {})
             if outcome.get('status') != 'observed':
-                exclusions['record_' + outcome.get('status', 'missing')] += 1
+                reason = 'record_' + outcome.get('status', 'missing')
+                if outcome.get('reason'):
+                    reason += ':' + outcome['reason']
+                exclude(reason, [record])
                 continue
             groups[outcome['group_id']].append(record)
         accepted = []
         for group_id, records in groups.items():
             outcome = records[0]['outcomes'][window]
             if len(records) != outcome['group_size']:
-                exclusions['incomplete_group'] += 1
+                exclude('incomplete_group', records)
                 continue
             if len({r['model'] for r in records}) != 1:
-                exclusions['mixed_model_group'] += 1
+                exclude('mixed_model_group', records)
                 continue
             if any(not r.get('learning_eligible') for r in records):
-                exclusions['concurrent_flag'] += 1
+                exclude('concurrent_flag', records)
                 continue
             matched = [event_index[r['id']] for r in records]
             if any(len(matches) != 1 or matches[0].get('duration_ms') is None for matches in matched):
-                exclusions['missing_or_ambiguous_event'] += 1
+                exclude('missing_or_ambiguous_event', records)
                 continue
             members = [matches[0] for matches in matched]
             if any(e.get('model') != r['model'] or e.get('total_tokens') != r['raw_tokens']
                    for e, r in zip(members, records)):
-                exclusions['event_mismatch'] += 1
+                exclude('event_mismatch', records)
                 continue
             if len({e.get('reasoning_effort') or 'unknown' for e in members}) != 1:
-                exclusions['mixed_effort_group'] += 1
+                exclude('mixed_effort_group', records)
                 continue
             if not all(matches(e) for e in members):
-                exclusions['filter_mismatch'] += 1
+                exclude('filter_mismatch', records)
                 continue
             observed = datetime.fromisoformat(outcome['observed_at'])
             earliest = min(datetime.fromisoformat(e['recorded_at']) -
                            timedelta(milliseconds=e['duration_ms']) for e in members)
             if earliest < start or observed > end:
-                exclusions['period_boundary'] += 1
+                exclude('period_boundary', records)
                 continue
             member_ids = {e['event_id'] for e in members}
             if any(finish > earliest and begin < observed and e['event_id'] not in member_ids
                    for begin, finish, e in intervals):
-                exclusions['overlapping_local_execution'] += 1
+                exclude('overlapping_local_execution', records)
                 continue
             if any(e.get('total_tokens', 0) > 0 and e.get('duration_ms') is None
                    and e['event_id'] not in member_ids
                    and earliest <= datetime.fromisoformat(e['recorded_at']) <= observed
                    for e in events):
-                exclusions['unverified_execution_timing'] += 1
+                exclude('unverified_execution_timing', records)
                 continue
             after = samples.get(outcome['observed_at'], [])
             reset_key = window + '_resets_at'
             if not after or any(not r.get('limits_before', {}).get(window, {}).get('resets_at')
                                 or any(s.get(reset_key) != r['limits_before'][window]['resets_at']
                                        for s in after) for r in records):
-                exclusions['unverified_or_changed_reset'] += 1
+                exclude('unverified_or_changed_reset', records)
                 continue
             actual = outcome['group_actual_percent']
             if actual <= 0 or any(r['outcomes'][window]['group_actual_percent'] != actual for r in records):
-                exclusions['invalid_delta'] += 1
+                exclude('invalid_delta', records)
                 continue
             accepted.append({'group_id': group_id, 'model': records[0]['model'],
                              'reasoning_effort': members[0].get('reasoning_effort') or 'unknown',
@@ -153,7 +166,8 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
         for row in effort_totals.values():
             row['pp_per_million_tokens'] = row['deduction_pp'] * 1_000_000 / row['tokens']
         windows[window] = {'model_efforts': dict(effort_totals), 'models': dict(totals), 'excluded': dict(exclusions), 'groups': accepted,
-                           'last_valid_observed_at': max((g['observed_at'] for g in accepted), default=None)}
+                           'last_valid_observed_at': max((g['observed_at'] for g in accepted), default=None),
+                           'excluded_models': dict(excluded_models), 'excluded_model_efforts': dict(excluded_efforts)}
 
     daily = defaultdict(Counter)
     for event in selected:

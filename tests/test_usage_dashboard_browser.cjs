@@ -75,8 +75,11 @@ if(process.argv.includes('--serve')) {
         assert.equal(requests[0].searchParams.get('effort'),'all');
         assert.equal(requests[0].searchParams.get('days'),'90');
         await expect(page.locator('#model-rows tr')).toHaveCount(3);
-        await expect(page.locator('#comparison .bar-row')).toHaveCount(1);
+        await expect(page.locator('#comparison [data-observation="verified"]')).toHaveCount(1);
         await expect(page.locator('#comparison')).toContainText('1.250');
+        await expect(page.locator('#comparison [data-observation="insufficient"]')).toHaveCount(2);
+        await expect(page.locator('#comparison')).toContainText('관측 부족');
+        await expect(page.locator('#comparison')).not.toContainText('99.000');
         assert.deepEqual(await page.locator('#monthly-rows tr td:nth-child(2)').allTextContents(),['400','300','300']);
         assert.deepEqual(await page.locator('#weekly-rows tr td:nth-child(2)').allTextContents(),['400','0','0','0','0','500','100']);
         await expect(page.locator('#weekly-rows tr').first()).toContainText('2026-10-05 주');
@@ -84,7 +87,7 @@ if(process.argv.includes('--serve')) {
         await expect(page.locator('#monthly-rows tr').nth(1)).not.toContainText('일부 기간');
         await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'}).locator('td').nth(3)).toHaveText('—');
         await page.locator('[data-window="weekly"]').click();
-        await expect(page.locator('#comparison .bar-row')).toHaveCount(1);
+        await expect(page.locator('#comparison [data-observation="verified"]')).toHaveCount(1);
         await expect(page.locator('#comparison')).toContainText('low');
         await expect(page.locator('#comparison')).toContainText('0.500');
         const geometry = () => page.locator('.chart svg').evaluateAll(nodes=>nodes.map(el=>({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height})));

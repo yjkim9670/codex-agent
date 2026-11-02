@@ -13,9 +13,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'conversation-app'))
-from services.codex_provider import INSTRUCTIONS, Provider, RPC, sanitize_catalog
+from services.codex_provider import INSTRUCTIONS, Provider, RPC, sanitize_catalog, verify_cli_version
 from shared.chat_accounts import accounts
 from services.artifacts import Artifacts, TOOL, TOOL_NAME
+
+
+@pytest.mark.parametrize('version', ['codex-cli 0.160.0', 'codex-cli 0.166.0'])
+def test_verified_cli_releases_are_accepted(version):
+    verify_cli_version(version)
+
+
+@pytest.mark.parametrize('version', ['codex-cli 0.167.0', 'codex-cli 0.166.0-dev', '', 'unexpected'])
+def test_unaudited_cli_requires_validation_without_downgrade(version):
+    with pytest.raises(ValueError, match='CLI를 유지한 채'):
+        verify_cli_version(version)
 
 
 def test_catalog_removes_coding_instructions_and_tools():
@@ -51,8 +62,11 @@ def test_auth_snapshot_has_no_refresh_token_or_extensions(tmp_path):
 
 
 @pytest.mark.skipif(os.environ.get('RUN_CODEX_CHAT_NATIVE_TESTS') != '1', reason='Opt-in native Codex request audit; no model API calls')
-def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path):
+def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatch):
     """Capture real serialized CLI requests at a local fake provider, not self-report."""
+    # Audit upgraded binaries before adding them to the production allowlist.
+    # Only this test bypasses the release gate; all tool restrictions stay on.
+    monkeypatch.setattr('services.codex_provider.verify_cli_version', lambda version: None)
     captured = queue.Queue()
     handled = threading.Event()
     invoke = threading.Event()
@@ -110,6 +124,7 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path):
                 handled.set()
                 return result
             rpc = RPC(home, workspace, catalog, {
+                'model_provider': 'audit',
                 'model_providers.audit.name': 'audit',
                 'model_providers.audit.base_url': f'http://127.0.0.1:{http.server_port}/v1',
                 'model_providers.audit.wire_api': 'responses',

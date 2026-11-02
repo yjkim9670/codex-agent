@@ -4,7 +4,7 @@
 
 구현 파일은 `conversation-app/`, `shared/chat_accounts.py`, `run_conversation_server.py/.sh`, `ops/workbench-chat.job.json`이다. 별도 DB·계정별 Codex home, 개인 계정·런타임 모델/추론 선택, 번역/교정/검색, SSE·복구·중단, 글꼴 8종, 공통 사용량 수집·앱 필터를 구현했다. 실제 모델 번역·검색·중단과 격리된 Chromium 화면을 검증했다. 실제 CLI 전송 도구는 검색 끄기 0개, 켜기 web.run만 노출됐다.
 
-실제 구현의 조정 사항: 요청별 새 provider thread에 완료 문맥을 한 번 전달하며 자동 요약은 하지 않는다. 접속은 loopback 전용이다. 인증 갱신은 기존 로그인만 담당하고 Chat은 refresh token 없이 접속 snapshot을 읽는다. Codex CLI는 격리 검증한 0.160.0으로 제한한다. 중단 직후 사용량 미반환은 확정 0 대신 집계 대기로 남긴다. 기존 스트림 테스트 실패 24개는 변경 전 HEAD에서도 동일하게 재현됐다.
+실제 구현의 조정 사항: 요청별 새 provider thread에 완료 문맥을 한 번 전달하며 자동 요약은 하지 않는다. 접속은 loopback 전용이다. 인증 갱신은 기존 로그인만 담당하고 Chat은 refresh token 없이 접속 snapshot을 읽는다. Codex CLI는 릴리스별 native 격리 검증을 통과한 정확한 버전 목록(0.160.0 / 0.166.0)으로 제한한다. 중단 직후 사용량 미반환은 확정 0 대신 집계 대기로 남긴다. 기존 스트림 테스트 실패 24개는 변경 전 HEAD에서도 동일하게 재현됐다.
 
 ## 1. 목표와 이번 결정
 

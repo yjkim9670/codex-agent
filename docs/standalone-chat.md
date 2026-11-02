@@ -16,7 +16,7 @@
 - 명령: `bash run_conversation_server.sh --host 127.0.0.1 --port 3101`
 - Python 3.11 이상, Flask와 cryptography가 필요하다 (`requirements.txt`). 등록 job은 검증한 `/opt/homebrew/bin/python3.14`를 지정한다.
 - Proc Manager가 `HOME=/Users/dinya/works`로 실행해도 launcher는 OS 로그인 홈의 Python 사용자 패키지를 찾는다. macOS framework Python은 `~/Library/Python/<version>`을 `PYTHONUSERBASE`로 설정하며, 명시적으로 지정한 `PYTHONUSERBASE`는 유지한다. `PYTHONPATH`를 Workbench에서 상속받지 않아도 동작한다.
-- Codex CLI **0.160.0**의 실제 전송 도구를 검증했다. 다른 버전에서는 모델 실행을 차단한다. CLI 업그레이드 시 `RUN_CODEX_CHAT_NATIVE_TESTS=1 ... -m pytest tests/test_conversation_provider.py -q`로 도구 격리를 재검증하고 버전 제한을 갱신한다. App Server는 버전별 동작 차이가 있으므로 알 수 없는 버전에 자동으로 권한을 열지 않는다.
+- Codex CLI **0.160.0 / 0.166.0**의 실제 전송 도구를 검증했다. 호환 버전은 `conversation-app/services/codex_provider.py`의 `VERIFIED_CLI_VERSIONS`에서 관리한다. CLI 업그레이드 시 버전을 되돌리지 않고 `RUN_CODEX_CHAT_NATIVE_TESTS=1 python3.14 -m pytest tests/test_conversation_provider.py -q`로 도구 격리를 재검증한 뒤 정확한 버전을 목록에 추가한다. native 테스트에서만 버전 gate를 우회하므로 미등록 버전도 먼저 검증할 수 있다. App Server는 버전별 동작 차이가 있으므로 알 수 없는 버전에 자동으로 권한을 열지 않는다.
 - 기존 Workbench의 **Dev Codex Workbench job**도 사용자가 재시작하면 새 사용량 앱 필터·명시적 Chat outbox 수집 코드가 적용된다. 다른 체크아웃에는 소스를 동기화하지 않았다.
 
 ## 저장과 계정
@@ -104,7 +104,7 @@ Chat은 자신의 SQLite outbox만 갱신한다. 기존 Workbench 수집기가 �
 - 모델의 파일 작업은 서버가 처리하는 `chat_artifact` 도구로만 제공한다. 사용자 요청에 따른 UTF-8 텍스트 산출물의 생성·전체 내용 교체·읽기·삭제를 지원한다. 도구 하나당 파일 크기는 1 MiB까지다. 임의 코드 실행·셸·Git·저장소 수정·임의 로컬 파일 읽기는 허용하지 않는다.
 - 산출물은 `/tmp/workbench-chat-*`의 권한 0700 전용 폴더, 파일은 0600으로 생성한다. 같은 계정·대화는 서버가 실행 중인 동안 동일 폴더를 사용한다. 대화 ID는 서버가 지정하고 클라이언트가 파일 경로/범위를 지정할 수 없다. 서버 재시작 후에는 새 폴더를 배정하며 기존 산출물은 지우지 않는다. `/tmp`이므로 OS의 임시 파일 정리 대상이다.
 - 절대 경로, `..`, 심볼릭 링크, 하드링크, 특수 파일을 거부한다. 디렉터리 descriptor와 `O_NOFOLLOW`, 원자적 교체로 경로 확인 후 링크를 바꾸는 우회도 방어한다. `/tmp` 전체나 다른 대화의 폴더를 파일 도구에 개방하지 않는다. 대화 DB·인증 snapshot·사용량 등 앱 내부 상태는 기존 데이터 경로에서 서버가 관리하며 모델 도구로 접근할 수 없다.
-- 도구 연결은 [OpenAI Docs의 App Server dynamic tools 프로토콜](https://learn.chatgpt.com/docs/app-server#dynamic-tool-calls-experimental)을 따르며 고정된 CLI 0.160.0으로 검증한다. 가짜 로컬 모델 응답으로 실제 도구 전송 목록과 JSON-RPC 파일 생성을 확인하므로 실제 계정 토큰·유료 모델 요청은 보내지 않는다.
+- 도구 연결은 [OpenAI Docs의 App Server dynamic tools 프로토콜](https://learn.chatgpt.com/docs/app-server#dynamic-tool-calls-experimental)을 따르며 호환 목록에 등록한 CLI 릴리스별로 검증한다. 가짜 로컬 모델 응답으로 실제 도구 전송 목록과 JSON-RPC 파일 생성을 확인하므로 실제 계정 토큰·유료 모델 요청은 보내지 않는다.
 - 반영: 사용자가 **Workbench Chat - conversation server**를 재시작한 다음 페이지를 새로고침한다. 이번 작업에서는 운영 서버·Proc Manager·터널을 재시작하지 않았다. 실제 Cloudflare 인증 브라우저 세션 검증은 별도로 남아 있다.
 
 - 이번 검증: native CLI 도구 전송·실제 산출물 호출을 포함한 관련 Python 테스트 **36개 통과**, Chromium **360/768/1440px**에서 `randomUUID` 없는 상태의 전송·폰트·설정·XSS 회귀 통과. `git diff --check` 통과.
@@ -188,3 +188,10 @@ CODEX_VERIFY_CONVERSATION=1 CODEX_VERIFY_LOCAL_TLS=1 python3.14 scripts/verify_b
 - `visualViewport` 높이를 사용해 입력창을 배치한다. Chromium의 360×780 모사에서 상단 약 51px, 입력부 105px, 본문 약 624px를 확인했다. 높이 460px의 키보드 모사에서는 본문 약 304px를 확보했다. 실기기 키보드 검증은 포함하지 않는다.
 - `tests/test_conversation_mobile_browser.cjs`는 본문 공간·번역 설정·입력창 높이·상세 접기·메뉴·키보드 모사·360→768→390px 전환을 검증하며 기존 conversation 브라우저 검증에 포함된다. 360/768/1440/1920px 기존 전송·중단·Markdown·폰트·암호화 회귀 검증도 통과했다.
 - 반영하려면 사용자가 **Workbench Chat - conversation server**를 재시작한 다음 브라우저를 새로고침한다. 이번 작업에서는 운영 서버·Proc Manager·터널을 재시작하지 않았다.
+
+### CLI 0.166.0 업그레이드 호환 (2026-11-03)
+
+- 설치 버전은 `codex-cli 0.166.0`인데 Chat이 `0.160.0` 문자열만 허용해 연결을 차단했다. CLI 설치는 변경하지 않고 검증한 정확한 릴리스 목록에 0.166.0을 추가했다. 미검증 버전 오류는 현재 버전과 재검증 절차를 안내한다.
+- 0.166.0은 thread provider와 현재 provider의 일치를 검사하므로 native 테스트의 시작 설정도 로컬 `audit` provider로 명시했다. 제품 실행은 양쪽 모두 `openai`로 기존과 같다.
+- native 검증은 인증 없는 임시 home과 loopback 가짜 모델 endpoint만 사용한다. 검색 off/on의 실제 직렬화 요청에서 `chat_artifact` 및 선택적 `web.run`만 노출되고 외부 작업 지침이 없으며 산출물 호출이 성공하는지 확인했다. 실제 계정·유료 모델 생성은 수행하지 않는다.
+- 적용하려면 사용자가 **Workbench Chat - conversation server**를 재시작하고 페이지를 새로고침한다. 운영 프로세스는 작업 중 재시작하지 않았다.

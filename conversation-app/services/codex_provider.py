@@ -40,6 +40,18 @@ DISABLED = ('shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'apps'
             'tool_suggest', 'recommended_plugins', 'sleep_tool', 'deferred_executor',
             'default_mode_request_user_input', 'workspace_dependencies')
 
+# Exact releases audited with the native request-capture test. Do not accept a
+# version range: new CLI releases can introduce tools or change feature flags.
+VERIFIED_CLI_VERSIONS = frozenset({'codex-cli 0.160.0', 'codex-cli 0.166.0'})
+
+
+def verify_cli_version(version):
+    if version not in VERIFIED_CLI_VERSIONS:
+        raise ValueError(
+            f'현재 Codex CLI ({version})의 Chat 도구 격리 검증이 필요합니다. '
+            'CLI를 유지한 채 tests/test_conversation_provider.py의 native 격리 검증 후 '
+            'Workbench Chat 호환 버전 목록을 갱신해 주세요.')
+
 
 class RPC:
     active = set()
@@ -75,8 +87,7 @@ class RPC:
         env = {k: v for k, v in os.environ.items() if not k.startswith(('CODEX_', 'OPENAI_', 'DTGPT_', 'AZURE_'))}
         env['CODEX_HOME'] = str(home)
         version = subprocess.run([executable, '--version'], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        if version != 'codex-cli 0.160.0':
-            raise ValueError('도구 격리를 검증한 Codex CLI 0.160.0이 필요합니다. 버전 변경 후 격리 검증을 다시 실행해 주세요.')
+        verify_cli_version(version)
         self.process = subprocess.Popen(args, cwd=workspace, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
         with self.active_lock:

@@ -74,7 +74,7 @@ async function verifyConversation(browser,targetUrl){
    const family=await page.evaluate(()=>getComputedStyle(document.body).fontFamily.split(',')[0]);
    assert.ok(await page.evaluate(async family=>(await document.fonts.load('16px '+family,'안녕')).length>0,family),`font failed ${font}: ${family}`);
   }
-  await page.locator('#settings-dialog button').click();await page.locator('#message').fill('보존할 초안');await page.reload();
+  await page.locator('#settings-dialog button').click();await page.locator('#message').fill('보존할 초안');const savedCid=await page.evaluate(()=>state.cid);await page.reload();await page.evaluate(()=>chatReady);assert.equal(await page.evaluate(()=>state.cid),null);await expect(page.locator('#message')).toHaveValue('');await page.evaluate(id=>openConversation(id),savedCid);
   await expect(page.locator('#message')).toHaveValue('보존할 초안');await expect(page.locator('html')).toHaveAttribute('data-ui-font','nexon-lv2-gothic');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
   if(width<1024){await page.locator('#show-history').click();await expect(page.locator('#sidebar')).toBeVisible();await page.keyboard.press('Escape');await expect(page.locator('#sidebar')).not.toBeVisible();await expect(page.locator('#show-history')).toBeFocused();}
   if(width===360)await page.locator('#more-actions').click();await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await expect(page.locator('#dialog-limits')).toContainText('40% 남음');

@@ -18,7 +18,20 @@ let statusTimer;
 function status(text){clearTimeout(statusTimer);$('status').textContent=text;if(['응답 완료','복사했습니다.','응답을 중단했습니다.'].includes(text))statusTimer=setTimeout(()=>{$('status').textContent='';},3000);}
 const compactLayout=matchMedia('(max-width:599px)');
 const drawerLayout=matchMedia('(max-width:1023px)');
+// A real backdrop intercepts clicks instead of letting them reach the composer.
+const sidebarBackdrop=document.createElement('div');
+sidebarBackdrop.id='sidebar-backdrop';sidebarBackdrop.hidden=true;sidebarBackdrop.setAttribute('aria-hidden','true');
+$('sidebar').before(sidebarBackdrop);
+function setHistoryOpen(open,restoreFocus=true){
+ open=open&&drawerLayout.matches;
+ $('sidebar').classList.toggle('open',open);sidebarBackdrop.hidden=!open;
+ document.querySelector('main').inert=open;
+ $('show-history').setAttribute('aria-expanded',String(open));
+ if(open)$('new-chat').focus();else if(restoreFocus&&drawerLayout.matches)$('show-history').focus();
+}
+sidebarBackdrop.addEventListener('click',()=>setHistoryOpen(false));
 function responsiveSidebar(){
+ if(!drawerLayout.matches)setHistoryOpen(false,false);
  // A running server may still render its cached template during an update.
  for(const id of ['account-settings','usage-settings']){const section=$(id);if(section)section.open=!drawerLayout.matches;}
  if(drawerLayout.matches&&$('history-query').value){$('history-query').value='';list().catch(e=>status(e.message));}
@@ -35,6 +48,20 @@ function responsiveControls(){
 $('more-actions').onclick=()=>$('actions-dialog').showModal();
 $('request-summary').onclick=()=>{$('message').blur();$('request-dialog').showModal();};
 document.querySelectorAll('[data-close-dialog]').forEach(button=>button.onclick=()=>button.closest('dialog').close());
+document.querySelectorAll('dialog').forEach(dialog=>{
+ const outside=event=>{
+  const rect=dialog.getBoundingClientRect();
+  return event.target===dialog&&(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom);
+ };
+ let startedOutside=false;
+ dialog.addEventListener('pointerdown',event=>{startedOutside=outside(event);});
+ dialog.addEventListener('pointercancel',()=>{startedOutside=false;});
+ dialog.addEventListener('click',event=>{
+  // Dragging from a form control into the backdrop must keep the dialog open.
+  if(startedOutside&&outside(event))dialog.close();
+  startedOutside=false;
+ });
+});
 $('mobile-actions').addEventListener('click',event=>{if(event.target.closest('button'))$('actions-dialog').close();});
 for(const id of ['mode','model','effort','search','language','tone','format'])$(id).addEventListener('change',requestSummary);
 function viewportSize(){document.documentElement.style.setProperty('--viewport-height',(visualViewport?.height||innerHeight)+'px');resizeMessage();}
@@ -63,9 +90,9 @@ function applyTheme(){const value=$('theme').value;document.documentElement.data
 $('theme').value=['system','light','dark'].includes(localStorage.getItem('chat-theme'))?localStorage.getItem('chat-theme'):'system';
 applyTheme();$('theme').onchange=applyTheme;systemTheme.addEventListener('change',applyTheme);
 $('preferences').onclick=()=>$('settings-dialog').showModal();
-$('show-history').onclick=()=>{$('sidebar').classList.add('open');$('new-chat').focus();};
-$('close-history').onclick=()=>{$('sidebar').classList.remove('open');$('show-history').focus();};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open')){$('sidebar').classList.remove('open');$('show-history').focus();}if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select,summary')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
+$('show-history').onclick=()=>setHistoryOpen(true);
+$('close-history').onclick=()=>setHistoryOpen(false);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open'))setHistoryOpen(false);if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select,summary')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
 let limitGeneration=0;
 function paintLimits(data, message){
  for(const id of ['limit-windows','dialog-limits']){
@@ -107,7 +134,7 @@ async function list(){
 let queryTimer;$('history-query').oninput=()=>{clearTimeout(queryTimer);queryTimer=setTimeout(()=>list().catch(e=>status(e.message)),180);};
 async function openConversation(id){
  saveDraft();const gen=++state.generation;state.source?.close();state.source=null;state.cid=id;state.active=null;state.messages=[];messageViews.clear();$('messages').replaceChildren();
- $('message').value=state.drafts[draftKey()]||'';resizeMessage();localStorage.setItem('chat-current',id||'');$('sidebar').classList.remove('open');state.following=true;
+ $('message').value=state.drafts[draftKey()]||'';resizeMessage();localStorage.setItem('chat-current',id||'');setHistoryOpen(false,false);state.following=true;
  await refresh();if(gen===state.generation)await list();
 }
 $('new-chat').onclick=()=>openConversation(null).catch(e=>status(e.message));

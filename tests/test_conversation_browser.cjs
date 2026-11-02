@@ -3,6 +3,7 @@ const {expect}=require('@playwright/test');
 const assert=require('node:assert/strict');
 
 async function verifyConversation(browser,targetUrl){
+ await require('./test_conversation_overlays_browser.cjs').verifyConversationOverlays(browser,targetUrl);
  await require('./test_conversation_mobile_browser.cjs').verifyMobileConversation(browser,targetUrl);
  for(const width of [360,768,1440,1920]){
   const prefix=width===360?'':width===768?'/apps/workbench-chat':'/chat';

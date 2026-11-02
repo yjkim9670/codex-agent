@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from .usage_recovery import event_key, same_reset
 
 
 def analyze(root, days=30, effort="all", environment="all", *, data=None, now=None, application="all"):
@@ -55,13 +56,25 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
     event_index = defaultdict(list)
     intervals = []
     for event in events:
-        event_index[event['event_id'].split(':', 1)[-1]].append(event)
+        event_index[event_key(event)].append(event)
         if event.get('total_tokens', 0) > 0 and event.get('duration_ms') is not None:
             finish = datetime.fromisoformat(event['recorded_at'])
             intervals.append((finish - timedelta(milliseconds=event['duration_ms']), finish, event))
     samples = defaultdict(list)
-    for sample in history.get('account_limit_samples', []):
-        samples[sample.get('limits_observed_at')].append(sample)
+    all_samples = [*history.get('account_limit_samples', []),
+                   *(s for r in calibration.get('records', []) for s in r.get('quota_samples', []))]
+    for sample in all_samples:
+        if sample.get('limits_observed_at'):
+            samples[datetime.fromisoformat(sample['limits_observed_at'])].append(sample)
+
+    record_ids = {r['id'] for r in calibration.get('records', [])}
+    coverage = defaultdict(Counter)
+    coverage_efforts = defaultdict(Counter)
+    for event in selected:
+        key = event_key(event)
+        field = 'linked_tokens' if key in record_ids and len(event_index[key]) == 1 else 'unlinked_tokens'
+        coverage[event.get('model') or 'unknown'][field] += event.get('total_tokens', 0)
+        coverage_efforts[f"{event.get('model') or 'unknown'}/{event.get('reasoning_effort') or 'unknown'}"][field] += event.get('total_tokens', 0)
 
     windows = {}
     for window in ('five_hour', 'weekly'):
@@ -82,6 +95,12 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
                 continue
             outcome = record.get('outcomes', {}).get(window, {})
             if outcome.get('status') != 'observed':
+                linked = event_index[record['id']]
+                if linked and not any(matches(e) for e in linked):
+                    continue
+                if not linked and (effort != 'all' and record.get('reasoning_effort') != effort or
+                                   environment != 'all' or application != 'all'):
+                    continue
                 reason = 'record_' + outcome.get('status', 'missing')
                 if outcome.get('reason'):
                     reason += ':' + outcome['reason']
@@ -132,10 +151,11 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
                    for e in events):
                 exclude('unverified_execution_timing', records)
                 continue
-            after = samples.get(outcome['observed_at'], [])
+            after = samples.get(observed, [])
             reset_key = window + '_resets_at'
             if not after or any(not r.get('limits_before', {}).get(window, {}).get('resets_at')
-                                or any(s.get(reset_key) != r['limits_before'][window]['resets_at']
+                                or any(not (s.get(reset_key) == r['limits_before'][window]['resets_at'] or
+                                            same_reset(s.get(reset_key), r['limits_before'][window]['resets_at']))
                                        for s in after) for r in records):
                 exclude('unverified_or_changed_reset', records)
                 continue
@@ -182,6 +202,7 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
             'events': len(selected), 'calibration_first_at': min(
                 (r['created_at'] for r in calibration.get('records', [])), default=None),
             'models': dict(models), 'windows': windows,
+            'calibration_coverage': {'models': dict(coverage), 'model_efforts': dict(coverage_efforts)},
             'quota_sample_count': len(history.get('account_limit_samples', [])),
             'current_limits': {w: snapshot.get(w) for w in ('five_hour', 'weekly')},
             'method': 'Sum same-model complete observed groups; exclude local overlapping '

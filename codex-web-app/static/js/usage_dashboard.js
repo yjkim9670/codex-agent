@@ -28,13 +28,20 @@
     const max = Math.max(...items.filter(r => reliable(quota(windowName,r.key))).map(r => quota(windowName,r.key).pp_per_million_tokens || 0), 1);
     $('comparison').innerHTML = items.map((row,i) => {
       const q = quota(windowName,row.key);
+      const coverage = (report.effort === 'all' ? report.calibration_coverage?.model_efforts : report.calibration_coverage?.models)?.[row.key];
+      const coverageNote = `전체 수집 ${num(row.tokens)} 토큰 · 보정 기록 없음 ${num(coverage?.unlinked_tokens)} 토큰 · 검증 통과 ${num(q.tokens || 0)} 토큰`;
       if (!reliable(q)) {
         const excluded = (report.effort === 'all' ? report.windows[windowName].excluded_model_efforts : report.windows[windowName].excluded_models)?.[row.key] || {};
         const labels = {mixed_model_group:'다른 모델과 혼합', mixed_effort_group:'추론 강도 혼합', overlapping_local_execution:'다른 작업과 시간 중복', unverified_or_changed_reset:'리셋 검증 불가', concurrent_flag:'동시 실행', 'record_excluded:observation_timeout':'관측 기한 초과', 'record_excluded:missing_baseline':'시작 한도 누락', 'record_excluded:reset_observed':'한도 리셋', record_pending:'관측 대기'};
-        const reasons = Object.entries(excluded).map(([reason,count]) => `${labels[reason] || reason} ${num(count)}`).join(' · ');
-        return `<div class="bar-row" data-observation="insufficient"><button type="button" class="bar-label" data-key="${esc(row.key)}">${esc(name(row.model))}<br><small>${esc(row.effort)}</small></button><div class="note">수집 ${num(row.tokens)} 토큰<br>${esc(reasons || '검증 가능한 차감 관측 부족')}</div><div class="bar-value"><strong>관측 부족</strong><br>${num(q.groups || 0)} / 최소 3구간</div></div>`;
+        labels['record_excluded:awaiting_quota_observation'] = '후속 한도 관측 대기';
+        labels['record_excluded:overlapping_local_execution'] = '다른 작업과 시간 중복';
+        labels['record_excluded:unverified_or_changed_reset'] = '리셋 검증 불가';
+        labels['record_excluded:unverified_baseline'] = '시작 한도 검증 불가';
+        labels['record_excluded:unverified_execution_timing'] = '실행 시간 검증 불가';
+        const reasons = Object.entries(excluded).map(([reason,count]) => `${labels[reason] || reason} ${num(count)}${reason.startsWith('record_') ? '건' : '구간'}`).join(' · ');
+        return `<div class="bar-row" data-observation="insufficient"><button type="button" class="bar-label" data-key="${esc(row.key)}">${esc(name(row.model))}<br><small>${esc(row.effort)}</small></button><div class="note">${esc(coverageNote)}<br>${esc(reasons || '검증 가능한 차감 관측 부족')}</div><div class="bar-value"><strong>관측 부족</strong><br>${num(q.groups || 0)} / 최소 3구간</div></div>`;
       }
-      return `<div class="bar-row" data-observation="verified"><button type="button" class="bar-label" data-key="${esc(row.key)}">${esc(name(row.model))}<br><small>${esc(row.effort)}</small></button><div class="bar-track"><div class="bar-fill" style="width:${(q.pp_per_million_tokens || 0)/max*100}%;background:${palette[i%palette.length]}"></div></div><div class="bar-value"><strong>${rate(q.pp_per_million_tokens)}</strong> ${q.groups ? '%p' : ''}<br>${num(q.groups || 0)}구간 · 관측값</div></div>`;
+      return `<div class="bar-row" data-observation="verified"><button type="button" class="bar-label" data-key="${esc(row.key)}">${esc(name(row.model))}<br><small>${esc(row.effort)}</small></button><div><div class="bar-track"><div class="bar-fill" style="width:${(q.pp_per_million_tokens || 0)/max*100}%;background:${palette[i%palette.length]}"></div></div><p class="note">${esc(coverageNote)}</p></div><div class="bar-value"><strong>${rate(q.pp_per_million_tokens)}</strong> ${q.groups ? '%p' : ''}<br>${num(q.groups || 0)}구간 · 관측값</div></div>`;
     }).join('') || '<p class="empty">검증 구간 3개 이상인 모델/effort가 없습니다. 전체 사용량은 모델 상세에서 확인하세요.</p>';
     showGroups();
   }

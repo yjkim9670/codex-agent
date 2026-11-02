@@ -7656,6 +7656,9 @@ def _reconcile_usage_calibration(account_id, limits_after):
             pending = [
                 item for item in records
                 if item.get('outcomes', {}).get(limit_name, {}).get('status') == 'pending'
+                # Chat uses its persisted per-attempt observations and isolation
+                # checks. Never batch it into unrelated job-mode quota deltas.
+                and item.get('application') != 'workbench-chat'
                 and (
                     observed_time is None
                     or parse_timestamp(item.get('created_at')) is None

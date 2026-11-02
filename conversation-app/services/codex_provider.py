@@ -12,6 +12,7 @@ from pathlib import Path
 import queue
 import re
 import math
+import logging
 from datetime import datetime, timezone
 import shutil
 import subprocess
@@ -43,6 +44,7 @@ DISABLED = ('shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'apps'
 # Exact releases audited with the native request-capture test. Do not accept a
 # version range: new CLI releases can introduce tools or change feature flags.
 VERIFIED_CLI_VERSIONS = frozenset({'codex-cli 0.160.0', 'codex-cli 0.166.0'})
+_LOG = logging.getLogger(__name__)
 
 
 def verify_cli_version(version):
@@ -224,7 +226,8 @@ def normalize_limits(result):
         if key and isinstance(used, (int, float)) and not isinstance(used, bool) and math.isfinite(used):
             used = min(100, max(0, used))
             windows[key] = {'used_percent': used, 'remaining_percent': 100 - used,
-                            'resets_at': entry.get('resetsAt')}
+                            'resets_at': (datetime.fromtimestamp(entry['resetsAt'], timezone.utc).isoformat()
+                                          if isinstance(entry.get('resetsAt'), (int, float)) else entry.get('resetsAt'))}
     return {**windows, 'plan_type': raw.get('planType'),
             'observed_at': datetime.now(timezone.utc).isoformat()}
 
@@ -324,6 +327,7 @@ class Provider:
             if scope[1]:
                 self.artifact_roots[scope] = artifacts.root
         rpc = None
+        started = False
         try:
             rpc = RPC(home, workspace, home / 'chat_models.json', artifact_handler=artifacts.call)
             if cancel.is_set():
@@ -353,10 +357,12 @@ class Provider:
             context = json.dumps(history, ensure_ascii=False)
             if len(context) > 180000:
                 raise ValueError('대화가 너무 깁니다. 새 대화를 시작해 주세요. 원문은 보존됩니다.')
+            self.observe_limits(rpc, emit, 'before')
             response = rpc.call('turn/start', {'threadId': thread, 'model': model['model'], 'effort': effort,
                 'input': [{'type': 'text', 'text': 'Conversation history (role-tagged data):\n' + context}],
                 'environments': []})
             turn = response['turn']['id']
+            started = True
             emit('provider', {'thread_id': thread, 'turn_id': turn, 'model': result['model'],
                               'reasoning_effort': effort, 'workspace_path': str(workspace.resolve())})
             interrupted = False
@@ -413,8 +419,30 @@ class Provider:
             raise ValueError('응답 제한 시간을 초과했습니다. 부분 응답을 보존했습니다.')
         finally:
             if rpc:
+                if started:
+                    self.observe_limits(rpc, emit, 'after')
+                    self.schedule_limit_observation(account, emit)
                 rpc.close()
             artifacts.close()
+
+    @staticmethod
+    def observe_limits(rpc, emit, phase):
+        try:
+            value = normalize_limits(rpc.call('account/rateLimits/read', {}, timeout=15))
+            if value['five_hour'] or value['weekly']:
+                emit('limits', {phase: value})
+        except Exception:
+            _LOG.debug('Chat quota observation unavailable (%s)', phase, exc_info=True)
+
+    def schedule_limit_observation(self, account, emit):
+        def observe():
+            try:
+                emit('limits', {'delayed': self.limits(account, force=True)})
+            except Exception:
+                _LOG.debug('Chat delayed quota observation unavailable', exc_info=True)
+        timer = threading.Timer(30, observe)
+        timer.daemon = True
+        timer.start()
 
 
 atexit.register(RPC.close_all)

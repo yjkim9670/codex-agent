@@ -253,3 +253,42 @@ def test_first_reply_provider_separates_title_and_keeps_sandbox(tmp_path, monkey
     finally:
         for artifact_path in artifact_paths:
             shutil.rmtree(artifact_path)
+
+
+def test_run_observes_before_turn_and_after_completion_without_cached_baseline(tmp_path, monkeypatch):
+    import services.codex_provider as module
+    calls, output = [], []
+    class FakeRPC:
+        def __init__(self, *args, **kwargs):
+            self.events = queue.Queue()
+            self.events.put({'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}})
+        def call(self, method, params, **kwargs):
+            calls.append(method)
+            if method == 'thread/start':
+                return {'model': 'm', 'thread': {'id': 'thread'}}
+            if method == 'turn/start':
+                return {'turn': {'id': 'turn'}}
+            return {'rateLimits': {'primary': {'windowDurationMins': 300, 'usedPercent': 20, 'resetsAt': 2000000000}}}
+        def close(self):
+            calls.append('close')
+    monkeypatch.setattr(module, 'RPC', FakeRPC)
+    provider = Provider(tmp_path)
+    monkeypatch.setattr(provider, 'models', lambda account: [{'model': 'm', 'defaultReasoningEffort': 'low', 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}])
+    monkeypatch.setattr(provider, 'prepare', lambda account: (tmp_path, tmp_path))
+    monkeypatch.setattr(provider, 'schedule_limit_observation', lambda account, emit: calls.append('delayed'))
+    provider.run({'provider_account_id': 'account'}, {'model': 'm', 'effort': 'low', 'search': 'off'}, [],
+                 lambda kind, data: output.append((kind, data)), threading.Event())
+    assert calls == ['thread/start', 'account/rateLimits/read', 'turn/start', 'account/rateLimits/read', 'delayed', 'close']
+    assert list(output[0][1]) == ['before']
+    assert output[-2] == ('done', {'status': 'completed'})
+    assert list(output[-1][1]) == ['after']
+    assert output[0][1]['before']['five_hour']['resets_at'].startswith('2033-')
+
+
+def test_missing_quota_does_not_abort_response():
+    class Offline:
+        def call(self, *args, **kwargs):
+            raise ValueError('unavailable')
+    output = []
+    Provider.observe_limits(Offline(), lambda *args: output.append(args), 'before')
+    assert output == []

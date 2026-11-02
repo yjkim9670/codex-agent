@@ -37,3 +37,29 @@ def test_rollout_corrects_provisional_values_and_app_filter():
     assert {r['event_id'] for r in merged} == {'rollout:t:u:m', 'work'}
     assert analyze(Path('.'), data={'events': merged}, now=at, application='workbench-chat')['total_tokens'] == 100
     assert analyze(Path('.'), data={'events': merged}, now=at)['total_tokens'] == 170
+
+
+def test_quota_observations_survive_completion_deletion_and_do_not_move_usage_time(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHAT_DATA_DIR', str(tmp_path))
+    store = Store(tmp_path)
+    cid = store.create()['id']
+    attempt, _ = store.enqueue(cid, 'hello', 'quota-request', {'account_id': 'a', 'provider_account_id': 'p', 'search': 'off'})
+    aid = attempt['id']
+    before = {'observed_at': datetime.now(timezone.utc).isoformat(), 'five_hour': {'used_percent': 20}}
+    store.emit(aid, 'limits', {'before': before})
+    store.emit(aid, 'provider', {'thread_id': 'thread', 'turn_id': 'turn', 'model': 'gpt-6-luna'})
+    store.emit(aid, 'usage', {'total': {'inputTokens': 90, 'outputTokens': 10, 'totalTokens': 100}})
+    store.emit(aid, 'done', {'status': 'completed'})
+    original = read_chat_outbox('p')[0]
+    store.emit(aid, 'limits', {'after': {'observed_at': 'later'}, 'delayed': {'observed_at': 'latest'}})
+    updated = read_chat_outbox('p')[0]
+    assert updated['recorded_at'] == original['recorded_at']
+    assert updated['execution_completed_at'] == original['execution_completed_at']
+    assert updated['execution_started_at'] == before['observed_at']
+    assert updated['duration_ms'] >= 0
+    assert set(updated['quota_observations']) == {'before', 'after', 'delayed'}
+    assert store.attempt(aid)['status'] == 'completed'
+    store.change(cid, delete=True)
+    assert read_chat_outbox('p')[0] == updated
+    store.emit(aid, 'limits', {'delayed': {'observed_at': 'after deletion'}})
+    assert read_chat_outbox('p')[0]['quota_observations']['delayed']['observed_at'] == 'after deletion'

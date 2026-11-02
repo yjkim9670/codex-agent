@@ -12,11 +12,12 @@ const report = {
     collected_at:'2026-10-05T12:00:00+09:00', limits_observed_at:null,
     effort:'all', efforts:['medium','low'], accounts:{accounts:[]}, environments:[],
     total_tokens:1000, current_limits:{},
+    calibration_coverage:{model_efforts:{'alpha/medium':{linked_tokens:400,unlinked_tokens:100},'alpha/low':{unlinked_tokens:200},'beta/medium':{unlinked_tokens:300}}},
     daily:{'2026-10-05':{alpha:400},'2026-08-30':{alpha:100},'2026-09-01':{beta:300},'2026-08-31':{alpha:200}},
     models:{alpha:{total_tokens:700},beta:{total_tokens:300}},
     model_efforts:{'alpha/medium':{model:'alpha',reasoning_effort:'medium',total_tokens:500},'alpha/low':{model:'alpha',reasoning_effort:'low',total_tokens:200},'beta/medium':{model:'beta',reasoning_effort:'medium',total_tokens:300}},
     windows:{
-        five_hour:{model_efforts:{'alpha/medium':qualified(3,1.25),'alpha/low':qualified(2,99),'beta/medium':qualified(4,null)},groups:[],excluded:{record_pending:7},last_valid_observed_at:'2026-10-01T10:03:00+09:00'},
+        five_hour:{model_efforts:{'alpha/medium':qualified(3,1.25),'alpha/low':qualified(2,99),'beta/medium':qualified(4,null)},excluded_model_efforts:{'alpha/low':{mixed_model_group:4,'record_excluded:observation_timeout':19}},groups:[],excluded:{record_pending:7},last_valid_observed_at:'2026-10-01T10:03:00+09:00'},
         weekly:{model_efforts:{'alpha/medium':qualified(2,77),'alpha/low':qualified(3,.5)},groups:[],excluded:{}}
     },
     quota_samples:[{limits_observed_at:'2026-09-01T01:00:00+09:00',five_hour_used_percent:20,five_hour_resets_at:'a'}, {limits_observed_at:'2026-09-02T01:00:00+09:00',five_hour_used_percent:10,five_hour_resets_at:'b'}],
@@ -79,6 +80,10 @@ if(process.argv.includes('--serve')) {
         await expect(page.locator('#comparison')).toContainText('1.250');
         await expect(page.locator('#comparison [data-observation="insufficient"]')).toHaveCount(2);
         await expect(page.locator('#comparison')).toContainText('관측 부족');
+        await expect(page.locator('#comparison')).toContainText('보정 기록 없음 200 토큰');
+        await expect(page.locator('#comparison')).toContainText('다른 모델과 혼합 4구간');
+        await expect(page.locator('#comparison')).toContainText('관측 기한 초과 19건');
+        await expect(page.locator('#comparison')).toContainText('검증 통과');
         await expect(page.locator('#comparison')).not.toContainText('99.000');
         assert.deepEqual(await page.locator('#monthly-rows tr td:nth-child(2)').allTextContents(),['400','300','300']);
         assert.deepEqual(await page.locator('#weekly-rows tr td:nth-child(2)').allTextContents(),['400','0','0','0','0','500','100']);

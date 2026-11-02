@@ -5,7 +5,7 @@
 <title>사용량 통계 · Codex Workbench</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/usage_dashboard.css', v=4) }}">
-<script defer src="{{ url_for('static', filename='js/usage_dashboard.js', v=5) }}"></script>
+<script defer src="{{ url_for('static', filename='js/usage_dashboard.js', v=6) }}"></script>
 </head>
 <body>
 <main id="usage-dashboard">
@@ -26,6 +26,7 @@
 </div>
 <section class="panel comparison"><div class="section-title"><div><h2>100만 토큰당 한도 차감</h2><p>관측된 차감 합계 ÷ 검증 토큰 합계 × 100만 · 단위 %p</p></div><div class="segments" role="group" aria-label="한도 창"><button type="button" data-window="five_hour" aria-pressed="true">5시간</button><button type="button" data-window="weekly" aria-pressed="false">주간</button></div></div>
 <p id="calibration-status" class="note" role="status"></p>
+<p class="note">전체 수집에는 보정 기록이 없는 사용도 포함됩니다. 검증 통과 토큰만 차감률 계산에 사용합니다. 제외 사유의 ‘건’은 보정 기록 수, ‘구간’은 묶음 관측 수입니다.</p>
 <div id="comparison" aria-label="모델별 한도 차감 비교"></div>
 <p class="note">관측 기반 추정치입니다. 공식 모델 환산율이 아니며, 검증 구간 3개 미만이거나 유효한 환산값이 없는 모델/effort는 수집 토큰과 관측 부족 사유를 표시합니다. 차감률은 검증 후 표시합니다. 추적되지 않은 다른 PC·클라우드 사용, 정수 반올림과 조회 지연이 영향을 줄 수 있습니다.</p>
 <details id="group-details"><summary>검증 구간과 제외 사유</summary><div id="groups"></div></details>

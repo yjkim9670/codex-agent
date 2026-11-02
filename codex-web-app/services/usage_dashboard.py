@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from .model_usage_analysis import analyze
 from .conversation_usage import chat_root, read_chat_outbox, application_of
 from .usage_reconciliation import build_usage_reconciliation
+from .usage_recovery import chat_calibration
 
 KST = ZoneInfo('Asia/Seoul')
 _LOG = logging.getLogger(__name__)
@@ -187,7 +188,8 @@ def merge_events(ledger, threads):
                 for entry in candidates:
                     result.pop(entry['event_id'], None)
                 for row in rows:
-                    result[row['event_id']] = {**row, 'application': 'workbench-chat'}
+                    result[row['event_id']] = {**row, 'application': 'workbench-chat',
+                        'calibration_id': candidates[0]['event_id'] if len(candidates) == 1 else None}
                 handled.update(row['event_id'] for row in rows)
                 diagnostics['matched_rollout_tokens'] += sum(row['total_tokens'] for row in rows)
                 continue
@@ -256,10 +258,12 @@ def collect(context, *, force=False, now=None):
         except FileNotFoundError:
             pass
         identity = chat._read_auth_identity(context['codex_home']).get('provider_account_id')
+        outbox = []
         from ..config import is_internal_multiuser_mode
         if not is_internal_multiuser_mode():
             try:
-                ledger.extend(read_chat_outbox(identity))
+                outbox = [e for e in read_chat_outbox(identity) if _stamp(e['recorded_at']) >= cutoff]
+                ledger.extend(outbox)
             except (OSError, sqlite3.Error, ValueError) as exc:
                 errors.append('Chat outbox: ' + str(exc))
         cached = old.get('files', {}) if old.get('version') == 4 else {}
@@ -331,11 +335,37 @@ def collect(context, *, force=False, now=None):
         events, diagnostics = merge_events(ledger, threads.values())
         events = [{**e, 'application': application_of(e)} for e in events if cutoff <= _stamp(e['recorded_at']) <= now]
         diagnostics['chat_pending_attempts'] = sum(bool(e.get('usage_pending')) for e in events)
+        if outbox:
+            try:
+                sync_chat_calibration(context, outbox, events, now=now)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                errors.append('Chat calibration: ' + str(exc))
         result = {'version': 4, 'collected_at': now.isoformat(), 'retention_days': 90,
                   'account_id': context['account']['id'], 'events': events, 'sources': sources,
                   'diagnostics': diagnostics, 'errors': errors, 'files': files}
         chat._write_json_atomic(path, result)
         return result
+
+
+def sync_chat_calibration(context, outbox, events, *, now=None):
+    """Import durable Chat observations under the common account file locks."""
+    from . import codex_chat as chat
+    history_path = Path(context['root']) / 'codex_usage_history.json'
+    calibration_path = Path(context['root']) / 'codex_usage_calibration.json'
+    history = _read(history_path)
+    records, _samples = chat_calibration(outbox, events, history.get('account_limit_samples', []), now=now)
+    with chat._acquire_path_file_lock(calibration_path):
+        ledger = chat._load_usage_calibration_ledger(calibration_path)
+        indexed = {r['id']: r for r in ledger['records']}
+        for record in records:
+            weighted = chat._calculate_sol_weighted_tokens(record['model'], record['token_usage'])
+            record['weighted_tokens'] = weighted
+            indexed[record['id']] = record
+        revised = sorted(indexed.values(), key=lambda r: _stamp(r['created_at']))[-chat._USAGE_CALIBRATION_MAX_RECORDS:]
+        if revised != ledger['records']:
+            ledger['records'] = revised
+            ledger['updated_at'] = chat.normalize_timestamp(None)
+            chat._write_json_atomic(calibration_path, ledger)
 
 
 def dashboard(account_id=None, days=30, effort='all', environment='all', application='all'):

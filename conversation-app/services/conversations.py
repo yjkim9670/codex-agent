@@ -44,6 +44,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS conversation_messages ON messages(conversation_id,created_at,id);
             CREATE INDEX IF NOT EXISTS conversation_attempts ON attempts(conversation_id,created_at,id);
             CREATE TABLE IF NOT EXISTS usage_outbox(attempt_id TEXT PRIMARY KEY,event TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS usage_limits(attempt_id TEXT PRIMARY KEY,value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS conversation_titles(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,source TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY,value TEXT);
             ''')
@@ -171,6 +172,19 @@ class Store:
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT * FROM attempts WHERE id=?', (aid,)).fetchone()
+            if kind == 'limits':
+                if not row and not db.execute('SELECT 1 FROM usage_outbox WHERE attempt_id=?', (aid,)).fetchone():
+                    return
+                previous = db.execute('SELECT value FROM usage_limits WHERE attempt_id=?', (aid,)).fetchone()
+                limits = json.loads(previous['value']) if previous else {}
+                limits.update(data)
+                db.execute('INSERT OR REPLACE INTO usage_limits VALUES(?,?)', (aid, json.dumps(limits)))
+                usage = db.execute('SELECT event FROM usage_outbox WHERE attempt_id=?', (aid,)).fetchone()
+                if usage:
+                    event = json.loads(usage['event'])
+                    event['quota_observations'] = limits
+                    db.execute('UPDATE usage_outbox SET event=? WHERE attempt_id=?', (json.dumps(event), aid))
+                return  # Quota reads must not move the execution completion timestamp.
             if not row:
                 return
             updates = {'updated_at': now()}
@@ -225,6 +239,10 @@ class Store:
                          'cached_input_tokens': last.get('cachedInputTokens', 0),
                          'output_tokens': last.get('outputTokens', 0), 'reasoning_output_tokens': last.get('reasoningOutputTokens', 0),
                          'total_tokens': last.get('totalTokens', 0)}
+                limits = db.execute('SELECT value FROM usage_limits WHERE attempt_id=?', (aid,)).fetchone()
+                event['quota_observations'] = json.loads(limits['value']) if limits else {}
+                event['execution_started_at'] = event['quota_observations'].get('before', {}).get('observed_at') or row['created_at']
+                event['duration_ms'] = max(0, int((datetime.fromisoformat(event['execution_completed_at']) - datetime.fromisoformat(event['execution_started_at'])).total_seconds() * 1000))
                 db.execute('INSERT OR REPLACE INTO usage_outbox VALUES(?,?)', (aid, json.dumps(event)))
         with self.wake:
             self.wake.notify_all()

@@ -27,7 +27,6 @@ class TaskNotificationService : Service() {
         private const val MONITOR_NOTIFICATION_ID = 3101
         private const val COMPLETE_NOTIFICATION_ID = 3102
         private const val POLL_INTERVAL_MS = 5_000L
-        private const val IDLE_GRACE_POLLS = 2
         private const val MAX_MONITOR_MS = 4 * 60 * 60 * 1000L
         private val USER_AGENT = "CodexWorkbenchAndroid/${BuildConfig.VERSION_NAME}"
 
@@ -59,7 +58,7 @@ class TaskNotificationService : Service() {
     private var monitorThread: Thread? = null
     private var baseUrl: String = ""
     private var workbenchLabel: String = "코덱스 워크벤치"
-    private var cookie: String = ""
+    @Volatile private var cookie: String = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -74,10 +73,19 @@ class TaskNotificationService : Service() {
             return START_NOT_STICKY
         }
 
-        baseUrl = intent?.getStringExtra(EXTRA_BASE_URL).orEmpty().trim()
+        val requestedBase = intent?.getStringExtra(EXTRA_BASE_URL).orEmpty().trim()
+        if (!WorkbenchCatalog.isAllowedPage(requestedBase, quickRoot())) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (monitorThread?.isAlive == true) {
+            if (requestedBase == baseUrl) cookie = intent?.getStringExtra(EXTRA_COOKIE).orEmpty()
+            return START_NOT_STICKY
+        }
+        baseUrl = requestedBase
         workbenchLabel = intent?.getStringExtra(EXTRA_LABEL).orEmpty().ifBlank { "코덱스 워크벤치" }
         cookie = intent?.getStringExtra(EXTRA_COOKIE).orEmpty()
-        if (baseUrl.isBlank()) {
+        if (!WorkbenchCatalog.isAllowedPage(baseUrl, quickRoot())) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -103,38 +111,27 @@ class TaskNotificationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun quickRoot(): String = WorkbenchCatalog.normalizeQuickTunnelRoot(
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString("quick_tunnel_root", null)
+    ) ?: WorkbenchCatalog.QUICK_TUNNEL_ROOT
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopRequested.set(true)
+        stopForegroundCompat()
+        stopSelf()
+    }
+
     private fun monitorLoop() {
         val startedAt = System.currentTimeMillis()
-        var idlePolls = 0
-        var seenActiveTask = false
-        val observedSessionIds = linkedSetOf<String>()
-
+        val tracker = CompletionTracker()
         while (!stopRequested.get() && System.currentTimeMillis() - startedAt < MAX_MONITOR_MS) {
             val snapshot = fetchStreamSnapshot()
-            if (snapshot == null) {
-                idlePolls += 1
-                if (!seenActiveTask && idlePolls >= IDLE_GRACE_POLLS) break
-                sleepPollInterval()
-                continue
+            if (snapshot != null) {
+                val sessions = tracker.observe(snapshot.streams, snapshot.pendingQueueCount)
+                if (sessions.isNotEmpty() && !stopRequested.get() && !MainActivity.isVisible) {
+                    postCompletionNotification(resolveCompletedSessionLabel(sessions), sessions.first())
+                }
             }
-
-            if (snapshot.activeStreams.isNotEmpty()) {
-                seenActiveTask = true
-                idlePolls = 0
-                snapshot.activeStreams.values
-                    .filter { it.isNotBlank() }
-                    .forEach { observedSessionIds.add(it) }
-            } else if (!seenActiveTask) {
-                idlePolls += 1
-                if (idlePolls >= IDLE_GRACE_POLLS) break
-            }
-
-            if (seenActiveTask && snapshot.activeStreams.isEmpty() && snapshot.pendingQueueCount <= 0) {
-                val sessionLabel = resolveCompletedSessionLabel(observedSessionIds)
-                postCompletionNotification(sessionLabel)
-                break
-            }
-
             sleepPollInterval()
         }
 
@@ -144,7 +141,7 @@ class TaskNotificationService : Service() {
     }
 
     private data class StreamSnapshot(
-        val activeStreams: Map<String, String>,
+        val streams: Map<String, CompletionTracker.Stream>,
         val pendingQueueCount: Int,
     )
 
@@ -160,8 +157,8 @@ class TaskNotificationService : Service() {
             if (!looksLikeJson(connection.contentType, body)) return null
 
             val root = JSONObject(body)
-            val streams = root.optJSONArray("streams") ?: return StreamSnapshot(emptyMap(), 0)
-            val active = linkedMapOf<String, String>()
+            val streams = root.optJSONArray("streams") ?: return null
+            val active = linkedMapOf<String, CompletionTracker.Stream>()
             var pending = 0
             for (index in 0 until streams.length()) {
                 val stream = streams.optJSONObject(index) ?: continue
@@ -170,8 +167,8 @@ class TaskNotificationService : Service() {
                 val done = stream.optBoolean("done", false)
                 val cancelled = stream.optBoolean("cancelled", false)
                 pending = maxOf(pending, stream.optInt("pending_queue_count", 0))
-                if (id.isNotBlank() && !done && !cancelled) {
-                    active[id] = sessionId
+                if (id.isNotBlank()) {
+                    active[id] = CompletionTracker.Stream(sessionId, done, cancelled)
                 }
             }
             StreamSnapshot(active, pending)
@@ -238,7 +235,7 @@ class TaskNotificationService : Service() {
             requestMethod = "GET"
             connectTimeout = 7_000
             readTimeout = 7_000
-            instanceFollowRedirects = true
+            instanceFollowRedirects = false
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", USER_AGENT)
             if (cookie.isNotBlank()) setRequestProperty("Cookie", cookie)
@@ -312,12 +309,14 @@ class TaskNotificationService : Service() {
             .build()
     }
 
-    private fun postCompletionNotification(sessionLabel: String?) {
+    private fun postCompletionNotification(sessionLabel: String?, sessionId: String) {
         val openIntent = PendingIntent.getActivity(
             this,
             1,
             Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(MainActivity.EXTRA_OPEN_BASE, baseUrl)
+                putExtra(MainActivity.EXTRA_OPEN_SESSION, sessionId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

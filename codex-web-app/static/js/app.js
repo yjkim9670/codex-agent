@@ -8820,7 +8820,15 @@ async function loadSessions({ preserveActive = true, selectSessionId = null, rel
         state.sessionStorage = result?.session_storage || null;
         updateSessionStorageSummary(state.sessionStorage);
 
-        const requestedActiveId = selectSessionId || (preserveActive ? state.activeSessionId : null);
+        const linkedSession = new URLSearchParams(location.search).get('session');
+        let storedSession = null;
+        try { storedSession = sessionStorage.getItem('codex-active-session:' + location.pathname); } catch {}
+        const requestedActiveId = selectSessionId || linkedSession || (preserveActive ? state.activeSessionId : null) || storedSession;
+        if (linkedSession) {
+            const clean = new URL(location.href);
+            clean.searchParams.delete('session');
+            history.replaceState(history.state, '', clean);
+        }
         const requestedSummary = requestedActiveId
             ? state.sessions.find(session => session.id === requestedActiveId) || null
             : null;
@@ -27750,6 +27758,7 @@ async function loadSession(sessionId) {
         const session = result?.session;
         const previousSessionId = state.activeSessionId;
         state.activeSessionId = session?.id || sessionId;
+        try { sessionStorage.setItem('codex-active-session:' + location.pathname, state.activeSessionId); } catch {}
         ensureSessionState(state.activeSessionId);
         if (session?.id) {
             upsertSessionSummary(session);

@@ -3,7 +3,6 @@
     <style name="Theme.CodexWorkbench" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:statusBarColor">@color/system_bar_background_light</item>
         <item name="android:navigationBarColor">@color/system_bar_background_light</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>

@@ -53,10 +53,13 @@ jobs:
           gradle-version: "8.13"
 
       - name: Run Android unit tests
-        run: gradle -p android :app:testDebugUnitTest --stacktrace
+        run: ./android/gradlew -p android :app:testDebugUnitTest --stacktrace
+
+      - name: Compile release and run lint
+        run: ./android/gradlew -p android :app:assembleRelease :app:lintDebug --stacktrace
 
       - name: Build debug validation APK
-        run: gradle -p android :app:assembleDebug --stacktrace
+        run: ./android/gradlew -p android :app:assembleDebug --stacktrace
 
       - name: Upload debug validation APK
         if: >-
@@ -108,7 +111,7 @@ jobs:
           inputs.publish_artifact &&
           env.ANDROID_KEYSTORE_BASE64 != '' &&
           env.ANDROID_KEYSTORE_PASSWORD != ''
-        run: gradle -p android :app:assembleRelease --stacktrace
+        run: ./android/gradlew -p android :app:assembleRelease --stacktrace
 
       - name: Verify release APK signature
         if: >-

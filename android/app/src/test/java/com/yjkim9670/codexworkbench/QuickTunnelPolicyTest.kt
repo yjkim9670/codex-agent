@@ -8,7 +8,7 @@ class QuickTunnelPolicyTest {
     @Test
     fun keepsCurrentQuickTunnelRootAsDefault() {
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com",
+            "https://strategy-lawrence-runs-places.trycloudflare.com",
             WorkbenchCatalog.QUICK_TUNNEL_ROOT,
         )
     }
@@ -16,27 +16,27 @@ class QuickTunnelPolicyTest {
     @Test
     fun buildsExpectedDefaultQuickTunnelWorkbenchUrls() {
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/tg/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/tg/",
             WorkbenchCatalog.byId("common_tg").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/finance-codex/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/finance-codex/",
             WorkbenchCatalog.byId("finance").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/local/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/local/",
             WorkbenchCatalog.byId("local").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/constraint/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/constraint/",
             WorkbenchCatalog.byId("constraint").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/dev/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/dev/",
             WorkbenchCatalog.byId("dev").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
         assertEquals(
-            "https://painted-slideshow-hampshire-main.trycloudflare.com/",
+            "https://strategy-lawrence-runs-places.trycloudflare.com/",
             WorkbenchCatalog.byId("process_dashboard").urlFor(ConnectionMode.QUICK_TUNNEL),
         )
     }

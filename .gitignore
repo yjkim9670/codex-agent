@@ -30,3 +30,6 @@ android/**/build/
 android/.signing/
 android/*.jks
 android/*.keystore
+
+android/keystore.properties
+android/.kotlin/

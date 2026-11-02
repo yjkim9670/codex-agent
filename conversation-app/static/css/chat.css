@@ -108,3 +108,18 @@ header,#composer,#status{flex-shrink:0}
 /* Keep the drawer sharp while blocking and softening the inactive page. */
 #sidebar-backdrop{position:fixed;inset:0;z-index:9;background:#16161666;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);touch-action:none}
 @media(min-width:1024px){#sidebar-backdrop{display:none}}
+
+/* Reading preferences remain independent from the responsive control scale. */
+.answer-body{line-height:var(--reading-line-height,1.8);min-width:0}
+.answer-body :is(h1,h2,h3,h4){line-height:1.4;margin:1.4em 0 .55em;font-weight:600}
+.answer-body :is(ul,ol){padding-inline-start:1.6em}
+.answer-body li+li{margin-top:.4em}
+.answer-body blockquote{margin-inline:0;border-inline-start:3px solid var(--border-strong);padding-inline-start:16px;color:var(--muted)}
+.answer-body pre{overscroll-behavior-x:contain;tab-size:4;line-height:1.6}
+@media(prefers-reduced-motion:reduce){#thread{scroll-behavior:auto}}
+@media(min-width:600px) and (max-width:1023px){
+ header{padding:8px 16px}
+ #thread{padding:24px 20px}
+ #composer{padding:12px 20px max(12px,env(safe-area-inset-bottom))}
+ #message{max-height:min(180px,25dvh)}
+}

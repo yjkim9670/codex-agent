@@ -3,7 +3,6 @@ package com.yjkim9670.codexworkbench
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,7 +12,6 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.Message
 import android.text.TextUtils
 import android.view.Gravity
@@ -22,7 +20,6 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
-import android.webkit.DownloadListener
 import android.webkit.HttpAuthHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -42,6 +39,9 @@ import android.widget.Toast
 
 class MainActivity : Activity() {
     companion object {
+        const val EXTRA_OPEN_BASE = "open_base"
+        const val EXTRA_OPEN_SESSION = "open_session"
+        @Volatile var isVisible = false
         const val EXTRA_SHOW_SERVER_SELECTION = "show_server_selection"
         private const val PREFS_NAME = "codex_workbench"
         private const val PREF_SERVER_URL = "server_url"
@@ -72,9 +72,19 @@ class MainActivity : Activity() {
 
     private lateinit var root: FrameLayout
     private var webView: WebView? = null
+    private var connectionStatus: TextView? = null
+    private var connectionFailed = false
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) {
+            runOnUiThread {
+                if (connectionFailed && isVisible) webView?.reload()
+            }
+        }
+    }
+    private var pendingSession: String? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var currentTarget: WorkbenchTarget? = null
-    private var currentConnectionMode = ConnectionMode.FUNNEL
+    private var currentConnectionMode = ConnectionMode.QUICK_TUNNEL
     private var serverBaseUrl = ""
     private var splashTransition: Runnable? = null
     private var settingsOverlay: View? = null
@@ -86,12 +96,19 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) { navigateBack() }
+        }
 
         root = FrameLayout(this).apply { setBackgroundColor(COLOR_CANVAS) }
         setContentView(root)
         installCrashRecorder()
 
         try {
+            (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager)
+                .registerDefaultNetworkCallback(networkCallback)
             configureSystemBars()
             applySystemBarInsets()
 
@@ -105,13 +122,16 @@ class MainActivity : Activity() {
                 return
             }
 
+            if (prefs.getString(PREF_QUICK_TUNNEL_ROOT, "")?.contains("painted-slideshow-hampshire-main.trycloudflare.com") == true) {
+                prefs.edit().remove(PREF_QUICK_TUNNEL_ROOT).apply()
+            }
             val legacyUrl = prefs.getString(PREF_SERVER_URL, null)
             if (!prefs.contains(PREF_CONNECTION_MODE)) {
                 val migratedMode = WorkbenchCatalog.modeForUrl(legacyUrl)
                     ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
                         ConnectionMode.TAILSCALE
                     } else {
-                        ConnectionMode.FUNNEL
+                        ConnectionMode.QUICK_TUNNEL
                     }
                 prefs.edit()
                     .putString(PREF_CONNECTION_MODE, migratedMode.name)
@@ -121,16 +141,39 @@ class MainActivity : Activity() {
             val savedId = prefs.getString(PREF_WORKBENCH_ID, null)
                 ?: WorkbenchCatalog.byUrl(legacyUrl)?.id
                 ?: WorkbenchCatalog.DEFAULT_ID
-            showConnectionScreen(savedId)
+            if (openNotification(intent)) return
+            val restoreId = savedInstanceState?.getString("connected_target")
+            if (restoreId != null) {
+                val target = WorkbenchCatalog.byId(restoreId)
+                val mode = storedConnectionMode()
+                showWorkbench(target, mode, resolvedTargetUrl(target, mode))
+            } else showConnectionScreen(savedId)
         } catch (error: Throwable) {
             recordCrash(error)
             showRecoveryScreen("앱 초기화 오류", formatError(error))
         }
     }
 
+    private fun openNotification(source: Intent?): Boolean {
+        val base = source?.getStringExtra(EXTRA_OPEN_BASE) ?: return false
+        val target = WorkbenchCatalog.byUrl(base) ?: return false
+        if (!target.isCodexWorkbench || !WorkbenchCatalog.isAllowedPage(base, quickTunnelRoot())) return false
+        pendingSession = source.getStringExtra(EXTRA_OPEN_SESSION)
+        source.removeExtra(EXTRA_OPEN_BASE)
+        source.removeExtra(EXTRA_OPEN_SESSION)
+        showWorkbench(target, WorkbenchCatalog.modeForUrl(base) ?: storedConnectionMode(), base)
+        return true
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        currentTarget?.let { outState.putString("connected_target", it.id) }
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (openNotification(intent)) return
         if (intent?.getBooleanExtra(EXTRA_SHOW_SERVER_SELECTION, false) != true) return
         intent.removeExtra(EXTRA_SHOW_SERVER_SELECTION)
         val savedId = prefs.getString(PREF_WORKBENCH_ID, null) ?: WorkbenchCatalog.DEFAULT_ID
@@ -143,12 +186,14 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        isVisible = true
         suppressNextPauseMonitor = false
-        runCatching { TaskNotificationService.stop(this) }
-            .onFailure { recordCrash(it) }
+        webView?.onResume()
+        webView?.evaluateJavascript("document.dispatchEvent(new Event('visibilitychange'));", null)
     }
 
     override fun onPause() {
+        isVisible = false
         if (!suppressNextPauseMonitor) {
             runCatching { startBackgroundCompletionMonitorIfNeeded() }
                 .onFailure { recordCrash(it) }
@@ -168,6 +213,10 @@ class MainActivity : Activity() {
         runCatching { destroyWebView() }
         if (Thread.getDefaultUncaughtExceptionHandler() === crashHandler) {
             Thread.setDefaultUncaughtExceptionHandler(previousUncaughtHandler)
+        }
+        runCatching {
+            (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager)
+                .unregisterNetworkCallback(networkCallback)
         }
         super.onDestroy()
     }
@@ -316,7 +365,7 @@ class MainActivity : Activity() {
             val bottom: Int
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val insets = windowInsets.getInsets(
-                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+                    WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime(),
                 )
                 left = insets.left
                 top = insets.top
@@ -342,7 +391,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         root.setBackgroundColor(Color.rgb(7, 26, 53))
         currentTarget = null
-        currentConnectionMode = ConnectionMode.FUNNEL
+        currentConnectionMode = ConnectionMode.QUICK_TUNNEL
         serverBaseUrl = ""
 
         val content = LinearLayout(this).apply {
@@ -383,7 +432,7 @@ class MainActivity : Activity() {
             ?: if (prefs.getBoolean(PREF_USE_TAILSCALE, false)) {
                 ConnectionMode.TAILSCALE
             } else {
-                ConnectionMode.FUNNEL
+                ConnectionMode.QUICK_TUNNEL
             }
 
     private fun persistConnectionMode(mode: ConnectionMode) {
@@ -430,6 +479,8 @@ class MainActivity : Activity() {
         root.removeAllViews()
         root.setBackgroundColor(COLOR_CANVAS)
         currentTarget = null
+        connectionStatus = null
+        TaskNotificationService.stop(this)
         serverBaseUrl = ""
 
         val scroll = ScrollView(this).apply {
@@ -438,7 +489,8 @@ class MainActivity : Activity() {
         }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(30))
+            val side = if (resources.configuration.screenWidthDp >= 840) 80 else 16
+            setPadding(dp(side), dp(20), dp(side), dp(24))
         }
 
         panel.addView(simpleText("코덱스 워크벤치", 26f, COLOR_INK, true, Gravity.CENTER), matchWrap())
@@ -447,13 +499,25 @@ class MainActivity : Activity() {
             matchWrap().apply { topMargin = dp(6); bottomMargin = dp(16) },
         )
 
-        var selectedId = WorkbenchCatalog.byId(initialWorkbenchId).id
+        val chatMode = prefs.getBoolean("chat_mode", false)
+        val applicationModes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        listOf(false to "작업", true to "채팅").forEach { (chat, label) ->
+            val button = simpleButton(label, chat == chatMode)
+            applicationModes.addView(button, LinearLayout.LayoutParams(0, dp(48), 1f))
+            button.setOnClickListener {
+                prefs.edit().putBoolean("chat_mode", chat).apply()
+                showConnectionScreen(if (chat) "conversation" else WorkbenchCatalog.DEFAULT_ID)
+            }
+        }
+        panel.addView(applicationModes, matchWrap().apply { bottomMargin = dp(14) })
+        var selectedId = if (chatMode) "conversation" else WorkbenchCatalog.byId(initialWorkbenchId).let {
+            if (it.isCodexWorkbench) it.id else WorkbenchCatalog.DEFAULT_ID
+        }
         var selectedConnectionMode = storedConnectionMode()
         val cards = linkedMapOf<String, TextView>()
         val modeButtons = linkedMapOf<ConnectionMode, TextView>()
 
         fun connectionSummary(): String = when (selectedConnectionMode) {
-            ConnectionMode.FUNNEL -> "외부 Funnel · ${WorkbenchCatalog.FUNNEL_ROOT}"
             ConnectionMode.TAILSCALE ->
                 "내부 Tailscale · ${WorkbenchCatalog.TAILSCALE_HOST}:3000~3004 · Dashboard :18000"
             ConnectionMode.QUICK_TUNNEL ->
@@ -464,7 +528,6 @@ class MainActivity : Activity() {
             append(target.name.removeSuffix(" Codex Workbench"))
             append("\n")
             when (selectedConnectionMode) {
-                ConnectionMode.FUNNEL -> append("Funnel · ${target.funnelUrl}")
                 ConnectionMode.TAILSCALE -> append("Tailscale · ${target.tailscaleUrl}")
                 ConnectionMode.QUICK_TUNNEL ->
                     append("Quick Tunnel · ${target.quickTunnelUrl(quickTunnelRoot())}")
@@ -478,9 +541,8 @@ class MainActivity : Activity() {
             background = roundedDrawable(Color.WHITE, dp(15).toFloat(), COLOR_BORDER, 1)
         }
         listOf(
-            ConnectionMode.FUNNEL to "Funnel",
             ConnectionMode.TAILSCALE to "Tailscale",
-            ConnectionMode.QUICK_TUNNEL to "Quick Tunnel",
+            ConnectionMode.QUICK_TUNNEL to "Cloudflare",
         ).forEach { (mode, label) ->
             val button = simpleText(label, 12.5f, COLOR_INK, true, Gravity.CENTER).apply {
                 isClickable = true
@@ -489,7 +551,7 @@ class MainActivity : Activity() {
             }
             modeButtons[mode] = button
             modeRow.addView(button, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                if (mode != ConnectionMode.FUNNEL) leftMargin = dp(4)
+                if (mode != ConnectionMode.TAILSCALE) leftMargin = dp(4)
             })
         }
         panel.addView(modeRow, matchWrap().apply { bottomMargin = dp(6) })
@@ -564,7 +626,7 @@ class MainActivity : Activity() {
                 isFocusable = true
                 setLineSpacing(dp(3).toFloat(), 1f)
                 setOnClickListener {
-                    if (target.isCodexWorkbench) {
+                    if (target.isCodexWorkbench || target.isConversation) {
                         selectedId = target.id
                         refreshCards()
                     } else {
@@ -584,15 +646,15 @@ class MainActivity : Activity() {
             matchWrap().apply { bottomMargin = dp(7) },
         )
         WorkbenchCatalog.targets
-            .filter { !it.isCodexWorkbench }
+            .filter { !it.isCodexWorkbench && !it.isConversation }
             .forEach { addTargetCard(it) }
 
         panel.addView(
-            simpleText("Codex Workbench", 12.5f, COLOR_MUTED, true),
+            simpleText(if (chatMode) "Workbench Chat" else "Codex Workbench", 12.5f, COLOR_MUTED, true),
             matchWrap().apply { topMargin = dp(8); bottomMargin = dp(7) },
         )
         WorkbenchCatalog.targets
-            .filter { it.isCodexWorkbench }
+            .filter { if (chatMode) it.isConversation else it.isCodexWorkbench }
             .forEach { addTargetCard(it) }
         refreshModeButtons()
         refreshCards()
@@ -624,6 +686,7 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun showWorkbench(target: WorkbenchTarget, mode: ConnectionMode, resolvedUrl: String) {
         closeSettingsOverlay()
+        TaskNotificationService.stop(this)
         destroyWebView()
         root.removeAllViews()
         root.setBackgroundColor(Color.WHITE)
@@ -646,7 +709,6 @@ class MainActivity : Activity() {
                 append(target.name.removeSuffix(" Codex Workbench"))
                 append(
                     when (mode) {
-                        ConnectionMode.FUNNEL -> " · Funnel"
                         ConnectionMode.TAILSCALE -> " · Tailscale"
                         ConnectionMode.QUICK_TUNNEL -> " · Quick Tunnel"
                     },
@@ -668,6 +730,14 @@ class MainActivity : Activity() {
         toolbar.addView(server, LinearLayout.LayoutParams(dp(54), dp(38)).apply { leftMargin = dp(4) })
         toolbar.addView(settings, LinearLayout.LayoutParams(dp(54), dp(38)).apply { leftMargin = dp(4) })
         container.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)))
+        val status = simpleText("연결 중…", 12f, COLOR_MUTED, false).apply {
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            minHeight = dp(44)
+            setOnClickListener { webView?.reload() }
+        }
+        connectionStatus = status
+        connectionFailed = false
+        container.addView(status, matchWrap())
 
         runCatching { WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG) }
 
@@ -677,7 +747,6 @@ class MainActivity : Activity() {
         browser.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            databaseEnabled = true
             allowFileAccess = false
             allowContentAccess = true
             javaScriptCanOpenWindowsAutomatically = !target.isCodexWorkbench
@@ -704,6 +773,7 @@ class MainActivity : Activity() {
                 val uri = request?.url ?: return false
                 val scheme = uri.scheme?.lowercase().orEmpty()
                 if (scheme == "blob" || scheme == "data" || scheme == WebViewDownloadController.BRIDGE_SCHEME) {
+                    if (!request.isForMainFrame) return true
                     return downloadController?.handleNavigation(uri) ?: true
                 }
                 if (scheme == "http" || scheme == "https") {
@@ -714,12 +784,36 @@ class MainActivity : Activity() {
                 return true
             }
 
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                connectionFailed = false
+                connectionStatus?.text = "연결 중…"
+                connectionStatus?.visibility = View.VISIBLE
+            }
+
+            override fun onReceivedHttpError(view: WebView?, request: WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
+                if (request?.isForMainFrame != true) return
+                connectionFailed = true
+                connectionStatus?.visibility = View.VISIBLE
+                connectionStatus?.text = when (response?.statusCode) {
+                    401, 403 -> "인증이 필요하거나 만료되었습니다. 로그인 후 다시 시도하세요. · 탭하여 재시도"
+                    502, 503, 504 -> "서버가 응답하지 않습니다. 터널 주소와 서버 상태를 확인하세요. · 탭하여 재시도"
+                    else -> "서버 오류 ${response?.statusCode} · 탭하여 재시도"
+                }
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                if (!WorkbenchCatalog.isAllowedPage(url, quickTunnelRoot())) return
+                if (!connectionFailed) connectionStatus?.visibility = View.GONE
+                startBackgroundCompletionMonitorIfNeeded()
                 runCatching { downloadController?.installInterceptor() }
                 if (target.isCodexWorkbench) {
                     runCatching { removeDuplicatedPromptSafeArea(view) }
                     runCatching { enableWorkModeByDefault(view) }
+                }
+                if (target.isCodexWorkbench || target.isConversation) {
+                    applyReadingPreferences(view)
                 }
             }
 
@@ -728,15 +822,23 @@ class MainActivity : Activity() {
                 if (request?.isForMainFrame != true) return
                 val message = when (currentConnectionMode) {
                     ConnectionMode.TAILSCALE ->
-                        "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Funnel 모드로 전환하세요."
+                        "Tailscale 연결 오류: ${error?.description ?: "unknown error"}\nTailscale 앱의 연결 상태를 확인하거나 Cloudflare 모드로 전환하세요."
                     ConnectionMode.QUICK_TUNNEL ->
                         "Quick Tunnel 연결 오류: ${error?.description ?: "unknown error"}"
-                    ConnectionMode.FUNNEL -> {
-                        val label = if (target.isCodexWorkbench) "Workbench" else "대시보드"
-                        "$label 연결 오류: ${error?.description ?: "unknown error"}"
-                    }
                 }
-                Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                connectionFailed = true
+                connectionStatus?.visibility = View.VISIBLE
+                connectionStatus?.text = "$message · 탭하여 재시도"
+            }
+
+            override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                downloadController?.close()
+                downloadController = null
+                (view?.parent as? ViewGroup)?.removeView(view)
+                if (webView === view) webView = null
+                view?.destroy()
+                showRecoveryScreen("웹 화면이 종료되었습니다", "다시 연결하면 저장된 대화와 초안을 복원합니다.")
+                return true
             }
 
             override fun onReceivedHttpAuthRequest(
@@ -773,6 +875,11 @@ class MainActivity : Activity() {
                     handled = true
                     when (scheme) {
                         "http", "https" -> {
+                            if (!WorkbenchCatalog.isAllowedPage(uri.toString(), quickTunnelRoot())) {
+                                openExternal(uri)
+                                popup.post { popup.destroy() }
+                                return true
+                            }
                             suppressNextPauseMonitor = true
                             runCatching {
                                 startActivity(
@@ -843,12 +950,7 @@ class MainActivity : Activity() {
             }
         }
 
-        browser.setDownloadListener(
-            DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                enqueueDownload(url, userAgent, contentDisposition, mimeType)
-            },
-        )
-        val downloads = WebViewDownloadController(this, browser)
+        val downloads = WebViewDownloadController(this, browser, serverBaseUrl)
         downloadController = downloads
         runCatching { downloads.install() }
             .onFailure {
@@ -864,7 +966,10 @@ class MainActivity : Activity() {
         server.setOnClickListener { runCatching { showConnectionScreen(target.id) } }
         settings.setOnClickListener { runCatching { showSettingsOverlay() } }
         root.addView(container, fillFrame())
-        browser.loadUrl(serverBaseUrl)
+        val session = pendingSession
+        pendingSession = null
+        browser.loadUrl(if (session.isNullOrBlank()) serverBaseUrl else Uri.parse(serverBaseUrl).buildUpon()
+            .appendQueryParameter("session", session).build().toString())
     }
 
     private fun removeDuplicatedPromptSafeArea(browser: WebView?) {
@@ -887,6 +992,22 @@ class MainActivity : Activity() {
             })();
         """.trimIndent()
         browser?.evaluateJavascript(script, null)
+    }
+
+    private fun applyReadingPreferences(browser: WebView?) {
+        if (browser == null || !WorkbenchCatalog.isAllowedPage(browser.url, quickTunnelRoot())) return
+        val lineHeight = prefs.getInt("reading_line_height", 180).coerceIn(150, 220) / 100.0
+        val font = prefs.getString("reading_font", "page").orEmpty()
+        browser.evaluateJavascript("""
+            (() => {
+              let style = document.getElementById('android-reading-preferences');
+              if (!style) { style = document.createElement('style'); style.id = 'android-reading-preferences'; document.head.append(style); }
+              style.textContent = '.answer-body,.message-bubble,.message-content,.markdown-body {line-height:$lineHeight!important; overflow-wrap:anywhere} pre {max-width:100%;overflow-x:auto} textarea {max-width:100%}';
+              const font = ${org.json.JSONObject.quote(font)};
+              if (font !== 'page') document.documentElement.dataset.uiFont = font;
+              if (font === 'system') style.textContent += 'body,textarea,button,input,select {font-family:system-ui,sans-serif!important}';
+            })();
+        """.trimIndent(), null)
     }
 
     private fun enableWorkModeByDefault(browser: WebView?) {
@@ -917,7 +1038,8 @@ class MainActivity : Activity() {
         }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(24), dp(20), dp(30))
+            val side = if (resources.configuration.screenWidthDp >= 840) 80 else 16
+            setPadding(dp(side), dp(20), dp(side), dp(24))
         }
         panel.addView(simpleText("설정", 25f, COLOR_INK, true), matchWrap().apply { bottomMargin = dp(16) })
 
@@ -954,6 +1076,34 @@ class MainActivity : Activity() {
 
         val resetScale = simpleButton("100%로 초기화", false)
         displayCard.addView(resetScale, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
+        val readingFont = simpleButton("글꼴: " + prefs.getString("reading_font", "page"), false)
+        displayCard.addView(readingFont, matchWrap().apply { topMargin = dp(10) })
+        readingFont.setOnClickListener {
+            val names = arrayOf("페이지 설정 사용", "IBM Plex Sans KR", "SUIT", "시스템 글꼴")
+            val values = arrayOf("page", "ibm-plex", "suit", "system")
+            android.app.AlertDialog.Builder(this).setTitle("본문 글꼴")
+                .setItems(names) { _, index ->
+                    prefs.edit().putString("reading_font", values[index]).apply()
+                    readingFont.text = "글꼴: ${names[index]}"
+                    if (values[index] == "page") webView?.reload() else applyReadingPreferences(webView)
+                }.show()
+        }
+        val spacing = simpleText("줄간격 ${prefs.getInt("reading_line_height", 180)}%", 13f, COLOR_INK, false)
+        displayCard.addView(spacing, matchWrap().apply { topMargin = dp(12) })
+        displayCard.addView(SeekBar(this).apply {
+            max = 7
+            progress = (prefs.getInt("reading_line_height", 180) - 150) / 10
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                    val height = 150 + value * 10
+                    prefs.edit().putInt("reading_line_height", height).apply()
+                    spacing.text = "줄간격 $height%"
+                    applyReadingPreferences(webView)
+                }
+                override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+            })
+        }, matchWrap())
         panel.addView(displayCard, matchWrap().apply { bottomMargin = dp(12) })
 
         val quickTunnelCard = LinearLayout(this).apply {
@@ -1180,42 +1330,6 @@ class MainActivity : Activity() {
         true
     }
 
-    private fun enqueueDownload(
-        url: String?,
-        userAgent: String?,
-        contentDisposition: String?,
-        mimeType: String?,
-    ) {
-        if (url.isNullOrBlank()) return
-        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return
-        if (uri.scheme != "http" && uri.scheme != "https") return
-
-        val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimeType)
-            .replace('/', '_')
-            .replace('\\', '_')
-            .ifBlank { "download.bin" }
-        try {
-            val request = DownloadManager.Request(uri).apply {
-                setTitle(fileName)
-                setDescription("코덱스 워크벤치 다운로드")
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                if (!mimeType.isNullOrBlank()) setMimeType(mimeType)
-                val cookie = CookieManager.getInstance().getCookie(url)
-                if (!cookie.isNullOrBlank()) addRequestHeader("Cookie", cookie)
-                if (!userAgent.isNullOrBlank()) addRequestHeader("User-Agent", userAgent)
-                setDestinationInExternalFilesDir(
-                    this@MainActivity,
-                    Environment.DIRECTORY_DOWNLOADS,
-                    fileName,
-                )
-            }
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            Toast.makeText(this, "다운로드 시작: $fileName", Toast.LENGTH_LONG).show()
-        } catch (error: Exception) {
-            Toast.makeText(this, "다운로드 실패: ${error.message ?: error.javaClass.simpleName}", Toast.LENGTH_LONG).show()
-        }
-    }
-
     @Deprecated("WebView file chooser compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
@@ -1229,7 +1343,10 @@ class MainActivity : Activity() {
     }
 
     @Deprecated("Server selection is the navigation root")
-    override fun onBackPressed() {
+    @SuppressLint("GestureBackNavigation")
+    override fun onBackPressed() = navigateBack()
+
+    private fun navigateBack() {
         if (settingsOverlay != null) {
             closeSettingsOverlay()
             return
@@ -1241,7 +1358,7 @@ class MainActivity : Activity() {
             showConnectionScreen(selectedId)
             return
         }
-        super.onBackPressed()
+        finish()
     }
 
     private fun destroyWebView() {

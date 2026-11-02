@@ -65,7 +65,7 @@ When both signing secrets exist, the workflow also:
 3. builds `assembleRelease`,
 4. verifies the APK signature with `apksigner`,
 5. records the signing-certificate information in the workflow summary, and
-6. uploads `codex-workbench-android-release` with 90-day artifact retention.
+6. uploads `codex-workbench-android-release` with 30-day artifact retention.
 
 Only `codex-workbench-android-release` should be used for normal device installation after migration.
 
@@ -90,3 +90,12 @@ apksigner verify --verbose --print-certs app-release.apk
 ```
 
 Record the SHA-256 certificate digest from the first stable release and compare it whenever the signing setup changes. A different certificate digest means Android will treat the APK as a different signing identity and refuse an in-place update.
+
+
+## Local signing and validation (1.2.0)
+
+Use the checked-in Gradle Wrapper: `./android/gradlew -p android ...` from the repository root. Copy `android/keystore.properties.example` to ignored `android/keystore.properties`, or point `ANDROID_SIGNING_PROPERTIES` at a private properties file. Explicit environment variables override properties. Relative `storeFile` values resolve beside the properties file. Never provide passwords in command-line arguments or commit the filled-in properties file.
+
+Run `:app:requireReleaseSigning :app:assembleRelease` to require an installable signed release. Without the signing gate, an unsigned release remains available for compile validation. The gate does not create or rotate a key.
+
+Version 1.2.0 uses versionCode base 1,200,000 plus the optional `ANDROID_VERSION_CODE` offset. CI supplies its run number. When updating an installed CI build with a local release, set an offset greater than that installed CI run. See [IMPROVEMENTS.md](IMPROVEMENTS.md) for the full implementation and device handoff.

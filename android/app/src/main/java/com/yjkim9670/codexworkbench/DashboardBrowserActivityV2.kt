@@ -2,7 +2,6 @@ package com.yjkim9670.codexworkbench
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
@@ -11,19 +10,14 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.Message
-import android.provider.MediaStore
 import android.text.TextUtils
-import android.util.Base64
 import android.view.Gravity
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
-import android.webkit.DownloadListener
 import android.webkit.JavascriptInterface
-import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -34,13 +28,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import org.json.JSONObject
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 
 class DashboardBrowserActivityV2 : Activity() {
     companion object {
@@ -54,12 +43,6 @@ class DashboardBrowserActivityV2 : Activity() {
         private const val BLOB_CHUNK_BYTES = 48 * 1024
     }
 
-    private data class PendingBlobDownload(
-        val fileName: String,
-        val mimeType: String?,
-        val tempFile: File,
-    )
-
     private val colorCanvas = Color.rgb(247, 249, 252)
     private val colorInk = Color.rgb(20, 34, 54)
     private val colorMuted = Color.rgb(91, 106, 128)
@@ -68,10 +51,18 @@ class DashboardBrowserActivityV2 : Activity() {
     private lateinit var root: FrameLayout
     private var browser: WebView? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
-    private val pendingBlobDownloads = mutableMapOf<String, PendingBlobDownload>()
+    private var downloads: WebViewDownloadController? = null
+    private fun quickRoot(): String = WorkbenchCatalog.normalizeQuickTunnelRoot(
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString("quick_tunnel_root", null)
+    ) ?: WorkbenchCatalog.QUICK_TUNNEL_ROOT
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
+            ) { navigateBack() }
+        }
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.WHITE) }
         setContentView(root)
@@ -80,7 +71,7 @@ class DashboardBrowserActivityV2 : Activity() {
 
         val initialUrl = intent.getStringExtra(EXTRA_URL).orEmpty().trim()
         val initialUri = runCatching { Uri.parse(initialUrl) }.getOrNull()
-        if (initialUri == null || initialUri.scheme?.lowercase() !in setOf("http", "https")) {
+        if (initialUri == null || !WorkbenchCatalog.isAllowedPage(initialUrl, quickRoot())) {
             showStartupError(IllegalArgumentException("Invalid dashboard URL: $initialUrl"))
             return
         }
@@ -151,32 +142,43 @@ class DashboardBrowserActivityV2 : Activity() {
             }
         }
 
-        webView.addJavascriptInterface(DownloadBridge(webView), DownloadClickInterceptor.BRIDGE_NAME)
+        downloads = WebViewDownloadController(this, webView, initialUri.toString()).also { it.install() }
 
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
+                if (!request.isForMainFrame && uri.scheme?.lowercase() in setOf("blob", "data", DOWNLOAD_BRIDGE_SCHEME)) return true
                 val active = view ?: webView
                 return when (uri.scheme?.lowercase()) {
-                    "http", "https" -> false
+                    "http", "https" -> if (WorkbenchCatalog.isAllowedPage(uri.toString(), quickRoot())) false else openExternal(uri)
                     "blob", "data" -> {
-                        handleDownload(active, uri.toString(), active.settings.userAgentString, null, null)
+                        downloads?.handleNavigation(uri)
                         true
                     }
-                    DOWNLOAD_BRIDGE_SCHEME -> handleBridgeRequest(active, uri)
+                    DOWNLOAD_BRIDGE_SCHEME -> downloads?.handleNavigation(uri) ?: true
                     "mailto", "tel" -> openExternal(uri)
                     else -> true
                 }
             }
 
+            override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                downloads?.close()
+                downloads = null
+                (view?.parent as? ViewGroup)?.removeView(view)
+                if (browser === view) browser = null
+                view?.destroy()
+                showStartupError(IllegalStateException("웹 화면이 종료되었습니다. 다시 접속하세요."))
+                return true
+            }
+
             override fun onPageCommitVisible(view: WebView?, url: String?) {
                 super.onPageCommitVisible(view, url)
-                view?.let { installDownloadInterceptor(it) }
+                downloads?.installInterceptor()
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                view?.let { installDownloadInterceptor(it) }
+                downloads?.installInterceptor()
             }
         }
 
@@ -236,12 +238,6 @@ class DashboardBrowserActivityV2 : Activity() {
             }
         }
 
-        webView.setDownloadListener(
-            DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-                handleDownload(webView, url, userAgent, contentDisposition, mimeType)
-            },
-        )
-
         container.addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         root.removeAllViews()
         root.addView(
@@ -258,17 +254,6 @@ class DashboardBrowserActivityV2 : Activity() {
         webView.loadUrl(initialUri.toString())
     }
 
-    private fun installDownloadInterceptor(webView: WebView) {
-        runCatching { DownloadClickInterceptor.install(webView, DOWNLOAD_BRIDGE_SCHEME) }
-            .onFailure {
-                Toast.makeText(
-                    this,
-                    "다운로드 감지기 초기화 실패: ${shortError(it)}",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-    }
-
     @SuppressLint("SetJavaScriptEnabled")
     private fun createPopupCaptureWebView(sourceWebView: WebView): WebView {
         var handled = false
@@ -282,7 +267,9 @@ class DashboardBrowserActivityV2 : Activity() {
             if (handled) return true
             handled = true
             when (uri.scheme?.lowercase()) {
-                "http", "https" -> runCatching {
+                "http", "https" -> if (!WorkbenchCatalog.isAllowedPage(uri.toString(), quickRoot())) {
+                    openExternal(uri)
+                } else runCatching {
                     startActivity(DashboardBrowserActivity.createIntent(this, uri.toString()))
                 }.onFailure {
                     Toast.makeText(
@@ -291,13 +278,7 @@ class DashboardBrowserActivityV2 : Activity() {
                         Toast.LENGTH_LONG,
                     ).show()
                 }
-                "blob", "data" -> handleDownload(
-                    sourceWebView,
-                    uri.toString(),
-                    sourceWebView.settings.userAgentString,
-                    null,
-                    null,
-                )
+                "blob", "data" -> downloads?.handleNavigation(uri)
                 "mailto", "tel" -> openExternal(uri)
             }
             capture.post { runCatching { capture.destroy() } }
@@ -317,333 +298,6 @@ class DashboardBrowserActivityV2 : Activity() {
             }
         }
         return capture
-    }
-
-    private inner class DownloadBridge(private val sourceWebView: WebView) {
-        @JavascriptInterface
-        fun request(url: String?, fileName: String?, mimeType: String?) {
-            val value = url.orEmpty().trim()
-            if (value.isBlank()) return
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                Toast.makeText(this@DashboardBrowserActivityV2, "다운로드 요청 감지", Toast.LENGTH_SHORT).show()
-                val safeName = fileName.orEmpty().trim().takeIf { it.isNotBlank() }?.let(::safeFileName)
-                val disposition = safeName?.let { "attachment; filename=\"$it\"" }
-                handleDownload(
-                    sourceWebView,
-                    value,
-                    sourceWebView.settings.userAgentString,
-                    disposition,
-                    mimeType?.takeIf { it.isNotBlank() },
-                )
-            }
-        }
-
-        @JavascriptInterface
-        fun blobChunk(token: String?, encoded: String?) {
-            val id = token.orEmpty()
-            val payload = encoded.orEmpty()
-            if (id.isBlank() || payload.isBlank()) return
-            val pending = synchronized(pendingBlobDownloads) { pendingBlobDownloads[id] } ?: return
-            runCatching {
-                val bytes = Base64.decode(payload, Base64.DEFAULT)
-                synchronized(pending) {
-                    FileOutputStream(pending.tempFile, true).use { it.write(bytes) }
-                }
-            }.onFailure {
-                synchronized(pendingBlobDownloads) { pendingBlobDownloads.remove(id) }
-                    ?.tempFile
-                    ?.delete()
-                showDownloadFailed(it)
-            }
-        }
-
-        @JavascriptInterface
-        fun blobFinish(token: String?, resolvedMimeType: String?) {
-            val id = token.orEmpty()
-            val pending = synchronized(pendingBlobDownloads) { pendingBlobDownloads.remove(id) } ?: return
-            Thread {
-                try {
-                    val mime = resolvedMimeType?.takeIf { it.isNotBlank() } ?: pending.mimeType
-                    publishTempFile(pending.tempFile, pending.fileName, mime)
-                    pending.tempFile.delete()
-                    showDownloadCompleted(pending.fileName)
-                } catch (error: Throwable) {
-                    pending.tempFile.delete()
-                    showDownloadFailed(error)
-                }
-            }.start()
-        }
-
-        @JavascriptInterface
-        fun blobError(token: String?, message: String?) {
-            val id = token.orEmpty()
-            synchronized(pendingBlobDownloads) { pendingBlobDownloads.remove(id) }
-                ?.tempFile
-                ?.delete()
-            showDownloadFailed(IOException(message.orEmpty().ifBlank { "blob 다운로드 실패" }))
-        }
-    }
-
-    private fun handleBridgeRequest(webView: WebView, uri: Uri): Boolean {
-        if (!uri.host.equals("request", ignoreCase = true)) return true
-        val url = uri.getQueryParameter("url").orEmpty()
-        if (url.isBlank()) return true
-        val safeName = uri.getQueryParameter("name")
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::safeFileName)
-        val disposition = safeName?.let { "attachment; filename=\"$it\"" }
-        Toast.makeText(this, "다운로드 요청 감지", Toast.LENGTH_SHORT).show()
-        handleDownload(
-            webView,
-            url,
-            webView.settings.userAgentString,
-            disposition,
-            uri.getQueryParameter("mime")?.takeIf { it.isNotBlank() },
-        )
-        return true
-    }
-
-    private fun handleDownload(
-        webView: WebView,
-        url: String?,
-        userAgent: String?,
-        contentDisposition: String?,
-        mimeType: String?,
-    ) {
-        if (url.isNullOrBlank()) return
-        val uri = runCatching { Uri.parse(url) }.getOrNull()
-        val scheme = uri?.scheme?.lowercase().orEmpty()
-        when (scheme) {
-            "http", "https" -> downloadHttp(url, userAgent, contentDisposition, mimeType)
-            "blob" -> downloadBlob(webView, url, contentDisposition, mimeType)
-            "data" -> downloadDataUrl(url, contentDisposition, mimeType)
-            else -> Toast.makeText(this, "지원하지 않는 다운로드 형식입니다: $scheme", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun downloadHttp(
-        url: String,
-        userAgent: String?,
-        contentDisposition: String?,
-        mimeType: String?,
-    ) {
-        val initialName = safeFileName(URLUtil.guessFileName(url, contentDisposition, mimeType))
-        val cookie = runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()
-        val referer = browser?.url?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
-        val resolvedUserAgent = userAgent?.takeIf { it.isNotBlank() }
-            ?: browser?.settings?.userAgentString
-
-        Toast.makeText(this, "다운로드 시작: $initialName", Toast.LENGTH_SHORT).show()
-        Thread {
-            var connection: HttpURLConnection? = null
-            var tempFile: File? = null
-            try {
-                connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = 15_000
-                    readTimeout = 120_000
-                    requestMethod = "GET"
-                    doInput = true
-                    setRequestProperty("Accept", "*/*")
-                    setRequestProperty("Accept-Encoding", "identity")
-                    if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
-                    if (!resolvedUserAgent.isNullOrBlank()) setRequestProperty("User-Agent", resolvedUserAgent)
-                    if (!referer.isNullOrBlank()) setRequestProperty("Referer", referer)
-                }
-                connection.connect()
-                val responseCode = connection.responseCode
-                if (responseCode !in 200..299) {
-                    throw IOException("HTTP $responseCode ${connection.responseMessage.orEmpty()}".trim())
-                }
-
-                val responseMime = connection.contentType
-                    ?.substringBefore(';')
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: mimeType
-                val responseDisposition = connection.getHeaderField("Content-Disposition")
-                    ?.takeIf { it.isNotBlank() }
-                    ?: contentDisposition
-                val finalName = safeFileName(
-                    URLUtil.guessFileName(connection.url.toString(), responseDisposition, responseMime),
-                )
-                tempFile = File.createTempFile("dashboard-download-", ".part", cacheDir)
-                connection.inputStream.use { input ->
-                    FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output, 64 * 1024)
-                    }
-                }
-                publishTempFile(tempFile, finalName, responseMime)
-                tempFile.delete()
-                tempFile = null
-                showDownloadCompleted(finalName)
-            } catch (error: Throwable) {
-                tempFile?.delete()
-                showDownloadFailed(error)
-            } finally {
-                connection?.disconnect()
-            }
-        }.start()
-    }
-
-    private fun downloadDataUrl(
-        url: String,
-        contentDisposition: String?,
-        mimeType: String?,
-    ) {
-        val initialName = safeFileName(URLUtil.guessFileName("download", contentDisposition, mimeType))
-        Toast.makeText(this, "다운로드 시작: $initialName", Toast.LENGTH_SHORT).show()
-        Thread {
-            var tempFile: File? = null
-            try {
-                val comma = url.indexOf(',')
-                if (comma <= 5) throw IOException("잘못된 data URL")
-                val metadata = url.substring(5, comma)
-                val payload = url.substring(comma + 1)
-                val resolvedMime = metadata.substringBefore(';')
-                    .takeIf { it.isNotBlank() }
-                    ?: mimeType
-                val bytes = if (metadata.split(';').any { it.equals("base64", ignoreCase = true) }) {
-                    Base64.decode(payload, Base64.DEFAULT)
-                } else {
-                    Uri.decode(payload).toByteArray(Charsets.UTF_8)
-                }
-                val finalName = safeFileName(
-                    URLUtil.guessFileName("download", contentDisposition, resolvedMime),
-                )
-                tempFile = File.createTempFile("dashboard-download-", ".part", cacheDir)
-                tempFile.writeBytes(bytes)
-                publishTempFile(tempFile, finalName, resolvedMime)
-                tempFile.delete()
-                tempFile = null
-                showDownloadCompleted(finalName)
-            } catch (error: Throwable) {
-                tempFile?.delete()
-                showDownloadFailed(error)
-            }
-        }.start()
-    }
-
-    private fun downloadBlob(
-        webView: WebView,
-        blobUrl: String,
-        contentDisposition: String?,
-        mimeType: String?,
-    ) {
-        val token = UUID.randomUUID().toString()
-        val fileName = safeFileName(URLUtil.guessFileName("download", contentDisposition, mimeType))
-        val tempFile = runCatching { File.createTempFile("dashboard-blob-", ".part", cacheDir) }
-            .getOrElse {
-                showDownloadFailed(it)
-                return
-            }
-        synchronized(pendingBlobDownloads) {
-            pendingBlobDownloads[token] = PendingBlobDownload(fileName, mimeType, tempFile)
-        }
-
-        val script = """
-            (async function() {
-              const bridge = window[${JSONObject.quote(DownloadClickInterceptor.BRIDGE_NAME)}];
-              if (!bridge) throw new Error('Android download bridge unavailable');
-              try {
-                const response = await fetch(${JSONObject.quote(blobUrl)});
-                const blob = await response.blob();
-                const bytes = new Uint8Array(await blob.arrayBuffer());
-                const chunkSize = $BLOB_CHUNK_BYTES;
-                for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-                  const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length));
-                  let binary = '';
-                  for (let i = 0; i < chunk.length; i++) binary += String.fromCharCode(chunk[i]);
-                  bridge.blobChunk(${JSONObject.quote(token)}, btoa(binary));
-                }
-                bridge.blobFinish(${JSONObject.quote(token)}, blob.type || '');
-              } catch (error) {
-                bridge.blobError(${JSONObject.quote(token)}, String(error));
-              }
-            })();
-            null;
-        """.trimIndent()
-
-        Toast.makeText(this, "다운로드 준비: $fileName", Toast.LENGTH_SHORT).show()
-        runCatching { webView.evaluateJavascript(script, null) }
-            .onFailure {
-                synchronized(pendingBlobDownloads) { pendingBlobDownloads.remove(token) }
-                    ?.tempFile
-                    ?.delete()
-                showDownloadFailed(it)
-            }
-    }
-
-    private fun publishTempFile(tempFile: File, fileName: String, mimeType: String?) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType ?: "application/octet-stream")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
-            }
-            val destination = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IOException("Downloads 저장 위치를 만들 수 없습니다.")
-            try {
-                contentResolver.openOutputStream(destination, "w")?.use { output ->
-                    tempFile.inputStream().use { input -> input.copyTo(output, 64 * 1024) }
-                } ?: throw IOException("Downloads 파일을 열 수 없습니다.")
-                contentResolver.update(
-                    destination,
-                    ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
-                    null,
-                    null,
-                )
-            } catch (error: Throwable) {
-                runCatching { contentResolver.delete(destination, null, null) }
-                throw error
-            }
-            return
-        }
-
-        val directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-            ?: throw IOException("다운로드 폴더를 사용할 수 없습니다.")
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw IOException("다운로드 폴더를 만들 수 없습니다.")
-        }
-        var destination = File(directory, fileName)
-        var suffix = 1
-        val dot = fileName.lastIndexOf('.')
-        val stem = if (dot > 0) fileName.substring(0, dot) else fileName
-        val extension = if (dot > 0) fileName.substring(dot) else ""
-        while (destination.exists()) {
-            destination = File(directory, "$stem ($suffix)$extension")
-            suffix += 1
-        }
-        tempFile.inputStream().use { input ->
-            FileOutputStream(destination).use { output -> input.copyTo(output, 64 * 1024) }
-        }
-    }
-
-    private fun safeFileName(value: String?): String =
-        value.orEmpty()
-            .replace('/', '_')
-            .replace('\\', '_')
-            .replace(':', '_')
-            .replace('"', '_')
-            .trim()
-            .ifBlank { "download.bin" }
-
-    private fun showDownloadCompleted(fileName: String) {
-        runOnUiThread {
-            if (!isFinishing && !isDestroyed) {
-                Toast.makeText(this, "다운로드 완료: $fileName · Downloads", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun showDownloadFailed(error: Throwable) {
-        runOnUiThread {
-            if (!isFinishing && !isDestroyed) {
-                Toast.makeText(this, "다운로드 실패: ${shortError(error)}", Toast.LENGTH_LONG).show()
-            }
-        }
     }
 
     private fun showStartupError(error: Throwable) {
@@ -710,22 +364,23 @@ class DashboardBrowserActivityV2 : Activity() {
     }
 
     @Deprecated("Server selection is the navigation root")
-    override fun onBackPressed() {
+    @SuppressLint("GestureBackNavigation")
+    override fun onBackPressed() = navigateBack()
+
+    private fun navigateBack() {
         returnToServerSelection()
     }
 
     override fun onDestroy() {
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
-        synchronized(pendingBlobDownloads) {
-            pendingBlobDownloads.values.forEach { runCatching { it.tempFile.delete() } }
-            pendingBlobDownloads.clear()
-        }
         destroyBrowser()
         super.onDestroy()
     }
 
     private fun destroyBrowser() {
+        downloads?.close()
+        downloads = null
         browser?.let { webView ->
             browser = null
             runCatching { webView.removeJavascriptInterface(DownloadClickInterceptor.BRIDGE_NAME) }

@@ -1,6 +1,10 @@
 package com.yjkim9670.codexworkbench
 
 import android.app.Activity
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.pm.PackageManager
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Build
@@ -9,7 +13,8 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
-import android.webkit.JavascriptInterface
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import android.webkit.URLUtil
 import android.webkit.WebView
 import android.widget.Toast
@@ -24,9 +29,12 @@ import java.util.UUID
 internal class WebViewDownloadController(
     private val activity: Activity,
     private val webView: WebView,
+    private val trustedUrl: String,
 ) {
     companion object {
         const val BRIDGE_SCHEME = "codex-download"
+        private val notificationIds = java.util.concurrent.atomic.AtomicInteger(5000)
+        private const val DOWNLOAD_CHANNEL = "workbench_downloads"
         private const val BLOB_CHUNK_BYTES = 48 * 1024
     }
 
@@ -42,7 +50,23 @@ internal class WebViewDownloadController(
 
     fun install() {
         if (closed) return
-        webView.addJavascriptInterface(DownloadBridge(), DownloadClickInterceptor.BRIDGE_NAME)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            val bridge = DownloadBridge()
+            val origin = requireNotNull(WorkbenchCatalog.origin(trustedUrl))
+            WebViewCompat.addWebMessageListener(webView, "WorkbenchDownloadMessages", setOf(origin)) {
+                    _, message, sourceOrigin, mainFrame, _ ->
+                if (closed || !mainFrame || WorkbenchCatalog.origin(sourceOrigin.toString()) != origin) return@addWebMessageListener
+                runCatching {
+                    val payload = JSONObject(message.data.orEmpty())
+                    when (payload.optString("method")) {
+                        "request" -> bridge.request(payload.optString("url"), payload.optString("name"), payload.optString("mime"))
+                        "chunk" -> bridge.blobChunk(payload.optString("token"), payload.optString("data"))
+                        "finish" -> bridge.blobFinish(payload.optString("token"), payload.optString("mime"))
+                        "error" -> bridge.blobError(payload.optString("token"), payload.optString("message"))
+                    }
+                }.onFailure { showDownloadFailed(it) }
+            }
+        }
         webView.setDownloadListener(
             DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
                 handleDownload(url, userAgent, contentDisposition, mimeType)
@@ -52,7 +76,19 @@ internal class WebViewDownloadController(
     }
 
     fun installInterceptor() {
-        if (closed) return
+        if (closed || WorkbenchCatalog.origin(webView.url) != WorkbenchCatalog.origin(trustedUrl)) return
+        webView.evaluateJavascript("""
+            (() => {
+              const send = value => window.WorkbenchDownloadMessages?.postMessage(JSON.stringify(value));
+              if (!window.WorkbenchDownloadMessages) return;
+              window.CodexDownloadBridge = {
+                request: (url,name,mime) => send({method:'request',url,name,mime}),
+                blobChunk: (token,data) => send({method:'chunk',token,data}),
+                blobFinish: (token,mime) => send({method:'finish',token,mime}),
+                blobError: (token,message) => send({method:'error',token,message})
+              };
+            })();
+        """.trimIndent(), null)
         DownloadClickInterceptor.install(webView, BRIDGE_SCHEME)
     }
 
@@ -76,7 +112,9 @@ internal class WebViewDownloadController(
     fun close() {
         if (closed) return
         closed = true
-        runCatching { webView.removeJavascriptInterface(DownloadClickInterceptor.BRIDGE_NAME) }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            runCatching { WebViewCompat.removeWebMessageListener(webView, "WorkbenchDownloadMessages") }
+        }
         runCatching { webView.setDownloadListener(null) }
         val pending = synchronized(pendingBlobDownloads) {
             val values = pendingBlobDownloads.values.toList()
@@ -87,7 +125,6 @@ internal class WebViewDownloadController(
     }
 
     private inner class DownloadBridge {
-        @JavascriptInterface
         fun request(url: String?, fileName: String?, mimeType: String?) {
             val value = url.orEmpty().trim()
             if (value.isBlank() || closed) return
@@ -104,7 +141,6 @@ internal class WebViewDownloadController(
             }
         }
 
-        @JavascriptInterface
         fun blobChunk(token: String?, encoded: String?) {
             if (closed) return
             val id = token.orEmpty()
@@ -124,7 +160,6 @@ internal class WebViewDownloadController(
             }
         }
 
-        @JavascriptInterface
         fun blobFinish(token: String?, resolvedMimeType: String?) {
             if (closed) return
             val id = token.orEmpty()
@@ -142,7 +177,6 @@ internal class WebViewDownloadController(
             }.start()
         }
 
-        @JavascriptInterface
         fun blobError(token: String?, message: String?) {
             val id = token.orEmpty()
             synchronized(pendingBlobDownloads) { pendingBlobDownloads.remove(id) }
@@ -176,6 +210,13 @@ internal class WebViewDownloadController(
         mimeType: String?,
     ) {
         if (url.isNullOrBlank() || closed) return
+        if (WorkbenchCatalog.origin(webView.url) != WorkbenchCatalog.origin(trustedUrl)) return
+        if (url.startsWith("http:", true) || url.startsWith("https:", true)) {
+            if (WorkbenchCatalog.origin(url) != WorkbenchCatalog.origin(trustedUrl)) {
+                showDownloadFailed(IOException("허용되지 않은 다운로드 주소"))
+                return
+            }
+        }
         val uri = runCatching { Uri.parse(url) }.getOrNull()
         when (uri?.scheme?.lowercase().orEmpty()) {
             "http", "https" -> downloadHttp(url, userAgent, contentDisposition, mimeType)
@@ -198,23 +239,38 @@ internal class WebViewDownloadController(
             ?: webView.settings.userAgentString
 
         showDownloadStarted(initialName)
+        val noticeId = notificationIds.incrementAndGet()
+        downloadNotice(noticeId, initialName, -1)
         Thread {
             var connection: HttpURLConnection? = null
             var tempFile: File? = null
             try {
-                connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = 15_000
-                    readTimeout = 120_000
-                    requestMethod = "GET"
-                    doInput = true
-                    setRequestProperty("Accept", "*/*")
-                    setRequestProperty("Accept-Encoding", "identity")
-                    if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
-                    if (!resolvedUserAgent.isNullOrBlank()) setRequestProperty("User-Agent", resolvedUserAgent)
-                    if (!referer.isNullOrBlank()) setRequestProperty("Referer", referer)
+                var destinationUrl = url
+                var redirects = 0
+                while (true) {
+                    if (closed) throw IOException("다운로드 창이 닫혔습니다.")
+                    connection = (URL(destinationUrl).openConnection() as HttpURLConnection).apply {
+                        instanceFollowRedirects = false
+                        connectTimeout = 15_000
+                        readTimeout = 120_000
+                        requestMethod = "GET"
+                        doInput = true
+                        setRequestProperty("Accept", "*/*")
+                        setRequestProperty("Accept-Encoding", "identity")
+                        if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
+                        if (!resolvedUserAgent.isNullOrBlank()) setRequestProperty("User-Agent", resolvedUserAgent)
+                        if (!referer.isNullOrBlank()) setRequestProperty("Referer", referer)
+                    }
+                    val code = connection.responseCode
+                    if (code !in setOf(301, 302, 303, 307, 308)) break
+                    val location = connection.getHeaderField("Location") ?: throw IOException("이동 주소가 없습니다.")
+                    val next = URL(URL(destinationUrl), location).toString()
+                    if (++redirects > 5 || WorkbenchCatalog.origin(next) != WorkbenchCatalog.origin(trustedUrl)) {
+                        throw IOException("허용되지 않은 다운로드 이동 주소")
+                    }
+                    connection.disconnect()
+                    destinationUrl = next
                 }
-                connection.connect()
                 val responseCode = connection.responseCode
                 if (responseCode !in 200..299) {
                     throw IOException("HTTP $responseCode ${connection.responseMessage.orEmpty()}".trim())
@@ -234,20 +290,52 @@ internal class WebViewDownloadController(
                 tempFile = File.createTempFile("workbench-download-", ".part", activity.cacheDir)
                 connection.inputStream.use { input ->
                     FileOutputStream(tempFile).use { output ->
-                        input.copyTo(output, 64 * 1024)
+                        val buffer = ByteArray(64 * 1024)
+                        var received = 0L
+                        var lastUpdate = 0L
+                        val total = connection.contentLengthLong
+                        while (true) {
+                            if (closed) throw IOException("다운로드 창이 닫혔습니다.")
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            output.write(buffer, 0, count)
+                            received += count
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (now - lastUpdate >= 750) {
+                                downloadNotice(noticeId, finalName, if (total > 0) (received * 100 / total).toInt().coerceIn(0, 100) else -1)
+                                lastUpdate = now
+                            }
+                        }
                     }
                 }
                 publishTempFile(tempFile, finalName, responseMime)
                 tempFile.delete()
                 tempFile = null
+                downloadNotice(noticeId, finalName, 100, "다운로드 완료 · Downloads")
                 showDownloadCompleted(finalName)
             } catch (error: Throwable) {
                 tempFile?.delete()
+                downloadNotice(noticeId, initialName, 0, "다운로드 실패")
                 showDownloadFailed(error)
             } finally {
                 connection?.disconnect()
             }
         }.start()
+    }
+
+    private fun downloadNotice(id: Int, fileName: String, percent: Int, finished: String? = null) {
+        if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
+        runCatching {
+            val manager = activity.getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel(DOWNLOAD_CHANNEL, "다운로드", NotificationManager.IMPORTANCE_LOW))
+            val builder = Notification.Builder(activity, DOWNLOAD_CHANNEL)
+                .setSmallIcon(R.drawable.ic_notification_workbench)
+                .setContentTitle(fileName).setOnlyAlertOnce(true)
+                .setContentText(finished ?: if (percent < 0) "다운로드 중…" else "다운로드 중 · $percent%")
+                .setOngoing(finished == null).setAutoCancel(finished != null)
+            if (finished == null) builder.setProgress(100, maxOf(0, percent), percent < 0)
+            manager.notify(id, builder.build())
+        }
     }
 
     private fun downloadDataUrl(
@@ -293,6 +381,10 @@ internal class WebViewDownloadController(
         contentDisposition: String?,
         mimeType: String?,
     ) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            showDownloadFailed(IOException("blob 다운로드를 사용하려면 Android System WebView를 업데이트하세요."))
+            return
+        }
         val token = UUID.randomUUID().toString()
         val fileName = safeFileName(URLUtil.guessFileName("download", contentDisposition, mimeType))
         val tempFile = runCatching {

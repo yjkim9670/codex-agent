@@ -86,6 +86,15 @@ can exceed the remaining budget; later automatic runs are blocked.
 Manual immediate runs bypass the cadence and budgets but retain all locks.
 Pausing the blog pauses automatic lightweight tasks.
 
+The blog management view reports local automatic-run blockers, the saved next
+eligible time (not a guaranteed appointment), and today's recorded runs/tokens.
+`GET /api/codex/blog` exposes these as `automatic.reason`, `next_run_at`,
+`daily_usage`, `remaining_tokens`, `budget_overrun_tokens` and
+`budget_policy: pre_run_check`. Readiness still requires the next zero-usage
+refresh plus account and shared-claim checks at submission. Status reads do not
+reserve a window, acquire a project claim, or start a model run. Timestamped
+history entries with UTC offsets are converted to KST before daily accounting.
+
 Stage history includes prompt character count and the size of allowed files at
 submission. These help compare context size with actual input/cache/output
 usage; they do not measure every model tool read or attribute token costs to

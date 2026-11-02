@@ -41,6 +41,20 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_USAGE_BLOG_STATUS === '1') {
+        await expect(page.locator('#calibration-status')).toContainText('5시간:');
+        await expect(page.locator('#calibration-status')).toContainText('24시간 이상 경과');
+        await expect(page.locator('#calibration-status')).toContainText('기간 내 대기 7건');
+        await expect(page.locator('#calibration-status')).toContainText('주간: 없음');
+        await page.goto(new URL('/blog', targetUrl).href);
+        await page.locator('.manage-link').click();
+        await expect(page.locator('#automatic-status')).toBeVisible();
+        await expect(page.locator('#automatic-status')).toContainText('당일 예산 소진');
+        await expect(page.locator('#automatic-status')).toContainText('5시간 사용률 0%');
+        await expect(page.locator('#budget-status')).toContainText('478,809 / 300,000토큰');
+        await expect(page.locator('#budget-status')).toContainText('178,809토큰 초과');
+        await expect(page.locator('#budget-status')).toContainText('즉시 실행은 간격·일일 예산 검사를 건너뜁니다');
+    }
     if (startupResponses) {
         const responses = await startupResponses;
         for (const response of responses) expect(response.status()).toBe(200);

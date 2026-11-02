@@ -769,6 +769,47 @@ def _post_summaries(root, state):
     return items
 
 
+def _daily_usage(root, now):
+    history = []
+    for record in _read_jsonl_tail(_runs_path(root), 100000):
+        at = parse_timestamp(record.get('at'))
+        if at and at.astimezone(KST).date() == now.astimezone(KST).date():
+            history.append(record)
+    return {
+        'date': now.astimezone(KST).date().isoformat(),
+        'runs': sum(r.get('status') == 'started' for r in history),
+        'tokens': sum(_normalize_tokens(r.get('token_usage'))['total_tokens'] for r in history),
+    }
+
+
+def _automatic_status(root, project, state):
+    now = _now()
+    usage = _daily_usage(root, now)
+    next_at = parse_timestamp(state.get('next_run_at'))
+    reason = 'usage_refresh_required'
+    if not project.get('enabled'):
+        reason = 'disabled'
+    elif project.get('automatic_paused'):
+        reason = 'automatic_paused'
+    elif (state.get('in_flight') or {}).get('run_id'):
+        reason = 'run_in_flight'
+    elif next_at and next_at > now:
+        reason = 'not_due'
+    elif usage['runs'] >= project['daily_run_budget'] or usage['tokens'] >= project['daily_token_budget']:
+        reason = 'daily_budget_exceeded'
+    elif state.get('stage') == 'research' and not project.get('allow_web_research'):
+        reason = 'verification_pending'
+    elif state.get('stage') in {'select', 'topic'} and not project.get('topic_rotation_enabled') and state.get('completed_post_count'):
+        reason = 'topic_rotation_disabled'
+    return {
+        'reason': reason, 'next_run_at': state.get('next_run_at'),
+        'daily_usage': usage,
+        'remaining_tokens': max(0, project['daily_token_budget'] - usage['tokens']),
+        'budget_overrun_tokens': max(0, usage['tokens'] - project['daily_token_budget']),
+        'budget_policy': 'pre_run_check',
+    }
+
+
 def _status_payload(root=None):
     root = Path(root or _blog_root())
     project_payload = _read_json(_project_path(root))
@@ -828,6 +869,7 @@ def _status_payload(root=None):
         'backlog': _load_backlog(root),
         'backlog_count': dashboard['backlog_count'],
         'dashboard': dashboard,
+        'automatic': _automatic_status(root, project, state),
         'recent_runs': _read_jsonl_tail(_runs_path(root)),
         'artifacts': sorted(
             str(path.relative_to(root)).replace('\\', '/')
@@ -981,10 +1023,9 @@ def _start_pipeline_run(force=False, account_id=None):
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
         if not force:
-            today = now.date().isoformat()
-            history = [r for r in _read_jsonl_tail(_runs_path(root), 100000) if str(r.get('at', '')).startswith(today)]
-            if (sum(r.get('status') == 'started' for r in history) >= project['daily_run_budget'] or
-                    sum(_normalize_tokens(r.get('token_usage'))['total_tokens'] for r in history) >= project['daily_token_budget']):
+            usage = _daily_usage(root, now)
+            if (usage['runs'] >= project['daily_run_budget'] or
+                    usage['tokens'] >= project['daily_token_budget']):
                 return {'started': False, 'reason': 'daily_budget_exceeded'}
         if state.get('stage') == 'research' and not project.get('allow_web_research'):
             return {'started': False, 'reason': 'verification_pending'}

@@ -38,6 +38,35 @@ def test_blog_pipeline_is_disabled_until_configured(blog_environment):
     assert blog_pipeline.run_blog_pipeline(force=True)['reason'] == 'not_configured'
 
 
+def test_automatic_status_reports_budget_in_korean_calendar_day(blog_environment, monkeypatch):
+    blog_pipeline.configure_blog_project({'enabled': True, 'daily_token_budget': 300000})
+    now = datetime.fromisoformat('2026-11-01T02:00:00+09:00')
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    root = blog_pipeline._blog_root()
+    for record in [
+        {'at': '2026-10-31T16:30:00+00:00', 'status': 'started'},
+        {'at': '2026-10-31T16:40:00+00:00', 'status': 'completed', 'token_usage': {'total_tokens': 478809}},
+        {'at': '2026-10-31T00:01:00+09:00', 'status': 'completed', 'token_usage': {'total_tokens': 100}},
+    ]:
+        blog_pipeline._append_jsonl(blog_pipeline._runs_path(root), record)
+    status = blog_pipeline.get_blog_pipeline_status()['automatic']
+    assert status['daily_usage'] == {'date': '2026-11-01', 'runs': 1, 'tokens': 478809}
+    assert status['reason'] == 'daily_budget_exceeded'
+    assert status['remaining_tokens'] == 0
+    assert status['budget_overrun_tokens'] == 178809
+    assert status['budget_policy'] == 'pre_run_check'
+
+
+@pytest.mark.parametrize(('changes', 'reason'), [
+    ({'enabled': False}, 'disabled'), ({'automatic_paused': True}, 'automatic_paused'),
+    ({}, 'usage_refresh_required'),
+])
+def test_automatic_status_explains_wait_without_starting_work(blog_environment, changes, reason):
+    status = blog_pipeline.configure_blog_project({'enabled': True, **changes})
+    assert status['automatic']['reason'] == reason
+    assert status['recent_runs'] == []
+
+
 def test_usage_panel_advances_the_same_blog_pipeline(blog_environment, monkeypatch):
     blog_pipeline.configure_blog_project({
         "pipeline_mode": "legacy", "allow_web_research": True,

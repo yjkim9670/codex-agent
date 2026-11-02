@@ -156,6 +156,11 @@
     }
     function render(fillSettings) {
         const d=status.dashboard || {}, p=status.project || {};
+        const a=status.automatic || {}, usage=a.daily_usage || {};
+        const reasons={disabled:'비활성화',automatic_paused:'자동 실행 일시정지',run_in_flight:'집필 실행 중',not_due:'실행 간격 대기',daily_budget_exceeded:'당일 예산 소진',verification_pending:'자료조사 허용 필요',topic_rotation_disabled:'새 주제 순환 비활성화',usage_refresh_required:'사용량 갱신 및 실행 조건 확인 대기'};
+        const next=a.next_run_at ? new Date(a.next_run_at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}) : '별도 시간 제한 없음';
+        el('automatic-status').textContent=status.configured ? `자동 실행: ${reasons[a.reason] || '상태 확인 중'} · 다음 실행 가능 시각: ${next} (한국시간). 시간 도달 후에도 사용량 갱신에서 5시간 사용률 0%가 관측되고 계정·공유 잠금 조건이 충족되어야 실행됩니다.` : '';
+        el('budget-status').textContent=status.configured ? `오늘(${usage.date || ''}, 한국시간) ${Number(usage.runs || 0).toLocaleString()} / ${Number(p.daily_run_budget || 0).toLocaleString()}회 · ${Number(usage.tokens || 0).toLocaleString()} / ${Number(p.daily_token_budget || 0).toLocaleString()}토큰${a.budget_overrun_tokens ? ` · ${Number(a.budget_overrun_tokens).toLocaleString()}토큰 초과` : ''}. 예산은 실행 전 검사이며 실행 도중 초과할 수 있습니다. 즉시 실행은 간격·일일 예산 검사를 건너뜁니다.` : '';
         el('progress').textContent = status.configured ? `${displayTitle(d.current_topic) || '새 글 준비'} · ${labels[d.current_stage] || d.current_stage} · ${d.completed_stage_count}/${d.total_stage_count} · ${d.is_running ? '실행 중' : p.automatic_paused ? '자동 실행 일시정지' : '대기'}${status.state?.last_error ? ` · ${status.state.last_error}` : ''}` : '아직 설정되지 않았습니다. 블로그 설정에서 방향과 활성화를 저장하세요.';
         el('run').disabled=!status.enabled || Boolean(d.is_running);
         if (fillSettings) for (const key of fields) {const input=el(key);if(input.type === 'checkbox') input.checked=Boolean(p[key] ?? (key === 'topic_rotation_enabled'));else input.value=p[key] ?? ({cadence_minutes:360,daily_run_budget:6,daily_token_budget:300000}[key] || '');}

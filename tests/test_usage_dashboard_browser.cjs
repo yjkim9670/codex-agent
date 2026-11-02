@@ -16,7 +16,7 @@ const report = {
     models:{alpha:{total_tokens:700},beta:{total_tokens:300}},
     model_efforts:{'alpha/medium':{model:'alpha',reasoning_effort:'medium',total_tokens:500},'alpha/low':{model:'alpha',reasoning_effort:'low',total_tokens:200},'beta/medium':{model:'beta',reasoning_effort:'medium',total_tokens:300}},
     windows:{
-        five_hour:{model_efforts:{'alpha/medium':qualified(3,1.25),'alpha/low':qualified(2,99),'beta/medium':qualified(4,null)},groups:[],excluded:{}},
+        five_hour:{model_efforts:{'alpha/medium':qualified(3,1.25),'alpha/low':qualified(2,99),'beta/medium':qualified(4,null)},groups:[],excluded:{record_pending:7},last_valid_observed_at:'2026-10-01T10:03:00+09:00'},
         weekly:{model_efforts:{'alpha/medium':qualified(2,77),'alpha/low':qualified(3,.5)},groups:[],excluded:{}}
     },
     quota_samples:[{limits_observed_at:'2026-09-01T01:00:00+09:00',five_hour_used_percent:20,five_hour_resets_at:'a'}, {limits_observed_at:'2026-09-02T01:00:00+09:00',five_hour_used_percent:10,five_hour_resets_at:'b'}],
@@ -30,6 +30,18 @@ if(process.argv.includes('--serve')) {
     const server=http.createServer((req,res)=>{
         const pathname=new URL(req.url,'http://localhost').pathname;
         if(pathname==='/api/codex/usage/dashboard') {res.setHeader('Content-Type','application/json');res.end(JSON.stringify(report));return;}
+        if(pathname==='/api/codex/blog') {
+            res.setHeader('Content-Type','application/json');
+            res.end(JSON.stringify({configured:true,enabled:true,posts:[],backlog:[],recent_runs:[],
+                project:{enabled:true,daily_run_budget:6,daily_token_budget:300000},
+                dashboard:{current_stage:'research',completed_stage_count:1,total_stage_count:4},
+                automatic:{reason:'daily_budget_exceeded',next_run_at:'2026-11-01T02:00:49+09:00',
+                    daily_usage:{date:'2026-10-31',runs:3,tokens:478809},budget_overrun_tokens:178809}}));return;
+        }
+        if(pathname==='/blog') {
+            res.setHeader('Content-Type','text/html; charset=utf-8');
+            res.end(read('templates/blog.html').replace(/\{\{ url_for\('static', filename='([^']+)'\) \}\}/g, '/static/$1'));return;
+        }
         if(pathname.startsWith('/static/')) {
             const file=path.resolve(staticRoot,pathname.slice(8));
             if(!file.startsWith(staticRoot+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}

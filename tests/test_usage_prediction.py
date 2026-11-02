@@ -10,6 +10,41 @@ from codex_agent.services.usage_prediction import (
 )
 
 
+@pytest.mark.parametrize('current_percent', [12, None, 5, 10])
+def test_reconciliation_retires_bad_entries_without_blocking_recent_ones(tmp_path, monkeypatch, current_percent):
+    path = tmp_path / 'calibration.json'
+    now = datetime(2026, 10, 31, 12, tzinfo=timezone.utc)
+    def entry(key, created, baseline):
+        return {'id': key, 'created_at': created, 'weighted_tokens': 100,
+                'limits_before': {w: {'used_percent': baseline} for w in ('five_hour', 'weekly')},
+                'outcomes': {w: {'status': 'pending'} for w in ('five_hour', 'weekly')}}
+    data = [entry('missing', (now - timedelta(hours=1)).isoformat(), None),
+            entry('stale', (now - timedelta(days=10)).isoformat(), 1),
+            entry('invalid-date', 'invalid', 10),
+            entry('recent', (now - timedelta(minutes=2)).isoformat(), 10),
+            entry('future', (now + timedelta(minutes=2)).isoformat(), 10)]
+    path.write_text(json.dumps({'records': data}))
+    monkeypatch.setattr(codex_chat, '_account_storage_context', lambda _: {'usage_calibration_path': path})
+    snapshot = {'limits_observed_at': now.isoformat(),
+                **{w: {'used_percent': current_percent} for w in ('five_hour', 'weekly')}}
+    assert codex_chat._reconcile_usage_calibration('test', snapshot)
+    saved = json.loads(path.read_text())['records']
+    for w in ('five_hour', 'weekly'):
+        assert saved[0]['outcomes'][w]['reason'] == 'missing_baseline'
+        assert saved[1]['outcomes'][w]['reason'] == 'observation_timeout'
+        assert saved[2]['outcomes'][w]['reason'] == 'missing_created_at'
+        outcome = saved[3]['outcomes'][w]
+        if current_percent == 12:
+            assert outcome['actual_percent'] == 2
+            assert outcome['group_size'] == 1
+        elif current_percent == 5:
+            assert outcome['reason'] == 'reset_observed'
+        else:
+            assert outcome['status'] == 'pending'
+        assert saved[4]['outcomes'][w]['status'] == 'pending'
+    assert not codex_chat._reconcile_usage_calibration('test', snapshot)
+
+
 def records(count=16):
     result = []
     for i in range(count):

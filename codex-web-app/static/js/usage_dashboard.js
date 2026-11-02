@@ -178,6 +178,11 @@
     effort.innerHTML='<option value="all">전체 모델 / effort</option>'+efforts.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
     effort.value=selected;
     $('status').textContent = `수집 ${dateLabel(report.collected_at)} · 한도 조회 ${dateLabel(report.limits_observed_at)} · 한국시간 ${report.start.slice(0,10)} ~ ${report.end.slice(0,10)} · 1분마다 화면 갱신`;
+    $('calibration-status').textContent = '선택 조건의 마지막 유효 보정 관측 · ' + [['five_hour','5시간'],['weekly','주간']].map(([key,label]) => {
+      const w=report.windows[key], at=w.last_valid_observed_at;
+      const stale=at && Date.now()-new Date(at).getTime()>86400000;
+      return `${label}: ${at ? dateLabel(at) : '없음'}${stale ? ' (24시간 이상 경과)' : ''} · 기간 내 대기 ${num(w.excluded.record_pending || 0)}건`;
+    }).join(' / ');
     $('summary').innerHTML=[['수집 토큰',num(report.total_tokens)],['현재 5시간 사용률',report.current_limits.five_hour?.used_percent == null ? '미확인' : `${report.current_limits.five_hour.used_percent}%`],['현재 주간 사용률',report.current_limits.weekly?.used_percent == null ? '미확인' : `${report.current_limits.weekly.used_percent}%`],['수집 환경',num(report.environments.length)]].map(([label,value])=>`<div class="metric"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('');
     compare();
     $('model-rows').innerHTML=rows().sort((a,b)=>b.tokens-a.tokens).map(row=>{

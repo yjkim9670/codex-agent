@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import datetime
 import json
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def fixture(root, mixed=False, overlap=False, reset=False):
     for name, value in data.items():
         (root / name).write_text(json.dumps(value))
     (root / 'codex_usage_events.jsonl').write_text('\n'.join(json.dumps(e) for e in events))
-    return module.analyze(root)
+    return module.analyze(root, now=datetime.fromisoformat('2026-10-05T12:00:00+09:00'))
 
 
 def test_group_deduction_counted_once(tmp_path):
@@ -51,6 +52,7 @@ def test_group_deduction_counted_once(tmp_path):
         assert row['deduction_pp'] == 2
         assert row['pp_per_million_tokens'] == 1
         assert row['groups'] == 1
+        assert window['last_valid_observed_at'] == '2026-10-01T10:03:00+09:00'
 
 
 def test_mixed_models_not_attributed(tmp_path):
@@ -67,4 +69,5 @@ def test_cross_workspace_overlap_not_attributed(tmp_path):
 def test_reset_invalidates_only_affected_window(tmp_path):
     report = fixture(tmp_path, reset=True)
     assert not report['windows']['five_hour']['models']
+    assert report['windows']['five_hour']['last_valid_observed_at'] is None
     assert report['windows']['weekly']['models']['model']['deduction_pp'] == 2

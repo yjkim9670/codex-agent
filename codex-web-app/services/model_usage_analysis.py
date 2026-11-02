@@ -152,7 +152,8 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
             row['deduction_pp'] += group['deduction_pp']
         for row in effort_totals.values():
             row['pp_per_million_tokens'] = row['deduction_pp'] * 1_000_000 / row['tokens']
-        windows[window] = {'model_efforts': dict(effort_totals), 'models': dict(totals), 'excluded': dict(exclusions), 'groups': accepted}
+        windows[window] = {'model_efforts': dict(effort_totals), 'models': dict(totals), 'excluded': dict(exclusions), 'groups': accepted,
+                           'last_valid_observed_at': max((g['observed_at'] for g in accepted), default=None)}
 
     daily = defaultdict(Counter)
     for event in selected:
@@ -179,4 +180,3 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
                             'Observed token mixes and historical periods differ by model; '
                             'these are not intrinsic model multipliers or official rates.',
                             'Missing quota observations are excluded, not reconstructed.']}
-

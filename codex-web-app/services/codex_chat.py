@@ -7664,6 +7664,31 @@ def _reconcile_usage_calibration(account_id, limits_after):
             ]
             if not pending:
                 continue
+            # Retire unusable entries independently: an old/missing baseline
+            # must not block (or consume the delta of) newer valid requests.
+            valid = []
+            for record in pending:
+                created = parse_timestamp(record.get('created_at'))
+                before = _coerce_float(
+                    record.get('limits_before', {}).get(limit_name, {}).get('used_percent')
+                )
+                reason = None
+                if created is None:
+                    reason = 'missing_created_at'
+                elif observed_time and observed_time - created > timedelta(hours=_USAGE_CALIBRATION_STALE_HOURS):
+                    reason = 'observation_timeout'
+                elif before is None:
+                    reason = 'missing_baseline'
+                if reason:
+                    record['outcomes'][limit_name] = {
+                        'status': 'excluded', 'reason': reason, 'observed_at': observed_at,
+                    }
+                    changed = True
+                else:
+                    valid.append(record)
+            pending = sorted(valid, key=lambda item: parse_timestamp(item['created_at']))
+            if not pending:
+                continue
             baseline = _coerce_float(
                 pending[0].get('limits_before', {}).get(limit_name, {}).get('used_percent')
             )
@@ -7671,13 +7696,8 @@ def _reconcile_usage_calibration(account_id, limits_after):
             if baseline is None or current_percent is None:
                 continue
             delta = round(current_percent - baseline, 4)
-            oldest_time = parse_timestamp(pending[0].get('created_at'))
-            stale = bool(
-                oldest_time is not None and observed_time is not None
-                and observed_time - oldest_time > timedelta(hours=_USAGE_CALIBRATION_STALE_HOURS)
-            )
-            if delta < -0.1 or stale:
-                reason = 'reset_observed' if delta < -0.1 else 'observation_timeout'
+            if delta < -0.1:
+                reason = 'reset_observed'
                 for record in pending:
                     record['outcomes'][limit_name] = {
                         'status': 'excluded', 'reason': reason, 'observed_at': observed_at,

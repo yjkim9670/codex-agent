@@ -25,6 +25,7 @@
 <section class="panel"><h2>주간 사용량</h2><p>한국시간 · 월요일~일요일 · 선택 기간 내 수집 토큰</p><div class="chart-toolbar" role="group" aria-label="주간 사용량 가로 scope"><span>가로 scope</span><button type="button" data-chart="weekly-chart" data-zoom="out" aria-label="주간 사용량 가로축 축소">− 축소</button><output id="weekly-chart-zoom-level" aria-live="polite">1×</output><button type="button" data-chart="weekly-chart" data-zoom="in" aria-label="주간 사용량 가로축 확대">＋ 확대</button><button type="button" data-chart="weekly-chart" data-zoom="reset">초기화</button></div><div id="weekly-chart" class="chart"></div><div class="table-wrap"><table><thead><tr><th>주 / 포함 기간</th><th>수집 토큰</th><th>기록 있는 날</th></tr></thead><tbody id="weekly-rows"></tbody></table></div></section>
 </div>
 <section class="panel comparison"><div class="section-title"><div><h2>100만 토큰당 한도 차감</h2><p>관측된 차감 합계 ÷ 검증 토큰 합계 × 100만 · 단위 %p</p></div><div class="segments" role="group" aria-label="한도 창"><button type="button" data-window="five_hour" aria-pressed="true">5시간</button><button type="button" data-window="weekly" aria-pressed="false">주간</button></div></div>
+<p id="calibration-status" class="note" role="status"></p>
 <div id="comparison" aria-label="모델별 한도 차감 비교"></div>
 <p class="note">관측 기반 추정치입니다. 공식 모델 환산율이 아니며, 검증 구간 3개 미만이거나 유효한 환산값이 없는 모델/effort는 이 비교에서 제외합니다. 전체 목록은 모델 상세에서 확인할 수 있습니다. 추적되지 않은 다른 PC·클라우드 사용, 정수 반올림과 조회 지연이 영향을 줄 수 있습니다.</p>
 <details id="group-details"><summary>검증 구간과 제외 사유</summary><div id="groups"></div></details>

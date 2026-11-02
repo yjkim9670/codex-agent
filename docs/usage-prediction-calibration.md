@@ -40,6 +40,24 @@ Account percentages are rounded and include external activity. Eligible groups
 reduce known contamination; these remain estimates, not exact per-task billing.
 Changing predictions does not change actual subscription usage.
 
+## Pending observation recovery and freshness
+
+Reconciliation excludes each pending entry with a missing baseline, invalid
+creation timestamp, or observation age over eight days independently. These
+entries cannot block newer valid entries or receive part of their observed
+delta. Entries newer than the account snapshot remain pending. Cleanup still
+runs when the snapshot's percentage is unavailable; valid entries wait for a
+usable observation. Repeated reconciliation of the same snapshot is idempotent.
+Exclusions keep their reason and timestamp in the existing ledger; no historical
+quota deductions are fabricated. Recovery runs on the next ordinary account
+usage refresh after the updated server is loaded.
+
+The usage dashboard separates collection/limit-query times from each window's
+last accepted observation under the selected filters. It shows pending counts
+within the selected period and flags accepted observations older than 24 hours.
+This freshness indicator refers to validated comparison groups, not the ledger's
+last write or proof that a prediction model has been retrained.
+
 ## Reproduce validation
 
 ```sh

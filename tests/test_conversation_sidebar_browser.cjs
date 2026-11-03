@@ -33,6 +33,13 @@ async function verifyConversationSidebar(browser,url){
   await page.setViewportSize({width:1440,height:900});
   await expect(page.locator('#account')).toBeVisible();await expect(page.locator('#account-limits')).toBeVisible();
   await expect(page.locator('#account-settings summary')).not.toBeVisible();await expect(page.locator('#history-query')).toBeVisible();
+  expect((await page.locator('#sidebar').boundingBox()).width).toBeGreaterThanOrEqual(396);
+  await page.locator('#history button').first().evaluate(button=>{button.textContent='아주 긴 대화 제목이 충분히 보이도록 두 줄까지 표시하는 사이드바 검증 '.repeat(4);});
+  const titleLayout=await page.locator('#history button').first().evaluate(button=>({
+   lines:getComputedStyle(button).webkitLineClamp,whiteSpace:getComputedStyle(button).whiteSpace,
+   fits:button.getBoundingClientRect().right<=document.querySelector('#sidebar').getBoundingClientRect().right
+  }));
+  expect(titleLayout).toEqual({lines:'2',whiteSpace:'normal',fits:true});
   // Polling must not resize the footer or the history above it on desktop.
   const stableLimits=await page.evaluate(()=>{
    const snapshot=()=>['#history','.account','#account-limits','#limit-windows','#limits-status'].map(selector=>{

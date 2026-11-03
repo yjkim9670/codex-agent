@@ -118,3 +118,42 @@ def test_preview_scope_persists_and_rejects_other_files(tmp_path):
     finally:
         artifacts.close()
         shutil.rmtree(artifacts.root)
+
+
+def test_legacy_preview_recovers_only_verified_conversation_tool_output(tmp_path, artifacts):
+    from services.codex_provider import Provider
+    from services.conversations import Store
+    store = Store(tmp_path)
+    conversation = store.create()['id']
+    # Minimal saved attempt metadata, as older servers persisted it.
+    thread = '01a1a00e-1015-7183-a4d4-884426dc3f8f'
+    with store.db() as db:
+        db.execute('INSERT INTO attempts(id,conversation_id,provider) VALUES(?,?,?)',
+                   ('legacy', conversation, json.dumps({'thread_id': thread})))
+    assert call(artifacts, 'write', 'nested/result.py', content='saved code')['success']
+    path = str(artifacts.root / 'nested/result.py')
+    log = tmp_path / 'codex_home/account/identity/sessions/2026/11/03' / f'rollout-date-{thread}.jsonl'
+    log.parent.mkdir(parents=True)
+    rows = [
+        {'type': 'session_meta', 'payload': {'id': thread}},
+        {'type': 'response_item', 'payload': {'type': 'function_call', 'name': TOOL_NAME,
+          'call_id': 'call1', 'arguments': json.dumps({'operation': 'write', 'path': 'nested/result.py'})}},
+        {'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'call1',
+          'output': json.dumps({'operation': 'write', 'path': path})}},
+    ]
+    provider = Provider(tmp_path)
+    # A link in assistant text alone must not authorize filesystem access.
+    log.write_text(json.dumps({'type': 'response_item', 'payload': {'type': 'message', 'text': path}}) + '\n')
+    with pytest.raises(ValueError, match='기록이 없습니다'):
+        provider.read_artifact(conversation, path)
+    log.write_text('\n'.join(map(json.dumps, rows)) + '\n')
+    with pytest.raises(ValueError):
+        provider.read_artifact(store.create()['id'], path)
+    assert provider.read_artifact(conversation, path)['content'] == 'saved code'
+    log.unlink()
+    assert Provider(tmp_path).read_artifact(conversation, path)['content'] == 'saved code'
+    if sys.platform == 'darwin':
+        assert provider.read_artifact(conversation, '/private' + path)['content'] == 'saved code'
+    assert call(artifacts, 'delete', 'nested/result.py')['success']
+    with pytest.raises(ValueError, match='임시 저장소'):
+        provider.read_artifact(conversation, path)

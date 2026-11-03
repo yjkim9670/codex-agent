@@ -15,6 +15,8 @@ import math
 import logging
 from datetime import datetime, timezone
 import shutil
+import sqlite3
+import sys
 import subprocess
 import threading
 import time
@@ -269,7 +271,36 @@ class Provider:
                 saved = read_json(record)
                 if saved.get('root'):
                     roots.add(saved['root'])
-        for root in roots:
+        result = self._read_artifact_roots(roots, path)
+        if result is not None:
+            return result
+        # Older releases did not persist roots. Recover only from successful
+        # tool calls in the server-recorded thread, never from assistant links.
+        recovered = self._legacy_artifact_roots(cid)
+        result = self._read_artifact_roots(recovered, path)
+        if result is not None:
+            with self.lock:
+                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                for root in recovered:
+                    record = directory / ('legacy-' + hashlib.sha256(root.encode()).hexdigest() + '.json')
+                    temporary = record.with_suffix('.tmp')
+                    temporary.write_text(json.dumps({'root': root}))
+                    temporary.chmod(0o600)
+                    temporary.replace(record)
+            return result
+        if roots or recovered:
+            raise ValueError('이 대화에서 생성한 파일 저장소에서 요청한 파일을 찾을 수 없습니다. 파일이 삭제되었거나 임시 저장소가 정리되었을 수 있습니다. 파일 경로를 확인하거나 다시 생성해 주세요.')
+        raise ValueError('이 대화에서 생성한 파일인지 확인할 기록이 없습니다. 파일이 삭제되었다는 뜻은 아닙니다. 파일 생성 기록이 있는 서버에서 열거나 다시 생성해 주세요.')
+
+    @staticmethod
+    def _read_artifact_roots(roots, path):
+        # macOS exposes the same temp directory through both spellings.
+        def canonical(value):
+            return value.removeprefix('/private') if sys.platform == 'darwin' and value.startswith('/private/tmp/') else value
+
+        path = canonical(path)
+        for root in sorted(roots):
+            root = canonical(root)
             prefix = root.rstrip('/') + '/'
             relative = path[len(prefix):] if path.startswith(prefix) else path
             if path.startswith('/') and not path.startswith(prefix):
@@ -284,7 +315,49 @@ class Provider:
                 continue
             if result['success']:
                 return json.loads(result['contentItems'][0]['text'])
-        raise ValueError('파일이 없거나 이 대화에서 생성한 파일이 아닙니다. 파일을 다시 만들어 달라고 요청해 주세요.')
+        return None
+
+    def _legacy_artifact_roots(self, cid):
+        database = self.root / 'conversations.sqlite3'
+        if not database.is_file():
+            return set()
+        roots = set()
+        with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as db:
+            rows = db.execute('SELECT provider FROM attempts WHERE conversation_id=?', (cid,)).fetchall()
+        for (raw,) in rows:
+            try:
+                thread = json.loads(raw).get('thread_id', '')
+            except (ValueError, AttributeError):
+                continue
+            if not isinstance(thread, str) or not re.fullmatch(r'[a-f0-9-]{36}', thread):
+                continue
+            for log in (self.root / 'codex_home').glob(f'*/*/sessions/*/*/*/rollout-*-{thread}.jsonl'):
+                calls, verified = {}, False
+                try:
+                    with log.open() as source:
+                        for line in source:
+                            row = json.loads(line)
+                            item = row.get('payload') or {}
+                            if row.get('type') == 'session_meta':
+                                verified = item.get('id') == thread
+                            if not verified or row.get('type') != 'response_item':
+                                continue
+                            if item.get('type') == 'function_call' and item.get('name') == TOOL_NAME and item.get('namespace') in (None, 'functions'):
+                                args = json.loads(item.get('arguments', '{}'))
+                                if args.get('operation') == 'write' and isinstance(args.get('path'), str):
+                                    calls[item.get('call_id')] = args['path']
+                            elif item.get('type') == 'function_call_output' and item.get('call_id') in calls:
+                                output = json.loads(item.get('output', '{}'))
+                                relative = calls.pop(item['call_id'])
+                                actual = output.get('path', '')
+                                if output.get('operation') != 'write' or not relative or not isinstance(actual, str):
+                                    continue
+                                root = actual.removesuffix('/' + relative)
+                                if actual == root + '/' + relative and re.fullmatch(r'/(?:private/)?tmp/workbench-chat-[a-zA-Z0-9_-]+', root):
+                                    roots.add(root)
+                except (OSError, ValueError, TypeError, AttributeError):
+                    continue
+        return roots
 
     def home(self, account):
         identity = hashlib.sha256(account['provider_account_id'].encode()).hexdigest()[:16]

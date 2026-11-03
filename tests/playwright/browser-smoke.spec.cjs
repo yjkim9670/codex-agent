@@ -25,6 +25,10 @@ test('browser UI smoke check', async ({ page }) => {
         await require('./blog.cjs').setupBlog(page);
     }
 
+    if (process.env.CODEX_VERIFY_CHAT_SCROLL === '1') {
+        await require('./chat-scroll.cjs').setupChatScroll(page);
+    }
+
     // Watch before navigation: a startup exception can leave the HTML shell
     // visible while preventing every data request from being sent.
     const startupResponses = process.env.CODEX_VERIFY_STARTUP === '1'
@@ -142,6 +146,10 @@ test('browser UI smoke check', async ({ page }) => {
     }
     if (process.env.CODEX_VERIFY_BLOG === '1') {
         await require('./blog.cjs').verifyBlog(page, expect);
+    }
+    if (process.env.CODEX_VERIFY_CHAT_SCROLL === '1') {
+        test.setTimeout(60_000);
+        await require('./chat-scroll.cjs').verifyChatScroll(page, expect);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
 });

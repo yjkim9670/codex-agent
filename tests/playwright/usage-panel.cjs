@@ -128,10 +128,59 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     await page.evaluate(() => updateUsageSummary(window.usageFixture));
     await expect(limit.locator('.usage-reset').first()).toBeVisible();
     await expect(weekly.locator('.usage-reset').first()).toBeVisible();
+    // Missing, disabled and zero-valued usage keep all four slots visible.
+    for (const scenario of ['loading', 'missing', 'partial', 'disabled', 'zero']) {
+        await page.evaluate(scenario => {
+            fixtureState.settings.loaded = scenario !== 'loading';
+            fixtureState.settings.usageLimitsEnabled = scenario !== 'disabled';
+            const usage = scenario === 'zero' ? {token_usage:{today:{total_tokens:0,requests:0}}}
+                : scenario === 'partial' ? {five_hour:usageFixture.five_hour}
+                : scenario === 'disabled' ? usageFixture : null;
+            updateUsageSummary(usage);
+        }, scenario);
+        await expect(page.locator('#codex-usage-summary .usage-token-period')).toHaveText(['Today', 'All', '5h', 'Weekly']);
+        await expect(page.locator('#codex-usage-summary > .usage-entry')).toHaveCount(4);
+        if (scenario === 'zero') await expect(page.locator('.usage-token-total').first()).toHaveText('0 tok');
+        if (scenario === 'disabled') await expect(page.locator('.usage-limit-entry .usage-reset')).toHaveText(['조회 꺼짐', '조회 꺼짐']);
+    }
+    await page.evaluate(() => {
+        fixtureState.settings.loaded = true;
+        fixtureState.settings.usageLimitsEnabled = true;
+        updateUsageSummary(usageFixture);
+        const message = document.createElement('div');
+        message.className = 'message user';
+        message.innerHTML = '<div class="message-bubble">보낸 메시지 gyp 한글 <a href="#">링크</a><blockquote>인용문</blockquote></div>';
+        document.body.appendChild(message);
+    });
+    for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+        const readable = await page.locator('.message.user .message-bubble').evaluate(el => {
+            const luminance = color => {
+                const c = color.match(/[\d.]+/g).slice(0,3).map(Number).map(v => {
+                    v /= 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+                });
+                return c[0]*.2126+c[1]*.7152+c[2]*.0722;
+            };
+            const bg = luminance(getComputedStyle(el).backgroundColor);
+            return [el, el.querySelector('a'), el.querySelector('blockquote')].every(node => {
+                const fg = luminance(getComputedStyle(node).color);
+                return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05) >= 4.5;
+            });
+        });
+        expect(readable, `user message contrast in ${theme}`).toBe(true);
+    }
+    const accountFits = await page.locator('#codex-account-select').evaluate(el => {
+        const style = getComputedStyle(el);
+        // Native Chromium selects can report 'normal' despite a CSS line-height.
+        const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5;
+        return {height: el.clientHeight, needed: lineHeight + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)};
+    });
+    expect(accountFits.height, `account text has room for descenders: ${JSON.stringify(accountFits)}`).toBeGreaterThanOrEqual(accountFits.needed);
+    await page.evaluate(() => { document.querySelector('.message.user').remove(); document.documentElement.dataset.theme = 'light'; });
     await page.evaluate(() => setPlanModeToggleState('plan'));
     await expect(page.locator('#codex-controls-summary')).toHaveText('Plan · plan-model · medium');
     await page.evaluate(() => setPlanModeToggleState('secondary'));
-    await expect(page.locator('#codex-controls-summary > span')).toHaveText(['Sec · secondary-model · low', 'Plan · plan-model · medium']);
+    await expect(page.locator('#codex-controls-summary > span')).toHaveText(['Sec · dtgpt · secondary-model · low', 'Plan · plan-model · medium']);
     await page.evaluate(() => setPlanModeToggleState('off'));
     await expect(page.locator('#codex-controls-summary > span')).toHaveText(['메인 · very-long-main-model-name-for-layout · high', 'Plan · plan-model · medium']);
     await page.evaluate(() => document.querySelectorAll('.usage-entry[open]').forEach(entry => entry.open = false));

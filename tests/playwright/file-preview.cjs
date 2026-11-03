@@ -53,6 +53,12 @@ exports.verifyFilePreview = async (page, expect) => {
         await expect(host.locator('.file-browser-viewer-save')).not.toBeVisible();
         for (const theme of ['light', 'dark']) {
             await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+            expect(await page.evaluate(() => {
+                const css = getComputedStyle(document.documentElement);
+                return ['--bg', '--surface', '--accent', '--radius-sm', '--font-size-meta'].map(name => css.getPropertyValue(name).trim());
+            })).toEqual(theme === 'dark'
+                ? ['#161616', '#262626', '#78a9ff', '2px', '13px']
+                : ['#f4f4f4', '#ffffff', '#0f62fe', '2px', '13px']);
             for (const width of [1280, 390]) {
                 await page.setViewportSize({ width, height: 800 });
                 for (const locator of [dir, file]) {
@@ -109,6 +115,63 @@ exports.verifyFilePreview = async (page, expect) => {
         const download = await downloadEvent;
         expect(download.suggestedFilename()).toBe('preview.txt');
         expect(await page.evaluate(() => window.previewDownloads.at(-1))).toEqual({ root: 'workspace', paths: [path] });
+        // Directory refreshes and stale list selections must not disable or
+        // retarget file actions, including binary and source-only HTML files.
+        const cases = await page.evaluate(async variant => {
+            const v = variant === 'overlay' ? FILE_PANEL_VARIANT_OVERLAY : FILE_PANEL_VARIANT_WORK_MODE;
+            const elements = getFilePanelVariantConfig(v).getElements();
+            const results = [];
+            const originalOpen = window.open;
+            window.open = () => ({ opener: window, location: { replace: url => { window.lastPreviewUrl = url; } } });
+            try {
+                for (const fixture of [
+                    { path: '한글/empty.txt', content: '' },
+                    { path: 'source.py', content: 'x'.repeat(30000), truncated: true },
+                    { path: 'image.png', is_binary: true },
+                    { path: 'archive.zip', is_binary: true },
+                    { path: 'page.html', is_html: true, html_previewable: true },
+                    { path: 'template.html', is_html: true, html_previewable: false },
+                    { path: 'notes.md', content: '# title', language: 'markdown' },
+                ]) {
+                    hydrateFilePanelEditStateFromResult(v, fixture, { root: 'server' });
+                    // Both a directory refresh and selection drift can happen
+                    // while the displayed preview is retained.
+                    fileBrowserSelectedPath = '';
+                    workModeFileSelectedPath = '';
+                    elements.loading?.classList.remove('is-hidden');
+                    syncFilePanelViewerActionState(v);
+                    const url = getFilePanelPreviewLaunchUrl(v);
+                    const expected = fixture.html_previewable
+                        ? buildFileBrowserHtmlPreviewUrl('server', fixture.path)
+                        : buildFileBrowserRawFileUrl('server', fixture.path);
+                    results.push({ path: fixture.path, open: !elements.openNewBtn.disabled,
+                        download: !elements.downloadCurrentBtn.disabled, correctUrl: url === expected });
+                    if (!fixture.language) {
+                        window.lastPreviewUrl = '';
+                        results.push({ launched: openFilePanelPreviewInNewWindow(v), correctTarget: window.lastPreviewUrl === expected });
+                    }
+                    const state = getFilePanelEditState(v);
+                    state.diffMode = true;
+                    syncFilePanelViewerActionState(v);
+                    results.push({ diffOpen: !elements.openNewBtn.disabled, diffDownload: !elements.downloadCurrentBtn.disabled });
+                }
+                const state = getFilePanelEditState(v);
+                state.previewResult.is_deleted = true;
+                syncFilePanelViewerActionState(v);
+                results.push({ deletedOpenBlocked: elements.openNewBtn.disabled, deletedDownloadBlocked: elements.downloadCurrentBtn.disabled });
+                resetFilePanelEditState(v);
+                results.push({ emptyOpenBlocked: elements.openNewBtn.disabled, emptyDownloadBlocked: elements.downloadCurrentBtn.disabled });
+            } finally {
+                window.open = originalOpen;
+                elements.loading?.classList.add('is-hidden');
+            }
+            return results;
+        }, variant);
+        for (const result of cases) {
+            for (const [key, value] of Object.entries(result)) {
+                if (key !== 'path') expect(value, JSON.stringify(result)).toBe(true);
+            }
+        }
         await page.evaluate(() => {
             // Return nodes to the original hierarchy so getElements() remains valid.
             const host = document.getElementById('file-preview-verification');

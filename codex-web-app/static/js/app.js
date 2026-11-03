@@ -4303,6 +4303,7 @@ document.addEventListener('DOMContentLoaded', () => {
         messages.addEventListener('scroll', () => {
             handleMessageScroll(messages);
         });
+        observeMessageLayout(messages);
         handleMessageScroll(messages);
     }
 
@@ -6776,7 +6777,7 @@ function initializeFilePreviewToolbar() {
 
 async function downloadCurrentFileFromFilePanel(variant) {
     const state = getFilePanelEditState(variant);
-    if (!state.path || state.saving || isFilePanelBulkActionInFlight(variant)) return false;
+    if (!state.path || state.previewResult?.is_deleted || state.saving || isFilePanelBulkActionInFlight(variant)) return false;
     // Snapshot the preview target; list selections must not change this download.
     const { root, path } = state;
     setFilePanelBulkActionInFlight(variant, true);
@@ -6967,7 +6968,7 @@ function syncFilePanelViewerActionState(variant) {
         setIconButtonScreenReaderText(elements.copyBtn, '파일 내용 전체 복사');
     }
     if (elements.downloadCurrentBtn) {
-        elements.downloadCurrentBtn.disabled = !hasPreview || isBusy;
+        elements.downloadCurrentBtn.disabled = !hasPreview || state.previewResult?.is_deleted || isPreviewActionBusy;
     }
     if (elements.viewerMore && !hasPreview) elements.viewerMore.open = false;
     if (elements.renameCurrentBtn) {
@@ -9919,7 +9920,6 @@ function updateUsageSummary(usage) {
     if (isUsageKeepaliveHistoryOverlayOpen()) renderUsageKeepaliveHistory();
     const accountName = typeof usage?.account_name === 'string' ? usage.account_name.trim() : '';
     const tokenUsage = usage?.token_usage || null;
-    const hasTokenUsage = Boolean(tokenUsage && (tokenUsage.today || tokenUsage.all_time));
     const expandedTokenPeriods = new Set(
         Array.from(element.querySelectorAll('.usage-token-entry[open]'))
             .map(entry => entry.querySelector('.usage-token-period')?.textContent)
@@ -9929,36 +9929,37 @@ function updateUsageSummary(usage) {
     const selectedAccountName = String(activeAccount?.label || '').trim();
     const showAccountName = accountName && accountName !== selectedAccountName;
     if (showAccountName) element.appendChild(buildUsageAccount(accountName));
-    const hasUsage = showUsageLimits && Boolean(usage?.five_hour || usage?.weekly);
-    if (hasTokenUsage) {
-        const tokenEntries = [
-            buildTokenUsageEntry(tokenUsage?.today, 'Today'),
-            buildTokenUsageEntry(tokenUsage?.all_time, 'All')
-        ].filter(Boolean);
-        tokenEntries.forEach(entry => {
-            entry.open = expandedTokenPeriods.has(entry.querySelector('.usage-token-period')?.textContent);
-            element.appendChild(entry);
-        });
-    }
-    if (!hasUsage && !hasTokenUsage) {
-        const fallbackText = state.settings.loaded ? 'Usage unavailable' : 'Refresh to load';
-        if (!showAccountName) {
-            element.textContent = fallbackText;
-            return;
-        }
-        const fallback = document.createElement('div');
-        fallback.className = 'usage-empty';
-        fallback.textContent = fallbackText;
-        element.appendChild(fallback);
-        return;
-    }
-    const entries = showUsageLimits ? [
-        buildUsageEntry(usage?.five_hour, '5h'),
-        buildUsageEntry(usage?.weekly, 'Weekly')
-    ].filter(Boolean) : [];
-    entries.forEach(entry => {
+    // Keep four stable slots even before loading, or when a provider omits data.
+    const placeholder = (label, type, status) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = `usage-entry usage-${type}-entry usage-placeholder`;
+        const row = document.createElement('div');
+        row.className = type === 'token' ? 'usage-token-summary' : 'usage-limit-summary';
+        const period = document.createElement('span');
+        period.className = 'usage-token-period';
+        period.textContent = label;
+        const value = document.createElement('span');
+        value.className = type === 'token' ? 'usage-token-total' : 'usage-remaining';
+        value.textContent = '--';
+        row.append(period, value);
+        const note = document.createElement('div');
+        note.className = 'usage-reset';
+        note.textContent = status;
+        wrapper.append(row, note);
+        return wrapper;
+    };
+    const unavailable = state.settings.loaded ? '미제공' : '불러오는 중';
+    for (const [key, label] of [['today', 'Today'], ['all_time', 'All']]) {
+        const entry = buildTokenUsageEntry(tokenUsage?.[key], label)
+            || placeholder(label, 'token', unavailable);
+        if (entry.tagName === 'DETAILS') entry.open = expandedTokenPeriods.has(label);
         element.appendChild(entry);
-    });
+    }
+    for (const [key, label] of [['five_hour', '5h'], ['weekly', 'Weekly']]) {
+        const entry = (showUsageLimits && buildUsageEntry(usage?.[key], label))
+            || placeholder(label, 'limit', showUsageLimits ? unavailable : '조회 꺼짐');
+        element.appendChild(entry);
+    }
 }
 
 function buildModelSelectOptions(options, selectedModel) {
@@ -18090,13 +18091,13 @@ function getWorkModePreviewLaunchUrl() {
 }
 
 function getFilePanelPreviewLaunchUrl(variant) {
-    const normalizedVariant = normalizeFilePanelVariant(variant);
-    if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
-        return getWorkModePreviewLaunchUrl();
-    }
-    const selectedRoot = normalizeFileBrowserRoot(fileBrowserRoot);
-    const selectedPath = normalizeFileBrowserRelativePath(fileBrowserSelectedPath);
-    return buildFileBrowserRawFileUrl(selectedRoot, selectedPath);
+    // Use the displayed file, independent of directory navigation, selection
+    // checkboxes, or a suspended HTML iframe.
+    const state = getFilePanelEditState(normalizeFilePanelVariant(variant));
+    if (!state.path || state.previewResult?.is_deleted) return '';
+    return state.previewResult?.is_html && state.previewResult?.html_previewable
+        ? buildFileBrowserHtmlPreviewUrl(state.root, state.path)
+        : buildFileBrowserRawFileUrl(state.root, state.path);
 }
 
 function getFilePanelMarkdownPreviewPayload(variant) {
@@ -18712,25 +18713,10 @@ function canOpenWorkModePreviewInNewWindow() {
 }
 
 function canOpenFilePanelPreviewInNewWindow(variant) {
-    const normalizedVariant = normalizeFilePanelVariant(variant);
-    if (getFilePanelEditState(normalizedVariant)?.diffMode) {
-        return false;
-    }
-    if (normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE) {
-        if (!isWorkModeEnabled()) return false;
-        if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
-            return true;
-        }
-        return canOpenWorkModePreviewInNewWindow();
-    }
-    if (!isFileBrowserOverlayOpen()) return false;
-    if (getFilePanelMarkdownPreviewPayload(normalizedVariant)) {
-        return true;
-    }
-    return Boolean(getFilePanelPreviewLaunchUrl(normalizedVariant));
+    return Boolean(getFilePanelPreviewLaunchUrl(variant));
 }
 
-function syncFilePanelPreviewOpenButton(variant, { loading = false } = {}) {
+function syncFilePanelPreviewOpenButton(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
     const config = getFilePanelVariantConfig(normalizedVariant);
     const elements = config.getElements();
@@ -18739,7 +18725,9 @@ function syncFilePanelPreviewOpenButton(variant, { loading = false } = {}) {
     const label = getFilePanelPreviewOpenButtonLabel(normalizedVariant);
     button.setAttribute('aria-label', label);
     button.setAttribute('title', label);
-    button.disabled = Boolean(loading) || !canOpenFilePanelPreviewInNewWindow(normalizedVariant);
+    const state = getFilePanelEditState(normalizedVariant);
+    button.disabled = state.saving || isFilePanelBulkActionInFlight(normalizedVariant)
+        || !canOpenFilePanelPreviewInNewWindow(normalizedVariant);
     setIconButtonScreenReaderText(button, label);
     syncHoverTooltipFromLabel(button, label);
 }
@@ -18754,6 +18742,7 @@ function openWorkModePreviewInNewWindow() {
 
 function openFilePanelPreviewInNewWindow(variant) {
     const normalizedVariant = normalizeFilePanelVariant(variant);
+    if (!canOpenFilePanelPreviewInNewWindow(normalizedVariant)) return false;
     const markdownPayload = getFilePanelMarkdownPreviewPayload(normalizedVariant);
     const panelOpen = normalizedVariant === FILE_PANEL_VARIANT_WORK_MODE
         ? isWorkModeEnabled()
@@ -18774,7 +18763,7 @@ function openFilePanelPreviewInNewWindow(variant) {
         });
         return false;
     }
-    const opened = window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    const opened = window.open('', '_blank');
     if (!opened) {
         showToast('팝업이 차단되어 새 창을 열지 못했습니다.', {
             tone: 'error',
@@ -18782,6 +18771,8 @@ function openFilePanelPreviewInNewWindow(variant) {
         });
         return false;
     }
+    opened.opener = null;
+    opened.location.replace(previewUrl);
     return true;
 }
 
@@ -31027,6 +31018,8 @@ function scrollToBottom(force = false) {
         setAutoScrollEnabled(true);
     }
     const scroll = () => {
+        // A queued layout update must respect a reader who has since scrolled up.
+        if (!state.autoScrollEnabled) return;
         container.scrollTop = container.scrollHeight;
         syncScrollToBottomButton(container);
     };
@@ -31037,8 +31030,41 @@ function scrollToBottom(force = false) {
     }
 }
 
+let messageLayoutSize = '';
+function messageLayoutSignature(container) {
+    return [container.clientWidth, container.clientHeight, container.scrollHeight].join(':');
+}
+
+function observeMessageLayout(container) {
+    // Fonts, wrapping, previews and composer height can settle after initial render.
+    // Observe the viewport as well as messages so height-only resizes also settle.
+    const settle = () => {
+        messageLayoutSize = messageLayoutSignature(container);
+        if (state.autoScrollEnabled) container.scrollTop = container.scrollHeight;
+        syncScrollToBottomButton(container);
+    };
+    const observer = new ResizeObserver(settle);
+    observer.observe(container);
+    const observeMessages = () => {
+        observer.disconnect();
+        observer.observe(container);
+        for (const message of container.children) observer.observe(message);
+        settle();
+    };
+    new MutationObserver(observeMessages).observe(container, { childList: true });
+    observeMessages();
+}
+
 function handleMessageScroll(container) {
     if (!container) return;
+    const size = messageLayoutSignature(container);
+    if (size !== messageLayoutSize) {
+        // Browser scroll anchoring/clamping during reflow is not reader intent.
+        messageLayoutSize = size;
+        if (state.autoScrollEnabled) container.scrollTop = container.scrollHeight;
+        syncScrollToBottomButton(container);
+        return;
+    }
     setAutoScrollEnabled(isMessageListNearBottom(container));
 }
 
@@ -32857,8 +32883,9 @@ function normalizeTokenUsageEntry(entry) {
     const outputTokens = Number(entry.output_tokens);
     const totalTokens = Number(entry.total_tokens);
     const requests = Number(entry.requests);
-    const hasTokenData = [inputTokens, cachedInputTokens, outputTokens, totalTokens]
-        .some(value => Number.isFinite(value) && value > 0);
+    const hasTokenData = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens']
+        .some(key => entry[key] !== null && entry[key] !== undefined
+            && entry[key] !== '' && Number.isFinite(Number(entry[key])) && Number(entry[key]) >= 0);
     const hasRequestData = Number.isFinite(requests) && requests > 0;
     if (!hasTokenData && !hasRequestData) return null;
     return {

@@ -14,13 +14,14 @@ button,input,select{border-color:var(--border)}
 .brand{font-size:24px;font-weight:600;letter-spacing:-.6px;gap:5px;min-height:44px;flex-shrink:0}
 .brand b{font-weight:600}
 #close-history{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;background:transparent;border:0;min-width:44px;padding:8px}
-#new-chat{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;font-size:17px;border-radius:13px;flex-shrink:0}
+.history-toolbar{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:8px;flex-shrink:0;min-width:0}
+#new-chat{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:8px 12px;font-size:14px;white-space:nowrap;border-radius:12px;flex-shrink:0}
 #sidebar>label[for=history-query]{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
-#history-query{background:var(--surface);width:100%;flex-shrink:0}
+#history-query{background:var(--surface);width:100%;min-width:0;min-height:44px;font-size:14px;flex-shrink:0}
 .history-heading{margin:8px 0 0;font-size:13px;font-weight:500;color:var(--muted);flex-shrink:0}
-#history{display:flex;flex-direction:column;gap:8px}
-#history button{position:relative;flex-shrink:0;padding:14px 14px 14px 46px;min-height:64px;border-left:0;border-radius:12px;font-weight:500;background:transparent}
-#history button::before{content:'';position:absolute;left:14px;top:20px;width:20px;height:20px;background:var(--muted);mask:url('../icons/chat-circle.svg') center/contain no-repeat;-webkit-mask:url('../icons/chat-circle.svg') center/contain no-repeat}
+#history{display:flex;flex-direction:column;gap:6px}
+#history button{position:relative;flex-shrink:0;padding:10px 12px 10px 42px;min-height:48px;font-size:14px;line-height:1.5;border-left:0;border-radius:12px;font-weight:500;background:transparent}
+#history button::before{content:'';position:absolute;left:12px;top:14px;width:18px;height:18px;background:var(--muted);mask:url('../icons/chat-circle.svg') center/contain no-repeat;-webkit-mask:url('../icons/chat-circle.svg') center/contain no-repeat}
 #history button:hover{background:var(--surface)}
 #history button[aria-current=page]{background:var(--selected);color:var(--text)}
 #history button[aria-current=page]::before{background:var(--accent)}
@@ -49,7 +50,7 @@ header button{display:inline-flex;align-items:center;justify-content:center;bord
 #status{padding-inline:28px}
 #composer{border:0;padding:8px 28px max(24px,env(safe-area-inset-bottom));background:var(--page)}
 .toolbar{gap:10px;margin-bottom:12px;align-items:end}
-.toolbar label{font-size:11px;color:var(--muted);min-width:0;flex:0 1 auto;gap:3px}
+.toolbar label{font-size:13px;color:var(--muted);min-width:0;flex:0 1 auto;gap:3px}
 .toolbar label:has(#model){flex:0 1 300px;order:-1}
 .toolbar select{border:0;border-radius:24px;background:var(--layer);min-height:44px;padding:8px 14px;color:var(--text)}
 .toolbar label:has(#model) select{background:var(--selected);color:var(--link)}
@@ -80,7 +81,7 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:8px}
  #account-settings label{display:none}
  #account{min-height:40px;font-size:13px;background:transparent;border:0;padding-left:0;font-weight:500}
  #reload-models{justify-self:start;min-height:30px;background:transparent;border:0;color:var(--muted);padding:2px 0}
- #connection,#transport-status{font-size:11px}
+ #connection,#transport-status{font-size:13px}
  #limit-windows{height:92px;gap:16px}
  .account{padding-top:12px;gap:6px}
 }
@@ -95,6 +96,7 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:8px}
  #message{min-height:64px}
 }
 @media(max-width:1023px){
+ .history-toolbar{grid-template-columns:minmax(0,1fr)}
  #sidebar{width:min(360px,calc(100vw / var(--scale) - 32px));padding:16px;gap:12px}
  #sidebar .brand{font-size:23px}
  #sidebar .account{padding-top:8px}
@@ -121,7 +123,7 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:8px}
  #message{font-size:16px;min-height:44px;max-height:min(120px,25dvh);line-height:26px;padding:9px 8px;resize:none}
  #send{width:44px;min-width:44px;height:44px;min-height:44px;padding:10px}
  #send .icon{width:23px;height:23px}
- #stop{padding:6px 8px;min-height:44px;font-size:12px}
+ #stop{padding:6px 8px;min-height:44px;font-size:13px}
  #status{padding-inline:16px}
  #request-dialog{border-radius:20px 20px 0 0}
  #request-dialog .toolbar label{font-size:13px}

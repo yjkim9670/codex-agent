@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=258">
+    <link rel="stylesheet" href="/static/css/app.css?v=260">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 </head>
 <body data-company-mode="{{ 'true' if company_mode_enabled else 'false' }}" data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
@@ -578,7 +578,12 @@
                             </div>
                             <div class="account-switcher-status" id="codex-account-switcher-status"></div>
                             <div id="codex-usage-keepalive-error" class="is-hidden" role="status"></div>
-                            <div class="usage-value" id="codex-usage-summary">Refresh to load</div>
+                            <div class="usage-value" id="codex-usage-summary">
+                                <div class="usage-entry usage-token-entry usage-placeholder"><div class="usage-token-summary"><span class="usage-token-period">Today</span><span class="usage-token-total">--</span></div><div class="usage-reset">불러오는 중</div></div>
+                                <div class="usage-entry usage-token-entry usage-placeholder"><div class="usage-token-summary"><span class="usage-token-period">All</span><span class="usage-token-total">--</span></div><div class="usage-reset">불러오는 중</div></div>
+                                <div class="usage-entry usage-limit-entry usage-placeholder"><div class="usage-limit-summary"><span class="usage-token-period">5h</span><span class="usage-remaining">--</span></div><div class="usage-reset">불러오는 중</div></div>
+                                <div class="usage-entry usage-limit-entry usage-placeholder"><div class="usage-limit-summary"><span class="usage-token-period">Weekly</span><span class="usage-remaining">--</span></div><div class="usage-reset">불러오는 중</div></div>
+                            </div>
 
                         </div>
                         <div class="model-card" id="codex-model-card">
@@ -2040,6 +2045,6 @@
     <script src="/static/vendor/marked-18.0.6.umd.js"></script>
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
-    <script src="/static/js/app.js?v=281"></script>
+    <script src="/static/js/app.js?v=283"></script>
 </body>
 </html>

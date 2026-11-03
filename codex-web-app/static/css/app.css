@@ -415,26 +415,26 @@
     --ui-scale: 0.9;
     --font-size-body: 14px;
     --font-size-code: 13px;
-    --font-size-meta: 12px;
-    --bg: #f4f7fb;
+    --font-size-meta: 13px;
+    --bg: #f4f4f4;
     --bg-ambient: none;
     --surface: #ffffff;
-    --surface-muted: #f0f4fa;
+    --surface-muted: #f4f4f4;
     --surface-raised: #ffffff;
-    --border: #d5deea;
-    --text-primary: #0f1b2d;
-    --text-secondary: #3c4b63;
-    --text-tertiary: #4c5c72;
-    --text-muted: #526176;
-    --accent: #0f4c81;
-    --accent-dark: #0c3e6b;
-    --accent-fill: #0f4c81;
-    --accent-fill-hover: #0c3e6b;
+    --border: #e0e0e0;
+    --text-primary: #161616;
+    --text-secondary: #525252;
+    --text-tertiary: #6f6f6f;
+    --text-muted: #6f6f6f;
+    --accent: #0f62fe;
+    --accent-dark: #0043ce;
+    --accent-fill: #0f62fe;
+    --accent-fill-hover: #0043ce;
     --danger: #d92d4c;
     --weather-temp-current: #ca5a1f;
     --weather-temp-high: #d64a3a;
     --weather-temp-low: #2f6dcd;
-    --button-secondary-bg: #e4edf7;
+    --button-secondary-bg: #f4f4f4;
     --code-bg: #393939;
     --code-inline-bg: #525252;
     --code-gutter-bg: #262626;
@@ -479,7 +479,7 @@
     --message-error-bg: #fff1f3;
     --shadow-accent: none;
     --shell-bg: var(--surface);
-    --shell-border: rgba(255, 255, 255, 0.85);
+    --shell-border: var(--border);
     --shell-shadow: none;
     --shell-gloss: none;
     --card-shadow: none;
@@ -500,9 +500,9 @@
     --mobile-terminal-viewport-height: 100dvh;
     --mobile-prompt-lift: 0px;
     --app-max-width: 1200px;
-    --radius-lg: 13px;
-    --radius-md: 9px;
-    --radius-sm: 6px;
+    --radius-lg: 4px;
+    --radius-md: 4px;
+    --radius-sm: 2px;
     --radius-pill: 999px;
     --icon-button-size: 34px;
     --icon-button-radius: 8px;
@@ -683,25 +683,25 @@
 
 [data-theme="dark"] {
     color-scheme: dark;
-    --bg: #1b1e22;
+    --bg: #161616;
     --bg-ambient: none;
-    --surface: #24282d;
-    --surface-muted: #202429;
-    --surface-raised: #2a2f35;
-    --border: #343a41;
+    --surface: #262626;
+    --surface-muted: #161616;
+    --surface-raised: #393939;
+    --border: #525252;
     --text-primary: #f4f4f4;
-    --text-secondary: #d0d7de;
-    --text-tertiary: #b6c0ca;
-    --text-muted: #aeb9c4;
-    --accent: #a6c8ff;
-    --accent-dark: #d0e2ff;
-    --accent-fill: #3d5873;
-    --accent-fill-hover: #30465c;
-    --danger: #b8977f;
+    --text-secondary: #c6c6c6;
+    --text-tertiary: #a8a8a8;
+    --text-muted: #a8a8a8;
+    --accent: #78a9ff;
+    --accent-dark: #4589ff;
+    --accent-fill: #0f62fe;
+    --accent-fill-hover: #0043ce;
+    --danger: #ff8389;
     --weather-temp-current: #f2b178;
     --weather-temp-high: #f2a093;
     --weather-temp-low: #8cbcff;
-    --button-secondary-bg: #262a30;
+    --button-secondary-bg: #393939;
     --code-bg: #393939;
     --code-inline-bg: #525252;
     --code-gutter-bg: #262626;
@@ -745,8 +745,8 @@
     --message-code-token-literal: var(--code-token-literal);
     --message-error-bg: #2a2421;
     --shadow-accent: none;
-    --shell-bg: var(--surface);
-    --shell-border: rgba(255, 255, 255, 0.06);
+    --shell-bg: #262626;
+    --shell-border: #525252;
     --shell-shadow: none;
     --shell-gloss: none;
     --card-shadow: none;
@@ -11694,13 +11694,13 @@ body.is-work-mode-resizing * {
     justify-content: center;
     min-height: 22px;
     border: none;
-    border-radius: 0;
+    border-radius: 9px;
     background: var(--surface-muted);
-    padding: 4px 7px;
+    padding: 6px 10px;
     margin: 0;
     font-size: var(--font-size-meta);
     font-weight: 600;
-    line-height: 1.1;
+    line-height: 1.4;
     color: var(--text-secondary);
     cursor: pointer;
     text-decoration: none;
@@ -15506,3 +15506,41 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 :root[data-work-arrangement="vertical"] body.is-work-mode-resizing * {
     cursor: row-resize !important;
 }
+
+/* Selected Carbon White / Graphite concepts; preserve work-mode geometry. */
+.app { box-shadow: none; background: var(--surface); border-color: var(--border); }
+.app-header { border-bottom: 1px solid var(--border); }
+.app-header h1 { font-family: var(--font-sans); letter-spacing: -.6px; }
+.chat-header, .work-mode-preview-header { background: var(--surface); border-bottom-color: var(--border); }
+.chat-frame { background: var(--surface); }
+.chat-controls { box-shadow: none; background: var(--surface-muted); }
+.btn, .chat-header-fullscreen, .work-mode-preview-root-target { border-radius: 2px; }
+.message.user .message-bubble { background: var(--surface-muted); color: var(--text-primary); border-left: 2px solid var(--accent); }
+[data-theme="dark"] .app-header { background: #161616; }
+[data-theme="dark"] .chat-header,
+[data-theme="dark"] .work-mode-preview-header,
+[data-theme="dark"] .message.user .message-bubble { background: #303030; }
+[data-theme="dark"] #codex-controls .controls-summary { color: #a6c8ff; }
+
+/* User messages share the Carbon/Graphite text and link palette. */
+.message.user .message-bubble a,
+.message.user .message-bubble a:visited,
+.message.user .message-bubble a:hover { color: var(--link-color, var(--accent)); }
+.message.user .message-bubble a:focus-visible { outline-color: var(--accent); }
+.message.user .message-detail-link,
+.message.user .message-attachment { color: var(--text-primary); background: var(--surface-muted); border-color: var(--border); }
+.message.user .message-detail-link:hover { color: var(--text-primary); background: var(--surface-hover); }
+#codex-controls .account-select {
+    height: auto;
+    min-height: 40px;
+    padding-block: 8px;
+    line-height: 1.5;
+    font-size: 13px;
+}
+#codex-controls .usage-entry { min-height: 76px; min-width: 0; }
+#codex-controls .usage-placeholder .usage-token-summary::after { content: none; }
+.message.user .message-bubble blockquote { color: var(--text-secondary); border-left-color: var(--border); }
+.message.user .message-bubble th,
+.message.user .message-bubble td { border-color: var(--border); }
+.message.user .message-bubble th { background: var(--surface-muted); }
+.message.user .message-details summary { color: var(--text-secondary); }

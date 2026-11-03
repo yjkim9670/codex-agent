@@ -44,7 +44,7 @@ class Provider:
     def limits(self, account, force=False):
         if self.fail_limits:
             raise ValueError('계정 한도 조회 실패')
-        return dict(five_hour=dict(used_percent=24, remaining_percent=76, resets_at=2000000000),
+        return dict(five_hour=dict(used_percent=24, remaining_percent=76, resets_at="2033-05-18T03:33:20+00:00"),
                     weekly=dict(used_percent=60, remaining_percent=40, resets_at=2000500000))
 
     def run(self, account, settings, history, emit, cancel):

@@ -37,8 +37,8 @@ def sample(snapshot):
         for window in WINDOWS for field in ('used_percent', 'resets_at')}}
 
 
-def reconstruct(record, event, events, samples, window, *, baseline_at=None):
-    """Return a direct outcome only when the entire measured interval is isolated."""
+def reconstruct(record, event, events, samples, window, *, baseline_at=None, chat_candidates=None):
+    """Verify an isolated execution or a complete, sequential Chat group."""
     def excluded(reason):
         return {'status': 'excluded', 'reason': reason}
     begin, finish = interval(event)
@@ -80,6 +80,8 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None):
                 return excluded('unverified_or_changed_reset')
         except ValueError:
             return excluded('unverified_or_changed_reset')
+        members = [record]
+        member_events = [event]
         for other in events:
             if other['event_id'] == event['event_id']:
                 continue
@@ -94,11 +96,27 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None):
                 if baseline <= other_finish <= observed:
                     return excluded('unverified_execution_timing')
             elif other_finish > baseline and other_begin < observed:
-                return excluded('overlapping_local_execution')
+                candidate = (chat_candidates or {}).get(other['event_id'])
+                if (candidate is None or other.get('application') != 'workbench-chat'
+                        or other_begin < begin or other_finish > observed
+                        or candidate.get('model') != record.get('model')
+                        or candidate.get('reasoning_effort') != record.get('reasoning_effort')
+                        or not record.get('model') or not record.get('reasoning_effort')
+                        or any(candidate.get(k) != record.get(k)
+                               for k in ('account_id', 'provider_account_id'))
+                        or not same_reset(candidate['limits_before'][window].get('resets_at'), reset)):
+                    return excluded('overlapping_local_execution')
+                members.append(candidate)
+                member_events.append(other)
+        ordered = sorted((interval(e) for e in member_events), key=lambda times: times[0])
+        if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
+            return excluded('overlapping_local_execution')
         delta = round(percent - used, 6)
         return {'status': 'observed', 'actual_percent': delta, 'group_actual_percent': delta,
                 'group_id': f'{window}:{record["id"]}:{observation["limits_observed_at"]}',
-                'group_size': 1, 'quality': 'isolated_retained_observation',
+                'group_size': len(members),
+                'quality': 'homogeneous_chat_observation' if len(members) > 1 else 'isolated_retained_observation',
+                **({'member_ids': [r['id'] for r in members]} if chat_candidates is not None else {}),
                 'observed_at': observation['limits_observed_at']}
     return excluded('awaiting_quota_observation')
 
@@ -128,11 +146,21 @@ def recover_timeouts(records, events, samples, *, model=None, effort=None):
 
 
 def chat_calibration(outbox, events, historical_samples, *, now=None):
-    records, retained = [], []
+    records, retained, linked = [], [], {}
     for entry in outbox:
         quota = entry.get('quota_observations') or {}
         retained.extend(sample(q) for q in quota.values() if q.get('observed_at'))
     observations = [*historical_samples, *retained]
+
+    def verified_member(record, window):
+        event, before = linked[record['id']]
+        begin, _ = interval(event)
+        baseline_at = before.get('observed_at')
+        used = record['limits_before'][window].get('used_percent')
+        return (begin is not None and baseline_at is not None
+                and timedelta(0) <= begin - stamp(baseline_at) <= timedelta(minutes=15)
+                and isinstance(used, (int, float)) and math.isfinite(used))
+
     for entry in outbox:
         if entry.get('status') not in ('completed', 'failed', 'cancelled', 'interrupted') or entry.get('usage_pending'):
             continue
@@ -146,19 +174,49 @@ def chat_calibration(outbox, events, historical_samples, *, now=None):
         before = quota.get('before') or {}
         record = {'id': entry['event_id'], 'created_at': entry['execution_completed_at'],
                   'application': 'workbench-chat', 'status': entry['status'],
+                  'account_id': entry.get('account_id'), 'provider_account_id': entry.get('provider_account_id'),
                   'model': event.get('model'), 'reasoning_effort': event.get('reasoning_effort'),
                   'raw_tokens': event['total_tokens'], 'limits_before': {w: before.get(w) or {} for w in WINDOWS},
                   'token_usage': {k: event.get(k, 0) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens')},
                   'outcomes': {}, 'learning_eligible': True, 'service_tier': 'standard',
-                  'calculation_version': 'chat_isolated_observation_v1'}
-        for window in WINDOWS:
+                  'calculation_version': 'chat_homogeneous_observation_v2'}
+        records.append(record)
+        linked[record['id']] = (event, before)
+    # Walk from the earliest execution for each quota window. A measured delta
+    # belongs to exactly one complete group, even when later baselines are stale.
+    records.sort(key=lambda r: interval(linked[r['id']][0])[0] or stamp(r['created_at']))
+    for window in WINDOWS:
+        assigned = set()
+        last_observed = None
+        for record in records:
+            if record['id'] in assigned:
+                continue
+            event, before = linked[record['id']]
+            if last_observed is not None and (not before.get('observed_at')
+                    or stamp(before['observed_at']) < last_observed):
+                record['outcomes'][window] = {'status': 'excluded', 'reason': 'unverified_baseline'}
+                continue
+            candidates = {linked[r['id']][0]['event_id']: r for r in records
+                          if r['id'] not in assigned and verified_member(r, window)}
+
             record['outcomes'][window] = reconstruct(record, event, events, observations, window,
-                                                   baseline_at=before.get('observed_at'))
+                                                   baseline_at=before.get('observed_at'),
+                                                   chat_candidates=candidates)
+            outcome = record['outcomes'][window]
+            member_ids = outcome.pop('member_ids', [])
+            if outcome['status'] == 'observed':
+                last_observed = stamp(outcome['observed_at'])
+                members = [r for r in records if r['id'] in member_ids]
+                total = sum(r['raw_tokens'] for r in members)
+                for member in members:
+                    member['outcomes'][window] = {**outcome, 'actual_percent':
+                        outcome['group_actual_percent'] * member['raw_tokens'] / total}
+                    assigned.add(member['id'])
             if record['outcomes'][window].get('reason') == 'awaiting_quota_observation':
                 record['outcomes'][window]['status'] = 'pending'
                 if now is not None and now - interval(event)[1] > timedelta(hours=24):
                     record['outcomes'][window] = {'status': 'excluded', 'reason': 'observation_timeout'}
+    for record in records:
         observed_times = {o.get('observed_at') for o in record['outcomes'].values()}
         record['quota_samples'] = [s for s in observations if s.get('limits_observed_at') in observed_times]
-        records.append(record)
     return records, retained

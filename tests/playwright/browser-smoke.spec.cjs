@@ -123,6 +123,9 @@ test('browser UI smoke check', async ({ page }) => {
         test.setTimeout(60_000);
         await require('../test_conversation_sidebar_browser.cjs').verifyConversationSidebar(page.context().browser(), targetUrl);
     }
+    if (process.env.CODEX_VERIFY_CHAT_LIMIT_RESET === '1') {
+        await require('./chat-limit-reset.cjs').verifyChatLimitReset(page, expect);
+    }
     if (process.env.CODEX_VERIFY_CONVERSATION === '1') {
         test.setTimeout(120_000);
         await require('../test_conversation_browser.cjs').verifyConversation(page.context().browser(), targetUrl);

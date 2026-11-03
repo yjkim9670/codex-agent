@@ -125,13 +125,18 @@ $('show-history').onclick=()=>setHistoryOpen(true);
 $('close-history').onclick=()=>setHistoryOpen(false);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open'))setHistoryOpen(false);if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select,summary')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
 let limitGeneration=0;
+function limitResetDate(value){
+ if(value===null||value===undefined||value==='')return null;
+ const date=new Date(typeof value==='number'?value*1000:value);
+ return Number.isNaN(date.getTime())?null:date;
+}
 function paintLimits(data, message){
  for(const id of ['limit-windows','dialog-limits']){
   const box=$(id);box.replaceChildren();
   for(const [key,label] of [['five_hour','5h · 5시간'],['weekly','Weekly · 주간']]){
    const value=data?.[key],row=node('div',undefined,'limit-window');
    const heading=node('div',undefined,'limit-heading');heading.append(node('span',label),node('strong',value?`${value.remaining_percent.toLocaleString()}% 남음`:'미제공'));row.append(heading);
-   if(value){const meter=node('progress');meter.max=100;meter.value=value.used_percent;meter.setAttribute('aria-label',label+' 사용 비율');row.append(meter);const reset=value.resets_at?new Date(value.resets_at*1000):null;row.append(node('small',`${value.used_percent.toLocaleString()}% 사용 · 초기화 ${reset&&!isNaN(reset)?reset.toLocaleString():'시간 미제공'}`));}
+   if(value){const meter=node('progress');meter.max=100;meter.value=value.used_percent;meter.setAttribute('aria-label',label+' 사용 비율');row.append(meter);const reset=limitResetDate(value.resets_at);row.append(node('small',`${value.used_percent.toLocaleString()}% 사용 · 초기화 ${reset&&!isNaN(reset)?reset.toLocaleString():'시간 미제공'}`));}
    box.append(row);
   }
  }

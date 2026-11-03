@@ -79,6 +79,7 @@ async function verifyConversation(browser,targetUrl){
   if(width<1024){await page.locator('#show-history').click();await expect(page.locator('#sidebar')).toBeVisible();await page.keyboard.press('Escape');await expect(page.locator('#sidebar')).not.toBeVisible();await expect(page.locator('#show-history')).toBeFocused();}
   if(width===360)await page.locator('#more-actions').click();await page.locator('#usage').click();await expect(page.locator('#usage-summary')).toContainText('tokens');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await expect(page.locator('#dialog-limits')).toContainText('40% 남음');
   await expect(page.locator('#dialog-limits progress').first()).toHaveAttribute('value','24');
+  await expect(page.locator('#dialog-limits')).not.toContainText('시간 미제공');
   await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/fail'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
   await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits-status')).toContainText('조회 실패');await expect(page.locator('#dialog-limits')).toContainText('미제공');
   await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/ok'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});

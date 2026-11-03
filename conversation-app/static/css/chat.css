@@ -89,7 +89,7 @@ header,#composer,#status{flex-shrink:0}
  .account>details>summary{display:none}
  /* Reserve both limit rows during loading, missing data and refresh errors. */
  .account{flex-shrink:0}
- #limit-windows{display:grid;grid-template-rows:repeat(2,96px);height:192px;min-width:0}
+ #limit-windows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;height:92px;min-width:0}
  #limit-windows .limit-window{min-width:0;overflow:auto;font-variant-numeric:tabular-nums}
  #limit-windows .limit-heading{white-space:nowrap}
  #limits-status{display:block;height:3.3em;line-height:1.65;overflow:auto;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
@@ -128,7 +128,7 @@ header,#composer,#status{flex-shrink:0}
 .input-row{display:flex;align-items:flex-end;gap:8px}
 .input-row textarea{flex:1;min-width:0}
 .compose-footer{flex-shrink:0;margin:0}
-@media(min-width:1024px){.shell{grid-template-columns:440px minmax(0,1fr)}}
+@media(min-width:1024px){.shell{grid-template-columns:calc(min(480px,40vw) / var(--scale)) minmax(0,1fr)}}
 @media(max-width:1023px){#sidebar{width:min(400px,calc(100vw / var(--scale) - 32px))}}
 #history button{white-space:normal;overflow-wrap:anywhere;line-height:1.5;min-height:48px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 
@@ -150,3 +150,33 @@ header,#composer,#status{flex-shrink:0}
 #file-preview-code{flex:1;min-height:0;margin:0;padding:20px;overflow:auto;overscroll-behavior:contain;white-space:pre;background:var(--code);font:14px/1.65 'Chat Code',monospace;tab-size:4;contain:content}
 .file-preview-paging{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 20px;border-top:1px solid var(--border);flex:none;font-size:13px}
 @media(max-width:700px){#file-preview{width:100vw}.file-preview-heading{flex-wrap:wrap;gap:8px;padding:12px}.file-preview-actions{margin-left:auto}#file-preview-code{padding:12px}}
+
+/* Overlay rails leave the full width available for reading. */
+.scroll-region{position:relative;min-height:0;min-width:0;overflow:hidden}
+.thread-region,.history-region{display:flex;flex:1 1 0}
+#thread,#history{min-height:0;min-width:0;width:100%;scrollbar-width:none}
+#thread::-webkit-scrollbar,#history::-webkit-scrollbar{display:none}
+#thread{overflow-anchor:none}
+.overlay-scrollbar{position:absolute;inset:4px 1px 4px auto;width:10px;z-index:2;touch-action:none;opacity:.35;transition:opacity .15s}
+.scroll-region:hover>.overlay-scrollbar,.overlay-scrollbar.dragging{opacity:1}
+.overlay-scrollbar-thumb{position:absolute;right:2px;width:5px;border-radius:6px;background:var(--border-strong);min-height:28px}
+.overlay-scrollbar:hover .overlay-scrollbar-thumb,.overlay-scrollbar.dragging .overlay-scrollbar-thumb{background:var(--accent)}
+.thread-navigation{position:absolute;right:20px;bottom:12px;display:flex;align-items:center;gap:6px;z-index:3}
+.thread-navigation button{min-width:44px;min-height:44px;padding:6px 12px;border-radius:22px;background:var(--surface);box-shadow:0 2px 8px #0002}
+.thread-navigation #new-content{position:static;font-size:13px}
+#thread{padding-bottom:72px}
+@media(min-width:1024px){
+ aside{gap:12px;padding-block:16px}
+ .account{padding-top:8px;gap:6px}
+ #account-settings .account-content{grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;align-items:center}
+ #account-settings label{grid-column:1/-1;font-size:12px}
+ #account,#reload-models{min-height:36px;padding:4px 8px;font-size:12px}
+ #connection,#transport-status{font-size:11px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #account-limits{padding-top:6px}
+ #limit-windows .limit-window{padding:4px 0}
+ #limit-windows progress{margin:4px 0;height:4px}
+ #limits-status{height:1.65em;font-size:11px}
+}
+@media(max-width:1023px){.history-region{flex:1 1 0;min-height:96px}.thread-navigation{right:16px;bottom:8px}}
+@media(prefers-reduced-motion:reduce){.overlay-scrollbar{transition:none}}
+@media(forced-colors:active){.overlay-scrollbar-thumb{background:CanvasText}}

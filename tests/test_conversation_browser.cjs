@@ -2,11 +2,13 @@
 const {expect}=require('@playwright/test');
 const assert=require('node:assert/strict');
 
-async function verifyConversation(browser,targetUrl){
+async function verifyConversation(browser,targetUrl,widths){
+ if(!widths){
  await require('./test_conversation_resume_browser.cjs').verifyConversationResume(browser,targetUrl);
  await require('./test_conversation_overlays_browser.cjs').verifyConversationOverlays(browser,targetUrl);
  await require('./test_conversation_mobile_browser.cjs').verifyMobileConversation(browser,targetUrl);
- for(const width of [360,768,1440,1920]){
+ }
+ for(const width of widths||[360,768,1440,1920]){
   const prefix=width===360?'':width===768?'/apps/workbench-chat':'/chat';
   const context=await browser.newContext({viewport:{width,height:900},ignoreHTTPSErrors:process.env.CODEX_VERIFY_LOCAL_TLS==='1'});
   try{
@@ -80,7 +82,7 @@ async function verifyConversation(browser,targetUrl){
   await expect(page.locator('.answer-body blockquote')).toContainText('읽기 쉬운');await expect(page.locator('.answer-body th')).toHaveCount(2);
   assert.ok((await page.locator('.answer-body pre code').evaluate(el=>getComputedStyle(el).fontFamily)).includes('Chat Code'));
   assert.equal(await page.locator('.answer-body a[href="https://example.com/"]').getAttribute('rel'),'noopener noreferrer');
-  if(width>=1440){const composer=await page.locator('.composer-inner').boundingBox();assert.ok(composer.width>1000,`desktop composer width ${composer.width}`);const answer=await page.locator('.answer').boundingBox();assert.ok(answer.width>1000,`desktop answer width ${answer.width}`);}
+  if(width>=1440){const main=await page.locator('main').boundingBox(),scale=await page.evaluate(()=>Number(getComputedStyle(document.documentElement).getPropertyValue('--scale'))),expectedWidth=Math.min(main.width-60,1440*scale),composer=await page.locator('.composer-inner').boundingBox(),answer=await page.locator('.answer').boundingBox();assert.ok(composer.width>=expectedWidth-1,`composer fills available main width ${composer.width}/${main.width}`);assert.ok(answer.width>=expectedWidth-1,`answer fills available main width ${answer.width}/${main.width}`);}
   await page.evaluate(()=>{window.__firstAnswer=document.querySelector('.answer-body');window.__mutations=0;window.__observer=new MutationObserver(rows=>window.__mutations+=rows.length);window.__observer.observe(window.__firstAnswer,{subtree:true,childList:true,characterData:true});});
   await page.locator('#message').fill('cancel me');await page.locator('#send').click();await expect(page.locator('.thinking:not([hidden])>summary')).toBeVisible();await page.locator('.thinking:not([hidden])>summary').click();await expect(page.locator('.answer-body.streaming')).toBeVisible();
   await page.locator('#stop').click();await expect(page.locator('#stop')).toBeHidden();await expect(page.locator('.answer .meta').last()).toContainText('중단된 부분');

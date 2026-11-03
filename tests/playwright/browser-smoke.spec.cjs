@@ -129,6 +129,10 @@ test('browser UI smoke check', async ({ page }) => {
     if (process.env.CODEX_VERIFY_CONVERSATION_FILES === '1') {
         await require('../test_conversation_files_browser.cjs').verifyConversationFiles(page, expect);
     }
+    if (process.env.CODEX_VERIFY_CONVERSATION_RESPONSIVE === '1') {
+        test.setTimeout(300_000);
+        await require('../test_conversation_responsive_browser.cjs').verifyResponsiveConversation(page.context().browser(), targetUrl);
+    }
     if (process.env.CODEX_VERIFY_CONVERSATION === '1') {
         test.setTimeout(120_000);
         await require('../test_conversation_browser.cjs').verifyConversation(page.context().browser(), targetUrl);

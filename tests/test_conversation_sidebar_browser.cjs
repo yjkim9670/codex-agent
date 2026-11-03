@@ -33,10 +33,12 @@ async function verifyConversationSidebar(browser,url){
   await page.setViewportSize({width:1440,height:900});
   await expect(page.locator('#account')).toBeVisible();await expect(page.locator('#account-limits')).toBeVisible();
   await expect(page.locator('#account-settings summary')).not.toBeVisible();await expect(page.locator('#history-query')).toBeVisible();
-  expect((await page.locator('#sidebar').boundingBox()).width).toBeGreaterThanOrEqual(479);
+  const sidebarWidth=(await page.locator('#sidebar').boundingBox()).width;
+  expect(sidebarWidth).toBeGreaterThanOrEqual(288);
+  expect(sidebarWidth).toBeLessThanOrEqual(420);
   expect((await page.locator('.account').boundingBox()).height).toBeLessThan(255);
   await page.locator('#scale').evaluate(input=>{input.value='80';input.dispatchEvent(new Event('input'));});
-  expect((await page.locator('#sidebar').boundingBox()).width).toBeGreaterThanOrEqual(479);
+  expect(Math.abs((await page.locator('#sidebar').boundingBox()).width-sidebarWidth)).toBeLessThan(1);
   await page.locator('#scale').evaluate(input=>{input.value='90';input.dispatchEvent(new Event('input'));});
   const historyScroll=await page.locator('#history').evaluate(el=>({gutter:el.offsetWidth-el.clientWidth,style:getComputedStyle(el).scrollbarWidth}));
   expect(historyScroll).toEqual({gutter:0,style:'none'});
@@ -57,6 +59,16 @@ async function verifyConversationSidebar(browser,url){
    return states.map(args=>{paintLimits(...args);return {before,after:snapshot()};});
   });
   for(const {before,after} of stableLimits)expect(after).toEqual(before);
+  // Desktop collapse gives the conversation space back without opening a backdrop.
+  const mainWidth=(await page.locator('main').boundingBox()).width;
+  await page.locator('#close-history').click();await expect(page.locator('#sidebar')).not.toBeVisible();
+  await expect(page.locator('#show-history')).toBeFocused();
+  await expect(page.locator('#show-history')).toHaveAttribute('aria-expanded','false');
+  await expect(page.locator('#sidebar-backdrop')).not.toBeVisible();
+  expect((await page.locator('main').boundingBox()).width).toBeGreaterThan(mainWidth+280);
+  await page.locator('#show-history').click();await expect(page.locator('#sidebar')).toBeVisible();
+  await expect(page.locator('#close-history')).toBeFocused();
+  await expect(page.locator('#show-history')).toHaveAttribute('aria-expanded','true');
   await page.locator('#history-query').fill('no-matching-conversation');await expect(page.locator('#history button')).toHaveCount(0);
   await page.setViewportSize({width:768,height:900});await page.locator('#show-history').click();
   await expect(page.locator('#history-query')).not.toBeVisible();await expect(page.locator('#account-settings')).not.toHaveAttribute('open','');

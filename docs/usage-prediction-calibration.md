@@ -40,6 +40,31 @@ Account percentages are rounded and include external activity. Eligible groups
 reduce known contamination; these remain estimates, not exact per-task billing.
 Changing predictions does not change actual subscription usage.
 
+## Sub-percentage-point Chat observations
+
+Fractional positive quota changes (for example 0.125 percentage points) remain
+valid measurements; there is no one-percentage-point minimum. Sequential Chat
+executions of the same model and effort continue to accumulate until a positive
+change is observed, subject to the existing account, reset and isolation checks.
+
+An unchanged integer reading now retains a separate `resolution_observation`
+with the complete group and its last verified observation. The dashboard's
+“1%p 미만 차감 관측” disclosure shows a conditional reference range:
+`reported_pp_per_million_upper = 1,000,000 / group_tokens`. For example, five
+million tokens within one unchanged integer bin gives less than 0.2 pp per
+million, assuming one-pp reporting bins and up-to-date observations. Quota update
+delays can invalidate this interpretation. It is not a measured fractional
+deduction, an unconditional billing bound, or evidence of zero usage.
+
+The whole group is retained once per window, including after observation timeout;
+it is never summed into positive measurements, ranked in the comparison chart,
+or used to train predictions. A later verified positive delta supersedes it on
+ordinary re-collection. Saturated 100% readings, noninteger unchanged baselines,
+changed resets, mixed or overlapping executions and incomplete groups cannot
+create a one-pp reference. Existing period, app, environment and effort filters
+also apply to these groups. Historical records without verified before/after
+observations remain unlinked; no missing deductions are reconstructed.
+
 ## Pending observation recovery and freshness
 
 Reconciliation excludes each pending entry with a missing baseline, invalid

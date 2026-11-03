@@ -63,6 +63,7 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None, cha
     following = sorted((s for s in samples if s.get('limits_observed_at') and
                         finish <= stamp(s['limits_observed_at']) <= finish + timedelta(hours=24)),
                        key=lambda s: stamp(s['limits_observed_at']))
+    resolution = None
     for observation in following:
         percent = observation.get(window + '_used_percent')
         if percent is None:
@@ -71,8 +72,6 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None, cha
             continue
         if not same_reset(observation.get(window + '_resets_at'), reset) or percent < used:
             return excluded('unverified_or_changed_reset')
-        if percent <= used:
-            continue
         observed = stamp(observation['limits_observed_at'])
         # Also reject observations at/after the advertised reset boundary.
         try:
@@ -111,6 +110,17 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None, cha
         ordered = sorted((interval(e) for e in member_events), key=lambda times: times[0])
         if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
             return excluded('overlapping_local_execution')
+        if percent == used:
+            # A display bin constrains reported usage only if updates are current.
+            # Never turn an unchanged reading into zero usage or a training sample.
+            if float(used).is_integer() and 0 <= used < 100:
+                resolution = {
+                    'group_id': f'{window}:resolution:{record["id"]}:{observation["limits_observed_at"]}',
+                    'group_size': len(members), 'group_actual_percent': 0,
+                    'resolution_pp': 1, 'member_ids': [r['id'] for r in members],
+                    'observed_at': observation['limits_observed_at'],
+                }
+            continue
         delta = round(percent - used, 6)
         return {'status': 'observed', 'actual_percent': delta, 'group_actual_percent': delta,
                 'group_id': f'{window}:{record["id"]}:{observation["limits_observed_at"]}',
@@ -118,7 +128,8 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None, cha
                 'quality': 'homogeneous_chat_observation' if len(members) > 1 else 'isolated_retained_observation',
                 **({'member_ids': [r['id'] for r in members]} if chat_candidates is not None else {}),
                 'observed_at': observation['limits_observed_at']}
-    return excluded('awaiting_quota_observation')
+    return {**excluded('awaiting_quota_observation'),
+            **({'resolution_observation': resolution} if resolution else {})}
 
 
 def recover_timeouts(records, events, samples, *, model=None, effort=None):
@@ -215,8 +226,17 @@ def chat_calibration(outbox, events, historical_samples, *, now=None):
             if record['outcomes'][window].get('reason') == 'awaiting_quota_observation':
                 record['outcomes'][window]['status'] = 'pending'
                 if now is not None and now - interval(event)[1] > timedelta(hours=24):
-                    record['outcomes'][window] = {'status': 'excluded', 'reason': 'observation_timeout'}
+                    record['outcomes'][window].update(status='excluded', reason='observation_timeout')
+            resolution = record['outcomes'][window].get('resolution_observation')
+            if resolution:
+                member_ids = resolution.pop('member_ids')
+                for member in records:
+                    if member['id'] in member_ids:
+                        member['outcomes'][window] = deepcopy(record['outcomes'][window])
+                        assigned.add(member['id'])
     for record in records:
         observed_times = {o.get('observed_at') for o in record['outcomes'].values()}
+        observed_times.update(o['resolution_observation']['observed_at']
+                              for o in record['outcomes'].values() if o.get('resolution_observation'))
         record['quota_samples'] = [s for s in observations if s.get('limits_observed_at') in observed_times]
     return records, retained

@@ -5,7 +5,7 @@
 <title>사용량 통계 · Codex Workbench</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/usage_dashboard.css', v=4) }}">
-<script defer src="{{ url_for('static', filename='js/usage_dashboard.js', v=7) }}"></script>
+<script defer src="{{ url_for('static', filename='js/usage_dashboard.js', v=8) }}"></script>
 </head>
 <body>
 <main id="usage-dashboard">
@@ -28,6 +28,7 @@
 <p id="calibration-status" class="note" role="status"></p>
 <p class="note">전체 수집에는 보정 기록이 없는 사용도 포함됩니다. 검증 통과 토큰만 차감률 계산에 사용합니다. 제외 사유의 ‘건’은 보정 기록 수, ‘구간’은 묶음 관측 수입니다.</p>
 <div id="comparison" aria-label="모델별 한도 차감 비교"></div>
+<details><summary>1%p 미만 차감 관측 · 참고 범위</summary><div id="resolution-observations"></div></details>
 <p class="note">관측 기반 추정치입니다. 공식 모델 환산율이 아니며, 유효한 검증 구간이 3개 미만인 모델/effort는 비교에서 숨깁니다. 전체 수집 토큰과 검증 토큰·구간 수는 모델 상세에서 확인할 수 있습니다. 추적되지 않은 다른 PC·클라우드 사용, 정수 반올림과 조회 지연이 영향을 줄 수 있습니다.</p>
 <details id="group-details"><summary>검증 구간과 제외 사유</summary><div id="groups"></div></details>
 </section>

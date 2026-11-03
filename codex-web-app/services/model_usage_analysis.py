@@ -105,11 +105,18 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
                 if outcome.get('reason'):
                     reason += ':' + outcome['reason']
                 exclude(reason, [record])
-                continue
+                if not outcome.get('resolution_observation'):
+                    continue
+                outcome = outcome['resolution_observation']
             groups[outcome['group_id']].append(record)
         accepted = []
+        resolution_groups = []
         for group_id, records in groups.items():
-            outcome = records[0]['outcomes'][window]
+            def measurement(record):
+                result = record['outcomes'][window]
+                return result.get('resolution_observation') or result
+            outcome = measurement(records[0])
+            is_resolution = 'resolution_pp' in outcome
             if len(records) != outcome['group_size']:
                 exclude('incomplete_group', records)
                 continue
@@ -160,8 +167,22 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
                 exclude('unverified_or_changed_reset', records)
                 continue
             actual = outcome['group_actual_percent']
-            if actual <= 0 or any(r['outcomes'][window]['group_actual_percent'] != actual for r in records):
+            if (actual < 0 or (actual == 0 and not is_resolution)
+                    or any(measurement(r)['group_actual_percent'] != actual for r in records)):
                 exclude('invalid_delta', records)
+                continue
+            if is_resolution:
+                tokens = sum(r['raw_tokens'] for r in records)
+                if outcome.get('resolution_pp') != 1 or actual != 0 or tokens <= 0:
+                    exclude('invalid_delta', records)
+                    continue
+                resolution_groups.append({
+                    'group_id': group_id, 'model': records[0]['model'],
+                    'reasoning_effort': members[0].get('reasoning_effort') or 'unknown',
+                    'tokens': tokens, 'records': len(records),
+                    'observed_at': outcome['observed_at'],
+                    'reported_pp_per_million_upper': 1_000_000 / tokens,
+                })
                 continue
             accepted.append({'group_id': group_id, 'model': records[0]['model'],
                              'reasoning_effort': members[0].get('reasoning_effort') or 'unknown',
@@ -185,7 +206,8 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
             row['deduction_pp'] += group['deduction_pp']
         for row in effort_totals.values():
             row['pp_per_million_tokens'] = row['deduction_pp'] * 1_000_000 / row['tokens']
-        windows[window] = {'model_efforts': dict(effort_totals), 'models': dict(totals), 'excluded': dict(exclusions), 'groups': accepted,
+        windows[window] = {'resolution_groups': resolution_groups,
+                           'model_efforts': dict(effort_totals), 'models': dict(totals), 'excluded': dict(exclusions), 'groups': accepted,
                            'last_valid_observed_at': max((g['observed_at'] for g in accepted), default=None),
                            'excluded_models': dict(excluded_models), 'excluded_model_efforts': dict(excluded_efforts)}
 

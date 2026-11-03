@@ -33,6 +33,8 @@
       const coverageNote = `전체 수집 ${num(row.tokens)} 토큰 · 보정 기록 없음 ${num(coverage?.unlinked_tokens)} 토큰 · 검증 통과 ${num(q.tokens || 0)} 토큰`;
       return `<div class="bar-row" data-observation="verified"><button type="button" class="bar-label" data-key="${esc(row.key)}">${esc(name(row.model))}<br><small>${esc(row.effort)}</small></button><div><div class="bar-track"><div class="bar-fill" style="width:${(q.pp_per_million_tokens || 0)/max*100}%;background:${palette[i%palette.length]}"></div></div><p class="note">${esc(coverageNote)}</p></div><div class="bar-value"><strong>${rate(q.pp_per_million_tokens)}</strong> ${q.groups ? '%p' : ''}<br>${num(q.groups || 0)}구간 · 관측값</div></div>`;
     }).join('') || '<p class="empty">검증 구간 3개 이상인 모델/effort가 없습니다. 전체 사용량은 모델 상세에서 확인하세요.</p>';
+    const limited = report.windows[windowName].resolution_groups || [];
+    $('resolution-observations').innerHTML = limited.length ? `<p class="note">정수 사용률이 그대로인 구간입니다. 조회 지연이 없고 표시 간격이 1%p일 때의 참고 범위이며, 실제 차감률·학습·비교 순위에는 반영하지 않습니다.</p><div class="table-wrap"><table><thead><tr><th>모델 / effort</th><th>관측 시각</th><th>누적 토큰</th><th>표시 기준 %p / 100만</th></tr></thead><tbody>${limited.map(g => `<tr><td>${esc(name(g.model))} / ${esc(g.reasoning_effort)}</td><td>${esc(dateLabel(g.observed_at))}</td><td>${num(g.tokens)} · ${num(g.records)}작업</td><td>&lt; ${(Math.ceil(g.reported_pp_per_million_upper * 1e6) / 1e6).toFixed(6).replace(/\.?0+$/, '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">조건을 충족하는 미세 차감 관측이 없습니다. 실행 전후 조회·동일 모델/effort·리셋 및 실행 겹침 검증이 필요합니다.</p>';
     showGroups();
   }
   function showGroups(key) {

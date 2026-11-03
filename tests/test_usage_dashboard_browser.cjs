@@ -23,6 +23,9 @@ const report = {
     quota_samples:[{limits_observed_at:'2026-09-01T01:00:00+09:00',five_hour_used_percent:20,five_hour_resets_at:'a'}, {limits_observed_at:'2026-09-02T01:00:00+09:00',five_hour_used_percent:10,five_hour_resets_at:'b'}],
     collection_diagnostics:{},sources:[],collection_errors:[],reconciliation:{daily:[],comparable_days:0,comparable_difference_tokens:0,account_missing_days:0}
 };
+report.windows.five_hour.resolution_groups = [{model:'beta', reasoning_effort:'medium',
+    observed_at:'2026-10-05T10:00:00+09:00', tokens:5000000, records:2,
+    reported_pp_per_million_upper:0.2}];
 if(process.argv.includes('--serve')) {
     const http=require('node:http');
     const staticRoot=path.join(root,'codex-web-app/static');
@@ -82,6 +85,9 @@ if(process.argv.includes('--serve')) {
         await expect(page.locator('#comparison')).toContainText('검증 통과 1,000,000 토큰');
         await expect(page.locator('#comparison [data-key="alpha/low"]')).toHaveCount(0);
         await expect(page.locator('#comparison [data-key="beta/medium"]')).toHaveCount(0);
+        await expect(page.locator('#resolution-observations')).toContainText('< 0.2');
+        await expect(page.locator('#resolution-observations')).toContainText('5,000,000 · 2작업');
+        await expect(page.locator('#resolution-observations')).toContainText('조회 지연');
         await expect(page.locator('#comparison')).not.toContainText('99.000');
         assert.deepEqual(await page.locator('#monthly-rows tr td:nth-child(2)').allTextContents(),['400','300','300']);
         assert.deepEqual(await page.locator('#weekly-rows tr td:nth-child(2)').allTextContents(),['400','0','0','0','0','500','100']);
@@ -90,6 +96,7 @@ if(process.argv.includes('--serve')) {
         await expect(page.locator('#monthly-rows tr').nth(1)).not.toContainText('일부 기간');
         await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'}).locator('td').nth(3)).toHaveText('—');
         await page.locator('[data-window="weekly"]').click();
+        await expect(page.locator('#resolution-observations')).toContainText('조건을 충족하는 미세 차감 관측이 없습니다');
         await expect(page.locator('#comparison [data-observation="verified"]')).toHaveCount(1);
         await expect(page.locator('#comparison [data-observation="insufficient"]')).toHaveCount(0);
         await expect(page.locator('#comparison')).toContainText('low');

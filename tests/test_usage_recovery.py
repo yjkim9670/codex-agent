@@ -229,3 +229,91 @@ def test_grouped_chat_ledger_reimport_is_idempotent_after_rollout_corrections(tm
                      now=datetime.fromisoformat('2026-10-14T11:00:00+09:00'))
     result = report['windows']['five_hour']['models']['gpt-6-luna']
     assert (result['groups'], result['tokens'], result['deduction_pp']) == (1, 800, 1)
+
+
+def resolution_report(first, second, **kwargs):
+    records, _ = chat_calibration([first, second], [first, second], [], **kwargs)
+    report = analyze(Path('.'), data={'events': [first, second],
+                     'codex_usage_calibration.json': {'records': records}},
+                     now=datetime.fromisoformat('2026-10-16T12:00:00+09:00'))
+    return records, report
+
+
+def test_unchanged_chat_readings_batch_tokens_without_fabricating_a_rate():
+    first, second = consecutive_chat()
+    first['total_tokens'] = 2_000_000
+    second['total_tokens'] = 3_000_000
+    for window in ('five_hour', 'weekly'):
+        second['quota_observations']['after'][window]['used_percent'] = 20
+    records, report = resolution_report(first, second)
+    for window in ('five_hour', 'weekly'):
+        assert all(r['outcomes'][window]['status'] == 'pending' for r in records)
+        result = report['windows'][window]
+        assert not result['models']  # Never an exact zero or a training observation.
+        assert len(result['resolution_groups']) == 1
+        group = result['resolution_groups'][0]
+        assert (group['tokens'], group['records']) == (5_000_000, 2)
+        assert group['reported_pp_per_million_upper'] == 0.2
+    _, expired = resolution_report(first, second,
+                                  now=datetime.fromisoformat('2026-10-16T11:00:00+09:00'))
+    assert expired['windows']['five_hour']['resolution_groups'] == report['windows']['five_hour']['resolution_groups']
+    # Filters apply to the complete group, including the reference-only result.
+    filtered = analyze(Path('.'), effort='medium', data={'events': [first, second],
+                       'codex_usage_calibration.json': {'records': records}},
+                       now=datetime.fromisoformat('2026-10-16T12:00:00+09:00'))
+    assert not filtered['windows']['five_hour']['resolution_groups']
+
+
+def test_fractional_delta_supersedes_unchanged_readings_without_a_one_percent_threshold():
+    first, second = consecutive_chat()
+    for window in ('five_hour', 'weekly'):
+        second['quota_observations']['after'][window]['used_percent'] = 20.125
+    _, report = resolution_report(first, second)
+    for window in report['windows'].values():
+        assert not window['resolution_groups']
+        assert window['models']['gpt-6-luna']['deduction_pp'] == 0.125
+        assert window['models']['gpt-6-luna']['tokens'] == 300
+
+
+def test_resolution_ledger_reimport_is_idempotent_and_positive_delta_replaces_it(tmp_path):
+    first, second = consecutive_chat()
+    for window in ('five_hour', 'weekly'):
+        second['quota_observations']['after'][window]['used_percent'] = 20
+    context = {'root': tmp_path}
+    sync_chat_calibration(context, [first, second], [first, second])
+    path = tmp_path / 'codex_usage_calibration.json'
+    original = path.read_bytes()
+    assert all(r['outcomes']['five_hour']['resolution_observation']['group_size'] == 2
+               for r in json.loads(original)['records'])
+    sync_chat_calibration(context, [first, second], [first, second])
+    assert path.read_bytes() == original
+    for window in ('five_hour', 'weekly'):
+        second['quota_observations']['after'][window]['used_percent'] = 20.25
+    sync_chat_calibration(context, [first, second], [first, second])
+    for record in json.loads(path.read_bytes())['records']:
+        for outcome in record['outcomes'].values():
+            assert outcome['status'] == 'observed'
+            assert outcome['group_actual_percent'] == 0.25
+            assert 'resolution_observation' not in outcome
+
+
+def test_unchanged_readings_reject_mixed_reset_saturated_and_fractional_bins():
+    for change in ('model', 'reset', 'saturated', 'fractional'):
+        first, second = consecutive_chat()
+        second['quota_observations']['after']['five_hour']['used_percent'] = 20
+        if change == 'model':
+            second['model'] = 'different'
+        elif change == 'reset':
+            second['quota_observations']['after']['five_hour']['resets_at'] = '2026-10-16T00:00:00+09:00'
+        else:
+            value = 100 if change == 'saturated' else 20.5
+            for entry in (first, second):
+                for observation in entry['quota_observations'].values():
+                    observation['five_hour']['used_percent'] = value
+        _, report = resolution_report(first, second)
+        groups = report['windows']['five_hour']['resolution_groups']
+        if change == 'model':
+            assert all(g['model'] != 'gpt-6-luna' for g in groups)
+            assert all(g['records'] == 1 for g in groups)
+        else:
+            assert not groups, change

@@ -424,6 +424,34 @@ def test_raw_preview_rejects_files_larger_than_one_mebibyte(isolated_browser_roo
     assert exc_info.value.status_code == 413
 
 
+@pytest.mark.parametrize('suffix,mime_type', [('png', 'image/png'), ('jpg', 'image/jpeg'), ('webp', 'image/webp')])
+def test_raw_image_preview_allows_files_above_one_mebibyte(
+    browser_test_client, isolated_browser_roots, suffix, mime_type,
+):
+    content = b'\x00' * (1024 * 1024 + 1)
+    name = f'large.{suffix}'
+    (isolated_browser_roots['server_root'] / name).write_bytes(content)
+
+    response = browser_test_client.get(f'/api/codex/files/raw/server/{name}')
+
+    assert response.status_code == 200
+    assert response.mimetype == mime_type
+    assert response.data == content
+    assert response.headers['X-Content-Type-Options'] == 'nosniff'
+
+
+def test_raw_image_preview_enforces_image_limit(isolated_browser_roots):
+    path = isolated_browser_roots['server_root'] / 'oversized.png'
+    with path.open('wb') as handle:
+        handle.truncate(32 * 1024 * 1024 + 1)
+
+    with pytest.raises(file_browser.FileBrowserError) as exc_info:
+        file_browser.read_file_raw(root_key='server', relative_path=path.name)
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.error_code == 'file_too_large'
+
+
 def test_read_file_raw_keeps_html_mime_for_template_markers(isolated_browser_roots):
     server_root = isolated_browser_roots['server_root']
     (server_root / 'template.html').write_text(

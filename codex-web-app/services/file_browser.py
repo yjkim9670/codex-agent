@@ -37,8 +37,10 @@ _MIN_FILE_PREVIEW_BYTES = 16 * 1024
 # Raw previews feed browser document/media parsers, which can be much more
 # expensive than their byte size suggests. HTML is sandboxed and rendered in
 # an iframe fetched separately from JSON/source. Allow larger HTML documents
-# without relaxing the limit for images, PDFs, or other raw file types.
+# without relaxing the limit for PDFs or other raw file types. Generated images
+# commonly exceed 1 MiB, so give images a separate bounded allowance.
 _MAX_FILE_RAW_BYTES = 1024 * 1024
+_MAX_IMAGE_RAW_BYTES = 32 * 1024 * 1024
 _MAX_HTML_RAW_BYTES = 64 * 1024 * 1024
 _MAX_FILE_EDIT_BYTES = 512 * 1024
 _MAX_FILE_DOWNLOAD_BYTES = int(CODEX_FILE_MAX_SINGLE_DOWNLOAD_BYTES)
@@ -1446,7 +1448,13 @@ def read_file_raw(root_key=None, relative_path=''):
             status_code=500,
         ) from exc
 
-    raw_byte_limit = _MAX_HTML_RAW_BYTES if _guess_language(target_path) == 'html' else _MAX_FILE_RAW_BYTES
+    mime_type = mimetypes.guess_type(target_path.name)[0] or 'application/octet-stream'
+    if _guess_language(target_path) == 'html':
+        raw_byte_limit = _MAX_HTML_RAW_BYTES
+    elif mime_type.startswith('image/'):
+        raw_byte_limit = _MAX_IMAGE_RAW_BYTES
+    else:
+        raw_byte_limit = _MAX_FILE_RAW_BYTES
     if total_bytes > raw_byte_limit:
         raise FileBrowserError(
             f'동적 미리보기 제공 크기 제한({_format_byte_limit(raw_byte_limit)})을 초과했습니다.',
@@ -1463,7 +1471,6 @@ def read_file_raw(root_key=None, relative_path=''):
             status_code=500,
         ) from exc
 
-    mime_type = mimetypes.guess_type(target_path.name)[0] or 'application/octet-stream'
     return {
         'root': normalized_root,
         'root_path': str(root_path),

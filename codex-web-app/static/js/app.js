@@ -25889,7 +25889,7 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
     }
     hydrateFilePanelEditStateFromResult(variant, result, { root: previewRoot });
     setFilePanelViewerMetaText(elements, infoParts.join(' · '), {
-        truncated: Boolean(result?.truncated) && !canRenderHtmlPreview,
+        truncated: Boolean(result?.truncated) && !canRenderHtmlPreview && !isImage,
         noteText: useLargeTextPreview
             ? '큰 텍스트는 성능을 위해 경량 모드로 표시됩니다.'
             : ''
@@ -25933,6 +25933,14 @@ async function renderFileBrowserViewerIntoElements(elements, result, options = {
         wrapper.className = 'file-browser-media-preview';
         const image = document.createElement('img');
         image.alt = normalizedPath || 'Image preview';
+        image.addEventListener('error', () => {
+            if (elements.viewerContent.dataset.renderToken !== renderToken) return;
+            const placeholder = document.createElement('div');
+            placeholder.className = 'file-browser-placeholder';
+            placeholder.setAttribute('role', 'status');
+            placeholder.textContent = '이미지를 불러오지 못했습니다. 파일이 손상되었거나 지원하지 않는 형식 또는 미리보기 크기 한도(32 MiB)를 초과했을 수 있습니다. 다운로드하여 확인해주세요.';
+            wrapper.replaceChildren(placeholder);
+        }, { once: true });
         if (previewUrl) {
             image.src = previewUrl;
         }

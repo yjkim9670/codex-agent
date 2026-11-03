@@ -16,6 +16,11 @@ spec = importlib.util.spec_from_file_location('conversation_fixture', ROOT / 'co
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 
+from services.codex_provider import Provider as ArtifactProvider
+from services.artifacts import TOOL_NAME
+
+PREVIEW_CONTENT = 'print("미리보기")\n' + 'x' * 70000 + '\n<script>window.fileXss=true</script>'
+
 ANSWER = '''**Hello**
 
 > 읽기 쉬운 인용문
@@ -37,6 +42,9 @@ print("hello")
 class Provider:
     fail_limits = False
 
+    def read_artifact(self, cid, path):
+        return self.artifacts.read_artifact(cid, path)
+
     def models(self, account, force=False):
         return [dict(model='test-model', displayName='Test Model', defaultReasoningEffort='low',
                      supportedReasoningEfforts=[dict(reasoningEffort='low'), dict(reasoningEffort='high')])]
@@ -49,6 +57,15 @@ class Provider:
 
     def run(self, account, settings, history, emit, cancel):
         emit('provider', dict(model='test-model', reasoning_effort='low', thread_id='fixture', turn_id=str(time.time_ns())))
+        if 'file preview fixture' in history[-1]['content']:
+            artifacts = self.artifacts.open_artifacts('fixture', settings['artifact_scope'])
+            try:
+                artifacts.call({'tool': TOOL_NAME, 'arguments': {'operation': 'write', 'path': 'sample.py', 'content': PREVIEW_CONTENT}})
+                emit('delta', dict(text=f'[sample.py]({artifacts.root}/sample.py)'))
+                emit('done', dict(status='completed'))
+            finally:
+                artifacts.close()
+            return
         emit('title', dict(title='영어 번역'))
         emit('delta', dict(text='**Hello**\n'))
         if 'cancel me' in history[-1]['content']:
@@ -75,6 +92,7 @@ def main():
     server.get_account = lambda _: account
     with tempfile.TemporaryDirectory(prefix='conversation-browser-') as data:
         provider = Provider()
+        provider.artifacts = ArtifactProvider(data)
         app = server.create_app(data, provider)
         @app.post('/__fixture/limits/<mode>')
         def fixture_limits(mode):

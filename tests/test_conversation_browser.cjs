@@ -44,12 +44,31 @@ async function verifyConversation(browser,targetUrl){
    };
   },width);
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`overflow ${width}`);
+  const input=await page.locator('#message').boundingBox(),send=await page.locator('#send').boundingBox();
+  assert.ok(send.x>=input.x+input.width-1&&send.y<input.y+input.height,'send shares the input row');
+  if(width>=1440)assert.ok((await page.locator('#sidebar').boundingBox()).width>=288,'wider desktop sidebar');
+  if(width===1440){
+   const limits=await page.evaluate(async()=>{
+    const original=transport.request.bind(transport);let calls=0;
+    transport.request=(path,...args)=>{if(path.startsWith('/api/usage/limits'))calls++;return original(path,...args);};
+    const row=$('limit-windows').firstChild,meter=row.querySelector('progress'),before=row.textContent;
+    const pending=Promise.all([loadLimits(true),loadLimits(true)]);
+    const during=row.textContent;await pending;
+    await loadLimits();await loadLimits();
+    const result={calls,before,during,sameRow:row===$('limit-windows').firstChild,sameMeter:meter===$('limit-windows').querySelector('progress')};
+    transport.request=original;return result;
+   });
+   assert.equal(limits.calls,1,'coalesce refreshes and cache recent observations');assert.equal(limits.before,limits.during,'keep usage visible during refresh');assert.ok(limits.sameRow&&limits.sameMeter,'update usage in place');
+  }
+
   await page.locator('[data-mode=translate]').click();await expect(page.locator('#search')).toHaveValue('off');if(width===360){await expect(page.locator('#request-summary')).toContainText('영어 번역');await expect(page.locator('#translation-options')).not.toBeVisible();await page.locator('#request-summary').click();}
   await expect(page.locator('#translation-options')).toBeVisible();if(width===360)await page.locator('#request-dialog [data-close-dialog]').click();
   await page.locator('#message').fill('내일 회의할까요?');
   await page.locator('#message').dispatchEvent('keydown',{key:'Enter',keyCode:229,isComposing:true});
   assert.equal(await page.evaluate(()=>window.__paths.some(x=>x.endsWith('/messages'))),false);
-  await page.locator('#send').click();await expect(page.locator('.answer-body.streaming')).toContainText('Hello');
+  await page.locator('#send').click();await expect(page.locator('.thinking:not([hidden])>summary')).toHaveText('생각 중');
+  await expect(page.locator('.answer-body.streaming')).not.toBeVisible();
+  await page.locator('.thinking:not([hidden])>summary').click();await expect(page.locator('.answer-body.streaming')).toContainText('Hello');
   assert.equal(await page.evaluate(()=>window.__markdownCalls),0,'no Markdown parsing per delta');
   await expect(page.locator('.answer-body strong')).toHaveText('Hello');await expect(page.locator('#stop')).toBeHidden();
   assert.equal(await page.locator('.answer-body').evaluate(el=>(el.textContent.match(/Hello/g)||[]).length),1,'resume must not duplicate deltas');
@@ -63,7 +82,7 @@ async function verifyConversation(browser,targetUrl){
   assert.equal(await page.locator('.answer-body a[href="https://example.com/"]').getAttribute('rel'),'noopener noreferrer');
   if(width>=1440){const composer=await page.locator('.composer-inner').boundingBox();assert.ok(composer.width>1000,`desktop composer width ${composer.width}`);const answer=await page.locator('.answer').boundingBox();assert.ok(answer.width>1000,`desktop answer width ${answer.width}`);}
   await page.evaluate(()=>{window.__firstAnswer=document.querySelector('.answer-body');window.__mutations=0;window.__observer=new MutationObserver(rows=>window.__mutations+=rows.length);window.__observer.observe(window.__firstAnswer,{subtree:true,childList:true,characterData:true});});
-  await page.locator('#message').fill('cancel me');await page.locator('#send').click();await expect(page.locator('.answer-body.streaming')).toBeVisible();
+  await page.locator('#message').fill('cancel me');await page.locator('#send').click();await expect(page.locator('.thinking:not([hidden])>summary')).toBeVisible();await page.locator('.thinking:not([hidden])>summary').click();await expect(page.locator('.answer-body.streaming')).toBeVisible();
   await page.locator('#stop').click();await expect(page.locator('#stop')).toBeHidden();await expect(page.locator('.answer .meta').last()).toContainText('중단된 부분');
   assert.ok(await page.evaluate(()=>window.__firstAnswer===document.querySelector('.answer-body')),'preserve completed DOM');
   assert.equal(await page.evaluate(()=>window.__mutations),0,'do not mutate completed Markdown');
@@ -81,7 +100,7 @@ async function verifyConversation(browser,targetUrl){
   await expect(page.locator('#dialog-limits progress').first()).toHaveAttribute('value','24');
   await expect(page.locator('#dialog-limits')).not.toContainText('시간 미제공');
   await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/fail'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
-  await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits-status')).toContainText('조회 실패');await expect(page.locator('#dialog-limits')).toContainText('미제공');
+  await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits-status')).toContainText('조회 실패');await expect(page.locator('#dialog-limits')).toContainText('76% 남음');
   await page.evaluate(async()=>{await fetch(appUrl('/__fixture/limits/ok'),{method:'POST',headers:{'X-Chat-CSRF':csrf}});});
   await page.locator('#refresh-limits').click();await expect(page.locator('#dialog-limits')).toContainText('76% 남음');await page.locator('#usage-dialog .primary').click();
   // An expired session is renewed before retry; a plaintext response is never accepted.
@@ -93,10 +112,14 @@ async function verifyConversation(browser,targetUrl){
    const metrics=await page.evaluate(()=>{
     const original=state.messages;const history=Array.from({length:150},(_,i)=>({id:'perf-'+i,content:'지난 질문 '+i,attempts:[{...original[0].attempts[0],id:'perf-a-'+i,text:'완료된 답변',citations:[]}]}));
     const live={...original[0].attempts[0],id:'perf-active',status:'streaming',text:'장문 응답 '.repeat(10000),citations:[]};history.push({id:'perf-last',content:'계속',attempts:[live]});
-    render(history);window.__markdownCalls=0;const start=performance.now();for(let i=0;i<100;i++){live.text+='추가';render(history);}const elapsed=performance.now()-start;
-    const result={elapsed,parses:window.__markdownCalls,rows:document.querySelectorAll('.message').length};render(original);return result;
+    render(history);
+    const thinking=document.querySelector('#attempt-perf-active .thinking'),body=thinking.querySelector('.answer-body');
+    const collapsed=!thinking.open;thinking.open=true;
+    const liveHeight=body.getBoundingClientRect().height,overflow=body.scrollHeight>body.clientHeight;
+    window.__markdownCalls=0;const start=performance.now();for(let i=0;i<100;i++){live.text+='추가';render(history);}const elapsed=performance.now()-start;
+    const result={elapsed,parses:window.__markdownCalls,rows:document.querySelectorAll('.message').length,collapsed,liveHeight,overflow,stillOpen:thinking.open};render(original);return result;
    });
-   assert.equal(metrics.parses,0);assert.equal(metrics.rows,151);console.log(`Streaming load fixture: 151 rows / 60k chars / 100 updates: ${metrics.elapsed.toFixed(1)} ms, 0 Markdown parses`);
+   assert.ok(metrics.collapsed&&metrics.stillOpen&&metrics.overflow);assert.ok(metrics.liveHeight>0&&metrics.liveHeight<=240,'fixed live viewport');assert.equal(metrics.parses,0);assert.equal(metrics.rows,151);console.log(`Streaming load fixture: 151 rows / 60k chars / 100 updates: ${metrics.elapsed.toFixed(1)} ms, 0 Markdown parses`);
   }
   assert.ok(wire.length>0);for(const request of wire){assert.ok(['/api/crypto-session','/api/secure'].some(s=>new URL(request.url).pathname===prefix+s),'only encrypted API endpoints');assert.ok(!request.url.includes('?'),'no plaintext query strings');assert.ok(!request.body.includes('내일 회의할까요?')&&!request.body.includes('cancel me'),'no plaintext prompts');if(request.url.endsWith('/api/secure'))assert.equal(JSON.parse(request.body).encrypted,true);}
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),`final overflow ${width}`);assert.deepEqual(errors,[]);

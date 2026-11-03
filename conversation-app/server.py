@@ -233,6 +233,17 @@ def create_app(data_dir=None, provider=None):
             threading.Thread(target=work, daemon=True).start()
         return jsonify(attempt=attempt), 202 if created else 200
 
+    @app.get('/api/conversations/<cid>/artifact')
+    def artifact(cid):
+        with store.db() as db:
+            if not db.execute('SELECT id FROM conversations WHERE id=?', (cid,)).fetchone():
+                raise KeyError(cid)
+        path = request.args.get('path', '')
+        if not path or len(path) > 2048:
+            raise ValueError('파일 경로가 올바르지 않습니다.')
+        result = engine.read_artifact(cid, path)
+        return jsonify(name=Path(result['path']).name, content=result['content'])
+
     @app.get('/api/attempts/<aid>/events')
     def events(aid):
         store.attempt(aid)

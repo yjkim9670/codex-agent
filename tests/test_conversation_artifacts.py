@@ -95,3 +95,26 @@ def test_followup_can_reopen_only_the_same_private_artifacts(artifacts):
         assert (artifacts.root / 'result.txt').read_text() == 'second'
     finally:
         followup.close()
+
+
+def test_preview_scope_persists_and_rejects_other_files(tmp_path):
+    from services.codex_provider import Provider
+    provider = Provider(tmp_path)
+    artifacts = provider.open_artifacts('account', 'conversation-one')
+    try:
+        assert call(artifacts, 'write', 'nested/code.py', content='print("한글")')['success']
+        absolute = str(artifacts.root / 'nested/code.py')
+        # Fresh provider proves server restart preserves registered file access.
+        restarted = Provider(tmp_path)
+        assert restarted.read_artifact('conversation-one', absolute)['content'] == 'print("한글")'
+        assert restarted.read_artifact('conversation-one', 'nested/code.py')['content'] == 'print("한글")'
+        for cid, path in [('conversation-two', absolute), ('conversation-one', '/etc/passwd'),
+                          ('conversation-one', '../session.key')]:
+            with pytest.raises(ValueError):
+                restarted.read_artifact(cid, path)
+        (artifacts.root / 'leak').symlink_to(tmp_path / 'session.key')
+        with pytest.raises(ValueError):
+            restarted.read_artifact('conversation-one', 'leak')
+    finally:
+        artifacts.close()
+        shutil.rmtree(artifacts.root)

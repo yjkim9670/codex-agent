@@ -125,33 +125,46 @@ $('show-history').onclick=()=>setHistoryOpen(true);
 $('close-history').onclick=()=>setHistoryOpen(false);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sidebar').classList.contains('open'))setHistoryOpen(false);if(e.key==='Tab'&&$('sidebar').classList.contains('open')){const items=[...$('sidebar').querySelectorAll('button,input,select,summary')].filter(x=>x.offsetParent!==null&&!x.disabled);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
 let limitGeneration=0;
+const limitRefreshMs=5*60*1000,limitCache=new Map(),limitRequests=new Map();
 function limitResetDate(value){
  if(value===null||value===undefined||value==='')return null;
  const date=new Date(typeof value==='number'?value*1000:value);
  return Number.isNaN(date.getTime())?null:date;
 }
 function paintLimits(data, message){
+ const setText=(el,text)=>{if(el.textContent!==text)el.textContent=text;};
  for(const id of ['limit-windows','dialog-limits']){
-  const box=$(id);box.replaceChildren();
-  for(const [key,label] of [['five_hour','5h · 5시간'],['weekly','Weekly · 주간']]){
-   const value=data?.[key],row=node('div',undefined,'limit-window');
-   const heading=node('div',undefined,'limit-heading');heading.append(node('span',label),node('strong',value?`${value.remaining_percent.toLocaleString()}% 남음`:'미제공'));row.append(heading);
-   if(value){const meter=node('progress');meter.max=100;meter.value=value.used_percent;meter.setAttribute('aria-label',label+' 사용 비율');row.append(meter);const reset=limitResetDate(value.resets_at);row.append(node('small',`${value.used_percent.toLocaleString()}% 사용 · 초기화 ${reset&&!isNaN(reset)?reset.toLocaleString():'시간 미제공'}`));}
-   box.append(row);
+  const box=$(id);
+  for(const [index,[key,label]] of [['five_hour','5h · 5시간'],['weekly','Weekly · 주간']].entries()){
+   let row=box.children[index];
+   if(!row){row=node('div',undefined,'limit-window');const heading=node('div',undefined,'limit-heading'),meter=node('progress');heading.append(node('span',label),node('strong'));meter.max=100;meter.setAttribute('aria-label',label+' 사용 비율');row.append(heading,meter,node('small'));box.append(row);}
+   const value=data?.[key],meter=row.querySelector('progress'),reset=limitResetDate(value?.resets_at);
+   setText(row.querySelector('strong'),value?`${value.remaining_percent.toLocaleString()}% 남음`:'미제공');
+   meter.hidden=!value;if(value&&meter.value!==value.used_percent)meter.value=value.used_percent;
+   setText(row.querySelector('small'),value?`${value.used_percent.toLocaleString()}% 사용 · 초기화 ${reset?reset.toLocaleString():'시간 미제공'}`:'');
   }
  }
- for(const id of ['limits-status','dialog-limits-status'])$(id).textContent=message||(data?.observed_at?'관측 '+new Date(data.observed_at).toLocaleString():'한도 확인 중');
+ for(const id of ['limits-status','dialog-limits-status'])setText($(id),message||(data?.observed_at?'관측 '+new Date(data.observed_at).toLocaleString():'한도 확인 중'));
 }
 async function loadLimits(force=false){
- const generation=++limitGeneration,account=$('account').value;
- paintLimits(null,'사용 한도 확인 중');
+ const generation=++limitGeneration,account=$('account').value,cached=limitCache.get(account);
  if(!account){paintLimits(null,'계정을 선택해 주세요.');return;}
- try{const value=await api('/api/usage/limits?account_id='+encodeURIComponent(account)+(force?'&refresh=1':''));if(generation===limitGeneration&&account===$('account').value)paintLimits(value);}
- catch(e){if(generation===limitGeneration)paintLimits(null,'조회 실패 · '+e.message);}
+ // Retain the last observation during refresh and coalesce concurrent callers.
+ if(cached)paintLimits(cached.data);else paintLimits(null,'사용 한도 확인 중');
+ if(!force&&cached&&Date.now()-cached.at<limitRefreshMs)return;
+ let pending=limitRequests.get(account);
+ if(!pending){
+  pending=api('/api/usage/limits?account_id='+encodeURIComponent(account)+(force?'&refresh=1':''))
+   .then(data=>{limitCache.set(account,{data,at:Date.now()});return data;})
+   .finally(()=>limitRequests.delete(account));
+  limitRequests.set(account,pending);
+ }
+ try{const value=await pending;if(generation===limitGeneration&&account===$('account').value)paintLimits(value);}
+ catch(e){if(generation===limitGeneration&&account===$('account').value)paintLimits(cached?.data,'조회 실패 · '+e.message);}
 }
 $('refresh-limits').onclick=()=>loadLimits(true);
 $('usage').onclick=async()=>{$('usage-dialog').showModal();loadLimits();try{const x=await api('/api/usage/summary');$('usage-summary').textContent=`${x.total_tokens.toLocaleString()} tokens · ${x.attempts}회 기록 · ${x.pending_attempts||0}회 집계 대기 · 마지막 관측 ${x.last_observed_at?new Date(x.last_observed_at).toLocaleString():'집계 대기'}\n${x.status}`;}catch(e){$('usage-summary').textContent=e.message;}};
-setInterval(()=>{if(!document.hidden)loadLimits();},60000);
+setInterval(()=>{if(!document.hidden)loadLimits();},limitRefreshMs);
 
 let listGeneration=0;
 async function list(){
@@ -184,8 +197,51 @@ async function openConversation(id){
 $('new-chat').onclick=()=>openConversation(null).catch(e=>status(e.message));
 $('rename').onclick=async()=>{if(!state.cid)return;const title=prompt('대화 제목',$('title').textContent);if(title?.trim()){try{await api('/api/conversations/'+state.cid,'PATCH',{title});await list();}catch(e){status(e.message);}}};
 $('delete').onclick=async()=>{if(!state.cid||!confirm('대화를 삭제할까요? 사용량 회계와 Codex 실행 기록은 유지됩니다.'))return;try{await api('/api/conversations/'+state.cid,'DELETE',{});delete state.drafts[state.cid];$('message').value='';await openConversation(null);}catch(e){status(e.message);}};
+// File links are resolved only by the conversation-scoped server API.
+function artifactPath(href){
+ if(!href)return null;
+ let path;try{path=decodeURIComponent(href);}catch{return null;}
+ path=path.replace(/^sandbox:/,'').replace(/^file:\/\//,'');
+ path=path.replace(/(?::\d+(?::\d+)?|#L\d+(?:C\d+)?)$/,'');
+ if(/^[a-z][a-z0-9+.-]*:/i.test(path)||path.startsWith('//')||path.startsWith('#'))return null;
+ return path.startsWith('/')||/^(?:\.\/)?[^?#]+\.[a-z0-9]{1,12}$/i.test(path)?path:null;
+}
+let previewGeneration=0,previewContent='',previewName='',previewPage=0,previewOpener=null;
+const previewPageSize=24000;
+function renderFilePage(){
+ const pages=Math.max(1,Math.ceil(previewContent.length/previewPageSize));
+ $('file-preview-code').querySelector('code').textContent=previewContent.slice(previewPage*previewPageSize,(previewPage+1)*previewPageSize);
+ $('file-preview-code').scrollTop=0;$('file-preview-code').scrollLeft=0;
+ $('file-page').textContent=`${previewPage+1} / ${pages}`;
+ $('file-previous').disabled=previewPage===0;$('file-next').disabled=previewPage+1>=pages;
+}
+async function openFilePreview(path,opener){
+ const generation=++previewGeneration,cid=state.cid;previewOpener=opener;
+ previewContent='';previewName='';previewPage=0;
+ $('file-preview-title').textContent=path.split('/').pop()||'파일 미리보기';
+ $('file-preview-status').textContent='파일을 불러오는 중…';
+ $('file-copy').disabled=true;$('file-download').disabled=true;renderFilePage();
+ if(!$('file-preview').open)$('file-preview').showModal();
+ try{
+  const data=await api('/api/conversations/'+encodeURIComponent(cid)+'/artifact?path='+encodeURIComponent(path));
+  if(generation!==previewGeneration||!$('file-preview').open)return;
+  previewContent=data.content;previewName=data.name;renderFilePage();
+  $('file-preview-title').textContent=previewName;
+  $('file-preview-status').textContent=previewContent.length>previewPageSize?'긴 파일은 나누어 표시합니다. 복사와 다운로드에는 전체 내용이 포함됩니다.':'읽기 전용 미리보기';
+  $('file-copy').disabled=false;$('file-download').disabled=false;
+ }catch(error){if(generation===previewGeneration)$('file-preview-status').textContent=error.message;}
+}
+$('file-preview').addEventListener('close',()=>{if($('file-preview').open)return;previewGeneration++;previewContent='';$('file-preview-code').querySelector('code').textContent='';if(previewOpener?.isConnected)previewOpener.focus();});
+$('file-previous').onclick=()=>{if(previewPage>0){previewPage--;renderFilePage();}};
+$('file-next').onclick=()=>{if((previewPage+1)*previewPageSize<previewContent.length){previewPage++;renderFilePage();}};
+$('file-copy').onclick=async()=>{const generation=previewGeneration;try{await navigator.clipboard.writeText(previewContent);if(generation===previewGeneration)$('file-preview-status').textContent='전체 파일을 복사했습니다.';}catch{if(generation===previewGeneration)$('file-preview-status').textContent='복사 권한을 확인해 주세요.';}};
+$('file-download').onclick=()=>{
+ const url=URL.createObjectURL(new Blob([previewContent],{type:'text/plain;charset=utf-8'}));
+ const link=node('a');link.href=url;link.download=previewName;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+};
+$('messages').addEventListener('click',event=>{const link=event.target.closest('[data-artifact-path]');if(link){event.preventDefault();openFilePreview(link.dataset.artifactPath,link);}});
 const markdownCache=new Map();let markdownCacheSize=0;
-function safeMarkdown(text){if(markdownCache.has(text))return markdownCache.get(text).cloneNode(true);const html=DOMPurify.sanitize(marked.parse(text||'',{breaks:false,gfm:true}),{FORBID_TAGS:['img','video','audio','style','input','form'],FORBID_ATTR:['style']});const box=node('div');box.innerHTML=html;box.querySelectorAll('a').forEach(a=>{try{const u=new URL(a.getAttribute('href'));if(!['http:','https:'].includes(u.protocol))throw Error();a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';a.title=u.hostname+' · 새 탭에서 열기';}catch{a.removeAttribute('href');}});if(text?.length<100000){while(markdownCache.size&&(markdownCache.size>=24||markdownCacheSize+text.length>250000)){const oldest=markdownCache.keys().next().value;markdownCacheSize-=oldest.length;markdownCache.delete(oldest);}markdownCache.set(text,box.cloneNode(true));markdownCacheSize+=text.length;}return box;}
+function safeMarkdown(text){if(markdownCache.has(text))return markdownCache.get(text).cloneNode(true);const html=DOMPurify.sanitize(marked.parse(text||'',{breaks:false,gfm:true}),{FORBID_TAGS:['img','video','audio','style','input','form'],FORBID_ATTR:['style'],ALLOWED_URI_REGEXP:/^(?:(?:https?|file|sandbox):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i});const box=node('div');box.innerHTML=html;box.querySelectorAll('a').forEach(a=>{const path=artifactPath(a.getAttribute('href'));if(path){a.href='#file-preview';a.dataset.artifactPath=path;a.title='파일 미리보기 열기';return;}try{const u=new URL(a.getAttribute('href'));if(!['http:','https:'].includes(u.protocol))throw Error();a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';a.title=u.hostname+' · 새 탭에서 열기';}catch{a.removeAttribute('href');}});if(text?.length<100000){while(markdownCache.size&&(markdownCache.size>=24||markdownCacheSize+text.length>250000)){const oldest=markdownCache.keys().next().value;markdownCacheSize-=oldest.length;markdownCache.delete(oldest);}markdownCache.set(text,box.cloneNode(true));markdownCacheSize+=text.length;}return box;}
 async function copy(text){try{await navigator.clipboard.writeText(text);status('복사했습니다.');}catch{status('복사 권한을 확인하거나 답변을 선택해 복사하세요.');}}
 const messageViews=new Map();
 function codeBlocks(body){
@@ -196,11 +252,17 @@ function codeBlocks(body){
 $('messages').addEventListener('click',event=>{const button=event.target.closest('[data-copy-code]');if(button)copy(button.closest('.code-block').querySelector('code').textContent);});
 function attemptView(attempt){
  const el=node('article',undefined,'answer'),meta=node('details',undefined,'meta answer-details'),body=node('div',undefined,'answer-body'),notes=node('div'),actions=node('div',undefined,'actions'),sources=node('div');
- const summary=node('summary'),info=node('div');meta.append(summary,info);
- el.id='attempt-'+attempt.id;el.append(meta,body,notes,actions,sources);return {el,meta,summary,info,body,notes,actions,sources,text:null,complete:null,actionsKey:null,sourcesKey:null,attempt};
+ const summary=node('summary'),info=node('div'),thinking=node('details',undefined,'thinking'),thinkingLabel=node('summary','생각 중');meta.append(summary,info);
+ thinking.append(thinkingLabel);
+ el.id='attempt-'+attempt.id;body.id='attempt-body-'+attempt.id;thinkingLabel.setAttribute('aria-controls',body.id);el.append(meta,thinking,body,notes,actions,sources);return {el,meta,summary,info,thinking,body,notes,actions,sources,text:null,complete:null,actionsKey:null,sourcesKey:null,attempt};
 }
 function updateAttempt(view,attempt,isLast){
  view.attempt=attempt;const complete=terminal.has(attempt.status);
+ if(view.complete!==complete){
+  view.thinking.hidden=complete;view.meta.hidden=!complete;view.actions.hidden=!complete;view.sources.hidden=!complete;
+  if(complete)view.thinking.after(view.body);else {view.thinking.open=false;view.thinking.append(view.body);}
+ }
+ const followLive=view.thinking.open&&view.body.scrollHeight-view.body.scrollTop-view.body.clientHeight<40;
  const meta=`${attempt.provider?.model||attempt.settings.model} · ${attempt.provider?.reasoning_effort||attempt.settings.effort||'기본 추론'} · ${attempt.status} · 검색 ${attempt.search_count}회 · ${attempt.usage?attempt.usage.total.totalTokens.toLocaleString()+' tokens':'사용량 집계 대기'}`;
  if(view.info.textContent!==meta)view.info.textContent=meta;
  const label=({completed:'답변 완료',failed:'응답 실패',cancelled:'응답 중단',interrupted:'응답 중단'}[attempt.status]||'답변 생성 중')+' · 상세';if(view.summary.textContent!==label)view.summary.textContent=label;
@@ -210,6 +272,7 @@ function updateAttempt(view,attempt,isLast){
   else if(view.complete===false&&view.body.firstChild&&attempt.text.startsWith(view.text))view.body.firstChild.appendData(attempt.text.slice(view.text.length));
   else view.body.textContent=attempt.text;
   view.body.classList.toggle('streaming',!complete);view.text=attempt.text;view.complete=complete;
+  if(!complete&&followLive)view.body.scrollTop=view.body.scrollHeight;
  }
  const noteKey=JSON.stringify([attempt.error,attempt.status]);
  if(view.noteKey!==noteKey){view.notes.replaceChildren();if(attempt.error)view.notes.append(node('p',attempt.error,'error'));if(['cancelled','interrupted'].includes(attempt.status))view.notes.append(node('p','중단된 부분 응답입니다.','meta'));view.noteKey=noteKey;}

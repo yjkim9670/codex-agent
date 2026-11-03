@@ -31,7 +31,7 @@ URLs beside claims; never invent sources or claim a search succeeded when it did
 Do not access repositories or local files, run commands, use Git or delegate.
 Only the chat_artifact tool may create, read, replace or delete requested text
 artifacts in its private /tmp directory. Never use other filesystem tools.
-Use relative paths for chat_artifact and report its actual output path to the user.
+Use relative paths for chat_artifact and link its actual output path in Markdown: [filename](actual output path).
 No workspace tasks, planning workflow or repository instructions apply here.'''
 DISABLED = ('shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'apps',
             'plugins', 'remote_plugin', 'skill_search', 'skill_mcp_dependency_install',
@@ -241,6 +241,51 @@ class Provider:
         self.limit_cache = {}
         self.limit_lock = threading.Lock()
 
+    def open_artifacts(self, account_id, cid):
+        """Persist server-owned roots so links survive a Chat server restart."""
+        with self.lock:
+            scope = (account_id, cid)
+            directory = self.root / 'artifact-scopes' / hashlib.sha256(str(cid).encode()).hexdigest()
+            record = directory / (hashlib.sha256(account_id.encode()).hexdigest() + '.json')
+            saved = read_json(record) if record.exists() else {}
+            try:
+                artifacts = Artifacts(self.artifact_roots.get(scope) or saved.get('root'))
+            except FileNotFoundError:  # The OS may purge old /tmp artifacts.
+                artifacts = Artifacts()
+            if cid:
+                directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                temporary = record.with_suffix('.tmp')
+                temporary.write_text(json.dumps({'root': str(artifacts.root)}))
+                temporary.replace(record)
+                self.artifact_roots[scope] = artifacts.root
+            return artifacts
+
+    def read_artifact(self, cid, path):
+        # Only roots registered by the provider for this conversation are trusted.
+        directory = self.root / 'artifact-scopes' / hashlib.sha256(cid.encode()).hexdigest()
+        with self.lock:
+            roots = {str(root) for (_, scope), root in self.artifact_roots.items() if scope == cid}
+            for record in directory.glob('*.json'):
+                saved = read_json(record)
+                if saved.get('root'):
+                    roots.add(saved['root'])
+        for root in roots:
+            prefix = root.rstrip('/') + '/'
+            relative = path[len(prefix):] if path.startswith(prefix) else path
+            if path.startswith('/') and not path.startswith(prefix):
+                continue
+            try:
+                artifacts = Artifacts(root)
+                try:
+                    result = artifacts.call({'tool': TOOL_NAME, 'arguments': {'operation': 'read', 'path': relative}})
+                finally:
+                    artifacts.close()
+            except OSError:
+                continue
+            if result['success']:
+                return json.loads(result['contentItems'][0]['text'])
+        raise ValueError('파일이 없거나 이 대화에서 생성한 파일이 아닙니다. 파일을 다시 만들어 달라고 요청해 주세요.')
+
     def home(self, account):
         identity = hashlib.sha256(account['provider_account_id'].encode()).hexdigest()[:16]
         home = self.root / 'codex_home' / account['id'] / identity
@@ -321,11 +366,7 @@ class Provider:
         if effort not in [r['reasoningEffort'] for r in model['supportedReasoningEfforts']]:
             raise ValueError('모델이 지원하지 않는 추론 강도입니다.')
         home, workspace = self.prepare(account)
-        with self.lock:
-            scope = (account['provider_account_id'], settings.get('artifact_scope'))
-            artifacts = Artifacts(self.artifact_roots.get(scope))
-            if scope[1]:
-                self.artifact_roots[scope] = artifacts.root
+        artifacts = self.open_artifacts(account['provider_account_id'], settings.get('artifact_scope'))
         rpc = None
         started = False
         try:

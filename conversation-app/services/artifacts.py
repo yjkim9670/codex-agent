@@ -1,4 +1,4 @@
-"""The model's only filesystem capability: private text artifacts beneath /tmp.
+"""Writable model filesystem capability: private text artifacts beneath /tmp.
 
 Directory descriptors and O_NOFOLLOW prevent path traversal and symlink races.
 No shell, arbitrary reads, recursive deletion, or execution is exposed.

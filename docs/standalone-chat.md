@@ -44,7 +44,7 @@ macOS 실제 로그인 홈의 `.codex-workbench/codex_accounts.json`을 읽어 �
 
 이벤트는 SQLite에 저장하고 SSE event ID로 재연결한다. 화면 이동 시 이전 스트림은 닫으며 응답은 서버에서 보존한다. 재실행 시 미완료 attempt를 interrupted로 복구한다. SIGTERM 시 앱이 생성한 Codex 자식만 정리한다. 실행 중인 다른 Workbench/Proc Manager는 건드리지 않는다.
 
-영어 번역·교정·검색 중심의 채팅 전용 지침과 수정한 모델 메타데이터를 사용한다. shell·apply_patch·파일 보기·MCP·앱·플러그인·skills·코드 실행·에이전트 위임을 제거했다. ultra 추론은 자동 위임을 동반하므로 노출하지 않는다. 현재 실제 CLI 전송 요청에는 `chat_artifact`만 제공하고, 검색을 켜면 `web.run`을 추가한다. 모델의 셸·패치·임의 파일 도구는 제공하지 않는다. read-only sandbox를 도구 격리의 대체물로 사용하지 않는다.
+영어 번역·교정·검색 중심의 채팅 전용 지침과 수정한 모델 메타데이터를 사용한다. shell·apply_patch·기본 파일 보기·MCP·앱·플러그인·skills·코드 실행·에이전트 위임을 제거했다. ultra 추론은 자동 위임을 동반하므로 노출하지 않는다. 현재 실제 CLI 전송 요청에는 `chat_artifact`와 `chat_local_files`를 제공하고, 검색을 켜면 `web.run`을 추가한다. 모델의 셸·패치·임의 파일 도구는 제공하지 않는다. read-only sandbox를 도구 격리의 대체물로 사용하지 않는다.
 
 ## UI·접속 보호
 
@@ -101,7 +101,7 @@ Chat은 자신의 SQLite outbox만 갱신한다. 기존 Workbench 수집기가 �
 - loopback 프록시 요청은 브라우저가 설정한 `Sec-Fetch-Site: same-origin`과 **세션에 결합된 CSRF 토큰**을 함께 확인해 공개 Origin을 허용한다. 정확한 Host·실제 소켓 네트워크 검사는 계속 적용한다. 단일 정상 전달 헤더를 사용하는 기존 게이트웨이도 지원한다. 원격 소켓·cross-site 요청·토큰 누락은 허용하지 않는다. 게이트웨이 외부 소스는 수정하지 않았다.
 - API의 403 응답은 `host_not_allowed`, `network_not_allowed`, `origin_mismatch`, `csrf_mismatch` 코드와 각 원인에 맞는 안내를 반환한다. 인증 게이트웨이를 우회하여 Chat 포트에 직접 연결하는 터널은 여전히 실제 공개 호스트를 `--allowed-host`에 명시해야 한다. 와일드카드 공개 호스트는 허용하지 않는다.
 - HTTP LAN/Tailscale에서 `crypto.randomUUID`가 없으면 `crypto.getRandomValues`로 UUID v4를 생성한다. Web Crypto 전체가 없을 때에는 시간과 난수로 재전송 식별자를 만든다. 이 값은 인증·CSRF 비밀로 사용하지 않는다. JS 버전은 4로 갱신했다.
-- 모델의 파일 작업은 서버가 처리하는 `chat_artifact` 도구로만 제공한다. 사용자 요청에 따른 UTF-8 텍스트 산출물의 생성·전체 내용 교체·읽기·삭제를 지원한다. 도구 하나당 파일 크기는 1 MiB까지다. 임의 코드 실행·셸·Git·저장소 수정·임의 로컬 파일 읽기는 허용하지 않는다.
+- 모델의 산출물 변경은 서버가 처리하는 `chat_artifact` 도구로만 제공한다. 사용자 요청에 따른 UTF-8 텍스트 산출물의 생성·전체 내용 교체·읽기·삭제를 지원한다. 도구 하나당 파일 크기는 1 MiB까지다. 임의 코드 실행·셸·Git·저장소 수정은 허용하지 않는다. 허용된 PC 폴더 조회는 별도 `chat_local_files` 도구로만 제공한다.
 - 산출물은 `/tmp/workbench-chat-*`의 권한 0700 전용 폴더, 파일은 0600으로 생성한다. 같은 계정·대화는 서버가 실행 중인 동안 동일 폴더를 사용한다. 대화 ID는 서버가 지정하고 클라이언트가 파일 경로/범위를 지정할 수 없다. 서버 재시작 후에는 새 폴더를 배정하며 기존 산출물은 지우지 않는다. `/tmp`이므로 OS의 임시 파일 정리 대상이다.
 - 절대 경로, `..`, 심볼릭 링크, 하드링크, 특수 파일을 거부한다. 디렉터리 descriptor와 `O_NOFOLLOW`, 원자적 교체로 경로 확인 후 링크를 바꾸는 우회도 방어한다. `/tmp` 전체나 다른 대화의 폴더를 파일 도구에 개방하지 않는다. 대화 DB·인증 snapshot·사용량 등 앱 내부 상태는 기존 데이터 경로에서 서버가 관리하며 모델 도구로 접근할 수 없다.
 - 도구 연결은 [OpenAI Docs의 App Server dynamic tools 프로토콜](https://learn.chatgpt.com/docs/app-server#dynamic-tool-calls-experimental)을 따르며 호환 목록에 등록한 CLI 릴리스별로 검증한다. 가짜 로컬 모델 응답으로 실제 도구 전송 목록과 JSON-RPC 파일 생성을 확인하므로 실제 계정 토큰·유료 모델 요청은 보내지 않는다.
@@ -195,3 +195,14 @@ CODEX_VERIFY_CONVERSATION=1 CODEX_VERIFY_LOCAL_TLS=1 python3.14 scripts/verify_b
 - 0.166.0은 thread provider와 현재 provider의 일치를 검사하므로 native 테스트의 시작 설정도 로컬 `audit` provider로 명시했다. 제품 실행은 양쪽 모두 `openai`로 기존과 같다.
 - native 검증은 인증 없는 임시 home과 loopback 가짜 모델 endpoint만 사용한다. 검색 off/on의 실제 직렬화 요청에서 `chat_artifact` 및 선택적 `web.run`만 노출되고 외부 작업 지침이 없으며 산출물 호출이 성공하는지 확인했다. 실제 계정·유료 모델 생성은 수행하지 않는다.
 - 적용하려면 사용자가 **Workbench Chat - conversation server**를 재시작하고 페이지를 새로고침한다. 운영 프로세스는 작업 중 재시작하지 않았다.
+
+
+## PC 폴더 읽기 전용 조회 (2026-11-04)
+
+- 개인 Chat 요청에서 `chat_local_files`로 허용된 폴더의 목록과 UTF-8 텍스트를 조회할 수 있다. 모델이 `roots`로 root ID를 확인한 뒤 `list`/`read`와 상대 경로를 사용한다. 파일 편집·삭제·업로드·명령 실행 기능은 제공하지 않는다. 기존 `chat_artifact`는 별도 임시 산출물에서만 쓰기를 계속 허용한다.
+- 기본 범위는 이 체크아웃의 상위 작업 폴더 `/Users/dinya/works/dev_workspace`다. 시작 환경변수 `CHAT_READ_ONLY_ROOTS`로 절대 폴더들을 지정한다(macOS/Linux는 `:` 구분). 예: `CHAT_READ_ONLY_ROOTS=/Users/dinya/works/dev_workspace:/Users/dinya/Documents/reference`. 빈 값은 PC 조회를 비활성화한다. 홈 전체와 파일시스템 루트는 거부한다. 환경 설정은 서버 시작 때 읽는다.
+- 숨김 경로(`.env`, `.git`, `.ssh` 등), 대표 인증 파일(`auth.json`, 개인키 등), Chat 데이터 디렉터리, 심볼릭 링크·하드링크·특수 파일을 차단한다. 디렉터리 descriptor와 `O_NOFOLLOW`로 경로 각 구간을 열며, 모델이 제공한 절대 경로나 `..`는 거부한다. 민감 파일의 이름을 모두 추측할 수는 없으므로 허용 폴더에는 모델에 제공해도 되는 자료만 둔다. 읽은 내용은 답변과 모델 문맥에 포함될 수 있다.
+- 파일은 응답당 64 KiB, 목록은 200개까지 제공한다. 응답의 `next_offset`으로 다음 페이지를 읽는다. 파일 offset은 UTF-8 바이트 기준이고 목록 순서는 파일시스템 순서다. 조회 중 원본 파일이나 폴더가 변경되면 페이지 사이의 내용도 바뀔 수 있다. 바이너리·이미지 조회는 제공하지 않는다.
+- 새 HTTP 파일 API는 추가하지 않는다. 기존 Chat 접속 보호와 요청 경로를 사용한다. 모델의 기본 셸·파일 변경·MCP 도구는 계속 비활성화하며 CLI sandbox도 `read-only`로 유지한다. 로컬 조회 권한은 서버 도구에서 직접 제한한다.
+- 반영은 사용자가 **Workbench Chat - conversation server**를 재시작한 뒤 새로고침한다. 운영 서버·Proc Manager는 이번 작업에서 재시작하지 않는다.
+- 검증: 관련 Python 테스트 **84개 통과**. 실제 CLI가 검색 off/on에서 두 사용자 정의 도구만 전달하고, 가짜 모델 endpoint의 로컬 읽기·산출물 호출을 처리하는지 확인했다. 실제 계정 토큰·유료 모델 요청은 사용하지 않았다. 경로 이탈·숨김/비밀 파일·링크·특수 파일·쓰기 요청 차단과 UTF-8/목록 페이지 조회도 검증했다.

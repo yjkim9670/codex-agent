@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / 'conversation-app'))
 from services.codex_provider import INSTRUCTIONS, Provider, RPC, sanitize_catalog, verify_cli_version
 from shared.chat_accounts import accounts
 from services.artifacts import Artifacts, TOOL, TOOL_NAME
+from services.local_files import LocalFiles, TOOL as LOCAL_TOOL, TOOL_NAME as LOCAL_TOOL_NAME
 
 
 @pytest.mark.parametrize('version', ['codex-cli 0.160.0', 'codex-cli 0.166.0'])
@@ -62,11 +63,15 @@ def test_auth_snapshot_has_no_refresh_token_or_extensions(tmp_path):
 
 
 @pytest.mark.skipif(os.environ.get('RUN_CODEX_CHAT_NATIVE_TESTS') != '1', reason='Opt-in native Codex request audit; no model API calls')
-def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatch):
+@pytest.mark.parametrize('tool_name', [TOOL_NAME, LOCAL_TOOL_NAME])
+def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatch, tool_name):
     """Capture real serialized CLI requests at a local fake provider, not self-report."""
     # Audit upgraded binaries before adding them to the production allowlist.
     # Only this test bypasses the release gate; all tool restrictions stay on.
     monkeypatch.setattr('services.codex_provider.verify_cli_version', lambda version: None)
+    monkeypatch.setenv('CHAT_READ_ONLY_ROOTS', str(tmp_path))
+    (tmp_path / 'source.txt').write_text('local read audit')
+    local_files = LocalFiles()
     captured = queue.Queue()
     handled = threading.Event()
     invoke = threading.Event()
@@ -88,8 +93,10 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatc
                 self.send_header('Content-Type', 'text/event-stream')
                 self.end_headers()
                 item = {'type': 'function_call', 'id': 'fc_audit', 'call_id': 'call_audit',
-                        'name': TOOL_NAME, 'namespace': 'functions',
-                        'arguments': json.dumps({'operation': 'write', 'path': 'audit.txt', 'content': 'artifact audit'})}
+                        'name': tool_name, 'namespace': 'functions',
+                        'arguments': json.dumps({'operation': 'write', 'path': 'audit.txt', 'content': 'artifact audit'}
+                                                if tool_name == TOOL_NAME else
+                                                {'operation': 'read', 'root': '0', 'path': 'source.txt'})}
                 events = [
                     ('response.created', {'response': {'id': 'resp_audit', 'status': 'in_progress', 'output': []}}),
                     ('response.output_item.done', {'output_index': 0, 'item': item}),
@@ -120,7 +127,10 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatc
             handled.clear()
             invoke.clear()
             def handle(params):
-                result = artifacts.call(params)
+                result = local_files.call(params) if params.get('tool') == LOCAL_TOOL_NAME else artifacts.call(params)
+                assert result['success']
+                if tool_name == LOCAL_TOOL_NAME:
+                    assert json.loads(result['contentItems'][0]['text'])['content'] == 'local read audit'
                 handled.set()
                 return result
             rpc = RPC(home, workspace, catalog, {
@@ -134,7 +144,7 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatc
             try:
                 thread = rpc.call('thread/start', {'model': metadata[0]['slug'], 'modelProvider': 'audit',
                     'cwd': str(workspace), 'baseInstructions': INSTRUCTIONS,
-                    'config': {'web_search': mode}, 'dynamicTools': [TOOL], 'environments': [], 'approvalPolicy': 'never', 'sandbox': 'read-only'})
+                    'config': {'web_search': mode}, 'dynamicTools': [TOOL, LOCAL_TOOL], 'environments': [], 'approvalPolicy': 'never', 'sandbox': 'read-only'})
                 assert thread.get('instructionSources') == []
                 rpc.call('turn/start', {'threadId': thread['thread']['id'], 'input': [{'type': 'text', 'text': 'Hello'}], 'effort': 'low'})
                 body = captured.get(timeout=30)
@@ -142,7 +152,7 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatc
                 functions = [t for t in tools if t.get('name') == 'functions']
                 assert len(functions) == 1
                 artifact_tools = functions[0]['tools']
-                assert len(artifact_tools) == 1 and artifact_tools[0]['name'] == TOOL_NAME
+                assert {t['name'] for t in artifact_tools} == {TOOL_NAME, LOCAL_TOOL_NAME}
                 remaining = [t for t in tools if t.get('name') != 'functions']
                 if mode == 'disabled':
                     assert remaining == []
@@ -150,7 +160,9 @@ def test_native_cli_exposes_only_artifacts_and_optional_web(tmp_path, monkeypatc
                     assert len(remaining) == 1 and remaining[0]['name'] == 'web'
                     assert [t['name'] for t in remaining[0]['tools']] == ['run']
                 assert handled.wait(10), 'Native CLI did not dispatch the artifact call'
-                assert (artifacts.root / 'audit.txt').read_text() == 'artifact audit'
+                if tool_name == TOOL_NAME:
+                    assert (artifacts.root / 'audit.txt').read_text() == 'artifact audit'
+                assert (tmp_path / 'source.txt').read_text() == 'local read audit'
                 request_context = json.dumps(body.get('input', []))
                 assert 'AGENTS.md' not in request_context
                 assert 'available_skills' not in request_context
@@ -218,11 +230,18 @@ def test_first_reply_provider_separates_title_and_keeps_sandbox(tmp_path, monkey
     import services.codex_provider as module
     calls, output = [], []
     artifact_paths = []
+    monkeypatch.setenv('CHAT_READ_ONLY_ROOTS', str(tmp_path))
+    (tmp_path / 'source.txt').write_text('PC text')
     class FakeRPC:
         def __init__(self, home, workspace, catalog, artifact_handler):
-            artifact_paths.append(artifact_handler.__self__.root)
+            reply = artifact_handler({'tool': TOOL_NAME, 'arguments': {'operation': 'write', 'path': 'test.txt', 'content': 'artifact'}})
+            artifact_paths.append(Path(json.loads(reply['contentItems'][0]['text'])['path']).parent)
+            reply = artifact_handler({'tool': LOCAL_TOOL_NAME, 'arguments': {'operation': 'read', 'root': '0', 'path': 'source.txt'}})
+            assert reply['success'] and json.loads(reply['contentItems'][0]['text'])['content'] == 'PC text'
+            assert not artifact_handler({'tool': LOCAL_TOOL_NAME, 'arguments': {'operation': 'delete', 'root': '0', 'path': 'source.txt'}})['success']
             self.events = queue.Queue()
             for event in [
+                {'method': 'item/completed', 'params': {'item': {'type': 'dynamicToolCall', 'tool': LOCAL_TOOL_NAME}}},
                 {'method': 'item/agentMessage/delta', 'params': {'delta': '<chat_title>요청 제목</chat_title>\n\nHello'}},
                 {'method': 'item/completed', 'params': {'item': {'type': 'agentMessage', 'text': '<chat_title>요청 제목</chat_title>\n\nHello'}}},
                 {'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}},
@@ -236,7 +255,7 @@ def test_first_reply_provider_separates_title_and_keeps_sandbox(tmp_path, monkey
         def close(self):
             pass
     monkeypatch.setattr(module, 'RPC', FakeRPC)
-    provider = Provider(tmp_path)
+    provider = Provider(tmp_path / 'chat-state')
     monkeypatch.setattr(provider, 'models', lambda account: [{'model': 'test', 'defaultReasoningEffort': 'low', 'supportedReasoningEfforts': [{'reasoningEffort': 'low'}]}])
     monkeypatch.setattr(provider, 'prepare', lambda account: (tmp_path, tmp_path))
     try:
@@ -245,14 +264,14 @@ def test_first_reply_provider_separates_title_and_keeps_sandbox(tmp_path, monkey
         start = calls[0][1]
         assert '<chat_title>' in start['baseInstructions']
         assert start['sandbox'] == 'read-only' and start['approvalPolicy'] == 'never'
-        assert start['dynamicTools'] == [TOOL]
+        assert start['dynamicTools'] == [TOOL, LOCAL_TOOL]
         assert ('title', {'title': '요청 제목'}) in output
         assert ('answer', {'text': 'Hello'}) in output
         assert output[-1] == ('done', {'status': 'completed'})
         assert all('<chat_title>' not in data['text'] for kind, data in output if kind in ('answer', 'delta'))
     finally:
         for artifact_path in artifact_paths:
-            shutil.rmtree(artifact_path)
+            shutil.rmtree(artifact_path, ignore_errors=True)
 
 
 def test_run_observes_before_turn_and_after_completion_without_cached_baseline(tmp_path, monkeypatch):

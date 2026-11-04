@@ -301,6 +301,7 @@ function render(messages){
   for(const attempt of row.attempts){if(!terminal.has(attempt.status))state.active=attempt.id;let answer=view.attempts.get(attempt.id);if(!answer){answer=attemptView(attempt);view.attempts.set(attempt.id,answer);view.el.append(answer.el);}updateAttempt(answer,attempt,index===messages.length-1);}
  });
  for(const [id,view] of messageViews){if(!keep.has(id)){view.el.remove();messageViews.delete(id);}}
+ for(const id of ['scroll-previous','scroll-next'])$(id).disabled=messages.length<2;
  busy();if(following)thread.scrollTo({top:thread.scrollHeight,behavior:'instant'});else $('new-content').hidden=false;
 }
 function busy(){const active=!!state.active;$('stop').hidden=!active;$('send').hidden=active;for(const id of ['mode','model','effort','search','account','language','tone','format'])$(id).disabled=active;}
@@ -389,6 +390,22 @@ function jumpThread(bottom){
 }
 $('scroll-top').onclick=()=>jumpThread(false);
 $('scroll-bottom').onclick=()=>jumpThread(true);
+function jumpRequest(direction){
+ const thread=$('thread'),messages=Array.from($('messages').children);
+ if(messages.length<2)return;
+ const bounds=thread.getBoundingClientRect(),scale=bounds.height/thread.offsetHeight||1;
+ const inset=parseFloat(getComputedStyle(thread).paddingTop)||0;
+ const positions=messages.map(message=>Math.max(0,thread.scrollTop+(message.getBoundingClientRect().top-bounds.top)/scale-inset));
+ const current=thread.scrollTop;
+ const target=direction<0?positions.findLast(top=>top<current-8):positions.find(top=>top>current+8);
+ if(target===undefined)return;
+ state.following=false;
+ thread.scrollTo({top:target,behavior:'instant'});
+ saveReadingPosition();
+}
+$('scroll-previous').onclick=()=>jumpRequest(-1);
+$('scroll-next').onclick=()=>jumpRequest(1);
+
 // Content visibility and wrapping can change the final height after selection.
 let followFrame;
 const settleThread=()=>{

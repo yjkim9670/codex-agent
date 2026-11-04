@@ -4,6 +4,7 @@ const assert=require('node:assert/strict');
 
 async function verifyConversation(browser,targetUrl,widths){
  if(!widths){
+ await require('./test_conversation_history_refresh_browser.cjs').verifyConversationHistoryRefresh(browser,targetUrl);
  await require('./test_conversation_resume_browser.cjs').verifyConversationResume(browser,targetUrl);
  await require('./test_conversation_overlays_browser.cjs').verifyConversationOverlays(browser,targetUrl);
  await require('./test_conversation_mobile_browser.cjs').verifyMobileConversation(browser,targetUrl);

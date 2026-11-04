@@ -171,20 +171,45 @@ $('refresh-limits').onclick=()=>loadLimits(true);
 $('usage').onclick=async()=>{$('usage-dialog').showModal();loadLimits();try{const x=await api('/api/usage/summary');$('usage-summary').textContent=`${x.total_tokens.toLocaleString()} tokens · ${x.attempts}회 기록 · ${x.pending_attempts||0}회 집계 대기 · 마지막 관측 ${x.last_observed_at?new Date(x.last_observed_at).toLocaleString():'집계 대기'}\n${x.status}`;}catch(e){$('usage-summary').textContent=e.message;}};
 setInterval(()=>{if(!document.hidden)loadLimits();},limitRefreshMs);
 
-let listGeneration=0;
+const historyRefreshMs=30000;
+let listGeneration=0,listInFlight=0,lastListAttempt=0,historyRefreshFailures=0,historyRefreshTimer;
 async function list(){
  const generation=++listGeneration,query=$('history-query').value;
- const rows=await api('/api/conversations?q='+encodeURIComponent(query));
- if(generation!==listGeneration)return;
- state.rows=rows;const history=$('history'),existing=new Map([...history.children].map(el=>[el.dataset.cid,el]));
- rows.forEach((row,index)=>{let button=existing.get(row.id);if(!button){button=node('button');button.dataset.cid=row.id;button.onclick=()=>openConversation(row.id).catch(e=>status(e.message));}
-  if(button.textContent!==row.title)button.textContent=row.title;
-  button.setAttribute('aria-current',row.id===state.cid?'page':'false');
-  if(history.children[index]!==button)history.insertBefore(button,history.children[index]||null);existing.delete(row.id);
- });
- for(const button of existing.values())button.remove();
- const current=rows.find(x=>x.id===state.cid);if(current)$('title').textContent=current.title;else if(!state.cid)$('title').textContent='새 대화';
+ listInFlight++;lastListAttempt=Date.now();
+ try {
+  const rows=await api('/api/conversations?q='+encodeURIComponent(query));
+  if(generation!==listGeneration)return;
+  historyRefreshFailures=0;
+  state.rows=rows;const history=$('history'),existing=new Map([...history.children].map(el=>[el.dataset.cid,el]));
+  // Keep the visible row anchored when another session moves to the top.
+  const previousTop=history.scrollTop;
+  const anchor=previousTop>0?[...history.children].find(el=>el.offsetTop+el.offsetHeight>previousTop):null;
+  const anchorOffset=anchor?anchor.offsetTop-previousTop:0;
+  rows.forEach((row,index)=>{let button=existing.get(row.id);if(!button){button=node('button');button.dataset.cid=row.id;button.onclick=()=>openConversation(row.id).catch(e=>status(e.message));}
+   if(button.textContent!==row.title)button.textContent=row.title;
+   button.setAttribute('aria-current',row.id===state.cid?'page':'false');
+   if(history.children[index]!==button)history.insertBefore(button,history.children[index]||null);existing.delete(row.id);
+  });
+  for(const button of existing.values())button.remove();
+  history.scrollTop=anchor?.isConnected?anchor.offsetTop-anchorOffset:previousTop;
+  const current=rows.find(x=>x.id===state.cid);if(current)$('title').textContent=current.title;else if(!state.cid)$('title').textContent='새 대화';
+ } finally {listInFlight--;scheduleHistoryRefresh();}
 }
+async function refreshHistory(){
+ const delay=Math.min(historyRefreshMs*2**historyRefreshFailures,300000);
+ if(document.hidden||!navigator.onLine||listInFlight||Date.now()-lastListAttempt<delay)return;
+ // A background failure must not interrupt typing or replace conversation status.
+ try{await list();}catch{historyRefreshFailures=Math.min(historyRefreshFailures+1,4);}
+ finally{scheduleHistoryRefresh();}
+}
+function scheduleHistoryRefresh(){
+ clearTimeout(historyRefreshTimer);
+ const delay=Math.min(historyRefreshMs*2**historyRefreshFailures,300000);
+ historyRefreshTimer=setTimeout(()=>{refreshHistory().finally(scheduleHistoryRefresh);},delay);
+}
+scheduleHistoryRefresh();
+addEventListener('online',refreshHistory);
+
 let queryTimer;$('history-query').oninput=()=>{clearTimeout(queryTimer);queryTimer=setTimeout(()=>list().catch(e=>status(e.message)),180);};
 async function openConversation(id){
  saveReadingPosition();saveDraft();const gen=++state.generation;state.source?.close();state.source=null;state.cid=id;state.active=null;state.messages=[];messageViews.clear();$('messages').replaceChildren();
@@ -372,7 +397,7 @@ function subscribe(aid){
 }
 document.addEventListener('visibilitychange',()=>{
  if(document.hidden){saveReadingPosition();flushDrafts();}
- else {render(state.messages);loadLimits();if(state.cid)refresh().catch(e=>status(e.message));}
+ else {refreshHistory();render(state.messages);loadLimits();if(state.cid)refresh().catch(e=>status(e.message));}
 });
 $('stop').onclick=async()=>{if(state.active)try{await api('/api/attempts/'+state.active+'/cancel','POST',{});status('중단 요청 중…');}catch(e){status(e.message);}};
 function chooseMode(){const mode=$('mode').value;$('translation-options').hidden=mode!=='translate';$('search').value=['translate','proofread'].includes(mode)?'off':mode==='search'?'on':'auto';requestSummary();if(!$('request-dialog').open)$('message').focus();}

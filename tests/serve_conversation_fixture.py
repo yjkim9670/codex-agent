@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import threading
 
 from werkzeug.middleware.dispatcher import DispatcherMiddleware
 from werkzeug.serving import make_server
@@ -63,6 +64,7 @@ class Provider:
                     weekly=dict(used_percent=60, remaining_percent=40, resets_at=2000500000))
 
     def run(self, account, settings, history, emit, cancel):
+        emit('limits', {'before': self.limits(account)})
         emit('provider', dict(model='test-model', reasoning_effort='low', thread_id='fixture', turn_id=str(time.time_ns())))
         if 'file preview fixture' in history[-1]['content']:
             artifacts = self.artifacts.open_artifacts('fixture', settings['artifact_scope'])
@@ -87,6 +89,13 @@ class Provider:
             emit('delta', dict(text=ANSWER[start:start+3]))
         emit('usage', dict(total=dict(inputTokens=100, outputTokens=23, totalTokens=123)))
         emit('done', dict(status='completed'))
+        emit('limits', {'after': {**self.limits(account),
+                                'five_hour': dict(used_percent=25, resets_at='2033-05-18T03:33:20+00:00')}})
+        timer = threading.Timer(.2, lambda: emit('limits', {'delayed': {
+            'five_hour': dict(used_percent=26, resets_at='2033-05-18T03:33:20+00:00'),
+            'weekly': dict(used_percent=60.5, resets_at=2000500000)}}))
+        timer.daemon = True
+        timer.start()
 
 
 def main():

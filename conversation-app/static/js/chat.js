@@ -300,17 +300,61 @@ function attemptView(attempt){
  const el=node('article',undefined,'answer'),meta=node('details',undefined,'meta answer-details'),body=node('div',undefined,'answer-body'),notes=node('div'),actions=node('div',undefined,'actions'),sources=node('div');
  const summary=node('summary'),info=node('div'),thinking=node('details',undefined,'thinking'),thinkingLabel=node('summary','생각 중');meta.append(summary,info);
  thinking.append(thinkingLabel);
- el.id='attempt-'+attempt.id;body.id='attempt-body-'+attempt.id;thinkingLabel.setAttribute('aria-controls',body.id);el.append(meta,thinking,body,notes,actions,sources);return {el,meta,summary,info,thinking,body,notes,actions,sources,text:null,complete:null,actionsKey:null,sourcesKey:null,attempt};
+ const execution=node('div',undefined,'answer-execution'),usage=node('div',undefined,'answer-usage');
+ el.id='attempt-'+attempt.id;body.id='attempt-body-'+attempt.id;thinkingLabel.setAttribute('aria-controls',body.id);el.append(execution,meta,thinking,body,notes,usage,actions,sources);return {el,execution,usage,meta,summary,info,thinking,body,notes,actions,sources,text:null,complete:null,actionsKey:null,sourcesKey:null,attempt};
+}
+function attemptExecutionText(attempt){
+ const at=new Date(attempt.quota_observations?.before?.observed_at||attempt.created_at||NaN);
+ const time=Number.isFinite(at.getTime())?at.toLocaleString('ko-KR',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'시각 미기록';
+ return `${attempt.provider?.model||attempt.settings?.model||'모델 미기록'} · reasoning ${attempt.provider?.reasoning_effort||attempt.settings?.effort||'기본'} · 시작 ${time}`;
+}
+function attemptQuotaDelta(observations,key){
+ const before=observations?.before?.[key];
+ // Prefer the delayed observation per window; it may contain only one bucket.
+ const after=observations?.delayed?.[key]||observations?.after?.[key];
+ const valid=value=>typeof value==='number'&&Number.isFinite(value)&&value>=0;
+ if(!valid(before?.used_percent)||!valid(after?.used_percent))return '관측 대기';
+ if((before.resets_at&&after.resets_at&&before.resets_at!==after.resets_at)||after.used_percent<before.used_percent)return '리셋/감소';
+ const delta=Math.round((after.used_percent-before.used_percent)*100)/100;
+ return `+${delta.toLocaleString('ko-KR',{maximumFractionDigits:2})}%p`;
+}
+function attemptUsageText(attempt){
+ const total=attempt.usage?.total?.totalTokens;
+ const tokens=typeof total==='number'&&Number.isFinite(total)&&total>=0?`${total.toLocaleString()} tokens`:'토큰 집계 대기';
+ return `${tokens} · 관측 Δ 5h ${attemptQuotaDelta(attempt.quota_observations,'five_hour')} · Weekly ${attemptQuotaDelta(attempt.quota_observations,'weekly')}`;
+}
+function updateAttemptMetadata(view,attempt){
+ const execution=attemptExecutionText(attempt),usage=attemptUsageText(attempt);
+ if(view.execution.textContent!==execution)view.execution.textContent=execution;
+ if(view.usage.textContent!==usage)view.usage.textContent=usage;
+ const info=`${attempt.status} · 검색 ${attempt.search_count}회 · ${usage}`;
+ if(view.info.textContent!==info)view.info.textContent=info;
+ const total=attempt.usage?.total;
+ const breakdown=total?`입력 ${total.inputTokens??'—'} (캐시 ${total.cachedInputTokens??'—'}) · 출력 ${total.outputTokens??'—'} (reasoning ${total.reasoningOutputTokens??'—'})`:'토큰 미관측';
+ view.usage.title=breakdown+'\n계정의 작업 전·후 관측치 차이입니다. 동시 작업분과 지연 반영이 포함될 수 있습니다. 리셋을 가로지르면 증가분을 계산하지 않습니다.';
+}
+function scheduleAttemptMetadataRefresh(aid){
+ const cid=state.cid,generation=state.generation;
+ // Immediate and delayed provider observations arrive after the terminal event.
+ for(const delay of [2000,20000,65000])setTimeout(async()=>{
+  if(document.hidden||state.cid!==cid||state.generation!==generation)return;
+  try{
+   const data=await api('/api/attempts/'+encodeURIComponent(aid));
+   if(state.cid!==cid||state.generation!==generation)return;
+   const attempt=state.messages.flatMap(row=>row.attempts).find(row=>row.id===aid);
+   const view=[...messageViews.values()].map(row=>row.attempts.get(aid)).find(Boolean);
+   if(attempt&&view){Object.assign(attempt,data);updateAttemptMetadata(view,attempt);}
+  }catch{/* Preserve the observed values; reopening the conversation refreshes them. */}
+ },delay);
 }
 function updateAttempt(view,attempt,isLast){
  view.attempt=attempt;const complete=terminal.has(attempt.status);
+ updateAttemptMetadata(view,attempt);
  if(view.complete!==complete){
   view.thinking.hidden=complete;view.meta.hidden=!complete;view.actions.hidden=!complete;view.sources.hidden=!complete;
   if(complete)view.thinking.after(view.body);else {view.thinking.open=false;view.thinking.append(view.body);}
  }
  const followLive=view.thinking.open&&view.body.scrollHeight-view.body.scrollTop-view.body.clientHeight<40;
- const meta=`${attempt.provider?.model||attempt.settings.model} · ${attempt.provider?.reasoning_effort||attempt.settings.effort||'기본 추론'} · ${attempt.status} · 검색 ${attempt.search_count}회 · ${attempt.usage?attempt.usage.total.totalTokens.toLocaleString()+' tokens':'사용량 집계 대기'}`;
- if(view.info.textContent!==meta)view.info.textContent=meta;
  const label=({completed:'답변 완료',failed:'응답 실패',cancelled:'응답 중단',interrupted:'응답 중단'}[attempt.status]||'답변 생성 중')+' · 상세';if(view.summary.textContent!==label)view.summary.textContent=label;
  if(view.text!==attempt.text||view.complete!==complete){
   // Streaming uses a single text node. Parse/sanitize Markdown once on finish.
@@ -371,6 +415,7 @@ function subscribe(aid){
   else if(kind==='answer'&&data.text)attempt.text=data.text;
   else if(kind==='provider'){attempt.provider=data;attempt.status='streaming';}
   else if(kind==='usage')attempt.usage=data;
+  else if(kind==='limits')attempt.quota_observations={...attempt.quota_observations,...data};
   else if(kind==='search'){status(data.status);if(data.status==='검색 중')attempt.search_count++;}
   else if(kind==='title')list().catch(e=>status(e.message));
   else if(kind==='done'){done=true;attempt.status=data.status;attempt.error=data.error;}
@@ -407,7 +452,7 @@ function subscribe(aid){
   }
   if(!current())return;clearTimeout(timer);paint();state.source=null;controller.abort();loadLimits(true);
   status(attempt.error||({completed:'응답 완료',cancelled:'응답을 중단했습니다.',interrupted:'프로세스 중단 후 복구했습니다.'}[attempt.status]||attempt.status));
-  await refresh();await list();
+  await refresh();scheduleAttemptMetadataRefresh(aid);await list();
  }
  run().catch(error=>{if(state.cid===cid&&state.generation===gen)status(error.message);});
 }

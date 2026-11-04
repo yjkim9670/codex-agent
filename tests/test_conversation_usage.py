@@ -53,6 +53,9 @@ def test_quota_observations_survive_completion_deletion_and_do_not_move_usage_ti
     original = read_chat_outbox('p')[0]
     store.emit(aid, 'limits', {'after': {'observed_at': 'later'}, 'delayed': {'observed_at': 'latest'}})
     updated = read_chat_outbox('p')[0]
+    observations = updated['quota_observations']
+    assert store.attempt(aid)['quota_observations'] == observations
+    assert store.messages(cid)[0]['attempts'][0]['quota_observations'] == observations
     assert updated['recorded_at'] == original['recorded_at']
     assert updated['execution_completed_at'] == original['execution_completed_at']
     assert updated['execution_started_at'] == before['observed_at']

@@ -33,11 +33,10 @@ _POSTS_DIR_NAME = 'posts'
 _STAGES = ('brief', 'research', 'outline', 'draft', 'review', 'plan')
 _TOPIC_STAGE = 'topic'
 _TOPIC_PROPOSAL_FILENAME = 'topic_proposal.json'
-_DEFAULT_CADENCE_MINUTES = 360
+_DEFAULT_CADENCE_MINUTES = 300
 _MIN_CADENCE_MINUTES = 60
 _MAX_CADENCE_MINUTES = 10080
 _RUN_LEASE_SECONDS = 2 * 60 * 60
-_RETRY_DELAY_MINUTES = 30
 _MAX_RUN_HISTORY = 512
 _MAX_PROJECT_TEXT = 12000
 _DEFAULT_TOPIC_ROTATION_SEEDS = (
@@ -173,6 +172,7 @@ def _project_defaults():
         'pipeline_mode': 'compact',
         'topic_direction': _DEFAULT_TOPIC_DIRECTION,
         'exclude_ai_topics': False,
+        'daily_budget_enabled': False,
         'daily_run_budget': 6,
         'daily_token_budget': 300000,
         'language': '한국어',
@@ -180,8 +180,8 @@ def _project_defaults():
         'style_guide': _DEFAULT_STYLE_GUIDE,
         'allow_web_research': True,
         'cadence_minutes': _DEFAULT_CADENCE_MINUTES,
-        'model': '',
-        'reasoning_effort': 'low',
+        'model': 'gpt-6-luna',
+        'reasoning_effort': 'xhigh',
         # Kept as an editorial inspiration list for compatibility.  A model,
         # not deterministic string concatenation, chooses each next topic.
         'topic_rotation_enabled': True,
@@ -246,6 +246,7 @@ def _normalize_project(raw, existing=None):
         'pipeline_mode': 'legacy' if base.get('pipeline_mode') == 'legacy' else 'compact',
         'topic_direction': str(base.get('topic_direction') or base.get('audience') or '').strip()[:2000],
         'exclude_ai_topics': bool(base.get('exclude_ai_topics')),
+        'daily_budget_enabled': bool(base.get('daily_budget_enabled')),
         'daily_run_budget': _positive_int(base.get('daily_run_budget'), 6),
         'daily_token_budget': _positive_int(base.get('daily_token_budget'), 300000),
         'language': str(base.get('language') or '한국어').strip()[:40],
@@ -253,8 +254,8 @@ def _normalize_project(raw, existing=None):
         'style_guide': str(base.get('style_guide') or '').strip()[:_MAX_PROJECT_TEXT],
         'allow_web_research': bool(base.get('allow_web_research')),
         'cadence_minutes': cadence,
-        'model': str(base.get('model') or '').strip()[:80],
-        'reasoning_effort': str(base.get('reasoning_effort') or 'low').strip()[:40],
+        'model': str(base.get('model') or 'gpt-6-luna').strip()[:80],
+        'reasoning_effort': str(base.get('reasoning_effort') or 'xhigh').strip()[:40],
         'topic_rotation_enabled': bool(base.get('topic_rotation_enabled')),
         'topic_rotation_seeds': topic_rotation_seeds[:40],
         'updated_at': normalize_timestamp(None),
@@ -622,7 +623,7 @@ def _claim_global(context, project, run_id, now, force=False):
         if active and ((active_until and active_until > now) or _run_is_alive(active)):
             return False, 'project_busy', path
         next_allowed = parse_timestamp(payload.get('next_allowed_at'))
-        if not force and next_allowed and next_allowed > now:
+        if not force and payload.get('last_status') != 'completed' and next_allowed and next_allowed > now:
             return False, 'not_due', path
         payload.update({
             'version': 1,
@@ -655,6 +656,31 @@ def _update_claim_stream(claim_path, run_id, stream_id):
         _write_json_atomic(claim_path, payload)
 
 
+def retry_failed_blog_pipeline(account_id=None, snapshot=None):
+    """Resume a due failed stage only with fresh, observed zero usage."""
+    root = _blog_root()
+    project = _load_project(root)
+    if not project or not project.get('enabled') or project.get('automatic_paused'):
+        return {'started': False, 'reason': 'retry_disabled'}
+    state = _load_state(root, project['project_id'])
+    last = state.get('last_result') or {}
+    if state.get('in_flight') or last.get('status') != 'failed':
+        return {'started': False, 'reason': 'no_failed_stage'}
+    account_id = account_id or codex_chat.get_active_account_id()
+    if last.get('account_id') and last['account_id'] != account_id:
+        return {'started': False, 'reason': 'retry_account_mismatch'}
+    due = parse_timestamp(state.get('next_run_at'))
+    if not due or due > _now():
+        return {'started': False, 'reason': 'retry_pending'}
+    if not codex_chat._automatic_usage_snapshot_is_fresh(snapshot, _now()):
+        return {'started': False, 'reason': 'usage_snapshot_stale'}
+    if parse_timestamp(snapshot.get('last_success_at')) < due:
+        return {'started': False, 'reason': 'retry_pending'}
+    if not codex_chat._usage_keepalive_cycle_targets(snapshot, _now()):
+        return {'started': False, 'reason': 'no_zero_usage_window'}
+    return run_blog_pipeline(account_id=account_id)
+
+
 def _finish_claim(claim_path, project, run_id, succeeded, now, recovered=False):
     if not claim_path:
         return
@@ -667,11 +693,8 @@ def _finish_claim(claim_path, project, run_id, succeeded, now, recovered=False):
         payload['last_run_id'] = run_id
         payload['last_completed_at'] = normalize_timestamp(now)
         payload['last_status'] = 'recovered' if recovered else ('completed' if succeeded else 'failed')
-        delay_minutes = 0 if recovered else (
-            project['cadence_minutes'] if succeeded else _RETRY_DELAY_MINUTES)
-        payload['next_allowed_at'] = normalize_timestamp(
-            now + timedelta(minutes=delay_minutes)
-        )
+        payload['next_allowed_at'] = (None if succeeded or recovered else
+            normalize_timestamp(codex_chat._next_account_usage_refresh_at(now)))
         payload['updated_at'] = normalize_timestamp(now)
         _write_json_atomic(claim_path, payload)
 
@@ -785,7 +808,8 @@ def _daily_usage(root, now):
 def _automatic_status(root, project, state):
     now = _now()
     usage = _daily_usage(root, now)
-    next_at = parse_timestamp(state.get('next_run_at'))
+    next_at = (None if (state.get('last_result') or {}).get('status') == 'completed'
+               else parse_timestamp(state.get('next_run_at')))
     reason = 'usage_refresh_required'
     if not project.get('enabled'):
         reason = 'disabled'
@@ -795,18 +819,19 @@ def _automatic_status(root, project, state):
         reason = 'run_in_flight'
     elif next_at and next_at > now:
         reason = 'not_due'
-    elif usage['runs'] >= project['daily_run_budget'] or usage['tokens'] >= project['daily_token_budget']:
+    elif project['daily_budget_enabled'] and (
+            usage['runs'] >= project['daily_run_budget'] or usage['tokens'] >= project['daily_token_budget']):
         reason = 'daily_budget_exceeded'
     elif state.get('stage') == 'research' and not project.get('allow_web_research'):
         reason = 'verification_pending'
     elif state.get('stage') in {'select', 'topic'} and not project.get('topic_rotation_enabled') and state.get('completed_post_count'):
         reason = 'topic_rotation_disabled'
     return {
-        'reason': reason, 'next_run_at': state.get('next_run_at'),
+        'reason': reason, 'next_run_at': normalize_timestamp(next_at) if next_at else None,
         'daily_usage': usage,
-        'remaining_tokens': max(0, project['daily_token_budget'] - usage['tokens']),
-        'budget_overrun_tokens': max(0, usage['tokens'] - project['daily_token_budget']),
-        'budget_policy': 'pre_run_check',
+        'remaining_tokens': max(0, project['daily_token_budget'] - usage['tokens']) if project['daily_budget_enabled'] else None,
+        'budget_overrun_tokens': max(0, usage['tokens'] - project['daily_token_budget']) if project['daily_budget_enabled'] else 0,
+        'budget_policy': 'pre_run_check' if project['daily_budget_enabled'] else 'disabled',
     }
 
 
@@ -1019,10 +1044,11 @@ def _start_pipeline_run(force=False, account_id=None):
                           project, stale_run_id, False, now, recovered=True)
             _LOGGER.warning('Recovered interrupted blog run (run_id=%s, stream_id=%s)',
                             stale_run_id, in_flight.get('stream_id'))
-        next_run_at = parse_timestamp(state.get('next_run_at'))
+        next_run_at = (None if (state.get('last_result') or {}).get('status') == 'completed'
+                       else parse_timestamp(state.get('next_run_at')))
         if not force and next_run_at and next_run_at > now:
             return {'started': False, 'reason': 'not_due', 'next_run_at': state.get('next_run_at')}
-        if not force:
+        if not force and project['daily_budget_enabled']:
             usage = _daily_usage(root, now)
             if (usage['runs'] >= project['daily_run_budget'] or
                     usage['tokens'] >= project['daily_token_budget']):
@@ -1079,7 +1105,7 @@ def _start_pipeline_run(force=False, account_id=None):
             'owner_pid': os.getpid(),
             'account_id': context['account']['id'],
         }
-        state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=project['cadence_minutes']))
+        state['next_run_at'] = None
         state['last_error'] = ''
         _save_state(root, state)
 
@@ -1117,6 +1143,9 @@ def _start_pipeline_run(force=False, account_id=None):
                 'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
             },
         )
+        if not isinstance(stream, dict) or not stream.get('id'):
+            raise RuntimeError((stream or {}).get('error') if isinstance(stream, dict)
+                               and stream.get('error') else 'Blog stream did not start')
     except Exception as exc:
         _LOGGER.exception('Blog pipeline run failed to start')
         record_blog_pipeline_completion({
@@ -1234,6 +1263,7 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
         state['last_error'] = '' if succeeded else str(error or '')[:1000]
         state['last_result'] = {
             'run_id': run_id,
+            'account_id': in_flight.get('account_id'),
             'stage': stage,
             'post_id': str(operation.get('post_id') or in_flight.get('post_id') or ''),
             'status': 'completed' if succeeded else 'failed',
@@ -1252,7 +1282,7 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
                 state['last_error'] = 'topic_proposal_invalid'
                 state['last_result']['status'] = 'failed'
                 state['last_result']['error'] = 'topic_proposal_invalid'
-                state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=_RETRY_DELAY_MINUTES))
+                state['next_run_at'] = normalize_timestamp(codex_chat._next_account_usage_refresh_at(now))
             else:
                 state['stage'] = 'select'
                 state['revision'] = int(state.get('revision') or 0) + 1
@@ -1276,7 +1306,9 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
                 state['stage'] = sequence[sequence.index(stage) + 1]
             state['revision'] = int(state.get('revision') or 0) + 1
         else:
-            state['next_run_at'] = normalize_timestamp(now + timedelta(minutes=_RETRY_DELAY_MINUTES))
+            state['next_run_at'] = normalize_timestamp(codex_chat._next_account_usage_refresh_at(now))
+        if succeeded:
+            state['next_run_at'] = None
         _save_state(root, state)
         _append_jsonl(_runs_path(root), {
             'run_id': run_id,

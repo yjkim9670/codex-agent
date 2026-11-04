@@ -83,6 +83,27 @@ def wait_done(store, aid):
     raise AssertionError('worker did not complete')
 
 
+def test_attempt_metadata_exposes_persisted_observations_without_changing_completion(setup):
+    app, client, headers, provider = setup
+    store = app.extensions['chat_store']
+    cid = post(client, headers, '/api/conversations', {}).json['id']
+    aid = submit(client, headers, cid).json['attempt']['id']
+    assert provider.enter.wait(2)
+    provider.release.set()
+    completed = wait_done(store, aid)
+    observations = {'before': {'five_hour': {'used_percent': 20}},
+                    'after': {'five_hour': {'used_percent': 21}}}
+    store.emit(aid, 'limits', observations)
+    result = client.get('/api/attempts/' + aid)
+    assert result.status_code == 200
+    assert result.json['quota_observations'] == observations
+    assert result.json['provider']['model'] == 'test'
+    assert result.json['usage']['total']['totalTokens'] == 115
+    assert result.json['updated_at'] == completed['updated_at']
+    assert 'text' not in result.json and 'settings' not in result.json
+    assert client.get('/api/attempts/missing').status_code == 404
+
+
 def test_duplicate_sse_cancel_retry_delete_and_usage_survives(setup):
     app, client, headers, provider = setup
     store = app.extensions['chat_store']

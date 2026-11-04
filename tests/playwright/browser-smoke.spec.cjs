@@ -140,6 +140,10 @@ test('browser UI smoke check', async ({ page }) => {
         test.setTimeout(300_000);
         await require('../test_conversation_responsive_browser.cjs').verifyResponsiveConversation(page.context().browser(), targetUrl);
     }
+    if (process.env.CODEX_VERIFY_CONVERSATION_METADATA === '1') {
+        test.setTimeout(60_000);
+        await require('../test_conversation_metadata_browser.cjs').verifyConversationMetadata(page.context().browser(), targetUrl);
+    }
     if (process.env.CODEX_VERIFY_CONVERSATION === '1') {
         test.setTimeout(120_000);
         await require('../test_conversation_browser.cjs').verifyConversation(page.context().browser(), targetUrl);

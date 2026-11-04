@@ -1260,11 +1260,10 @@ def test_usage_keepalive_global_claim_blocks_other_workspaces_and_allows_next_wi
     assert codex_chat._usage_keepalive_global_claim(
         {**context, 'account': {'id': 'workspace-b'}}, first_targets, now
     ) == (False, 'account_cycle_already_submitted')
-    # A different observed zero window is also protected by the shared
-    # five-hour cooldown.
+    # A new observed reset window is eligible without a fixed five-hour wait.
     assert codex_chat._usage_keepalive_global_claim(
         context, {'five_hour': 'five_hour:zero-window:2026-08-04T18:00:00+09:00'}, now + timedelta(minutes=15)
-    ) == (False, 'account_window_cooldown')
+    ) == (True, '')
     # A subsequent real window is eligible.
     assert codex_chat._usage_keepalive_global_claim(
         context, {'five_hour': 'five_hour:zero-window:2026-08-04T22:30:00+09:00'}, now + timedelta(hours=5)

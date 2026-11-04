@@ -277,6 +277,12 @@ def create_app(data_dir=None, provider=None):
             response.headers['Content-Security-Policy'] = HTML_PREVIEW_CSP
         return response
 
+    @app.get('/api/attempts/<aid>')
+    def attempt_metadata(aid):
+        attempt = store.attempt(aid)
+        return jsonify({key: attempt[key] for key in (
+            'id', 'provider', 'usage', 'quota_observations', 'created_at', 'updated_at')})
+
     @app.get('/api/attempts/<aid>/events')
     def events(aid):
         store.attempt(aid)

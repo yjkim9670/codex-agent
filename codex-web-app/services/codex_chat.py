@@ -8438,6 +8438,11 @@ def _account_usage_refresh_slot(now=None):
     return slot
 
 
+def _next_account_usage_refresh_at(now=None):
+    """Next wall-clock :00/:10/:20/:30/:40/:50 slot, strictly after now."""
+    return _account_usage_refresh_slot(now) + timedelta(seconds=_USAGE_ACCOUNT_REFRESH_SECONDS)
+
+
 def _account_usage_refresh_is_due(snapshot, now=None):
     """Run once per 10-minute KST slot, with immediate keepalive follow-ups."""
     if _usage_keepalive_followup_is_due(snapshot, now):
@@ -8457,7 +8462,6 @@ _USAGE_KEEPALIVE_VERIFY_DELAY_SECONDS = 2 * 60
 # A keepalive is an activation probe, not a retry mechanism.  Retrying a
 # provisional rate-limit response consumed a large amount of quota without
 # making the server's reset timestamp any more authoritative.
-_USAGE_KEEPALIVE_GLOBAL_COOLDOWN = timedelta(hours=5)
 _USAGE_KEEPALIVE_PROMPT = (
     'Perform a read-only workspace health review.\n\n'
     '1. Inspect the top-level project structure and read up to three representative '
@@ -8530,8 +8534,8 @@ def _usage_keepalive_coordination_path(context):
 def _usage_keepalive_global_claim(context, cycle_targets, now=None):
     """Atomically reserve one automatic submission across all workspaces.
 
-    A five-hour guard makes all Workbench copies share one automatic
-    submission per observed zero-use window.
+    All Workbench copies share one submission per observed zero-use window.
+    A new reset window is eligible immediately, without a fixed cooldown.
     """
     current = now if isinstance(now, datetime) else datetime.now(KST)
     path = _usage_keepalive_coordination_path(context)
@@ -8542,20 +8546,14 @@ def _usage_keepalive_global_claim(context, cycle_targets, now=None):
             previous = {}
         windows = previous.get('windows') if isinstance(previous, dict) else {}
         windows = windows if isinstance(windows, dict) else {}
-        changed_windows = []
         eligible_windows = []
         for name, target in cycle_targets.items():
             prior = windows.get(name) if isinstance(windows.get(name), dict) else {}
-            prior_at = parse_timestamp(prior.get('submitted_at'))
             if prior.get('target') == target:
                 continue
-            changed_windows.append((name, target))
-            if not prior_at or prior_at + _USAGE_KEEPALIVE_GLOBAL_COOLDOWN <= current:
-                eligible_windows.append((name, target))
-        if not changed_windows:
-            return False, 'account_cycle_already_submitted'
+            eligible_windows.append((name, target))
         if not eligible_windows:
-            return False, 'account_window_cooldown'
+            return False, 'account_cycle_already_submitted'
         for name, target in eligible_windows:
             windows[name] = {
                 'target': target,
@@ -8804,17 +8802,31 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
         return {'submitted': False, 'reason': 'not_configured'}
     if not blog_status.get('enabled'):
         return {'submitted': False, 'reason': 'disabled'}
+    blocker = (blog_status.get('automatic') or {}).get('reason')
+    if blocker in {'automatic_paused', 'run_in_flight', 'daily_budget_exceeded',
+                   'verification_pending', 'topic_rotation_disabled'}:
+        return {'submitted': False, 'reason': blocker}
     retry_at = parse_timestamp(previous.get('next_retry_at'))
     if retry_at and retry_at > current:
         return {'submitted': False, 'reason': 'retry_pending'}
     targets = _usage_keepalive_cycle_targets(snapshot, current)
     if not targets:
         return {'submitted': False, 'reason': 'no_zero_usage_window'}
-    if previous.get('automatic_cycle_targets') == targets:
+    blog_state = blog_status.get('state') or {}
+    failed_retry = (blog_state.get('last_result') or {}).get('status') == 'failed'
+    due = parse_timestamp(blog_state.get('next_run_at'))
+    observed_at = parse_timestamp(snapshot.get('last_success_at'))
+    if failed_retry and due and (due > current or not observed_at or observed_at < due):
+        return {'submitted': False, 'reason': 'retry_pending'}
+    if failed_retry and (blog_state.get('last_result') or {}).get('account_id') not in {None, '', context['account']['id']}:
+        return {'submitted': False, 'reason': 'retry_account_mismatch'}
+    if previous.get('automatic_cycle_targets') == targets and not failed_retry:
         return {'submitted': False, 'reason': 'cycle_already_submitted'}
     if _account_has_active_codex_stream(context['account']['id']):
         return {'submitted': False, 'reason': 'account_busy'}
-    claimed, reason = _usage_keepalive_global_claim(context, targets, current)
+    # Failed stages may retry in the same zero window. The durable project
+    # claim still serializes retries across copies and enforces the delay.
+    claimed, reason = (True, '') if failed_retry else _usage_keepalive_global_claim(context, targets, current)
     if not claimed:
         return {'submitted': False, 'reason': reason}
     history = previous.get('history') if isinstance(previous.get('history'), list) else []
@@ -8917,7 +8929,7 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
                 _write_json_atomic(claim_path, claim)
             keepalive.pop('automatic_cycle_targets', None)
             keepalive['next_retry_at'] = normalize_timestamp(
-                datetime.now(KST) + timedelta(minutes=30))
+                _next_account_usage_refresh_at())
         snapshot['usage_keepalive'] = keepalive
         snapshot['version'] = snapshot.get('version') or 1
         snapshot['account_id'] = context['account']['id']

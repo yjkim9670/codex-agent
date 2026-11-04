@@ -98,11 +98,13 @@ class Store:
     def attempt(self, aid):
         with self.db() as db:
             row = db.execute('SELECT * FROM attempts WHERE id=?', (aid,)).fetchone()
+            limits = db.execute('SELECT value FROM usage_limits WHERE attempt_id=?', (aid,)).fetchone()
         if not row:
             raise KeyError(aid)
         row = dict(row)
         for key in ('settings', 'provider', 'usage', 'citations'):
             row[key] = json.loads(row[key]) if row[key] else None
+        row['quota_observations'] = json.loads(limits['value']) if limits else {}
         return row
 
     def messages(self, cid):
@@ -111,10 +113,11 @@ class Store:
                 raise KeyError(cid)
             rows = [dict(r) for r in db.execute('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at,id', (cid,))]
             grouped = {}
-            for attempt in db.execute('SELECT a.*, (SELECT COALESCE(MAX(id),0) FROM events WHERE attempt_id=a.id) AS event_cursor FROM attempts a WHERE conversation_id=? ORDER BY created_at,id', (cid,)):
+            for attempt in db.execute('SELECT a.*, q.value AS quota_observations, (SELECT COALESCE(MAX(id),0) FROM events WHERE attempt_id=a.id) AS event_cursor FROM attempts a LEFT JOIN usage_limits q ON q.attempt_id=a.id WHERE a.conversation_id=? ORDER BY a.created_at,a.id', (cid,)):
                 attempt = dict(attempt)
                 for key in ('settings', 'provider', 'usage', 'citations'):
                     attempt[key] = json.loads(attempt[key]) if attempt[key] else None
+                attempt['quota_observations'] = json.loads(attempt['quota_observations']) if attempt['quota_observations'] else {}
                 grouped.setdefault(attempt['message_id'], []).append(attempt)
             for row in rows:
                 row['attempts'] = grouped.get(row['id'], [])

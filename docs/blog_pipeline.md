@@ -19,7 +19,8 @@ curl -X PUT http://127.0.0.1:5000/api/codex/blog \
     "audience": "매일 새로운 발견을 만나고 싶은 한국어 독자",
     "style_guide": "친근한 해요체. 오늘의 발견 → 뜻밖의 포인트 → 우리와의 연결 → 직접 보기. 사실 확인과 설명이 붙은 원문 링크.",
     "cadence_minutes": 360,
-    "reasoning_effort": "low",
+    "model": "gpt-6-luna",
+    "reasoning_effort": "xhigh",
     "backlog": [
       "우주 기술이 일상의 도구가 된 사례",
       "직접 둘러볼 수 있는 디지털 자료실"
@@ -77,9 +78,11 @@ false stops new article planning after the current/first article completes.
 No deterministic topic is appended after completion: topic planning consumes
 one of the model runs described above.
 
-Automatic blog runs honor `cadence_minutes` (default 360, minimum 60),
-`daily_run_budget` (default 6), `daily_token_budget` (default 300000), and
-`automatic_paused`. Budgets count this workspace's recorded starts/tokens,
+Automatic blog runs follow the observed five-hour usage reset, checked every ten
+minutes, and honor `automatic_paused`. The legacy `cadence_minutes` setting is
+retained for compatibility but does not impose a fixed wait after success. Daily limits apply only when `daily_budget_enabled` is
+explicitly true (default false, including existing projects without this field).
+Optional limits are `daily_run_budget` (6) and `daily_token_budget` (300000). Budgets count this workspace's recorded starts/tokens,
 including manual runs, by KST date. Token totals include cached input, so this
 is a processing budget rather than a monetary cost estimate. A running stage
 can exceed the remaining budget; later automatic runs are blocked.
@@ -90,8 +93,11 @@ The blog management view reports local automatic-run blockers, the saved next
 eligible time (not a guaranteed appointment), and today's recorded runs/tokens.
 `GET /api/codex/blog` exposes these as `automatic.reason`, `next_run_at`,
 `daily_usage`, `remaining_tokens`, `budget_overrun_tokens` and
-`budget_policy: pre_run_check`. Readiness still requires the next zero-usage
-refresh plus account and shared-claim checks at submission. Status reads do not
+`budget_policy` (`disabled` by default, `pre_run_check` when enabled).
+With limits disabled, `remaining_tokens` is null and `budget_overrun_tokens` is zero.
+Successful runs clear local and shared time gates. Older successful-run cadence
+timestamps are ignored. Readiness requires the next observed zero-usage reset
+window plus account and shared-claim checks at submission. Status reads do not
 reserve a window, acquire a project claim, or start a model run. Timestamped
 history entries with UTC offsets are converted to KST before daily accounting.
 
@@ -116,7 +122,7 @@ curl -X POST http://127.0.0.1:5000/api/codex/blog/run \
 
 Each run claims `account identity + project_id` in the shared account state
 under an inter-process file lock. The claim has a two-hour lease for crash
-recovery and a six-hour default cooldown after success. An active claim is
+recovery and no fixed cooldown after a successful run. An active claim is
 authoritative even for a forced manual run, so simultaneous Usage-panel or API
 submissions from separate Workbenches yield `project_busy` rather than starting
 a second stage. Give independent blogs different `project_id` values.
@@ -127,8 +133,8 @@ by the existing usage refresh, aligned to KST minute 00, 10, 20, 30, 40 and 50
 account/slot across Workbenches): when the five-hour usage is observed at exactly
 0%, one enabled blog stage is queued for that usage window. The account-wide
 zero-window claim prevents another Workbench from submitting a second stage.
-The check interval does not override the blog cadence, budgets or account-wide
-five-hour cooldown. Weekly usage is not an automatic trigger.
+Budgets and account/project locks still apply; a new observed reset window is
+eligible even if fewer than five hours have elapsed since the previous run. Weekly usage is not an automatic trigger.
 There is no canonical-checkout-only execution restriction: any Workbench whose
 workspace contains an enabled `blog/project.json` can submit, subject to the
 shared account/project claims. A missing or disabled blog project
@@ -141,5 +147,18 @@ page remains available for explicit manual documentation work. No external
 documentation scheduler is installed or changed by Workbench lightweight tasks.
 
 The pipeline never starts while the selected account already has an active
-Codex stream in the same process. A failed stage records a 30-minute retry time. Automatic submission continues
-to use the existing account-wide usage-window reservation and retry policy.
+Codex stream in the same process. A failed stage (including a start failure or
+invalid output) records the next wall-clock ten-minute slot as its retry time.
+Usage refreshes check at KST :00, :10, :20, :30, :40 and :50, independent of
+task duration (a failure at 08:03 is eligible at 08:10, not 08:13). A retry requires a
+successful usage measurement at or after the retry time and five-hour usage of
+exactly 0%. Nonzero or unavailable usage leaves the same stage waiting until a
+later refresh observes 0%; retries have no count limit. A failed stage can retry
+in its original zero window, subject to shared project claims and the retry delay.
+Project claims, account-busy checks, explicit daily limits, disabled projects,
+and automatic pause still apply. On success the next stage waits for a new
+observed zero-use reset window, without a fixed five-hour delay. Both single-user
+and internal-user schedulers use this refresh path without an open browser.
+
+New projects use `gpt-6-luna` with `xhigh` reasoning explicitly, rather than
+inheriting the general chat model. Saved project model overrides remain supported.

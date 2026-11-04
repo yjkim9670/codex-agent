@@ -191,3 +191,8 @@ header,#composer,#status{flex-shrink:0}
 .file-preview-actions svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 #file-preview-html{flex:1;min-height:0;width:100%;border:0;background:white}
 #file-preview [hidden]{display:none!important}
+
+/* Compact per-answer execution and observed account usage. */
+.answer-execution,.answer-usage{font-size:12px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.answer-execution{margin-bottom:4px}
+.answer-usage{margin-top:6px}

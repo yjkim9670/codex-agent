@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 
@@ -39,7 +39,7 @@ def test_blog_pipeline_is_disabled_until_configured(blog_environment):
 
 
 def test_automatic_status_reports_budget_in_korean_calendar_day(blog_environment, monkeypatch):
-    blog_pipeline.configure_blog_project({'enabled': True, 'daily_token_budget': 300000})
+    blog_pipeline.configure_blog_project({'enabled': True, 'daily_budget_enabled': True, 'daily_token_budget': 300000})
     now = datetime.fromisoformat('2026-11-01T02:00:00+09:00')
     monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
     root = blog_pipeline._blog_root()
@@ -683,7 +683,7 @@ def test_review_pending_never_counts_as_completed(blog_environment, monkeypatch)
 
 
 def test_automatic_budget_and_manual_override(blog_environment, monkeypatch):
-    run = _compact_start(blog_environment, monkeypatch, daily_run_budget=1)
+    run = _compact_start(blog_environment, monkeypatch, daily_budget_enabled=True, daily_run_budget=1)
     _complete_stage(blog_environment, run)
     state = blog_pipeline.get_blog_pipeline_status()['state']
     state['next_run_at'] = None
@@ -753,3 +753,227 @@ def test_blog_page_and_artifact_endpoint(blog_environment):
     assert response.json['content'] == '<script>unsafe()</script>'
     assert client.get('/api/codex/blog/posts/post/private.txt').status_code == 400
     assert client.get('/api/codex/blog/posts/missing/final.md').status_code == 404
+
+
+@pytest.mark.parametrize('limits_enabled', [False, True])
+def test_daily_limits_require_explicit_opt_in(blog_environment, monkeypatch, limits_enabled):
+    run = _compact_start(blog_environment, monkeypatch, daily_run_budget=1,
+                         daily_budget_enabled=limits_enabled)
+    _complete_stage(blog_environment, run, token_usage={'total_tokens': 500000})
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    now = blog_pipeline._now() + timedelta(minutes=10)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    status = blog_pipeline.get_blog_pipeline_status()
+    assert status['project']['cadence_minutes'] == 300
+    assert status['automatic']['budget_policy'] == ('pre_run_check' if limits_enabled else 'disabled')
+    result = blog_pipeline.run_blog_pipeline(force=False)
+    if limits_enabled:
+        assert result['reason'] == 'daily_budget_exceeded'
+    else:
+        assert status['automatic']['remaining_tokens'] is None
+        assert result['started'] is True
+
+
+@pytest.mark.parametrize('succeeded', [True, False])
+def test_success_releases_cadence_but_failure_waits_ten_minutes(blog_environment, succeeded):
+    project = blog_pipeline._normalize_project({'enabled': True})
+    context = {'account': {'id': 'default'}, 'codex_home': blog_environment / 'home'}
+    start = datetime(2026, 11, 5, 2, 30, tzinfo=blog_pipeline.KST)
+    completed = start + timedelta(minutes=13, seconds=42)
+    claimed, _, path = blog_pipeline._claim_global(context, project, 'run-a', start)
+    assert claimed
+    blog_pipeline._finish_claim(path, project, 'run-a', succeeded, completed)
+    if succeeded:
+        assert blog_pipeline._read_json(path)['next_allowed_at'] is None
+        assert blog_pipeline._claim_global(context, project, 'next-reset', completed)[0]
+        return
+    expected = start + timedelta(minutes=20)
+    assert blog_pipeline.parse_timestamp(blog_pipeline._read_json(path)['next_allowed_at']) == expected
+    assert blog_pipeline._claim_global(context, project, 'early', expected - timedelta(seconds=1))[1] == 'not_due'
+    assert blog_pipeline._claim_global(context, project, 'on-time', expected)[0]
+
+
+@pytest.mark.parametrize(('minute', 'second', 'expected_minute'), [(0, 0, 10), (3, 42, 10), (9, 59, 10), (10, 0, 20), (59, 59, 0)])
+def test_usage_retry_aligns_to_next_wall_clock_slot(minute, second, expected_minute):
+    now = datetime(2026, 11, 5, 23, minute, second, 999, tzinfo=blog_pipeline.KST)
+    due = codex_chat._next_account_usage_refresh_at(now)
+    assert due.minute == expected_minute
+    assert due.second == due.microsecond == 0
+    assert now < due <= now + timedelta(minutes=10)
+    if minute == 59:
+        assert due.day == 6 and due.hour == 0
+
+
+@pytest.mark.parametrize('failure', ['stream', 'invalid_output', 'start', 'rejected_start'])
+def test_failed_stage_retries_every_ten_minutes(blog_environment, monkeypatch, failure):
+    now = datetime(2026, 11, 5, 10, 3, 42, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    root = blog_environment / 'blog'
+    if failure in {'start', 'rejected_start'}:
+        blog_pipeline.record_blog_pipeline_completion({**run, 'blog_root': str(root)}, True)
+        # Replace the initial failed-output result with a genuine start failure.
+        def fail_start(*args, **kwargs):
+            if failure == 'rejected_start':
+                return {'ok': False, 'error': 'backend unavailable'}
+            raise RuntimeError('backend unavailable')
+        monkeypatch.setattr(codex_chat, 'create_codex_stream', fail_start)
+        assert blog_pipeline.run_blog_pipeline(force=True)['reason'] == 'start_failed'
+        monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *a, **kw: {'id': 'retried-stream'})
+    else:
+        blog_pipeline.record_blog_pipeline_completion(
+            {**run, 'blog_root': str(root)}, failure == 'invalid_output', 'backend failure')
+    post_id = blog_pipeline.get_blog_pipeline_status()['state']['active_post_id']
+    # Retrying the same stage requires a new zero-usage observation.
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *a: pytest.fail('zero-window claim'))
+    for _ in range(2):
+        due = now.replace(minute=(now.minute // 10) * 10, second=0, microsecond=0) + timedelta(minutes=10)
+        state = blog_pipeline.get_blog_pipeline_status()['state']
+        assert blog_pipeline.parse_timestamp(state['next_run_at']) == due
+        now = due - timedelta(seconds=1)
+        assert blog_pipeline.retry_failed_blog_pipeline()['reason'] == 'retry_pending'
+        now = due
+        retry = blog_pipeline.retry_failed_blog_pipeline(snapshot={
+            'last_success_at': blog_pipeline.normalize_timestamp(now), 'five_hour': {'used_percent': 0}})
+        assert retry['started'] is True
+        assert retry['stage'] == 'plan'
+        assert retry['post_id'] == post_id
+        assert blog_pipeline.retry_failed_blog_pipeline()['reason'] == 'no_failed_stage'
+        blog_pipeline.record_blog_pipeline_completion({**retry, 'blog_root': str(root)}, False, 'failed again')
+    now += timedelta(minutes=10)
+    retry = blog_pipeline.retry_failed_blog_pipeline(snapshot={
+            'last_success_at': blog_pipeline.normalize_timestamp(now), 'five_hour': {'used_percent': 0}})
+    _complete_stage(blog_environment, retry, {
+        'plan.json': '{"title":"재시도 성공","needs_research":false}',
+        'brief.md': '기획', 'outline.md': '구성',
+    })
+    assert blog_pipeline.retry_failed_blog_pipeline()['reason'] == 'no_failed_stage'
+    assert blog_pipeline.get_blog_pipeline_status()['state']['next_run_at'] is None
+
+
+@pytest.mark.parametrize('guard', ['disabled', 'paused', 'busy', 'account', 'budget'])
+def test_failed_retry_preserves_automatic_guards(blog_environment, monkeypatch, guard):
+    now = datetime(2026, 11, 5, 10, 0, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    blog_pipeline.record_blog_pipeline_completion(
+        {**run, 'blog_root': str(blog_environment / 'blog')}, False, 'failure')
+    now += timedelta(minutes=10)
+    expected = {
+        'disabled': 'retry_disabled', 'paused': 'retry_disabled',
+        'busy': 'account_busy', 'account': 'retry_account_mismatch',
+        'budget': 'daily_budget_exceeded',
+    }
+    if guard == 'disabled':
+        blog_pipeline.configure_blog_project({'enabled': False})
+    elif guard == 'paused':
+        blog_pipeline.configure_blog_project({'automatic_paused': True})
+    elif guard == 'busy':
+        monkeypatch.setattr(codex_chat, '_account_has_active_codex_stream', lambda _: True)
+    elif guard == 'budget':
+        blog_pipeline.configure_blog_project({'daily_budget_enabled': True, 'daily_run_budget': 1})
+    assert blog_pipeline.retry_failed_blog_pipeline(
+        account_id='other' if guard == 'account' else 'default',
+        snapshot={'last_success_at': blog_pipeline.normalize_timestamp(now), 'five_hour': {'used_percent': 0}})['reason'] == expected[guard]
+
+
+def test_background_worker_only_retries_through_usage_refresh(monkeypatch):
+    calls = []
+    monkeypatch.setattr(blog_pipeline, 'retry_failed_blog_pipeline', lambda: calls.append('retry'))
+    monkeypatch.setattr(codex_chat, 'refresh_account_usage_snapshot_if_due', lambda: calls.append('refresh'))
+    monkeypatch.setattr(codex_chat, 'record_usage_snapshot_if_due', lambda: None)
+    def stop(_):
+        raise InterruptedError('end test loop')
+    monkeypatch.setattr(codex_chat.time, 'sleep', stop)
+    with pytest.raises(InterruptedError):
+        codex_chat._usage_snapshot_worker_loop()
+    assert calls == ['refresh']
+
+
+@pytest.mark.parametrize('used', [None, 1, 12.5, 100, 0])
+def test_scheduler_retries_failed_stage_only_after_observing_zero(blog_environment, monkeypatch, used):
+    now = datetime(2026, 11, 5, 10, 0, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    blog_pipeline.record_blog_pipeline_completion(
+        {**run, 'blog_root': str(blog_environment / 'blog')}, False, 'failure')
+    context = codex_chat._account_storage_context('default')
+    now += timedelta(minutes=10)
+    snapshot = {'last_success_at': blog_pipeline.normalize_timestamp(now),
+                'five_hour': {'used_percent': used, 'resets_at': '2026-11-05T15:00:00+09:00'}}
+    # The prior reservation belongs to the same reset window.
+    snapshot['usage_keepalive'] = {'automatic_cycle_targets':
+        codex_chat._usage_keepalive_cycle_targets({**snapshot, 'five_hour': {**snapshot['five_hour'], 'used_percent': 0}}, now)}
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *a: pytest.fail('retry consumed a new window'))
+    result = codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)
+    assert result['submitted'] is (used == 0)
+    if used != 0:
+        assert result['reason'] == 'no_zero_usage_window'
+        now += timedelta(hours=2)
+        snapshot.update(last_success_at=blog_pipeline.normalize_timestamp(now),
+                        five_hour={'used_percent': 0, 'resets_at': '2026-11-05T17:10:00+09:00'})
+        assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+    retry = codex_chat._run_usage_blog_pipeline('default', automatic=True)
+    assert retry['submitted']
+    assert retry['blog_pipeline']['stage'] == run['stage']
+    assert retry['blog_pipeline']['post_id'] == run['post_id']
+
+
+def test_success_runs_at_next_observed_reset_before_five_hours(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 5, 10, 0, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    _complete_stage(blog_environment, run, {
+        'plan.json': '{"title":"다음 단계","needs_research":false}',
+        'brief.md': '기획', 'outline.md': '구성'})
+    # Persist the old five-hour gates to verify upgrades do not retain them.
+    root = blog_environment / 'blog'
+    state = blog_pipeline._load_state(root, run['project_id'])
+    state['next_run_at'] = blog_pipeline.normalize_timestamp(now + timedelta(hours=5))
+    blog_pipeline._save_state(root, state)
+    context = codex_chat._account_storage_context('default')
+    claim_path = blog_pipeline._claim_path(context, run['project_id'])
+    claim = blog_pipeline._read_json(claim_path)
+    claim['next_allowed_at'] = state['next_run_at']
+    blog_pipeline._write_json_atomic(claim_path, claim)
+    now += timedelta(minutes=20)
+    old_snapshot = {'five_hour': {'used_percent': 0, 'resets_at': '2026-11-05T10:10:00+09:00'}}
+    old_targets = codex_chat._usage_keepalive_cycle_targets(old_snapshot, now)
+    assert codex_chat._usage_keepalive_global_claim(context, old_targets, now - timedelta(minutes=20))[0]
+    snapshot = {'five_hour': {'used_percent': 0, 'resets_at': '2026-11-05T15:20:00+09:00'},
+                'usage_keepalive': {'automatic_cycle_targets': old_targets}}
+    assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+    result = codex_chat._run_usage_blog_pipeline('default', automatic=True)
+    assert result['submitted']
+    assert result['blog_pipeline']['stage'] == 'draft'
+    assert not codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+
+
+def test_failed_retry_waits_for_measurement_after_due_time(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 5, 10, 3, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    blog_pipeline.record_blog_pipeline_completion(
+        {**run, 'blog_root': str(blog_environment / 'blog')}, False, 'failure')
+    now += timedelta(minutes=10)
+    snapshot = {'last_success_at': blog_pipeline.normalize_timestamp(now - timedelta(minutes=4)),
+                'five_hour': {'used_percent': 0}}
+    context = codex_chat._account_storage_context('default')
+    assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['reason'] == 'retry_pending'
+    now += timedelta(minutes=7)
+    snapshot['last_success_at'] = blog_pipeline.normalize_timestamp(now)
+    assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+
+
+def test_blog_defaults_explicitly_use_luna_xhigh(blog_environment, monkeypatch):
+    calls = []
+    _compact_start(blog_environment, monkeypatch)
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *a, **kw: calls.append(kw) or {'id': 'model-stream'})
+    # Complete the initial stage with failure, then manually resume it.
+    state = blog_pipeline.get_blog_pipeline_status()['state']
+    blog_pipeline.record_blog_pipeline_completion({**state['in_flight'],
+        'project_id': blog_pipeline.get_blog_pipeline_status()['project']['project_id'],
+        'blog_root': str(blog_environment / 'blog')}, False, 'failure')
+    assert blog_pipeline.run_blog_pipeline(force=True)['started']
+    assert calls[0]['model_override'] == 'gpt-6-luna'
+    assert calls[0]['reasoning_override'] == 'xhigh'

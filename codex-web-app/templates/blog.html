@@ -46,10 +46,11 @@
 <label><input id="exclude_ai_topics" type="checkbox"> AI 관련 주제 제외</label>
 <label><input id="allow_web_research" type="checkbox"> 웹 검색으로 사실과 원문 링크 확인</label>
 <label><input id="topic_rotation_enabled" type="checkbox"> 완성 후 다음 글 기획 허용</label>
+<label><input id="daily_budget_enabled" type="checkbox"> 일일 실행·토큰 제한 사용 (기본 꺼짐)</label>
 <div class="blog-fields"><label>자동 실행 간격 (분)<input id="cadence_minutes" type="number" min="60" max="10080" required></label>
 <label>일일 최대 실행 횟수<input id="daily_run_budget" type="number" min="1" required></label>
 <label>일일 토큰 예산<input id="daily_token_budget" type="number" min="1" required></label></div>
-<p>예산은 KST 날짜 기준이며 캐시를 포함한 기록 토큰으로 계산합니다. 한 단계가 예산을 넘길 수 있으며 다음 자동 실행을 제한합니다. 수동 실행은 간격·예산을 우회합니다.</p>
+<p>일일 제한을 켠 경우에만 KST 날짜 기준의 실행 횟수·토큰 한도를 적용합니다. 토큰 수는 캐시를 포함한 처리량이며 요금이 아닙니다. 수동 실행은 간격·일일 제한을 우회합니다.</p>
 <button type="submit">설정 저장</button></form></section></details>
 <details><summary>대기 주제와 참고 목록</summary><ul id="backlog"></ul></details>
 <section><h2>최근 단계 실행 기록</h2><div class="table-scroll"><table><thead><tr><th>단계 / 상태</th><th>시각 / 시간</th><th>입력 / 캐시 / 출력 / 전체 토큰</th><th>프롬프트 / 허용 파일 크기</th><th>검증·오류</th></tr></thead><tbody id="runs"></tbody></table></div></section>

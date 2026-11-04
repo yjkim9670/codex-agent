@@ -265,7 +265,7 @@ const DEFAULT_WEATHER_POSITION = Object.freeze({
     isDefault: true
 });
 const CHAT_INPUT_DEFAULT_PLACEHOLDER = 'Type a prompt for the selected agent. (Shift+Enter for newline)';
-const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for the selected agent. (Enter for newline; Ctrl/Cmd+Enter to send)';
+const CHAT_INPUT_MOBILE_PLACEHOLDER = 'Type a prompt for the selected agent. (Enter for newline; use the submit button to send)';
 const CHAT_ATTACHMENT_UPLOAD_TIMEOUT_MS = 120000;
 const GIT_BRANCH_STATUS_CACHE_MS = 5000;
 const GIT_BRANCH_TOAST_COOLDOWN_MS = 900;
@@ -2756,7 +2756,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (cyclePlanModeFromKeyboardEvent(event)) {
                 return;
             }
-            // Use the same Enter/Shift+Enter behavior on tablets and desktops.
+            // Mobile and Fold prompts send only through the submit button.
+            if (event.key === 'Enter' && isMobileViewportBehaviorActive()) return;
             if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
                 event.preventDefault();
                 handleSubmit();

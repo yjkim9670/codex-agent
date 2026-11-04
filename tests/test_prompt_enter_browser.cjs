@@ -4,12 +4,13 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 
 const source = fs.readFileSync(path.join(__dirname, '../codex-web-app/static/js/app.js'), 'utf8');
-function slice(start, end) {
-    const offset = source.indexOf(start);
+const chatSource = fs.readFileSync(path.join(__dirname, '../conversation-app/static/js/chat.js'), 'utf8');
+function slice(start, end, text = source) {
+    const offset = text.indexOf(start);
     assert.ok(offset >= 0, start);
-    const finish = source.indexOf(end, offset);
+    const finish = text.indexOf(end, offset);
     assert.ok(finish > offset, end);
-    return source.slice(offset, finish);
+    return text.slice(offset, finish);
 }
 
 (async () => {
@@ -20,11 +21,13 @@ function slice(start, end) {
             { name: 'iPad portrait', width: 820, platform: 'iPad', userAgent: 'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X)', touch: 5, fine: false, mobile: true },
             { name: 'Android tablet, desktop layout', width: 1280, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 15)', touch: 5, fine: true, mobile: true },
             { name: 'Android phone', width: 412, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 15) Mobile', touch: 5, fine: false, mobile: true },
+            { name: 'fold cover screen', width: 360, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 15; SM-F956N)', touch: 5, fine: false, mobile: true },
+            { name: 'fold landscape, desktop mode', width: 1400, platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 (Linux; Android 15; SM-F956N)', touch: 5, fine: true, mobile: true },
             { name: 'fold inner screen', width: 1000, platform: 'Linux armv8l', userAgent: '', touch: 5, fine: true, fold: true, mobile: true },
             { name: 'Mac desktop', width: 1440, platform: 'MacIntel', userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X)', touch: 0, fine: true, mobile: false },
             { name: 'Windows touch laptop with mouse', width: 1440, platform: 'Win32', userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', touch: 10, fine: true, mobile: false },
         ];
-        for (const device of cases) {
+        for (const [app, device] of ['workbench', 'chat'].flatMap(app => cases.map(device => [app, device]))) {
             const page = await browser.newPage({ viewport: { width: device.width, height: 900 } });
             try {
                 await page.setContent('<form id="codex-chat-form"><textarea id="codex-chat-input"></textarea><button type="submit">Submit</button></form>');
@@ -32,6 +35,14 @@ function slice(start, end) {
                     for (const [key, value] of Object.entries({ platform: device.platform, userAgent: device.userAgent, maxTouchPoints: device.touch, userAgentData: undefined })) {
                         Object.defineProperty(navigator, key, { configurable: true, value });
                     }
+                    const nativeMatchMedia = window.matchMedia.bind(window);
+                    window.matchMedia = query => {
+                        const result = nativeMatchMedia(query);
+                        if (query === '(any-pointer: fine)') return { matches: device.fine };
+                        if (query === '(any-pointer: coarse)') return { matches: !device.fine };
+                        if (query.startsWith('(spanning:')) return { matches: Boolean(device.fold) };
+                        return result;
+                    };
                     window.testDevice = device;
                     window.submissions = 0;
                 }, device);
@@ -44,19 +55,26 @@ function slice(start, end) {
                     const cyclePlanModeFromKeyboardEvent = () => false;
                     const syncActiveSessionControls = () => {};
                     const handleSubmit = event => { event?.preventDefault(); window.submissions++; };
-                    ${slice('function isLikelyVirtualKeyboardEnvironment()', 'function isEditableElement(')}
-                    ${slice('    if (form) {\n        form.addEventListener(\'submit\', handleSubmit);', '    sessionStatusFilterButtons.forEach')}
-                    ${slice("    if (input) {\n        input.addEventListener('keydown'", '    if (imageAttachBtn && imageInput)')}
+                    ${app === 'workbench' ? slice('function isLikelyVirtualKeyboardEnvironment()', 'function isEditableElement(') : ''}
+                    ${app === 'workbench' ? `
+                        ${slice('    if (form) {\n        form.addEventListener(\'submit\', handleSubmit);', '    sessionStatusFilterButtons.forEach')}
+                        ${slice("    if (input) {\n        input.addEventListener('keydown'", '    if (imageAttachBtn && imageInput)')}
+                    ` : `
+                        const $ = id => id === 'composer' ? form : input;
+                        const send = () => { window.submissions++; };
+                        const saveDraft = () => {}, resizeMessage = () => {};
+                        ${slice('function isButtonOnlyPromptEnvironment()', "$('thread').onscroll", chatSource)}
+                    `}
                 ` });
                 const input = page.locator('textarea');
                 await input.fill('first');
                 await input.press('Enter');
-                assert.equal(await page.evaluate(() => submissions), 1, device.name);
-                assert.equal(await input.inputValue(), 'first', device.name);
+                assert.equal(await page.evaluate(() => submissions), device.mobile ? 0 : 1, device.name);
+                assert.equal(await input.inputValue(), device.mobile ? 'first\n' : 'first', device.name);
                 await input.fill('first');
                 await input.press('Shift+Enter');
                 assert.equal(await input.inputValue(), 'first\n', device.name);
-                assert.equal(await page.evaluate(() => submissions), 1, `${device.name}: Shift+Enter must not submit`);
+                assert.equal(await page.evaluate(() => submissions), device.mobile ? 0 : 1, `${device.name}: Shift+Enter must not submit`);
                 const baseline = await page.evaluate(() => submissions);
                 for (const ime of [{ isComposing: true }, { keyCode: 229 }]) {
                     await input.dispatchEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...ime });
@@ -66,8 +84,8 @@ function slice(start, end) {
                     await input.fill('send this');
                     const before = await page.evaluate(() => submissions);
                     await input.press(key);
-                    assert.equal(await page.evaluate(() => submissions), before + 1, `${device.name}: ${key}`);
-                    assert.equal(await input.inputValue(), 'send this', `${device.name}: no newline on send`);
+                    assert.equal(await page.evaluate(() => submissions), before + (device.mobile ? 0 : 1), `${device.name}: ${key}`);
+                    if (!device.mobile) assert.equal(await input.inputValue(), 'send this', `${device.name}: no newline on send`);
                 }
                 const afterShortcuts = await page.evaluate(() => submissions);
                 for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {
@@ -81,7 +99,7 @@ function slice(start, end) {
                 assert.equal(await page.evaluate(() => submissions), afterShortcuts);
                 await page.getByRole('button', { name: 'Submit' }).click();
                 assert.equal(await page.evaluate(() => submissions), afterShortcuts + 1, `${device.name}: Submit`);
-                console.log(`PASS: ${device.name}`);
+                console.log(`PASS: ${app}: ${device.name}`);
             } finally {
                 await page.close();
             }

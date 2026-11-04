@@ -21,6 +21,13 @@ from services.artifacts import TOOL_NAME
 
 PREVIEW_CONTENT = 'print("미리보기")\n' + 'x' * 70000 + '\n<script>window.fileXss=true</script>'
 
+HTML_CONTENT = ('<!doctype html><html><head><meta charset="utf-8"><title>HTML fixture</title></head>'
+                '<body><h1>렌더링 확인</h1><button id="counter">0</button><script>'
+                'localStorage.setItem("fixture", "ready");'
+                'document.querySelector("#counter").onclick=()=>{document.querySelector("#counter").textContent="1";};'
+                'try { parent.document.body.dataset.escaped="yes"; } catch(e) {}'
+                '</script><!--' + 'x' * (5 * 1024 * 1024) + '--></body></html>')
+
 ANSWER = '''**Hello**
 
 > 읽기 쉬운 인용문
@@ -61,7 +68,8 @@ class Provider:
             artifacts = self.artifacts.open_artifacts('fixture', settings['artifact_scope'])
             try:
                 artifacts.call({'tool': TOOL_NAME, 'arguments': {'operation': 'write', 'path': 'sample.py', 'content': PREVIEW_CONTENT}})
-                emit('delta', dict(text=f'[sample.py]({artifacts.root}/sample.py)'))
+                artifacts.call({'tool': TOOL_NAME, 'arguments': {'operation': 'write', 'path': 'sample.html', 'content': HTML_CONTENT}})
+                emit('delta', dict(text=f'[sample.py]({artifacts.root}/sample.py) [sample.html]({artifacts.root}/sample.html)'))
                 emit('done', dict(status='completed'))
             finally:
                 artifacts.close()

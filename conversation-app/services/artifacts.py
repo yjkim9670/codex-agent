@@ -9,6 +9,7 @@ from pathlib import Path
 import secrets
 import stat
 import tempfile
+from shared.html_preview import HTML_MAX_BYTES
 
 TOOL_NAME = 'chat_artifact'
 LIMIT = 1024 * 1024
@@ -41,9 +42,10 @@ class Artifacts:
             parts = path.split('/')
             if len(path) > 512 or len(parts) > 16 or any(p in ('', '.', '..') or '\x00' in p or '\\' in p for p in parts):
                 raise ValueError('산출물은 전용 /tmp 디렉터리 안의 상대 경로만 허용합니다.')
+            limit = HTML_MAX_BYTES if Path(path).suffix.lower() in ('.html', '.htm', '.xhtml') else LIMIT
             content = args.get('content', '')
-            if not isinstance(content, str) or len(content.encode('utf-8')) > LIMIT:
-                raise ValueError('텍스트 산출물은 1 MiB까지 허용합니다.')
+            if not isinstance(content, str) or len(content.encode('utf-8')) > limit:
+                raise ValueError(f'산출물은 {limit // (1024 * 1024)} MiB까지 허용합니다.')
             parent = os.dup(self.fd)
             try:
                 for part in parts[:-1]:
@@ -83,8 +85,8 @@ class Artifacts:
                         info = os.fstat(source.fileno())
                         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                             raise ValueError('일반 산출물 파일만 읽을 수 있습니다.')
-                        data = source.read(LIMIT + 1)
-                    if len(data) > LIMIT:
+                        data = source.read(limit + 1)
+                    if len(data) > limit:
                         raise ValueError('파일 크기 제한을 초과했습니다.')
                     result['content'] = data.decode('utf-8')
             finally:

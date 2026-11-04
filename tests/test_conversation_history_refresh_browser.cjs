@@ -55,16 +55,17 @@ async function verifyConversationHistoryRefresh(browser,url){
   await page.clock.runFor(30000);
   await expect.poll(()=>page.evaluate(()=>historyRefreshFailures)).toBe(2);
   await expect(page.locator('#status')).toHaveText('기존 대화 상태');
-  // Text navigation remains distinct and fits both mobile and desktop overlays.
+  // Compact bubble navigation remains distinct and fits mobile and desktop overlays.
   for(const width of [360,768,1440]){
    await page.setViewportSize({width,height:900});
-   await expect(page.locator('#scroll-previous')).toHaveText('이전 요청');
-   await expect(page.locator('#scroll-next')).toHaveText('다음 요청');
+   await expect(page.locator('#scroll-previous')).toHaveAccessibleName('이전 요청과 답변');
+   await expect(page.locator('#scroll-next')).toHaveAccessibleName('다음 요청과 답변');
    const layout=await page.evaluate(()=>{
+    const previous=$('scroll-previous').getBoundingClientRect(),next=$('scroll-next').getBoundingClientRect();
     const nav=document.querySelector('.thread-navigation').getBoundingClientRect(),region=$('thread').getBoundingClientRect();
-    return {fits:nav.left>=region.left&&nav.right<=region.right&&nav.top>=region.top,round:getComputedStyle($('scroll-top')).borderRadius,text:getComputedStyle($('scroll-previous')).borderRadius};
+    return {compact:Math.abs(parseFloat(getComputedStyle($('scroll-previous')).width)-44)<1&&Math.abs(parseFloat(getComputedStyle($('scroll-next')).width)-44)<1&&Math.abs(previous.top-next.top)<1&&next.right-previous.left<=94,fits:nav.left>=region.left&&nav.right<=region.right&&nav.top>=region.top,round:getComputedStyle($('scroll-top')).borderRadius,text:getComputedStyle($('scroll-previous')).borderRadius};
    });
-   expect(layout.fits).toBe(true);expect(layout.round).not.toBe(layout.text);
+   expect(layout.compact).toBe(true);expect(layout.fits).toBe(true);expect(layout.round).not.toBe(layout.text);
   }
   await page.reload();await page.evaluate(()=>chatReady);
   for(let i=0;i<3;i++){
@@ -81,7 +82,7 @@ async function verifyConversationHistoryRefresh(browser,url){
   await page.locator('#scroll-bottom').click();
   await expect.poll(()=>page.locator('#thread').evaluate(el=>el.scrollHeight-el.clientHeight-el.scrollTop)).toBeLessThan(2);
   expect(errors).toEqual([]);
-  console.log('PASS history auto-refresh: encrypted API, 30s polling, hidden tab, coalescing, search, backoff, preserved draft/selection/scroll; text navigation at 360/768/1440px');
+  console.log('PASS history auto-refresh: encrypted API, 30s polling, hidden tab, coalescing, search, backoff, preserved draft/selection/scroll; bubble navigation at 360/768/1440px');
  }finally{await context.close();}
 }
 module.exports={verifyConversationHistoryRefresh};

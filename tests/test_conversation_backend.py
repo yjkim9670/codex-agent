@@ -353,3 +353,37 @@ def test_legacy_title_is_preserved_when_retrying_first_message(tmp_path):
     assert retried['settings']['generate_title'] is False
     store.emit(retried['id'], 'title', {'title': '덮어쓰면 안 되는 제목'})
     assert store.conversations()[0]['title'] == '기존 대화 제목'
+
+
+def test_html_preview_download_and_session_capability(setup, monkeypatch):
+    from shared.html_preview import HTML_PREVIEW_CSP
+    app, client, headers, provider = setup
+    content = '<!doctype html><head><meta charset="utf-8"></head><h1>한글</h1><script>localStorage.getItem("x")</script>'
+    cid = client.post('/api/conversations', json={}, headers=headers).json['id']
+    def read_artifact(scope, path):
+        assert scope == cid and path == 'page.html'
+        return {'path': '/tmp/private/page.html', 'content': content}
+    monkeypatch.setattr(provider, 'read_artifact', read_artifact, raising=False)
+    metadata = client.get(f'/api/conversations/{cid}/artifact?path=page.html').json
+    assert metadata['is_html'] and metadata['content'] == ''
+    with client.session_transaction() as sess:
+        assert sess['csrf'] not in metadata['token']
+    url = '/artifacts/' + metadata['token']
+    preview = client.get(url)
+    assert preview.status_code == 200 and preview.mimetype == 'text/html'
+    assert preview.headers['Content-Security-Policy'] == HTML_PREVIEW_CSP
+    assert preview.headers['Cache-Control'] == 'no-store'
+    assert 'data-codex-workbench-preview-compat' in preview.text
+    assert preview.text.index('data-codex-workbench-preview-compat') < preview.text.index('localStorage.getItem')
+    download = client.get(url + '?download=1')
+    assert download.data == content.encode()
+    assert download.headers['Content-Disposition'].startswith('attachment;')
+    assert client.get(f'/api/conversations/{cid}/artifact?path=page.html&source=1').json['content'] == content
+    stranger = app.test_client()
+    stranger.get('/')
+    assert stranger.get(url).status_code == 403
+    assert client.get(url + 'invalid').status_code == 403
+    import itsdangerous.timed
+    now = itsdangerous.timed.time.time()
+    monkeypatch.setattr(itsdangerous.timed.time, 'time', lambda: now + 3601)
+    assert client.get(url).status_code == 403

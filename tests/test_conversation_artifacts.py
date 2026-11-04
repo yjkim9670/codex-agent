@@ -157,3 +157,19 @@ def test_legacy_preview_recovers_only_verified_conversation_tool_output(tmp_path
     assert call(artifacts, 'delete', 'nested/result.py')['success']
     with pytest.raises(ValueError, match='임시 저장소'):
         provider.read_artifact(conversation, path)
+
+
+def test_html_uses_workbench_raw_limit_with_utf8_byte_boundary(artifacts, monkeypatch):
+    import services.artifacts as module
+    from shared.html_preview import HTML_MAX_BYTES
+    assert HTML_MAX_BYTES == 64 * 1024 * 1024
+    content = '<!doctype html>' + 'x' * (5 * 1024 * 1024)
+    assert call(artifacts, 'write', 'large.HTML', content=content)['success']
+    result = call(artifacts, 'read', 'large.HTML')
+    assert json.loads(result['contentItems'][0]['text'])['content'] == content
+    monkeypatch.setattr(module, 'HTML_MAX_BYTES', 1024)
+    for suffix in ('html', 'htm', 'xhtml'):
+        assert call(artifacts, 'write', f'page.{suffix}', content='한' * 341)['success']
+        assert not call(artifacts, 'write', f'page.{suffix}', content='한' * 342)['success']
+        (artifacts.root / f'page.{suffix}').write_text('x' * 1025)
+        assert not call(artifacts, 'read', f'page.{suffix}')['success']

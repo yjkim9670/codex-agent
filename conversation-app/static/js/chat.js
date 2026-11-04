@@ -236,7 +236,7 @@ function artifactPath(href){
  if(/^[a-z][a-z0-9+.-]*:/i.test(path)||path.startsWith('//')||path.startsWith('#'))return null;
  return path.startsWith('/')||/^(?:\.\/)?[^?#]+\.[a-z0-9]{1,12}$/i.test(path)?path:null;
 }
-let previewGeneration=0,previewContent='',previewName='',previewPage=0,previewOpener=null;
+let previewGeneration=0,previewContent='',previewName='',previewPage=0,previewOpener=null,previewUrl='',previewSourceUrl='',previewIsHtml=false;
 const previewPageSize=24000;
 function renderFilePage(){
  const pages=Math.max(1,Math.ceil(previewContent.length/previewPageSize));
@@ -247,28 +247,44 @@ function renderFilePage(){
 }
 async function openFilePreview(path,opener){
  const generation=++previewGeneration,cid=state.cid;previewOpener=opener;
- previewContent='';previewName='';previewPage=0;
+ previewContent='';previewName='';previewPage=0;previewUrl='';previewSourceUrl='';previewIsHtml=false;
+ $('file-preview-html').hidden=true;$('file-preview-html').removeAttribute('src');
+ $('file-preview-code').hidden=false;document.querySelector('.file-preview-paging').hidden=false;
+ $('file-open').disabled=true;
  $('file-preview-title').textContent=path.split('/').pop()||'파일 미리보기';
  $('file-preview-status').textContent='파일을 불러오는 중…';
  $('file-copy').disabled=true;$('file-download').disabled=true;renderFilePage();
  if(!$('file-preview').open)$('file-preview').showModal();
  try{
-  const data=await api('/api/conversations/'+encodeURIComponent(cid)+'/artifact?path='+encodeURIComponent(path));
+  const sourceUrl='/api/conversations/'+encodeURIComponent(cid)+'/artifact?path='+encodeURIComponent(path);
+  const data=await api(sourceUrl);
   if(generation!==previewGeneration||!$('file-preview').open)return;
-  previewContent=data.content;previewName=data.name;renderFilePage();
+  previewContent=data.content;previewName=data.name;previewIsHtml=data.is_html;
+  previewSourceUrl=sourceUrl+'&source=1';previewUrl=appUrl('/artifacts/'+encodeURIComponent(data.token));renderFilePage();
+  if(previewIsHtml){$('file-preview-code').hidden=true;document.querySelector('.file-preview-paging').hidden=true;$('file-preview-html').hidden=false;$('file-preview-html').src=previewUrl;}
+  $('file-open').disabled=false;
   $('file-preview-title').textContent=previewName;
-  $('file-preview-status').textContent=previewContent.length>previewPageSize?'긴 파일은 나누어 표시합니다. 복사와 다운로드에는 전체 내용이 포함됩니다.':'읽기 전용 미리보기';
+  $('file-preview-status').textContent=previewIsHtml?'HTML 미리보기':previewContent.length>previewPageSize?'긴 파일은 나누어 표시합니다. 복사와 다운로드에는 전체 내용이 포함됩니다.':'읽기 전용 미리보기';
   $('file-copy').disabled=false;$('file-download').disabled=false;
  }catch(error){if(generation===previewGeneration)$('file-preview-status').textContent=error.message;}
 }
-$('file-preview').addEventListener('close',()=>{if($('file-preview').open)return;previewGeneration++;previewContent='';$('file-preview-code').querySelector('code').textContent='';if(previewOpener?.isConnected)previewOpener.focus();});
+$('file-preview').addEventListener('close',()=>{if($('file-preview').open)return;previewGeneration++;previewContent='';previewUrl='';previewSourceUrl='';$('file-preview-html').removeAttribute('src');$('file-preview-html').hidden=true;$('file-preview-code').querySelector('code').textContent='';if(previewOpener?.isConnected)previewOpener.focus();});
 $('file-previous').onclick=()=>{if(previewPage>0){previewPage--;renderFilePage();}};
 $('file-next').onclick=()=>{if((previewPage+1)*previewPageSize<previewContent.length){previewPage++;renderFilePage();}};
-$('file-copy').onclick=async()=>{const generation=previewGeneration;try{await navigator.clipboard.writeText(previewContent);if(generation===previewGeneration)$('file-preview-status').textContent='전체 파일을 복사했습니다.';}catch{if(generation===previewGeneration)$('file-preview-status').textContent='복사 권한을 확인해 주세요.';}};
-$('file-download').onclick=()=>{
- const url=URL.createObjectURL(new Blob([previewContent],{type:'text/plain;charset=utf-8'}));
- const link=node('a');link.href=url;link.download=previewName;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);
+$('file-copy').onclick=async()=>{
+ const generation=previewGeneration;
+ try{
+  const content=previewIsHtml?(await api(previewSourceUrl)).content:previewContent;
+  if(generation!==previewGeneration)return;
+  await navigator.clipboard.writeText(content);
+  if(generation===previewGeneration)$('file-preview-status').textContent='전체 파일을 복사했습니다.';
+ }catch{if(generation===previewGeneration)$('file-preview-status').textContent='파일 조회 또는 복사 권한을 확인해 주세요.';}
 };
+$('file-download').onclick=()=>{
+ if(!previewUrl)return;
+ const link=node('a');link.href=previewUrl+'?download=1';link.download=previewName;document.body.append(link);link.click();link.remove();
+};
+$('file-open').onclick=()=>{if(previewUrl)window.open(previewUrl,'_blank','noopener,noreferrer');};
 $('messages').addEventListener('click',event=>{const link=event.target.closest('[data-artifact-path]');if(link){event.preventDefault();openFilePreview(link.dataset.artifactPath,link);}});
 const markdownCache=new Map();let markdownCacheSize=0;
 function safeMarkdown(text){if(markdownCache.has(text))return markdownCache.get(text).cloneNode(true);const html=DOMPurify.sanitize(marked.parse(text||'',{breaks:false,gfm:true}),{FORBID_TAGS:['img','video','audio','style','input','form'],FORBID_ATTR:['style'],ALLOWED_URI_REGEXP:/^(?:(?:https?|file|sandbox):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i});const box=node('div');box.innerHTML=html;box.querySelectorAll('a').forEach(a=>{const path=artifactPath(a.getAttribute('href'));if(path){a.href='#file-preview';a.dataset.artifactPath=path;a.title='파일 미리보기 열기';return;}try{const u=new URL(a.getAttribute('href'));if(!['http:','https:'].includes(u.protocol))throw Error();a.href=u.href;a.target='_blank';a.rel='noopener noreferrer';a.title=u.hostname+' · 새 탭에서 열기';}catch{a.removeAttribute('href');}});if(text?.length<100000){while(markdownCache.size&&(markdownCache.size>=24||markdownCacheSize+text.length>250000)){const oldest=markdownCache.keys().next().value;markdownCacheSize-=oldest.length;markdownCache.delete(oldest);}markdownCache.set(text,box.cloneNode(true));markdownCacheSize+=text.length;}return box;}

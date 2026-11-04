@@ -66,9 +66,15 @@ header button{display:inline-flex;align-items:center;justify-content:center;bord
 .thread-navigation{flex-direction:column;align-items:flex-end;right:28px;bottom:16px}
 .thread-navigation button{border-color:var(--border);min-width:44px;padding:8px}
 .thread-navigation #new-content{order:-1}
-/* Text labels distinguish turn navigation from the round boundary arrows. */
-.thread-navigation #scroll-previous,.thread-navigation #scroll-next{border-radius:10px;padding:8px 12px;font-size:13px;font-weight:500;line-height:1.5;background:var(--selected);color:var(--link);white-space:nowrap}
-.thread-navigation #scroll-previous:hover,.thread-navigation #scroll-next:hover{border-color:var(--accent)}
+/* Bubble arrows identify request jumps; keep the pair in one compact row. */
+.icon-chat-arrow-up{--icon:url('../icons/chat-arrow-up.svg')}.icon-chat-arrow-down{--icon:url('../icons/chat-arrow-down.svg')}
+.request-navigation{display:flex;gap:6px}
+.thread-navigation .request-navigation button{position:relative;display:flex;align-items:center;justify-content:center;width:44px;height:44px;padding:8px;border-radius:10px;background:var(--selected);color:var(--link)}
+.request-navigation .icon{width:24px;height:24px}
+.thread-navigation .request-navigation button:hover{border-color:var(--accent)}
+.request-navigation button::after{content:attr(data-tooltip);position:absolute;right:0;bottom:calc(100% + 8px);padding:4px 8px;border-radius:4px;background:var(--text);color:var(--surface);font-size:13px;line-height:1.5;white-space:nowrap;pointer-events:none;visibility:hidden;z-index:1}
+.request-navigation button:focus-visible::after{visibility:visible}
+@media(hover:hover){.request-navigation button:hover::after{visibility:visible}}
 .thread-navigation button:disabled{cursor:default}
 dialog{background:var(--surface);border-color:var(--border);border-radius:18px;box-shadow:0 16px 48px #0002;color:var(--text)}
 dialog button{border-radius:10px}

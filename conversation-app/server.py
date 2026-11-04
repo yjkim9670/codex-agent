@@ -1,15 +1,19 @@
 """Standalone personal conversation service with explicit network access rules."""
 import atexit
+import hashlib
 import json
 import ipaddress
+import io
 import os
 from pathlib import Path
 import secrets
 import threading
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory, session
+from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session
 from werkzeug.exceptions import HTTPException
+from itsdangerous import URLSafeTimedSerializer, BadSignature
+from shared.html_preview import HTML_PREVIEW_CSP, inject_html_preview_storage_compat
 from shared.chat_accounts import accounts, get_account
 from services.conversations import Store, TERMINAL
 from services.codex_provider import Provider
@@ -32,6 +36,7 @@ def create_app(data_dir=None, provider=None):
             pass
     app.config.update(SECRET_KEY=secret_file.read_text(), SESSION_COOKIE_NAME='workbench_chat_session',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict', MAX_CONTENT_LENGTH=1024 * 1024)
+    artifact_tokens = URLSafeTimedSerializer(app.secret_key, salt='chat-artifact-preview')
     allowed_hosts = {'localhost', '127.0.0.1', '::1'} | {
         host.strip().lower() for host in os.environ.get('CHAT_ALLOWED_HOSTS', '').split(',') if host.strip()}
     allowed_networks = [ipaddress.ip_network(cidr.strip()) for cidr in
@@ -102,7 +107,8 @@ def create_app(data_dir=None, provider=None):
 
     @app.after_request
     def headers(response):
-        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        if 'Content-Security-Policy' not in response.headers:
+            response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['Cache-Control'] = ('private, max-age=86400' if request.path.startswith('/static/')
@@ -242,7 +248,34 @@ def create_app(data_dir=None, provider=None):
         if not path or len(path) > 2048:
             raise ValueError('파일 경로가 올바르지 않습니다.')
         result = engine.read_artifact(cid, path)
-        return jsonify(name=Path(result['path']).name, content=result['content'])
+        name = Path(result['path']).name
+        is_html = Path(name).suffix.lower() in ('.html', '.htm', '.xhtml')
+        token = artifact_tokens.dumps({'cid': cid, 'path': path, 'owner': hashlib.sha256(session['csrf'].encode()).hexdigest()})
+        return jsonify(name=name, is_html=is_html, token=token,
+                       content='' if is_html and request.args.get('source') != '1' else result['content'])
+
+    @app.get('/artifacts/<token>')
+    def artifact_file(token):
+        # Native frame/navigation/download requests cannot use the encrypted
+        # JSON transport. Only its session-bound, expiring capability opens them.
+        try:
+            value = artifact_tokens.loads(token, max_age=3600)
+        except BadSignature:
+            abort(403)
+        if not session.get('csrf') or value.get('owner') != hashlib.sha256(session['csrf'].encode()).hexdigest():
+            abort(403)
+        result = engine.read_artifact(value['cid'], value['path'])
+        name = Path(result['path']).name
+        is_html = Path(name).suffix.lower() in ('.html', '.htm', '.xhtml')
+        content = result['content'].encode('utf-8')
+        download = request.args.get('download') == '1'
+        if is_html and not download:
+            content = inject_html_preview_storage_compat(content)
+        response = send_file(io.BytesIO(content), mimetype='text/html' if is_html else 'text/plain',
+                             as_attachment=download, download_name=name, max_age=0)
+        if is_html:
+            response.headers['Content-Security-Policy'] = HTML_PREVIEW_CSP
+        return response
 
     @app.get('/api/attempts/<aid>/events')
     def events(aid):

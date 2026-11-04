@@ -182,3 +182,12 @@ header,#composer,#status{flex-shrink:0}
 @media(max-width:1023px){.history-region{flex:1 1 0;min-height:96px}.thread-navigation{right:16px;bottom:8px}}
 @media(prefers-reduced-motion:reduce){.overlay-scrollbar{transition:none}}
 @media(forced-colors:active){.overlay-scrollbar-thumb{background:CanvasText}}
+
+/* Keep artifact tools compact and the rendered document at full panel height. */
+.file-preview-heading{gap:8px;padding:12px;flex-wrap:nowrap}
+.file-preview-heading h2{margin:0;flex:1}
+.file-preview-actions{gap:4px;margin-left:auto}
+.file-preview-actions button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;min-height:36px;padding:8px;flex:none}
+.file-preview-actions svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#file-preview-html{flex:1;min-height:0;width:100%;border:0;background:white}
+#file-preview [hidden]{display:none!important}

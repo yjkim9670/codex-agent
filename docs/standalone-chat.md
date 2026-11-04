@@ -200,7 +200,7 @@ CODEX_VERIFY_CONVERSATION=1 CODEX_VERIFY_LOCAL_TLS=1 python3.14 scripts/verify_b
 ## PC 폴더 읽기 전용 조회 (2026-11-04)
 
 - 개인 Chat 요청에서 `chat_local_files`로 허용된 폴더의 목록과 UTF-8 텍스트를 조회할 수 있다. 모델이 `roots`로 root ID를 확인한 뒤 `list`/`read`와 상대 경로를 사용한다. 파일 편집·삭제·업로드·명령 실행 기능은 제공하지 않는다. 기존 `chat_artifact`는 별도 임시 산출물에서만 쓰기를 계속 허용한다.
-- 기본 범위는 이 체크아웃의 상위 작업 폴더 `/Users/dinya/works/dev_workspace`다. 시작 환경변수 `CHAT_READ_ONLY_ROOTS`로 절대 폴더들을 지정한다(macOS/Linux는 `:` 구분). 예: `CHAT_READ_ONLY_ROOTS=/Users/dinya/works/dev_workspace:/Users/dinya/Documents/reference`. 빈 값은 PC 조회를 비활성화한다. 홈 전체와 파일시스템 루트는 거부한다. 환경 설정은 서버 시작 때 읽는다.
+- 기본 범위는 이 체크아웃의 두 단계 상위 폴더 `/Users/dinya/works`다. `dev_workspace`와 그 형제 폴더 아래를 모두 읽기 전용으로 조회한다(아래의 숨김·민감 파일 등 보호 규칙은 유지). 시작 환경변수 `CHAT_READ_ONLY_ROOTS`로 절대 폴더들을 지정한다(macOS/Linux는 `:` 구분). 예: `CHAT_READ_ONLY_ROOTS=/Users/dinya/works:/Users/dinya/Documents/reference`. 빈 값은 PC 조회를 비활성화한다. 홈 전체와 파일시스템 루트는 거부한다. 환경 설정은 서버 시작 때 읽는다.
 - 숨김 경로(`.env`, `.git`, `.ssh` 등), 대표 인증 파일(`auth.json`, 개인키 등), Chat 데이터 디렉터리, 심볼릭 링크·하드링크·특수 파일을 차단한다. 디렉터리 descriptor와 `O_NOFOLLOW`로 경로 각 구간을 열며, 모델이 제공한 절대 경로나 `..`는 거부한다. 민감 파일의 이름을 모두 추측할 수는 없으므로 허용 폴더에는 모델에 제공해도 되는 자료만 둔다. 읽은 내용은 답변과 모델 문맥에 포함될 수 있다.
 - 파일은 응답당 64 KiB, 목록은 200개까지 제공한다. 응답의 `next_offset`으로 다음 페이지를 읽는다. 파일 offset은 UTF-8 바이트 기준이고 목록 순서는 파일시스템 순서다. 조회 중 원본 파일이나 폴더가 변경되면 페이지 사이의 내용도 바뀔 수 있다. 바이너리·이미지 조회는 제공하지 않는다.
 - 새 HTTP 파일 API는 추가하지 않는다. 기존 Chat 접속 보호와 요청 경로를 사용한다. 모델의 기본 셸·파일 변경·MCP 도구는 계속 비활성화하며 CLI sandbox도 `read-only`로 유지한다. 로컬 조회 권한은 서버 도구에서 직접 제한한다.

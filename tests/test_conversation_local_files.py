@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,6 +87,29 @@ def test_root_scope_disabled_and_multi_root_configuration(tmp_path, monkeypatch)
     monkeypatch.setenv('CHAT_READ_ONLY_ROOTS', '/')
     with pytest.raises(ValueError):
         LocalFiles()
+    account_home = tmp_path / 'account-home'
+    monkeypatch.setattr('services.local_files.pwd.getpwuid', lambda uid: SimpleNamespace(pw_dir=str(account_home)))
+    monkeypatch.setenv('CHAT_READ_ONLY_ROOTS', str(account_home))
+    with pytest.raises(ValueError):
+        LocalFiles()
+
+
+def test_default_scope_includes_sibling_work_folders(tmp_path, monkeypatch):
+    monkeypatch.delenv('CHAT_READ_ONLY_ROOTS', raising=False)
+    works = tmp_path / 'works'
+    monkeypatch.setenv('HOME', str(works))
+    source = works / 'dev_workspace/codex_workbench/conversation-app/services/local_files.py'
+    source.parent.mkdir(parents=True)
+    monkeypatch.setattr('services.local_files.__file__', str(source))
+    sibling = works / 'another-project'
+    sibling.mkdir()
+    (sibling / 'notes.txt').write_text('read-only reference')
+    reader = LocalFiles()
+    assert value(call(reader, 'roots'))['roots'] == [{'id': '0', 'path': str(works)}]
+    assert value(call(reader, 'read', 'another-project/notes.txt'))['content'] == 'read-only reference'
+    assert not call(reader, 'read', '../outside.txt')['success']
+    assert not call(reader, 'write', 'another-project/notes.txt')['success']
+    assert (sibling / 'notes.txt').read_text() == 'read-only reference'
 
 
 def test_directory_pagination(files):

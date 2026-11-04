@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import pwd
 import stat
 
 TOOL_NAME = 'chat_local_files'
@@ -26,8 +27,10 @@ def permitted(part):
 
 class LocalFiles:
     def __init__(self, excluded=()):
-        default = str(Path(__file__).resolve().parents[2].parent)
+        default = str(Path(__file__).resolve().parents[2].parent.parent)
         configured = os.environ.get('CHAT_READ_ONLY_ROOTS', default)
+        # Proc Manager sets HOME to works; protect the OS account's actual home.
+        account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
         self.roots = {}
         self.excluded = tuple(Path(p).resolve() for p in excluded)
         for raw in configured.split(os.pathsep):
@@ -35,7 +38,7 @@ class LocalFiles:
                 continue
             root = Path(raw.strip()).expanduser().resolve()
             # Never silently turn a narrow scope into the entire PC or home.
-            if root in (Path(root.anchor), Path.home().resolve()):
+            if root in (Path(root.anchor), account_home):
                 raise ValueError('Chat 조회 범위는 홈 전체 대신 하위 폴더로 지정해 주세요.')
             self.roots[str(len(self.roots))] = root
 

@@ -18,11 +18,14 @@ exports.setupChatScroll = async page => {
 
 exports.verifyChatScroll = async (page, expect) => {
     const list = page.locator('#codex-chat-messages');
+    const navigation = page.locator('.chat-scroll-navigation, [id^="codex-chat-scroll-"]');
+    await expect(navigation).toHaveCount(0);
     const gap = () => list.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop);
     await expect(list.locator('.message')).toHaveCount(24);
     await expect.poll(gap, {message: 'latest conversation stays at bottom'}).toBeLessThan(2);
     for (const viewport of [{width: 1440, height: 1000}, {width: 1440, height: 650}, {width: 768, height: 900}, {width: 390, height: 780}, {width: 1280, height: 800}]) {
         await page.setViewportSize(viewport);
+        await expect(navigation).toHaveCount(0);
         await expect.poll(gap, {message: 'bottom after resize ' + JSON.stringify(viewport)}).toBeLessThan(2);
     }
     // Late font/preview reflow after the initial jump must remain at the bottom.

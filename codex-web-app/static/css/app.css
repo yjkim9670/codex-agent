@@ -8945,66 +8945,6 @@ body.is-work-mode-resizing * {
     position: relative;
 }
 
-.chat-scroll-navigation {
-    position: absolute;
-    right: 16px;
-    bottom: 16px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 7px;
-    z-index: 2;
-    pointer-events: none;
-}
-
-.chat-scroll-action {
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
-    border: 1px solid var(--icon-button-border);
-    border-radius: calc(var(--icon-button-radius) + 2px);
-    background: var(--icon-button-bg);
-    color: var(--text-secondary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    box-shadow: var(--icon-button-shadow);
-    opacity: 0;
-    transform: translateY(8px);
-    pointer-events: none;
-    transition: opacity 0.16s ease, transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
-}
-
-.chat-scroll-navigation .chat-scroll-action.is-visible {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto;
-}
-
-.chat-scroll-action:hover {
-    background: var(--icon-button-hover-bg);
-    border-color: color-mix(in srgb, var(--accent) 56%, var(--icon-button-border));
-    color: var(--accent);
-}
-
-.chat-scroll-action:active {
-    transform: translateY(0);
-}
-
-.chat-scroll-action:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-}
-
-.chat-scroll-navigation .chat-scroll-action:disabled {
-    opacity: 0.42;
-    cursor: default;
-}
-
 .app.is-chat-fullscreen {
     width: 100%;
     max-width: none;
@@ -12475,18 +12415,6 @@ label.hover-tooltip,
     .chat-frame {
         padding: 10px;
         min-width: 0;
-    }
-
-    .chat-scroll-navigation {
-        right: 12px;
-        bottom: 12px;
-        gap: 6px;
-    }
-
-    .chat-scroll-action {
-        width: 36px;
-        min-width: 36px;
-        height: 36px;
     }
 
     .chat-controls {

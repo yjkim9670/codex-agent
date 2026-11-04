@@ -2150,6 +2150,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const chatFullscreenBtn = document.getElementById('codex-chat-fullscreen');
     const chatTitleTrigger = document.getElementById('codex-chat-title');
     const messages = document.getElementById('codex-chat-messages');
+    const scrollToTopBtn = document.getElementById('codex-chat-scroll-top');
+    const scrollToPreviousBtn = document.getElementById('codex-chat-scroll-previous');
+    const scrollToNextBtn = document.getElementById('codex-chat-scroll-next');
     const scrollToLatestBtn = document.getElementById('codex-chat-scroll-bottom');
     const streamMonitorCloseBtn = document.getElementById('codex-stream-monitor-close');
     const streamMonitorToggle = document.getElementById('codex-stream-monitor-toggle');
@@ -4312,6 +4315,23 @@ document.addEventListener('DOMContentLoaded', () => {
             setAutoScrollEnabled(true);
             scrollToBottom(true);
         });
+    }
+
+    if (scrollToTopBtn) {
+        scrollToTopBtn.addEventListener('click', () => {
+            const container = getChatMessagesContainer();
+            if (!container) return;
+            setAutoScrollEnabled(false);
+            container.scrollTo({ top: 0, behavior: getChatNavigationScrollBehavior() });
+        });
+    }
+
+    if (scrollToPreviousBtn) {
+        scrollToPreviousBtn.addEventListener('click', () => scrollToAdjacentUserMessage(-1));
+    }
+
+    if (scrollToNextBtn) {
+        scrollToNextBtn.addEventListener('click', () => scrollToAdjacentUserMessage(1));
     }
 
     if (modelSelect) {
@@ -30977,18 +30997,7 @@ function getChatMessagesContainer() {
     return document.getElementById('codex-chat-messages');
 }
 
-function isMessageListNearBottom(container) {
-    if (!container) return true;
-    const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
-    const distanceFromBottom = Math.max(
-        0,
-        container.scrollHeight - container.scrollTop - container.clientHeight
-    );
-    return distanceFromBottom <= threshold;
-}
-
-function setScrollToBottomButtonVisible(isVisible) {
-    const button = document.getElementById('codex-chat-scroll-bottom');
+function setChatNavigationButtonVisible(button, isVisible) {
     if (!button) return;
     const visible = Boolean(isVisible);
     button.classList.toggle('is-visible', visible);
@@ -30996,22 +31005,85 @@ function setScrollToBottomButtonVisible(isVisible) {
     button.tabIndex = visible ? 0 : -1;
 }
 
-function syncScrollToBottomButton(container = null) {
+function syncChatUnitNavigationButtons(container = null) {
+    const target = container || getChatMessagesContainer();
+    const userMessages = target
+        ? target.querySelectorAll(':scope > .message.user')
+        : [];
+    const hasRequests = userMessages.length > 0;
+    const previousButton = document.getElementById('codex-chat-scroll-previous');
+    const nextButton = document.getElementById('codex-chat-scroll-next');
+    const hasMultipleRequests = userMessages.length > 1;
+    setChatNavigationButtonVisible(previousButton, hasRequests);
+    setChatNavigationButtonVisible(nextButton, hasRequests);
+    if (previousButton) previousButton.disabled = !hasMultipleRequests;
+    if (nextButton) nextButton.disabled = !hasMultipleRequests;
+}
+
+function syncChatScrollButtons(container = null, metrics = null) {
     const target = container || getChatMessagesContainer();
     if (!target) {
-        setScrollToBottomButtonVisible(false);
+        setChatNavigationButtonVisible(document.getElementById('codex-chat-scroll-top'), false);
+        setChatNavigationButtonVisible(document.getElementById('codex-chat-scroll-bottom'), false);
         return;
     }
-    const hasOverflow = target.scrollHeight - target.clientHeight > 1;
-    const shouldShow = hasOverflow && !isMessageListNearBottom(target);
-    setScrollToBottomButtonVisible(shouldShow);
+    const scrollTop = metrics?.scrollTop ?? target.scrollTop;
+    const scrollHeight = metrics?.scrollHeight ?? target.scrollHeight;
+    const clientHeight = metrics?.clientHeight ?? target.clientHeight;
+    const distanceFromBottom = Math.max(0, scrollHeight - scrollTop - clientHeight);
+    const hasOverflow = scrollHeight - clientHeight > 1;
+    setChatNavigationButtonVisible(
+        document.getElementById('codex-chat-scroll-top'),
+        hasOverflow && scrollTop > 80
+    );
+    setChatNavigationButtonVisible(
+        document.getElementById('codex-chat-scroll-bottom'),
+        hasOverflow && distanceFromBottom > 80
+    );
+}
+
+function getChatNavigationScrollBehavior() {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+
+function scrollToAdjacentUserMessage(direction) {
+    const container = getChatMessagesContainer();
+    if (!container) return;
+    const userMessages = container.querySelectorAll(':scope > .message.user');
+    if (userMessages.length < 2) return;
+
+    const viewportTop = container.getBoundingClientRect().top + container.clientTop;
+    const anchorTop = viewportTop + 16;
+    let currentIndex = -1;
+    for (let index = 0; index < userMessages.length; index += 1) {
+        if (userMessages[index].getBoundingClientRect().top <= anchorTop) {
+            currentIndex = index;
+        } else {
+            break;
+        }
+    }
+
+    const nextIndex = direction < 0
+        ? currentIndex - 1
+        : currentIndex + 1;
+    if (nextIndex < 0 || nextIndex >= userMessages.length) return;
+
+    const nextMessage = userMessages[nextIndex];
+    const messageTop = container.scrollTop
+        + nextMessage.getBoundingClientRect().top
+        - viewportTop;
+    setAutoScrollEnabled(false);
+    container.scrollTo({
+        top: Math.max(0, messageTop - 8),
+        behavior: getChatNavigationScrollBehavior()
+    });
 }
 
 function scrollToBottom(force = false) {
     const container = getChatMessagesContainer();
     if (!container) return;
     if (!force && !state.autoScrollEnabled) {
-        syncScrollToBottomButton(container);
+        syncChatScrollButtons(container);
         return;
     }
     if (force) {
@@ -31021,7 +31093,7 @@ function scrollToBottom(force = false) {
         // A queued layout update must respect a reader who has since scrolled up.
         if (!state.autoScrollEnabled) return;
         container.scrollTop = container.scrollHeight;
-        syncScrollToBottomButton(container);
+        syncChatScrollButtons(container);
     };
     if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(scroll);
@@ -31030,47 +31102,61 @@ function scrollToBottom(force = false) {
     }
 }
 
-let messageLayoutSize = '';
-function messageLayoutSignature(container) {
-    return [container.clientWidth, container.clientHeight, container.scrollHeight].join(':');
-}
-
 function observeMessageLayout(container) {
-    // Fonts, wrapping, previews and composer height can settle after initial render.
-    // Observe the viewport as well as messages so height-only resizes also settle.
     const settle = () => {
-        messageLayoutSize = messageLayoutSignature(container);
         if (state.autoScrollEnabled) container.scrollTop = container.scrollHeight;
-        syncScrollToBottomButton(container);
+        syncChatScrollButtons(container);
     };
-    const observer = new ResizeObserver(settle);
-    observer.observe(container);
-    const observeMessages = () => {
-        observer.disconnect();
-        observer.observe(container);
-        for (const message of container.children) observer.observe(message);
+    const resizeObserver = new ResizeObserver(settle);
+    resizeObserver.observe(container);
+    for (const message of container.children) {
+        if (message.classList.contains('message')) resizeObserver.observe(message);
+    }
+
+    new MutationObserver(records => {
+        for (const record of records) {
+            record.removedNodes.forEach(message => {
+                if (message.nodeType === Node.ELEMENT_NODE && message.classList.contains('message')) {
+                    resizeObserver.unobserve(message);
+                }
+            });
+            record.addedNodes.forEach(message => {
+                if (message.nodeType === Node.ELEMENT_NODE && message.classList.contains('message')) {
+                    resizeObserver.observe(message);
+                }
+            });
+        }
+        syncChatUnitNavigationButtons(container);
         settle();
-    };
-    new MutationObserver(observeMessages).observe(container, { childList: true });
-    observeMessages();
+    }).observe(container, { childList: true });
+    syncChatUnitNavigationButtons(container);
+    settle();
 }
 
+let messageScrollUpdateFrame = 0;
 function handleMessageScroll(container) {
     if (!container) return;
-    const size = messageLayoutSignature(container);
-    if (size !== messageLayoutSize) {
-        // Browser scroll anchoring/clamping during reflow is not reader intent.
-        messageLayoutSize = size;
-        if (state.autoScrollEnabled) container.scrollTop = container.scrollHeight;
-        syncScrollToBottomButton(container);
-        return;
-    }
-    setAutoScrollEnabled(isMessageListNearBottom(container));
+    if (messageScrollUpdateFrame) return;
+    messageScrollUpdateFrame = window.requestAnimationFrame(() => {
+        messageScrollUpdateFrame = 0;
+        const metrics = {
+            scrollTop: container.scrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight
+        };
+        const distanceFromBottom = Math.max(
+            0,
+            metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight
+        );
+        const threshold = Number.isFinite(state.autoScrollThreshold) ? state.autoScrollThreshold : 0;
+        state.autoScrollEnabled = distanceFromBottom <= threshold;
+        syncChatScrollButtons(container, metrics);
+    });
 }
 
 function setAutoScrollEnabled(isEnabled) {
     state.autoScrollEnabled = Boolean(isEnabled);
-    syncScrollToBottomButton();
+    syncChatScrollButtons();
 }
 
 function pinAutoScrollForSession(sessionId) {

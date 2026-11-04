@@ -164,7 +164,9 @@ header,#composer,#status{flex-shrink:0}
 .thread-navigation{position:absolute;right:20px;bottom:12px;display:flex;align-items:center;gap:6px;z-index:3}
 .thread-navigation button{min-width:44px;min-height:44px;padding:6px 12px;border-radius:22px;background:var(--surface);box-shadow:0 2px 8px #0002}
 .thread-navigation #new-content{position:static;font-size:13px}
-#thread{padding-bottom:72px}
+/* Keep only a small inset after the latest message; navigation overlays the thread. */
+#thread{padding-bottom:8px}
+#messages>.message:last-child{margin-bottom:0}
 @media(min-width:1024px){
  aside{gap:12px;padding-block:16px}
  .account{padding-top:8px;gap:6px}

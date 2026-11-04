@@ -32,7 +32,7 @@ header h1{font-size:19px;font-weight:600;min-width:0}
 header button{display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;min-width:44px;padding:10px}
 #mobile-actions button{display:flex;align-items:center;gap:12px;text-align:left}
 #mobile-actions .sr-only{position:static;width:auto;height:auto;clip:auto;overflow:visible}
-#thread{padding:40px max(28px,calc((100% - 1440px)/2)) 80px}
+#thread{padding:40px max(28px,calc((100% - 1440px)/2)) 8px}
 .message{margin-bottom:36px}
 .user{position:relative;min-height:48px;padding:4px 0 4px 68px;background:transparent;border-radius:0;line-height:1.8}
 .user::before{content:'';position:absolute;inset:2px auto auto 0;width:40px;height:40px;background:var(--accent);mask:url('../icons/user.svg') center/24px 24px no-repeat;-webkit-mask:url('../icons/user.svg') center/24px 24px no-repeat}
@@ -87,7 +87,7 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:8px}
 }
 @media(min-width:600px) and (max-width:1023px){
  header{min-height:64px;padding:8px 20px}
- #thread{padding:28px 24px 80px}
+ #thread{padding:28px 24px 8px}
  #composer{padding:8px 24px max(20px,env(safe-area-inset-bottom))}
  .toolbar label{flex:1;min-width:0}
  .toolbar label:has(#model){flex:1.6}
@@ -107,7 +107,7 @@ progress::-moz-progress-bar{background:var(--accent);border-radius:8px}
  header{min-height:50px;padding:3px 8px;gap:4px}
  header button{padding:4px 8px;line-height:1}
  header h1{font-size:16px}
- #thread{padding:20px 16px 64px}
+ #thread{padding:20px 16px 8px}
  .message{margin-bottom:28px}
  .user{padding:2px 0 2px 36px}
  .user::before{width:26px;height:30px;mask-size:21px;-webkit-mask-size:21px}

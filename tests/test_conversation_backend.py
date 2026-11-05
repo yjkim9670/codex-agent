@@ -202,6 +202,8 @@ def test_entrypoint_uses_loopback_without_host_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['run_conversation_server.py', '--port', '3101'])
     monkeypatch.setattr(Flask, 'run', lambda self, **kwargs: called.append(kwargs))
     entry.main()
+    from shared.chat_usage_sources import chat_roots
+    assert chat_roots(tmp_path / 'unused') == [tmp_path.resolve()]
     assert len(called) == 1
     assert called[0]['host'] == '127.0.0.1'
     assert called[0]['port'] == 3101

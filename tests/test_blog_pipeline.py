@@ -1042,3 +1042,36 @@ def test_blog_defaults_explicitly_use_luna_xhigh(blog_environment, monkeypatch):
     assert blog_pipeline.run_blog_pipeline(force=True)['started']
     assert calls[0]['model_override'] == 'gpt-6-luna'
     assert calls[0]['reasoning_override'] == 'xhigh'
+
+
+def test_automatic_window_tolerates_reset_drift_without_moving_anchor(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 6, 4, 20, tzinfo=blog_pipeline.KST)
+    context = codex_chat._account_storage_context('default')
+    claim_path = blog_environment / 'drift-claim.json'
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_coordination_path', lambda _context: claim_path)
+    monkeypatch.setattr(blog_pipeline, 'get_blog_pipeline_status', lambda: {
+        'configured': True, 'enabled': True, 'state': {}, 'automatic': {},
+    })
+    monkeypatch.setattr(codex_chat, '_account_has_active_codex_stream', lambda _account: False)
+    snapshot = {'last_success_at': blog_pipeline.normalize_timestamp(now),
+                'five_hour': {'used_percent': 0, 'resets_at': '2026-11-06T09:20:36+09:00'}}
+    assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+    first = snapshot['usage_keepalive']['automatic_cycle_targets']
+    for reset in ('2026-11-06T09:20:52+09:00', '2026-11-06T09:23:36+09:00',
+                  '2026-11-06T09:17:36+09:00'):
+        snapshot['five_hour']['resets_at'] = reset
+        assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['reason'] == 'cycle_already_submitted'
+        assert not codex_chat._usage_keepalive_global_claim(context, codex_chat._usage_keepalive_cycle_targets(snapshot, now), now)[0]
+    assert snapshot['usage_keepalive']['automatic_cycle_targets'] == first
+    snapshot['five_hour']['resets_at'] = '2026-11-06T09:23:37+09:00'
+    assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
+
+
+def test_keepalive_missing_reset_preserves_slot_behavior():
+    now = datetime(2026, 11, 6, 4, 29, tzinfo=blog_pipeline.KST)
+    snapshot = {'five_hour': {'used_percent': 0}}
+    first = codex_chat._usage_keepalive_cycle_targets(snapshot, now)
+    next_slot = codex_chat._usage_keepalive_cycle_targets(snapshot, now + timedelta(minutes=1))
+    assert not codex_chat._usage_keepalive_same_targets(first, next_slot)
+    legacy = {'five_hour': first['five_hour'].replace('zero-slot:', 'zero-window:')}
+    assert codex_chat._usage_keepalive_same_targets(legacy, first)

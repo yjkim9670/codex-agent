@@ -8491,9 +8491,36 @@ def _usage_keepalive_cycle_targets(snapshot, now=None):
     if not isinstance(limit, dict) or _normalize_used_percent(limit.get('used_percent')) != 0:
         return {}
     reset_at = parse_timestamp(limit.get('resets_at'))
-    cycle_key = normalize_timestamp(reset_at) if reset_at else normalize_timestamp(
-        current.replace(minute=(current.minute // 30) * 30, second=0, microsecond=0))
-    return {'five_hour': 'five_hour:zero-window:%s' % cycle_key}
+    if reset_at:
+        return {'five_hour': 'five_hour:zero-window:%s' % normalize_timestamp(reset_at)}
+    slot = current.replace(minute=(current.minute // 30) * 30, second=0, microsecond=0)
+    return {'five_hour': 'five_hour:zero-slot:%s' % normalize_timestamp(slot)}
+
+
+def _usage_keepalive_same_target(previous, current):
+    """Compare reset observations against the originally claimed window."""
+    if previous == current:
+        return bool(previous)
+    reset_prefix = 'five_hour:zero-window:'
+    slot_prefix = 'five_hour:zero-slot:'
+    if not isinstance(previous, str) or not isinstance(current, str):
+        return False
+    # Old versions encoded fallback slots as zero-window targets. Match an
+    # identical slot during migration, but never apply reset tolerance to it.
+    if current.startswith(slot_prefix) and previous.startswith(reset_prefix):
+        return current[len(slot_prefix):] == previous[len(reset_prefix):]
+    if not (previous.startswith(reset_prefix) and current.startswith(reset_prefix)):
+        return False
+    before = parse_timestamp(previous[len(reset_prefix):])
+    after = parse_timestamp(current[len(reset_prefix):])
+    return bool(before and after and abs((after - before).total_seconds()) <= 3 * 60)
+
+
+def _usage_keepalive_same_targets(previous, current):
+    return bool(isinstance(previous, dict) and isinstance(current, dict)
+                and current and previous.keys() == current.keys()
+                and all(_usage_keepalive_same_target(previous[name], target)
+                        for name, target in current.items()))
 
 
 def _usage_keepalive_daily_key(snapshot, now=None):
@@ -8549,7 +8576,7 @@ def _usage_keepalive_global_claim(context, cycle_targets, now=None):
         eligible_windows = []
         for name, target in cycle_targets.items():
             prior = windows.get(name) if isinstance(windows.get(name), dict) else {}
-            if prior.get('target') == target:
+            if _usage_keepalive_same_target(prior.get('target'), target):
                 continue
             eligible_windows.append((name, target))
         if not eligible_windows:
@@ -8596,7 +8623,7 @@ def _submit_usage_keepalive_locked(context, snapshot, automatic=False, now=None)
                 'no_zero_usage_window'
             )
             return {'submitted': False, 'reason': reason}
-        same_targets = previous_targets == cycle_targets
+        same_targets = _usage_keepalive_same_targets(previous_targets, cycle_targets)
         if same_targets:
             return {'submitted': False, 'reason': 'cycle_already_submitted'}
     if get_selected_agent_backend() != 'dtgpt':
@@ -8841,7 +8868,8 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
         return {'submitted': False, 'reason': 'retry_pending'}
     if failed_retry and (blog_state.get('last_result') or {}).get('account_id') not in {None, '', context['account']['id']}:
         return {'submitted': False, 'reason': 'retry_account_mismatch'}
-    if previous.get('automatic_cycle_targets') == targets and not failed_retry:
+    same_cycle = _usage_keepalive_same_targets(previous.get('automatic_cycle_targets'), targets)
+    if same_cycle and not failed_retry:
         return {'submitted': False, 'reason': 'cycle_already_submitted'}
     if _account_has_active_codex_stream(context['account']['id']):
         return {'submitted': False, 'reason': 'account_busy'}
@@ -8865,7 +8893,7 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
         'last_mode': 'automatic',
         'last_status': 'queued',
         'last_error': '',
-        'automatic_cycle_targets': targets,
+        'automatic_cycle_targets': previous['automatic_cycle_targets'] if same_cycle else targets,
         'automatic_attempts': 1,
         'next_retry_at': None,
         'history': history,

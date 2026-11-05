@@ -676,6 +676,9 @@ def retry_failed_blog_pipeline(account_id=None, snapshot=None):
         return {'started': False, 'reason': 'usage_snapshot_stale'}
     if parse_timestamp(snapshot.get('last_success_at')) < due:
         return {'started': False, 'reason': 'retry_pending'}
+    time_blocker = codex_chat._automatic_usage_blog_time_blocker(_now(), snapshot)
+    if time_blocker:
+        return {'started': False, 'reason': time_blocker}
     if not codex_chat._usage_keepalive_cycle_targets(snapshot, _now()):
         return {'started': False, 'reason': 'no_zero_usage_window'}
     return run_blog_pipeline(account_id=account_id)
@@ -826,6 +829,9 @@ def _automatic_status(root, project, state):
         reason = 'verification_pending'
     elif state.get('stage') in {'select', 'topic'} and not project.get('topic_rotation_enabled') and state.get('completed_post_count'):
         reason = 'topic_rotation_disabled'
+    elif codex_chat._automatic_usage_blog_time_blocker(now):
+        reason = 'quiet_hours'
+        next_at = now.replace(hour=4, minute=0, second=0, microsecond=0)
     return {
         'reason': reason, 'next_run_at': normalize_timestamp(next_at) if next_at else None,
         'daily_usage': usage,
@@ -1002,6 +1008,10 @@ def _start_pipeline_run(force=False, account_id=None):
         return {'started': False, 'reason': 'automatic_paused'}
     if not project or not project.get('enabled'):
         return {'started': False, 'reason': 'disabled'}
+    if not force:
+        time_blocker = codex_chat._automatic_usage_blog_time_blocker(_now())
+        if time_blocker:
+            return {'started': False, 'reason': time_blocker}
     account_id = account_id or codex_chat.get_active_account_id()
     context = codex_chat._account_storage_context(account_id)
     if context is None:

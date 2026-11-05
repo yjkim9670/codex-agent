@@ -129,8 +129,10 @@ def test_blog_submission_preserves_automatic_window_claim(blog_environment, monk
 
 
 def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 5, 12, 0, tzinfo=blog_pipeline.KST)
     context = {'account': {'id': 'default'}, 'codex_home': blog_environment.parent / 'codex-home'}
-    snapshot = {'five_hour': {'used_percent': 0, 'resets_at': '2026-09-19T17:00:00+09:00'}}
+    snapshot = {'last_success_at': blog_pipeline.normalize_timestamp(now),
+                'five_hour': {'used_percent': 0, 'resets_at': '2026-09-19T17:00:00+09:00'}}
     monkeypatch.setattr(codex_chat, '_account_has_active_codex_stream', lambda _account_id: False)
 
     assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot)['reason'] == 'not_configured'
@@ -140,7 +142,7 @@ def test_automatic_usage_reservation_requires_an_enabled_blog(blog_environment, 
         'project_id': 'automatic-series', 'enabled': True, 'backlog': ['자동 글'],
     })
     monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim', lambda *_args: (True, ''))
-    result = codex_chat._reserve_automatic_usage_blog_locked(context, snapshot)
+    result = codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)
 
     assert result['submitted'] is True
     assert snapshot['usage_keepalive']['automatic_cycle_targets']['five_hour'].startswith('five_hour:zero-window:')
@@ -890,6 +892,68 @@ def test_background_worker_only_retries_through_usage_refresh(monkeypatch):
     assert calls == ['refresh']
 
 
+@pytest.mark.parametrize(('at', 'observed', 'used', 'reason'), [
+    ('2026-11-05T23:59:59+09:00', '2026-11-05T23:50:00+09:00', 0, ''),
+    ('2026-11-06T00:00:00+09:00', '2026-11-06T00:00:00+09:00', 0, 'quiet_hours'),
+    ('2026-11-06T03:59:59+09:00', '2026-11-06T03:50:00+09:00', 0, 'quiet_hours'),
+    ('2026-11-06T04:00:00+09:00', '2026-11-06T03:50:00+09:00', 0, 'usage_observation_required'),
+    ('2026-11-06T04:00:00+09:00', '2026-11-06T04:00:00+09:00', 0, ''),
+    ('2026-11-06T04:00:00+09:00', '2026-11-06T04:00:00+09:00', 1, 'no_zero_usage_window'),
+    ('2026-11-05T19:00:00+00:00', '2026-11-05T19:00:00+00:00', 0, ''),
+])
+def test_overnight_reservation_waits_for_morning_observation(
+        blog_environment, monkeypatch, at, observed, used, reason):
+    now = datetime.fromisoformat(at)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    blog_pipeline.configure_blog_project({'enabled': True})
+    claims = []
+    monkeypatch.setattr(codex_chat, '_usage_keepalive_global_claim',
+                        lambda *args: (claims.append(args) or True, ''))
+    snapshot = {'last_success_at': observed, 'five_hour': {'used_percent': used}}
+    result = codex_chat._reserve_automatic_usage_blog_locked(
+        codex_chat._account_storage_context('default'), snapshot, now)
+    assert result['submitted'] is (not reason)
+    assert result['reason'] == reason
+    assert bool(claims) is (not reason)
+    if reason:
+        assert 'usage_keepalive' not in snapshot
+    # The overnight pause must not suppress the next read-only usage poll.
+    assert codex_chat._account_usage_refresh_is_due({}, now)
+
+
+def test_midnight_blocks_reserved_start_but_allows_manual_run(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 5, 0, 0, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    blog_pipeline.configure_blog_project({'enabled': True})
+    assert codex_chat._run_usage_blog_pipeline('default', automatic=True)['reason'] == 'quiet_hours'
+    status = blog_pipeline.get_blog_pipeline_status()['automatic']
+    assert status['reason'] == 'quiet_hours'
+    assert blog_pipeline.parse_timestamp(status['next_run_at']) == now.replace(hour=4)
+    monkeypatch.setattr(codex_chat, 'create_session', lambda **kwargs: {'id': 'manual'})
+    monkeypatch.setattr(codex_chat, 'create_codex_stream', lambda *args, **kwargs: {'id': 'manual-stream'})
+    assert codex_chat._run_usage_blog_pipeline('default', automatic=False)['submitted']
+
+
+def test_failed_retry_waits_overnight_then_uses_four_am_observation(blog_environment, monkeypatch):
+    now = datetime(2026, 11, 5, 23, 50, tzinfo=blog_pipeline.KST)
+    monkeypatch.setattr(blog_pipeline, '_now', lambda: now)
+    run = _compact_start(blog_environment, monkeypatch)
+    blog_pipeline.record_blog_pipeline_completion(
+        {**run, 'blog_root': str(blog_environment / 'blog')}, False, 'failure')
+    now += timedelta(minutes=10)
+    snapshot = {'last_success_at': blog_pipeline.normalize_timestamp(now),
+                'five_hour': {'used_percent': 0}}
+    assert blog_pipeline.retry_failed_blog_pipeline(snapshot=snapshot)['reason'] == 'quiet_hours'
+    now = now.replace(hour=4)
+    snapshot['last_success_at'] = blog_pipeline.normalize_timestamp(now - timedelta(minutes=10))
+    assert blog_pipeline.retry_failed_blog_pipeline(snapshot=snapshot)['reason'] == 'usage_observation_required'
+    snapshot['last_success_at'] = blog_pipeline.normalize_timestamp(now)
+    retry = blog_pipeline.retry_failed_blog_pipeline(snapshot=snapshot)
+    assert retry['started']
+    assert retry['stage'] == run['stage']
+    assert retry['post_id'] == run['post_id']
+
+
 @pytest.mark.parametrize('used', [None, 1, 12.5, 100, 0])
 def test_scheduler_retries_failed_stage_only_after_observing_zero(blog_environment, monkeypatch, used):
     now = datetime(2026, 11, 5, 10, 0, tzinfo=blog_pipeline.KST)
@@ -941,6 +1005,7 @@ def test_success_runs_at_next_observed_reset_before_five_hours(blog_environment,
     old_targets = codex_chat._usage_keepalive_cycle_targets(old_snapshot, now)
     assert codex_chat._usage_keepalive_global_claim(context, old_targets, now - timedelta(minutes=20))[0]
     snapshot = {'five_hour': {'used_percent': 0, 'resets_at': '2026-11-05T15:20:00+09:00'},
+                'last_success_at': blog_pipeline.normalize_timestamp(now),
                 'usage_keepalive': {'automatic_cycle_targets': old_targets}}
     assert codex_chat._reserve_automatic_usage_blog_locked(context, snapshot, now)['submitted']
     result = codex_chat._run_usage_blog_pipeline('default', automatic=True)

@@ -79,7 +79,14 @@ No deterministic topic is appended after completion: topic planning consumes
 one of the model runs described above.
 
 Automatic blog runs follow the observed five-hour usage reset, checked every ten
-minutes, and honor `automatic_paused`. The legacy `cadence_minutes` setting is
+minutes, and honor `automatic_paused`.
+Automatic submissions and failed-stage retries pause from 00:00 inclusive to
+04:00 exclusive in KST. Usage checks continue every ten minutes overnight.
+At or after 04:00, submission requires a successful usage observation taken at
+or after that day's 04:00 showing exactly 0% five-hour usage; a cached overnight
+0% observation cannot trigger a run. Existing runs may finish overnight, and
+explicit manual submissions remain available.
+The legacy `cadence_minutes` setting is
 retained for compatibility but does not impose a fixed wait after success. Daily limits apply only when `daily_budget_enabled` is
 explicitly true (default false, including existing projects without this field).
 Optional limits are `daily_run_budget` (6) and `daily_token_budget` (300000). Budgets count this workspace's recorded starts/tokens,

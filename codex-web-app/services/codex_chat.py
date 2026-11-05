@@ -8783,6 +8783,24 @@ def _run_usage_blog_pipeline(account_id, automatic):
     }
 
 
+def _automatic_usage_blog_time_blocker(now=None, snapshot=None):
+    """Keep automatic blog submissions out of 00:00–04:00 KST.
+
+    A cached observation from before 04:00 cannot authorize the morning run.
+    Usage polling itself continues throughout the quiet hours.
+    """
+    current = now if isinstance(now, datetime) else datetime.now(KST)
+    current = current.astimezone(KST) if current.tzinfo else current.replace(tzinfo=KST)
+    resume_at = current.replace(hour=4, minute=0, second=0, microsecond=0)
+    if current < resume_at:
+        return 'quiet_hours'
+    if snapshot is not None:
+        observed_at = parse_timestamp(snapshot.get('last_success_at'))
+        if observed_at is None or observed_at < resume_at:
+            return 'usage_observation_required'
+    return ''
+
+
 def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
     """Reserve one zero-use window before queueing its single blog stage.
 
@@ -8809,6 +8827,9 @@ def _reserve_automatic_usage_blog_locked(context, snapshot, now=None):
     retry_at = parse_timestamp(previous.get('next_retry_at'))
     if retry_at and retry_at > current:
         return {'submitted': False, 'reason': 'retry_pending'}
+    time_blocker = _automatic_usage_blog_time_blocker(current, snapshot)
+    if time_blocker:
+        return {'submitted': False, 'reason': time_blocker}
     targets = _usage_keepalive_cycle_targets(snapshot, current)
     if not targets:
         return {'submitted': False, 'reason': 'no_zero_usage_window'}
@@ -8877,6 +8898,7 @@ def _start_reserved_automatic_usage_blog(account_id, reservation=None):
             'disabled', 'not_configured', 'stale_run_recovered',
             'automatic_paused', 'daily_budget_exceeded',
             'verification_pending', 'topic_rotation_disabled',
+            'quiet_hours', 'usage_observation_required',
         }
         if result.get('completed'):
             outcome = 'completed'

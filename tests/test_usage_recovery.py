@@ -317,3 +317,44 @@ def test_unchanged_readings_reject_mixed_reset_saturated_and_fractional_bins():
             assert all(g['records'] == 1 for g in groups)
         else:
             assert not groups, change
+
+
+def test_reset_jitter_is_recovered_and_accepted_by_final_analysis():
+    from datetime import timedelta
+    for seconds in (-3, -1, 1, 3):
+        entry, _, after = fixture()
+        after['five_hour']['resets_at'] = (datetime.fromisoformat(after['five_hour']['resets_at'])
+                                          + timedelta(seconds=seconds)).isoformat()
+        records, _ = chat_calibration([entry], [entry], [])
+        assert records[0]['outcomes']['five_hour']['status'] == 'observed'
+        report = analyze(Path('.'), data={'events': [entry], 'codex_usage_calibration.json': {'records': records}},
+                         now=datetime.fromisoformat('2026-10-14T11:00:00+09:00'))
+        assert report['windows']['five_hour']['models']['gpt-6-luna']['deduction_pp'] == 1
+
+
+def test_reset_tolerance_keeps_decrease_large_changes_and_boundary_excluded():
+    from datetime import timedelta
+    for condition in ('large_change', 'decrease', 'boundary'):
+        entry, before, after = fixture()
+        if condition == 'large_change':
+            after['five_hour']['resets_at'] = (datetime.fromisoformat(after['five_hour']['resets_at'])
+                                              + timedelta(seconds=4)).isoformat()
+        elif condition == 'decrease':
+            after['five_hour']['used_percent'] = 19
+        else:
+            before['five_hour']['resets_at'] = '2026-10-14T10:02:01+09:00'
+            after['five_hour']['resets_at'] = '2026-10-14T10:01:59+09:00'
+        records, _ = chat_calibration([entry], [entry], [])
+        assert records[0]['outcomes']['five_hour']['reason'] == 'unverified_or_changed_reset'
+        assert records[0]['outcomes']['weekly']['status'] == 'observed'
+
+
+def test_final_analysis_rejects_previously_observed_group_crossing_reset():
+    entry, _, _ = fixture()
+    records, _ = chat_calibration([entry], [entry], [])
+    record = records[0]
+    record['limits_before']['five_hour']['resets_at'] = '2026-10-14T10:02:01+09:00'
+    record['quota_samples'][0]['five_hour_resets_at'] = '2026-10-14T10:01:59+09:00'
+    report = analyze(Path('.'), data={'events': [entry], 'codex_usage_calibration.json': {'records': records}},
+                     now=datetime.fromisoformat('2026-10-14T11:00:00+09:00'))
+    assert report['windows']['five_hour']['excluded']['unverified_or_changed_reset'] == 1

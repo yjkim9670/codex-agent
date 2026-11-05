@@ -21,7 +21,7 @@
 
 ## 저장과 계정
 
-기본 데이터는 `.agent_state/conversation/`이다. `CHAT_DATA_DIR`로 명시적으로 바꿀 수 있으며 수집기의 같은 환경에도 동일한 값을 설정해야 한다. 데이터 디렉터리는 0700, DB·세션 비밀·인증 snapshot은 0600이다. 실행 중 백업은 SQLite backup API를 쓰거나 사용자가 정지한 뒤 DB/WAL을 일관되게 보관한다.
+기본 데이터는 `.agent_state/conversation/`이다. `CHAT_DATA_DIR`로 명시적으로 바꿀 수 있다. Chat 실행기는 시작 시 실제 경로를 공통 계정 상태 디렉터리의 `chat_usage_sources/`에 등록하며, 업데이트된 Workbench 수집기는 모든 등록 경로를 계정별로 조회한다. 공통 계정 상태 경로를 변경했다면 Chat과 Workbench의 `CODEX_WORKBENCH_SHARED_ACCOUNT_STATE_DIR`를 일치시킨다. 수집기의 `CHAT_DATA_DIR`는 추가 원본으로 사용할 수 있다. 데이터 디렉터리는 0700, DB·세션 비밀·인증 snapshot은 0600이다. 실행 중 백업은 SQLite backup API를 쓰거나 사용자가 정지한 뒤 DB/WAL을 일관되게 보관한다.
 
 | 데이터 | 용도 |
 | --- | --- |

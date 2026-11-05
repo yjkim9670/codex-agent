@@ -161,8 +161,7 @@ def analyze(root, days=30, effort="all", environment="all", *, data=None, now=No
             after = samples.get(observed, [])
             reset_key = window + '_resets_at'
             if not after or any(not r.get('limits_before', {}).get(window, {}).get('resets_at')
-                                or any(not (s.get(reset_key) == r['limits_before'][window]['resets_at'] or
-                                            same_reset(s.get(reset_key), r['limits_before'][window]['resets_at']))
+                                or any(not same_reset(s.get(reset_key), r['limits_before'][window]['resets_at'], observed_at=observed)
                                        for s in after) for r in records):
                 exclude('unverified_or_changed_reset', records)
                 continue

@@ -21,7 +21,7 @@ def fixture(root, mixed=False, overlap=False, reset=False):
         records.append({'id': f'stream:{i}', 'model': model, 'raw_tokens': 1000000,
                         'created_at': f'2026-10-01T10:0{i + 1}:00+09:00',
                         'learning_eligible': True,
-                        'limits_before': {w: {'resets_at': 'reset'} for w in ('five_hour', 'weekly')},
+                        'limits_before': {w: {'resets_at': '2026-10-02T00:00:00+09:00'} for w in ('five_hour', 'weekly')},
                         'outcomes': {w: {'status': 'observed', 'group_id': w,
                                         'group_size': 2, 'group_actual_percent': 2,
                                         'actual_percent': 999,  # Allocated values must be ignored.
@@ -34,8 +34,8 @@ def fixture(root, mixed=False, overlap=False, reset=False):
         'codex_usage_calibration.json': {'records': records},
         'codex_usage_history.json': {'account_limit_samples': [{
             'limits_observed_at': '2026-10-01T10:03:00+09:00',
-            'five_hour_resets_at': 'changed' if reset else 'reset',
-            'weekly_resets_at': 'reset'}]},
+            'five_hour_resets_at': 'changed' if reset else '2026-10-02T00:00:00+09:00',
+            'weekly_resets_at': '2026-10-02T00:00:00+09:00'}]},
         'codex_account_usage_snapshot.json': {'last_success_at': '2026-10-01T11:00:00+09:00',
                                             'five_hour': {}, 'weekly': {}},
     }

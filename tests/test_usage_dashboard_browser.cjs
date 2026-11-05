@@ -56,7 +56,7 @@ if(process.argv.includes('--serve')) {
     });
     server.listen(0,'127.0.0.1',()=>console.log(`Fixture server http://127.0.0.1:${server.address().port}/usage`));
 } else (async()=>{
-    const browser = await chromium.launch({headless:true});
+    const browser = await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? {executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH} : {})});
     try {
         const page = await browser.newPage({viewport:{width:1440,height:1000},timezoneId:'America/Los_Angeles'});
         const errors=[], requests=[];
@@ -95,6 +95,9 @@ if(process.argv.includes('--serve')) {
         await expect(page.locator('#monthly-rows tr').last()).toContainText('일부 기간');
         await expect(page.locator('#monthly-rows tr').nth(1)).not.toContainText('일부 기간');
         await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'}).locator('td').nth(3)).toHaveText('—');
+        await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'})).toContainText('보정 미연결 200 토큰');
+        await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'})).toContainText('모델/effort 혼합 (구간) 4');
+        await expect(page.locator('#model-rows tr').filter({hasText:'alpha / low'})).toContainText('후속 관측 기한 초과 (건) 19');
         await page.locator('[data-window="weekly"]').click();
         await expect(page.locator('#resolution-observations')).toContainText('조건을 충족하는 미세 차감 관측이 없습니다');
         await expect(page.locator('#comparison [data-observation="verified"]')).toHaveCount(1);

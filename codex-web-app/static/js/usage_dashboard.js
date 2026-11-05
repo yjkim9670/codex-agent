@@ -37,10 +37,29 @@
     $('resolution-observations').innerHTML = limited.length ? `<p class="note">정수 사용률이 그대로인 구간입니다. 조회 지연이 없고 표시 간격이 1%p일 때의 참고 범위이며, 실제 차감률·학습·비교 순위에는 반영하지 않습니다.</p><div class="table-wrap"><table><thead><tr><th>모델 / effort</th><th>관측 시각</th><th>누적 토큰</th><th>표시 기준 %p / 100만</th></tr></thead><tbody>${limited.map(g => `<tr><td>${esc(name(g.model))} / ${esc(g.reasoning_effort)}</td><td>${esc(dateLabel(g.observed_at))}</td><td>${num(g.tokens)} · ${num(g.records)}작업</td><td>&lt; ${(Math.ceil(g.reported_pp_per_million_upper * 1e6) / 1e6).toFixed(6).replace(/\.?0+$/, '')}</td></tr>`).join('')}</tbody></table></div>` : '<p class="note">조건을 충족하는 미세 차감 관측이 없습니다. 실행 전후 조회·동일 모델/effort·리셋 및 실행 겹침 검증이 필요합니다.</p>';
     showGroups();
   }
+  function exclusionLabel(reason) {
+    if (reason.includes('overlapping_local_execution') || reason.includes('concurrent_flag')) return '실행 겹침';
+    if (reason.includes('mixed_model') || reason.includes('mixed_effort')) return '모델/effort 혼합';
+    if (reason.includes('reset')) return '리셋 확인 불가';
+    if (reason.includes('baseline')) return '실행 전 관측 미확인';
+    if (reason.includes('timeout')) return '후속 관측 기한 초과';
+    if (reason.includes('pending') || reason.includes('awaiting')) return '후속 관측 대기';
+    if (reason.includes('ambiguous') || reason.includes('incomplete')) return '연결 누락/중복';
+    return reason;
+  }
+  function exclusionNote(window, key) {
+    const byModel = report.effort === 'all' ? window.excluded_model_efforts : window.excluded_models;
+    const counts = new Map();
+    Object.entries(byModel?.[key] || {}).forEach(([reason, count]) => {
+      const label = exclusionLabel(reason) + (reason.startsWith('record_') ? ' (건)' : ' (구간)');
+      counts.set(label, (counts.get(label) || 0) + count);
+    });
+    return [...counts].map(([label, count]) => `${label} ${num(count)}`).join(' · ');
+  }
   function showGroups(key) {
     const window = report.windows[windowName];
     const groups = window.groups.filter(g => !key || (report.effort === 'all' ? `${g.model}/${g.reasoning_effort}` : g.model) === key);
-    $('groups').innerHTML = `<p class="note">${Object.entries(window.excluded).map(([k,v]) => `${esc(k)}: ${v}`).join(' · ') || '제외 구간 없음'}</p><div class="table-wrap"><table><thead><tr><th>모델 / effort</th><th>관측 시각</th><th>토큰</th><th>차감 %p</th></tr></thead><tbody>${groups.map(g => `<tr><td>${esc(name(g.model))} / ${esc(g.reasoning_effort)}</td><td>${esc(dateLabel(g.observed_at))}</td><td>${num(g.tokens)}</td><td>${rate(g.deduction_pp)}</td></tr>`).join('')}</tbody></table></div>`;
+    $('groups').innerHTML = `<p class="note">${Object.entries(window.excluded).map(([k,v]) => `${esc(exclusionLabel(k))}: ${v}`).join(' · ') || '제외 구간 없음'}</p><div class="table-wrap"><table><thead><tr><th>모델 / effort</th><th>관측 시각</th><th>토큰</th><th>차감 %p</th></tr></thead><tbody>${groups.map(g => `<tr><td>${esc(name(g.model))} / ${esc(g.reasoning_effort)}</td><td>${esc(dateLabel(g.observed_at))}</td><td>${num(g.tokens)}</td><td>${rate(g.deduction_pp)}</td></tr>`).join('')}</tbody></table></div>`;
   }
   const dayMs = 86400000;
   const dayDate = day => new Date(`${day}T00:00:00Z`);
@@ -192,11 +211,17 @@
     compare();
     $('model-rows').innerHTML=rows().sort((a,b)=>b.tokens-a.tokens).map(row=>{
       const f=quota('five_hour',row.key),w=quota('weekly',row.key);
-      return `<tr><td>${esc(name(row.model))} / ${esc(row.effort)}</td><td>${num(row.tokens)}</td><td>${num(f.tokens || 0)}</td><td>${observedRate(f)}</td><td>${num(f.groups || 0)}</td><td>${num(w.tokens || 0)}</td><td>${observedRate(w)}</td><td>${num(w.groups || 0)}</td></tr>`;
+      const coverage = (report.effort === 'all' ? report.calibration_coverage?.model_efforts : report.calibration_coverage?.models)?.[row.key];
+      const notes = [`보정 미연결 ${num(coverage?.unlinked_tokens || 0)} 토큰`,
+        ...[['five_hour', '5h'], ['weekly', '주간']].map(([key, label]) => {
+          const reason = exclusionNote(report.windows[key], row.key);
+          return reason ? `${label}: ${reason}` : '';
+        }).filter(Boolean)];
+      return `<tr><td>${esc(name(row.model))} / ${esc(row.effort)}<p class="note">${notes.map(esc).join("<br>")}</p></td><td>${num(row.tokens)}</td><td>${num(f.tokens || 0)}</td><td>${observedRate(f)}</td><td>${num(f.groups || 0)}</td><td>${num(w.tokens || 0)}</td><td>${observedRate(w)}</td><td>${num(w.groups || 0)}</td></tr>`;
     }).join('');
     renderCharts();
     const d=report.collection_diagnostics;
-    $('collection-note').textContent=`5분 주기 자동 수집 · 실행 완료 후 재대조 · 90일 보관 · 로그 보완 ${num(d.supplemental_tokens || 0)} 토큰 · 날짜/모델 미배분 DB 잔액 ${num(d.unallocated_db_tokens || 0)} 토큰 · 검토 필요 ${num((d.ambiguous_tokens || 0)+(d.quarantined_tokens || 0))} 토큰`;
+    $('collection-note').textContent=`최대 5분 간격 수집 · Chat 관측 변경 시 재대조 · Chat 원본 ${num(d.chat_outbox_events || 0)}건 · rollout 연결 ${num(d.chat_linked_events || 0)}건 · 90일 보관 · 로그 보완 ${num(d.supplemental_tokens || 0)} 토큰 · 날짜/모델 미배분 DB 잔액 ${num(d.unallocated_db_tokens || 0)} 토큰 · 검토 필요 ${num((d.ambiguous_tokens || 0)+(d.quarantined_tokens || 0))} 토큰`;
     const statuses={ok:'정상',error:'수집 오류',account_unverified:'계정 미확인 · 제외',no_session_db:'실행 로그 수집'};
     $('source-rows').innerHTML=report.sources.map(s=>`<tr><td title="${esc(s.home)}">${esc(s.home)}</td><td>${esc(dateLabel(s.last_record_at))}</td><td>${num(s.threads)}</td><td>${esc(statuses[s.status] || s.status)}${s.error ? ` · ${esc(s.error)}` : ''}</td></tr>`).join('');
     $('warnings').textContent=[...report.collection_errors,report.account_refresh_error].filter(Boolean).join(' · ');

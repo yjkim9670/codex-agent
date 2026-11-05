@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import math
 
 WINDOWS = ('five_hour', 'weekly')
+RESET_JITTER_SECONDS = 3
 
 
 def stamp(value):
@@ -17,10 +18,12 @@ def event_key(event):
     return event.get('calibration_id') or (event['event_id'] if event['event_id'].startswith('chat:') else event['event_id'].split(':', 1)[-1])
 
 
-def same_reset(left, right):
+def same_reset(left, right, *, observed_at=None):
     try:
-        return stamp(left) == stamp(right)
-    except ValueError:
+        a, b = stamp(left), stamp(right)
+        return (abs((a - b).total_seconds()) <= RESET_JITTER_SECONDS
+                and (observed_at is None or observed_at < min(a, b)))
+    except (ValueError, TypeError, OverflowError):
         return False
 
 
@@ -75,7 +78,7 @@ def reconstruct(record, event, events, samples, window, *, baseline_at=None, cha
         observed = stamp(observation['limits_observed_at'])
         # Also reject observations at/after the advertised reset boundary.
         try:
-            if stamp(reset) <= observed:
+            if min(stamp(reset), stamp(observation[window + '_resets_at'])) <= observed:
                 return excluded('unverified_or_changed_reset')
         except ValueError:
             return excluded('unverified_or_changed_reset')
@@ -190,7 +193,7 @@ def chat_calibration(outbox, events, historical_samples, *, now=None):
                   'raw_tokens': event['total_tokens'], 'limits_before': {w: before.get(w) or {} for w in WINDOWS},
                   'token_usage': {k: event.get(k, 0) for k in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'total_tokens')},
                   'outcomes': {}, 'learning_eligible': True, 'service_tier': 'standard',
-                  'calculation_version': 'chat_homogeneous_observation_v2'}
+                  'calculation_version': 'chat_homogeneous_observation_v3'}
         records.append(record)
         linked[record['id']] = (event, before)
     # Walk from the earliest execution for each quota window. A measured delta

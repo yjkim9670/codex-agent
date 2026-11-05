@@ -76,12 +76,12 @@ def test_collection_recovers_common_environment_and_is_idempotent(tmp_path, monk
     now=datetime(2026,10,1,12,tzinfo=usage.KST)
     first=usage.collect(context,force=True,now=now)
     second=usage.collect(context,force=True,now=now)
-    assert first['version'] == 4
+    assert first['version'] == 5
     assert first['events']==second['events']
     legacy = dict(first, version=3, events=[{'event_id': 'stale-old-cache'}])
     (root/'codex_usage_collection.json').write_text(json.dumps(legacy))
     migrated=usage.collect(context,force=True,now=now)
-    assert migrated['version'] == 4 and migrated['events'] == first['events']
+    assert migrated['version'] == 5 and migrated['events'] == first['events']
     assert first['diagnostics']['supplemental_tokens']==100
     assert first['events'][0]['workspace_path']=='/CommonTG'
     assert db_path.exists() and rollout.exists()
@@ -202,3 +202,37 @@ def test_dashboard_api_defaults_to_all_efforts(monkeypatch):
     assert response.json['effort'] == 'all'
     assert calls == [(None, 30, 'all', 'all', 'all')]
     assert app.test_client().get('/api/codex/usage/dashboard?effort=low').json['effort'] == 'low'
+
+
+def test_cache_rejects_changed_inputs_and_preserves_cache_on_outbox_failure(tmp_path, monkeypatch):
+    import pytest
+    from codex_agent import config
+    monkeypatch.setattr(config, 'is_internal_multiuser_mode', lambda: False)
+    monkeypatch.setattr(usage, 'discover_homes', lambda c, e: [])
+    monkeypatch.setattr(chat, '_read_auth_identity', lambda p: {'provider_account_id': 'ours'})
+    signature = [{'root': '/canonical-chat', 'files': ['initial']}]
+    monkeypatch.setattr(usage, 'chat_source_signature', lambda: signature)
+    calls = []
+    def outbox(identity):
+        calls.append(identity)
+        return []
+    monkeypatch.setattr(usage, 'read_chat_outbox', outbox)
+    context = {'root': tmp_path, 'account': {'id': 'one'}, 'codex_home': tmp_path,
+               'usage_events_path': tmp_path / 'events.jsonl'}
+    now = datetime(2026, 10, 1, 12, tzinfo=usage.KST)
+    usage.collect(context, now=now)
+    usage.collect(context, now=now)
+    assert len(calls) == 1
+    signature[0]['files'] = ['delayed-observation']
+    usage.collect(context, now=now)
+    assert len(calls) == 2
+    path = tmp_path / 'codex_usage_collection.json'
+    before = path.read_bytes()
+    signature[0]['files'] = ['unavailable']
+    def fail(identity):
+        raise OSError('unavailable')
+    monkeypatch.setattr(usage, 'read_chat_outbox', fail)
+    with pytest.raises(RuntimeError, match='Chat outbox'):
+        usage.collect(context, now=now)
+    assert path.read_bytes() == before
+    assert not (tmp_path / 'codex_usage_calibration.json').exists()

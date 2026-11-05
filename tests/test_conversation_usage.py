@@ -66,3 +66,47 @@ def test_quota_observations_survive_completion_deletion_and_do_not_move_usage_ti
     assert read_chat_outbox('p')[0] == updated
     store.emit(aid, 'limits', {'delayed': {'observed_at': 'after deletion'}})
     assert read_chat_outbox('p')[0]['quota_observations']['delayed']['observed_at'] == 'after deletion'
+
+
+def test_registered_sources_are_shared_across_checkouts_and_account_scoped(tmp_path, monkeypatch):
+    import sqlite3
+    from shared.chat_usage_sources import register_chat_root
+    from codex_agent.services import conversation_usage as usage
+    monkeypatch.setenv('CODEX_WORKBENCH_SHARED_ACCOUNT_STATE_DIR', str(tmp_path / 'shared'))
+    root = tmp_path / 'canonical-chat'
+    root.mkdir()
+    with sqlite3.connect(root / 'conversations.sqlite3') as db:
+        db.execute('create table usage_outbox (event text)')
+        for account in ('ours', 'other'):
+            db.execute('insert into usage_outbox values (?)', (json.dumps({
+                'event_id': 'chat:' + account, 'provider_account_id': account}),))
+    register_chat_root(root)
+    register_chat_root(root)
+    signatures = []
+    for checkout in ('checkout-a', 'checkout-b'):
+        monkeypatch.delenv('CHAT_DATA_DIR', raising=False)
+        monkeypatch.setattr(usage, 'chat_root', lambda: tmp_path / checkout)
+        assert usage.read_chat_outbox('ours') == [{'event_id': 'chat:ours', 'provider_account_id': 'ours'}]
+        signatures.append(usage.chat_source_signature())
+    assert signatures[0] == signatures[1]
+    assert len(list((tmp_path / 'shared/chat_usage_sources').glob('*.json'))) == 1
+    assert all(any(s['root'] == str(root) for s in signature) for signature in signatures)
+    (root / 'conversations.sqlite3').unlink()
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        usage.read_chat_outbox('ours')
+
+
+def test_source_signature_changes_when_wal_receives_delayed_observations(tmp_path, monkeypatch):
+    import sqlite3
+    from codex_agent.services import conversation_usage as usage
+    monkeypatch.setenv('CHAT_DATA_DIR', str(tmp_path))
+    monkeypatch.setenv('CODEX_WORKBENCH_SHARED_ACCOUNT_STATE_DIR', str(tmp_path / 'shared'))
+    with sqlite3.connect(tmp_path / 'conversations.sqlite3') as db:
+        db.execute('pragma journal_mode=WAL')
+        db.execute('create table usage_outbox (event text)')
+        db.commit()
+        before = usage.chat_source_signature()
+        db.execute('insert into usage_outbox values (?)', ('{}',))
+        db.commit()
+        assert usage.chat_source_signature() != before

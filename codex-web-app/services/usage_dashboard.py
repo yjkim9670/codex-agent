@@ -14,7 +14,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 from .model_usage_analysis import analyze
-from .conversation_usage import chat_root, read_chat_outbox, application_of
+from .conversation_usage import usage_chat_roots, chat_source_signature, read_chat_outbox, application_of
 from .usage_reconciliation import build_usage_reconciliation
 from .usage_recovery import chat_calibration
 
@@ -67,7 +67,7 @@ def discover_homes(context, events):
         roots = ([Path(p).expanduser() for p in configured.split(os.pathsep) if p] if configured else
                  ([login.parent / 'works'] if login else [Path(WORKSPACE_DIR)]))
         # Add Chat without replacing configured or default discovery roots.
-        roots.append(chat_root() / 'codex_home')
+        roots.extend(root / 'codex_home' for root in usage_chat_roots())
         roots += [Path(e['workspace_path']) for e in events if e.get('workspace_path')]
     for root in set(roots):
         for base, files in _walk(root):
@@ -240,7 +240,14 @@ def collect(context, *, force=False, now=None):
     path = Path(context['root']) / 'codex_usage_collection.json'
     with chat._acquire_path_file_lock(path):
         old = _read(path)
-        if old.get('version') == 4 and old.get('collected_at') and (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300):
+        from ..config import is_internal_multiuser_mode
+        identity = chat._read_auth_identity(context['codex_home']).get('provider_account_id')
+        inputs = {'chat_sources': [] if is_internal_multiuser_mode() else chat_source_signature(),
+                  'provider_account_id': identity, 'codex_home': str(Path(context['codex_home']).resolve()),
+                  'discovery_roots': os.environ.get('CODEX_USAGE_DISCOVERY_ROOTS'),
+                  'internal_multiuser': is_internal_multiuser_mode()}
+        if (old.get('version') == 5 and old.get('inputs') == inputs
+                and old.get('collected_at') and 0 <= (now - _stamp(old['collected_at'])).total_seconds() < (2 if force else 300)):
             return old
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=89)
         ledger = []
@@ -257,16 +264,15 @@ def collect(context, *, force=False, now=None):
                         errors.append(f'원장 {number}행: 잘못된 기록')
         except FileNotFoundError:
             pass
-        identity = chat._read_auth_identity(context['codex_home']).get('provider_account_id')
         outbox = []
-        from ..config import is_internal_multiuser_mode
         if not is_internal_multiuser_mode():
             try:
                 outbox = [e for e in read_chat_outbox(identity) if _stamp(e['recorded_at']) >= cutoff]
                 ledger.extend(outbox)
             except (OSError, sqlite3.Error, ValueError) as exc:
-                errors.append('Chat outbox: ' + str(exc))
-        cached = old.get('files', {}) if old.get('version') == 4 else {}
+                # Never publish a cache or calibration with a silently missing source.
+                raise RuntimeError('Chat outbox collection failed') from exc
+        cached = old.get('files', {}) if old.get('version') in (4, 5) else {}
         files = {}
         threads = {}
         for home in discover_homes(context, ledger):
@@ -334,13 +340,17 @@ def collect(context, *, force=False, now=None):
             sources.append(state)
         events, diagnostics = merge_events(ledger, threads.values())
         events = [{**e, 'application': application_of(e)} for e in events if cutoff <= _stamp(e['recorded_at']) <= now]
+        diagnostics['chat_outbox_events'] = len(outbox)
+        diagnostics['chat_linked_events'] = sum(bool(e.get('calibration_id')) for e in events)
         diagnostics['chat_pending_attempts'] = sum(bool(e.get('usage_pending')) for e in events)
         if outbox:
             try:
                 sync_chat_calibration(context, outbox, events, now=now)
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 errors.append('Chat calibration: ' + str(exc))
-        result = {'version': 4, 'collected_at': now.isoformat(), 'retention_days': 90,
+        result = {'version': 5, 'inputs': inputs,
+                  'collector': {'checkout': str(Path(__file__).resolve().parents[2]), 'pid': os.getpid()},
+                  'collected_at': now.isoformat(), 'retention_days': 90,
                   'account_id': context['account']['id'], 'events': events, 'sources': sources,
                   'diagnostics': diagnostics, 'errors': errors, 'files': files}
         chat._write_json_atomic(path, result)

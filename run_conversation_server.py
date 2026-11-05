@@ -38,6 +38,8 @@ def main():
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         app = module.create_app(root)
+        from shared.chat_usage_sources import register_chat_root
+        register_chat_root(root)
         app.run(host=args.host, port=args.port, threaded=True, debug=False, use_reloader=False)
 
 

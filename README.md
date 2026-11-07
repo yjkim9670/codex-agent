@@ -41,6 +41,41 @@ Or with the helper script:
 
 The helper launcher also uses `../.venv`.
 
+## Local voice transcription
+
+Install `ffmpeg`, `ffprobe`, `whisper-cli` and a multilingual whisper.cpp model.
+Configure the server environment or create the Git-ignored
+`.local/voice/config.json` (all values are strings):
+
+```json
+{
+  "CODEX_VOICE_ENABLED": "true",
+  "CODEX_VOICE_MODEL": "ggml-large-v3-turbo-q5_0.bin",
+  "CODEX_VOICE_FFMPEG": "/opt/homebrew/bin/ffmpeg",
+  "CODEX_VOICE_FFPROBE": "/opt/homebrew/bin/ffprobe",
+  "CODEX_VOICE_WHISPER_CLI": "/opt/homebrew/bin/whisper-cli"
+}
+```
+
+Relative model paths resolve from `.local/voice/`; use executable paths suitable
+for the server PC. Explicit environment variables take precedence, including
+`CODEX_VOICE_ENABLED=false`. The launchers do **not** load `.env` automatically.
+Without configuration voice transcription stays disabled. Existing servers need
+a restart after installing this code; later JSON changes apply to new jobs.
+`GET /api/codex/voice` returns `error: null` when prerequisites are available.
+
+Audio stays local, is limited to 20 MiB and five minutes, and is deleted after
+processing or cancellation. Results require review and manual insertion into
+the prompt. See [voice implementation and limits](docs/voice-transcription-implementation-plan.md).
+
+For repeatable verification, run `python3.14 tests/serve_voice_fixture.py --host
+127.0.0.1 --port 38941`, then in another terminal run
+`CODEX_VERIFY_VOICE=1 python3.14 scripts/verify_browser_ui.py --url
+http://127.0.0.1:38941/ --selector '#voice-start'`. This checks native browser
+recording and real local transcription with generated silence, plus deterministic
+insertion and cancellation cases. It requires the local tools and model above.
+Stop the fixture after verification; it uses disposable chat/account storage.
+
 ## Android Development on MacBook
 
 For the canonical MacBook + Codex workflow, Android build/release procedure,

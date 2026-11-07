@@ -1,5 +1,7 @@
 """Standalone personal conversation service with explicit network access rules."""
 import atexit
+import base64
+import binascii
 import hashlib
 import json
 import ipaddress
@@ -10,20 +12,33 @@ import secrets
 import threading
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session
+from flask import Flask, Request, Response, abort, jsonify, render_template, request, send_file, send_from_directory, session
 from werkzeug.exceptions import HTTPException
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from shared.html_preview import HTML_PREVIEW_CSP, inject_html_preview_storage_compat
 from shared.chat_accounts import accounts, get_account
 from services.conversations import Store, TERMINAL
 from services.codex_provider import Provider
+from codex_agent.services import voice_transcription as voice
 from services.transport import install_transport
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class ChatRequest(Request):
+    @property
+    def max_content_length(self):
+        # Base64 audio inside an encrypted JSON envelope expands twice.
+        if self.path == '/api/secure':
+            return 40 * 1024 * 1024
+        if self.path == '/api/voice' and self.method == 'POST':
+            return 28 * 1024 * 1024
+        return super().max_content_length
+
+
 def create_app(data_dir=None, provider=None):
     app = Flask(__name__, root_path=str(Path(__file__).resolve().parent))
+    app.request_class = ChatRequest
     root = Path(data_dir or os.environ.get('CHAT_DATA_DIR') or ROOT / '.agent_state/conversation').resolve()
     store = Store(root)
     secret_file = root / 'session.key'
@@ -161,6 +176,48 @@ def create_app(data_dir=None, provider=None):
         if name not in ('marked-18.0.6.umd.js', 'dompurify-3.4.12.min.js'):
             abort(404)
         return send_from_directory(ROOT / 'codex-web-app/static/vendor', name)
+
+    @app.get('/static/shared/<name>')
+    def voice_asset(name):
+        assets = {'voice.js': 'js', 'voice.css': 'css'}
+        if name not in assets:
+            abort(404)
+        return send_from_directory(ROOT / 'codex-web-app/static' / assets[name], name)
+
+    def voice_owner():
+        # The encrypted dispatcher requires this session's CSRF and channel.
+        return ('conversation', session['csrf'])
+
+    @app.route('/api/voice', methods=['GET', 'POST'])
+    def voice_create():
+        if request.method == 'GET':
+            return jsonify(error=voice.availability(), max_seconds=voice.MAX_SECONDS,
+                           max_bytes=voice.MAX_BYTES, max_prompt_chars=60000)
+        value = request.get_json(silent=True)
+        encoded = value.get('audio') if isinstance(value, dict) else None
+        if not isinstance(encoded, str) or not encoded:
+            raise ValueError('녹음 파일이 없습니다.')
+        if len(encoded) > 4 * ((voice.MAX_BYTES + 2) // 3):
+            abort(413)
+        try:
+            audio = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError('녹음 파일 형식이 올바르지 않습니다.') from None
+        if len(audio) > voice.MAX_BYTES:
+            abort(413)
+        return jsonify(id=voice.create(voice_owner(), io.BytesIO(audio))), 202
+
+    @app.route('/api/voice/<job_id>', methods=['GET', 'DELETE'])
+    def voice_job(job_id):
+        owner = voice_owner()
+        if request.method == 'DELETE':
+            if voice.cancel(owner, job_id):
+                return jsonify(ok=True)
+        else:
+            job = voice.get(owner, job_id)
+            if job is not None:
+                return jsonify(job)
+        abort(404, description='작업을 찾을 수 없습니다.')
 
     @app.get('/api/accounts')
     def list_accounts():

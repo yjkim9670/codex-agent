@@ -835,6 +835,76 @@ def codex_attachment_upload():
     return jsonify({'attachments': attachments})
 
 
+def _voice_owner():
+    token = session.get('voice_owner')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['voice_owner'] = token
+    user = get_active_user()
+    return (user.storage_key if user else 'standalone', token)
+
+
+def _voice_csrf_token():
+    token = session.get('voice_csrf')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['voice_csrf'] = token
+    return token
+
+
+def _voice_request_authorized():
+    # The browser-facing HTTPS host may differ from Flask's internal Host.
+    # Bind mutations to a token read by this session instead of trusting
+    # arbitrary forwarded headers or comparing against the internal address.
+    if request.headers.get('Sec-Fetch-Site') == 'cross-site':
+        return False
+    expected = session.get('voice_csrf')
+    provided = request.headers.get('X-Codex-CSRF-Token')
+    return bool(expected and provided and secrets.compare_digest(provided.encode('utf-8'), expected.encode('utf-8')))
+
+
+@bp.after_request
+def _voice_no_store(response):
+    if request.endpoint in {f'{bp.name}.codex_voice_create', f'{bp.name}.codex_voice_job'}:
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@bp.route('/api/codex/voice', methods=['GET', 'POST'])
+def codex_voice_create():
+    from ..services import voice_transcription as voice
+    if request.method == 'GET':
+        return jsonify({'error': voice.availability(), 'max_seconds': voice.MAX_SECONDS, 'max_bytes': voice.MAX_BYTES, 'max_prompt_chars': CODEX_MAX_PROMPT_CHARS, 'csrf_token': _voice_csrf_token()})
+    if not _voice_request_authorized():
+        return jsonify({'error': '녹음 세션을 확인할 수 없습니다. 페이지를 새로고침한 뒤 다시 시도하세요.', 'error_code': 'voice_csrf_rejected'}), 403
+    if request.content_length is None or request.content_length > voice.MAX_BYTES + 65536:
+        return jsonify({'error': '업로드 크기 제한을 초과했습니다.'}), 413
+    audio = request.files.get('audio')
+    if not audio:
+        return jsonify({'error': '녹음 파일이 없습니다.'}), 400
+    try:
+        job_id = voice.create(_voice_owner(), audio.stream)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'id': job_id}), 202
+
+
+@bp.route('/api/codex/voice/<job_id>', methods=['GET', 'DELETE'])
+def codex_voice_job(job_id):
+    from ..services import voice_transcription as voice
+    if request.method == 'DELETE' and not _voice_request_authorized():
+        return jsonify({'error': '녹음 세션을 확인할 수 없습니다. 페이지를 새로고침한 뒤 다시 시도하세요.', 'error_code': 'voice_csrf_rejected'}), 403
+    owner = _voice_owner()
+    if request.method == 'DELETE':
+        if voice.cancel(owner, job_id):
+            return '', 204
+    else:
+        job = voice.get(owner, job_id)
+        if job is not None:
+            return jsonify(job)
+    return jsonify({'error': '작업을 찾을 수 없습니다.'}), 404
+
+
 def _company_credential_error_response(exc):
     return jsonify({'error': str(exc), 'error_code': exc.error_code}), exc.status_code
 

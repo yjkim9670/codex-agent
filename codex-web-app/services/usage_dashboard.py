@@ -435,10 +435,11 @@ def ensure_collection_worker():
                             if context:
                                 collect(context, force=forced)
                     if is_internal_multiuser_mode():
-                        from ..config import CODEX_INTERNAL_USER_MAP_PATH
-                        from .multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
+                        from ..config import CODEX_INTERNAL_DATA_DIR, CODEX_INTERNAL_USER_MAP_PATH
+                        from .multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, prepare_user_storage, storage_key_for_ip
                         for ip, record in load_ip_user_map(CODEX_INTERNAL_USER_MAP_PATH).items():
                             user = InternalUser(record['username'], record['role'], ip, storage_key_for_ip(ip), record.get('profile_configured', False))
+                            prepare_user_storage(CODEX_INTERNAL_DATA_DIR / 'users', user)
                             token = activate_user(user)
                             try:
                                 collect_accounts()

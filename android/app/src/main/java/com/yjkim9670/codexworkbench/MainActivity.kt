@@ -21,6 +21,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -54,6 +55,7 @@ class MainActivity : Activity() {
         private const val PREF_LAST_CRASH = "last_crash"
         private const val FILE_CHOOSER_REQUEST_CODE = 7001
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 7002
+        private const val AUDIO_PERMISSION_REQUEST_CODE = 7003
         private const val SPLASH_DURATION_MS = 900L
         private const val DEFAULT_WEB_TEXT_ZOOM_PERCENT = 100
         private const val MIN_WEB_TEXT_ZOOM_PERCENT = 60
@@ -82,6 +84,7 @@ class MainActivity : Activity() {
         }
     }
     private var pendingSession: String? = null
+    private var pendingAudioRequest: PermissionRequest? = null
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var currentTarget: WorkbenchTarget? = null
     private var currentConnectionMode = ConnectionMode.QUICK_TUNNEL
@@ -786,6 +789,8 @@ class MainActivity : Activity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
+                pendingAudioRequest?.deny()
+                pendingAudioRequest = null
                 connectionFailed = false
                 connectionStatus?.text = "연결 중…"
                 connectionStatus?.visibility = View.VISIBLE
@@ -852,6 +857,27 @@ class MainActivity : Activity() {
         }
 
         browser.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                runOnUiThread {
+                    val origin = request.origin
+                    val safe = origin.scheme.equals("https", true) && isSameServerOrigin(origin) &&
+                        request.resources.contentEquals(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) &&
+                        webView?.url?.let { isSameServerOrigin(Uri.parse(it)) } == true
+                    if (!safe || pendingAudioRequest != null) {
+                        request.deny()
+                    } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                    } else {
+                        pendingAudioRequest = request
+                        requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION_REQUEST_CODE)
+                    }
+                }
+            }
+
+            override fun onPermissionRequestCanceled(request: PermissionRequest) {
+                if (pendingAudioRequest === request) pendingAudioRequest = null
+            }
+
             override fun onCreateWindow(
                 view: WebView?,
                 isDialog: Boolean,
@@ -1296,6 +1322,18 @@ class MainActivity : Activity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AUDIO_PERMISSION_REQUEST_CODE) {
+            val request = pendingAudioRequest
+            pendingAudioRequest = null
+            if (request != null) {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED &&
+                    request.origin.scheme.equals("https", true) && isSameServerOrigin(request.origin) &&
+                    webView?.url?.let { isSameServerOrigin(Uri.parse(it)) } == true) {
+                    request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                } else request.deny()
+            }
+            return
+        }
         if (requestCode != NOTIFICATION_PERMISSION_REQUEST_CODE) return
         if (grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
             prefs.edit().putBoolean(PREF_NOTIFICATIONS_ENABLED, false).apply()
@@ -1362,6 +1400,8 @@ class MainActivity : Activity() {
     }
 
     private fun destroyWebView() {
+        pendingAudioRequest?.deny()
+        pendingAudioRequest = null
         downloadController?.close()
         downloadController = null
         val browser = webView ?: return

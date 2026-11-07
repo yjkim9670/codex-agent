@@ -50,7 +50,7 @@ function responsiveControls(){
 $('more-actions').onclick=()=>$('actions-dialog').showModal();
 $('request-summary').onclick=()=>{$('message').blur();$('request-dialog').showModal();};
 document.querySelectorAll('[data-close-dialog]').forEach(button=>button.onclick=()=>button.closest('dialog').close());
-document.querySelectorAll('dialog').forEach(dialog=>{
+document.querySelectorAll('dialog:not(#voice-panel)').forEach(dialog=>{
  const outside=event=>{
   const rect=dialog.getBoundingClientRect();
   return event.target===dialog&&(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom);
@@ -547,3 +547,13 @@ function overlayScrollbar(scroller){
 overlayScrollbar($('thread'));overlayScrollbar($('history'));
 async function init(){try{const [data,prefs]=await Promise.all([api('/api/accounts'),api('/api/settings')]);for(const a of data.accounts){const option=node('option',a.label+(a.authenticated?'':' · 로그인 필요'));option.value=a.id;$('account').append(option);}const preferred=data.accounts.find(a=>a.id===prefs.account_id&&a.authenticated)||data.accounts.find(a=>a.authenticated)||data.accounts.find(a=>a.id===prefs.account_id)||data.accounts[0];if(preferred)$('account').value=preferred.id;else status('개인 Codex 계정을 찾을 수 없습니다. Codex 계정 등록과 로그인 상태를 확인해 주세요.');loadLimits();await loadModels();if(state.models.some(m=>m.model===prefs.model)){$('model').value=prefs.model;effortOptions();}if([...$('effort').options].some(o=>o.value===prefs.effort))$('effort').value=prefs.effort;if(['auto','on','off'].includes(prefs.search))$('search').value=prefs.search;await list();delete state.drafts.new;localStorage.removeItem('chat-current');flushDrafts();await openConversation(null);for(const id of ['account','model','effort','search'])$(id).addEventListener('change',()=>api('/api/settings','PATCH',settings()).catch(e=>status(e.message)));}catch(e){status(e.message);$('transport-status').textContent='암호화 연결 실패 · 전송 차단';$('send').disabled=true;}}
 const chatReady=init().then(()=>{requestSummary();resizeMessage();});
+
+// Reuse the Workbench recorder while keeping Chat's encrypted API transport.
+window.workbenchVoice = {
+ inputId: 'message', getSession: () => state.cid,
+ uploadBody: async blob => ({audio: transport.base64(await blob.arrayBuffer())}),
+ request: async (path, options = {}) => {
+  const body = await api(path.replace('/api/codex/voice', '/api/voice'), options.method || 'GET', options.body);
+  return {ok: true, json: async () => body};
+ }
+};

@@ -4,8 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=262">
+    <link rel="stylesheet" href="/static/css/app.css?v=263">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/css/voice.css?v=1">
 </head>
 <body data-company-mode="{{ 'true' if company_mode_enabled else 'false' }}" data-workspace-path="{{ workspace_directory_path }}" data-server-path="{{ server_directory_path }}" data-tmp-path="{{ tmp_directory_path }}" data-shared-path="{{ shared_knowledge_directory_path }}"{% if internal_multiuser_mode %} data-internal-multiuser="true"{% endif %}{% if current_internal_user %} data-internal-username="{{ current_internal_user.username }}" data-internal-role="{{ current_internal_user.role }}" data-internal-profile-configured="{{ 'true' if current_internal_user.profile_configured else 'false' }}"{% endif %}>
     {% macro render_file_panel(id_prefix) -%}
@@ -647,6 +648,9 @@
                         <div class="chat-prompt-field">
                             <label class="sr-only" for="codex-chat-input">Agent prompt</label>
                             <textarea id="codex-chat-input" rows="3" placeholder="Type a prompt for the selected agent. (Shift+Enter for newline)"></textarea>
+                            <button class="btn ghost icon-only chat-voice-start" type="button" id="voice-start" aria-haspopup="dialog" aria-controls="voice-panel" aria-label="음성 녹음" title="음성 녹음">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"></rect><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3m-3 0h6"></path></svg>
+                            </button>
                             <button
                                 class="btn ghost icon-only chat-compose-tools-toggle"
                                 type="button"
@@ -2026,6 +2030,21 @@
         <div class="terminal-overlay-extra-keys is-hidden" id="codex-terminal-overlay-extra-keys" aria-label="Terminal extra keys"></div>
     </div>
 
+    <dialog id="voice-panel" class="voice-panel" aria-labelledby="voice-heading">
+                            <h2 id="voice-heading">음성 입력</h2>
+                            <p class="voice-help">녹음 중지 후 전사 결과를 확인하고 입력창에 삽입하세요. 최대 5분까지 녹음할 수 있습니다.</p>
+                            <div id="voice-status" role="status" aria-live="polite"></div>
+                            <div class="voice-actions">
+                                <button type="button" class="btn ghost" id="voice-stop" hidden>녹음 중지</button>
+                                <button type="button" class="btn ghost" id="voice-retry" hidden>다시 전사</button>
+                                <button type="button" class="btn ghost" id="voice-download" hidden>녹음 다운로드</button>
+                                <button type="button" class="btn ghost" id="voice-cancel">취소</button>
+                            </div>
+                            <label for="voice-result" id="voice-result-label" hidden>전사 결과를 확인하고 수정하세요</label>
+                            <textarea id="voice-result" rows="4" hidden></textarea>
+                            <div id="voice-limit" role="status"></div>
+                            <button type="button" class="btn primary" id="voice-insert" hidden>입력창에 삽입</button>
+                        </dialog>
     <script>
         window.__CODEX_SECURITY_POLICY__ = {{ security_policy|default({}, true)|tojson }};
         window.__CODEX_MODEL_CATALOGS_BY_AGENT_BACKEND__ = {{ model_catalogs_by_agent_backend|default({}, true)|tojson }};
@@ -2034,5 +2053,7 @@
     <script src="/static/vendor/dompurify-3.4.12.min.js"></script>
     <script src="/static/js/toast_history.js?v=2"></script>
     <script src="/static/js/app.js?v=285"></script>
+    <script src="/static/js/voice.js?v=4"></script>
+
 </body>
 </html>

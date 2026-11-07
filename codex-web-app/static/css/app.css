@@ -15492,3 +15492,26 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 .message.user .message-bubble td { border-color: var(--border); }
 .message.user .message-bubble th { background: var(--surface-muted); }
 .message.user .message-details summary { color: var(--text-secondary); }
+
+.chat-prompt-field .chat-voice-start {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+}
+
+.chat-voice-start svg { width: 17px; height: 17px; }
+
+@media (max-width: 599px) {
+    .chat-prompt-field .chat-compose-tools-toggle { right: 44px; }
+    .chat-input #codex-chat-input { padding-bottom: 38px; }
+}

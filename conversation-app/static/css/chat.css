@@ -196,3 +196,6 @@ header,#composer,#status{flex-shrink:0}
 .answer-execution,.answer-usage{font-size:12px;line-height:1.5;color:var(--muted);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 .answer-execution{margin-bottom:4px}
 .answer-usage{margin-top:6px}
+
+#voice-start { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 10px; background: transparent; border-color: transparent; }
+#voice-start svg { width: 20px; height: 20px; }

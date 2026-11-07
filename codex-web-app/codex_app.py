@@ -15,6 +15,7 @@ from .config import (
     CODEX_REASONING_OPTIONS,
     CODEX_SERVICE_TIER_OPTIONS,
     SECRET_KEY,
+    CODEX_INTERNAL_DATA_DIR,
     CODEX_INTERNAL_USER_MAP_PATH,
     CODEX_SHARED_KNOWLEDGE_DIR,
     CODEX_TRUSTED_PROXY_NETWORKS,
@@ -34,7 +35,7 @@ from .services.codex_cli_output_filter import install_codex_cli_output_filter
 from .services.file_browser import get_tmp_root_path
 from .services.git_branch_switch import list_remote_branches, switch_remote_branch
 from .services.git_ops import get_current_branch_name
-from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, storage_key_for_ip
+from .services.multiuser import InternalUser, activate_user, deactivate_user, load_ip_user_map, prepare_user_storage, storage_key_for_ip
 
 
 def _get_allowed_origins():
@@ -129,14 +130,9 @@ def create_codex_app():
         if record is None:
             return jsonify({'error': '등록되지 않은 내부 사용자 IP입니다.', 'error_code': 'internal_user_not_registered'}), 403
         user = InternalUser(record['username'], record['role'], client_ip, storage_key_for_ip(client_ip), record.get('profile_configured', False))
+        prepare_user_storage(CODEX_INTERNAL_DATA_DIR / 'users', user)
         g.codex_current_user = user
         g.codex_user_context_token = activate_user(user)
-        # Move pre-hash user roots created by earlier internal-mode releases
-        # exactly once, preserving all existing chat, workspace and key data.
-        hashed_root = Path(WORKSPACE_DIR).parent
-        legacy_root = hashed_root.parent / user.username
-        if not hashed_root.exists() and legacy_root.is_dir() and legacy_root != hashed_root:
-            legacy_root.replace(hashed_root)
         # Provision only this user's empty workspace on first access.  The
         # scoped path prevents this from creating or exposing a shared root.
         WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)

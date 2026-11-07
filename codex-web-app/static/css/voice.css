@@ -1,0 +1,13 @@
+/* Shared modal for recording, transcription and explicit insertion. */
+dialog.voice-panel { box-sizing: border-box; margin: auto; width: min(560px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow: auto; padding: 24px; border: 1px solid var(--border, #c6c6c6); border-radius: 8px; background: var(--surface, #fff); color: var(--text, #161616); box-shadow: 0 16px 48px #0003; }
+dialog.voice-panel:not([open]), .voice-panel [hidden] { display: none !important; }
+.voice-panel::backdrop { background: rgb(0 0 0 / 48%); }
+.voice-panel h2 { margin: 0 0 12px; font-size: 22px; font-weight: 600; }
+.voice-panel .voice-help { margin: 0 0 20px; font-size: 14px; line-height: 1.6; }
+#voice-status { min-height: 48px; padding: 12px; background: var(--surface-muted, var(--layer, #f4f4f4)); border-left: 3px solid var(--accent, #0f62fe); overflow-wrap: anywhere; }
+.voice-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.voice-panel textarea { display: block; box-sizing: border-box; width: 100%; min-height: 128px; max-height: 35dvh; resize: vertical; padding: 12px; margin: 8px 0; background: var(--surface, #fff); color: inherit; border: 1px solid var(--border, #c6c6c6); font: inherit; }
+.voice-panel label, #voice-limit { font-size: 14px; }
+#voice-limit { margin-bottom: 12px; }
+#voice-stop { border-color: var(--danger, #da1e28); }
+@media (max-width: 599px) { dialog.voice-panel { padding: 20px; } .voice-actions button { min-height: 44px; } }

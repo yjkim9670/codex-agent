@@ -156,4 +156,14 @@ test('browser UI smoke check', async ({ page }) => {
         await require('./chat-scroll.cjs').verifyChatScroll(page, expect);
     }
     expect(browserErrors, browserErrors.join('\n')).toEqual([]);
+    if (process.env.CODEX_VERIFY_CONVERSATION_VOICE === '1') {
+        test.setTimeout(90_000);
+        await require('../test_conversation_voice_browser.cjs').verifyConversationVoice(page, expect);
+        expect(browserErrors, browserErrors.join('\n')).toEqual([]);
+    }
+    if (process.env.CODEX_VERIFY_VOICE === '1') {
+        test.setTimeout(90_000);
+        await require('../test_voice_browser.cjs').verifyVoice(page, expect);
+        expect(browserErrors, browserErrors.join('\n')).toEqual([]);
+    }
 });

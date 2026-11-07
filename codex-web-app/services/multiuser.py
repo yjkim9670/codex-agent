@@ -15,10 +15,12 @@ import hashlib
 import json
 import os
 import re
+import threading
 
 
 _USER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _active_user: ContextVar["InternalUser | None"] = ContextVar("codex_internal_user", default=None)
+_storage_migration_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,25 @@ def storage_key_for_ip(client_ip: str) -> str:
     """Return the stable, non-display filesystem identity for an IP address."""
     digest = hashlib.sha256(str(client_ip).strip().encode('utf-8')).hexdigest()
     return f'ip-{digest[:24]}'
+
+
+def prepare_user_storage(users_root: Path, user: InternalUser) -> None:
+    """Migrate before either HTTP handlers or background workers create state.
+
+    Existing hashed storage always wins; never replace it with legacy data.
+    Serialize threads and tolerate a second process completing the same rename.
+    """
+    users_root = Path(users_root)
+    hashed_root = users_root / user.storage_key
+    legacy_root = users_root / user.username
+    with _storage_migration_lock:
+        if hashed_root.exists() or legacy_root == hashed_root or not legacy_root.is_dir():
+            return
+        try:
+            legacy_root.rename(hashed_root)
+        except FileNotFoundError:
+            if not hashed_root.is_dir() or legacy_root.exists():
+                raise
 
 
 def activate_user(user: InternalUser):

@@ -43,6 +43,7 @@ from ..config import (
     CODEX_CHAT_STORE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_INTERNAL_USER_MAP_PATH,
+    CODEX_INTERNAL_DATA_DIR,
     CODEX_CONTEXT_MAX_CHARS,
     CODEX_GIT_COMMIT_MESSAGE_DEFAULT_REASONING_EFFORT,
     CODEX_CLI_MODEL_PROVIDER,
@@ -107,6 +108,7 @@ from .multiuser import (
     deactivate_user,
     get_active_user,
     load_ip_user_map,
+    prepare_user_storage,
     storage_key_for_ip,
 )
 
@@ -9455,6 +9457,7 @@ def _internal_usage_snapshot_worker_loop():
                     record['username'], record['role'], client_ip,
                     storage_key_for_ip(client_ip), record.get('profile_configured', False),
                 )
+                prepare_user_storage(CODEX_INTERNAL_DATA_DIR / 'users', user)
                 token = activate_user(user)
                 try:
                     account_id = get_active_account_id()

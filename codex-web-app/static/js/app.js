@@ -4299,6 +4299,10 @@ document.addEventListener('DOMContentLoaded', () => {
         ],
     );
 
+    document.getElementById('codex-chat-scroll-bottom')?.addEventListener('click', () => {
+        scrollToBottom(true);
+    });
+
     if (messages) {
         messages.addEventListener('scroll', () => {
             handleMessageScroll(messages);

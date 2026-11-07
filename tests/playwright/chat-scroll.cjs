@@ -18,15 +18,31 @@ exports.setupChatScroll = async page => {
 
 exports.verifyChatScroll = async (page, expect) => {
     const list = page.locator('#codex-chat-messages');
-    const navigation = page.locator('.chat-scroll-navigation, [id^="codex-chat-scroll-"]');
-    await expect(navigation).toHaveCount(0);
+    const navigation = page.locator('[id^="codex-chat-scroll-"]');
+    await expect(navigation).toHaveCount(1);
+    await expect(navigation).toHaveAccessibleName('맨 아래로 이동');
     const gap = () => list.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop);
     await expect(list.locator('.message')).toHaveCount(24);
     await expect.poll(gap, {message: 'latest conversation stays at bottom'}).toBeLessThan(2);
     for (const viewport of [{width: 1440, height: 1000}, {width: 1440, height: 650}, {width: 768, height: 900}, {width: 390, height: 780}, {width: 1280, height: 800}]) {
         await page.setViewportSize(viewport);
-        await expect(navigation).toHaveCount(0);
-        await expect.poll(gap, {message: 'bottom after resize ' + JSON.stringify(viewport)}).toBeLessThan(2);
+        await page.evaluate(() => setWorkModeMobileView('chat'));
+        await expect(navigation).toBeVisible();
+        const geometry = await navigation.evaluate(button => {
+            const rect = button.getBoundingClientRect();
+            const frame = button.closest('.chat-frame').getBoundingClientRect();
+            const input = document.getElementById('codex-chat-input').getBoundingClientRect();
+            return {right: frame.right - rect.right, bottom: frame.bottom - rect.bottom,
+                aboveInput: rect.bottom <= input.top};
+        });
+        // The app can scale its shell; compare rendered offsets with tolerance.
+        expect(geometry.right).toBeGreaterThan(12);
+        expect(geometry.right).toBeLessThan(20);
+        expect(geometry.bottom).toBeGreaterThan(12);
+        expect(geometry.bottom).toBeLessThan(20);
+        expect(geometry.aboveInput).toBe(true);
+        await navigation.click();
+        await expect.poll(gap, {message: 'bottom button at ' + JSON.stringify(viewport)}).toBeLessThan(2);
     }
     // Late font/preview reflow after the initial jump must remain at the bottom.
     await list.locator('.message').first().evaluate(el => el.style.minHeight = '1800px');
@@ -38,6 +54,9 @@ exports.verifyChatScroll = async (page, expect) => {
     await page.setViewportSize({width: 1100, height: 700});
     await expect.poll(gap).toBeGreaterThan(200);
     expect(await page.evaluate(() => state.autoScrollEnabled)).toBe(false);
+    await navigation.click();
+    await expect.poll(gap, {message: 'button jumps to latest message'}).toBeLessThan(2);
+    expect(await page.evaluate(() => state.autoScrollEnabled)).toBe(true);
     await page.reload();
     await expect(list.locator('.message')).toHaveCount(24);
     await expect.poll(gap, {message: 'bottom after page reload'}).toBeLessThan(2);

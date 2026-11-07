@@ -8993,6 +8993,35 @@ body.is-work-mode-resizing * {
     scrollbar-gutter: stable;
 }
 
+.chat-scroll-bottom {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    box-shadow: var(--card-shadow);
+    cursor: pointer;
+}
+
+.chat-scroll-bottom:hover {
+    background: var(--surface-muted);
+    color: var(--text-primary);
+}
+
+.chat-scroll-bottom:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
 .chat-placeholder {
     text-align: center;
     color: var(--text-tertiary);
@@ -15513,5 +15542,7 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 
 @media (max-width: 599px) {
     .chat-prompt-field .chat-compose-tools-toggle { right: 44px; }
-    .chat-input #codex-chat-input { padding-bottom: 38px; }
+    /* Reserve both controls' full width on every line, including while the
+       textarea scrolls. Bottom padding alone cannot protect scrolled text. */
+    .chat-input #codex-chat-input { padding: 10px 82px 10px 12px; }
 }

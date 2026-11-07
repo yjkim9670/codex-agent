@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% if internal_multiuser_mode %}TG Platform LLM Workbench{% else %}LLM Workbench{% endif %} · {{ workspace_directory_name }}</title>
-    <link rel="stylesheet" href="/static/css/app.css?v=263">
+    <link rel="stylesheet" href="/static/css/app.css?v=264">
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/static/css/voice.css?v=1">
 </head>
@@ -542,6 +542,11 @@
                     <div id="codex-chat-messages" class="chat-messages">
                         <div class="chat-placeholder">Select a session or create a new one.</div>
                     </div>
+                    <button type="button" id="codex-chat-scroll-bottom" class="chat-scroll-bottom" aria-label="맨 아래로 이동" title="맨 아래로 이동" aria-controls="codex-chat-messages">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 4v12m-5-5 5 5 5-5M5 20h14"/>
+                        </svg>
+                    </button>
                 </div>
 
                 <div class="chat-controls is-collapsed" id="codex-controls">

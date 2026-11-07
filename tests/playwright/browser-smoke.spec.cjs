@@ -45,6 +45,9 @@ test('browser UI smoke check', async ({ page }) => {
     expect(response.status(), 'HTTP status must be below 400').toBeLessThan(400);
     await expect(page.locator(targetSelector).first()).toBeVisible({ timeout: timeoutMs });
     await page.waitForTimeout(250);
+    if (process.env.CODEX_VERIFY_PROMPT_CONTROLS === '1') {
+        await require('../test_prompt_controls_browser.cjs').verifyPromptControls(page, expect);
+    }
     if (process.env.CODEX_VERIFY_USAGE_BLOG_STATUS === '1') {
         await expect(page.locator('#calibration-status')).toContainText('5시간:');
         await expect(page.locator('#calibration-status')).toContainText('24시간 이상 경과');

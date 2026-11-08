@@ -91,13 +91,15 @@ through the repository's `Android APK` GitHub Actions workflow.
 
 ## Team mode
 
-The composer menu offers `Work / Plan / Plan+ / Sec / Team`. Shift+Tab toggles
-only `Work ↔ Plan`; Plan+, Sec and Team return to Work. Sec directly executes
+The composer menu offers `Work / Plan / Plan+ / Sec / Economy / Team`. Shift+Tab toggles
+only `Work ↔ Plan`; the other selections return to Work. Sec directly executes
 with the secondary model. Team currently supports only the Codex backend.
-Set a secondary model in execution settings before using it.
+Set a secondary model in execution settings before using Team or Economy. Both require the main and secondary backends to be Codex. Economy routes high-risk requests directly to the main model; otherwise it runs the secondary model first and escalates when its report, checks, workspace inspection, or changed paths indicate review is needed. Reported passing checks are not proof that those commands ran.
 The main model analyzes the request, up to four secondary workers run sequentially,
 and the main model verifies the actual changes and finishes the request.
 Secondary model settings remain available for Sub jobs and commit messages.
+
+Plan and read-only reports cannot be combined with Team or Economy.
 
 See [Team execution](docs/team-mode.md) for state, cancellation, and recovery details.
 

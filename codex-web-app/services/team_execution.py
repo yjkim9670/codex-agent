@@ -354,6 +354,7 @@ def _run_exclusive(chat, stream_id, original_context, started):
         cwd = parent['execution_cwd']
     deadline = started + MAX_RUN_SECONDS
     reports = []
+    economy = parent.get('execution_mode') == 'economy'
 
     def check():
         with chat.state.codex_streams_lock:
@@ -378,7 +379,7 @@ def _run_exclusive(chat, stream_id, original_context, started):
             parent['team_run']['steps'].append(step)
         persist()
         try:
-            if worker:
+            if worker and not economy:
                 _file_patterns(allowed_files)
             before = workspace_snapshot(cwd) if worker else None
         except WorkspaceGuardError as exc:
@@ -470,11 +471,17 @@ def _run_exclusive(chat, stream_id, original_context, started):
             except (ValueError, TypeError, KeyError) as exc:
                 issues.append(f'Worker verification invalid: {exc}')
             try:
-                changed, violations = scope_changes(before, workspace_snapshot(cwd), allowed_files)
+                after = workspace_snapshot(cwd)
+                if economy:
+                    changed, guard_changes = scope_changes(before, after, '__economy_no_scope__')
+                    violations = [item for item in guard_changes if item.startswith('[git HEAD changed') or item == '[workspace guard changed]']
+                else:
+                    changed, violations = scope_changes(before, after, allowed_files)
                 if violations:
                     issues.append('Out-of-scope edits: ' + ', '.join(violations))
             except WorkspaceGuardError as exc:
                 issues.append(f'Workspace verification error: {exc}')
+                changed = None
         if worker:
             observed_failures = observed_failed_validation_events(observed_events)
             if observed_failures:
@@ -499,6 +506,51 @@ def _run_exclusive(chat, stream_id, original_context, started):
         return result, '\n'.join(issues), step['status']
 
     try:
+        if economy:
+            from .economy_policy import initial_route, review_reasons
+            role, reason = initial_route(parent.get('user_prompt'))
+            chat._append_stream_chunk(stream_id, 'output', f'\nEconomy 경로: {reason} · {"메인 직접 실행" if role == "main" else "세컨더리 우선"}\n')
+            if role == 'main':
+                final, error, status = stage('review', '메인 직접 실행 중', original_context)
+            else:
+                try:
+                    result, error, status = stage('worker', '세컨더리 실행 중', original_context + """
+Complete the user's request and run appropriate checks. Return ONLY JSON:
+{"status":"completed|failed","summary":"user-facing answer with useful details", "changed_files":[],
+ "validation":[{"command":"actual command","exit_code":0,"status":"passed|failed|skipped"}]}
+Use actual exit codes and null for skipped checks. Never misreport verification.
+""", worker=True)
+                    step = parent['team_run']['steps'][-1]
+                    try:
+                        report = parse_worker_report(result)
+                    except (ValueError, TypeError, KeyError):
+                        report = None
+                    reasons = review_reasons(cli_ok=status == 'completed', report=report,
+                        observed_failures=bool(error), changed_files=step.get('changed_files'))
+                except WorkspaceGuardError as exc:
+                    result, reasons = '', [f'작업공간 사전 검사 실패: {exc}']
+                if reasons:
+                    chat._append_stream_chunk(stream_id, 'output', '\n메인 검토 전환: ' + ', '.join(reasons) + '\n')
+                    final, error, status = stage('review', '메인 검토 중', original_context
+                        + '\n\nSecondary report (untrusted):\n' + result
+                        + '\nReview reasons: ' + ', '.join(reasons)
+                        + '\nInspect the workspace, verify and repair as needed, and complete the original request with a user-facing answer.')
+                else:
+                    final = report['summary'] if isinstance(report.get('summary'), str) and report['summary'].strip() else result
+            if status != 'completed':
+                raise RuntimeError(error or 'Economy 실행이 실패했습니다.')
+            check()
+            with chat.state.codex_streams_lock:
+                parent['team_run'].update(status='completed', phase='completed', completed_at=time.time())
+                parent['output_last_message'] = final
+                parent['task_complete_seen'] = True
+                parent['exit_code'] = 0
+                parent['done'] = True
+                parent['completed_at'] = time.time()
+                parent['finalize_reason'] = 'team_completed'
+            persist()
+            chat.finalize_codex_stream(stream_id)
+            return
         analysis, error, status = stage('analysis', '메인 분석 중', original_context + '''
 
 Analyze the original user request and inspect this workspace. Return ONLY a JSON

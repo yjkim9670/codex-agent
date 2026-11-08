@@ -15812,7 +15812,7 @@ def create_codex_stream(
         'inherit_model_settings': bool(inherit_model_settings),
         'execution_mode': execution_mode,
         'team_settings': deepcopy(team_settings),
-        'team_run': {'stream_id': stream_id, 'status': 'running', 'phase': 'analysis', 'steps': []} if execution_mode == 'team' else None,
+        'team_run': {'stream_id': stream_id, 'status': 'running', 'phase': 'analysis', 'mode': execution_mode, 'steps': []} if execution_mode in ('team', 'economy') else None,
         'id': stream_id,
         'owner_username': (get_active_user().storage_key if get_active_user() is not None else ''),
         'session_id': session_id,
@@ -15909,7 +15909,7 @@ def create_codex_stream(
     refresh_session_context_memory(session_id)
     request_context = copy_context()
     thread = threading.Thread(
-        target=lambda: request_context.run(_run_team_stream if execution_mode == 'team' else _run_codex_stream, stream_id, prompt),
+        target=lambda: request_context.run(_run_team_stream if execution_mode in ('team', 'economy') else _run_codex_stream, stream_id, prompt),
         daemon=True
     )
     if not deferred_start:
@@ -16152,15 +16152,15 @@ def _start_codex_stream_for_session_locked(
         team_settings=None,
         agent_backend_override=None,
         model_settings_snapshot=False):
-    if execution_mode == 'team':
+    if execution_mode in ('team', 'economy'):
         team_settings = team_settings or _team_settings_snapshot()
         error = _validate_team_settings(team_settings, plan_mode, question_only or structured_report_preset)
         if error:
-            return {'ok': False, 'error': error, 'error_code': 'team_configuration'}
+            return {'ok': False, 'error': error.replace('Team', 'Economy') if execution_mode == 'economy' else error, 'error_code': 'team_configuration'}
         model_override = team_settings['main_model']
         reasoning_override = team_settings['main_effort']
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
-    if execution_mode != 'team' and not model_settings_snapshot:
+    if execution_mode not in ('team', 'economy') and not model_settings_snapshot:
         # Routes can supply effort alone. Snapshot each missing value so the
         # worker and its metadata use the same selected model as the response.
         role_model, role_effort = resolve_model_role_settings(model_role)
@@ -16179,7 +16179,7 @@ def _start_codex_stream_for_session_locked(
 
     resolved_account_id = _normalize_account_id(account_id) or get_active_account_id()
     account_profile = _get_account_profile(resolved_account_id)
-    agent_backend = 'codex' if execution_mode == 'team' else _normalize_agent_backend_setting(
+    agent_backend = 'codex' if execution_mode in ('team', 'economy') else _normalize_agent_backend_setting(
         agent_backend_override or resolve_model_role_backend(model_role))
     if account_profile is None:
         return {'ok': False, 'error': '실행할 계정을 찾을 수 없습니다.', 'error_code': 'account_not_found'}
@@ -16231,7 +16231,7 @@ def _start_codex_stream_for_session_locked(
         model_override=model_override,
         reasoning_override=reasoning_override,
     )
-    if execution_mode == 'team':
+    if execution_mode in ('team', 'economy'):
         response_model = str(model_override or 'codex-default')
         response_reasoning_effort = reasoning_override
     elif agent_backend_override or model_role == 'secondary':
@@ -16332,7 +16332,7 @@ def _build_pending_queue_entry(
         execution_mode=None,
         team_settings=None):
     model_role = 'plan' if plan_mode else ('secondary' if model_role == 'secondary' else 'main')
-    backend = 'codex' if execution_mode == 'team' else resolve_model_role_backend(model_role)
+    backend = 'codex' if execution_mode in ('team', 'economy') else resolve_model_role_backend(model_role)
     model, effort = resolve_model_role_settings(model_role)
     # Display labels such as 'codex-default' are never executable model ids.
     if not model:
@@ -16596,11 +16596,11 @@ def enqueue_codex_stream_for_session(
         account_id=None,
         execution_mode=None,
         team_settings=None):
-    if execution_mode == 'team':
+    if execution_mode in ('team', 'economy'):
         team_settings = team_settings or _team_settings_snapshot()
         error = _validate_team_settings(team_settings, plan_mode, structured_report_preset)
         if error:
-            return {'ok': False, 'error': error, 'error_code': 'team_configuration'}
+            return {'ok': False, 'error': error.replace('Team', 'Economy') if execution_mode == 'economy' else error, 'error_code': 'team_configuration'}
     submit_lock = _get_session_submit_lock(session_id)
     with submit_lock:
         queued = _enqueue_pending_queue_entry(

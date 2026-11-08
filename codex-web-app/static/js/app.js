@@ -502,6 +502,11 @@ const PLAN_MODE_STATE_OFF = 'off';
 const PLAN_MODE_STATE_PLAN_ONLY = 'plan';
 const PLAN_MODE_STATE_SECONDARY = 'secondary';
 const PLAN_MODE_STATE_TEAM = 'team';
+const PLAN_MODE_STATE_ECONOMY = 'economy';
+function executionModeForState(value) {
+    const mode = normalizePlanModeState(value);
+    return mode === PLAN_MODE_STATE_TEAM || mode === PLAN_MODE_STATE_ECONOMY ? mode : '';
+}
 const PLAN_MODE_STATE_PLAN_AND_EXECUTE = 'plan_and_execute';
 const PLAN_MODE_AUTO_EXECUTE_PROMPT = '계획대로 수정해줘';
 
@@ -938,7 +943,7 @@ function syncSessionPendingQueue(sessionId, queue, { render = true } = {}) {
     return sessionState.pendingQueue;
 }
 
-function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getComposeModelRole(), executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '' } = {}) {
+function enqueuePrompt(sessionId, prompt, { planMode = false, modelRole = getComposeModelRole(), executionMode = executionModeForState(getPlanModeState()) } = {}) {
     const sessionState = ensureSessionState(sessionId);
     if (!sessionState) return 0;
     if (!Array.isArray(sessionState.queuedPrompts)) {
@@ -28012,8 +28017,8 @@ function normalizePlanModeState(value) {
         if (normalized === PLAN_MODE_STATE_SECONDARY) {
             return PLAN_MODE_STATE_SECONDARY;
         }
-        if (normalized === PLAN_MODE_STATE_TEAM) {
-            return PLAN_MODE_STATE_TEAM;
+        if (normalized === PLAN_MODE_STATE_TEAM || normalized === PLAN_MODE_STATE_ECONOMY) {
+            return normalized;
         }
         if (
             normalized === PLAN_MODE_STATE_PLAN_AND_EXECUTE
@@ -28059,7 +28064,9 @@ function shouldAutoExecuteAfterPlan(planModeState = getPlanModeState()) {
 }
 
 function getNextPlanModeState(currentState = getPlanModeState()) {
-    return currentState === PLAN_MODE_STATE_OFF ? PLAN_MODE_STATE_PLAN_ONLY : PLAN_MODE_STATE_OFF;
+    if (currentState === PLAN_MODE_STATE_OFF) return PLAN_MODE_STATE_PLAN_ONLY;
+    if (currentState === PLAN_MODE_STATE_PLAN_ONLY) return PLAN_MODE_STATE_ECONOMY;
+    return PLAN_MODE_STATE_OFF;
 }
 
 let composeModeMenuTrigger = null;
@@ -28559,7 +28566,7 @@ async function cleanupWorktreeTask(taskId, { force = false } = {}) {
 async function queuePromptOnServer(
     sessionId,
     prompt,
-    { planMode = false, modelRole = getComposeModelRole(), executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '', attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
+    { planMode = false, modelRole = getComposeModelRole(), executionMode = executionModeForState(getPlanModeState()), attachments = [], structuredReportPreset = '', worktreeMode = false } = {}
 ) {
     if (!sessionId) {
         return { ok: false, reason: 'missing_session' };
@@ -28633,7 +28640,7 @@ async function queuePromptWithPlanMode(
     }
     const normalizedPlanModeState = normalizePlanModeState(planModeState);
     const modelRole = getComposeModelRole(normalizedPlanModeState);
-    const executionMode = normalizedPlanModeState === PLAN_MODE_STATE_TEAM ? 'team' : '';
+    const executionMode = executionModeForState(normalizedPlanModeState);
     const queueItems = [];
     if (normalizedPlanModeState === PLAN_MODE_STATE_PLAN_AND_EXECUTE) {
         queueItems.push({ prompt: normalizedPrompt, planMode: true, attachments });
@@ -28682,6 +28689,9 @@ function setPlanModeToggleState(nextState) {
     } else if (normalized === PLAN_MODE_STATE_SECONDARY) {
         label = 'Sec · 세컨더리 모델로 실행';
         buttonText = 'Sec';
+    } else if (normalized === PLAN_MODE_STATE_ECONOMY) {
+        label = 'Economy · 세컨더리 우선, 필요 시 메인 검토 (Codex 전용)';
+        buttonText = 'Economy';
     } else if (normalized === PLAN_MODE_STATE_TEAM) {
         label = 'Team · 메인 분석 → 세컨더리 워커 → 메인 검토 (Codex 전용)';
         buttonText = 'Team';
@@ -28689,7 +28699,7 @@ function setPlanModeToggleState(nextState) {
         label = 'Plan+ · 계획 작성 후 메인 모델로 실행';
         buttonText = 'Plan+';
     }
-    label += ' (Shift+Tab: Work ↔ Plan)';
+    label += ' (Shift+Tab: Work → Plan → Economy → Work)';
     if (button) {
         button.classList.toggle('is-active', isActive);
         button.classList.toggle('is-plan-and-execute', isPlanAndExecute);
@@ -30024,7 +30034,7 @@ async function handleSubmit(event) {
         sessionId: activeSessionId,
         planMode: shouldUsePlanModeForRequest(planModeState),
         modelRole: getComposeModelRole(planModeState),
-        executionMode: planModeState === PLAN_MODE_STATE_TEAM ? 'team' : '',
+        executionMode: executionModeForState(planModeState),
         attachments,
         worktreeMode: getWorktreeModeState()
     });
@@ -30156,7 +30166,7 @@ async function sendPrompt(
         sessionId: sessionIdOverride = null,
         planMode = false,
         modelRole = getComposeModelRole(),
-        executionMode = getPlanModeState() === PLAN_MODE_STATE_TEAM ? 'team' : '',
+        executionMode = executionModeForState(getPlanModeState()),
         attachments = [],
         structuredReportPreset = '',
         worktreeMode = false
@@ -30485,7 +30495,7 @@ async function pollStream(streamId) {
             setMessageDetailLogLink(current.entry.footer, { team_run: current.teamRun });
         }
         setSessionStatus(current.sessionId, current.teamRun
-            ? `Team · ${teamStatusLabel(current.teamRun.status)}`
+            ? `${current.teamRun.mode === 'economy' ? 'Economy' : 'Team'} · ${teamStatusLabel(current.teamRun.status)}`
             : buildActiveStreamStatus(current.processRunning));
 
         if (result?.done && result?.company_timing?.pending && !result?.persistence_failed) {
@@ -31118,7 +31128,7 @@ function setMessageTeamProgress(bubble, team, now = Date.now()) {
     if (!panel) {
         panel = document.createElement('section');
         panel.className = 'message-team-progress';
-        panel.setAttribute('aria-label', 'Team 진행 상태');
+        panel.setAttribute('aria-label', `${team.mode === 'economy' ? 'Economy' : 'Team'} 진행 상태`);
         bubble.appendChild(panel);
     }
     // Keep disclosure state when the streaming text is replaced at a transition.
@@ -31135,7 +31145,7 @@ function setMessageTeamProgress(bubble, team, now = Date.now()) {
     panel.replaceChildren();
     const header = document.createElement('div');
     header.className = 'message-team-header';
-    header.textContent = `Team · ${teamStatusLabel(team.status)}`;
+    header.textContent = `${team.mode === 'economy' ? 'Economy' : 'Team'} · ${teamStatusLabel(team.status)}`;
     panel.appendChild(header);
     team.steps.forEach((step, index) => {
         const row = document.createElement('div');
@@ -31228,7 +31238,7 @@ function buildMessageDetailText(message) {
 
     if (message.team_run && Array.isArray(message.team_run.steps)) {
         sections.push([
-            `## Team · ${message.team_run.status || ''}`,
+            `## ${message.team_run.mode === 'economy' ? 'Economy' : 'Team'} · ${message.team_run.status || ''}`,
             ...message.team_run.steps.map(step => [
                 `### ${step.title} · ${step.model || 'default'} · ${step.status}`,
                 step.session_id ? `세션: ${step.session_id}` : '',

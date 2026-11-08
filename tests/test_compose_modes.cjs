@@ -36,6 +36,7 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
             ['off', 'Work', 'main', false, false],
             ['plan', 'Plan', 'main', true, false],
             ['secondary', 'Sec', 'secondary', false, false],
+            ['economy', 'Economy', 'main', false, false],
             ['team', 'Team', 'main', false, false],
             ['plan_and_execute', 'Plan+', 'main', true, true]
         ]) {
@@ -49,7 +50,7 @@ load('function getComposeModelRole(', "document.getElementById('codex-execution-
             assert.equal(context.cyclePlanModeFromKeyboardEvent({ key: 'Tab', shiftKey: true,
                 preventDefault: () => { prevented = true; }, stopPropagation() {} }), true);
             assert.equal(prevented, true);
-            assert.equal(context.getPlanModeState(), mode === 'off' ? 'plan' : 'off');
+            assert.equal(context.getPlanModeState(), mode === 'off' ? 'plan' : mode === 'plan' ? 'economy' : 'off');
         }
     }
     for (const event of [{ key: 'Tab' }, { key: 'Tab', shiftKey: true, ctrlKey: true }, { key: 'Enter', shiftKey: true }]) {

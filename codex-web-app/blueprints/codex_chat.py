@@ -2268,7 +2268,7 @@ def codex_session_message_stream(session_id):
     if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
         return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
     execution_mode = payload.get('execution_mode')
-    if execution_mode not in (None, '', 'team'):
+    if execution_mode not in (None, '', 'team', 'economy'):
         return jsonify({'error': 'execution_mode 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:
@@ -2376,7 +2376,7 @@ def codex_session_message_queue(session_id):
     if not isinstance(model_role, str) or model_role not in {'main', 'plan', 'secondary'} or (not plan_mode and model_role == 'plan'):
         return jsonify({'error': 'model_role 값이 올바르지 않습니다.'}), 400
     execution_mode = payload.get('execution_mode')
-    if execution_mode not in (None, '', 'team'):
+    if execution_mode not in (None, '', 'team', 'economy'):
         return jsonify({'error': 'execution_mode 값이 올바르지 않습니다.'}), 400
     worktree_mode = _parse_worktree_mode(payload)
     try:

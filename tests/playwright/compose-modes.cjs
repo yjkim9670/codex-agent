@@ -7,7 +7,7 @@ exports.verifyComposeModes = async (page, expect) => {
     const modes = [
         ['off', 'Work', 'main', false], ['plan', 'Plan', 'main', true],
         ['plan_and_execute', 'Plan+', 'main', true], ['secondary', 'Sec', 'secondary', false],
-        ['team', 'Team', 'main', false]
+        ['economy', 'Economy', 'main', false], ['team', 'Team', 'main', false]
     ];
     for (const [width, height] of [[1280, 800], [600, 360], [360, 360]]) {
         await page.setViewportSize({ width, height });
@@ -21,7 +21,7 @@ exports.verifyComposeModes = async (page, expect) => {
         };
         for (const [mode, label, role, plan] of modes) {
             await openMenu();
-            await expect(menu.locator('[role="menuitemradio"]')).toHaveCount(5);
+            await expect(menu.locator('[role="menuitemradio"]')).toHaveCount(6);
             await expect(menu.locator('[aria-checked="true"]')).toHaveCount(1);
             const bounds = await menu.evaluate(el => {
                 const r = el.getBoundingClientRect();
@@ -40,7 +40,9 @@ exports.verifyComposeModes = async (page, expect) => {
             expect(await page.evaluate(() => getComposeModelRole())).toBe(role);
             expect(await page.evaluate(() => shouldUsePlanModeForRequest())).toBe(plan);
             await expect(input).toBeFocused();
-            for (const nextLabel of [mode === 'off' ? 'Plan' : 'Work', mode === 'off' ? 'Work' : 'Plan']) {
+            const nextLabels = mode === 'off' ? ['Plan', 'Economy', 'Work']
+                : mode === 'plan' ? ['Economy', 'Work', 'Plan'] : ['Work', 'Plan', 'Economy'];
+            for (const nextLabel of nextLabels) {
                 await input.press('Shift+Tab');
                 await expect(desktop).toHaveText(nextLabel);
                 await expect(mobile).toHaveText(nextLabel);

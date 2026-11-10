@@ -129,7 +129,12 @@ curl -X POST http://127.0.0.1:5000/api/codex/blog/run \
 
 Each run claims `account identity + project_id` in the shared account state
 under an inter-process file lock. The claim has a two-hour lease for crash
-recovery and no fixed cooldown after a successful run. An active claim is
+recovery. The owning Workbench renews that lease every minute while the
+matching stream is active; renewals update both the local pipeline state and
+the shared claim only when their `run_id` still matches. An expired run is
+recovered before automatic eligibility is checked, so a stale `in_flight`
+record cannot block all later submissions. PID presence alone does not extend
+a lease. There is no fixed cooldown after a successful run. An active claim is
 authoritative even for a forced manual run, so simultaneous Usage-panel or API
 submissions from separate Workbenches yield `project_busy` rather than starting
 a second stage. Give independent blogs different `project_id` values.

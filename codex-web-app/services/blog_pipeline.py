@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import threading
 import uuid
 
 from ..config import KST
@@ -37,6 +38,7 @@ _DEFAULT_CADENCE_MINUTES = 300
 _MIN_CADENCE_MINUTES = 60
 _MAX_CADENCE_MINUTES = 10080
 _RUN_LEASE_SECONDS = 2 * 60 * 60
+_RUN_HEARTBEAT_INTERVAL_SECONDS = 60
 _MAX_RUN_HISTORY = 512
 _MAX_PROJECT_TEXT = 12000
 _DEFAULT_TOPIC_ROTATION_SEEDS = (
@@ -63,6 +65,9 @@ _DEFAULT_STYLE_GUIDE = (
     '검색으로 공식 기관·원문 자료를 읽고 사실을 확인한다. 자료의 발표·제작 시점을 밝히고 '
     '주요 주장 가까이에 근거 링크를, “직접 보기”에는 설명이 붙은 원문 링크를 제공한다.'
 )
+
+_RUN_HEARTBEATS = {}
+_RUN_HEARTBEATS_LOCK = threading.Lock()
 # Topic exclusions are optional and follow the project direction. Bound Latin
 # abbreviations to Latin letters so 'daily' is allowed and 'ChatGPT로' is caught.
 _AI_TOPIC_PATTERN = re.compile(
@@ -634,6 +639,7 @@ def _claim_global(context, project, run_id, now, force=False):
                 'workspace_scope_id': codex_chat._WORKSPACE_SCOPE_ID,
                 'workspace_path': str(codex_chat.WORKSPACE_DIR),
                 'started_at': normalize_timestamp(now),
+                'heartbeat_at': normalize_timestamp(now),
                 'lease_until': normalize_timestamp(now + timedelta(seconds=_RUN_LEASE_SECONDS)),
                 'stream_id': '',
                 'owner_pid': os.getpid(),
@@ -654,6 +660,105 @@ def _update_claim_stream(claim_path, run_id, stream_id):
         active['stream_id'] = stream_id
         payload['updated_at'] = normalize_timestamp(None)
         _write_json_atomic(claim_path, payload)
+
+
+def _run_lease_expired(run, now):
+    lease_until = parse_timestamp(run.get('lease_until'))
+    if lease_until:
+        return lease_until <= now
+    heartbeat_at = parse_timestamp(run.get('heartbeat_at'))
+    if heartbeat_at:
+        return heartbeat_at + timedelta(seconds=_RUN_LEASE_SECONDS) <= now
+    started_at = parse_timestamp(run.get('started_at'))
+    return not started_at or started_at + timedelta(seconds=_RUN_LEASE_SECONDS) <= now
+
+
+def _refresh_claim_lease(claim_path, run_id, now):
+    if not claim_path:
+        return False
+    with codex_chat._acquire_path_file_lock(claim_path):
+        payload = _read_json(claim_path, {})
+        active = payload.get('active') if isinstance(payload, dict) else None
+        if not isinstance(active, dict) or active.get('run_id') != run_id:
+            return False
+        active['heartbeat_at'] = normalize_timestamp(now)
+        active['lease_until'] = normalize_timestamp(now + timedelta(seconds=_RUN_LEASE_SECONDS))
+        payload['updated_at'] = normalize_timestamp(now)
+        _write_json_atomic(claim_path, payload)
+    return True
+
+
+def _renew_run_lease(root, project_id, run_id):
+    now = _now()
+    claim_path = None
+    with codex_chat._acquire_path_file_lock(_state_path(root)):
+        state = _load_state(root, project_id)
+        active = state.get('in_flight')
+        if not isinstance(active, dict) or active.get('run_id') != run_id:
+            return False
+        active['heartbeat_at'] = normalize_timestamp(now)
+        active['lease_until'] = normalize_timestamp(now + timedelta(seconds=_RUN_LEASE_SECONDS))
+        claim_path = active.get('claim_path')
+        _save_state(root, state)
+    _refresh_claim_lease(Path(claim_path) if claim_path else None, run_id, now)
+    return True
+
+
+def _stop_run_heartbeat(run_id):
+    with _RUN_HEARTBEATS_LOCK:
+        stop_event = _RUN_HEARTBEATS.pop(str(run_id or ''), None)
+    if stop_event:
+        stop_event.set()
+
+
+def _run_heartbeat_worker(root, project_id, run_id, stop_event):
+    try:
+        while not stop_event.wait(_RUN_HEARTBEAT_INTERVAL_SECONDS):
+            state_payload = _load_state(root, project_id)
+            active = state_payload.get('in_flight')
+            if not isinstance(active, dict) or active.get('run_id') != run_id:
+                return
+            with codex_chat.state.codex_streams_lock:
+                stream_id = active.get('stream_id')
+                stream = codex_chat.state.codex_streams.get(stream_id) if stream_id else None
+                if not stream or stream.get('done'):
+                    return
+                if stream.get('process_exited_at'):
+                    return
+                process = stream.get('process')
+                if process is None:
+                    started_at = parse_timestamp(active.get('started_at'))
+                    if started_at and (_now() - started_at).total_seconds() > 5 * 60:
+                        return
+                    continue
+                try:
+                    if process.poll() is not None:
+                        return
+                except Exception:
+                    return
+            if not _renew_run_lease(root, project_id, run_id):
+                return
+    except Exception:
+        _LOGGER.warning('Blog run heartbeat stopped after an error (run_id=%s)', run_id, exc_info=True)
+    finally:
+        with _RUN_HEARTBEATS_LOCK:
+            if _RUN_HEARTBEATS.get(run_id) is stop_event:
+                _RUN_HEARTBEATS.pop(run_id, None)
+
+
+def _start_run_heartbeat(root, project_id, run_id):
+    stop_event = threading.Event()
+    with _RUN_HEARTBEATS_LOCK:
+        previous = _RUN_HEARTBEATS.get(run_id)
+        if previous:
+            previous.set()
+        _RUN_HEARTBEATS[run_id] = stop_event
+    threading.Thread(
+        target=_run_heartbeat_worker,
+        args=(Path(root), project_id, run_id, stop_event),
+        name=f'blog-run-heartbeat-{run_id[:8]}',
+        daemon=True,
+    ).start()
 
 
 def retry_failed_blog_pipeline(account_id=None, snapshot=None):
@@ -959,18 +1064,15 @@ def _run_is_alive(in_flight):
     if stream_id:
         with codex_chat.state.codex_streams_lock:
             stream = codex_chat.state.codex_streams.get(stream_id)
-            if stream and not stream.get('done'):
-                return True
-    # Another server can share the durable state but not the stream registry.
-    owner_pid = in_flight.get('owner_pid')
-    if isinstance(owner_pid, int) and owner_pid != os.getpid():
-        try:
-            os.kill(owner_pid, 0)
-            return True
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            return True
+            if (stream and not stream.get('done') and not stream.get('process_exited_at')):
+                process = stream.get('process')
+                if process is not None:
+                    try:
+                        return process.poll() is None
+                    except Exception:
+                        return False
+    # A PID can be reused and only proves that a server process is alive.
+    # Cross-process liveness comes from the renewed, run-id-scoped lease.
     return False
 
 
@@ -999,6 +1101,54 @@ def _restore_finished_run(root, project):
         break
 
 
+def _recover_expired_in_flight(root, project, now=None):
+    now = now if isinstance(now, datetime) else _now()
+    recovered_run = None
+    with codex_chat._acquire_path_file_lock(_state_path(root)):
+        state = _load_state(root, project['project_id'])
+        in_flight = state.get('in_flight')
+        if not isinstance(in_flight, dict) or not in_flight.get('run_id'):
+            return False
+        if not _run_lease_expired(in_flight, now) or _run_is_alive(in_flight):
+            return False
+        recovered_run = dict(in_flight)
+        run_id = str(in_flight['run_id'])
+        state['in_flight'] = None
+        state['last_error'] = ''
+        state['next_run_at'] = None
+        state['last_result'] = {
+            **in_flight, 'status': 'recovered',
+            'completed_at': normalize_timestamp(now),
+            'reason': 'stale_run_recovered',
+        }
+        _append_jsonl(_runs_path(root), {
+            **in_flight, 'project_id': project['project_id'],
+            'status': 'recovered', 'at': normalize_timestamp(now),
+            'reason': 'stale_run_recovered',
+        })
+        _save_state(root, state)
+        claim_path = in_flight.get('claim_path')
+        _finish_claim(Path(claim_path) if claim_path else None,
+                      project, run_id, False, now, recovered=True)
+    if recovered_run:
+        _stop_run_heartbeat(recovered_run.get('run_id'))
+        _LOGGER.warning('Recovered interrupted blog run (run_id=%s, stream_id=%s)',
+                        recovered_run.get('run_id'), recovered_run.get('stream_id'))
+        return True
+    return False
+
+
+def recover_stale_blog_run_for_automatic():
+    """Restore completed work and clear an expired run before auto gating."""
+    root = _blog_root()
+    project = _load_project(root)
+    if not project:
+        return {'recovered': False, 'reason': 'not_configured'}
+    _restore_finished_run(root, project)
+    recovered = _recover_expired_in_flight(root, project)
+    return {'recovered': recovered, 'reason': 'stale_run_recovered' if recovered else ''}
+
+
 def _start_pipeline_run(force=False, account_id=None):
     root = _blog_root()
     if not _project_path(root).exists():
@@ -1022,6 +1172,7 @@ def _start_pipeline_run(force=False, account_id=None):
         return {'started': False, 'reason': 'account_login_required'}
 
     _restore_finished_run(root, project)
+    _recover_expired_in_flight(root, project)
     run_id = uuid.uuid4().hex
     now = _now()
     claim_path = None
@@ -1030,30 +1181,7 @@ def _start_pipeline_run(force=False, account_id=None):
         _migrate_backlog_to_inspirations(root)
         in_flight = state.get('in_flight')
         if isinstance(in_flight, dict) and in_flight.get('run_id'):
-            started_at = parse_timestamp(in_flight.get('started_at'))
-            expired = not started_at or started_at + timedelta(seconds=_RUN_LEASE_SECONDS) <= now
-            if not expired or _run_is_alive(in_flight):
-                return {'started': False, 'reason': 'run_in_flight', 'run_id': in_flight.get('run_id')}
-            stale_run_id = str(in_flight['run_id'])
-            stale_claim_path = in_flight.get('claim_path')
-            state['in_flight'] = None
-            state['last_error'] = ''
-            state['next_run_at'] = None
-            state['last_result'] = {
-                **in_flight, 'status': 'recovered',
-                'completed_at': normalize_timestamp(now),
-                'reason': 'stale_run_recovered',
-            }
-            _append_jsonl(_runs_path(root), {
-                **in_flight, 'project_id': project['project_id'],
-                'status': 'recovered', 'at': normalize_timestamp(now),
-                'reason': 'stale_run_recovered',
-            })
-            _save_state(root, state)
-            _finish_claim(Path(stale_claim_path) if stale_claim_path else None,
-                          project, stale_run_id, False, now, recovered=True)
-            _LOGGER.warning('Recovered interrupted blog run (run_id=%s, stream_id=%s)',
-                            stale_run_id, in_flight.get('stream_id'))
+            return {'started': False, 'reason': 'run_in_flight', 'run_id': in_flight.get('run_id')}
         next_run_at = (None if (state.get('last_result') or {}).get('status') == 'completed'
                        else parse_timestamp(state.get('next_run_at')))
         if not force and next_run_at and next_run_at > now:
@@ -1105,6 +1233,8 @@ def _start_pipeline_run(force=False, account_id=None):
             'stage': stage,
             'post_id': post_id,
             'started_at': normalize_timestamp(now),
+            'heartbeat_at': normalize_timestamp(now),
+            'lease_until': normalize_timestamp(now + timedelta(seconds=_RUN_LEASE_SECONDS)),
             'prompt_chars': len(prompt),
             'context_bytes': sum((Path(codex_chat.WORKSPACE_DIR) / name).stat().st_size
                                  for name in _stage_files(root, state)
@@ -1186,6 +1316,7 @@ def _start_pipeline_run(force=False, account_id=None):
         })
     _LOGGER.info('Started blog run (run_id=%s, stream_id=%s)', run_id, stream.get('id'))
     _update_claim_stream(claim_path, run_id, stream.get('id') or '')
+    _start_run_heartbeat(root, project['project_id'], run_id)
     return {
         'started': True,
         'run_id': run_id,
@@ -1336,6 +1467,7 @@ def record_blog_pipeline_completion(operation, succeeded, error='', token_usage=
             'token_usage': _normalize_tokens(token_usage),
             'error': '' if succeeded else str(error or '')[:1000],
         })
+    _stop_run_heartbeat(run_id)
     claim_path = in_flight.get('claim_path') or operation.get('claim_path')
     _finish_claim(Path(claim_path) if claim_path else None, project, run_id, bool(succeeded), now)
     return True

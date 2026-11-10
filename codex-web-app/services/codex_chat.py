@@ -9052,6 +9052,8 @@ def _evaluate_automatic_usage_blog_from_shared_snapshot(context, now=None):
     must never suppress a configured project's zero-window claim merely
     because a different Workbench without that project refreshed first.
     """
+    from .blog_pipeline import recover_stale_blog_run_for_automatic
+    recover_stale_blog_run_for_automatic()
     with _acquire_path_file_lock(context['account_usage_snapshot_path']):
         snapshot = _load_account_usage_snapshot(context)
         if not _automatic_usage_snapshot_is_fresh(snapshot, now):
@@ -9329,6 +9331,8 @@ def refresh_account_usage_snapshot_if_due(
         _reconcile_usage_calibration(context['account']['id'], snapshot)
         keepalive = {'submitted': False, 'reason': 'not_automatic'}
         if resolved_limit_sample_source == 'automatic':
+            from .blog_pipeline import recover_stale_blog_run_for_automatic
+            recover_stale_blog_run_for_automatic()
             with _acquire_path_file_lock(context['account_usage_snapshot_path']):
                 snapshot = _load_account_usage_snapshot(context)
                 keepalive = _reserve_automatic_usage_blog_locked(context, snapshot)

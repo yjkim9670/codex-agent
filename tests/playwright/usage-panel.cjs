@@ -180,7 +180,7 @@ async function verifyUsagePanel(page, expect, { isolated = false } = {}) {
     await page.evaluate(() => setPlanModeToggleState('plan'));
     await expect(page.locator('#codex-controls-summary')).toHaveText('Plan · plan-model · medium');
     await page.evaluate(() => setPlanModeToggleState('secondary'));
-    await expect(page.locator('#codex-controls-summary > span')).toHaveText(['Sec · dtgpt · secondary-model · low', 'Plan · plan-model · medium']);
+    await expect(page.locator('#codex-controls-summary > span')).toHaveText(['Sec · Codex · secondary-model · low', 'Plan · plan-model · medium']);
     await page.evaluate(() => setPlanModeToggleState('off'));
     await expect(page.locator('#codex-controls-summary > span')).toHaveText(['메인 · very-long-main-model-name-for-layout · high', 'Plan · plan-model · medium']);
     await page.evaluate(() => document.querySelectorAll('.usage-entry[open]').forEach(entry => entry.open = false));

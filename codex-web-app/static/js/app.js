@@ -1712,13 +1712,14 @@ function normalizeAgentBackendOptions(options) {
         const fallbackName = id === 'claude'
             ? 'Claude'
             : (id === 'opencode' ? 'OpenCode' : 'Codex');
-        const name = typeof item?.name === 'string'
+        const configuredName = typeof item?.name === 'string'
             ? item.name.trim()
             : (typeof item?.label === 'string' ? item.label.trim() : fallbackName);
+        const name = id === 'dtgpt' ? 'Codex' : (configuredName || fallbackName);
         const description = typeof item?.description === 'string' ? item.description.trim() : '';
         normalized.push({
             id,
-            name: name || fallbackName,
+            name,
             description
         });
         seen.add(id);
@@ -10352,7 +10353,7 @@ function updateControlsModelSummary() {
     const effort = (isPlan ? state.settings.planModeReasoningEffort : isSecondary ? state.settings.secondaryReasoningEffort : null) || (inheritsMain ? state.settings.reasoningEffort : null);
     const role = isPlan ? 'Plan' : isSecondary ? 'Sec' : '메인';
     const reasoning = hasReasoningControlsForBackend(backend) ? getReasoningProfile(model, effort, getReasoningOptionsForBackend(backend), backend).effectiveReasoning : '';
-    const text = [role, isSecondary ? backend : '', model || 'default', reasoning].filter(Boolean).join(' · ');
+    const text = [role, isSecondary ? formatAgentBackendStatus(backend) : '', model || 'default', reasoning].filter(Boolean).join(' · ');
     const parts = [text];
     if (!isPlan) {
         const planModel = state.settings.planModeModel || state.settings.model;

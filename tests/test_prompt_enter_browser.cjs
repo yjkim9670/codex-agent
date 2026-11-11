@@ -84,8 +84,9 @@ function slice(start, end, text = source) {
                     await input.fill('send this');
                     const before = await page.evaluate(() => submissions);
                     await input.press(key);
-                    assert.equal(await page.evaluate(() => submissions), before + (device.mobile ? 0 : 1), `${device.name}: ${key}`);
-                    if (!device.mobile) assert.equal(await input.inputValue(), 'send this', `${device.name}: no newline on send`);
+                    const shouldSubmit = !device.mobile || (app === 'workbench' && key === 'Control+Enter');
+                    assert.equal(await page.evaluate(() => submissions), before + (shouldSubmit ? 1 : 0), `${app}: ${device.name}: ${key}`);
+                    if (shouldSubmit) assert.equal(await input.inputValue(), 'send this', `${app}: ${device.name}: no newline on send`);
                 }
                 const afterShortcuts = await page.evaluate(() => submissions);
                 for (const modifiers of [{ ctrlKey: true }, { metaKey: true }]) {

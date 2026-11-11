@@ -2764,8 +2764,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (cyclePlanModeFromKeyboardEvent(event)) {
                 return;
             }
-            // Mobile and Fold prompts send only through the submit button.
-            if (event.key === 'Enter' && isMobileViewportBehaviorActive()) return;
+            // Mobile and Fold prompts also support Ctrl+Enter to submit.
+            if (event.key === 'Enter' && !event.ctrlKey && isMobileViewportBehaviorActive()) return;
             if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
                 event.preventDefault();
                 handleSubmit();

@@ -1,0 +1,12 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(`${__dirname}/../codex-web-app/static/js/app.js`, 'utf8');
+const start = source.indexOf('function sortModelOptionsForDisplay(');
+const end = source.indexOf('\nfunction updateModelControls(', start);
+const context = vm.createContext({normalizeOptionList: values => Array.from(new Set(values))});
+vm.runInContext(source.slice(start, end), context);
+const order = Array.from(context.buildModelSelectOptions(['gpt-5-sol', 'custom-a', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra', 'custom-b'], 'gpt-6-luna'));
+assert.deepEqual(order, ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5-sol', 'custom-a', 'custom-b']);
+assert.deepEqual(Array.from(context.buildModelSelectOptions(['custom-b', 'custom-a'], 'saved')), ['custom-b', 'custom-a', 'saved']);
+console.log('PASS: frontier and version model ordering preserves selected and unknown models');

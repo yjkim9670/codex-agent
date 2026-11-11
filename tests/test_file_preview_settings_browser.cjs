@@ -17,6 +17,19 @@ exports.verifyPreviewSettings = async (browser, url) => {
             await page.route('**/api/codex/git/status', route => route.fulfill({json: {branch: 'fixture', changed_files_count: 0, changed_files: []}}));
             await page.goto(url, { waitUntil: 'domcontentloaded' });
             await page.locator('#codex-ui-settings-open').click();
+            assert.equal(await page.locator('#codex-ui-settings-close').evaluate(el => document.activeElement === el), true);
+            assert.equal(await page.locator('#codex-ui-settings-overlay .ui-settings-body').evaluate(el => el.scrollTop), 0);
+            for (const [id, value, text] of [['bytes', '65536', '64 KiB (기본)'], ['lines', '750', '750줄 (기본)']]) {
+                const select = page.locator(`#codex-file-preview-${id}`);
+                assert.equal(await select.inputValue(), value);
+                assert.equal(await select.locator('option:checked').textContent(), text);
+                assert.notEqual(await select.evaluate(el => getComputedStyle(el).color), await select.evaluate(el => getComputedStyle(el).backgroundColor));
+            }
+            await page.locator('#codex-ui-settings-overlay .ui-settings-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
+            await page.locator('#codex-ui-settings-close').click();
+            assert.equal(await page.locator('#codex-ui-settings-open').evaluate(el => document.activeElement === el), true);
+            await page.locator('#codex-ui-settings-open').click();
+            assert.equal(await page.locator('#codex-ui-settings-overlay .ui-settings-body').evaluate(el => el.scrollTop), 0);
             for (const select of await page.locator('#codex-ui-settings-overlay select').all()) {
                 if (!await select.isVisible()) continue;
                 const metrics = await select.evaluate(el => ({
@@ -31,6 +44,13 @@ exports.verifyPreviewSettings = async (browser, url) => {
             await page.reload({ waitUntil: 'domcontentloaded' });
             assert.equal(await page.locator('#codex-file-preview-bytes').inputValue(), '1048576');
             assert.equal(await page.locator('#codex-file-preview-lines').inputValue(), '5000');
+            assert.match(await page.locator('#codex-file-preview-bytes option:checked').textContent(), /1 MiB/);
+            await page.evaluate(() => localStorage.setItem('codex-file-preview-settings-v1', JSON.stringify({readBytes: 42, lines: 42})));
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            assert.equal(await page.locator('#codex-file-preview-bytes').inputValue(), '65536');
+            assert.equal(await page.locator('#codex-file-preview-lines').inputValue(), '750');
+            await page.evaluate(() => localStorage.setItem('codex-file-preview-settings-v1', JSON.stringify({readBytes: 1048576, lines: 5000})));
+            await page.reload({ waitUntil: 'domcontentloaded' });
             const result = await page.evaluate(async () => {
                 const check = (condition, message) => { if (!condition) throw new Error(message); };
                 // Real encrypted client -> API -> fixture file -> decoded response.

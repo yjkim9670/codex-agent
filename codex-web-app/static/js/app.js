@@ -2672,7 +2672,9 @@ document.addEventListener('DOMContentLoaded', () => {
         uiSettingsOverlay.classList.add('is-visible');
         uiSettingsOverlay.setAttribute('aria-hidden', 'false');
         document.body.classList.add('is-overlay-open');
-        window.setTimeout(() => uiSettingsFontInputs.find(input => input.checked)?.focus(), 0);
+        const body = uiSettingsOverlay.querySelector('.ui-settings-body');
+        if (body) body.scrollTop = 0;
+        uiSettingsClose?.focus({ preventScroll: true });
     };
     try {
         const storedUiScalesByViewMode = window.localStorage.getItem(UI_SCALE_BY_VIEW_MODE_STORAGE_KEY);
@@ -9043,6 +9045,8 @@ async function switchActiveCodexAccount(accountId) {
         const result = await fetchJson(`/api/codex/accounts/${encodeURIComponent(normalizedId)}/activate`, {
             method: 'POST'
         });
+        usageAccountGeneration++;
+        usageResponseGeneration++;
         applyCodexAccountsSummary(result?.accounts);
         state.settings.usage = result?.usage || null;
         state.settings.usageHistory = result?.usage_history || null;
@@ -9696,11 +9700,19 @@ async function loadSettings({ silent = true } = {}) {
     }
 }
 
+let usageResponseGeneration = 0;
+let usageAccountGeneration = 0;
+
 async function refreshUsageSummary({
     silent = true,
     showSuccessToast = false,
     forceAccountRefresh = false
 } = {}) {
+    const requestGeneration = ++usageResponseGeneration;
+    const accountId = state.accounts?.activeAccountId || '';
+    const accountGeneration = usageAccountGeneration;
+    const isCurrent = () => requestGeneration === usageResponseGeneration
+        && accountGeneration === usageAccountGeneration && accountId === (state.accounts?.activeAccountId || '');
     try {
         const includeHistory = isUsageHistoryOverlayOpen();
         const query = new URLSearchParams({
@@ -9722,6 +9734,7 @@ async function refreshUsageSummary({
             }
             : { cache: 'no-store' };
         const result = await fetchJson(requestUrl, requestOptions);
+        if (!isCurrent()) return;
         const usage = result?.usage ?? null;
         const usageHistory = result?.usage_history ?? null;
         state.settings.usageLimitsEnabled = normalizeBooleanPolicyFlag(
@@ -9762,6 +9775,7 @@ async function refreshUsageSummary({
         // snapshot when a live App Server poll is temporarily unavailable.
         // Apply that payload even with a non-2xx status; otherwise the card
         // stays blank until the user reloads the whole page.
+        if (!isCurrent()) return;
         const fallback = error?.payload;
         if (fallback?.usage) {
             state.settings.usage = fallback.usage;
@@ -9779,12 +9793,10 @@ async function refreshUsageSummary({
 }
 
 function usageLimitSnapshotsDiffer(before, after) {
-    const beforeObservedAt = String(before?.observed_at || '');
-    const afterObservedAt = String(after?.observed_at || '');
-    if (afterObservedAt && afterObservedAt !== beforeObservedAt) return true;
-    return ['five_hour', 'weekly'].some(name => (
-        Number(before?.[name]?.used_percent) !== Number(after?.[name]?.used_percent)
-    ));
+    const value = (snapshot, name, key) => snapshot?.[name]?.[key] ?? null;
+    return ['five_hour', 'weekly'].some(name =>
+        ['used_percent', 'resets_at'].some(key => value(before, name, key) !== value(after, name, key))
+    );
 }
 
 function applyRefreshedMessageUsageLimits(message, sessionId) {
@@ -9798,26 +9810,41 @@ function scheduleMessageUsageLimitFollowups(sessionId, message) {
     const messageId = String(message?.id || '').trim();
     if (!sessionId || !messageId) return;
     const existing = state.usageLimitFollowups.get(messageId);
-    if (existing) existing.cancelled = true;
-    const followup = { cancelled: false, initialAfter: resolveMessageUsageLimitSnapshot(message, 'usage_limits_after') };
+    if (existing) return;
+    const followup = { cancelled: false, accountId: state.accounts?.activeAccountId || '',
+        accountGeneration: usageAccountGeneration,
+        initialAfter: resolveMessageUsageLimitSnapshot(message, 'usage_limits_after')
+            || resolveMessageUsageLimitSnapshot(message, 'usage_limits_before') };
     state.usageLimitFollowups.set(messageId, followup);
     const delays = [0, 5000, 10000, 20000];
 
     const refresh = async index => {
         if (followup.cancelled || state.usageLimitFollowups.get(messageId) !== followup) return;
+        if (followup.accountGeneration !== usageAccountGeneration
+            || followup.accountId !== (state.accounts?.activeAccountId || '')) {
+            state.usageLimitFollowups.delete(messageId);
+            return;
+        }
+        const requestGeneration = ++usageResponseGeneration;
         try {
             const result = await fetchChatResponseJson(
                 `/api/codex/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/usage-limits`,
                 { method: 'POST', timeoutMs: USAGE_HISTORY_REQUEST_TIMEOUT_MS }
             );
+            if (followup.accountGeneration !== usageAccountGeneration
+                || followup.accountId !== (state.accounts?.activeAccountId || '')) {
+                state.usageLimitFollowups.delete(messageId);
+                return;
+            }
             const updatedMessage = result?.message;
-            if (result?.usage) {
+            if (result?.usage && requestGeneration === usageResponseGeneration) {
                 state.settings.usage = result.usage;
                 updateUsageSummary(result.usage);
             }
             applyRefreshedMessageUsageLimits(updatedMessage, sessionId);
             const after = resolveMessageUsageLimitSnapshot(updatedMessage, 'usage_limits_after');
-            if (usageLimitSnapshotsDiffer(followup.initialAfter, after) || index === delays.length - 1) {
+            if ((result?.account_usage_refresh?.refreshed && after
+                && usageLimitSnapshotsDiffer(followup.initialAfter, after)) || index === delays.length - 1) {
                 state.usageLimitFollowups.delete(messageId);
                 return;
             }
@@ -9965,11 +9992,36 @@ function updateUsageSummary(usage) {
     }
 }
 
+function sortModelOptionsForDisplay(options) {
+    // Version numbers are comparable within a family; unknown catalogs retain
+    // their provider order. A known frontier tier precedes smaller variants.
+    const frontier = /(?:^|[-/])(astra|opus|pro)(?:$|[-.])/i;
+    const family = name => {
+        const match = name.toLowerCase().match(/(?:^|\/)(gpt|claude|gemini)[-./]?/);
+        return match?.[1] || '';
+    };
+    const version = name => (name.match(/\d+(?:\.\d+)*/)?.[0] || '').split('.').map(Number);
+    const normalized = normalizeOptionList(options);
+    const families = [...new Set(normalized.map(family).filter(Boolean))];
+    return normalized.map((name, index) => ({ name, index })).sort((a, b) => {
+        const af = family(a.name), bf = family(b.name);
+        if (!af || !bf) return af ? -1 : bf ? 1 : a.index - b.index;
+        const aFrontier = frontier.test(a.name), bFrontier = frontier.test(b.name);
+        if (aFrontier !== bFrontier) return aFrontier ? -1 : 1;
+        if (af !== bf) return families.indexOf(af) - families.indexOf(bf);
+        const av = version(a.name), bv = version(b.name);
+        for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+            if ((av[i] || 0) !== (bv[i] || 0)) return (bv[i] || 0) - (av[i] || 0);
+        }
+        return a.index - b.index;
+    }).map(item => item.name);
+}
+
 function buildModelSelectOptions(options, selectedModel) {
-    const normalizedOptions = normalizeOptionList(options);
+    const normalizedOptions = sortModelOptionsForDisplay(options);
     const normalizedModel = typeof selectedModel === 'string' ? selectedModel.trim() : '';
     if (normalizedModel && !normalizedOptions.includes(normalizedModel)) {
-        return [normalizedModel, ...normalizedOptions];
+        return [...normalizedOptions, normalizedModel];
     }
     return normalizedOptions;
 }
@@ -9980,7 +10032,8 @@ function updateModelControls(model, options) {
     const field = select ? select.closest('.model-field') : null;
     const catalogOptions = normalizeOptionList(options);
     const selectedModel = typeof model === 'string' ? model.trim() : '';
-    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
+    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel)
+        .sort((a, b) => Number(getModelCatalogEntry(a)?.selectable === false) - Number(getModelCatalogEntry(b)?.selectable === false));
     const hasOptions = normalizedOptions.length > 0;
     const defaultPlaceholder = isClaudeBackend() ? 'Claude CLI default model' : 'Default model';
     if (select) {
@@ -10032,7 +10085,10 @@ function updatePlanModeModelControls(planModeModel, options, role = 'plan-mode')
     const field = select ? select.closest('.model-field') : null;
     const catalogOptions = normalizeOptionList(options);
     const selectedModel = typeof planModeModel === 'string' ? planModeModel.trim() : '';
-    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel);
+    const modelBackend = role === 'secondary' ? getSecondaryBackend() : getActiveAgentBackend();
+    const normalizedOptions = buildModelSelectOptions(catalogOptions, selectedModel)
+        .sort((a, b) => Number(getModelCatalogEntry(a, modelBackend)?.selectable === false)
+            - Number(getModelCatalogEntry(b, modelBackend)?.selectable === false));
     const hasOptions = normalizedOptions.length > 0;
     const defaultPlaceholder = role === 'secondary' ? (getSecondaryBackend() === getActiveAgentBackend() ? '메인 모델 상속' : 'Backend 기본 모델') : (isClaudeBackend() ? 'Use Claude CLI default' : 'Use default model');
     if (select) {
@@ -30638,13 +30694,15 @@ async function finishStream(streamId, result) {
     if (shouldReloadActive) {
         syncActiveSessionControls();
     }
+    // Begin the bounded recheck as soon as the response completes.
+    const completedMessage = savedMessage || result?.saved_message || null;
+    if (completedMessage) {
+        scheduleMessageUsageLimitFollowups(sessionId, completedMessage);
+    } else {
+        void refreshUsageSummary({ silent: true, forceAccountRefresh: true });
+        scheduleUsageSummaryFollowup();
+    }
     await loadSessions({ preserveActive: true, reloadActive: shouldReloadActive });
-    // The local snapshot may still hold the value sampled before this answer.
-    // Fetch the account limits after finalization so both real 5h and weekly
-    // percentages update without requiring the user to reload the page.
-    await refreshUsageSummary({ silent: true, forceAccountRefresh: true });
-    scheduleUsageSummaryFollowup();
-    scheduleMessageUsageLimitFollowups(sessionId, savedMessage || result?.saved_message || null);
     void refreshWorktreeTasks({ silent: true });
     void flushQueuedPrompts(sessionId);
 }
@@ -32066,13 +32124,13 @@ function buildMessageObservedLimitUsage(message) {
         const previous = formatObservedLimitPercent(before, limitName);
         const current = formatObservedLimitPercent(after, limitName);
         if (previous === '--' && current === '--') return '';
-        return `${limitName === 'five_hour' ? '5h' : 'Weekly'} 실제 ${previous} → ${current}`;
+        return `${limitName === 'five_hour' ? '5h' : 'Weekly'} 관측 ${previous} → ${current}`;
     };
     const text = ['five_hour', 'weekly'].map(describe).filter(Boolean).join(' · ');
     if (!text) return null;
     return {
         text,
-        tooltip: '실제 사용량: 작업 전·후 API 표본입니다. 동시 작업분도 함께 반영될 수 있습니다.'
+        tooltip: '작업 전·후 계정 사용률 표본입니다. 반영 지연이나 반올림이 있을 수 있으며 다른 작업도 포함됩니다.'
     };
 }
 

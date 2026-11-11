@@ -1258,9 +1258,17 @@ def codex_usage_refresh():
     return jsonify(response), (200 if refresh.get('refreshed') else 502)
 
 
+_message_usage_refresh_lock = threading.Lock()
+
+
 @bp.route('/api/codex/sessions/<session_id>/messages/<message_id>/usage-limits', methods=['POST'])
 def codex_session_message_usage_limits(session_id, message_id):
-    """Refresh and persist the final quota sample for one completed reply."""
+    """Refresh and persist a quota sample for one completed reply."""
+    with _message_usage_refresh_lock:
+        return _refresh_message_usage_limits(session_id, message_id)
+
+
+def _refresh_message_usage_limits(session_id, message_id):
     try:
         crypto_session_id = _get_chat_response_crypto_session_id()
     except FileCryptoError as exc:
@@ -1282,8 +1290,15 @@ def codex_session_message_usage_limits(session_id, message_id):
         return jsonify({'error': '현재 계정과 응답 계정이 일치하지 않습니다.'}), 409
 
     refresh = refresh_account_usage_snapshot_if_due(account_id=account_id, force=True)
+    if get_active_account_id() != account_id:
+        return jsonify({'error': '사용량 조회 중 계정이 변경되었습니다.'}), 409
     usage = get_usage_summary(account_id=account_id)
-    snapshot = refresh.get('snapshot') if isinstance(refresh, dict) else None
+    if not isinstance(refresh, dict) or not refresh.get('refreshed'):
+        return _jsonify_chat_payload_or_crypto_error({
+            'message': message, 'usage': usage,
+            'account_usage_refresh': {'refreshed': False, 'error': (refresh or {}).get('error', '')},
+        }, crypto_session_id)
+    snapshot = refresh.get('snapshot')
     compact_snapshot = _compact_usage_limit_snapshot(
         snapshot if isinstance(snapshot, dict) else usage
     )

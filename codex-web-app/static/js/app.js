@@ -6808,9 +6808,8 @@ function setFilePanelViewerMetaText(elements, text, { truncated = false, noteTex
     if (!elements?.viewerMeta) return;
     elements.viewerMeta.textContent = String(text || '');
     const state = getFilePanelEditState(getFilePanelVariantFromElements(elements));
-    const rootPath = getFileBrowserAbsoluteRoots().find(root => root.root === state.root)?.path;
     const copyPath = state.path
-        ? (rootPath ? `${rootPath.replace(/\/$/, '')}/${state.path}` : formatFileBrowserDisplayPath(state.root, state.path))
+        ? formatFileBrowserDisplayPath(state.root, state.path)
         : '';
     bindCopyableFilePreviewPath(elements.viewerMeta, copyPath);
     if (truncated || noteText) {
@@ -18055,12 +18054,7 @@ function setFilePanelPathLabel(pathElement, root, relativePath = '', absoluteRoo
     pathElement.dataset.fullPath = fullDisplay;
     pathElement.classList.toggle('is-compact-path', display !== fullDisplay);
 
-    const absoluteRoot = normalizeFilesystemPath(absoluteRootPath
-        || getFileBrowserAbsoluteRoots().find(root => root.root === normalizedRoot)?.path || '');
-    const absolutePath = absoluteRoot
-        ? (normalizedPath ? `${absoluteRoot}/${normalizedPath}` : absoluteRoot)
-        : fullDisplay;
-    bindCopyableFilePreviewPath(pathElement, absolutePath);
+    bindCopyableFilePreviewPath(pathElement, fullDisplay);
 }
 
 function setFileBrowserPathLabel(root, relativePath = '', absoluteRootPath = '') {

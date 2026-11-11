@@ -15367,6 +15367,16 @@ html[data-view-mode="fold-inner"].is-mobile-keyboard-open body {
 .file-browser-viewer-header { flex-wrap: nowrap; }
 .file-browser-viewer-meta { flex: 1 1 0; }
 .file-browser-viewer-actions { margin-left: auto; }
+@media (max-width: 840px) {
+    .file-browser-viewer-header { flex-wrap: wrap; }
+    .file-browser-viewer-meta { flex: 1 0 100%; }
+    .file-browser-viewer-actions {
+        flex: 1 1 100%;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
+}
 .file-browser-viewer-more { position: relative; }
 .file-browser-viewer-more > summary {
     display: inline-flex;
